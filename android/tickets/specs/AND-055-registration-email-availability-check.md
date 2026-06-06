@@ -5,7 +5,8 @@ milestone: M2
 epic: E08
 priority: P2
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-053]
 blocks: []
 ---
@@ -54,9 +55,11 @@ introducing a new screen.
   `supportingText`/`isError`/trailing slot this ticket drives.
 - **AND-009** `OkHttp client timeouts` — ~20s call timeout applies; the dev backend
   `http://18.222.237.167:8000` is plaintext and unreliable.
-- Web reference: `frontend/src/api/endpoints/register.ts` (the `checkEmail` call) and
-  `frontend/src/api/types.ts` (`RegisterCheckResponse`). Confirm the exact response
-  shape against `/openapi.json` before implementation (see §13 R1).
+- Web reference (verified): `frontend/src/api/endpoints/auth.ts` (`registerEmailCheck` →
+  `api.post<RegisterEmailCheckResp>("/ui/register/check", body)`), `frontend/src/api/types.ts`
+  (`RegisterEmailCheckReq` / `RegisterEmailCheckResp`), and `frontend/src/pages/Register.tsx`
+  (the 400 ms debounced `useEffect` that drives `emailStatus`). Response shape confirmed
+  against `/openapi.json` (`RegisterEmailCheckResp`); see §13 R1 (resolved) and §16.
 
 ## 3. Functional Requirements
 
@@ -194,49 +197,65 @@ Design notes:
 
 New call on the existing `RegistrationApi` (AND-053):
 
+> **Verified against OpenAPI (`POST /ui/register/check`, schemas `RegisterEmailCheckReq`
+> / `RegisterEmailCheckResp`) and `frontend/src/api/types.ts` + `endpoints/auth.ts`.**
+> Corrections applied below: the backend request/response schemas are named
+> `RegisterEmailCheckReq` / `RegisterEmailCheckResp` (not `RegisterCheck*`); the response
+> has **two required** fields `{ available: boolean, status: string }` — there is **no**
+> `email` field on the response (that was an unverified invention in the original draft).
+
 ```kotlin
 interface RegistrationApi {
     // ...register/start, register/confirm, register/resend (other tickets)
     @POST("ui/register/check")
-    suspend fun checkEmail(@Body body: RegisterCheckRequest): RegisterCheckResponse
+    suspend fun checkEmail(@Body body: RegisterEmailCheckReq): RegisterEmailCheckResp
 }
 
 @JsonClass(generateAdapter = true)
-data class RegisterCheckRequest(val email: String)
+data class RegisterEmailCheckReq(val email: String)
 
 @JsonClass(generateAdapter = true)
-data class RegisterCheckResponse(
-    val available: Boolean,
-    @Json(name = "email") val email: String? = null,
+data class RegisterEmailCheckResp(
+    val available: Boolean,          // required (verified)
+    val status: String,              // required (verified) — free-form server status string
 )
 ```
 
-Endpoint: `POST /ui/register/check`
+Endpoint: `POST /ui/register/check` (op `register_check_ui_register_check_post`).
 
-Request body:
+Request body (schema `RegisterEmailCheckReq`, `email` required):
 ```json
 { "email": "user@example.com" }
 ```
 
-Response (200):
+Response (200, schema `RegisterEmailCheckResp`, both fields required):
 ```json
-{ "available": false, "email": "user@example.com" }
+{ "available": false, "status": "taken" }
 ```
 - `available == true` → email is free → `EmailAvailability.Available`.
 - `available == false` → email is taken → `EmailAvailability.Taken`.
+- `status` is a free-form server string. The web client (`Register.tsx`) **ignores it**
+  and branches solely on `data.available`; this ticket mirrors that — `status` is parsed
+  (it is required, so omitting it would break Moshi non-null parsing) but not currently
+  used for UI branching. It is retained as a hook for future granularity.
 
-Error responses use the standard FastAPI `detail` envelope, mapped by AND-015:
+Error responses use the standard FastAPI `detail` envelope, mapped by AND-015. The
+documented validation error is **422** (`HTTPValidationError`):
 ```json
 { "detail": [{ "loc": ["body", "email"], "msg": "value is not a valid email address" }] }
 ```
-A 422 (validation) or any non-2xx is treated as advisory `Error` here (the field is
-already gated locally by `EmailValidator`, so a 422 should be rare).
+**However, the web reference (`Register.tsx`) also handles `400` (→ "invalid") and `429`
+(→ "rate_limited") for this endpoint** — i.e. the backend rate-limits availability checks.
+For this ticket all non-2xx responses (400 / 422 / 429 / 5xx / transport) collapse to the
+advisory `EmailAvailability.Error`, which never blocks submit (see §7). The field is also
+gated locally by `EmailValidator`, so a 422 should be rare in practice.
 
-CSRF/cookie handling: the call carries the `ui_csrf` → `X-CSRF-Token` header and cookie
-jar automatically via the core-network interceptors (AND-012/AND-011); no auth session
-is required to call `register/check`. **Confirm the exact field name (`available` vs
-`exists`/`taken`) against `/openapi.json` and `frontend/src/api/types.ts` — see §13 R1**;
-the Moshi DTO and `toAvailability()` are the only places to adjust if it differs.
+CSRF/cookie handling — **verified** against `frontend/src/api/client.ts`: the call carries
+the `ui_csrf` cookie value as the `X-CSRF-Token` header (`credentials: "include"`) via the
+core-network interceptors (AND-012/AND-011). The OpenAPI index lists **no auth params**
+(`params=` is empty — no `X-SESSION-ID`/`user_sub`), confirming **no auth session is
+required** to call `register/check`. The Moshi DTOs and `toAvailability()` are the only
+places to adjust if the contract changes (see §13 R1, now resolved).
 
 ## 6. Data & State Management
 
@@ -285,7 +304,10 @@ State rules:
   email cannot clobber a newer state.
 - **No auto-retry.** `register/check` is a POST; the AND-016 backoff policy applies only
   to idempotent GETs. We perform exactly one attempt per debounced query; the next
-  keystroke (or re-typing the same address after editing) naturally re-triggers.
+  keystroke (or re-typing the same address after editing) naturally re-triggers. This also
+  means a **429 rate-limit** response (the backend rate-limits this endpoint — see §5/R2)
+  is **not** retried; it collapses to advisory `Error` and the 400 ms debounce already
+  throttles request volume, mitigating further rate-limiting.
 - **Stale-response guard** (FR-6): the collector discards a result whose checked email
   no longer matches the live field, preventing a flicker to `Taken`/`Available` for a
   value the user has since changed.
@@ -403,14 +425,16 @@ in case 7 is the authoritative coverage.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Response field name.** The exact `register/check` response shape
-  (`{available}` vs `{exists}`/`{taken}`) must be verified against `/openapi.json` and
-  `frontend/src/api/types.ts`. The Moshi DTO + `toAvailability()` are the single point
-  of change; default assumption is `available: Boolean`.
+- **R1 — Response field name. [RESOLVED 2026-06-06.]** Verified against
+  `/openapi.json` (`RegisterEmailCheckResp`) and `frontend/src/api/types.ts`: the response
+  is `{ available: boolean, status: string }` — **both required**, and there is **no**
+  `email` field (the draft's optional `email` was wrong and has been removed in §5). The
+  Moshi DTO + `toAvailability()` remain the single point of change.
 - **R2 — Email enumeration.** An unauthenticated availability endpoint leaks which
-  emails are registered. This is a backend concern (rate limiting / generic responses);
-  the Android client should not log/persist results. Flag to backend owners; no Android
-  action beyond §8.
+  emails are registered. This is a backend concern; **note the backend already rate-limits
+  this endpoint** — the web reference (`Register.tsx`) explicitly handles **HTTP 429** as
+  `rate_limited`. The Android client should still not log/persist results (§8). No Android
+  action beyond §8 and treating 429 as advisory `Error` (§5/§7).
 - **R3 — Debounce tuning.** 400 ms is a starting value balancing responsiveness against
   load on the unreliable dev host. Make `EMAIL_DEBOUNCE_MS` a constant for easy tuning;
   revisit if check latency is high.
@@ -418,9 +442,11 @@ in case 7 is the authoritative coverage.
   proceeds (FR-8) and `register/start` adjudicates. Confirm this is acceptable UX vs.
   briefly disabling submit during `Checking`. Current decision: do **not** block on
   `Checking` to keep the form responsive.
-- **R5 — Endpoint existence.** If `POST /ui/register/check` is absent from the backend,
-  the feature degrades to `Error`/no-op and submit relies on `register/start`. Confirm
-  the route exists before sizing as done.
+- **R5 — Endpoint existence. [RESOLVED 2026-06-06.]** `POST /ui/register/check` exists
+  in the backend OpenAPI index (op `register_check_ui_register_check_post`,
+  `req=RegisterEmailCheckReq`, `resp=200:RegisterEmailCheckResp;422:HTTPValidationError`).
+  No degradation path needed for absence; the advisory `Error` fallback (§7) still covers
+  transient outages.
 
 ## 14. Acceptance Criteria
 
@@ -449,8 +475,10 @@ in case 7 is the authoritative coverage.
   `EmailAvailability` enum, the debounce pipeline in `RegisterViewModel.init`,
   `onEmailChange` reset behavior, the `submitEnabled` `Taken` gate, and the email-field
   supporting-text/spinner wiring in `RegisterScreen`.
-- `RegistrationApi.checkEmail` + `RegisterCheckRequest`/`RegisterCheckResponse` DTOs and
-  `RegistrationRepository.checkEmail(): ApiResult<Boolean>` added and Hilt-wired (KSP).
+- `RegistrationApi.checkEmail` + `RegisterEmailCheckReq`/`RegisterEmailCheckResp` DTOs
+  (names matching the backend OpenAPI schemas; response carries required `available` +
+  `status`) and `RegistrationRepository.checkEmail(): ApiResult<Boolean>` added and
+  Hilt-wired (KSP).
 - `RegisterEmailCheckTest` (cases 1–12) green in CI; branch-coverage gate met.
 - Strings `register_email_taken`, `register_email_available`,
   `register_email_checking` added to `strings.xml`; field uses polite `liveRegion`
@@ -463,3 +491,213 @@ in case 7 is the authoritative coverage.
   block; airplane mode degrades to no-block with the form still submittable.
 - Open questions R1 and R5 (response shape + endpoint existence) resolved against
   `/openapi.json` before merge.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with VERDICT (Verified / Corrected / Unverified-assumption) and
+an exact SOURCE pointer.
+
+1. **Endpoint is `POST /ui/register/check`.** VERDICT: Verified.
+   SOURCE: OpenAPI `POST /ui/register/check` (op `register_check_ui_register_check_post`);
+   `src/api/endpoints/auth.ts: registerEmailCheck` (`api.post("/ui/register/check", body)`).
+2. **HTTP method is POST (not GET).** VERDICT: Verified.
+   SOURCE: OpenAPI `POST /ui/register/check`; `src/api/endpoints/auth.ts: registerEmailCheck`.
+3. **Request body is `{ email: string }` (email required).** VERDICT: Verified.
+   SOURCE: OpenAPI schema `RegisterEmailCheckReq` (`properties.email: string`, `required:[email]`);
+   `src/api/types.ts: RegisterEmailCheckReq`.
+4. **Request/response DTO names.** VERDICT: Corrected. Draft used `RegisterCheckRequest` /
+   `RegisterCheckResponse`; canonical names are `RegisterEmailCheckReq` / `RegisterEmailCheckResp`.
+   SOURCE: OpenAPI `components.schemas.RegisterEmailCheckReq` / `RegisterEmailCheckResp`;
+   `src/api/types.ts: RegisterEmailCheckReq`, `RegisterEmailCheckResp`.
+5. **Response field `available: Boolean` drives free/taken.** VERDICT: Verified.
+   SOURCE: OpenAPI `RegisterEmailCheckResp.properties.available: boolean` (required);
+   `src/api/types.ts: RegisterEmailCheckResp`; `src/pages/Register.tsx:247`
+   (`setEmailStatus(data.available ? "available" : "unavailable")`).
+6. **Response also has a required `status: string` field; there is NO `email` field on the
+   response.** VERDICT: Corrected. Draft declared an optional `email` field (does not exist)
+   and omitted the required `status` field.
+   SOURCE: OpenAPI `RegisterEmailCheckResp.properties` = `{available, status}`, `required:[status, available]`;
+   `src/api/types.ts: RegisterEmailCheckResp` (`status: string; available: boolean;`).
+7. **`status` is unused for UI branching (mirrors web).** VERDICT: Verified.
+   SOURCE: `src/pages/Register.tsx:247` branches only on `data.available`; `status` is never read.
+8. **Debounce window is 400 ms.** VERDICT: Verified.
+   SOURCE: `src/pages/Register.tsx:262` (`setTimeout(..., 400)` keyed on `emailValue`).
+9. **A new keystroke cancels the prior pending/in-flight check.** VERDICT: Verified
+   (web parity; Android uses `flatMapLatest`).
+   SOURCE: `src/pages/Register.tsx:229,263-266` (`isActive=false`, `clearTimeout` in effect cleanup);
+   Android approach is a framework choice — `kotlinx.coroutines.flow.flatMapLatest`
+   (framework ref: https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-latest.html).
+10. **Only syntactically valid emails are dispatched; invalid/blank dispatch nothing.**
+    VERDICT: Verified (web parity).
+    SOURCE: `src/pages/Register.tsx:219-228` (blank → `idle`; `z.string().email()` invalid → `invalid`, returns early).
+11. **CSRF: `ui_csrf` cookie sent as `X-CSRF-Token` header.** VERDICT: Verified.
+    SOURCE: `src/api/client.ts:168-170` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`),
+    `client.ts:124,183` (`credentials: "include"`).
+12. **No auth session required for `register/check`.** VERDICT: Verified.
+    SOURCE: OpenAPI index line for `POST /ui/register/check` has empty `params=` (no
+    `X-SESSION-ID` / `user_sub` / impersonation), unlike authed `/ui/*` routes; web sends no
+    Authorization for this call (`client.ts:158` only sets it when an access token exists).
+13. **Validation error envelope is FastAPI `detail` (422 `HTTPValidationError`).**
+    VERDICT: Verified.
+    SOURCE: OpenAPI `resp=...;422:HTTPValidationError` for `POST /ui/register/check`;
+    error classification owned by AND-015.
+14. **Backend rate-limits this endpoint (HTTP 429) and may return 400 for invalid input.**
+    VERDICT: Verified (behavior present in web client; advisory-collapsed on Android).
+    SOURCE: `src/pages/Register.tsx:254-257` (`err.status === 429` → `rate_limited`;
+    `err.status === 400` → `invalid`).
+15. **Web reference lives in `Register.tsx` extending an existing screen (no new screen);
+    advisory inline status under the email field.** VERDICT: Verified.
+    SOURCE: `src/pages/Register.tsx:607-631` (inline `checking`/`available`/`unavailable`/
+    `rate_limited`/`error` supporting text under the email input).
+16. **~20s OkHttp call timeout (AND-009) and ViewModel/coroutine cancellation model.**
+    VERDICT: Unverified-assumption (Android-internal cross-ticket convention; not derivable
+    from backend/web sources). SOURCE: AND-009 / AND-018 internal specs (not in this review's
+    authoritative source set).
+17. **Web uses i18n resource keys for these availability strings.** VERDICT: Corrected /
+    Unverified — the web reference uses **hard-coded inline literals**, not i18n keys (no
+    matching keys in `src/i18n/locales/en.json`). The Android plan to use `strings.xml`
+    resources is a deliberate, valid platform improvement, not a mirror of web.
+    SOURCE: `src/pages/Register.tsx:607-631` (literal strings); `src/i18n/locales/en.json`
+    (no `available`/`already exists`/`Checking email` keys found).
+
+### Corrections made
+
+- §5 / §15 / §16: DTO names changed `RegisterCheckRequest`/`RegisterCheckResponse` →
+  `RegisterEmailCheckReq`/`RegisterEmailCheckResp` to match the backend OpenAPI schemas
+  (claims 4).
+- §5: Removed the invented optional response `email` field and **added the required
+  `status: String` field**; documented that `status` is parsed but unused for branching
+  (mirrors web), and that omitting a required field would break Moshi non-null parsing
+  (claims 6, 7).
+- §5 / §7 / §13-R2: Documented that the backend **rate-limits** this endpoint and the web
+  client handles **429 (rate_limited)** and **400 (invalid)** distinctly; clarified that
+  Android collapses 400/422/429/5xx/transport to advisory `Error` and does not retry 429
+  (claims 13, 14).
+- §5: Strengthened CSRF/no-auth claims from "assumed via interceptors" to verified against
+  `client.ts` and the empty OpenAPI `params=` list (claims 11, 12).
+- §2: Corrected the web reference path from the non-existent
+  `frontend/src/api/endpoints/register.ts` to the actual `endpoints/auth.ts`
+  (`registerEmailCheck`), `types.ts`, and `pages/Register.tsx`.
+- §13-R1 and §13-R5 marked **RESOLVED** with verified evidence; §13-R2 augmented with the
+  429 rate-limit evidence.
+
+### Open assumptions
+
+- **OkHttp ~20s call timeout** (claim 16): an AND-009 cross-ticket convention; not present
+  in the backend/web sources provided, so it cannot be verified here. Treated as inherited.
+- **`EmailValidator.isPlausible` semantics** (AND-031): the exact validity rule is an
+  Android-internal core-ui contract not in the authoritative source set; the web uses Zod
+  `z.string().email()` (`Register.tsx:224`) as its analog, but the two need not be identical.
+- **Analytics event/property names** (`register_email_check*`, `email_domain`, `email_len`):
+  Android-internal telemetry convention (AND-052); not derivable from backend/web sources.
+- **`status` string vocabulary** (e.g. is it exactly `"taken"`/`"available"`?): the OpenAPI
+  schema types it only as a free-form `string` with no enum; the precise values are not
+  specified, which is why this ticket (like the web client) does not branch on it.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device); **Emulator** =
+headless AVD `test35` (x86_64, API 35); **Device** = physical Samsung Galaxy A15 5G
+(SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). This ticket is pure logic + a small
+Compose surface with **no** camera/biometrics/push/WebRTC/Telecom hardware needs, so the
+emulator is sufficient for instrumented/UI cases; one ABI/API-parity case is pinned to the
+physical device.
+
+- **TC-AND-055-01** — Debounced single dispatch (happy path).
+  Type: unit (JVM, `kotlinx-coroutines-test` virtual time + Turbine).
+  Target: JVM. Preconditions: `FakeRegistrationRepository(checkResult=Success(true))`.
+  Steps: call `onEmailChange("a@b.com")`; `advanceTimeBy(401ms)`; settle.
+  Expected: `repo.checkCalls == 1`; checked value is trimmed `"a@b.com"`; final
+  `emailAvailability == Available`. Traces: AC-1.
+- **TC-AND-055-02** — Rapid typing collapses to one request.
+  Type: unit (JVM). Target: JVM. Preconditions: fake repo.
+  Steps: emit `onEmailChange` for `"a@"`, `"a@b"`, `"a@b.c"`, `"a@b.com"` within < 400 ms
+  each; then `advanceTimeBy(401ms)`.
+  Expected: `checkCalls == 1`, dispatched only for the final value; no concurrent calls.
+  Traces: AC-1.
+- **TC-AND-055-03** — Invalid email dispatches nothing.
+  Type: unit (JVM). Target: JVM. Preconditions: fake repo.
+  Steps: `onEmailChange("foo")`; `advanceTimeBy(401ms)`.
+  Expected: `checkCalls == 0`; `emailAvailability == Unknown`. Traces: AC-3.
+- **TC-AND-055-04** — Blank email dispatches nothing.
+  Type: unit (JVM). Target: JVM. Steps: `onEmailChange("")`; `advanceTimeBy(401ms)`.
+  Expected: `checkCalls == 0`; `emailAvailability == Unknown`. Traces: AC-3.
+- **TC-AND-055-05** — In-flight `Checking` then clears.
+  Type: unit (JVM). Target: JVM. Preconditions: fake repo with a suspendable/gated result.
+  Steps: dispatch a valid email; assert `emailChecking == true` while suspended; release;
+  assert `emailChecking == false` after result. Traces: AC-4.
+- **TC-AND-055-06** — `available == true` → `Available`, submit unaffected.
+  Type: unit (JVM). Target: JVM. Preconditions: `checkResult=Success(true)`, all other
+  fields valid. Steps: dispatch valid email; settle. Expected: `Available`;
+  `submitEnabled == true`. Traces: AC-2 (negative side), AC-5-adjacent.
+- **TC-AND-055-07** — `available == false` → `Taken`, submit blocked (core AC).
+  Type: unit (JVM). Target: JVM. Preconditions: `checkResult=Success(false)`, all other
+  fields valid. Steps: dispatch valid email; settle.
+  Expected: `emailAvailability == Taken`; `submitEnabled == false`; supporting text resolves
+  `register_email_taken`. Traces: AC-2.
+- **TC-AND-055-08** — Contract test against the real response shape (MockWebServer).
+  Type: contract/MockWebServer (JVM or Robolectric). Target: JVM/Emulator.
+  Preconditions: MockWebServer enqueues `200 {"available": false, "status": "taken"}`.
+  Steps: call `RegistrationApi.checkEmail(RegisterEmailCheckReq("x@y.com"))`.
+  Expected: request is `POST /ui/register/check` with JSON body `{"email":"x@y.com"}` and
+  header `X-CSRF-Token` present; Moshi parses both required fields (`available=false`,
+  `status="taken"`) with no failure; repository maps to `Taken`. Also enqueue
+  `{"available": true, "status": "ok"}` and assert `Available`. Traces: AC-2, AC-7-adjacent.
+- **TC-AND-055-09** — Error responses collapse to advisory `Error`, submit stays enabled.
+  Type: contract/MockWebServer + unit. Target: JVM/Emulator.
+  Preconditions: enqueue, across sub-cases, `422 HTTPValidationError`, `400`, `429`, `500`,
+  and a transport failure/timeout. Steps: dispatch a valid email per sub-case; settle.
+  Expected: each maps to `EmailAvailability.Error`; `submitEnabled` remains as base-field
+  validation dictates (not blocked by the check). Traces: AC-5.
+- **TC-AND-055-10** — Flaky-dev-host / offline path.
+  Type: integration (MockWebServer with throttled/dropped connection) + manual on Device.
+  Target: JVM/Emulator for automated; **Device** for the manual airplane-mode smoke.
+  Preconditions: airplane mode ON (Device) or MockWebServer set to no-response/timeout.
+  Steps: type a valid email; wait past the ~20s call timeout.
+  Expected: `emailAvailability == Error`; no crash, no blocking banner; form still
+  submittable; deferral to `register/start`. Traces: AC-5.
+- **TC-AND-055-11** — Stale-response guard (race).
+  Type: unit (JVM). Target: JVM. Preconditions: gated fake repo.
+  Steps: dispatch check for `"old@x.com"`; before it resolves, `onEmailChange("new@x.com")`;
+  resolve the old call. Expected: the old result is discarded (no `Taken`/`Available` shown
+  for `old@x.com`); state reflects the new value's pipeline; verified via `flatMapLatest`
+  cancellation + email-match guard. Traces: AC-6.
+- **TC-AND-055-12** — `onEmailChange` immediately resets to `Unknown`.
+  Type: unit (JVM). Target: JVM. Preconditions: prior state `Taken`.
+  Steps: `onEmailChange("z@z.com")`. Expected: `emailAvailability == Unknown` synchronously
+  (no stale `Taken`/`Available` shown while re-typing). Traces: AC-6.
+- **TC-AND-055-13** — No raw email in logs / analytics / `toString` (security/privacy).
+  Type: unit (JVM). Target: JVM. Preconditions: fake analytics sink + captured logs.
+  Steps: drive a full check cycle with `"secret@corp.com"`.
+  Expected: emitted events contain only `email_domain`/`email_len`/`availability`/`latency_ms`;
+  the raw local-part never appears in any event, log line, or `RegisterUiState.toString()`.
+  Traces: AC-7.
+- **TC-AND-055-14** — Compose-UI: taken email shows inline error, disables submit, is
+  accessible.
+  Type: Compose-UI / instrumented. Target: Emulator (AVD `test35`).
+  Preconditions: test ViewModel/fake repo returning `available=false`; all other fields valid.
+  Steps: type a known-taken email; advance debounce; assert node with `register_email_taken`
+  text and `error` semantics; assert submit button has `disabled()` semantics; assert the
+  email field's supporting text node uses `liveRegion = Polite`; while checking, assert the
+  spinner exposes a `contentDescription` resolving `register_email_checking`.
+  Expected: all assertions pass (TalkBack-compatible). Traces: AC-2, AC-4, AC-7.
+- **TC-AND-055-15** — ABI/API parity smoke on physical hardware.
+  Type: instrumented/e2e. Target: **Device (MUST run on physical SM-A156U, arm64-v8a,
+  API 34)** to catch arm64-vs-x86 / API-34-vs-35 differences vs the x86_64 API-35 emulator.
+  Preconditions: app installed on the device; reachable via adb (serial R5CX821TA9R).
+  Steps: launch Register; type a known-taken then a fresh email against the dev backend
+  (or MockWebServer over adb-reverse). Expected: inline taken message + disabled submit for
+  taken; available/no-block for fresh; no ABI-specific crash. Traces: AC-2, AC-3.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (debounce: ≤1 call/400 ms, no concurrency) | TC-01, TC-02 |
+| AC-2 (taken surfaced inline before submit; submit disabled) | TC-07, TC-08, TC-14, TC-15 |
+| AC-3 (invalid/blank → no call, no status) | TC-03, TC-04, TC-15 |
+| AC-4 (`emailChecking` spinner shown then cleared, accessible) | TC-05, TC-14 |
+| AC-5 (failed/timeout → advisory `Error`, submit not blocked) | TC-06, TC-09, TC-10 |
+| AC-6 (edit cancels/discards stale; no stale status) | TC-11, TC-12 |
+| AC-7 (no raw email in logs/analytics/`toString`) | TC-13, TC-08, TC-14 |
+| AC-8 (100% branch coverage of pipeline + `toAvailability`) | TC-01..TC-13 (the JVM/contract suite) |

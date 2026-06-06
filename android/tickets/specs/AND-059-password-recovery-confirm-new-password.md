@@ -5,7 +5,8 @@ milestone: M2
 epic: E08
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-058]
 blocks: []
 ---
@@ -20,10 +21,19 @@ collects the new password (with confirmation), validates it against client-side
 strength rules, and POSTs it to `/ui/password-recovery/confirm` together with the
 recovery context produced by the preceding challenge step.
 
+> **Correction (review AND-059):** the confirm request field for the verification
+> code is **`confirmation_code`**, not `code`. Verified against OpenAPI schema
+> `PasswordRecoveryConfirmReq` and `src/api/types.ts: PasswordRecoveryConfirmReq` /
+> `src/api/endpoints/auth.ts: passwordRecoveryConfirm`. The body shape is
+> `{username, confirmation_code, new_password, challenge_id?}` with `challenge_id`
+> **optional** (only `username`, `confirmation_code`, `new_password` are required).
+> All field-name references below have been corrected accordingly.
+
 The goal is a self-contained Compose screen plus its ViewModel that:
 
-- Accepts `username`, `code`, `new_password`, and `challenge_id` (the first three
-  carried in from AND-058, the `new_password` collected here).
+- Accepts `username`, `confirmation_code`, `new_password`, and (optional)
+  `challenge_id` (the first carried in from AND-057/058, the `confirmation_code`
+  and `challenge_id` from AND-058, the `new_password` collected here).
 - Enforces password strength rules locally before enabling submit.
 - Calls the confirm endpoint, maps FastAPI errors to user-facing messages, and on
   success routes the user to the login screen so they can sign in with the new
@@ -46,11 +56,20 @@ test.
   HTTP, unreliable). OpenAPI at `/openapi.json`. The confirm route is part of the
   unauthenticated recovery namespace `/ui/password-recovery/*`; unlike the session
   routes it does **not** require an authenticated cookie, but it does participate in
-  the CSRF scheme (the `ui_csrf` cookie is set on the first recovery call and echoed
-  as `X-CSRF-Token`).
-- **Web reference:** `frontend/src/api/endpoints/passwordRecovery.ts` (confirm call
-  shape) and `frontend/src/api/types.ts` (request/response types). Mirror field names
-  exactly.
+  the CSRF scheme: the web client reads the `ui_csrf` cookie and echoes it as the
+  `X-CSRF-Token` header on **every** request (verified in `src/api/client.ts`:
+  `getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`). *Exactly which
+  recovery response sets the `ui_csrf` cookie is server-side and not visible in the
+  OpenAPI/frontend sources — treated as an unverified assumption; the Android CSRF
+  interceptor must send the header whenever the cookie is present, mirroring the web
+  client.*
+- **Web reference:** `src/api/endpoints/auth.ts: passwordRecoveryConfirm` (confirm
+  call shape — there is **no** `passwordRecovery.ts`; the recovery calls live in
+  `auth.ts`) and `src/api/types.ts: PasswordRecoveryConfirmReq` / `OkResp`
+  (request/response types). The confirm screen flow is in
+  `src/pages/PasswordRecovery.tsx`. Mirror field names exactly. *(Correction: the
+  spec previously cited `frontend/src/api/endpoints/passwordRecovery.ts`, which does
+  not exist.)*
 - **Core deps:** `core-network` (Retrofit/OkHttp/Moshi, persistent cookie jar, CSRF
   interceptor, `ApiResult<T>`), `core-model` (DTOs + domain models), `core-ui`
   (text-field components, password-strength meter), `core-data` (recovery repository).
@@ -64,7 +83,19 @@ FR-1. The screen renders two secure text fields: **New password** and **Confirm
 password**, each with a show/hide toggle.
 
 FR-2. A live password-strength meter and rule checklist updates on every keystroke.
-Rules (client-side, must mirror backend policy):
+
+> **Unverified-assumption (review AND-059):** the specific rules below (12-char
+> minimum, four character classes, not-username, no-triple-repeat) are **not**
+> confirmed by any authoritative source. The web reference (`PasswordRecovery.tsx`)
+> enforces only `new_password >= 8 chars` client-side, and the OpenAPI
+> `PasswordRecoveryConfirmReq.new_password` is an unconstrained `string` (no
+> minLength/pattern). The backend policy is the source of truth and is not exposed in
+> the available sources. **Recommendation:** keep the richer client meter as a UX
+> pre-filter ONLY (do not block submit on rules the server may not enforce), or
+> reduce the hard submit-gate to the web-verified `>= 8` and surface the rest as
+> advisory. Treat server `detail` as authoritative (see §7). The rules as written:
+
+Rules (client-side, advisory pre-filter — must be reconciled with backend policy):
 
 - minimum length 12 characters;
 - at least one uppercase, one lowercase, one digit, one symbol from
@@ -76,7 +107,8 @@ FR-3. The **Set password** button is enabled only when: all strength rules pass,
 two fields match, and no request is in flight.
 
 FR-4. On submit, the ViewModel POSTs to `/ui/password-recovery/confirm` with
-`{username, code, new_password, challenge_id}`.
+`{username, confirmation_code, new_password, challenge_id}` (field name corrected:
+`confirmation_code`, not `code`; `challenge_id` is optional per the schema).
 
 FR-5. On HTTP 200 the screen shows a brief success confirmation and navigates to the
 login route (`route_login`), passing the `username` so the email field is prefilled.
@@ -222,12 +254,20 @@ Authentication: none (recovery namespace). CSRF: `X-CSRF-Token` header echoing t
 `ui_csrf` cookie set during AND-058; supplied automatically by the shared CSRF
 interceptor in `core-network`.
 
+**Verified contract (OpenAPI `PasswordRecoveryConfirmReq` + `src/api/types.ts`):**
+required fields are `username`, `confirmation_code`, `new_password`; `challenge_id`
+is **optional/nullable**. The success response is `OkResp = { "ok": boolean }`
+(`src/api/endpoints/auth.ts: passwordRecoveryConfirm` returns `OkResp`; OpenAPI 200
+is a free-form `object` with `additionalProperties: true`). The previously-documented
+`{status, username}` response shape was **not** verified by any source and has been
+corrected to `OkResp`.
+
 Request body:
 
 ```json
 {
   "username": "jdoe",
-  "code": "482915",
+  "confirmation_code": "482915",
   "new_password": "Str0ng!Passw0rd",
   "challenge_id": "chal_7f3a9c20"
 }
@@ -240,32 +280,35 @@ interface PasswordRecoveryApi {
     @POST("ui/password-recovery/confirm")
     suspend fun confirm(
         @Body body: ConfirmPasswordRequest,
-    ): Response<ConfirmPasswordResponse>
+    ): Response<OkResponse>
 }
 
 @JsonClass(generateAdapter = true)
 data class ConfirmPasswordRequest(
     @Json(name = "username") val username: String,
-    @Json(name = "code") val code: String,
+    @Json(name = "confirmation_code") val confirmationCode: String,
     @Json(name = "new_password") val newPassword: String,
-    @Json(name = "challenge_id") val challengeId: String,
+    // optional per schema; omit (null) if the verified challenge did not return one
+    @Json(name = "challenge_id") val challengeId: String? = null,
 )
 
+// Success response is OkResp = { "ok": boolean }; no username is returned.
 @JsonClass(generateAdapter = true)
-data class ConfirmPasswordResponse(
-    @Json(name = "status") val status: String? = null,   // e.g. "ok"
-    @Json(name = "username") val username: String? = null,
+data class OkResponse(
+    @Json(name = "ok") val ok: Boolean = false,
 )
 ```
 
 Success — HTTP 200:
 
 ```json
-{ "status": "ok", "username": "jdoe" }
+{ "ok": true }
 ```
 
 Error — FastAPI `detail` is mapped via the shared `detail` decoder
-(`string | [{msg,...}] | {code,...}`):
+(`string | [{loc,msg,type}] | {code,message,...}`). The decoder mirrors the web
+client's `normalizeErrorDetail` (verified in `src/api/client.ts`), which handles all
+three shapes plus an object-with-`code` branch (`mapAuthorizationError`):
 
 ```json
 { "detail": "Password does not meet policy requirements." }
@@ -277,6 +320,15 @@ Error — FastAPI `detail` is mapped via the shared `detail` decoder
 { "detail": { "code": "challenge_expired", "message": "Recovery challenge has expired." } }
 ```
 
+> **Verification note:** Only the **422 array** shape is documented in the OpenAPI for
+> this endpoint (`HTTPValidationError = { detail: ValidationError[] }`, where
+> `ValidationError = { loc, msg, type }`, all required). The string-`detail` and
+> object-`detail` (`{code,message}`) shapes are FastAPI `HTTPException` runtime
+> conventions — **not** declared in the OpenAPI for `/ui/password-recovery/confirm`
+> — but the web `normalizeErrorDetail` decodes them, so handling all three remains
+> the correct defensive design. Treat the non-422 shapes as unverified-but-consistent
+> with the web contract.
+
 Status mapping:
 
 | HTTP | Meaning | UI behavior |
@@ -287,9 +339,20 @@ Status mapping:
 | 404 / 410 | `challenge_id` expired/unknown | `fatal = CHALLENGE_EXPIRED` |
 | 5xx / IOException / timeout | Server / network | inline retryable error |
 
-Field names MUST be verified against `/openapi.json` and
-`frontend/src/api/endpoints/passwordRecovery.ts` before merge; this contract is the
-expected shape pending that confirmation (see Open Questions).
+> **Verification note on status codes:** the OpenAPI declares **only `200` and `422`**
+> for `POST /ui/password-recovery/confirm`. The `400/401/403/404/410` rows are
+> defensive mappings (FastAPI may raise `HTTPException` with these at runtime, and the
+> web `client.ts` has explicit `401`/`403` branches) but are **not** documented for
+> this route. Keep the mappings, but the only contractually-guaranteed error code here
+> is `422`; a server policy rejection most likely arrives as `422` (validation) or a
+> string-`detail` error. The client should map by family and fall back to an inline
+> retryable error for anything undocumented.
+
+Field names have been **verified** against the OpenAPI schema
+`PasswordRecoveryConfirmReq` and `src/api/endpoints/auth.ts: passwordRecoveryConfirm`
+/ `src/api/types.ts: PasswordRecoveryConfirmReq` (see §16). The earlier reference to
+`frontend/src/api/endpoints/passwordRecovery.ts` was incorrect — that file does not
+exist; the recovery calls live in `auth.ts`.
 
 ## 6. Data & State Management
 
@@ -318,10 +381,17 @@ fun SavedStateHandle.toRecoveryContext(): RecoveryContext? {
 ```kotlin
 interface RecoveryRepository {
     suspend fun confirmNewPassword(
-        username: String, code: String, newPassword: String, challengeId: String,
+        username: String,
+        confirmationCode: String,        // serialized as wire field "confirmation_code"
+        newPassword: String,
+        challengeId: String? = null,     // optional per schema
     ): ApiResult<Unit>
 }
 ```
+
+> Internal domain naming may keep `code` (as carried from AND-058's `RecoveryContext`),
+> but the **wire field is `confirmation_code`** — the Moshi `@Json(name = ...)` mapping
+> in `ConfirmPasswordRequest` is what guarantees the correct JSON key.
 
 The implementation calls `PasswordRecoveryApi.confirm`, folds the `Response` into
 `ApiResult` via the shared `apiCall { }` helper, and discards the body (mapping to
@@ -409,9 +479,10 @@ reach logcat.
 - double `onSubmit` triggers exactly one repository call.
 
 **Repository (MockWebServer):**
-- request body field names/JSON match the contract (`username`, `code`,
-  `new_password`, `challenge_id`);
-- `X-CSRF-Token` header sent;
+- request body field names/JSON match the verified contract (`username`,
+  `confirmation_code`, `new_password`, optional `challenge_id`);
+- success body deserializes as `OkResp` (`{ "ok": true }`);
+- `X-CSRF-Token` header sent (when `ui_csrf` cookie present);
 - 200 → `ApiResult.Success`; error codes → mapped `ApiResult.Error`.
 
 **Compose UI (`createAndroidComposeRule`):**
@@ -442,12 +513,17 @@ the gating end-to-end test for the ticket.
 
 - **R1 — exact server policy rules.** Client rules must match backend policy or users
   hit confusing server rejections. Mitigation: verify against `/openapi.json` and the
-  auth service; treat server `detail` as authoritative. *Open: confirm minimum length
-  and required character classes from backend config.*
-- **R2 — confirm request schema.** The field set (`username`, `code`, `new_password`,
-  `challenge_id`) is from the backlog scope; verify whether the server expects `code`
-  here or only `challenge_id` once the challenge is verified. *Open: validate against
-  `frontend/src/api/endpoints/passwordRecovery.ts`.*
+  auth service; treat server `detail` as authoritative. *Open (still unverified): the
+  OpenAPI `new_password` field is an unconstrained `string`, and the web client
+  enforces only `>= 8 chars` (`PasswordRecovery.tsx`). The 12-char + character-class +
+  no-triple-repeat rules in FR-2 are NOT confirmed by any source — confirm the actual
+  backend policy before hard-gating submit on them (see §16 Open assumptions).*
+- **R2 — confirm request schema. RESOLVED (review AND-059).** Verified field set is
+  `username`, `confirmation_code`, `new_password` (required) + `challenge_id`
+  (optional). Source: OpenAPI `PasswordRecoveryConfirmReq`, `src/api/types.ts:
+  PasswordRecoveryConfirmReq`, and `src/pages/PasswordRecovery.tsx` (which sends all
+  four). The web sends both `confirmation_code` and `challenge_id`; Android should do
+  the same when `challenge_id` is available.
 - **R3 — unreliable plaintext dev host.** Flaky/timeout responses on confirm; the
   user-initiated retry on a non-idempotent POST could double-apply. Risk is low
   (idempotent in effect — same password) but flagged.
@@ -460,8 +536,10 @@ the gating end-to-end test for the ticket.
 
 - AC-1. Given a valid `RecoveryContext` and a password satisfying all strength rules
   entered identically in both fields, submitting POSTs to
-  `/ui/password-recovery/confirm` with `{username, code, new_password, challenge_id}`
-  and `X-CSRF-Token`; on 200 the app navigates to login with the username prefilled.
+  `/ui/password-recovery/confirm` with
+  `{username, confirmation_code, new_password, challenge_id?}` and `X-CSRF-Token`
+  (when the `ui_csrf` cookie is present); on 200 (`{ "ok": true }`) the app navigates
+  to login with the username prefilled.
 - AC-2. The user can then log in with the new password (verified by the integration
   test driving the session-start flow to a successful `auth_required`/finalize).
 - AC-3. The **Set password** button is disabled whenever any rule fails, the fields
@@ -493,3 +571,250 @@ the gating end-to-end test for the ticket.
 - Request/response field names confirmed against `/openapi.json` and the web
   reference; any deviation from Section 5 reconciled before merge.
 - PR description links AND-057/AND-058 and notes the plaintext-HTTP dev caveat.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Endpoint is `POST /ui/password-recovery/confirm`.** — **Verified.**
+   OpenAPI `POST /ui/password-recovery/confirm`
+   (op=`password_recovery_confirm_ui_password_recovery_confirm_post`);
+   `src/api/endpoints/auth.ts: passwordRecoveryConfirm`.
+2. **Request field for the verification code is `confirmation_code` (NOT `code`).** —
+   **Corrected.** OpenAPI schema `PasswordRecoveryConfirmReq.confirmation_code`;
+   `src/api/types.ts: PasswordRecoveryConfirmReq`; `src/pages/PasswordRecovery.tsx`
+   (sends `confirmation_code`). The spec's `code` was wrong.
+3. **Required request fields are `username`, `confirmation_code`, `new_password`;
+   `challenge_id` is optional/nullable.** — **Corrected.** OpenAPI
+   `PasswordRecoveryConfirmReq.required = [username, confirmation_code, new_password]`;
+   `challenge_id` typed `anyOf [string, null]`; `src/api/types.ts` shows
+   `challenge_id?: string`. The spec implied `challenge_id` was required.
+4. **Success response is `OkResp = { "ok": boolean }`, NOT `{status, username}`.** —
+   **Corrected.** `src/api/endpoints/auth.ts: passwordRecoveryConfirm` returns
+   `OkResp`; `src/api/types.ts: OkResp = { ok: boolean }`; OpenAPI 200 schema is a
+   free-form object (`additionalProperties: true`, no declared fields). No `username`
+   is returned; the Android screen must take `username` from the in-memory
+   `RecoveryContext`, not the response.
+5. **Web reference file is `src/api/endpoints/auth.ts` (`passwordRecoveryConfirm`),
+   not `passwordRecovery.ts`.** — **Corrected.** No `passwordRecovery.ts` exists;
+   recovery calls are in `auth.ts`. Confirm screen behavior is in
+   `src/pages/PasswordRecovery.tsx`.
+6. **CSRF: `X-CSRF-Token` header echoes the `ui_csrf` cookie on every request.** —
+   **Verified.** `src/api/client.ts`: `getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`. (Which response *sets* the `ui_csrf` cookie is
+   server-side — see Open assumptions.)
+7. **Recovery namespace is unauthenticated; no session-refresh-on-401 applies.** —
+   **Verified.** `src/api/client.ts`: the 401 refresh/retry path runs only
+   `if (useAuthStore.getState().isAuthenticated)`; an unauthenticated 401 propagates
+   directly via `ApiError(401, ...)`. Recovery has no stored access token.
+8. **Network/offline error surfaces as a transport failure (not an HTTP code).** —
+   **Verified.** `src/api/client.ts`: a `fetch` throw → `throw new ApiError(0,
+   "Network error", err)`. Android equivalent: `IOException`/`SocketTimeout` →
+   retryable inline error.
+9. **`detail` decoding handles `string | [{loc,msg,type}] | {code,message}`.** —
+   **Verified (frontend) / partially-verified (OpenAPI).** `src/api/client.ts:
+   normalizeErrorDetail` (+ `mapAuthorizationError`) handles all three; OpenAPI
+   declares only the **array** form for this route
+   (`HTTPValidationError = { detail: ValidationError[] }`,
+   `ValidationError = { loc, msg, type }` all required). String/object shapes are
+   FastAPI runtime conventions, not declared for this endpoint.
+10. **Documented response codes for confirm are only `200` and `422`.** —
+    **Verified.** OpenAPI index line for `/ui/password-recovery/confirm`:
+    `resp=200:;422:HTTPValidationError`. The `400/401/403/404/410` mappings in §5 are
+    defensive (and `client.ts` has 401/403 branches generally) but are **not**
+    documented for this route → Corrected to label them defensive/unverified.
+11. **Password strength rules (12 chars, 4 char-classes, not-username,
+    no-triple-repeat).** — **Unverified-assumption.** No source confirms them. Web
+    enforces only `new_password.min(8)` (`src/pages/PasswordRecovery.tsx`); OpenAPI
+    `new_password` is an unconstrained `string`. Backend policy not exposed.
+12. **AC-2 login verification uses `POST /ui/session/start` (+ finalize).** —
+    **Verified (endpoints).** OpenAPI `POST /ui/session/start`
+    (req=`UiSessionStartReq`, resp `UiSessionStartResp`) and
+    `POST /ui/session/finalize`; `src/api/types.ts: SessionStartResp`
+    (`auth_required`, `required_factors`, optional `challenge_id`/`session_id`). The
+    exact post-confirm login sequence/factors are owned by the auth feature.
+13. **Web confirm flow shows inline `err.detail` on error and stays on-screen; shows a
+    success state on success.** — **Verified.** `src/pages/PasswordRecovery.tsx:
+    handleConfirm` (`setError(err.detail ...)` on `ApiError`, `setStep("success")` on
+    success).
+14. **Compose / Hilt / Retrofit-Moshi / SavedStateHandle implementation choices.** —
+    **Framework ref (not contract).** Compose state hoisting + `SavedStateHandle`:
+    https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate ;
+    `PasswordVisualTransformation`:
+    https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/PasswordVisualTransformation ;
+    autofill `ContentType.NewPassword`:
+    https://developer.android.com/develop/ui/compose/text/autofill .
+
+### Corrections made
+
+- **C1.** `code` → **`confirmation_code`** in the request body, Retrofit DTO, FR-1/FR-4,
+  §5 JSON, AC-1, and the MockWebServer test (claims 2). Internal domain naming may keep
+  `code`, but the wire key is `confirmation_code`.
+- **C2.** Success response **`{status, username}` → `OkResp { ok }`**; removed the
+  assumption that the server echoes `username`; screen now sources `username` from
+  `RecoveryContext` (claim 4).
+- **C3.** `challenge_id` reclassified from required to **optional/nullable** in the DTO,
+  §5, FR-1, and AC-1 (claim 3).
+- **C4.** Web-reference path **`frontend/src/api/endpoints/passwordRecovery.ts` →
+  `src/api/endpoints/auth.ts: passwordRecoveryConfirm`** (claim 5), in §2/§5.
+- **C5.** Status-code table annotated: only `200`/`422` are documented; the other rows
+  are explicitly labeled defensive/unverified (claim 10).
+- **C6.** FR-2 strength rules + R1 annotated as **unverified assumptions** (web enforces
+  only `min(8)`); recommended making them advisory rather than a hard submit gate
+  (claim 11).
+- **C7.** §5 error-shape block annotated: only the 422 array shape is OpenAPI-declared
+  (claim 9).
+
+### Open assumptions (could not be verified from the available sources)
+
+- **OA-1 — Backend password policy.** The real strength policy (min length, required
+  classes) is not in the OpenAPI (unconstrained `string`) or the web client (which only
+  checks `>= 8`). Why: backend config/business logic is not in the provided sources.
+  Action: confirm with the auth service before hard-gating submit on the FR-2 rules.
+- **OA-2 — Which recovery response sets `ui_csrf`.** The header-echo behavior is
+  verified, but the `Set-Cookie` source is server-side and not in OpenAPI/frontend.
+  Why: cookies are emitted by the backend, not described in the spec. Action: confirm
+  the cookie is present after AND-058; otherwise confirm will fail CSRF.
+- **OA-3 — Non-422 error codes (400/401/403/404/410) for confirm.** Not documented for
+  this route; the `challenge_expired`/object-`detail` shape is a defensive convention.
+  Why: only 200/422 are declared. Action: capture a real expired-challenge response
+  from the dev host to confirm the actual status/shape.
+- **OA-4 — Username prefill into login.** The web app does not pass `username` into the
+  login screen after success; this is an Android UX decision, not a verified web
+  behavior. Why: `PasswordRecovery.tsx` shows a static success card. Action: acceptable
+  as a design choice; not a contract.
+- **OA-5 — Autofill "save new credential" prompt.** Device/IME-dependent (R5). Why:
+  platform behavior, not in sources. Action: verify on the physical device.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device);
+**emu(test35)** = headless AVD `test35`, x86_64, API 35, in CI;
+**device(A15)** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a).
+Hardware/real-network cases prefer **device(A15)**.
+
+- **TC-AND-059-01 — PasswordPolicy rule evaluation (unit).**
+  Type: unit. Target: JVM. Preconditions: `PasswordPolicy.evaluate` available.
+  Steps: parameterized inputs exercising each rule independently — length boundary
+  (11 fail / 12 pass), each class present/absent, symbol-set membership for the full
+  `!@#$%^&*()-_=+[]{};:,.?` set, case-insensitive username equality (`JDOE` vs `jdoe`),
+  triple-repeat (`aab` passes, `aaa` fails). Expected: each `PasswordRuleResults` flag
+  matches the expectation; `allPass` true only when all flags true.
+  Traces: AC-3. *(Note: rules are unverified — see OA-1; test the implemented policy,
+  not a backend contract.)*
+
+- **TC-AND-059-02 — Submit gate logic (unit/ViewModel).**
+  Type: unit. Target: JVM (Robolectric for `SavedStateHandle`), Turbine,
+  `MainDispatcherRule`, fake `RecoveryRepository`. Preconditions: valid
+  `RecoveryContext`. Steps: type a rule-passing password in both fields → assert
+  `isSubmitEnabled = true`; make fields differ → `false`; clear a rule →`false`; set
+  `isSubmitting = true` → `false`. Expected: gate true only when all rules pass AND
+  passwords match AND not submitting. Traces: AC-3.
+
+- **TC-AND-059-03 — Happy-path confirm + navigation (ViewModel).**
+  Type: unit. Target: JVM, fake repo returning `ApiResult.Success(Unit)`.
+  Preconditions: valid context, valid matching passwords. Steps: `onSubmit()`.
+  Expected: exactly one `confirmNewPassword(username, confirmationCode, newPassword,
+  challengeId)` call; on success `result = ConfirmResult.Success(username)`,
+  `isSubmitting=false`, and password fields cleared from `UiState` + `SavedStateHandle`.
+  Traces: AC-1, AC-7.
+
+- **TC-AND-059-04 — Request body & headers on the wire (contract/MockWebServer).**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer enqueues
+  `200 {"ok":true}`; `ui_csrf` cookie seeded in the cookie jar. Steps: call repository
+  `confirmNewPassword(...)`. Expected: recorded request path `=
+  /ui/password-recovery/confirm`, method `POST`; JSON body keys are exactly
+  `username`, `confirmation_code`, `new_password`, `challenge_id` (no `code` key);
+  `X-CSRF-Token` header equals the cookie value; response deserializes as `OkResp`
+  and folds to `ApiResult.Success`. Traces: AC-1, AC-7.
+
+- **TC-AND-059-05 — 422 validation error, all decoder shapes (contract + unit).**
+  Type: contract/MockWebServer + unit. Target: JVM. Preconditions: MockWebServer.
+  Steps: enqueue (a) `422 {"detail":[{"loc":["body","new_password"],"msg":"string too
+  short","type":"value_error"}]}`, (b) `400 {"detail":"Password does not meet policy
+  requirements."}`, (c) `{"detail":{"code":"challenge_expired","message":"..."}}`.
+  Submit for each. Expected: (a)+(b) → inline `errorMessage` = decoded `detail` text,
+  screen retained; (c) → `fatal = CHALLENGE_EXPIRED`. The array case joins `msg`
+  values; the object case maps `message`/`code`. Traces: AC-4, AC-5.
+
+- **TC-AND-059-06 — Expired/invalid challenge → Start over (ViewModel/UI).**
+  Type: unit + Compose-UI. Target: JVM + emu(test35). Preconditions: repo returns the
+  `challenge_expired` error (or 404/410). Steps: submit; then tap "Start over".
+  Expected: `fatal = CHALLENGE_EXPIRED` state renders with a working "Start over"
+  action that invokes the pop-to-recovery-start nav lambda. Traces: AC-5.
+
+- **TC-AND-059-07 — Missing RecoveryContext (ViewModel/UI).**
+  Type: unit + Compose-UI. Target: JVM + emu(test35). Preconditions: empty
+  `SavedStateHandle` (no `username`/`code`/`challenge_id`). Steps: construct ViewModel /
+  open screen. Expected: `fatal = MISSING_CONTEXT` immediately; **no** repository/network
+  call is made; UI shows the missing-context state and routes to recovery start.
+  Traces: AC-6.
+
+- **TC-AND-059-08 — Double-submit guard (unit).**
+  Type: unit. Target: JVM, fake repo with a suspending/delayed success. Steps: call
+  `onSubmit()` twice before the first completes. Expected: exactly one repository call;
+  button disabled while `isSubmitting`. Traces: AC-3.
+
+- **TC-AND-059-09 — Flaky dev host / offline / timeout (contract + device).**
+  Type: contract/MockWebServer + instrumented. Target: JVM (MockWebServer:
+  `SocketPolicy.NO_RESPONSE` / disconnect for timeout & connection drop) and a
+  confirming run on **device(A15)** with the radio off (airplane mode) hitting the real
+  dev host. Steps: submit while the host is unreachable / mid-timeout. Expected:
+  transport failure maps to a **retryable inline error** (not a fatal, not a wrong-code
+  crash); `isSubmitting` resets; a user-initiated "Try again" re-issues exactly one
+  POST. Must run on device(A15) for the real airplane-mode/network-loss behavior.
+  Traces: AC-1 (resilience aspect).
+
+- **TC-AND-059-10 — Compose UI: gating, toggles, checklist (Compose-UI).**
+  Type: Compose-UI. Target: emu(test35) (`createAndroidComposeRule`). Steps: enter
+  partial then full passwords; toggle show/hide on each field. Expected: "Set password"
+  disabled until valid then enabled; rule checklist rows update per keystroke;
+  show/hide flips the visual transformation and the toggle `contentDescription`
+  updates. Traces: AC-3, AC-8.
+
+- **TC-AND-059-11 — Security: redaction & no-persistence (unit + instrumented).**
+  Type: unit + instrumented. Target: JVM (logging interceptor redaction assertion) +
+  device(A15) (filesystem/SavedState inspection). Steps: submit with a known password;
+  capture OkHttp interceptor output; trigger success; inspect `SavedStateHandle` and any
+  app storage. Expected: `new_password`/`confirmation_code` never appear in logcat
+  (recovery bodies redacted); no password written to Room/DataStore/disk; password
+  state cleared from `UiState` + `SavedStateHandle` after success. Traces: AC-7.
+
+- **TC-AND-059-12 — Rotation / process-death input restore (instrumented).**
+  Type: instrumented. Target: emu(test35). Steps: enter both passwords + toggle
+  visibility; rotate the device / simulate process death + restore. Expected: entered
+  text and visibility flags restored from `SavedStateHandle`; no crash; password not
+  leaked to disk during save. Traces: AC-8, AC-7.
+
+- **TC-AND-059-13 — Accessibility: TalkBack, focus order, live-region error
+  (instrumented/manual).**
+  Type: instrumented + manual. Target: device(A15) with TalkBack on. Steps: navigate the
+  form with TalkBack and an external keyboard; trigger a submit error. Expected: each
+  rule row announces pass/fail (status by icon+text, not color alone); toggles announce
+  state; logical focus order new → confirm → submit; targets ≥48dp; the inline error is
+  announced via a live region; all strings externalized. Run on device(A15) for real
+  TalkBack behavior. Traces: AC-8.
+
+- **TC-AND-059-14 — End-to-end acceptance: confirm then log in (integration/e2e).**
+  Type: integration/e2e. Target: device(A15) against the dev backend (fallback: fully
+  scripted MockWebServer for CI). Preconditions: a recoverable account; AND-057→AND-058
+  run to produce a verified `RecoveryContext` + `ui_csrf` cookie. Steps: confirm a new
+  password (POST `/ui/password-recovery/confirm` → `{"ok":true}`); then drive
+  `POST /ui/session/start` with the username + new password and complete finalize.
+  Expected: confirm returns 200; the subsequent session-start succeeds
+  (`auth_required`/finalize path), proving the password was actually changed and is
+  usable. Prefer device(A15) for real-network + arm64/API-34 behavior. Traces: AC-1,
+  AC-2.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|----------------------|------------|
+| AC-1 (POST shape + nav to login on 200) | TC-04, TC-03, TC-09, TC-14 |
+| AC-2 (login with new password) | TC-14 |
+| AC-3 (submit gate disabled states) | TC-01, TC-02, TC-08, TC-10 |
+| AC-4 (policy/validation `detail` shapes inline) | TC-05 |
+| AC-5 (expired challenge → Start over) | TC-05(c), TC-06 |
+| AC-6 (missing context, no network call) | TC-07 |
+| AC-7 (no log/persist; cleared on success; redaction) | TC-03, TC-04, TC-11, TC-12 |
+| AC-8 (rotation, TalkBack/keyboard, externalized strings) | TC-10, TC-12, TC-13 |

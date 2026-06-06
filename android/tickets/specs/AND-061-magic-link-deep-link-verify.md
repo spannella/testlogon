@@ -5,7 +5,8 @@ milestone: M2
 epic: E08
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-060, AND-022]
 blocks: []
 ---
@@ -50,10 +51,15 @@ the user on a blank screen.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext
   HTTP, unreliable). OpenAPI at `/openapi.json`. Verify endpoint:
   `POST /ui/passwordless/verify`.
-- **Auth model:** cookie-based session + `ui_csrf` cookie echoed as `X-CSRF-Token`;
-  persistent cookie jar required (shared with AND-022 session bootstrap). A
-  successful verify is equivalent to `POST /ui/session/finalize` — it must leave the
-  cookie jar authenticated so a subsequent `GET /ui/me` succeeds.
+- **Auth model:** cookie-based session + `ui_csrf` cookie echoed as `X-CSRF-Token`
+  (verified: `src/api/client.ts` reads the `ui_csrf` cookie and sets the
+  `X-CSRF-Token` header); persistent cookie jar required (shared with AND-022 session
+  bootstrap). A successful verify must leave the cookie jar authenticated so a
+  subsequent `GET /ui/me` (verified op `ui_me_ui_me_get`) succeeds.
+  *(Note: `POST /ui/passwordless/verify` and `POST /ui/session/finalize` are distinct
+  endpoints; the earlier draft's "equivalent to finalize" wording is dropped — verify
+  is its own operation that returns its own session, no separate finalize call is
+  made. See §16.)*
 - **Dependencies:** AND-060 (passwordless start; shares the `PasswordlessApi` and the
   email-link format), AND-022 (NavHost & typed routes the deep link resolves to).
 
@@ -73,15 +79,20 @@ FR-3. On entry, the screen MUST immediately POST the token to
 `/ui/passwordless/verify` and display a determinate "Verifying…" loading state
 while the call is in flight.
 
-FR-4. On a response where `auth_required == false` (full session granted), the app
-MUST treat the user as authenticated and navigate to the authenticated home
-destination (`Route.Home`), clearing the magic-link destination from the back stack
-(so Back does not return to the verify screen).
+FR-4. On a **full-session** response (`status == "ok"` AND `session_id` present;
+`auth_required` is `false`), the app MUST treat the user as authenticated and
+navigate to the authenticated home destination (`Route.Home`), clearing the
+magic-link destination from the back stack (so Back does not return to the verify
+screen).
+*(Corrected: the success discriminator is `status == "ok"` + `session_id`, mirroring
+the web client — see §16. The earlier draft branched solely on `auth_required ==
+false`. The response always includes a required `status` string and an optional
+`session_id`; both were absent from the original draft and are now modeled in §5.)*
 
-FR-5. On a response where `auth_required == true`, the app MUST navigate to the MFA
-challenge entry, passing `challenge_id` and `required_factors[]`, reusing the same
-MFA route/contract used by the password login path. The verify destination MUST be
-popped from the back stack.
+FR-5. On an **MFA-required** response (`auth_required == true` AND `challenge_id`
+present), the app MUST navigate to the MFA challenge entry, passing `challenge_id`
+and `required_factors[]`, reusing the same MFA route/contract used by the password
+login path. The verify destination MUST be popped from the back stack.
 
 FR-6. The flow MUST work in all three launch modes: cold start (app not running),
 warm start (process alive, Activity recreated), and hot/foreground (Activity
@@ -195,6 +206,8 @@ class MagicLinkVerifyViewModel @Inject constructor(
         if (verifyJob?.isActive == true) return            // dedupe FR-6
         verifyJob = viewModelScope.launch {
             _state.value = MagicLinkUiState.Verifying
+            // toUiState() maps: status=="ok" && session_id!=null -> Authenticated;
+            // auth_required && challenge_id!=null -> MfaRequired; else INVALID (see §5).
             _state.value = passwordlessRepository.verify(token).toUiState()
         }
     }
@@ -242,18 +255,36 @@ Request body (`PasswordlessVerifyRequest`):
 { "token": "<opaque one-time token from email link>" }
 ```
 
+> **Verified against `PasswordlessVerifyResp` (OpenAPI) and `src/api/types.ts:
+> PasswordlessVerifyResp`.** The response has FIVE fields, not three: `status`
+> (string, **required**), `session_id` (string | null), `auth_required` (boolean,
+> default `false`), `challenge_id` (string | null), and `required_factors`
+> (string[]). The original draft omitted `status` and `session_id`; they are now
+> modeled below. (Corrected — see §16.)
+
 Success response (200) — full session granted:
 ```json
-{ "auth_required": false, "challenge_id": null, "required_factors": [] }
+{ "status": "ok",
+  "session_id": "sess_…",
+  "auth_required": false,
+  "challenge_id": null,
+  "required_factors": [] }
 ```
 
-Success response (200) — second factor still required (mirrors
-`/ui/session/start`):
+Success response (200) — second factor still required (similar to
+`/ui/session/start`, which returns `auth_required` / `challenge_id` /
+`required_factors` / `session_id` but **no** `status` field):
 ```json
-{ "auth_required": true,
+{ "status": "mfa_required",
+  "session_id": null,
+  "auth_required": true,
   "challenge_id": "chg_8f2…",
   "required_factors": ["totp"] }
 ```
+*(Note: the exact non-"ok" `status` value for the MFA branch is not pinned by the
+OpenAPI schema — `status` is a free-form string. The branch MUST be discriminated by
+`auth_required == true` + `challenge_id` presence, exactly as the web client does
+(`src/pages/MagicLinkVerify.tsx`), NOT by the literal `status` string.)*
 
 Kotlin/Moshi models (`core-model`):
 ```kotlin
@@ -262,24 +293,41 @@ data class PasswordlessVerifyRequest(val token: String)
 
 @JsonClass(generateAdapter = true)
 data class PasswordlessVerifyResponse(
-    @Json(name = "auth_required") val authRequired: Boolean,
+    @Json(name = "status") val status: String,                 // required; "ok" == full session
+    @Json(name = "session_id") val sessionId: String?,         // present on full-session success
+    @Json(name = "auth_required") val authRequired: Boolean = false,
     @Json(name = "challenge_id") val challengeId: String?,
     @Json(name = "required_factors") val requiredFactors: List<String> = emptyList(),
 )
 ```
 
-Error responses use the standard FastAPI `detail` shape, mapped by the shared
-error mapper (string | `[{msg}]` | `{code,…}`):
-- **400/422** — malformed/missing token → `MagicLinkError.INVALID`.
-- **401/403** — token expired or already consumed. The discriminator is the
-  `detail.code` (e.g. `"token_expired"`, `"token_used"`) when the object form is
-  returned; map to `EXPIRED` / `USED`, else fall back to `INVALID`.
-- **404** — token not found → `INVALID`.
+**Branching rule (matches `src/pages/MagicLinkVerify.tsx`):**
+- Full session → `status == "ok" && session_id != null` → `Authenticated`.
+- MFA → `auth_required == true && challenge_id != null` → `MfaRequired`.
+- Otherwise (e.g. `status` not "ok" and not MFA) → treat as `INVALID` error.
+
+Error responses: **Unverified beyond 422.** The OpenAPI index lists only
+`resp=200:PasswordlessVerifyResp;422:HTTPValidationError` for this endpoint — i.e.
+the only *documented* non-200 status is **422** (`HTTPValidationError`, the standard
+FastAPI `detail: [{loc,msg,type}]` array). The web client (`MagicLinkVerify.tsx`)
+treats **any** thrown error (and any non-"ok"/non-MFA 200 body) generically as
+"link may have expired or already been used" — it does NOT inspect a `detail.code`.
+The mapping below is therefore a **best-effort assumption**, not a verified contract:
+- **422** — malformed/missing token (validation) → `MagicLinkError.INVALID`. *(verified status code)*
+- **400/401/403/404** — expired / already-consumed / not-found token. **Assumed**;
+  none of these status codes are declared in the OpenAPI for this op. If present, the
+  client SHOULD attempt to read a `detail.code` (e.g. `"token_expired"`,
+  `"token_used"`) and map to `EXPIRED` / `USED`, **falling back to `INVALID`** when
+  the code is absent or unrecognized (which, per the web client, is the expected
+  common case). *(unverified — see §16 Open assumptions.)*
 - **5xx** — `SERVER`.
 
-When `auth_required == false`, the verify screen does **not** call `GET /ui/me`
-(the home destination owns its own bootstrap), but the cookie jar MUST be
-authenticated after the call.
+On a full-session success the verify screen does **not** call `GET /ui/me`, the
+home destination owns its own bootstrap. *(Divergence from web: the web client
+DOES call `getMe()` (`GET /ui/me`) immediately after a successful verify —
+`src/pages/MagicLinkVerify.tsx` line 35, `src/api/endpoints/auth.ts: getMe`. This is
+an intentional Android design choice, not a contract requirement; see §16.)* The
+cookie jar MUST be authenticated after the verify call regardless.
 
 ## 6. Data & State Management
 
@@ -415,9 +463,14 @@ Sequencing: AND-022 → AND-060 → **AND-061**.
 - **Process-death re-verify:** if verify succeeds but the process dies before
   navigation, restore re-POSTs and gets `USED`. Acceptable trade-off; persisting a
   "consumed" flag is rejected to avoid storing token-derived state.
-- **Exact error discriminator:** the precise `detail.code` strings for expired vs
-  used are assumed from `/openapi.json`; confirm against the live schema. Mapping
-  falls back to `INVALID` if codes differ.
+- **Exact error discriminator (CONFIRMED GAP):** the OpenAPI schema declares only
+  `200` and `422` for `POST /ui/passwordless/verify` — there is **no** documented
+  401/403/404 response and **no** `detail.code` enum for expired-vs-used. The web
+  client (`src/pages/MagicLinkVerify.tsx`) does not distinguish them; it shows one
+  generic "expired or already used" message. The Android `EXPIRED`/`USED` split is
+  therefore aspirational and MUST fall back to `INVALID`. *Open question:* does the
+  live backend actually emit distinct codes/status for expired vs consumed? Verify
+  against a running dev host before relying on the split. (See §16 Open assumptions.)
 - **Dev-host cleartext in release:** ensure the `http://18.222.237.167` intent-filter
   and cleartext permission are stripped from release variants.
 
@@ -458,3 +511,254 @@ Sequencing: AND-022 → AND-060 → **AND-061**.
   to exclude the dev cleartext filter.
 - Code reviewed and merged; AND-061 acceptance ("tapping the link opens the app and
   completes/branches auth") demonstrated on a device/emulator.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source. Sources are
+exact pointers into the OpenAPI index/spec or the frontend reference app.
+
+1. **Endpoint is `POST /ui/passwordless/verify`.** VERIFIED.
+   Source: OpenAPI `POST /ui/passwordless/verify` (op
+   `passwordless_verify_ui_passwordless_verify_post`); frontend
+   `src/api/endpoints/auth.ts: passwordlessVerify` (`api.post("/ui/passwordless/verify", body)`).
+2. **Request body is `{ "token": string }` (`PasswordlessVerifyRequest`).** VERIFIED.
+   Source: OpenAPI schema `PasswordlessVerifyReq` (single required `token: string`);
+   `src/api/types.ts: PasswordlessVerifyReq`.
+3. **Companion start endpoint is `POST /ui/passwordless/start` with `{username}`.**
+   VERIFIED (context only; owned by AND-060). Source: OpenAPI `POST
+   /ui/passwordless/start`, schema `PasswordlessStartReq` (`username` required);
+   `src/api/types.ts: PasswordlessStartReq`.
+4. **Verify response carries `auth_required` (bool), `challenge_id` (string|null),
+   `required_factors` (string[]).** VERIFIED.
+   Source: OpenAPI schema `PasswordlessVerifyResp`; `src/api/types.ts:
+   PasswordlessVerifyResp`.
+5. **Verify response ALSO carries `status` (string, REQUIRED) and `session_id`
+   (string|null) — both omitted by the original draft.** CORRECTED.
+   Source: OpenAPI schema `PasswordlessVerifyResp` (`required: ["status"]`, plus
+   `session_id` anyOf string/null); `src/api/types.ts: PasswordlessVerifyResp`
+   (`status: string; session_id?: string`).
+6. **Full-session success is discriminated by `status == "ok"` + `session_id`
+   present (NOT solely by `auth_required == false`).** CORRECTED.
+   Source: `src/pages/MagicLinkVerify.tsx` line 33
+   (`if (resp.status === "ok" && resp.session_id)`).
+7. **MFA branch is discriminated by `auth_required == true` + `challenge_id`
+   present.** VERIFIED. Source: `src/pages/MagicLinkVerify.tsx` line 41
+   (`else if (resp.auth_required && resp.challenge_id)`).
+8. **The verify response "mirrors `/ui/session/start`".** CORRECTED (partially true).
+   `UiSessionStartResp` has `auth_required` (required), `challenge_id`,
+   `required_factors`, `session_id` — but **no `status`** field; `PasswordlessVerifyResp`
+   adds the required `status`. Source: OpenAPI schemas `UiSessionStartResp` vs
+   `PasswordlessVerifyResp`.
+9. **Auth model: cookie session + `ui_csrf` cookie echoed as `X-CSRF-Token`.**
+   VERIFIED. Source: `src/api/client.ts` (`getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`).
+10. **A subsequent `GET /ui/me` is the session-bootstrap endpoint.** VERIFIED.
+    Source: OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`); `src/api/endpoints/auth.ts:
+    getMe` (`api.get("/ui/me")`), `MeResp { user_sub, session_id }` in
+    `src/api/types.ts`.
+11. **Web client calls `GET /ui/me` after a successful verify; Android intentionally
+    does NOT (home owns bootstrap).** VERIFIED (divergence documented).
+    Source: `src/pages/MagicLinkVerify.tsx` line 35 (`const me = await getMe();`).
+12. **Original draft claim "successful verify is equivalent to `POST
+    /ui/session/finalize`".** CORRECTED. They are distinct ops; verify returns its own
+    session and no finalize call is made. Source: OpenAPI `POST /ui/session/finalize`
+    (op `ui_session_finalize_...`, req `UiSessionFinalizeReq`) is a separate endpoint;
+    `src/pages/MagicLinkVerify.tsx` invokes only `passwordlessVerify` then `getMe`.
+13. **Web route is `/magic-link-verify`, reading the `token` query param.** VERIFIED.
+    Source: `src/App.tsx` line 278 (`<Route path="/magic-link-verify" .../>`);
+    `src/pages/MagicLinkVerify.tsx` line 16 (`searchParams.get("token")`).
+14. **Error contract: distinct 401/403/404 + `detail.code` for expired vs used.**
+    UNVERIFIED-ASSUMPTION. OpenAPI declares only `200` and `422`
+    (`HTTPValidationError`) for this op. The web client handles all errors generically.
+    Source: OpenAPI index line for `POST /ui/passwordless/verify`
+    (`resp=200:PasswordlessVerifyResp;422:HTTPValidationError`);
+    `src/pages/MagicLinkVerify.tsx` `catch` block (generic message).
+15. **422 validation error shape is FastAPI `detail: [{loc,msg,type}]`.** VERIFIED.
+    Source: OpenAPI `HTTPValidationError` / `ValidationError` schema referenced by the
+    `422` response of every `/ui/*` op.
+16. **Missing/blank token → no network call.** VERIFIED against web behavior.
+    Source: `src/pages/MagicLinkVerify.tsx` lines 19-23 (early `return` when `!token`).
+17. **Android App Links / `autoVerify` + `assetlinks.json` + `singleTask` /
+    `onNewIntent` deep-link delivery + `navDeepLink`.** UNVERIFIED-ASSUMPTION
+    (framework choice, not derivable from backend/web sources). Sources (framework ref):
+    https://developer.android.com/training/app-links (App Links & autoVerify),
+    https://developer.android.com/training/app-links/verify-android-applinks
+    (assetlinks.json Digital Asset Links),
+    https://developer.android.com/guide/navigation/navigation-deep-link
+    (`navDeepLink` / `handleDeepLink`),
+    https://developer.android.com/guide/components/activities/tasks-and-back-stack
+    (`singleTask` / `onNewIntent`).
+18. **`SavedStateHandle` survives process death / config change for the token nav
+    arg.** UNVERIFIED-ASSUMPTION (framework ref):
+    https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate
+19. **Cleartext dev host (`http://18.222.237.167`) restricted out of release variants.**
+    UNVERIFIED-ASSUMPTION (project/ops decision, framework ref):
+    https://developer.android.com/privacy-and-security/security-config (cleartext /
+    network security config).
+
+### Corrections made
+
+- **§5 / FR-4:** success discriminator changed from `auth_required == false` to
+  `status == "ok"` + `session_id` present (matches `src/pages/MagicLinkVerify.tsx`).
+- **§5 model:** added the required `status: String` and optional `session_id: String?`
+  fields to `PasswordlessVerifyResponse` (and JSON examples), which the draft omitted;
+  `authRequired` defaulted to `false` per the schema default.
+- **§5 errors:** demoted the 401/403/404 + `detail.code` (`token_expired`/`token_used`)
+  mapping to an explicit best-effort assumption; only `200` and `422` are documented.
+- **§2:** dropped the "verify is equivalent to `POST /ui/session/finalize`" claim
+  (distinct ops); clarified that no finalize call is made; cited the CSRF/cookie and
+  `/ui/me` sources.
+- **§5:** documented that the web client calls `GET /ui/me` after success while Android
+  deliberately defers bootstrap to the home destination.
+- **§13:** upgraded the "exact error discriminator" risk to a confirmed schema gap.
+
+### Open assumptions
+
+- **Distinct backend error codes/status for expired vs already-used tokens** cannot be
+  confirmed: the OpenAPI declares only `200`/`422` for the verify op and the web client
+  collapses all failures into one message. Why unverifiable: no error schema beyond
+  `HTTPValidationError` is published and the live dev host is unreliable/plaintext.
+  Mitigation: map all non-validation failures to `INVALID` unless a recognized
+  `detail.code` is observed at runtime.
+- **The literal `status` string for the MFA branch** (e.g. `"mfa_required"`) is not
+  pinned — `status` is a free-form string in the schema. Branch only on
+  `auth_required` + `challenge_id`. Why unverifiable: schema gives no enum and the web
+  client never inspects `status` on the MFA path.
+- **App Links auto-verification on the production host** depends on a web/ops-published
+  `/.well-known/assetlinks.json` with the release cert fingerprint — outside this
+  module and not present in any reviewed source. Why unverifiable: ops artifact, not in
+  repo/OpenAPI/frontend.
+- **Android framework behaviors** (App Links verification, `onNewIntent` delivery,
+  `SavedStateHandle` persistence, cleartext-config stripping) are framework-ref only;
+  validated by tests in §17, not by the backend/web contract.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device); **EMU** =
+headless emulator AVD `test35` (x86_64, API 35) on the CI build server; **DEVICE** =
+physical Samsung Galaxy A15 5G (SM-A156U, serial `R5CX821TA9R`, Android 14 / API 34,
+arm64-v8a) on the build host via adb. Error shapes below use the real contract from
+§5/§16 (only `200`/`422` are documented; expired/used are best-effort).
+
+- **TC-AND-061-01** — Type: unit (JVM, Turbine). Target: `MagicLinkVerifyViewModel`.
+  Preconditions: repo stub returns `PasswordlessVerifyResponse(status="ok",
+  sessionId="sess_1", authRequired=false, challengeId=null, requiredFactors=[])`.
+  Steps: construct VM with `SavedStateHandle["token"]="valid"`; collect `state`.
+  Expected: `Verifying` → terminal `Authenticated`; exactly one `verify()` API call.
+  Traces: AC-2, AC-7.
+- **TC-AND-061-02** — Type: unit (JVM, Turbine). Target: `MagicLinkVerifyViewModel`.
+  Preconditions: stub returns `status="mfa_required", authRequired=true,
+  challengeId="chg_8f2", requiredFactors=["totp"], sessionId=null`.
+  Steps: VM with token "valid"; collect state.
+  Expected: terminal `MfaRequired(challengeId="chg_8f2", requiredFactors=["totp"])`.
+  Traces: AC-3.
+- **TC-AND-061-03** — Type: unit (JVM). Target: `MagicLinkVerifyViewModel`.
+  Preconditions: `SavedStateHandle["token"]` is null, then blank.
+  Steps: construct VM; collect state; assert no repo/API interaction (mock verify).
+  Expected: immediate `Error(MISSING_TOKEN)`, zero network calls.
+  Traces: AC-4, AC-8.
+- **TC-AND-061-04** — Type: unit (JVM). Target: VM + error mapper.
+  Preconditions: stub returns 422 `HTTPValidationError`
+  (`{"detail":[{"loc":["body","token"],"msg":"...","type":"..."}]}`); then a 200 body
+  that is neither "ok"+session_id nor MFA (e.g. `status="failed"`).
+  Steps: drive each case.
+  Expected: both map to `Error(INVALID)` (fallback per §5).
+  Traces: AC-5.
+- **TC-AND-061-05** — Type: unit (JVM). Target: VM + error mapper.
+  Preconditions: stub throws `IOException`/`SocketTimeoutException`; then a 5xx.
+  Steps: drive each.
+  Expected: `Error(NETWORK)` for IO/timeout, `Error(SERVER)` for 5xx; **no auto-retry**
+  occurs. Traces: AC-6.
+- **TC-AND-061-06** — Type: unit (JVM). Target: VM dedupe + retry.
+  Preconditions: stub with a suspendable/slow verify.
+  Steps: call `verify()` twice while the first job is active; then after it completes,
+  invoke retry ("Try again") once.
+  Expected: only ONE API call during the active window (dedupe); retry issues exactly
+  one further call with the SAME token. Traces: AC-6, AC-7.
+- **TC-AND-061-07** — Type: contract/MockWebServer (JVM/Robolectric). Target:
+  `PasswordlessApi.verify` + `PasswordlessRepository` over the real OkHttp stack.
+  Preconditions: MockWebServer enqueues 200 with body
+  `{"status":"ok","session_id":"sess_1","auth_required":false,"challenge_id":null,"required_factors":[]}`
+  and a `Set-Cookie: ui_csrf=...; session=...` header.
+  Steps: call `repository.verify("valid")`; inspect recorded request and cookie jar.
+  Expected: request is `POST /ui/passwordless/verify`, JSON body exactly
+  `{"token":"valid"}`, `Content-Type: application/json`; Moshi parses all five fields;
+  the persistent cookie jar now holds `ui_csrf` + session cookies. Traces: AC-2.
+- **TC-AND-061-08** — Type: contract/MockWebServer (JVM). Target: CSRF echo on the
+  shared interceptor. Preconditions: cookie jar pre-seeded with `ui_csrf=abc` from a
+  prior verify; enqueue any subsequent state-changing call.
+  Steps: issue the follow-up request through the shared client.
+  Expected: outgoing request carries header `X-CSRF-Token: abc` (matches
+  `src/api/client.ts`). Traces: AC-2, AC-8.
+- **TC-AND-061-09** — Type: instrumented/Compose-UI deep link (EMU `test35`). Target:
+  `MainActivity` + NavHost + `MagicLinkVerifyScreen` (stubbed backend / MockWebServer).
+  Preconditions: app installed, backend stub returns full-session success.
+  Steps: launch `ACTION_VIEW` Intent
+  `https://<applink_host>/magic-link-verify?token=valid` (cold start), then repeat
+  delivering via `onNewIntent` with the Activity already resident (foreground).
+  Expected: both paths navigate to `Route.Home`; the verify destination is popped
+  (Back does not return to it); verify POST fires exactly once per Intent.
+  Traces: AC-1, AC-2, AC-7.
+- **TC-AND-061-10** — Type: instrumented deep link (EMU `test35`). Target: NavHost MFA
+  hand-off. Preconditions: stub returns MFA-branch body; MFA route registered (or
+  placeholder). Steps: fire `ACTION_VIEW` with an MFA-branch token.
+  Expected: navigation to the MFA challenge route with nav args
+  `challenge_id="chg_8f2"`, `required_factors=["totp"]`; verify destination popped.
+  Traces: AC-1, AC-3.
+- **TC-AND-061-11** — Type: instrumented deep link (EMU `test35`). Target: error UI +
+  recovery navigation. Preconditions: stub returns a verify failure (e.g. 422 / non-ok
+  body). Steps: fire the deep-link Intent; on the error screen tap "Request a new
+  link", then (separate run) "Use password instead".
+  Expected: distinct readable error copy; "Request a new link" navigates to the AND-060
+  start screen; "Use password instead" navigates to the login screen.
+  Traces: AC-5.
+- **TC-AND-061-12** — Type: instrumented offline/flaky-host (DEVICE preferred; EMU
+  acceptable). Target: no-auto-retry + manual retry on real radio.
+  **MUST run on DEVICE** to exercise real cellular/Wi-Fi loss and timeout against the
+  unreliable dev host. Preconditions: app on SM-A156U; toggle airplane mode (or point
+  at the flaky dev host `http://18.222.237.167`). Steps: open the magic link while
+  offline; observe `NETWORK` error; confirm no automatic re-request fires; restore
+  connectivity; tap "Try again".
+  Expected: single failed attempt, manual "Try again" re-issues verify with the same
+  token, success on restore. Traces: AC-6.
+- **TC-AND-061-13** — Type: instrumented security (EMU `test35`). Target: logging +
+  persistence redaction. Preconditions: debug build with logging interceptor at
+  HEADERS (never BODY) for passwordless; analytics in test sink.
+  Steps: run a verify; capture logcat, the analytics sink, and inspect DataStore/Room.
+  Expected: the raw token value appears in NONE of logcat, analytics payloads, or
+  persistent storage; only outcome/error-kind/HTTP status are recorded. Traces: AC-8.
+- **TC-AND-061-14** — Type: manual + instrumented App-Links verification (DEVICE).
+  **MUST run on DEVICE** (real installed-app link claiming / email-tap behavior).
+  Target: App Link autoVerify + tap-through. Preconditions: release-signed (or
+  debug-with-assetlinks) build on SM-A156U. Steps:
+  `adb -s R5CX821TA9R shell pm get-app-links com.testlogon.android` (expect
+  `verified` for the production host); tap the magic link from a real email client;
+  also `adb -s R5CX821TA9R shell am start -a android.intent.action.VIEW -d
+  "https://<host>/magic-link-verify?token=..."`. Expected: link opens the app directly
+  (production host verified); dev `http` host opens via tap-through chooser; app lands
+  on the verify destination. Traces: AC-1.
+- **TC-AND-061-15** — Type: Compose-UI accessibility (EMU `test35` with TalkBack, or
+  Robolectric semantics). Target: `MagicLinkVerifyScreen` a11y.
+  Preconditions: each UI state rendered. Steps: assert semantics for Verifying
+  (progress `contentDescription`/live region), each error (assertive live region
+  announces outcome), and action buttons. Expected: progress and outcome are announced
+  to TalkBack; all touch targets ≥ 48dp; layout reflows/scrolls at large font scale;
+  no hard-coded user-facing strings (all from `strings.xml`). Traces: AC-5 (UI), AC-8
+  (string-resource hygiene).
+
+### Coverage matrix (§14 Acceptance Criterion → covering TC)
+
+- **AC-1** (link opens app at verify destination; App Link verified prod, tap-through
+  dev): TC-09, TC-10, TC-14.
+- **AC-2** (valid `status=="ok"` + session → authenticated, cookie jar + `ui_csrf`,
+  nav to Home, popped): TC-01, TC-07, TC-08, TC-09.
+- **AC-3** (MFA branch carries `challenge_id` + `required_factors`): TC-02, TC-10.
+- **AC-4** (missing/blank token → invalid-link error, no network call): TC-03.
+- **AC-5** (expired/used/invalid → distinct readable error + "Request a new link" /
+  "Use password instead"): TC-04, TC-11, TC-15.
+- **AC-6** (network/timeout → manual "Try again", no auto-retry, same token): TC-05,
+  TC-06, TC-12.
+- **AC-7** (cold/warm/foreground; verify fires exactly once per token Intent): TC-01,
+  TC-06, TC-09.
+- **AC-8** (token never in logs/analytics/persistent storage): TC-03, TC-08, TC-13,
+  TC-15.

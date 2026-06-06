@@ -5,9 +5,10 @@ milestone: M1
 epic: E06
 priority: P0
 size: S
-status: draft
 depends_on: [AND-014]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-041 — Server-URL settings screen
@@ -132,8 +133,11 @@ object BaseUrlValidator {
 }
 ```
 
-`validate` trims input, parses with `okhttp3.HttpUrl.parse(...)` (robust, already on the
-classpath via OkHttp; avoids `java.net.URI` quirks), enforces scheme ∈ {http, https},
+`validate` trims input, parses with the OkHttp Kotlin extension
+`String.toHttpUrlOrNull()` (from `okhttp3.HttpUrl.Companion`; robust, already on the
+classpath via OkHttp 4.x; avoids `java.net.URI` quirks). Note: the legacy static
+`okhttp3.HttpUrl.parse(...)` form is deprecated in OkHttp 4.x in favor of the
+`toHttpUrlOrNull()` extension — use the extension. It enforces scheme ∈ {http, https},
 non-empty host, port range, and returns a normalized form
 `"$scheme://$host" + (explicitPort?.let { ":$it" } ?: "") ` with no trailing slash. `cleartext`
 is `scheme == "http"`.
@@ -207,12 +211,16 @@ gated by `canReset`. State collected via `collectAsStateWithLifecycle()`.
 No new HTTP endpoints. This screen reads/writes a local DataStore value (via `HostRepository`)
 and has no request/response payloads of its own. Its sole network-facing effect is **indirect**:
 the persisted value becomes the host that AND-014's `HostSelectionInterceptor` applies to all
-subsequent calls (e.g. `GET /openapi.json`, `POST /ui/session/start`, `GET /ui/me`). Endpoint
-contracts for those flows are owned by their respective tickets (E02 networking, E05 auth).
+subsequent calls (e.g. `POST /ui/session/start` → `UiSessionStartResp`, `GET /ui/me`). Both
+endpoints are confirmed in the backend OpenAPI (see §16). Endpoint contracts for those flows are
+owned by their respective tickets (E02 networking, E05 auth).
 
 For manual verification the screen pairs with the connectivity probe (if present) or any
-existing GET; an optional "Test connection" affordance is **out of scope** here and noted as an
-open question (§13).
+existing GET; the simplest verified app endpoint for a smoke probe is `GET /health` (op
+`health_health_get`, returns 200, no params/auth). The previously-cited `GET /openapi.json`
+is a FastAPI documentation default and does **not** appear in the backend route index — do not
+rely on it; prefer `GET /health`. An optional "Test connection" affordance is **out of scope**
+here and noted as an open question (§13).
 
 ## 6. Data & State Management
 
@@ -336,10 +344,11 @@ open question (§13).
 - **R2 — "Used immediately" verification.** The acceptance criterion's "used immediately" is
   proven indirectly (persisted value == interceptor's source). A true end-to-end assertion needs
   a live request, deferred to E02 integration tests. Open question: should this screen include a
-  "Test connection" button (one GET to `/openapi.json` with the candidate URL) for instant
-  feedback? Proposed: **out of scope here**, track as a follow-up.
-- **R3 — Port/IPv6 edge cases.** `HttpUrl.parse` handles IPv6 brackets; ensure the validator and
-  normalizer round-trip `http://[::1]:8000`. Add a test case.
+  "Test connection" button (one `GET /health` — the verified unauthenticated probe endpoint,
+  `op=health_health_get`, 200 with no params — against the candidate URL) for instant feedback?
+  Proposed: **out of scope here**, track as a follow-up.
+- **R3 — Port/IPv6 edge cases.** `HttpUrl` parsing (`toHttpUrlOrNull()`) handles IPv6 brackets;
+  ensure the validator and normalizer round-trip `http://[::1]:8000`. Add a test case.
 - **R4 — Cleartext policy.** If the network-security config does not allow the user-entered host,
   requests will fail despite a "valid" URL. Out of scope (E02 owns the config) but worth a doc note.
 
@@ -380,3 +389,107 @@ AC-6. **Cleartext advisory** shown for `http` schemes without blocking Save (FR-
   :feature-settings:lintDebug` passes.
 - Manual smoke: change host to a reachable alternate, observe next request hits the new host
   (verified with AND-014 in place); reset returns to default.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **Claim:** The persisted base URL feeds subsequent backend calls including `POST /ui/session/start`.
+   **VERDICT: Verified.** SOURCE: OpenAPI `POST /ui/session/start` (`op=ui_session_start_ui_session_start_post`, `req=UiSessionStartReq`, `resp=200:UiSessionStartResp;422:HTTPValidationError`) — openapi.index.txt line 1848.
+
+2. **Claim:** `GET /ui/me` is an authenticated endpoint behind the same host.
+   **VERDICT: Verified.** SOURCE: OpenAPI `GET /ui/me` (`op=ui_me_ui_me_get`, `resp=200:;422:HTTPValidationError`, `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`) — openapi.index.txt line 1638.
+
+3. **Claim (original spec §5/§13):** A "Test connection" probe could hit `GET /openapi.json`.
+   **VERDICT: Corrected.** `/openapi.json` does NOT appear anywhere in the backend route index or references; it is only a FastAPI documentation default and is not a guaranteed app route. Corrected to `GET /health`. SOURCE: OpenAPI `GET /health` (`op=health_health_get`, `resp=200:`, no params/auth) — openapi.index.txt line 273; absence of `/openapi.json` confirmed by Grep over the entire `reference/` tree (0 matches).
+
+4. **Claim:** The base-URL normalization should strip a trailing `/`.
+   **VERDICT: Verified (matches web client behavior).** The web client computes `API_BASE_URL` as `(VITE_API_BASE_URL ?? "").replace(/\/$/, "")` — i.e. trailing slash stripped — and `withApiBase` joins paths with a single slash. SOURCE: `src/api/client.ts:7` and `src/api/client.ts:9-14` (`withApiBase`). Mirrored in `src/api/endpoints/profile.ts:63,71-72`.
+
+5. **Claim (original spec §4.2):** Validate by parsing with `okhttp3.HttpUrl.parse(...)`.
+   **VERDICT: Corrected.** The static `HttpUrl.parse(String)` form is deprecated in OkHttp 4.x (Kotlin-first API); the supported form is the extension `String.toHttpUrlOrNull()` on `okhttp3.HttpUrl.Companion`. Corrected in §4.2 and §13/R3. SOURCE: framework ref — OkHttp 4.x upgrade guide, https://square.github.io/okhttp/upgrading_to_okhttp_4/ (HttpUrl moved to Kotlin companion extensions). Stack is OkHttp 4.x via AND-010 (Retrofit/Moshi), Kotlin 2.0.21 — spec §2.
+
+6. **Claim:** Backend 422 validation errors use the `HTTPValidationError` shape (`{ detail: ValidationError[] }`, each `{ loc, msg, type }`).
+   **VERDICT: Verified.** SOURCE: OpenAPI `components.schemas.HTTPValidationError` (openapi.pretty.json line 37133) and `components.schemas.ValidationError` (line 80337; required `loc`, `msg`, `type`). Note: this shape is only relevant to downstream E02/E05 calls, not to this local-only screen.
+
+7. **Claim:** The web client uses CSRF (`ui_csrf` cookie → `X-CSRF-Token` header) and Bearer auth, with 401→refresh.
+   **VERDICT: Verified — but out of scope for AND-041.** This screen performs no network calls, so it neither sends nor depends on these. SOURCE: `src/api/client.ts:157-171` (Authorization + `ui_csrf` → `X-CSRF-Token`), `src/api/client.ts:121-130,194-237` (refresh-on-401). Recorded here so the §5 "no auth/CSRF on this screen" claim is verified against the real transport.
+
+8. **Claim:** This ticket introduces no new HTTP endpoints; it reads/writes a local DataStore value via `HostRepository` (AND-014).
+   **VERDICT: Verified (scope) / Unverified-assumption (AND-014 internals).** No endpoint maps to this screen's behavior in the OpenAPI index. The `HostRepository`/DataStore key `host_base_url` and the `HostSelectionInterceptor` are owned by AND-014, which is not present in the provided sources — see Open assumptions.
+
+9. **Claim (framework choices §2):** Compose + Material 3, Navigation-Compose, Hilt (KSP), DataStore (Preferences), `collectAsStateWithLifecycle()`, `SavedStateHandle` for process death.
+   **VERDICT: Unverified-assumption (framework ref).** These are standard AndroidX choices consistent with the stated stack; no project source was provided to confirm module wiring. Framework refs: Compose state collection https://developer.android.com/jetpack/compose/state ; DataStore https://developer.android.com/topic/libraries/architecture/datastore ; SavedStateHandle https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate .
+
+10. **Claim:** Default dev host is `http://18.222.237.167:8000` (cleartext), surfaced via `BuildConfig.BASE_URL`.
+    **VERDICT: Unverified-assumption.** This value is not present in the provided backend/frontend sources (the web client reads `VITE_API_BASE_URL` from env, not a hardcoded IP). Plausible as a build-config default but not verifiable here.
+
+### Corrections made
+
+- **§5 & §13/R2:** Replaced the `GET /openapi.json` probe reference with the verified `GET /health` endpoint; `/openapi.json` is not in the backend route index (claim #3).
+- **§5:** Tied the example downstream calls to verified OpenAPI entries (`POST /ui/session/start` → `UiSessionStartResp`, `GET /ui/me`) and removed the unverifiable `GET /openapi.json` example (claims #1, #2, #3).
+- **§4.2 & §13/R3:** Replaced deprecated static `okhttp3.HttpUrl.parse(...)` with the OkHttp 4.x extension `String.toHttpUrlOrNull()` (claim #5).
+
+### Open assumptions
+
+- **AND-014 contract (`HostRepository`, DataStore key `host_base_url`, `HostSelectionInterceptor`):** not present in the provided sources; this spec consumes an interface it cannot verify. Risk tracked as §13/R1. If AND-014 names the type/key differently, an alias/adapter is required (no second DataStore key).
+- **`BuildConfig.BASE_URL = http://18.222.237.167:8000`:** the concrete default host is an assumption; the web client uses an env var, not a hardcoded IP (claim #10).
+- **Android framework module wiring** (Hilt/KSP, Navigation-Compose route registration, Material 3 versions): assumed from the stated stack; no Android project source was provided to confirm (claim #9).
+- **Telemetry/analytics abstraction (§10):** existence is conditional ("if available, else no-op"); not verifiable from sources.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM unit/Robolectric (no device); **EMU** = headless emulator AVD `test35` (x86_64, API 35) for fast CI UI/instrumented suites; **DEVICE** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). This ticket is a local-only Compose settings screen with no hardware dependencies, so most cases run on JVM/EMU; one ABI-difference case is noted for DEVICE.
+
+- **TC-AND-041-01** — Type: unit (JVM). Target: `BaseUrlValidatorTest` (`BaseUrlValidator.validate`).
+  Preconditions: none. Steps: feed each §6 matrix row (blank, `not a url`, `ftp://h:21`, `http://`, `http://h:0`, `http://h:70000`, `http://18.222.237.167:8000`, `https://api.example.com`). Expected: `BLANK`, `MALFORMED`, `BAD_SCHEME`, `NO_HOST`, `BAD_PORT`, `BAD_PORT`, `Valid(cleartext=true)`, `Valid(cleartext=false)` respectively. Traces: AC-2, AC-6.
+
+- **TC-AND-041-02** — Type: unit (JVM). Target: `BaseUrlValidatorTest` normalization.
+  Preconditions: none. Steps: validate `"  HTTP://18.222.237.167:8000/  "`, `"https://api.example.com"`, `"https://api.example.com:443/"`. Expected normalized: `http://18.222.237.167:8000`, `https://api.example.com`, `https://api.example.com:443` (trim, scheme lowercased, trailing slash stripped, explicit port preserved — matches web client `replace(/\/$/, "")`, `src/api/client.ts:7`). Traces: AC-5.
+
+- **TC-AND-041-03** — Type: unit (JVM). Target: `BaseUrlValidatorTest` IPv6 round-trip (§13/R3).
+  Preconditions: none. Steps: validate `http://[::1]:8000`. Expected: `Valid`, normalized preserves bracketed IPv6 host and port (`http://[::1]:8000`), via `toHttpUrlOrNull()`. Traces: AC-5.
+
+- **TC-AND-041-04** — Type: unit (JVM). Target: `ServerUrlViewModelTest` init seeding (fake `HostRepository` over `MutableStateFlow`, `MainDispatcherRule`, Turbine).
+  Preconditions: fake repo `baseUrl` emits `http://18.222.237.167:8000`, `default = http://18.222.237.167:8000`. Steps: construct VM, collect first non-empty state. Expected: `input == persistedUrl == defaultUrl == http://18.222.237.167:8000`; `canSave=false`, `canReset=false`. Traces: AC-1, AC-3.
+
+- **TC-AND-041-05** — Type: unit (JVM). Target: `ServerUrlViewModelTest` `onInputChange` gating.
+  Preconditions: persisted = `http://18.222.237.167:8000`. Steps: (a) input a valid different URL `https://staging.example.com`; (b) input the unchanged persisted value; (c) input `ftp://h:21`. Expected: (a) `error=null`, `cleartextWarning=false`, `canSave=true`; (b) `canSave=false`; (c) `error=BAD_SCHEME`, `canSave=false`. Traces: AC-1, AC-2, AC-6.
+
+- **TC-AND-041-06** — Type: unit (JVM). Target: `ServerUrlViewModelTest` `onSave` happy path.
+  Preconditions: valid changed input `https://staging.example.com`, `canSave=true`. Steps: call `onSave()`. Expected: `setBaseUrl("https://staging.example.com")` called exactly once on the fake; fake's stored value equals normalized input; `SettingsMessage.Saved` emitted; state reseeds (`persistedUrl` updated, `canSave=false`). This proves "persisted and used immediately" (interceptor reads the same store). Traces: AC-1.
+
+- **TC-AND-041-07** — Type: unit (JVM). Target: `ServerUrlViewModelTest` invalid save guard.
+  Preconditions: input `http://` (NO_HOST). Steps: call `onSave()`. Expected: `setBaseUrl` never invoked; repo value unchanged; `error=NO_HOST` retained; no `Saved` message. Traces: AC-2.
+
+- **TC-AND-041-08** — Type: unit (JVM). Target: `ServerUrlViewModelTest` reset.
+  Preconditions: persisted `https://staging.example.com`, default `http://18.222.237.167:8000`, so `canReset=true`. Steps: call `onResetToDefault()`. Expected: `resetToDefault()` called; `input` becomes the default; `SettingsMessage.ResetDone` emitted; `canReset` flips to false. Traces: AC-3.
+
+- **TC-AND-041-09** — Type: unit (JVM). Target: `ServerUrlViewModelTest` persistence failure.
+  Preconditions: fake repo configured so `setBaseUrl` throws `IOException`; valid changed input. Steps: call `onSave()`. Expected: `SettingsMessage.Failed("Could not save server URL")` emitted; `saving=false`; persisted value unchanged. (Local DataStore offline/flaky-write analog — no network.) Traces: AC-1 (negative path).
+
+- **TC-AND-041-10** — Type: Compose-UI (EMU; `createAndroidComposeRule`). Target: `ServerUrlSettingsScreenTest`.
+  Preconditions: screen launched with fake repo at default. Steps: type an invalid URL → observe; clear and type a valid different URL → observe; tap Save → observe; tap Reset → observe. Expected: invalid shows inline `supportingText` error and Save disabled; valid-different enables Save; Save shows confirmation snackbar and updates "Current:"; Reset restores default text. Traces: AC-1, AC-2, AC-3, AC-5.
+
+- **TC-AND-041-11** — Type: Compose-UI (EMU). Target: `ServerUrlSettingsScreenTest` cleartext advisory + accessibility.
+  Preconditions: screen at default. Steps: enter `http://newhost:9000`; inspect supporting/warning text and Save state; run accessibility checks (enable `AccessibilityChecks`/Espresso a11y; assert TalkBack semantics). Expected: non-blocking "Connection is not encrypted (HTTP)" warning shown, Save still enabled (valid+changed); error semantics set via `isError`+`supportingText`; back button has `contentDescription`; touch targets ≥ 48dp; layout reflows under font scale. Traces: AC-6, AC-2 (a11y of error state).
+
+- **TC-AND-041-12** — Type: integration (JVM/Robolectric or EMU instrumented). Target: real DataStore-backed `HostRepository` (closing loop with AND-014).
+  Preconditions: real Preferences DataStore in a temp dir. Steps: call `setBaseUrl("https://staging.example.com")` via the VM/repo, then read `baseUrl.first()`. Expected: emits the normalized value, proving the persisted change is observable by the interceptor's source of truth (no restart). Traces: AC-1.
+
+- **TC-AND-041-13** — Type: instrumented/e2e (EMU). Target: pre-login navigation + no-auth assertion.
+  Preconditions: app launched, unauthenticated. Steps: from the login screen, open the "Settings" affordance → land on `settings/server-url`; assert no session/auth call occurred (e.g. no `Authorization` header, no `/ui/session/start` issued from this flow — MockWebServer/interceptor recorder). Expected: screen opens without a session and performs no auth calls. Traces: AC-4.
+
+- **TC-AND-041-14** — Type: instrumented (DEVICE — physical Samsung A15, API 34/arm64-v8a). Target: ABI/API parity of validator + persistence.
+  Preconditions: app installed on device serial R5CX821TA9R. Steps: run the validator/normalizer and a save+read round-trip (`http://[::1]:8000`, `https://api.example.com:443/`) on-device. Expected: identical normalization/validation results and persisted values as JVM/EMU runs (guards against arm64-vs-x86 and API-34-vs-35 differences in `HttpUrl` parsing and DataStore). MUST run on the physical device for the arm64/API-34 dimension; EMU `test35` covers x86_64/API-35. Traces: AC-1, AC-2, AC-5.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (edited URL persists & used immediately) | TC-04, TC-05, TC-06, TC-09, TC-10, TC-12, TC-14 |
+| AC-2 (invalid input rejected, tested) | TC-01, TC-05, TC-07, TC-10, TC-11, TC-14 |
+| AC-3 (reset to default) | TC-04, TC-08, TC-10 |
+| AC-4 (reachable pre-login, no auth) | TC-13 |
+| AC-5 (normalization) | TC-02, TC-03, TC-10, TC-14 |
+| AC-6 (cleartext advisory, non-blocking) | TC-01, TC-05, TC-11 |

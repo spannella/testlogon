@@ -5,7 +5,8 @@ milestone: M1
 epic: E07
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-008, AND-048]
 blocks: []
 ---
@@ -136,8 +137,8 @@ No application data, Room schema, or DataStore involvement. The relevant state i
 
 ## 8. Security & Privacy
 
-- No production credentials. Tests against the dev backend (`http://18.222.237.167:8000`, plaintext HTTP) MUST use throwaway/dev test accounts only; no real user PII is entered. Test credentials, if any, come from CI secrets, never committed.
-- The emulator runs in a CI sandbox; cookie jars / DataStore created during tests are destroyed with the ephemeral emulator and never exported as artifacts. Logcat artifacts (FR-4) MUST be scrubbed of any `Authorization`, `Cookie`, `Set-Cookie`, or `X-CSRF-Token` values — the logging policy (no secret logging) is enforced by app code, and CI additionally treats logcat as potentially sensitive: artifacts are retained only on the private CI store, not on public PRs.
+- No production credentials. Tests against the dev backend (a plaintext-HTTP dev host; the exact base URL is configured per environment, not hard-coded — see §16 open assumption A-1) MUST use throwaway/dev test accounts only; no real user PII is entered. Test credentials, if any, come from CI secrets, never committed.
+- The emulator runs in a CI sandbox; cookie jars / DataStore created during tests are destroyed with the ephemeral emulator and never exported as artifacts. Logcat artifacts (FR-4) MUST be scrubbed of any `Authorization` (Bearer token), `Cookie`/`Set-Cookie` (including the session cookie and the `ui_csrf` cookie), `X-CSRF-Token`, and `X-IMPERSONATION-TOKEN` values — these are the actual sensitive headers/cookies the web client transmits (verified against `src/api/client.ts`; see §16). The logging policy (no secret logging) is enforced by app code, and CI additionally treats logcat as potentially sensitive: artifacts are retained only on the private CI store, not on public PRs.
 - KVM access requires the CI user be in the `kvm` group; document this as a deliberate, minimal privilege grant on `andrioiddev`.
 
 ## 9. Accessibility & i18n
@@ -198,3 +199,92 @@ The deliverable *is* test infrastructure, so "testing" means verifying the harne
 - `andrioiddev` provisioning notes (KVM/`kvm` group, `cmdline-tools/latest`, `system-images;android-35;google_apis;x86_64`, free-disk requirement) documented in `android/ci/README.md`.
 - Reproducible on a fresh checkout (AC-6); R-1 (KVM availability) confirmed or escalated.
 - Code review approved; pipeline merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+This is a CI/build-infrastructure ticket; it introduces **no** application network calls of its own (§5 correctly states N/A). The only backend-contract claims appear in §5 (endpoints the *tests under test* may hit) and §8 (the sensitive headers/cookies logcat must scrub). Those were verified against the authoritative sources below. Framework/tooling claims (emulator flags, Gradle tasks, Hilt runner, GMD) are verified against Android developer documentation and labelled "framework ref".
+
+1. **Claim (§5):** The app's auth/session endpoints include `POST /ui/session/start` and `GET /ui/me`. — **VERDICT: Verified.** Source: OpenAPI `POST /ui/session/start` (op=`ui_session_start_ui_session_start_post`, req=`UiSessionStartReq`, resp=`200:UiSessionStartResp;422:HTTPValidationError`) and `GET /ui/me` (op=`ui_me_ui_me_get`, resp=`200;422:HTTPValidationError`, params=`user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`) in `openapi.index.txt`.
+2. **Claim (§5):** Session refresh exists as an endpoint the client uses. — **VERDICT: Verified.** Source: frontend `src/api/client.ts: refreshSession()` calls `POST /ui/session/refresh` with `credentials: "include"`.
+3. **Claim (§8, original):** Sensitive values to scrub from logcat are `Authorization`, `Cookie`, `Set-Cookie`, `X-CSRF-Token`. — **VERDICT: Corrected (incomplete).** The web client also transmits `X-IMPERSONATION-TOKEN` and reads CSRF from a cookie named `ui_csrf`; the scrub list was expanded to cover them. Source: `src/api/client.ts` — `Authorization: Bearer ${accessToken}` (line ~159), `X-CSRF-Token` from `getCookie("ui_csrf")` (lines ~168-170), `X-IMPERSONATION-TOKEN` (line ~164), session cookie via `credentials: "include"` (line ~183).
+4. **Claim (§8, original):** The dev backend base URL is `http://18.222.237.167:8000`. — **VERDICT: Unverified-assumption.** The frontend does not hard-code this; it resolves the base URL from `VITE_API_BASE_URL` at build time. Source: `src/api/client.ts: API_BASE_URL = import.meta.env?.VITE_API_BASE_URL`. The specific IP could not be confirmed from the sources; reworded as a per-environment value (see Open assumptions A-1). The "plaintext HTTP" characterization is plausible (dev) but also not provable from these sources.
+5. **Claim (§5/§11):** Validation/error responses from these endpoints use the FastAPI `HTTPValidationError` shape. — **VERDICT: Verified.** Source: `components.schemas.HTTPValidationError` in `openapi.pretty.json` = `{ detail: ValidationError[] }`; every `/ui/*` op lists `422:HTTPValidationError`.
+6. **Claim (§4):** A custom `AndroidJUnitRunner` subclass that swaps in `HiltTestApplication` is required to run Hilt-injected instrumented tests. — **VERDICT: Verified (framework ref).** Standard Hilt testing pattern. Source: Android docs "Hilt testing guide" (https://developer.android.com/training/dependency-injection/hilt-testing#instrumented-tests) and "AndroidJUnitRunner" (https://developer.android.com/training/testing/instrumented-tests/androidx-test-libraries/runner).
+7. **Claim (§3/§4):** `connectedDebugAndroidTest` installs and runs `androidTest` instrumentation against a connected device/emulator; Gradle Managed Devices produces a per-device task `test35DebugAndroidTest`. — **VERDICT: Verified (framework ref).** Source: Android docs "Test from the command line" / "Gradle Managed Devices" (https://developer.android.com/studio/test/gradle-managed-devices).
+8. **Claim (§4):** Emulator headless flags `-no-window -no-audio -no-boot-anim -no-snapshot-save -gpu swiftshader_indirect -accel on` and readiness via `getprop sys.boot_completed`. — **VERDICT: Verified (framework ref).** Source: Android docs "Start the emulator from the command line" (https://developer.android.com/studio/run/emulator-commandline) and "AVD / hardware acceleration" (https://developer.android.com/studio/run/emulator-acceleration). `sys.boot_completed` polling is the documented boot-ready signal.
+9. **Claim (§2/§4):** System image `system-images;android-35;google_apis;x86_64` is installable via `sdkmanager` and an AVD created via `avdmanager`. — **VERDICT: Verified (framework ref).** Source: Android docs "sdkmanager" and "avdmanager" (https://developer.android.com/tools/sdkmanager, https://developer.android.com/tools/avdmanager).
+10. **Claim (§8):** KVM (`/dev/kvm`) is required for hardware-accelerated x86_64 emulation on the Linux build host. — **VERDICT: Verified (framework ref).** Source: Android docs "Configure hardware acceleration for the Android Emulator" (https://developer.android.com/studio/run/emulator-acceleration#vm-linux).
+11. **Claim (§2):** Project stack — Kotlin 2.0.21, AGP 8.7.3, Gradle 8.9, JDK 17, compile/target SDK 35, minSdk 24, Hilt+KSP, Compose/Material3, Room 2.6, DataStore. — **VERDICT: Unverified-assumption (out of source scope).** These are project-config claims inherited from AND-008/AND-048; the OpenAPI/frontend sources provided cannot confirm Android build-config versions. Carried forward as stated by upstream tickets (see A-2).
+
+### Corrections made
+- **§8 scrub list:** expanded from `{Authorization, Cookie, Set-Cookie, X-CSRF-Token}` to additionally include `X-IMPERSONATION-TOKEN` and to name the `ui_csrf` cookie explicitly, matching the headers/cookies actually emitted by `src/api/client.ts` (citation 3).
+- **§8 dev base URL:** replaced the hard-coded `http://18.222.237.167:8000` with a per-environment description, because the frontend resolves the base URL from `VITE_API_BASE_URL` and the literal IP is not present in the provided sources (citation 4).
+- No changes to §5 endpoint paths/methods — they were verified correct as written.
+
+### Open assumptions
+- **A-1 — Dev backend URL/scheme.** The exact dev host (`18.222.237.167:8000`) and plaintext-HTTP assumption are not provable from the OpenAPI spec or frontend (which uses `VITE_API_BASE_URL`). Why unverifiable: deployment/env config is outside the provided sources. Impact: low — this ticket runs ephemeral emulators against whatever dev host the test config points to; it does not depend on a specific IP.
+- **A-2 — Android build-config versions (§2).** Kotlin/AGP/Gradle/SDK/Hilt/Room versions come from upstream AND-008/AND-048 and cannot be checked against the OpenAPI/frontend sources. Why unverifiable: no Android build files were provided in the reference set. Impact: low for this chore, but the GMD/`apiLevel = 35` and `system-images;android-35` choices must stay consistent with the real `targetSdk` when those files are available.
+- **A-3 — `andrioiddev` host capabilities (R-1).** Whether the build host exposes `/dev/kvm` (bare-metal vs nested virt) is an operational fact about CI infrastructure, not derivable from any code/spec source. Why unverifiable: requires inspecting the actual build agent. Impact: high for runtime (SwiftShader fallback is far slower) — tracked as R-1 and gated by the §7 KVM pre-flight.
+- **A-4 — CI backend (GitHub Actions vs Jenkins).** §2/§4 hedge between Actions and a generic agent; the canonical artifact set could not be confirmed. Why unverifiable: CI platform config not in scope. Impact: low — the `run-instrumented.sh` script is platform-agnostic by design.
+
+## 17. Test Plan
+
+Because the deliverable is CI test *infrastructure*, the "system under test" is the harness (boot → install → instrument → collect → teardown), not application screens. Cases below validate the harness; the application-behavior cases (login UI) are the *workload* used to prove it. Test-target legend per the available CI/dev fleet: **JVM/Robolectric** (local, no device), **emulator AVD `test35`** (headless x86_64, API 35, KVM, on the build server), **physical device** (Samsung Galaxy A15 5G, SM-A156U, arm64-v8a, API 34).
+
+> Note on device selection: this ticket's whole purpose is the **headless emulator**, so almost every case runs on the `test35` emulator by design. Two cases (TC-09, TC-10) additionally exercise the **physical device** to validate arm64-v8a / API-34 portability of the same instrumented suite, since the emulator is x86_64/API-35 only and cannot surface ABI- or API-level regressions.
+
+- **TC-AND-051-01 — Happy-path connected run boots and goes green.**
+  Type: integration. Target: emulator `test35`. Preconditions: fresh `android-port` checkout on a KVM-capable agent; `/dev/kvm` writable; AND-048 suite + `EmulatorSmokeTest` present. Steps: run `android/ci/run-instrumented.sh` (`CI_EMULATOR_MODE=manual`). Expected: AVD `test35` created if absent (idempotent), emulator boots `-no-window` with `sys.boot_completed=1` inside 600 s, `./gradlew connectedDebugAndroidTest` runs, all instrumented tests pass, stage exit code 0. Traces: AC-1, AC-2.
+
+- **TC-AND-051-02 — Sentinel smoke test executes against the app package.**
+  Type: instrumented/e2e. Target: emulator `test35`. Preconditions: harness booted. Steps: run `EmulatorSmokeTest`. Expected: `InstrumentationRegistry.getInstrumentation().targetContext.packageName == "com.testlogon.android"`; test passes; proves install+instrumentation path independent of feature tests. Traces: AC-1.
+
+- **TC-AND-051-03 — Hilt runner injects HiltTestApplication.**
+  Type: instrumented/e2e. Target: emulator `test35`. Preconditions: each `androidTest` `defaultConfig` sets `testInstrumentationRunner = "com.testlogon.android.core.testing.HiltTestRunner"`. Steps: run a Hilt-annotated instrumented test (AND-048 login). Expected: the running `Application` is `HiltTestApplication`; `@Inject`/`@BindValue` dependencies resolve; no "Hilt … did not use HiltTestApplication" error. Traces: AC-2.
+
+- **TC-AND-051-04 — Failing instrumented assertion turns the stage red.**
+  Type: integration (negative). Target: emulator `test35`. Preconditions: a deliberately-failing `androidTest` introduced locally (NOT committed). Steps: run the connected task. Expected: Gradle task exits non-zero, stage is red, the failure appears in the JUnit XML and PR check summary with the failing test name; passing tests still report individually. Traces: AC-2, AC-3.
+
+- **TC-AND-051-05 — Artifacts and JUnit results are collected on pass and fail.**
+  Type: integration. Target: emulator `test35`. Preconditions: TC-01 (pass) and TC-04 (fail) runs available. Steps: after each run, inspect uploaded artifacts. Expected: per-module `build/reports/androidTests/connected/**` HTML, `build/outputs/androidTest-results/connected/**/*.xml`, and `logcat-test35.txt` are uploaded in both cases (`always()`); JUnit XML renders in the check summary. Traces: AC-3.
+
+- **TC-AND-051-06 — Deterministic teardown leaves no zombie emulator.**
+  Type: integration. Target: emulator `test35`. Preconditions: completed pass run and completed fail run. Steps: after each, run `adb devices` and check host process list for `emulator`/`qemu`. Expected: no `emulator-5554` device listed, no `emulator`/`qemu` process; `trap … EXIT`/`always()` killed it on both paths. Traces: AC-4.
+
+- **TC-AND-051-07 — Boot-timeout path is distinguishable and self-cleaning.**
+  Type: integration (resilience / flaky-host). Target: emulator `test35`. Preconditions: boot timeout temporarily lowered (e.g. 5 s) or boot deliberately stalled. Steps: run the harness. Expected: stage fails with the distinct `EMULATOR_BOOT_TIMEOUT` message (not a test-failure message), emulator is killed, no zombie remains; per §7 the boot-and-run sequence MAY retry once but a hard timeout still fails the stage. Traces: AC-7, AC-4.
+
+- **TC-AND-051-08 — KVM pre-flight hard-fails fast with remediation.**
+  Type: integration (security/permission + resilience). Target: emulator `test35` host. Preconditions: simulate `/dev/kvm` absent or not writable (CI user removed from `kvm` group / `test -w /dev/kvm` false). Steps: run the harness. Expected: job fails fast at the pre-flight with explicit remediation text (add CI user to `kvm` group), does NOT silently fall back to slow SwiftShader, no emulator started. Traces: AC-1 (acceleration precondition), AC-7-adjacent (clear, bounded failure).
+
+- **TC-AND-051-09 — Same instrumented suite passes on the physical arm64 device.**
+  Type: instrumented/e2e. Target: **physical device** (SM-A156U, arm64-v8a, API 34) — MUST run on the physical device; the `test35` emulator is x86_64/API-35 and cannot expose ABI/API portability issues. Preconditions: device connected via adb to the build host; debuggable. Steps: `./gradlew connectedDebugAndroidTest` (or `connectedDebugAndroidTest` targeting the device serial `R5CX821TA9R`). Expected: AND-048 + sentinel suite passes on arm64-v8a/API 34; no `INSTALL_FAILED_NO_MATCHING_ABIS`; results collected as on emulator. Traces: AC-2, AC-6.
+
+- **TC-AND-051-10 — Offline / flaky-host transport behavior under test.**
+  Type: contract/MockWebServer + instrumented. Target: emulator `test35` (network behavior is host-independent; runnable here) — physical device acceptable but not required. Preconditions: instrumented test points the app at a MockWebServer; emulate (a) network unreachable and (b) HTTP `422 HTTPValidationError` (`{ "detail": [ … ] }`) and `401` from `/ui/session/start`/`/ui/me`. Steps: run the test under each condition. Expected: offline yields the app's network-error path (the web client raises `ApiError(0, "Network error")`); `422` surfaces a validation error mapped from the `detail[]` array; `401` (when previously authenticated) triggers a single `POST /ui/session/refresh` retry then logout on failure — matching `src/api/client.ts`. The harness itself reports these as ordinary pass/fail (assertions never retried at the CI level). Traces: AC-2.
+
+- **TC-AND-051-11 — Sensitive headers/cookies are scrubbed from logcat artifact.**
+  Type: integration (security). Target: emulator `test35`. Preconditions: an instrumented test that performs an authenticated request so `Authorization: Bearer …`, the session cookie, `ui_csrf` cookie, `X-CSRF-Token`, and `X-IMPERSONATION-TOKEN` could appear in logs. Steps: run the suite, then grep the uploaded `logcat-test35.txt`. Expected: none of those token/cookie *values* appear in the artifact; the scrubbing/no-secret-logging policy holds (per corrected §8). Traces: AC-3 (artifact correctness), §8.
+
+- **TC-AND-051-12 — Reproducibility: two fresh-checkout runs match.**
+  Type: integration. Target: emulator `test35`. Preconditions: two independent fresh checkouts of `android-port` on a correctly-provisioned agent. Steps: run the full job twice, zero manual steps. Expected: identical green/red outcome and the same set of passed tests; no interactive prompts; AVD reuse is idempotent (no duplicate/divergent `test35`). Traces: AC-6.
+
+- **TC-AND-051-13 — Gating: stage runs on `android-port` push and PRs targeting it.**
+  Type: manual (CI config verification). Target: CI config (no device). Preconditions: workflow/pipeline config committed. Steps: inspect the stage's trigger filters; push a trivial commit to `android-port` and open a PR targeting it. Expected: the connected stage triggers in both; an instrumented failure or boot timeout fails the overall pipeline; the stage runs *after* AND-008's unit stage (fail-fast ordering). Traces: AC-5.
+
+- **TC-AND-051-14 — Stale-emulator pre-clean before boot.**
+  Type: integration (resilience). Target: emulator `test35`. Preconditions: a stale `emulator-5554` left running from a simulated previously-crashed job. Steps: start a new harness run. Expected: pre-run cleanup kills the stale `emulator-5554`/`adb` before booting, the new run proceeds normally to green, port `5554` is reused cleanly. Traces: AC-4, AC-6.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (headless KVM run, no manual steps) | TC-01, TC-02, TC-08 |
+| AC-2 (AND-048 tests pass; exit code reflects result) | TC-01, TC-03, TC-04, TC-09, TC-10 |
+| AC-3 (reports + scrubbed logcat published; JUnit in summary) | TC-04, TC-05, TC-11 |
+| AC-4 (no zombie emulator/device after any run) | TC-06, TC-07, TC-14 |
+| AC-5 (gates `android-port` pushes/PRs; failures fail pipeline) | TC-13 |
+| AC-6 (fresh-checkout reproducibility, zero manual) | TC-09, TC-12, TC-14 |
+| AC-7 (`EMULATOR_BOOT_TIMEOUT` + clean teardown, distinguishable) | TC-07, TC-08 |
+
+> Accessibility: this ticket produces no UI, so there are no Compose/TalkBack accessibility assertions here (see §9). Accessibility of the screens executed as workload (AND-046/AND-048 login) is owned by those tickets; this harness is the documented future home for running such checks headlessly.

@@ -5,7 +5,8 @@ milestone: M2
 epic: E08
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-030]
 blocks: []
 ---
@@ -15,16 +16,24 @@ blocks: []
 ## 1. Overview & Goal
 
 This ticket implements the **start (request) half of the passwordless / magic-link
-sign-in flow** for the TestLogon native Android app. The user enters their email
-address, the app calls `POST /ui/passwordless/start`, and the screen transitions
-to a **"check your email" confirmation state** that displays the server-returned
-`sent_to` destination and an opportunity to resend (with cooldown) or change the
-address. It sits in epic **E08 (alternative sign-in surfaces)**, milestone **M2**.
+sign-in flow** for the TestLogon native Android app. The user enters their
+**username or email** (the request key is `username`, per the verified contract;
+the web client labels the field "Username or email"), the app calls
+`POST /ui/passwordless/start`, and the screen transitions to a **"check your email"
+confirmation state**. **CORRECTION (verified):** the server-returned `sent_to` is a
+**list of strings** (`string[]`), not a single masked string, and the success body
+also carries a required `status` string. There is **no** `resend_after`/`expires_in`
+in the verified response (see Sections 5/16). The web reference does not render
+`sent_to` at all — it confirms using the user's own typed input — so this app
+treats `sent_to` as optional supplementary display. The screen offers an
+opportunity to resend (client-side cooldown) or change the address. It sits in
+epic **E08 (alternative sign-in surfaces)**, milestone **M2**.
 
 Scope is deliberately bounded to the **start/dispatch** leg. The link the user
 receives is opened out-of-band (web / deep link) and **completing** the
-passwordless session (token consumption → `GET /ui/me`) is **not** owned here; it
-is a downstream "passwordless complete / deep-link" ticket (see Section 12). This
+passwordless session (token consumption via `POST /ui/passwordless/verify` with
+`{ "token": ... }`, then `GET /ui/me`) is **not** owned here; it is a downstream
+"passwordless complete / deep-link" ticket (see Section 12). This
 ticket delivers: a stateless Compose screen with two phases (email entry →
 confirmation), a `@HiltViewModel` driving a `StateFlow<PasswordlessStartUiState>`,
 a thin repository method `startPasswordless(email)` over a Retrofit `AuthApi`
@@ -32,9 +41,11 @@ call, DTO→domain mapping, error normalization (FastAPI `detail`), resend coold
 and full test coverage.
 
 Definition of success: from the Login screen's "Sign in with a link" affordance
-(AND-030), a user enters an email, taps Send, and the screen shows a confirmation
-state naming the masked `sent_to`; a resend control is gated by a cooldown timer;
-all paths are unit/Compose-tested with no live backend.
+(AND-030), a user enters a username/email, taps Send, and the screen shows a
+confirmation state (naming the address the user typed; optionally echoing the
+server `sent_to[]` if present); a resend control is gated by a **client-side**
+cooldown timer (the server provides no cooldown hint — see Section 5/16); all paths
+are unit/Compose-tested with no live backend.
 
 ## 2. Context & References
 
@@ -68,27 +79,38 @@ all paths are unit/Compose-tested with no live backend.
 
 ## 3. Functional Requirements
 
-FR-1 **Email entry.** A single-line email field (keyboard type `Email`, autofill
-hint `emailAddress`, IME action `Done`) with inline validation: non-blank and
-matching `Patterns.EMAIL_ADDRESS`. Submit is gated on validity and on not being
-in flight.
+FR-1 **Identifier entry.** A single-line field accepting **username or email**
+(the verified request key is `username`; the web client labels it "Username or
+email"). Keyboard type `Email`, autofill hint `emailAddress`, IME action `Done`.
+Inline validation is **non-blank only** by default; an email-shaped value MAY be
+additionally checked with `Patterns.EMAIL_ADDRESS`, but because a bare username is
+valid the client must **not** hard-block non-email input. (The web client gates
+only on non-blank: `if (!magicEmail.trim()) return`.) Submit is gated on non-blank
+and on not being in flight.
 
 FR-2 **Start dispatch.** Tapping the primary button (or IME `Done` when valid)
 invokes the ViewModel, which calls `AuthRepository.startPasswordless(email)`
 → `POST /ui/passwordless/start`. While in flight the button shows progress and
 the field is disabled.
 
-FR-3 **Confirmation state.** On success the screen switches to a "check your
-email" phase that renders the server-provided `sent_to` (masked, e.g.
-`j•••@example.com`) using a parameterized string. It shows guidance copy
-("Open the link we sent to {address} to finish signing in"), a **Resend** control,
-and a **"Use a different email"** action that returns to the entry phase.
+FR-3 **Confirmation state.** On success (`200` with `status` present) the screen
+switches to a "check your email" phase. **CORRECTION (verified):** the primary
+`{address}` shown is the **user's own typed input** (mirroring the web client,
+which renders `magicEmail`); the server `sent_to` is a **`string[]`** and is
+optional, used only to optionally enrich the confirmation when present (it is not
+guaranteed masked). It shows guidance copy ("Open the link we sent to {address} to
+finish signing in"), a **Resend** control, and a **"Use a different email"** action
+that returns to the entry phase.
 
-FR-4 **Resend with cooldown.** Resend re-invokes start for the same email but is
-locally blocked while a cooldown timer (`resendSecondsLeft > 0`) is active; no
-network call is made during cooldown. The default cooldown is 30s, overridden by a
-server `resend_after`/`Retry-After` value when present. The control displays the
-remaining seconds.
+FR-4 **Resend with cooldown.** Resend re-invokes start for the same identifier but
+is locally blocked while a cooldown timer (`resendSecondsLeft > 0`) is active; no
+network call is made during cooldown. **CORRECTION (verified):** the verified
+`PasswordlessStartResp` has **no** `resend_after` field, so the cooldown is a
+**purely client-side** 30s default. A server `Retry-After` header (or `429`) is
+**unverified** (not in the OpenAPI `responses` for this op — only `200`/`422` are
+documented); if such a header/status is ever observed at runtime the client MAY
+honor it, but this is an assumption, not a contract (see Sections 7/16). The
+control displays the remaining seconds.
 
 FR-5 **Change email.** "Use a different email" resets to the entry phase
 preserving the previously typed address (so the user can correct a typo), clears
@@ -168,11 +190,13 @@ class PasswordlessStartViewModel @Inject constructor(
     private fun dispatch(isResend: Boolean) { /* validate -> Sending -> repo -> Confirm/error */ }
 }
 
-// core-model
+// core-model — shaped to the VERIFIED contract:
+//   PasswordlessStartResp { status: string (required), sent_to: string[] }
 data class PasswordlessStarted(
-    val sentTo: String,                 // masked destination from server
-    val resendAfterSeconds: Int = 30,
-    val expiresInSeconds: Int? = null,
+    val status: String,                 // required success status string
+    val sentTo: List<String> = emptyList(), // server destinations (NOT guaranteed masked)
+    // No resendAfter / expiresIn: not present in the verified response.
+    // Client cooldown default lives in the ViewModel, not the domain type.
 )
 ```
 
@@ -181,7 +205,7 @@ Repository addition (interface from AND-028 family; method added here):
 ```kotlin
 interface AuthRepository {
     // ...existing session/MFA methods...
-    suspend fun startPasswordless(email: String): ApiResult<PasswordlessStarted>
+    suspend fun startPasswordless(identifier: String): ApiResult<PasswordlessStarted>
 }
 
 @Singleton
@@ -189,20 +213,23 @@ class AuthRepositoryImpl @Inject constructor(
     private val api: AuthApi,
     private val errorMapper: ApiErrorMapper,
 ) : AuthRepository {
-    override suspend fun startPasswordless(email: String): ApiResult<PasswordlessStarted> =
-        safeApiCall(errorMapper) { api.passwordlessStart(PasswordlessStartReq(email)).toDomain() }
+    // Param is the identifier (username OR email); mapped to the `username` wire key.
+    override suspend fun startPasswordless(identifier: String): ApiResult<PasswordlessStarted> =
+        safeApiCall(errorMapper) {
+            api.passwordlessStart(PasswordlessStartReq(username = identifier)).toDomain()
+        }
 }
 
 private fun PasswordlessStartResp.toDomain() = PasswordlessStarted(
-    sentTo = sentTo,
-    resendAfterSeconds = resendAfter ?: 30,
-    expiresInSeconds = expiresIn,
+    status = status,
+    sentTo = sentTo ?: emptyList(),
 )
 ```
 
 Cooldown is driven by a `viewModelScope` ticker decrementing `resendSecondsLeft`
-once per second from `resendAfterSeconds` to 0 (using the injected `clock`/test
-dispatcher). Layout: `Scaffold` + scrollable `Column` with `imePadding()`; the
+once per second from a **client-side** default (30s; the server returns no cooldown
+hint) to 0 (using the injected `clock`/test dispatcher). Layout: `Scaffold` +
+scrollable `Column` with `imePadding()`; the
 entry phase shows the email field + primary button; the confirmation phase swaps to
 an icon/header, the masked-destination copy, resend, and change-email actions.
 `@Preview`s cover: empty entry, valid entry, sending, confirmation, confirmation
@@ -215,55 +242,65 @@ the `X-CSRF-Token` header is injected by the `core-network` CSRF interceptor
 (AND-012) — not set manually. Because this is a session-bootstrapping request, the
 401-refresh authenticator (AND-013) is generally a no-op here.
 
-### `POST /ui/passwordless/start`
+### `POST /ui/passwordless/start`  *(verified against OpenAPI + frontend)*
 
-Request:
+Request (`PasswordlessStartReq`, `username` **required**):
 ```json
-{ "email": "user@example.com" }
+{ "username": "user@example.com" }
 ```
-Response `200`:
+Response `200` (`PasswordlessStartResp`, `status` **required**, `sent_to` is an array):
 ```json
-{ "sent_to": "u•••@example.com", "resend_after": 30, "expires_in": 900 }
+{ "status": "sent", "sent_to": ["u***@example.com"] }
 ```
 
-Notes:
-- `sent_to` is the **masked** destination the server actually dispatched to. The
-  client treats it as opaque display text (never unmasks/stores the raw address
-  beyond the user's own input).
-- `resend_after` / `Retry-After` (header) drive the cooldown when present;
-  fallback 30s.
-- Some backends return `202 Accepted` for an async dispatch; treat any `2xx` as
-  success. To avoid account enumeration the backend may return `200` even for an
-  unknown email — the client therefore shows confirmation on any `2xx` and does not
-  branch on existence.
+Notes (corrected to the verified contract):
+- **Request key is `username`, NOT `email`.** Verified: OpenAPI
+  `components.schemas.PasswordlessStartReq` (single required prop `username`) and
+  `src/api/endpoints/auth.ts: passwordlessStart` → `passwordlessStart({ username })`
+  in `src/pages/Login.tsx`.
+- **`sent_to` is `string[]`** (array), and `status` (string) is required. Verified:
+  OpenAPI `components.schemas.PasswordlessStartResp` and
+  `src/api/types.ts: PasswordlessStartResp`. The masking and the value's contents
+  are not specified by the schema; treat each element as opaque display text. The
+  web client does **not** render `sent_to` at all (it echoes the typed input), so
+  consuming `sent_to` is optional enrichment.
+- **No `resend_after`, no `expires_in`** in the verified response. Cooldown is
+  client-side (Section 7).
+- **Only `200` and `422` are documented** in the OpenAPI `responses` for this op.
+  A `202`-async variant and `2xx`-for-unknown-email enumeration safety are
+  **unverified assumptions** (the schema neither confirms nor denies); the client
+  still shows confirmation on `2xx` defensively, but this is not a documented
+  contract.
 
-### Error responses (FastAPI `detail`, polymorphic)
+### Error responses
 
-`detail` is `string | [{msg, type, loc}] | {code, ...}`; `ApiErrorMapper`
-(AND-015) normalizes all three into `ApiError(code?, message)`.
+The **only documented error is `422`** (`HTTPValidationError`). Verified:
+`detail` is an array of `ValidationError` objects, each with required `loc`
+(array of string|int), `msg` (string), and `type` (string). `ApiErrorMapper`
+(AND-015) normalizes this into `ApiError(code?, message)` and maps to the field
+error.
 
-- `422` invalid email format → validation array → inline field error.
-- `429` rate-limited → honor `Retry-After`/`retry_after` into cooldown; disable
-  resend; show throttle copy.
-- `400/404` policy errors (only if the backend chooses to reveal) → mapped form
-  error; copy must not be phrased so as to confirm/deny account existence beyond
-  what the server already exposes.
+- `422` → validation array → inline field error.
+- `429` rate-limit + `Retry-After`, and `400/404` policy errors: **UNVERIFIED** —
+  not present in the OpenAPI `responses` for this op. The client may handle them
+  defensively (generic mapped copy), but they are assumptions, not contract
+  (Section 16). FastAPI's global handler can still emit a `string` or
+  `{detail: ...}` shape for unexpected statuses, so `ApiErrorMapper` should remain
+  tolerant of `string | [{msg,type,loc}] | {detail}`.
 
-Exact field names (`sent_to` vs `masked_email`, `resend_after` vs `retry_after`,
-presence of `expires_in`) and the request key (`email`) are reconciled against
-`/openapi.json` and `frontend/src/api/types.ts` before merge (Section 13). Moshi
+The request key (`username`) and response shape are reconciled and **confirmed**
+against the OpenAPI spec and `src/api/types.ts` (Section 13/16). Moshi
 `@Json(name="...")` snake_case mapping is used on the DTOs.
 
 ```kotlin
-// core-network DTOs (Moshi)
+// core-network DTOs (Moshi) — shaped to the VERIFIED contract
 @JsonClass(generateAdapter = true)
-data class PasswordlessStartReq(@Json(name = "email") val email: String)
+data class PasswordlessStartReq(@Json(name = "username") val username: String)
 
 @JsonClass(generateAdapter = true)
 data class PasswordlessStartResp(
-    @Json(name = "sent_to") val sentTo: String,
-    @Json(name = "resend_after") val resendAfter: Int? = null,
-    @Json(name = "expires_in") val expiresIn: Int? = null,
+    @Json(name = "status") val status: String,          // required
+    @Json(name = "sent_to") val sentTo: List<String>? = null, // array; may be absent/empty
 )
 
 interface AuthApi {
@@ -289,14 +326,16 @@ interface AuthApi {
 @Immutable
 data class PasswordlessStartUiState(
     val phase: Phase = Phase.Entry,        // Entry, Sending, Confirmation
-    val email: String = "",
-    val emailError: FieldError? = null,    // Required | InvalidEmail
-    val sentTo: String? = null,            // masked destination (Confirmation)
+    val identifier: String = "",           // username OR email (wire key: `username`)
+    val identifierError: FieldError? = null, // Required (InvalidEmail optional/soft)
+    val sentTo: List<String> = emptyList(), // server `sent_to[]`, optional enrichment
     val resendSecondsLeft: Int = 0,
     val formError: FormError? = null,      // retryable network/server | non-retryable policy
 ) {
+    // Confirmation copy uses `identifier` (the typed value), matching the web client;
+    // `sentTo` is only rendered when non-empty.
     val isSubmitEnabled: Boolean
-        get() = phase != Phase.Sending && email.isNotBlank() && emailError == null
+        get() = phase != Phase.Sending && identifier.isNotBlank() && identifierError == null
     val canResend: Boolean
         get() = phase == Phase.Confirmation && resendSecondsLeft == 0
 }
@@ -320,10 +359,12 @@ error). Errors are transient and cleared on edit/`onDismissError`.
   retry simply triggers another link), so the bounded-backoff retry policy
   (AND-016) may apply to transient transport failures, but **never** auto-retry on
   a `4xx` and never auto-resend on `429`.
-- **Throttle (429):** set `resendSecondsLeft` from `Retry-After`/`retry_after`,
-  disable resend, no retry.
-- **Validation (422):** map to the email field error; no network re-attempt until
-  the user edits.
+- **Throttle (429) — UNVERIFIED (not in OpenAPI for this op):** if a `429` with
+  `Retry-After` is ever returned, set `resendSecondsLeft` from it, disable resend,
+  no retry. This is defensive handling only; the documented contract has no `429`.
+- **Validation (422) — verified:** map the `HTTPValidationError` (`detail[]` of
+  `{loc,msg,type}`) to the identifier field error; no network re-attempt until the
+  user edits.
 - **Offline:** if dispatch fails entirely while in `Entry`, render the AND-021
   offline/error state with a Retry action; there is no cached fallback.
 - **Cancellation:** in-flight dispatch and the cooldown ticker are tied to
@@ -337,11 +378,16 @@ across the auth area.
 ## 8. Security & Privacy
 
 - **Account enumeration:** the screen shows the confirmation state on any `2xx`
-  regardless of whether the email exists, so the client does not become an
-  enumeration oracle. Error copy for `4xx` is generic and must not assert account
-  existence beyond what the server response already discloses.
-- **Masked destination:** `sent_to` is masked server-side; the client never
-  attempts to unmask or persist a full address beyond the value the user typed.
+  regardless of whether the account exists, so the client does not become an
+  enumeration oracle. **Note (unverified):** whether the backend is actually
+  enumeration-safe (always `200`) is not expressed by the OpenAPI schema — only
+  `200`/`422` are documented; the web client treats any non-error as "sent". Error
+  copy for any `4xx` is generic and must not assert account existence beyond what
+  the server response already discloses.
+- **Destination display:** `sent_to` is a `string[]` whose masking is **not**
+  guaranteed by the schema. The client renders the user's own typed identifier as
+  the primary confirmation text and treats `sent_to` elements (if shown) as opaque;
+  it never persists a full address beyond the value the user typed.
 - **No secrets logged or persisted.** The email is treated as PII: excluded from
   analytics values and from any non-debug logging; not written to disk beyond the
   rotation-scoped `SavedStateHandle`.
@@ -396,23 +442,25 @@ the ViewModel at the defined interaction points.
 **Unit (JUnit + Turbine + MockK, fixtures in `core-testing`):**
 
 1. `startPasswordless` success maps `PasswordlessStartResp` → `PasswordlessStarted`
-   (masked `sentTo`, `resendAfter` default 30 when null).
-2. `422` validation → `ApiResult.HttpError` with mapped message; `429` →
-   cooldown sourced from `Retry-After`/`retry_after`.
+   (`status` carried; `sentTo` mapped from `string[]`, null → empty list).
+2. `422` validation (`HTTPValidationError`: `detail[]` of `{loc,msg,type}`) →
+   `ApiResult.HttpError` with mapped message. (`429`/`Retry-After` cooldown is
+   defensive/unverified — covered as an optional case, not contract.)
 3. `IOException` → `ApiResult.NetworkError` (single surface; no auto-retry on 4xx).
-4. Client validation: blank/malformed email → `emailError`, **no** network call
-   (MockK `wasNot Called`).
+4. Client validation: blank identifier → `identifierError`, **no** network call
+   (MockK `wasNot Called`). A bare (non-email) username is accepted, not blocked.
 5. Resend during cooldown (`resendSecondsLeft > 0`) performs **no** network call.
-6. Treats `202` like `200` (both advance to Confirmation).
+6. Request body serializes the **`username`** key (asserted in contract tests).
 
 **ViewModel state tests (Turbine, injected `Clock`/test dispatcher):** intent
 sequence `onEmailChange → onSubmit` drives `Entry → Sending → Confirmation`;
 cooldown ticker decrements to 0 then enables resend; `onChangeEmail` returns to
 `Entry` preserving email; error path returns to `Entry` with `formError`.
 
-**Contract tests (MockWebServer):** success, validation, throttled (429 +
-`Retry-After`) fixtures; assert request body JSON key (`email`) and presence of the
-`X-CSRF-Token` header.
+**Contract tests (MockWebServer):** success (`200` with `status` + `sent_to[]`),
+validation (`422` `HTTPValidationError`) fixtures (plus an optional defensive `429`
++ `Retry-After` fixture); assert request body JSON key is **`username`** and the
+`X-CSRF-Token` header is present.
 
 **Compose UI tests (`createComposeRule`, fake state — no Hilt/network):**
 - Submit disabled for blank/invalid email, enabled when valid.
@@ -450,17 +498,24 @@ a named test.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Exact wire shape.** Field names (`email` request key; `sent_to` vs
-  `masked_email`; `resend_after` vs `retry_after`; presence of `expires_in`) and
-  the success status (`200` vs `202`) are assumed from sibling MFA flows and must
-  be confirmed against `/openapi.json` and `frontend/src/api/types.ts`. *Open: does
-  the endpoint exist exactly at `/ui/passwordless/start`?* The web reference was not
-  available in this workspace at spec time.
-- **R2 — Enumeration policy.** Whether the backend returns `200` for unknown emails
-  (enumeration-safe) or a `4xx`. The client defaults to confirm-on-`2xx`; verify
-  the backend's behavior and align copy.
-- **R3 — Completion ownership.** The magic-link consume/finalize ticket is implied
-  but not enumerated in the backlog. Confirm its AND-### id and update `blocks`.
+- **R1 — Exact wire shape — RESOLVED (verified 2026-06-06).** The endpoint exists
+  exactly at `POST /ui/passwordless/start`. Verified shapes: request key is
+  **`username`** (not `email`); response is **`{ status: string (required),
+  sent_to: string[] }`** — there is **no** `resend_after`/`retry_after` and **no**
+  `expires_in`; only `200`/`422` are documented. Source: OpenAPI
+  `components.schemas.PasswordlessStartReq`/`PasswordlessStartResp` and
+  `src/api/types.ts`. The spec body has been corrected throughout (see Section 16).
+- **R2 — Enumeration policy — partially open.** The OpenAPI schema documents only
+  `200`/`422`, and the web client treats any non-error as "sent", consistent with
+  enumeration-safety, but the schema does not explicitly guarantee `200` for
+  unknown accounts. The client defaults to confirm-on-`2xx`; runtime verification
+  against the dev host is still advisable. (Unverified — see Section 16.)
+- **R3 — Completion ownership — clarified.** The downstream consume/finalize step
+  is `POST /ui/passwordless/verify` (`PasswordlessVerifyReq { token }` →
+  `PasswordlessVerifyResp { status, session_id?, auth_required, challenge_id?,
+  required_factors[] }`), after which the web client calls `GET /ui/me`
+  (`src/pages/MagicLinkVerify.tsx`). The corresponding AND-### id is still not
+  enumerated in the backlog; confirm and update `blocks`.
 - **R4 — Resend cap.** Backlog does not specify a max-resend count; defer to server
   enforcement (429) unless product specifies otherwise.
 - **R5 — Cooldown vs delivery latency.** On the flaky dev host, email delivery may
@@ -472,17 +527,18 @@ a named test.
 
 ## 14. Acceptance Criteria
 
-AC-1 **Start triggers send (tested).** Submitting a valid email issues
-`POST /ui/passwordless/start` with `{ "email": ... }` and, on `2xx`, transitions to
-the confirmation phase. Verified by unit + MockWebServer + Compose tests.
+AC-1 **Start triggers send (tested).** Submitting a non-blank identifier issues
+`POST /ui/passwordless/start` with `{ "username": ... }` and, on `2xx`, transitions
+to the confirmation phase. Verified by unit + MockWebServer + Compose tests.
 (Directly satisfies the backlog acceptance bullet.)
 
-AC-2 **Confirmation shows `sent_to` (tested).** The confirmation state renders the
-server-returned masked `sent_to` via a parameterized string; a failed start never
-reaches confirmation.
+AC-2 **Confirmation shown (tested).** On success the confirmation state renders the
+typed identifier via a parameterized string (and optionally the server `sent_to[]`
+when present); a failed start never reaches confirmation.
 
-AC-3 **Validation gates the network.** Blank/malformed email shows an inline field
-error and makes no network call; submit is disabled until valid.
+AC-3 **Validation gates the network.** Blank identifier shows an inline field error
+and makes no network call; submit is disabled until non-blank. A bare username
+(non-email) is accepted.
 
 AC-4 **Resend + cooldown.** Resend re-dispatches only when the cooldown has
 elapsed; a resend attempt during cooldown makes no network call; `429`/`Retry-After`
@@ -522,3 +578,227 @@ dynamic type and RTL respected.
 - Builds clean with the project toolchain (Kotlin 2.0.21, AGP 8.7.3, JDK 17),
   passes lint/detekt, reviewed, and merged. PR references AND-060 and links the
   downstream magic-link complete ticket once identified.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. OpenAPI =
+`reference/openapi.pretty.json` (schemas under `components.schemas`) and
+`reference/openapi.index.txt`; frontend = `reference/src/`.
+
+1. **Endpoint exists at `POST /ui/passwordless/start`.** VERIFIED.
+   OpenAPI `POST /ui/passwordless/start` (op `passwordless_start_ui_passwordless_start_post`);
+   `src/api/endpoints/auth.ts: passwordlessStart` → `api.post("/ui/passwordless/start", body)`.
+2. **HTTP method is POST, JSON body.** VERIFIED. OpenAPI path `post` with
+   `requestBody.required: true`; `src/api/endpoints/auth.ts` uses `api.post`.
+3. **Request key is `username` (required), NOT `email`.** CORRECTED (spec said
+   `email`). OpenAPI `components.schemas.PasswordlessStartReq` (single required prop
+   `username`); `src/api/types.ts: PasswordlessStartReq { username: string }`;
+   `src/pages/Login.tsx` calls `passwordlessStart({ username: magicEmail.trim() })`.
+4. **Response `sent_to` is `string[]` (array), not a single masked string.**
+   CORRECTED. OpenAPI `components.schemas.PasswordlessStartResp.sent_to` =
+   `{type: array, items: {type: string}}`; `src/api/types.ts: PasswordlessStartResp
+   { status: string; sent_to: string[] }`.
+5. **Response carries a required `status` string.** CORRECTED (spec omitted it).
+   OpenAPI `PasswordlessStartResp.required: ["status"]`; `src/api/types.ts`.
+6. **Response has NO `resend_after`/`retry_after` and NO `expires_in`.** CORRECTED
+   (spec invented both). OpenAPI `PasswordlessStartResp` has only `status` +
+   `sent_to`; absent from `src/api/types.ts`.
+7. **`sent_to` is guaranteed masked.** CORRECTED → UNVERIFIED-ASSUMPTION. The
+   schema (OpenAPI `PasswordlessStartResp.sent_to.items: {type: string}`) says
+   nothing about masking; the web client never renders it. Spec now treats it as
+   opaque, optional.
+8. **Documented success/error statuses are exactly `200` and `422`.** VERIFIED.
+   OpenAPI path `responses` keys = `200` (PasswordlessStartResp), `422`
+   (HTTPValidationError); index line `resp=200:PasswordlessStartResp;422:HTTPValidationError`.
+9. **`202`-async success variant.** UNVERIFIED-ASSUMPTION (spec asserted it). Not in
+   OpenAPI `responses`. Client still treats any `2xx` as success defensively.
+10. **`429` rate-limit with `Retry-After` drives the cooldown.** CORRECTED →
+    UNVERIFIED-ASSUMPTION. No `429` in OpenAPI `responses` for this op; no
+    `resend_after` in the body. Cooldown is now specified as client-side (30s).
+11. **`400/404` policy errors.** UNVERIFIED-ASSUMPTION. Not in OpenAPI `responses`.
+12. **`422` body is FastAPI `HTTPValidationError`** (`detail: ValidationError[]`,
+    each required `loc: (string|int)[]`, `msg: string`, `type: string`). VERIFIED.
+    OpenAPI `components.schemas.HTTPValidationError` and `components.schemas.ValidationError`.
+13. **CSRF via `X-CSRF-Token` header injected by transport (not set manually).**
+    VERIFIED for the web contract. `src/api/client.ts` reads cookie `ui_csrf` and
+    sets header `X-CSRF-Token`; Android equivalent is the AND-012 interceptor
+    (assumed analogous, not re-checked here).
+14. **Request rides cookies / credentials included.** VERIFIED (web).
+    `src/api/client.ts` uses `credentials: "include"` on fetch.
+15. **Web client gates submit on non-blank only (no email-format hard block).**
+    VERIFIED. `src/pages/Login.tsx handleMagicLink`: `if (!magicEmail.trim()) return`;
+    button `disabled={loading || !magicEmail.trim()}`; field label "Username or email".
+16. **Web confirmation echoes the user's typed input, not `sent_to`.** VERIFIED.
+    `src/pages/Login.tsx` renders `{magicEmail}` in the "We sent a sign-in link to …"
+    copy; `sent_to` is unused on this screen.
+17. **Downstream completion = `POST /ui/passwordless/verify` then `GET /ui/me`.**
+    VERIFIED. OpenAPI `POST /ui/passwordless/verify`
+    (`PasswordlessVerifyReq { token }` → `PasswordlessVerifyResp { status,
+    session_id?, auth_required, challenge_id?, required_factors[] }`);
+    `src/pages/MagicLinkVerify.tsx` calls `passwordlessVerify({ token })` then `getMe`.
+18. **Android framework choices** (Compose Material 3, Hilt, Retrofit/Moshi,
+    `collectAsStateWithLifecycle`, `SavedStateHandle`, Compose `semantics`
+    error/liveRegion). UNVERIFIED here (framework ref) — not checkable against the
+    backend/frontend sources; standard AndroidX APIs assumed correct per project
+    stack (Section 2).
+
+### Corrections made
+
+- Request key `email` → **`username`** (Sections 1, 3, 4, 5, 6, 11, 14).
+- `sent_to` typed `String` (masked) → **`List<String>`** (optional, masking not
+  guaranteed); confirmation copy now uses the user's typed identifier (Sections 1,
+  3, 4, 5, 6, 8).
+- Removed invented `resend_after`/`Retry-After` server cooldown and `expires_in`;
+  cooldown is now **client-side 30s**; domain type `PasswordlessStarted` reshaped to
+  `{ status, sentTo: List<String> }` (Sections 1, 3, 4, 5, 7).
+- Added required `status` field to the response DTO/domain (Sections 4, 5, 11).
+- `202`/`429`/`400`/`404` downgraded from asserted contract to **defensive,
+  unverified** handling (only `200`/`422` documented) (Sections 5, 7, 8, 11).
+- `422` error shape pinned to verified `HTTPValidationError`/`ValidationError`
+  (Sections 5, 7, 11).
+- R1 marked RESOLVED; R3 enriched with the verified `verify` contract (Section 13).
+- Email-format hard validation softened to non-blank to allow bare usernames
+  (Sections 3, 11, 14).
+
+### Open assumptions
+
+- **Enumeration safety** (always `200` for unknown accounts): not expressed by the
+  schema; consistent with web behavior but unverified at runtime (R2).
+- **`202`/`429`/`400`/`404` runtime behavior**: undocumented; handled defensively
+  only. A live `Retry-After` header, if it ever appears, would be honored but is not
+  contractually guaranteed.
+- **`sent_to` masking and cardinality**: schema allows any/empty array of arbitrary
+  strings; client must not assume a single masked email.
+- **Android-side CSRF/cookie/refresh interceptors (AND-011/012/013)** behave
+  identically to the web `client.ts`: assumed, not re-verified in this review (those
+  tickets own it).
+- **Framework/API correctness** (Compose, Hilt, Retrofit, AndroidX semantics):
+  framework ref; not verifiable from the provided sources.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **EMU** =
+headless emulator AVD `test35` (x86_64, API 35) for CI UI/instrumented; **DEVICE** =
+physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34,
+arm64-v8a). This ticket is pure networking + Compose UI with no camera/biometrics/
+push/WebRTC, so almost everything runs on JVM or EMU; one ABI/API-skew smoke is
+called out for DEVICE.
+
+- **TC-AND-060-01 — Happy-path mapping (unit).** Type: unit (JVM). Target:
+  `AuthRepositoryImpl.startPasswordless` + `toDomain`. Preconditions: MockK `AuthApi`
+  returns `PasswordlessStartResp(status="sent", sentTo=["u***@example.com"])`.
+  Steps: call `startPasswordless("user@example.com")`. Expected:
+  `ApiResult.Success(PasswordlessStarted(status="sent", sentTo=["u***@example.com"]))`;
+  request built with `PasswordlessStartReq(username="user@example.com")`. Traces: AC-1, AC-2.
+
+- **TC-AND-060-02 — `sent_to` absent/empty maps to empty list (unit).** Type: unit
+  (JVM). Target: `toDomain`. Preconditions: response `{status:"sent"}` (no `sent_to`).
+  Steps: map. Expected: `sentTo == emptyList()`, no crash; `status` preserved.
+  Traces: AC-2.
+
+- **TC-AND-060-03 — Request serializes `username` key + CSRF header
+  (contract/MockWebServer).** Type: contract (JVM, MockWebServer). Target: `AuthApi`
+  + OkHttp stack. Preconditions: MockWebServer enqueues `200`
+  `{"status":"sent","sent_to":["u***@x.com"]}`; CSRF cookie present. Steps: invoke
+  `passwordlessStart`. Expected: recorded request path `POST /ui/passwordless/start`,
+  body JSON `{"username":"..."}` (NOT `email`), header `X-CSRF-Token` present,
+  `Content-Type: application/json`. Traces: AC-1.
+
+- **TC-AND-060-04 — `422` validation maps to field error
+  (contract/MockWebServer).** Type: contract (JVM). Target: repository +
+  `ApiErrorMapper`. Preconditions: MockWebServer returns `422`
+  `{"detail":[{"loc":["body","username"],"msg":"value is not a valid email address","type":"value_error"}]}`.
+  Steps: invoke start. Expected: `ApiResult.HttpError(422, mappedMessage)`; ViewModel
+  surfaces `identifierError`; phase stays `Entry`; never reaches `Confirmation`.
+  Traces: AC-3, AC-6, AC-2.
+
+- **TC-AND-060-05 — Network failure surfaces retryable error (unit + contract).**
+  Type: unit/contract (JVM). Target: repository + ViewModel. Preconditions: API
+  throws `IOException` (or MockWebServer `setBodyDelay` beyond call timeout). Steps:
+  submit. Expected: `ApiResult.NetworkError`; `formError = Network` (retryable);
+  Retry re-invokes the same dispatch; no auto-retry on 4xx. Traces: AC-6.
+
+- **TC-AND-060-06 — Flaky/offline dev-host path (integration).** Type: integration
+  (JVM/Robolectric, MockWebServer simulating ~20s timeout then success on retry).
+  Target: ViewModel + retry policy (AND-016). Preconditions: first dispatch times
+  out, Retry succeeds. Steps: submit → observe Network error → tap Retry. Expected:
+  bounded-backoff applies to transport failure only; second attempt reaches
+  `Confirmation`; no duplicate in-flight calls. Traces: AC-6, AC-1.
+
+- **TC-AND-060-07 — Client validation gates the network (unit).** Type: unit (JVM).
+  Target: ViewModel. Preconditions: MockK repo. Steps: `onEmailChange("")` (blank)
+  then `onSubmit()`; separately `onEmailChange("alice")` (bare username) then
+  `onSubmit()`. Expected: blank → `identifierError = Required`, repo `wasNot Called`;
+  bare username → **accepted**, repo IS called (no email-format hard block).
+  Traces: AC-3.
+
+- **TC-AND-060-08 — Resend cooldown blocks network (unit, injected clock).** Type:
+  unit (JVM, test dispatcher + injected `Clock`). Target: ViewModel. Preconditions:
+  in `Confirmation` with `resendSecondsLeft = 30`. Steps: `onResend()` immediately,
+  then advance virtual time to 0 and `onResend()` again. Expected: first resend makes
+  **no** network call (`canResend == false`); after countdown reaches 0,
+  `canResend == true` and resend dispatches once. Traces: AC-4.
+
+- **TC-AND-060-09 — Defensive `429`/`Retry-After` cooldown (contract, OPTIONAL/
+  unverified).** Type: contract (JVM, MockWebServer). Target: repository +
+  ViewModel. Preconditions: MockWebServer returns `429` with `Retry-After: 60`
+  (NOTE: undocumented behavior; defensive only). Steps: submit. Expected: if handled,
+  `resendSecondsLeft` set from `Retry-After`, resend disabled, no auto-retry; if not
+  handled, falls through to generic mapped error. Test asserts no crash either way.
+  Traces: AC-4, AC-6.
+
+- **TC-AND-060-10 — State machine + cooldown ticker (unit, Turbine).** Type: unit
+  (JVM, Turbine + injected clock). Target: ViewModel `StateFlow`. Preconditions:
+  repo returns success. Steps: `onEmailChange(valid) → onSubmit`; observe; advance
+  ticker; `onChangeEmail`. Expected: `Entry → Sending → Confirmation`; ticker
+  decrements to 0 enabling resend; `onChangeEmail` returns to `Entry` preserving
+  `identifier`, stops ticker, clears error. Traces: AC-1, AC-4, AC-5.
+
+- **TC-AND-060-11 — Confirmation renders identifier; failure never confirms
+  (Compose-UI).** Type: Compose-UI (EMU). Target: `PasswordlessStartScreen` (fake
+  state). Preconditions: state `Confirmation(identifier="alice@x.com", sentTo=["a***@x.com"])`.
+  Steps: assert confirmation copy shows the identifier; render `sentTo` only when
+  non-empty; then render a `formError` state and assert the screen is NOT in
+  Confirmation. Expected: matches FR-3/FR-7. Traces: AC-2, AC-7-adjacent.
+
+- **TC-AND-060-12 — Submit enable/disable + Sending lockout (Compose-UI).** Type:
+  Compose-UI (EMU). Target: stateless screen. Preconditions: drive states blank /
+  valid / `Sending`. Steps: assert submit disabled when blank, enabled when
+  non-blank, and field+submit disabled with progress shown in `Sending`. Expected:
+  matches FR-1/FR-2 and no double-dispatch. Traces: AC-1, AC-3.
+
+- **TC-AND-060-13 — Accessibility semantics (Compose-UI / instrumented).** Type:
+  Compose-UI + TalkBack assertions (EMU). Target: stateless screen. Preconditions:
+  error state + cooldown-active confirmation. Steps: assert field error is associated
+  via `semantics { error(...) }`; form-error banner is `liveRegion = Assertive`;
+  confirmation transition announced; resend disabled exposes accessible reason
+  ("available in {n} seconds"); touch targets ≥48dp; dynamic font scaling and RTL
+  render without truncation/overlap. Expected: all pass. Traces: AC-8.
+
+- **TC-AND-060-14 — No-PII redaction (unit/instrumented).** Type: unit (JVM) +
+  optional instrumented log capture. Target: ViewModel/analytics + Timber tree.
+  Preconditions: debug build, analytics fake. Steps: run a full submit→confirm flow.
+  Expected: identifier and `sent_to` never appear as analytics property values nor in
+  non-redacted logs; not persisted beyond `SavedStateHandle`. Traces: AC-7.
+
+- **TC-AND-060-15 — ABI/API-skew smoke (instrumented/e2e, DEVICE).** Type:
+  instrumented (DEVICE — physical A15, arm64-v8a, API 34). Target: full feature on
+  real hardware. Preconditions: app installed on SM-A156U; MockWebServer or dev host
+  reachable. Steps: run the happy-path submit→confirmation and one error path.
+  Expected: identical behavior to EMU (API 35 / x86_64); no arm64-vs-x86 or
+  API-34-vs-35 regressions (Moshi codegen, Compose rendering). MUST run on the
+  physical device to catch ABI/API-level differences; EMU run is the baseline.
+  Traces: AC-1, AC-2, AC-6.
+
+### Coverage matrix
+
+| AC | Description | Covered by |
+|----|-------------|------------|
+| AC-1 | Start triggers `POST …/start` with `username`, advances on 2xx | TC-01, TC-03, TC-06, TC-10, TC-12, TC-15 |
+| AC-2 | Confirmation shown; failure never confirms | TC-01, TC-02, TC-04, TC-11, TC-15 |
+| AC-3 | Validation gates network; bare username accepted | TC-04, TC-07, TC-12 |
+| AC-4 | Resend + cooldown; defensive Retry-After | TC-08, TC-09, TC-10 |
+| AC-5 | Change email returns to entry, preserves input, stops ticker | TC-10 |
+| AC-6 | Error handling (network/422/throttle), retryable | TC-04, TC-05, TC-06, TC-09, TC-15 |
+| AC-7 | No PII leakage (logs/analytics/persistence) | TC-14, TC-11 (state only) |
+| AC-8 | Accessibility (error assoc, announce, reason, 48dp, dynamic type, RTL) | TC-13 |

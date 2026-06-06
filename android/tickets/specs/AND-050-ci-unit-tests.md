@@ -5,7 +5,8 @@ milestone: M1
 epic: E07
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-008, AND-047]
 blocks: []
 ---
@@ -53,9 +54,11 @@ stdout are one click away from the build summary; and the PR cannot be marked gr
     verifying the reporting path end-to-end.
 - **No backend interaction.** This is a build/chore ticket; the FastAPI dev host
   (`http://18.222.237.167:8000`) is irrelevant — unit tests must never hit the network.
-- **References:** Gradle `Test` task and `test-report-aggregation` plugin docs; AGP
-  `testDebugUnitTest` task; `dorny/test-reporter` and `mikepenz/action-junit-report`
-  GitHub Actions for JUnit XML surfacing; `gradle/actions/setup-gradle` for caching.
+- **References:** Gradle `Test` and `TestReport` task docs (the built-in
+  `test-report-aggregation` plugin is *not* used — it requires the JVM Test Suite Plugin and
+  does not support Android plugins; see §4.2 correction); AGP `testDebugUnitTest` task;
+  `dorny/test-reporter` and `mikepenz/action-junit-report` GitHub Actions for JUnit XML
+  surfacing; `gradle/actions/setup-gradle` for caching.
 
 ## 3. Functional Requirements
 
@@ -150,26 +153,36 @@ reporting green).
 
 ### 4.2 Gradle aggregation
 
-Add the `test-report-aggregation` plugin to a small aggregation point so a single
-`mergedTestReport` task produces one cross-module HTML report at
-`android/build/reports/allTests/`. In `android/build.gradle.kts` (root):
+Produce one cross-module HTML report at `android/build/reports/allTests/` via a single
+`mergedTestReport` task. **Correction (review):** Gradle's built-in
+`test-report-aggregation` plugin is **not** used here — per the Gradle docs it "takes no
+action unless applied in concert with the JVM Test Suite Plugin" and "does not currently
+work with the `com.android.application` plugin." Android library/app modules apply
+`com.android.library`/`com.android.application`, not `java`/`jvm-test-suite`, and their
+results land under `testDebugUnitTest` rather than a JVM test suite, so the plugin's
+synthesized `testAggregateTestReport` task would aggregate nothing. We therefore aggregate
+manually with a plain `TestReport` task that points at each module's
+`test-results/testDebugUnitTest` directory (the `binary-results-dir`, which `TestReport`
+consumes). In `android/build.gradle.kts` (root):
 
 ```kotlin
-plugins {
-    id("test-report-aggregation")
-}
-
-dependencies {
-    subprojects.forEach { testReportAggregation(project(it.path)) }
-}
-
 tasks.register<org.gradle.api.tasks.testing.TestReport>("mergedTestReport") {
     destinationDirectory.set(layout.buildDirectory.dir("reports/allTests"))
+    // TestReport.testResults consumes the binary results dirs, not the XML dirs.
     testResults.from(
-        subprojects.map { it.layout.buildDirectory.dir("test-results/testDebugUnitTest") }
+        subprojects.map {
+            it.layout.buildDirectory.dir("test-results/testDebugUnitTest/binary")
+        }
     )
+    // Ensure all module unit tests have run before aggregating.
+    mustRunAfter(subprojects.map { "${it.path}:testDebugUnitTest" })
 }
 ```
+
+Note: `TestReport.getTestResults()` expects the **binary** results directories
+(`.../test-results/<task>/binary`), not the JUnit XML. The XML files (consumed separately
+by the GitHub publish step in §4.1) live one level up at
+`.../test-results/testDebugUnitTest/*.xml`.
 
 ### 4.3 Shared test conventions
 
@@ -381,3 +394,343 @@ change**, demonstrated via linked green-path and red-path CI run URLs.
 - Documentation: a short `android/CONTRIBUTING` note (or README section) describes how to
   reproduce the CI unit-test run locally (`./gradlew testDebugUnitTest mergedTestReport`)
   and where to find reports.
+
+## 16. Citations & Assumption Audit
+
+This is a CI/build-chore ticket with **no application HTTP API surface** (confirmed by §5).
+Accordingly, there are no OpenAPI endpoint or frontend-DTO claims to verify; the
+authoritative `openapi.index.txt` / `openapi.pretty.json` and `reference/src/**` sources
+yielded no relevant endpoints (the only matches for `unit`/`test`/`ci` in the OpenAPI index
+are incidental substrings inside unrelated paths). The verifiable claims here are
+**framework/tooling facts** (Gradle, AGP, GitHub Actions), checked against vendor docs and
+labelled `framework ref`.
+
+1. **Claim:** A single `./gradlew testDebugUnitTest` invocation runs JVM unit tests across
+   all modules and auto-discovers new modules (FR-2, §4.1, §4.2).
+   **VERDICT: Verified.** `testDebugUnitTest` is the standard AGP-generated unit-test task
+   per module; invoking it at the root with no module path makes Gradle run the
+   same-named task in every subproject that defines it.
+   **SOURCE:** framework ref — AGP/Gradle test task model
+   (https://developer.android.com/studio/test/command-line and
+   https://docs.gradle.org/current/userguide/java_testing.html).
+
+2. **Claim (ORIGINAL, WRONG):** Apply the `test-report-aggregation` plugin so a single
+   `mergedTestReport` task produces one cross-module HTML report.
+   **VERDICT: Corrected.** The Gradle `test-report-aggregation` plugin "takes no action
+   unless applied in concert with the JVM Test Suite Plugin" and "does not currently work
+   with the `com.android.application` plugin." Android modules apply
+   `com.android.library`/`com.android.application` and produce `testDebugUnitTest` results,
+   not a JVM test suite, so the plugin would aggregate nothing. §4.2 now drops the plugin
+   and uses a plain `TestReport` task pointed at each module's binary results dir.
+   **SOURCE:** framework ref —
+   https://docs.gradle.org/current/userguide/test_report_aggregation_plugin.html.
+
+3. **Claim (ADDED in correction):** `TestReport.testResults` must point at the **binary**
+   results directory (`.../test-results/testDebugUnitTest/binary`), not the XML directory.
+   **VERDICT: Verified.** `TestReport.getTestResults()` consumes `binary-results-dir`
+   outputs (`TestReport`/`Test.binaryResultsDirectory`); the human XML lives one level up.
+   **SOURCE:** framework ref —
+   https://docs.gradle.org/current/javadoc/org/gradle/api/tasks/testing/TestReport.html and
+   `Test.getBinaryResultsDirectory()`.
+
+4. **Claim:** `mikepenz/action-junit-report@v5` accepts `report_paths`, `fail_on_failure`,
+   `require_tests`, and `check_name`; `require_tests: true` fails the run when zero tests
+   are found and `fail_on_failure: true` fails on any test failure (§4.1, FR-4, §7, AC-5).
+   **VERDICT: Verified.** All four inputs exist; `require_tests` = "Fail if no tests are
+   found", `fail_on_failure` = "Fail the build in case of a test failure". (Defaults are
+   false, so the spec's explicit `true` values are required — confirmed.)
+   **SOURCE:** framework ref — https://github.com/mikepenz/action-junit-report (action
+   inputs/README).
+
+5. **Claim:** `report_paths` glob
+   `android/**/build/test-results/testDebugUnitTest/*.xml` locates the per-module JUnit XML
+   (§4.1, §6).
+   **VERDICT: Verified.** AGP writes JUnit XML to
+   `<module>/build/test-results/testDebugUnitTest/*.xml`; the action's `report_paths` takes
+   a glob (its own default is `**/junit-reports/TEST-*.xml`, so the override is necessary).
+   **SOURCE:** framework ref — AGP test-results layout
+   (https://developer.android.com/studio/test/command-line) +
+   https://github.com/mikepenz/action-junit-report.
+
+6. **Claim:** `cache-read-only: ${{ github.ref != 'refs/heads/android-port' }}` makes
+   pushes to `android-port` write the cache while PRs read-only (§4.1, §6).
+   **VERDICT: Verified.** `gradle/actions/setup-gradle` writes the cache only on the repo's
+   default branch by default; the documented way to let another long-lived branch write is
+   to override `cache-read-only`. Since `android-port` (not `main`) is the integration
+   branch here, this override is the correct mechanism and yields the intended
+   write-on-android-port / read-only-on-PR behavior.
+   **SOURCE:** framework ref —
+   https://github.com/gradle/actions/blob/main/docs/setup-gradle.md (caching section).
+
+7. **Claim:** `actions/upload-artifact@v4` with `if: always()` and
+   `if-no-files-found: error` uploads reports on success and failure and fails the step if
+   the report path matched nothing (§4.1, §7).
+   **VERDICT: Verified.** `if-no-files-found` supports `warn` | `error` | `ignore`;
+   `if: always()` is standard GitHub Actions step conditioning.
+   **SOURCE:** framework ref — https://github.com/actions/upload-artifact (inputs) +
+   https://docs.github.com/actions/learn-github-actions/expressions (`always()`).
+
+8. **Claim:** `--continue` runs all modules even after a failure yet the build still exits
+   non-zero (FR-3, AC-3).
+   **VERDICT: Verified.** Gradle `--continue` executes every task not dependent on the
+   failed one and still reports a non-zero exit at the end.
+   **SOURCE:** framework ref —
+   https://docs.gradle.org/current/userguide/command_line_interface.html (`--continue`).
+
+9. **Claim:** `testOptions.unitTests.isReturnDefaultValues` and
+   `isIncludeAndroidResources` are valid AGP unit-test options (§4.3).
+   **VERDICT: Verified.** Both are members of AGP's `TestOptions.UnitTestOptions`.
+   **SOURCE:** framework ref —
+   https://developer.android.com/reference/tools/gradle-api/current/com/android/build/api/dsl/UnitTestOptions
+   and https://developer.android.com/training/testing/local-tests.
+
+10. **Claim:** Robolectric requires `isIncludeAndroidResources = true` and is JDK-version
+    sensitive (pinned JDK 17) (§4.3, R4).
+    **VERDICT: Verified.** Robolectric's AGP guidance requires
+    `includeAndroidResources = true`; JDK 17 is supported by current Robolectric.
+    **SOURCE:** framework ref — http://robolectric.org/getting-started/.
+
+11. **Claim:** "No backend interaction; unit tests must never hit the network; the FastAPI
+    dev host `http://18.222.237.167:8000` is irrelevant" (§2, §8, FR-5).
+    **VERDICT: Verified (scope claim).** Consistent with the ticket scope (CI chore) and
+    §5's N/A API contract; nothing in the OpenAPI/frontend sources contradicts it.
+    **SOURCE:** ticket scope (specs-src/AND-050.md) + spec §5.
+
+12. **Claim:** Toolchain versions — Kotlin 2.0.21, Gradle 8.9, AGP 8.7.3, JDK 17, KSP for
+    Hilt (§2).
+    **VERDICT: Unverified-assumption.** These are inherited from scaffolding/AND-008 and
+    are not checkable from the provided sources (no Android project, version catalog, or
+    `gradle-wrapper.properties` is present in this plan repo). Mutually compatible per
+    public compatibility matrices, but the exact pinned values cannot be confirmed here.
+    **SOURCE:** inherited from AND-008 (not present in this repo) — see Open assumptions.
+
+13. **Claim:** AND-008 already created a CI job running `assembleDebug` +
+    `testDebugUnitTest` on a self-hosted `andrioiddev` runner with Gradle caching; GitHub
+    Actions is the canonical runner (§1, §2, §12).
+    **VERDICT: Unverified-assumption.** Cross-ticket dependency; AND-008's artifacts are
+    not in the provided sources. Open Q1 in §13 already flags the orchestrator assumption.
+    **SOURCE:** AND-008 (not provided) — see Open assumptions.
+
+14. **Claim:** AND-047 supplies the representative `AuthRepository` unit suite used to
+    validate the green path (§2, §11, §12).
+    **VERDICT: Unverified-assumption.** AND-047 is a separate ticket not in the provided
+    sources; its existence/shape can't be verified here (the *backend* auth contract it
+    targets does exist in the OpenAPI index, but that does not confirm the AND-047 suite).
+    **SOURCE:** AND-047 (not provided) — see Open assumptions.
+
+15. **Claim:** `concurrency: { group: unit-tests-${{ github.ref }}, cancel-in-progress:
+    true }` reaps superseded runs (§4.1, §7, R1).
+    **VERDICT: Verified.** Standard GitHub Actions concurrency semantics; per-ref grouping
+    cancels the older in-flight run on the same ref.
+    **SOURCE:** framework ref —
+    https://docs.github.com/actions/using-jobs/using-concurrency.
+
+16. **Claim:** Least-privilege `permissions: { contents: read, checks: write,
+    pull-requests: write }` is sufficient for the JUnit check publisher (§8).
+    **VERDICT: Verified.** `mikepenz/action-junit-report` creates a check run (needs
+    `checks: write`) and annotates PRs (`pull-requests: write`); it does not write repo
+    contents.
+    **SOURCE:** framework ref — https://github.com/mikepenz/action-junit-report (required
+    permissions) + https://docs.github.com/actions/security-guides/automatic-token-authentication.
+
+### Corrections made
+
+- **§4.2 (Citation 2):** Removed the `plugins { id("test-report-aggregation") }` block and
+  the `testReportAggregation(...)` dependency wiring. That plugin requires the JVM Test
+  Suite Plugin and explicitly does not support Android plugins, so it would have aggregated
+  nothing for `testDebugUnitTest` results. Replaced with a self-contained `TestReport` task.
+- **§4.2 (Citation 3):** Corrected the aggregation source path — `TestReport.testResults`
+  consumes the **binary** results dir (`.../test-results/testDebugUnitTest/binary`), not the
+  XML dir. Added a `mustRunAfter(... :testDebugUnitTest)` ordering so the merged report is
+  built after the tests run within the single §4.1 Gradle invocation.
+- **§2 References:** Updated to state the `test-report-aggregation` plugin is intentionally
+  not used and to reference the `TestReport` task instead, keeping §2 consistent with §4.2.
+
+### Open assumptions
+
+- **Toolchain pins (Citation 12):** Kotlin/Gradle/AGP/JDK/KSP versions are inherited from
+  scaffolding and AND-008; no Android project files exist in this plan repo to confirm them.
+  *Why unverifiable:* the authoritative sources are the backend OpenAPI and the web frontend
+  reference, neither of which contains the Android build configuration.
+- **AND-008 CI baseline (Citation 13):** existence/shape of the prior CI job, the
+  `andrioiddev` self-hosted runner, and that GitHub Actions (not Jenkins/Buildkite) is the
+  orchestrator. *Why unverifiable:* AND-008 is a separate ticket not provided; §13 Open Q1
+  already records this and notes the §4.2/§4.3 Gradle wiring is orchestrator-independent.
+- **AND-047 suite (Citation 14):** that AND-047 lands a deterministic `AuthRepository` unit
+  suite usable as the green-path target. *Why unverifiable:* AND-047 is not in the provided
+  sources; this spec can be wired before it but cannot be fully *verified* without it (§12
+  sequencing note).
+- **Default-branch identity:** the override in Citation 6 assumes `main`/`master` is the
+  repo default while `android-port` is the long-lived integration branch. If `android-port`
+  were itself the default branch, the `cache-read-only` expression would still be correct
+  but redundant. *Why unverifiable:* repo branch settings are not in the provided sources.
+
+## 17. Test Plan
+
+These cases validate the **pipeline itself** (this ticket authors no feature unit tests).
+Most are CI/infra validations executed on the self-hosted `andrioiddev` GitHub Actions
+runner; the local-reproducibility case runs on a developer/JVM host. No Android device or
+emulator is required for the JVM unit suite, so the headless `test35` emulator and the
+physical Galaxy A15 are **not used** here — this ticket is JVM-only by design (FR-5); they
+remain reserved for the instrumented/hardware tickets elsewhere in E07. Where a case asserts
+Gradle behavior in isolation, it runs as a JVM-local check; where it asserts GitHub-check
+surfacing, it runs as an integration test against a throwaway branch/PR.
+
+- **TC-AND-050-01 — Triggers fire on push, PR, and manual dispatch**
+  - Type: integration (CI)
+  - Test target: `andrioiddev` self-hosted runner (GitHub Actions).
+  - Preconditions: workflow `android-unit-tests.yml` merged; default-branch cache exists.
+  - Steps: (a) push a no-op commit under `android/**` to `android-port`; (b) open a PR
+    targeting `android-port` touching `android/**`; (c) trigger `workflow_dispatch` from the
+    Actions UI; (d) push a commit touching only a path outside `android/**` and the workflow
+    file.
+  - Expected: the `Android Unit Tests` job runs for (a), (b), (c); (d) does **not** trigger
+    it (path filter). Concurrency cancels a superseded earlier run on the same ref.
+  - Traces: AC-1.
+
+- **TC-AND-050-02 — Full-suite execution & new-module auto-discovery**
+  - Type: integration (CI) + JVM-local sanity
+  - Test target: `andrioiddev` runner; also reproducible JVM-local.
+  - Preconditions: multi-module project with ≥2 modules owning unit tests.
+  - Steps: confirm `./gradlew testDebugUnitTest` runs every module's tests; add a trivial
+    new `core-sample` module with one passing test; re-run the workflow with **no** workflow
+    edit.
+  - Expected: all modules' tests execute under one invocation; the new module's test runs
+    and appears in the merged `allTests` report; no `.yml` change needed.
+  - Traces: AC-2.
+
+- **TC-AND-050-03 — Failing test fails the job and the check (red path)**
+  - Type: integration (CI)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: green baseline.
+  - Steps: on a throwaway branch/PR, add a deliberately failing assertion in a
+    `core-network` test; run the workflow.
+  - Expected: Gradle exits non-zero; job is red; `Unit Tests` check is red
+    (`fail_on_failure: true`); other modules still ran (`--continue`) and their results are
+    present; the PR diff is annotated at the failing test line.
+  - Traces: AC-3, AC-4.
+
+- **TC-AND-050-04 — Reports upload + PR annotation on success and failure**
+  - Type: integration (CI)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: TC-01 baseline plus the red-path branch from TC-03.
+  - Steps: inspect the `unit-test-reports` artifact and the Step Summary on (a) a green run
+    and (b) the TC-03 red run.
+  - Expected: artifact contains per-module JUnit XML
+    (`**/build/test-results/testDebugUnitTest/*.xml`) and the merged HTML
+    (`build/reports/allTests/**`) on **both** runs (`if: always()`); Step Summary shows
+    total/passed/failed/skipped counts; PR check annotations present.
+  - Traces: AC-4.
+
+- **TC-AND-050-05 — Compile failure in test sources fails red, artifact step still runs**
+  - Type: integration (CI)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: green baseline.
+  - Steps: introduce a Kotlin compile error in a `src/test/` source; run the workflow.
+  - Expected: `compile*UnitTestKotlin` fails; job red with the compiler error in the log;
+    `upload-artifact` step still executes (`if: always()`); job stays red.
+  - Traces: AC-3, AC-4.
+
+- **TC-AND-050-06 — Empty-suite guard fails (does not green)**
+  - Type: integration (CI)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: green baseline.
+  - Steps: temporarily make discovery find zero tests (e.g. a filter excluding all, or a
+    removed test source set); run the workflow.
+  - Expected: `mikepenz/action-junit-report` with `require_tests: true` fails the check even
+    though no test technically "failed"; job is red — not a silent green.
+  - Traces: AC-5.
+
+- **TC-AND-050-07 — JVM-only, no network access (security/isolation)**
+  - Type: unit / contract (offline enforcement)
+  - Test target: JVM-local + `andrioiddev` runner.
+  - Preconditions: suite present; ability to run with outbound network blocked (firewall/no
+    egress on the runner step, or a `SecurityManager`/socket-deny test rule).
+  - Steps: run `./gradlew testDebugUnitTest` with outbound network disabled; grep the suite
+    for socket/`OkHttp` real-call usage in review.
+  - Expected: suite passes with no network; any test attempting a real socket fails fast;
+    code review rejects sockets in unit tests. No emulator/device involved.
+  - Traces: AC-6 (security facet).
+
+- **TC-AND-050-08 — Determinism: 3× consecutive runs, zero flaps**
+  - Type: integration (CI)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: green baseline.
+  - Steps: run the workflow 3 times consecutively on the same commit (warm cache).
+  - Expected: identical pass/fail set all 3 runs; zero flaky flaps (no retry policy
+    configured, so a flap would show).
+  - Traces: AC-6.
+
+- **TC-AND-050-09 — Reproducibility on fresh checkout (cold vs warm cache)**
+  - Type: integration (CI) + JVM-local
+  - Test target: `andrioiddev` runner (cold cache via cache bust) and a clean local clone.
+  - Preconditions: none beyond a clean clone.
+  - Steps: run once cold (no cache), once warm; also run on a fresh local clone with
+    `./gradlew testDebugUnitTest mergedTestReport`.
+  - Expected: identical pass/fail outcome regardless of cache state (cache is
+    correctness-neutral); local outcome matches CI.
+  - Traces: AC-6.
+
+- **TC-AND-050-10 — Warm-cache wall-clock under 8 minutes**
+  - Type: integration (CI, performance)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: warm Gradle/config/build cache present.
+  - Steps: run the job and read the job duration from the Actions timing.
+  - Expected: unit-test job wall-clock < 8 min warm-cache; within `timeout-minutes: 25`.
+  - Traces: AC-7.
+
+- **TC-AND-050-11 — Cache scoping: write on `android-port`, read-only on PR (security)**
+  - Type: integration (CI, security)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: setup-gradle caching enabled.
+  - Steps: inspect setup-gradle logs on a push to `android-port` vs on a PR run.
+  - Expected: push to `android-port` writes the cache; PR run is `cache-read-only` (the
+    `github.ref != 'refs/heads/android-port'` expression evaluates true on PRs), so PR runs
+    cannot poison the shared cache.
+  - Traces: AC-6 (reproducibility/isolation), §8 security control.
+
+- **TC-AND-050-12 — Least-privilege token & no secrets (security)**
+  - Type: manual (config audit) + integration
+  - Test target: workflow YAML + a live run.
+  - Preconditions: workflow merged.
+  - Steps: audit the workflow for `permissions:` (`contents: read`, `checks: write`,
+    `pull-requests: write`) and absence of any `secrets.*`; confirm the publish step still
+    posts the check with that token.
+  - Expected: no `secrets.*` referenced; token cannot write repo contents; check
+    publication succeeds with the restricted permissions; forked-PR auto-run gated by
+    maintainer approval (runner/org policy).
+  - Traces: AC-6 (security facet), §8.
+
+- **TC-AND-050-13 — Merged report check is usable/accessible (a11y of the only "UI")**
+  - Type: manual (accessibility review)
+  - Test target: GitHub `Unit Tests` check + merged HTML report.
+  - Preconditions: a completed run (green and red).
+  - Steps: verify the check name is the stable `Unit Tests`; failure annotations attach to
+    the exact failing test in the diff; open the merged `index.html` and confirm it is
+    navigable/semantic (headings, links, no color-only signaling of pass/fail).
+  - Expected: check is clearly named; annotations are precise; report is keyboard-navigable
+    and not reliant on color alone to convey status.
+  - Traces: AC-4 (reporting clarity), §9.
+
+- **TC-AND-050-14 — Source-ticket criterion end-to-end (green + red URLs)**
+  - Type: integration/e2e (CI)
+  - Test target: `andrioiddev` runner.
+  - Preconditions: TC-01..03 complete.
+  - Steps: capture a linked green-path run URL and a linked red-path run URL demonstrating
+    "CI runs and reports unit tests on every change."
+  - Expected: both URLs exist and show the expected outcomes; once green-path is confirmed,
+    `Unit Tests` is enabled as a **required** status check in branch protection.
+  - Traces: AC-8.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (triggers: push/PR/dispatch, path filter) | TC-AND-050-01 |
+| AC-2 (single invocation runs all modules; new module auto-discovered) | TC-AND-050-02 |
+| AC-3 (failing/errored test → job & check red; `--continue`) | TC-AND-050-03, TC-AND-050-05 |
+| AC-4 (XML+HTML artifact always; PR annotations) | TC-AND-050-04, TC-AND-050-03, TC-AND-050-05, TC-AND-050-13 |
+| AC-5 (zero discovered tests fails via `require_tests`) | TC-AND-050-06 |
+| AC-6 (JVM-only, no network; deterministic ×3; reproducible) | TC-AND-050-07, TC-AND-050-08, TC-AND-050-09, TC-AND-050-11, TC-AND-050-12 |
+| AC-7 (warm-cache < 8 min) | TC-AND-050-10 |
+| AC-8 (source criterion; green+red URLs) | TC-AND-050-14 |

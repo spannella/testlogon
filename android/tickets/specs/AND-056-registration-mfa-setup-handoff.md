@@ -5,7 +5,8 @@ milestone: M2
 epic: E08
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-054, AND-064]
 blocks: []
 ---
@@ -128,10 +129,26 @@ package com.testlogon.android.feature.auth.register
 sealed interface PostConfirmRoute {
     data class EnrollMfa(val handoff: MfaSetupHandoff) : PostConfirmRoute
     data object Home : PostConfirmRoute
+    /**
+     * Confirm succeeded but no `session_id` was returned: the account is
+     * verified but there is no authenticated session, so we cannot enter the
+     * cookie-gated enrollment graph. Mirror the web client's "you can now sign
+     * in" success state. (Added in review 2026-06-06 to match web semantics.)
+     */
+    data object VerifiedSignIn : PostConfirmRoute
 }
 
-/** Pure mapper — no Android deps; fully unit testable (FR-7). */
-fun RegisterConfirmResp.toPostConfirmRoute(): PostConfirmRoute {
+/**
+ * Pure mapper — no Android deps; fully unit testable (FR-7).
+ * `registeredEmail` is supplied by the caller (the confirm screen's own state)
+ * because the confirm response does NOT carry an email field (see §5 correction).
+ */
+fun RegisterConfirmResp.toPostConfirmRoute(
+    registeredEmail: String? = null,
+): PostConfirmRoute {
+    // No session established by confirm → cannot enter the cookie-gated
+    // enrollment graph; mirror web "verified, please sign in" (see §6).
+    if (sessionId.isNullOrBlank()) return PostConfirmRoute.VerifiedSignIn
     val factors = mfaSetup
         ?.mapNotNull { it.toMfaSetupFactorOrNull() }
         ?.distinct()
@@ -141,7 +158,11 @@ fun RegisterConfirmResp.toPostConfirmRoute(): PostConfirmRoute {
         MfaSetupHandoff(
             factors = factors,
             smsPhone = smsPhone?.takeIf { it.isNotBlank() },
-            email = email?.takeIf { !it.isNullOrBlank() },
+            // CORRECTED: RegisterConfirmResp has no `email` field (verified
+            // against OpenAPI RegisterConfirmResp + src/api/types.ts). The
+            // registered email must be passed in by the caller from the
+            // confirm-screen's own state, not read off the response.
+            email = registeredEmail?.takeIf { !it.isNullOrBlank() },
         ),
     )
 }
@@ -219,6 +240,11 @@ LaunchedEffect(Unit) {
             PostConfirmRoute.Home -> navController.navigate(Home) {
                 popUpTo<RegisterStart>() { inclusive = true }
             }
+            // No session from confirm: show the verified/sign-in success state
+            // rather than entering the enrollment graph (mirrors web client).
+            PostConfirmRoute.VerifiedSignIn -> navController.navigate(SignIn) {
+                popUpTo<RegisterStart>() { inclusive = true }
+            }
         }
     }
 }
@@ -243,37 +269,50 @@ POST /ui/register/confirm
 Content-Type: application/json
 X-CSRF-Token: <ui_csrf cookie value>
 
-{ "email": "user@example.com", "code": "123456" }
+{ "email": "user@example.com", "confirmation_code": "123456" }
 ```
 
-Confirm response — fields consumed by this ticket:
+> **CORRECTED (review 2026-06-06):** the request field is `confirmation_code`,
+> NOT `code`. Verified against OpenAPI `RegisterConfirmReq` (required:
+> `email`, `confirmation_code`) and `src/api/types.ts: RegisterConfirmReq`.
+> The request body is owned by AND-054; noted here for accuracy.
+
+Confirm response — actual schema (verified against OpenAPI `RegisterConfirmResp`
+and `src/api/types.ts: RegisterConfirmResp`):
 
 ```json
 {
-  "confirmed": true,
+  "status": "confirmed",
+  "session_id": "sess_abc123",
   "mfa_setup": ["totp", "sms"],
-  "sms_phone": "+15551234567",
-  "email": "user@example.com"
+  "sms_phone": "+15551234567"
 }
 ```
 
-Moshi DTO (additive fields on the AND-054 DTO):
+> **CORRECTED (review 2026-06-06):** the earlier draft claimed a boolean
+> `confirmed` field and an `email` field on the response. Neither exists. The
+> real required field is `status` (string); success is `getMe`/session-gated via
+> `session_id`, not a boolean. There is **no `email`** in the response — the web
+> client uses the locally-held registered email, not a response echo. `session_id`
+> (nullable string) IS present and is load-bearing (see §6/§13-R4).
+
+Moshi DTO (additive fields on the AND-054 DTO — corrected to match wire schema):
 
 ```kotlin
 @JsonClass(generateAdapter = true)
 data class RegisterConfirmResp(
-    @Json(name = "confirmed") val confirmed: Boolean = false,
+    @Json(name = "status") val status: String = "",     // required on wire
+    @Json(name = "session_id") val sessionId: String? = null,
     @Json(name = "mfa_setup") val mfaSetup: List<String>? = null,
     @Json(name = "sms_phone") val smsPhone: String? = null,
-    @Json(name = "email") val email: String? = null,
 )
 ```
 
 Notes:
-- `mfa_setup` is tolerated as `null`, `[]`, or a list of factor strings.
-  Verify the exact wire encoding against `/openapi.json`; if the backend returns
-  an object (e.g. `{ "required": [...] }`) instead of a bare array, adapt the
-  DTO accordingly (see §13 open question).
+- `mfa_setup` is a **bare array of strings** (`items: {type: string}`),
+  tolerated as `null`/absent or `[]`. VERIFIED against OpenAPI — it is NOT an
+  object with a `required` list, so R1 (§13) is resolved. The mapper still drops
+  unknown tokens for forward-compat.
 - Downstream enrollment endpoints (AND-064/AND-033): TOTP
   `devices/begin|confirm|{id}/remove`, SMS/email `begin|confirm|remove`. Their
   contracts are owned by those tickets and are out of scope here.
@@ -287,10 +326,21 @@ Notes:
 - **No DataStore writes** in this ticket. The "MFA pending" condition is derived
   fresh from each confirm response, not cached, to avoid stale enrollment
   prompts.
-- **Session state**: After confirm, the account exists but is not necessarily an
-  authenticated UI session. If `GET /ui/me` / session state is needed before
-  enrollment, that is handled by AND-064's begin calls (which carry the session
-  cookie). This ticket does not call `/ui/session/*`.
+- **Session state (CORRECTED — review 2026-06-06)**: confirm DOES establish a
+  session — the response returns a nullable `session_id`, and the web client
+  (`src/pages/Register.tsx: handleConfirm`) gates the entire handoff on it: only
+  when `resp.session_id` is truthy does the web app call `GET /ui/me`, `login()`,
+  and THEN route to MFA enrollment or home. When `session_id` is null/absent the
+  web app shows a "Registration verified, you can now sign in" success state
+  instead of routing into enrollment. To mirror web semantics, the Android
+  handoff must treat a missing `session_id` as "no authenticated session yet →
+  do NOT enter the cookie-gated enrollment graph; show the sign-in/success
+  path." The enrollment `begin` calls (AND-064) carry the session cookie set by
+  confirm; this ticket still issues no network calls of its own, but the routing
+  decision must consider `session_id`, not just `mfa_setup`. The web client also
+  calls `GET /ui/me` after confirm — whether the Android handoff needs the same
+  pre-fetch is delegated to AND-054/AND-064 (this ticket does not call
+  `/ui/session/*` directly).
 - **Back stack as state**: `popUpTo<RegisterStart>(inclusive = true)` removes the
   whole registration sub-graph so the enrollment/home destination becomes the
   new effective root of this flow (FR-4, FR-5).
@@ -398,21 +448,27 @@ in CI.
 
 ## 13. Risks & Open Questions
 
-- **R1 — `mfa_setup` wire shape unconfirmed.** Backend may return a bare array,
-  an object with a `required` list, or per-factor objects. Mitigation: verify
-  against `/openapi.json` and `frontend/src/api/types.ts` before finalizing the
-  DTO; the mapper is isolated so only `toPostConfirmRoute` changes.
+- **R1 — `mfa_setup` wire shape — RESOLVED (review 2026-06-06).** Verified
+  against OpenAPI `RegisterConfirmResp` and `src/api/types.ts`: `mfa_setup` is a
+  **bare array of strings** (`string[]`, optional). It is NOT an object with a
+  `required` list nor per-factor objects. The DTO/mapper need no further change.
 - **R2 — Factor sequencing ownership.** Whether the multi-factor "next pending
   factor" loop lives in AND-064 or here. Decision (this spec): AND-064 owns
   sequencing; we pass the ordered list. Confirm with AND-064 owner.
 - **R3 — Mandatory vs skippable enrollment.** Is registration-driven MFA setup
   mandatory? Assumed guided-but-skippable per AND-064 policy; the skip gate is
   not implemented here. Open question for product.
-- **R4 — Session readiness.** Does confirm establish a usable cookie session, or
-  is a `session/start` needed before enrollment `begin` calls succeed? Verify;
-  if a session step is required, AND-064 (not this ticket) must perform it.
-- **R5 — `email` field presence.** Confirm response may not echo `email`; mapper
-  already degrades to `null` and enrollment collects it.
+- **R4 — Session readiness — RESOLVED (review 2026-06-06).** Confirm DOES return
+  a (nullable) `session_id`; the web client treats it as the session gate (calls
+  `GET /ui/me` + `login()` only when present, then routes to enrollment). When
+  absent, the web app shows a verified/"please sign in" state and does NOT enter
+  enrollment. The mapper now branches on `session_id` (→ `VerifiedSignIn` when
+  null). Whether Android also needs the `GET /ui/me` pre-fetch before AND-064's
+  `begin` calls is delegated to AND-054/AND-064 (out of scope here).
+- **R5 — `email` field presence — RESOLVED (review 2026-06-06).** The confirm
+  response has **no `email` field** (verified). The registered email must be
+  supplied by the caller from the confirm screen's own state; the mapper now
+  takes `registeredEmail` as a parameter and degrades to `null`/collect-in-UI.
 
 ## 14. Acceptance Criteria
 
@@ -421,7 +477,11 @@ in CI.
   flow.
 - AC-2: `RegisterConfirmResp.mfa_setup` containing `totp` routes to TOTP
   enrollment; `sms` routes to SMS enrollment with `sms_phone` pre-filled when
-  present; `email` routes to email enrollment.
+  present; `email` routes to email enrollment. (Note: the web client only
+  branches on `totp`/`sms` post-confirm; the `email` post-confirm factor is an
+  unverified assumption — see §16 Open assumptions. Email-MFA *device*
+  enrollment endpoints do exist (`/ui/mfa/email/devices/*`) but the web
+  registration handoff does not route into them.)
 - AC-3: Multiple factors route to the first listed factor with the full ordered
   list forwarded to AND-064.
 - AC-4: Absent/empty/all-unknown `mfa_setup` routes to Home and clears the
@@ -441,8 +501,10 @@ in CI.
   wired into the confirm composable's `LaunchedEffect` collector.
 - `MfaEnroll` typed navigation route added and agreed with AND-064; navigation
   uses `popUpTo<RegisterStart>(inclusive = true)`.
-- `RegisterConfirmResp` DTO fields (`mfa_setup`, `sms_phone`, `email`) added and
-  verified against `/openapi.json`.
+- `RegisterConfirmResp` DTO fields (`status`, `session_id`, `mfa_setup`,
+  `sms_phone`) added and verified against `/openapi.json`. (Corrected: the
+  response carries no `email` field and no boolean `confirmed`; success is
+  `status` + `session_id`-gated — see §5/§16.)
 - All unit, ViewModel, DTO, and Compose UI tests from §11 written and green in
   CI; no dev-backend calls in tests.
 - Telemetry event `register_mfa_handoff` emitted with PII-safe properties; PII
@@ -450,3 +512,237 @@ in CI.
 - Lint/detekt/ktlint clean; no hardcoded user-facing strings.
 - Code reviewed and merged to `android-port`; AND-064 owner has confirmed the
   `MfaEnroll` nav contract.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Confirm endpoint is `POST /ui/register/confirm`.** VERIFIED.
+   Source: OpenAPI `POST /ui/register/confirm` (op
+   `register_confirm_ui_register_confirm_post`, req=`RegisterConfirmReq`,
+   resp=`200:RegisterConfirmResp`); `src/api/endpoints/auth.ts: registerConfirm`.
+2. **Confirm request fields are `email` + `code`.** CORRECTED → the field is
+   `confirmation_code`, not `code`.
+   Source: OpenAPI `RegisterConfirmReq` (required: `email`, `confirmation_code`);
+   `src/api/types.ts: RegisterConfirmReq`; `src/pages/Register.tsx` (handleConfirm
+   sends `confirmation_code`).
+3. **Confirm response has a boolean `confirmed` field.** CORRECTED → no such
+   field. The required field is `status` (string).
+   Source: OpenAPI `RegisterConfirmResp` (required: `[status]`);
+   `src/api/types.ts: RegisterConfirmResp`.
+4. **Confirm response carries `mfa_setup`.** VERIFIED — it is an optional **bare
+   array of strings** (`items:{type:string}`), not an object/`required`-wrapper.
+   Source: OpenAPI `RegisterConfirmResp.mfa_setup`; `src/api/types.ts:
+   RegisterConfirmResp` (`mfa_setup?: string[]`).
+5. **Confirm response carries `sms_phone` (nullable string).** VERIFIED.
+   Source: OpenAPI `RegisterConfirmResp.sms_phone` (anyOf string|null);
+   `src/api/types.ts: RegisterConfirmResp` (`sms_phone?: string | null`).
+6. **Confirm response carries `email`.** CORRECTED → no `email` field exists on
+   the response. The registered email is held in client state and passed into the
+   mapper.
+   Source: OpenAPI `RegisterConfirmResp` (properties: status, session_id,
+   mfa_setup, sms_phone only); `src/api/types.ts: RegisterConfirmResp`;
+   `src/pages/Register.tsx` (uses `registeredEmail` local var, not a response
+   field).
+7. **Confirm establishes/returns a session, gating the handoff.** CORRECTED/
+   ADDED → response has nullable `session_id`; web routes to MFA/home only when
+   `session_id` is present (after `getMe()`+`login()`), else shows a verified/
+   sign-in success state.
+   Source: OpenAPI `RegisterConfirmResp.session_id` (anyOf string|null);
+   `src/pages/Register.tsx: handleConfirm` (`if (resp.session_id) { … } else
+   setStep("success") `).
+8. **Web client recognises `totp` and `sms` from `mfa_setup` post-confirm.**
+   VERIFIED.
+   Source: `src/pages/Register.tsx` (`mfaSetup.includes("sms")`,
+   `mfaSetup.includes("totp")`).
+9. **CSRF is `X-CSRF-Token` header echoing the `ui_csrf` cookie, cookie session
+   transport.** VERIFIED.
+   Source: `src/api/client.ts` (`getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)`; `credentials: "include"`).
+10. **TOTP enrollment endpoints `/ui/mfa/totp/devices/{begin,confirm,{id}/remove}`
+    (AND-064 surface).** VERIFIED.
+    Source: OpenAPI `POST /ui/mfa/totp/devices/begin`,
+    `POST /ui/mfa/totp/devices/confirm`,
+    `POST /ui/mfa/totp/devices/{device_id}/remove`;
+    `src/api/endpoints/account.ts: beginTotpEnrollment` and siblings.
+11. **SMS/email enrollment "begin|confirm|remove" shorthand.** CORRECTED/clarified
+    → SMS & email device removal is a two-step `…/devices/{id}/remove/begin` +
+    `…/devices/remove/confirm`, not a single `remove`.
+    Source: OpenAPI `POST /ui/mfa/sms/devices/begin|confirm`,
+    `/ui/mfa/sms/devices/{sms_device_id}/remove/begin`,
+    `/ui/mfa/sms/devices/remove/confirm` (and email analogues);
+    `src/api/endpoints/account.ts`.
+12. **`mfa_setup` factor enum values are `totp`/`sms`/`email`.** UNVERIFIED-
+    ASSUMPTION for exact string set — OpenAPI types `mfa_setup` as free-form
+    `string[]` (no enum); only `totp` and `sms` are observed in the web client.
+    `framework`/contract drift handled by the mapper dropping unknown tokens.
+13. **`@Serializable`/type-safe Navigation-Compose + `popUpTo` back-stack reset.**
+    VERIFIED (framework ref) — type-safe routes + `popUpTo(inclusive=true)`.
+    Source: framework ref
+    https://developer.android.com/guide/navigation/design/type-safety and
+    https://developer.android.com/guide/navigation/backstack.
+14. **One-shot nav via `Channel(...).receiveAsFlow()` (not StateFlow) for events.**
+    VERIFIED (framework ref / Android UI-events guidance).
+    Source: framework ref
+    https://developer.android.com/topic/architecture/ui-layer/events.
+15. **`@Parcelize`/`SavedStateHandle` for config-change & process-death survival.**
+    VERIFIED (framework ref).
+    Source: framework ref
+    https://developer.android.com/topic/libraries/architecture/saving-states and
+    https://developer.android.com/kotlin/parcelize.
+
+### Corrections made
+
+- §5 request body: `code` → `confirmation_code` (claim 2).
+- §5 response + Moshi DTO: removed boolean `confirmed`, removed `email`; added
+  required `status` and `session_id`; documented `mfa_setup` as `string[]`
+  (claims 3, 4, 6, 7).
+- §4.2 mapper: now gates on `session_id` (new `PostConfirmRoute.VerifiedSignIn`),
+  and sources the email from a `registeredEmail` parameter instead of a
+  non-existent response field (claims 6, 7).
+- §4.4 nav collector: added the `VerifiedSignIn` branch.
+- §6 session-state bullet: corrected to reflect that confirm returns/gates on
+  `session_id` and the web client calls `GET /ui/me`/`login()` before enrollment.
+- §13 R1, R4, R5: marked RESOLVED with verified findings.
+- §11 SMS/email remove shorthand context and §15 DoD DTO field list corrected.
+- AC-2: annotated that the `email` post-confirm factor is an assumption.
+
+### Open assumptions
+
+- **A1 — `email` as an `mfa_setup` factor post-confirm.** The web client never
+  branches on `email` after confirm (only `totp`/`sms`). Email-MFA *device*
+  endpoints exist but are not entered from the registration handoff. Kept in the
+  mapper for forward-compat but UNVERIFIED; confirm with backend/product before
+  shipping an email post-confirm route.
+- **A2 — Exact `mfa_setup` token spelling/casing for non-observed factors.**
+  OpenAPI declares no enum (free `string[]`); only lowercase `totp`/`sms` seen.
+  The mapper lowercases and also accepts `"authenticator"` for TOTP — the
+  `authenticator` alias is an UNVERIFIED defensive assumption.
+- **A3 — Whether Android must call `GET /ui/me` before AND-064 `begin` calls.**
+  Web does; this spec delegates the decision to AND-054/AND-064. UNVERIFIED here
+  because it depends on those tickets' session bootstrapping.
+- **A4 — Multi-factor sequencing ownership (AND-064 vs here).** Product/owner
+  decision, not derivable from sources (R2). Assumed AND-064 sequences.
+- **A5 — Mandatory vs skippable registration-driven MFA (R3).** Product policy,
+  not in OpenAPI/frontend; UNVERIFIED.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** =
+headless emulator AVD `test35` (x86_64, API 35); **A15** = physical Samsung
+Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). This ticket is navigation/glue with
+no hardware dependencies, so the bulk runs on JVM; Compose-UI/instrumented cases
+run on **emu35** (fast in CI). A single config-change/process-death case is
+flagged for **A15** to validate real arm64/API-34 lifecycle behavior.
+
+- **TC-AND-056-01** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: `RegisterConfirmResp(status="confirmed", sessionId="s1",
+  mfaSetup=null)`. Steps: call mapper. Expected: returns `PostConfirmRoute.Home`.
+  Traces: AC-4.
+- **TC-AND-056-02** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: resp with `sessionId="s1"`, `mfaSetup=[]`. Steps: call mapper.
+  Expected: `Home`. Traces: AC-4.
+- **TC-AND-056-03** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: `sessionId="s1"`, `mfaSetup=["totp"]`. Steps: call mapper.
+  Expected: `EnrollMfa(factors=[TOTP])`. Traces: AC-2.
+- **TC-AND-056-04** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: `sessionId="s1"`, `mfaSetup=["sms"]`, `smsPhone="+15551234567"`.
+  Steps: call mapper. Expected: `EnrollMfa(factors=[SMS], smsPhone="+15551234567")`.
+  Traces: AC-2.
+- **TC-AND-056-05** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: `sessionId="s1"`, `mfaSetup=["sms"]`, `smsPhone=null` (also a
+  blank `"  "` variant). Steps: call mapper. Expected: `EnrollMfa(factors=[SMS])`
+  with `smsPhone == null` (blank normalised to null). Traces: AC-2.
+- **TC-AND-056-06** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: `sessionId="s1"`, `mfaSetup=["TOTP","Sms","email"]` (mixed
+  case, order significant). Steps: call mapper. Expected:
+  `EnrollMfa(factors=[TOTP, SMS, EMAIL])` — order preserved, case-insensitive.
+  Traces: AC-2, AC-3.
+- **TC-AND-056-07** — Type: unit (JVM). Target: `toPostConfirmRoute`.
+  Preconditions: `sessionId="s1"`, `mfaSetup=["totp","totp","sms"]` and an
+  unknown-token variant `["totp","webauthn"]` plus all-unknown `["webauthn"]`.
+  Steps: call mapper for each. Expected: deduped `[TOTP, SMS]`; `[TOTP]`
+  (unknown dropped); `Home` (all unknown dropped → empty). Traces: AC-3, AC-4,
+  AC-8.
+- **TC-AND-056-08** — Type: unit (JVM). Target: `toPostConfirmRoute` (session
+  gate, regression for the §6 correction). Preconditions:
+  `RegisterConfirmResp(status="confirmed", sessionId=null, mfaSetup=["totp"])`.
+  Steps: call mapper. Expected: `PostConfirmRoute.VerifiedSignIn` (NOT
+  `EnrollMfa`) — no session means no enrollment-graph entry. Traces: AC-1, AC-4.
+- **TC-AND-056-09** — Type: unit (JVM). Target: `toPostConfirmRoute` email
+  source. Preconditions: `sessionId="s1"`, `mfaSetup=["email"]`,
+  `registeredEmail="user@example.com"`; and a second call with
+  `registeredEmail=null`. Steps: call mapper. Expected: `EnrollMfa(factors=
+  [EMAIL], email="user@example.com")`; second call → `email == null`. Confirms
+  email is sourced from the parameter, not a (nonexistent) response field.
+  Traces: AC-2.
+- **TC-AND-056-10** — Type: contract/MockWebServer (JVM/Robolectric). Target:
+  `RegisterConfirmResp` Moshi adapter. Preconditions: fixture JSON bodies:
+  (a) full `{status, session_id, mfa_setup:["totp","sms"], sms_phone}`,
+  (b) minimal `{status:"confirmed"}` (mfa_setup absent, session_id absent),
+  (c) `{status, session_id:null, mfa_setup:[]}`. Steps: enqueue each on
+  MockWebServer, call the confirm endpoint, parse. Expected: all parse without
+  throwing; absent fields → null/empty; `status` populated. Validates the wire
+  schema from OpenAPI/`types.ts`. Traces: AC-8.
+- **TC-AND-056-11** — Type: unit (JVM, Turbine). Target:
+  `RegisterConfirmViewModel.nav`. Preconditions: fake `RegisterRepository`
+  returns `ApiResult.Success(RegisterConfirmResp(sessionId="s1",
+  mfaSetup=["sms"], smsPhone=…))`. Steps: call `onConfirm("123456")`, collect
+  `nav`. Expected: emits exactly one `EnrollMfa` (no duplicate after re-collect).
+  Traces: AC-1, AC-2.
+- **TC-AND-056-12** — Type: unit (JVM, Turbine). Target:
+  `RegisterConfirmViewModel.nav` error/offline path. Preconditions: fake repo
+  returns `ApiResult.Failure` (simulating the flaky dev host / offline /
+  timeout / 422). Steps: call `onConfirm`, observe `nav`. Expected: NO emission
+  on `nav`; error surfaced via `uiState` (AND-054). Confirms a failed confirm
+  triggers no handoff. Traces: AC-1.
+- **TC-AND-056-13** — Type: Compose-UI / instrumented (emu35). Target: confirm
+  composable `LaunchedEffect` nav collector + `NavController` back stack.
+  Preconditions: stubbed successful confirm `mfaSetup=["sms"]`, `smsPhone` set,
+  `sessionId` set. Steps: drive confirm; assert current destination is
+  `MfaEnroll` with `smsPhone` arg populated and `factorsCsv="SMS"`; assert
+  `RegisterStart`/`RegisterConfirm` are NOT on the back stack (system back does
+  not return to them). Expected: lands on `MfaEnroll`; back stack cleared.
+  Traces: AC-2, AC-5.
+- **TC-AND-056-14** — Type: Compose-UI / instrumented (emu35). Target: nav
+  collector, no-MFA and no-session branches. Preconditions: (a) confirm with
+  `sessionId` set, `mfa_setup` empty → expect `Home` current destination, back
+  stack cleared; (b) confirm with `sessionId=null` → expect `SignIn`/verified
+  destination, enrollment NOT entered. Steps: drive each. Expected: as stated.
+  Traces: AC-4, AC-5.
+- **TC-AND-056-15** — Type: instrumented lifecycle (A15 — MUST run on physical
+  device). Target: `SavedStateHandle`/`@Parcelize MfaSetupHandoff` survival.
+  Preconditions: handoff in progress to `MfaEnroll(factorsCsv="TOTP,SMS",
+  smsPhone=…)`. Steps: trigger configuration change (rotation) then process death
+  (`adb shell am kill` / Don't-Keep-Activities) and restore. Expected: the
+  enrollment destination and its args (factors order + `smsPhone`) are restored
+  identically; no fallback to confirm/home. Runs on A15 to validate real
+  arm64/API-34 process-death (differs from emulator). Traces: AC-6.
+- **TC-AND-056-16** — Type: unit (JVM) + manual log/analytics inspection
+  (security/PII). Target: telemetry emission + log redaction.
+  Preconditions: handoff with `smsPhone="+15551234567"`, `email="u@x.com"`.
+  Steps: trigger the `register_mfa_handoff` event and debug logging; capture the
+  analytics payload and logcat. Expected: event has `decision`, `factors`
+  (names only), `has_sms_phone=true`; the raw phone number and email appear
+  NOWHERE in analytics payload or logs (at most last-4/redacted). Traces: AC-7.
+- **TC-AND-056-17** — Type: Compose-UI accessibility (emu35). Target: transitional
+  "Setting up security…" state (only if rendered). Preconditions: handoff in
+  flight showing the transitional state. Steps: run with TalkBack/semantics
+  assertions; assert the loading text is a live-region announcement sourced from
+  `R.string.register_mfa_handoff_loading` (no hardcoded literal). Expected:
+  semantics live-region present; string is localized resource. Traces: AC-1
+  (a11y aspect of the guided handoff). If no transitional UI is rendered, mark
+  N/A with justification.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (guided into enrollment) | TC-08, TC-11, TC-12, TC-17 |
+| AC-2 (totp/sms/email routing + sms_phone prefill) | TC-03, TC-04, TC-05, TC-06, TC-09, TC-11, TC-13 |
+| AC-3 (first factor + full ordered list forwarded) | TC-06, TC-07 |
+| AC-4 (absent/empty/all-unknown → Home, stack cleared) | TC-01, TC-02, TC-07, TC-08, TC-14 |
+| AC-5 (system back does not return to confirm/start) | TC-13, TC-14 |
+| AC-6 (config-change + process-death survival) | TC-15 |
+| AC-7 (sms_phone never in logs/analytics) | TC-16 |
+| AC-8 (all unit tests incl. unknown/null/empty pass) | TC-01–TC-10 |

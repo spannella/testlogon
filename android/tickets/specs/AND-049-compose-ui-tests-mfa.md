@@ -5,7 +5,8 @@ milestone: M1
 epic: E07
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-040, AND-046]
 blocks: []
 ---
@@ -47,9 +48,12 @@ TOTP-wrong, SMS-OK, SMS-wrong) green.
   and captured fixtures under `core-testing/src/main/resources/fixtures/auth/`.
 - Sibling/parallel test tickets for consistency of conventions: AND-047 (AuthRepository
   contract tests), AND-048 (Compose UI tests: login).
-- Backend reference: FastAPI `POST /ui/mfa/{totp|sms|email}/begin|verify`, `POST
-  /ui/session/finalize`, error `detail` shapes; OpenAPI at `/openapi.json`. Web reference
-  `frontend/src/api/endpoints/*.ts`.
+- Backend reference (verified against OpenAPI index): `POST /ui/mfa/totp/verify`,
+  `POST /ui/mfa/sms/begin`, `POST /ui/mfa/sms/verify`, `POST /ui/session/finalize`,
+  `GET /ui/me`. NOTE: there is **no** `POST /ui/mfa/totp/begin` — TOTP has only `verify`
+  (SMS and email have `begin`+`verify`). Error `detail` shapes are normalized by the web
+  client (`normalizeErrorDetail`, see §7); OpenAPI at `/openapi.json`. Web reference
+  `frontend/src/api/endpoints/auth.ts` and `src/api/types.ts`. See §16 for full citations.
 - Stack: Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Navigation-Compose, Coroutines,
   Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15, minSdk 24, compileSdk/targetSdk 35, JDK 17,
   AGP 8.7.3, Gradle 8.9.
@@ -177,15 +181,21 @@ This ticket consumes (does not define) the MFA endpoints; the canonical contract
 by AND-038/AND-040. The fixtures (AND-046) MUST match these shapes. The suite asserts
 outbound requests and feeds canned responses.
 
-`POST /ui/mfa/totp/verify` — request body:
+`POST /ui/mfa/totp/verify` — request body (`TotpVerifyReq`; **CORRECTED** — the field is
+`totp_code`, NOT `code`):
 ```json
-{ "challenge_id": "chg_abc123", "code": "123456" }
+{ "challenge_id": "chg_abc123", "totp_code": "123456" }
 ```
-Success `200`:
+Success `200` (`MfaVerifyResp`; **CORRECTED** — there is no `auth_required`/`next` field;
+the web client routes to finalize when `remaining_factors` is empty):
 ```json
-{ "auth_required": true, "remaining_factors": [], "next": "finalize" }
+{ "status": "ok", "session_id": "sess_x", "required_factors": ["totp"],
+  "passed": { "totp": true }, "remaining_factors": [] }
 ```
-Rejected `400`/`401` (error `detail` mapping — string | array | object):
+Rejected (error `detail` mapping — string | array | object). NOTE: OpenAPI documents only
+`422:HTTPValidationError` (array-of-`ValidationError` with `msg`/`loc`/`type`) for these
+endpoints; the string and object `detail` variants are app-level error bodies observed via
+the web client's `normalizeErrorDetail`. A wrong code surfaces as a non-200 with a `detail`:
 ```json
 { "detail": "Invalid verification code" }
 ```
@@ -198,15 +208,30 @@ or
 { "detail": { "code": "mfa_invalid", "message": "Invalid code" } }
 ```
 
-`POST /ui/mfa/sms/begin` — request body `{ "challenge_id": "chg_abc123" }`; success `200`
-`{ "sent": true, "expires_in": 300 }`.
+`POST /ui/mfa/sms/begin` — request body `SmsBeginReq` `{ "challenge_id": "chg_abc123" }`;
+success `200` returns `ChallengeResp` (**CORRECTED** — not `{sent, expires_in}`):
+```json
+{ "challenge_id": "chg_abc123", "sent_to": ["+1******1234"] }
+```
 
-`POST /ui/mfa/sms/verify` — request `{ "challenge_id": "chg_abc123", "code": "654321" }`;
-success/rejection shapes identical to TOTP verify.
+`POST /ui/mfa/sms/verify` — request `SmsVerifyReq`
+`{ "challenge_id": "chg_abc123", "code": "654321" }` (SMS verify DOES use `code`, unlike
+TOTP); success returns `MfaVerifyResp` (same shape as TOTP verify) and rejection shapes
+are identical to TOTP verify.
 
-`POST /ui/session/finalize` — empty/`{}` body; success `200` `{ "authenticated": true }`,
-sets session cookie. Followed in production by `GET /ui/me` (the test enqueues a minimal
-`me` fixture so the post-auth callback fires).
+`POST /ui/session/finalize` — request body `UiSessionFinalizeReq` (**CORRECTED** — NOT an
+empty/`{}` body; it carries the `challenge_id`, with optional `remember_device`):
+```json
+{ "challenge_id": "chg_abc123", "remember_device": false }
+```
+Success `200` returns `SessionFinalizeResp` (**CORRECTED** — not `{authenticated: true}`):
+```json
+{ "status": "ok", "session_id": "sess_x", "required_factors": ["totp"],
+  "passed": { "totp": true } }
+```
+and sets the session cookie. The web client calls `finalize` only after a `verify` whose
+`remaining_factors` is empty (see `src/pages/Login.tsx`). Followed in production by
+`GET /ui/me` (the test enqueues a minimal `me` fixture so the post-auth callback fires).
 
 All POSTs carry header `X-CSRF-Token: <value of ui_csrf cookie>` and the persistent cookie
 jar's `Cookie` header; the fixture for the preceding step seeds `Set-Cookie: ui_csrf=...`.
@@ -396,3 +421,295 @@ AC-8 Suite is deterministic: 20/20 green across reruns; zero `Thread.sleep`.
   no-finalize-on-failure guards in place.
 - Code review approved; CI gate wired so the MFA UI suite runs on every PR touching
   `feature-auth` or `core-network`/`core-data` auth code.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with VERDICT and SOURCE pointer. Sources: OpenAPI index
+(`reference/openapi.index.txt`), OpenAPI full spec (`reference/openapi.pretty.json`,
+`components.schemas.<Name>`), or frontend paths under `reference/src/`.
+
+1. **`POST /ui/mfa/totp/verify` exists.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /ui/mfa/totp/verify` (op `ui_totp_verify_ui_mfa_totp_verify_post`, req
+   `TotpVerifyReq`); frontend `src/api/endpoints/auth.ts: verifyTotp`.
+2. **`POST /ui/mfa/sms/begin` exists.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /ui/mfa/sms/begin` (req `SmsBeginReq`); `src/api/endpoints/auth.ts: beginSms`.
+3. **`POST /ui/mfa/sms/verify` exists.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /ui/mfa/sms/verify` (req `SmsVerifyReq`); `src/api/endpoints/auth.ts: verifySms`.
+4. **`POST /ui/session/finalize` exists.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /ui/session/finalize` (req `UiSessionFinalizeReq`);
+   `src/api/endpoints/auth.ts: sessionFinalize`.
+5. **`GET /ui/me` exists for the post-auth callback.** VERDICT: Verified. SOURCE: OpenAPI
+   `GET /ui/me` (op `ui_me_ui_me_get`).
+6. **There is NO `POST /ui/mfa/totp/begin`.** VERDICT: Corrected (spec §2 implied a
+   `totp/.../begin`). SOURCE: OpenAPI index — TOTP login factor has only `.../totp/verify`;
+   only `sms` and `email` have `begin`. No `ui_totp_begin` op exists.
+7. **TOTP verify request field is `totp_code` (not `code`).** VERDICT: Corrected (spec §5
+   said `code`). SOURCE: OpenAPI `components.schemas.TotpVerifyReq` =
+   `{challenge_id, totp_code}` (both required); frontend `src/pages/Login.tsx`
+   (`verifyTotp({ challenge_id, totp_code: ... })`); `src/api/types.ts: TotpVerifyReq`.
+8. **SMS verify request field IS `code`.** VERDICT: Verified. SOURCE:
+   `components.schemas.SmsVerifyReq` = `{challenge_id, code}`; `src/api/types.ts: SmsVerifyReq`.
+9. **SMS begin request body is `{challenge_id}`.** VERDICT: Verified. SOURCE:
+   `components.schemas.SmsBeginReq`; `src/api/types.ts: SmsBeginReq`.
+10. **SMS begin success returns `ChallengeResp {challenge_id, sent_to?}` (not
+    `{sent, expires_in}`).** VERDICT: Corrected (spec §5). SOURCE:
+    `src/api/endpoints/auth.ts: beginSms` (typed `api.post<ChallengeResp>`);
+    `src/api/types.ts: ChallengeResp`. OpenAPI 200 has no body schema (`resp=200:`), so the
+    field shape is taken from the frontend contract.
+11. **Verify success returns `MfaVerifyResp {status, session_id?, required_factors, passed,
+    remaining_factors}` (not `{auth_required, remaining_factors, next}`).** VERDICT:
+    Corrected (spec §5). SOURCE: `src/api/endpoints/auth.ts: verifyTotp/verifySms` (typed
+    `MfaVerifyResp`); `src/api/types.ts: MfaVerifyResp`. OpenAPI 200 has no body schema.
+12. **`finalize` request carries `challenge_id` (+ optional `remember_device`), not an empty
+    body.** VERDICT: Corrected (spec §5). SOURCE: `components.schemas.UiSessionFinalizeReq` =
+    `{challenge_id (required), remember_device (default false)}`;
+    `src/api/types.ts: SessionFinalizeReq`; `src/pages/Login.tsx`
+    (`sessionFinalize({ challenge_id })`).
+13. **`finalize` success returns `SessionFinalizeResp {status, session_id?, required_factors,
+    passed}` (not `{authenticated: true}`).** VERDICT: Corrected (spec §5). SOURCE:
+    `src/api/types.ts: SessionFinalizeResp`; `src/api/endpoints/auth.ts: sessionFinalize`.
+14. **Routing to `finalize` is gated on `remaining_factors` being empty (not on a `next`
+    field).** VERDICT: Corrected (spec §5 referenced `"next": "finalize"`). SOURCE:
+    `src/pages/Login.tsx` (`if (resp.remaining_factors.length === 0) { ... sessionFinalize ... }`).
+15. **State-changing requests carry `X-CSRF-Token` sourced from the `ui_csrf` cookie.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts` lines 167-170 — reads `getCookie("ui_csrf")`
+    and sets `headers.set("X-CSRF-Token", csrf)`. NOTE: the web client sets the header on
+    ALL requests when the cookie is present (not only POSTs); the FR-7 assertion on POSTs is
+    a valid subset.
+16. **Error `detail` has three shapes (string | array-of-`{msg,loc}` | object) collapsed to
+    one human-readable string.** VERDICT: Verified. SOURCE: `src/api/client.ts:
+    normalizeErrorDetail` (string → as-is; array → join `.msg` by ", "; object →
+    `mapAuthorizationError` then `.msg`). The array variant matches OpenAPI
+    `components.schemas.HTTPValidationError.detail` = array of `ValidationError {msg, loc,
+    type}` (the 422 shape). NOTE: the object variant in the web client is the geo-block
+    `{code, message}` style via `mapAuthorizationError`; a generic `{code, message}` MFA
+    error is an assumption (see Open assumptions).
+17. **Wrong-code rejection is a non-200 with a `detail` body.** VERDICT:
+    Unverified-assumption (HTTP status). SOURCE: OpenAPI documents only `422` for these ops;
+    the frontend reads `err.detail` for any non-ok status (`src/pages/Login.tsx:
+    setError(err.detail || ...)`). The exact code (400 vs 401 vs 422) for a bad MFA code is
+    not pinned by the sources; tests should not assert a specific status, only the rejection
+    branch + rendered error.
+18. **MockWebServer / Robolectric + Compose test harness, `@TestInstallIn` baseUrl override,
+    Hilt test injection.** VERDICT: Unverified-assumption (Android-side; depends on AND-046).
+    SOURCE: framework ref — Compose testing
+    (https://developer.android.com/develop/ui/compose/testing), Robolectric
+    (https://robolectric.org), Hilt testing
+    (https://developer.android.com/training/dependency-injection/hilt-testing),
+    OkHttp MockWebServer (https://square.github.io/okhttp/features/https/#mockwebserver).
+19. **`MfaViewModel` / `MfaUiState` / `MfaRoute` signatures and the `PendingChallenge` seed
+    (§4, §6).** VERDICT: Unverified-assumption. SOURCE: owned by AND-040; no Android source in
+    this repo to verify against. Treated as the contract this ticket targets.
+20. **Production `testTag` constants (`mfa_totp_code`, `mfa_sms_code`, `mfa_sms_send`,
+    `mfa_submit`, `mfa_error`) (§4).** VERDICT: Unverified-assumption. SOURCE: defined by this
+    ticket against the (unseen) AND-040 screen; added tag-only if missing (R1).
+21. **No PLAINTEXT dev host (`18.222.237.167:8000`) is contacted; MockWebServer is loopback
+    only (§8).** VERDICT: Unverified-assumption (test-design intent; the dev host string is not
+    present in the verified sources). SOURCE: ticket-internal design constraint.
+
+### Corrections made
+
+- §2: removed the implied `POST /ui/mfa/totp/begin`; clarified TOTP has only `verify` while
+  SMS/email have `begin`+`verify`; corrected the endpoint enumeration and reference paths.
+- §5: TOTP verify field `code` → `totp_code` (per `TotpVerifyReq`).
+- §5: TOTP/SMS verify success body `{auth_required, remaining_factors, next}` → `MfaVerifyResp`
+  `{status, session_id?, required_factors, passed, remaining_factors}`.
+- §5: SMS begin success body `{sent, expires_in}` → `ChallengeResp {challenge_id, sent_to?}`.
+- §5: `finalize` empty/`{}` body → `UiSessionFinalizeReq {challenge_id, remember_device?}`.
+- §5: `finalize` success `{authenticated: true}` → `SessionFinalizeResp {status, session_id?,
+  required_factors, passed}`.
+- §5: routing-to-finalize is driven by empty `remaining_factors`, not a `next` field; added the
+  caveat that error status codes are not pinned (OpenAPI documents only 422).
+
+### Open assumptions
+
+- **Exact rejection HTTP status for a bad MFA code** — sources document only 422 for these
+  ops; 400/401 are app-level and unspecified. Tests assert the rejection branch + error text,
+  not a status code.
+- **Object-shaped `detail` for MFA errors** (`{code, message}`) — observed only for geo-block
+  in the web client; whether MFA emits this exact shape is unconfirmed. Fixtures for the
+  object variant are a defensive assumption.
+- **All Android-side types** (`MfaViewModel`, `MfaUiState`, `MfaRoute`, `PendingChallenge`,
+  `AuthRepository.mfaBegin/mfaVerify/finalize`, `MfaNavEvent`) — owned by AND-040; no Android
+  source available in this reference repo to verify against.
+- **AND-046 harness details** (`MockWebServerRule`, `@TestInstallIn` baseUrl override,
+  `enqueueFixture`) — assumed available; if absent this ticket adds them (R3).
+- **Production `testTag`s present on `MfaScreen`** — assumed; added tag-only if missing (R1).
+- **`liveRegion` semantics on the error node** (§9) — assumed; if absent, filed under AND-040
+  and the assertion is `@Ignore`-tracked, not weakened.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-049-NN`. Types: unit | contract/MockWebServer | Compose-UI |
+instrumented/e2e | manual. Test targets: **JVM/Robolectric** (local, headless — primary CI
+gate); **emulator `test35`** (API 35 x86_64, headless KVM); **physical device** (Samsung
+Galaxy A15 5G, SM-A156U, serial R5CX821TA9R, API 34 arm64-v8a). The MFA UI suite is
+loopback-only and hardware-independent, so the primary gate is Robolectric; the emulator
+mirror exists for on-device parity and the physical device is used only for the ABI/API
+parity smoke (TC-13) and an a11y/TalkBack manual check (TC-12).
+
+**TC-AND-049-01 — TOTP factor renders for `required_factors=["totp"]`**
+- Type: Compose-UI (Robolectric).
+- Target: JVM/Robolectric.
+- Preconditions: ViewModel seeded with `PendingChallenge(id="chg_abc123",
+  requiredFactors=[Totp])`; MockWebServer up; no requests enqueued.
+- Steps: render `MfaRoute`; query nodes by tag.
+- Expected: `mfa_totp_code` field and `mfa_submit` button exist; no SMS send affordance;
+  no network request recorded.
+- Traces: AC-1.
+
+**TC-AND-049-02 — TOTP happy path: verify → finalize → navigate**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric (mirror on emulator `test35`).
+- Preconditions: enqueue `mfa_totp_verify_ok.json` (`MfaVerifyResp` with
+  `remaining_factors:[]`), then `finalize_ok.json` (`SessionFinalizeResp status:"ok"`), then
+  `me_min.json`; fake `onAuthenticated` sink.
+- Steps: type a valid 6-digit code into `mfa_totp_code`; tap `mfa_submit`;
+  `waitUntil` the nav sink fires.
+- Expected: request 1 = `POST /ui/mfa/totp/verify` with body
+  `{challenge_id:"chg_abc123", totp_code:"<typed>"}`; request 2 = `POST /ui/session/finalize`
+  with body containing `challenge_id:"chg_abc123"`; order verify-before-finalize; the
+  `onAuthenticated` callback fires exactly once.
+- Traces: AC-2.
+
+**TC-AND-049-03 — TOTP wrong code: inline error, stays, no finalize, submit re-enables**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: enqueue `mfa_verify_invalid.json` (string `detail:"Invalid verification
+  code"`, non-200).
+- Steps: type a code; tap submit; `waitUntil` `mfa_error` exists.
+- Expected: `mfa_error` shows a non-empty message; still on MFA screen
+  (`mfa_totp_code` exists); `mfa_submit` re-enabled; white-box: `challengeId` unchanged,
+  `navEvent==null`; MockWebServer received NO `/ui/session/finalize` (queue drained, path
+  mismatch / `takeRequest` timeout). Do not assert a specific HTTP status (see §16 #17).
+- Traces: AC-3.
+
+**TC-AND-049-04 — TOTP error `detail` variants all map to a non-empty message**
+- Type: Compose-UI (parameterized) + contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: three runs enqueuing `mfa_verify_invalid.json` (string),
+  `mfa_verify_invalid_array.json` (`[{msg,loc}]`, the 422/`HTTPValidationError` shape), and
+  `mfa_verify_invalid_object.json` (`{code, message}`).
+- Steps: per variant, submit a code; `waitUntil` `mfa_error`.
+- Expected: each variant renders a single non-empty human-readable string in `mfa_error`
+  (string as-is; array → joined `.msg`; object → mapped message); no `finalize` call.
+- Traces: AC-3.
+
+**TC-AND-049-05 — TOTP validation gating: under-length code issues no request**
+- Type: Compose-UI.
+- Target: JVM/Robolectric.
+- Preconditions: ViewModel seeded TOTP; MockWebServer with no responses enqueued.
+- Steps: type a 5-digit code; inspect `mfa_submit`; attempt tap.
+- Expected: `mfa_submit` is disabled (or tapping is a no-op); MockWebServer records ZERO
+  requests; no `mfa_error`.
+- Traces: AC-7.
+
+**TC-AND-049-06 — Verify request carries `X-CSRF-Token` from `ui_csrf` cookie**
+- Type: contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: a preceding fixture seeds `Set-Cookie: ui_csrf=<placeholder>`; then enqueue
+  `mfa_totp_verify_ok.json`.
+- Steps: drive a successful TOTP verify; capture the recorded verify request.
+- Expected: the `/ui/mfa/totp/verify` request header `X-CSRF-Token` is present and equals the
+  seeded `ui_csrf` value; the `Cookie` header carries `ui_csrf`. Guards the OkHttp
+  interceptor/cookie-jar chain.
+- Traces: AC-6.
+
+**TC-AND-049-07 — TOTP recover after error: second attempt succeeds**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: enqueue rejection, then `mfa_totp_verify_ok.json`, `finalize_ok.json`,
+  `me_min.json`.
+- Steps: submit a wrong code → see `mfa_error`; correct the code; submit again;
+  `waitUntil` nav sink fires.
+- Expected: first request rejected with error shown; after correction, a second
+  `/ui/mfa/totp/verify` then `/ui/session/finalize` are sent and `onAuthenticated` fires;
+  error cleared.
+- Traces: AC-2, AC-3.
+
+**TC-AND-049-08 — SMS begin enables code field (carries `challenge_id`)**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: ViewModel seeded `requiredFactors=[Sms]`; enqueue `mfa_sms_begin_ok.json`
+  (`ChallengeResp {challenge_id, sent_to}`).
+- Steps: tap `mfa_sms_send`; `waitUntil` `mfa_sms_code` becomes enabled.
+- Expected: a single `POST /ui/mfa/sms/begin` with body `{challenge_id:"chg_abc123"}`;
+  `mfa_sms_code` enabled afterward.
+- Traces: AC-4.
+
+**TC-AND-049-09 — SMS happy path: begin → verify → finalize → navigate**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric (mirror on emulator `test35`).
+- Preconditions: enqueue `mfa_sms_begin_ok.json`, `mfa_sms_verify_ok.json`
+  (`MfaVerifyResp remaining_factors:[]`), `finalize_ok.json`, `me_min.json`.
+- Steps: tap `mfa_sms_send`; type delivered code into `mfa_sms_code`; tap `mfa_submit`;
+  `waitUntil` nav sink.
+- Expected: requests in order `sms/begin` → `sms/verify` (body
+  `{challenge_id:"chg_abc123", code:"<typed>"}`) → `session/finalize` (body with
+  `challenge_id`); `onAuthenticated` fires once.
+- Traces: AC-4.
+
+**TC-AND-049-10 — SMS wrong code: error, no finalize, no implicit begin resend**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: enqueue `mfa_sms_begin_ok.json`, then `mfa_verify_invalid.json`.
+- Steps: tap send; type a wrong code; submit; `waitUntil` `mfa_error`.
+- Expected: `mfa_error` non-empty; no `/ui/session/finalize`; exactly ONE `/ui/mfa/sms/begin`
+  was sent (verify retry does not re-issue begin); `challengeId` intact; submit re-enabled.
+- Traces: AC-5.
+
+**TC-AND-049-11 — SMS explicit resend issues a second begin**
+- Type: Compose-UI + contract/MockWebServer.
+- Target: JVM/Robolectric.
+- Preconditions: enqueue two `mfa_sms_begin_ok.json` responses.
+- Steps: tap `mfa_sms_send`; after enable, tap resend (`mfa_sms_send` again).
+- Expected: exactly TWO `POST /ui/mfa/sms/begin` requests recorded; no `verify`/`finalize`.
+- Traces: AC-5.
+
+**TC-AND-049-12 — Accessibility: code field semantics, error live-region, submit semantics**
+- Type: Compose-UI (Robolectric) for static semantics; manual TalkBack verification on
+  physical device for the announcement.
+- Target: JVM/Robolectric for the semantics assertions; **physical device (SM-A156U)** for
+  the manual TalkBack pass (real screen-reader announcement of a code rejection cannot be
+  faithfully verified on Robolectric/emulator).
+- Preconditions: TOTP rendered; for the manual part, TalkBack enabled on the device.
+- Steps: assert `mfa_totp_code` exposes non-empty content description/text; `mfa_submit`
+  `assertHasClickAction()` and correct enabled state; trigger a wrong-code error and assert
+  the `mfa_error` node carries `liveRegion = Polite`. Manual: with TalkBack on, submit a
+  wrong code and confirm the rejection is spoken.
+- Expected: semantics assertions pass; TalkBack speaks the error. If production lacks
+  `liveRegion`, the automated part is `@Ignore("AND-040")` and the gap is filed, not weakened.
+- Traces: AC-3 (a11y facet).
+
+**TC-AND-049-13 — ABI/API parity smoke on physical device**
+- Type: instrumented/e2e.
+- Target: **physical device (SM-A156U, API 34, arm64-v8a)** — required to catch
+  arm64-vs-x86 / API-34-vs-35 differences vs the x86_64/API-35 emulator gate.
+- Preconditions: app + MFA suite installable; MockWebServer reachable on loopback.
+- Steps: run the canonical four cases (TOTP-OK, TOTP-wrong, SMS-OK, SMS-wrong) on the device.
+- Expected: all four green on arm64-v8a / API 34, matching Robolectric/emulator results; no
+  ABI- or API-level-specific failures.
+- Traces: AC-1, AC-2, AC-3, AC-4, AC-5.
+
+**TC-AND-049-14 — Determinism / no-network / flake gate**
+- Type: integration (CI harness).
+- Target: JVM/Robolectric.
+- Preconditions: network access disabled in the test environment; suite uses MockWebServer
+  loopback only.
+- Steps: run `:feature-auth:testDebugUnitTest` 20× (`--rerun-tasks`); scan for `Thread.sleep`.
+- Expected: 20/20 green; zero `Thread.sleep` in the suite; no external host (incl. the dev
+  host `18.222.237.167:8000`) contacted.
+- Traces: AC-1, AC-8.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (headless render + suite passes) | TC-01, TC-13, TC-14 |
+| AC-2 (TOTP verify→finalize + nav) | TC-02, TC-07, TC-13 |
+| AC-3 (TOTP wrong code: error, no finalize, re-enable, detail variants) | TC-03, TC-04, TC-07, TC-12, TC-13 |
+| AC-4 (SMS begin enables field, verify→finalize→nav) | TC-08, TC-09, TC-13 |
+| AC-5 (SMS wrong code: error, no finalize, no implicit resend; explicit resend) | TC-10, TC-11, TC-13 |
+| AC-6 (verify carries `X-CSRF-Token` = `ui_csrf`) | TC-06 |
+| AC-7 (validation gating: no request on under-length code) | TC-05 |
+| AC-8 (deterministic 20/20, no `Thread.sleep`) | TC-14 |

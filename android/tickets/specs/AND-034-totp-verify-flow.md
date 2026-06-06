@@ -5,7 +5,8 @@ milestone: M1
 epic: E05
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-033, AND-028, AND-018]
 blocks: [AND-039, AND-047]
 ---
@@ -82,20 +83,29 @@ endpoint and the `ApiResult`/`apiCall` machinery from AND-018.
    - `FactorsRemaining(factors: List<MfaFactor>)` — at least one additional factor is still
      required; the caller drives the next factor's verify flow keyed by the same
      `challengeId`.
-3. `verifyTotp()` calls `AuthApi.verifyTotp(MfaTotpVerifyRequest(challengeId, code))` inside
+3. `verifyTotp()` calls `AuthApi.verifyTotp(TotpVerifyReq(challengeId, totpCode))` inside
    `apiCall { }` (AND-018) so transport failures fold to `ApiResult.NetworkError` and HTTP
    error bodies fold to `ApiResult.Failure(ApiError)`.
 4. **Branching rule** (deterministic, single source of truth) applied to a successful
-   `MfaVerifyResp`:
-   - If `verified == true` **and** `remaining_factors` is empty (and `auth_required` is
-     false/absent) → `ApiResult.Success(MfaVerifyResult.Completed)`.
-   - If `verified == true` **and** `remaining_factors` is non-empty → `ApiResult.Success(
+   (HTTP 2xx) `MfaVerifyResp`. **CORRECTED:** the verified-against-sources response schema
+   has **no** `verified` boolean and **no** `auth_required` field. The authoritative shape
+   (`src/api/types.ts: MfaVerifyResp`) is
+   `{ status: string; session_id?: string; required_factors: string[]; passed:
+   Record<string, boolean>; remaining_factors: string[] }`. The web client
+   (`src/pages/Login.tsx: handleMfaVerify`) decides completion purely from
+   `remaining_factors.length === 0`. The corrected rule is:
+   - If `remaining_factors` is **empty** → `ApiResult.Success(MfaVerifyResult.Completed)`.
+     The caller then proceeds to `POST /ui/session/finalize`.
+   - If `remaining_factors` is **non-empty** → `ApiResult.Success(
      MfaVerifyResult.FactorsRemaining(factors))`, mapping factor strings via
      `MfaFactor.fromWire` (AND-028).
-   - If `verified == false` → treat as a rejected code: `ApiResult.Failure(ApiError(
-     status=200, code="totp_invalid", message=<server detail or default>))`. A 200 with
-     `verified=false` MUST NOT be reported as success. (Servers that return HTTP 4xx for a
-     bad code are handled in Section 7; both shapes resolve to `code="totp_invalid"`.)
+   - **A wrong/expired code is NOT a 2xx response.** Verified against `src/api/client.ts`
+     and `src/pages/Login.tsx`: an incorrect code surfaces as a **thrown HTTP error**
+     (`ApiError` with a `status` + `detail` string), caught in the page's `catch` block.
+     There is no `verified=false` 200 path — that field does not exist. The repository
+     therefore maps the HTTP-error body (via AND-015) and remaps the relevant statuses to
+     `code="totp_invalid"` (see Section 7). A reachable 2xx with a non-empty/empty
+     `remaining_factors` is the ONLY success contract.
 5. The `code` argument is the user-entered 6-digit TOTP; the repository trims whitespace and
    passes it verbatim. It does **not** validate length/format — input validation is owned by
    the OTP composable / ViewModel (AND-020/AND-039). (A blank `code` short-circuits to a
@@ -137,19 +147,28 @@ sealed interface MfaVerifyResult {
 Wire DTOs (defined in AND-033 alongside `AuthApi`; shown for the contract this ticket
 consumes):
 
+**CORRECTED to match the backend schema.** The OpenAPI request schema is `TotpVerifyReq`
+(not `MfaTotpVerifyRequest`) with fields `challenge_id` and **`totp_code`** (not `code`) —
+both required (OpenAPI `components.schemas.TotpVerifyReq`; `src/api/types.ts: TotpVerifyReq`).
+The response schema is **not** annotated in OpenAPI (`POST /ui/mfa/totp/verify` →
+`resp=200:` with no model), so the authoritative response contract is the frontend type
+`src/api/types.ts: MfaVerifyResp` = `{ status, session_id?, required_factors[], passed,
+remaining_factors[] }` — there is no `verified`, no `auth_required`, no `detail` on success.
+
 ```kotlin
 @JsonClass(generateAdapter = true)
-data class MfaTotpVerifyRequest(
+data class TotpVerifyReq(
     @Json(name = "challenge_id") val challengeId: String,
-    val code: String,
+    @Json(name = "totp_code") val totpCode: String,
 )
 
 @JsonClass(generateAdapter = true)
 data class MfaVerifyResp(
-    val verified: Boolean = false,
-    @Json(name = "auth_required") val authRequired: Boolean = false,
+    val status: String = "",
+    @Json(name = "session_id") val sessionId: String? = null,
+    @Json(name = "required_factors") val requiredFactors: List<String> = emptyList(),
+    val passed: Map<String, Boolean> = emptyMap(),
     @Json(name = "remaining_factors") val remainingFactors: List<String> = emptyList(),
-    val detail: String? = null,
 )
 ```
 
@@ -157,7 +176,7 @@ data class MfaVerifyResp(
 
 ```kotlin
 @POST("ui/mfa/totp/verify")
-suspend fun verifyTotp(@Body body: MfaTotpVerifyRequest): MfaVerifyResp
+suspend fun verifyTotp(@Body body: TotpVerifyReq): MfaVerifyResp
 ```
 
 Repository:
@@ -185,24 +204,21 @@ class MfaRepositoryImpl @Inject constructor(
             )
         }
         return apiCall {
-            api.verifyTotp(MfaTotpVerifyRequest(challengeId = challengeId, code = trimmed))
+            api.verifyTotp(TotpVerifyReq(challengeId = challengeId, totpCode = trimmed))
         }.flatMap { resp -> resp.toVerifyResult() }
     }
 
-    private fun MfaVerifyResp.toVerifyResult(): ApiResult<MfaVerifyResult> = when {
-        !verified -> ApiResult.Failure(
-            ApiError(
-                status = 200,
-                code = "totp_invalid",
-                message = detail ?: "Incorrect or expired code",
-            ),
-        )
-        remainingFactors.isNotEmpty() || authRequired ->
+    // CORRECTED: a 2xx response is always an accepted code. Completion is decided solely by
+    // remaining_factors (matching src/pages/Login.tsx). A wrong code never reaches here as a
+    // success — it is a thrown HTTP error folded by apiCall/AND-015 (see Section 7).
+    private fun MfaVerifyResp.toVerifyResult(): ApiResult<MfaVerifyResult> =
+        if (remainingFactors.isEmpty()) {
+            ApiResult.Success(MfaVerifyResult.Completed)
+        } else {
             ApiResult.Success(
                 MfaVerifyResult.FactorsRemaining(remainingFactors.map(MfaFactor::fromWire)),
             )
-        else -> ApiResult.Success(MfaVerifyResult.Completed)
-    }
+        }
 }
 ```
 
@@ -219,33 +235,37 @@ abstract class MfaDataModule {
 
 `flatMap` (AND-018) preserves `Failure`/`NetworkError` from `apiCall` unchanged and applies
 the branch mapping only on `Success`, keeping the original transport/HTTP failure intact for
-the ViewModel. The HTTP-level "bad code" case (server returns 4xx, Section 7) is normalized
-to the same `code="totp_invalid"` by the AND-015 error mapper plus a small remap, so AND-039
-has a single `code` to key its localized "incorrect code" copy off, regardless of whether the
-backend signals via `verified=false` or an HTTP status.
+the ViewModel. The "bad code" case (server returns an HTTP 4xx with a `detail`, Section 7 —
+**the only** wrong-code signal; there is no 200 `verified=false`) is normalized to
+`code="totp_invalid"` by the AND-015 error mapper plus a small remap, so AND-039 has a single
+`code` to key its localized "incorrect code" copy off.
 
 ## 5. API Contract
 
 Single endpoint consumed: **`POST /ui/mfa/totp/verify`**.
 
-Request body:
+Request body (**CORRECTED** — field is `totp_code`, per `TotpVerifyReq`):
 
 ```json
 {
   "challenge_id": "chl_01HXYZ...",
-  "code": "123456"
+  "totp_code": "123456"
 }
 ```
 
 Headers: `Content-Type: application/json`; cookies + `X-CSRF-Token` (`ui_csrf`) are added by
 interceptors (AND-011/AND-012), not by this repository.
 
+**CORRECTED** success bodies below to the real `MfaVerifyResp` shape
+(`{ status, session_id?, required_factors[], passed, remaining_factors[] }`).
+
 Representative success — **challenge complete** (only TOTP was required):
 
 ```json
 {
-  "verified": true,
-  "auth_required": false,
+  "status": "ok",
+  "required_factors": ["totp"],
+  "passed": { "totp": true },
   "remaining_factors": []
 }
 ```
@@ -255,36 +275,42 @@ Representative success — **factor accepted, more required** (TOTP + SMS challe
 
 ```json
 {
-  "verified": true,
-  "auth_required": true,
+  "status": "pending",
+  "required_factors": ["totp", "sms"],
+  "passed": { "totp": true, "sms": false },
   "remaining_factors": ["sms"]
 }
 ```
 → `ApiResult.Success(MfaVerifyResult.FactorsRemaining([Sms]))`
 
-Representative **rejected code** (HTTP 200 with `verified=false`):
+Representative **rejected code** — **CORRECTED**: a wrong/expired code is **not** an HTTP 200;
+it is a thrown HTTP error (FastAPI `detail`), confirmed via `src/api/client.ts` +
+`src/pages/Login.tsx` (the page reads `err.detail`). Exact status is unverified (see §16);
+the dev host was unreachable for live confirmation. Representative body:
 
 ```json
-{
-  "verified": false,
-  "detail": "Invalid authentication code"
-}
+{ "detail": "Invalid authentication code" }
 ```
-→ `ApiResult.Failure(ApiError(status=200, code="totp_invalid", message="Invalid authentication code"))`
+→ `ApiResult.Failure(ApiError(status=4xx, code="totp_invalid", message="Invalid authentication code"))`
 
 Error responses folded by `apiCall`/AND-015 into `ApiResult.Failure(ApiError)` and remapped:
 
-- **400/401 bad-or-expired code** — some deployments signal a wrong code with an HTTP status
-  and a `detail` string:
+- **4xx bad-or-expired code** — the backend signals a wrong code with an HTTP error status
+  and a `detail` string (this is the **primary** wrong-code path, confirmed via the web
+  client; exact status code unverified — see §16):
   ```json
   { "detail": "Invalid authentication code" }
   ```
-  → `Failure(ApiError(status=400|401, message="Invalid authentication code"))`, remapped to
+  → `Failure(ApiError(status=4xx, message="Invalid authentication code"))`, remapped to
   `code="totp_invalid"`. Note: a *challenge*-expired/invalid 401 here is a credentials-class
-  401, NOT a session-expiry 401, and must not loop through AND-013 refresh (Section 7).
-- **422 Unprocessable Entity** (validation, e.g. missing `challenge_id`) — `detail` list:
+  401, NOT a session-expiry 401, and must not loop through AND-013 refresh (Section 7). This
+  is consistent with `src/api/client.ts`, where an **unauthenticated** 401 (no active
+  session — exactly the MFA-verify case) propagates to the caller and is NOT auto-refreshed.
+- **422 Unprocessable Entity** (validation, e.g. missing `challenge_id`/`totp_code`) — the
+  OpenAPI-declared error for this endpoint is `HTTPValidationError`, a `detail` list of
+  `loc/msg/type` items (`POST /ui/mfa/totp/verify` → `resp=422:HTTPValidationError`):
   ```json
-  { "detail": [ { "loc": ["body","code"], "msg": "field required" } ] }
+  { "detail": [ { "loc": ["body","totp_code"], "msg": "field required", "type": "missing" } ] }
   ```
   → `Failure(ApiError(status=422, message="field required"))` per AND-015 (distinct from
   `totp_invalid` — surfaced as a generic error, not "wrong code").
@@ -319,10 +345,11 @@ AND-033*; this ticket asserts only the branch mapping on top of representative r
 - **Timeouts:** OkHttp ~20s (AND-009) against the flaky dev host; `SocketTimeoutException`
   folds to `ApiResult.NetworkError(isTimeout = true)` via AND-018, letting AND-039 show
   "server is slow" copy distinct from "you're offline".
-- **Wrong/expired code:** both shapes — HTTP 200 `verified=false` and an HTTP 4xx with a
-  `detail` — normalize to `ApiError(code="totp_invalid")`. AND-039 keeps the user on the OTP
-  screen, clears the field, and shows a localized "incorrect or expired code" message; it does
-  NOT navigate back to login for a `totp_invalid`.
+- **Wrong/expired code:** **CORRECTED** — there is no HTTP 200 `verified=false` shape. A wrong
+  code is an HTTP 4xx with a `detail` string (per `src/api/client.ts`/`Login.tsx`); the AND-015
+  mapper plus a small remap normalize it to `ApiError(code="totp_invalid")`. AND-039 keeps the
+  user on the OTP screen, clears the field, and shows a localized "incorrect or expired code"
+  message; it does NOT navigate back to login for a `totp_invalid`.
 - **Challenge expired/not found (404/410):** mapped to `code="challenge_expired"`; AND-039
   treats this as terminal for the current challenge and routes back to the login screen to
   restart `session/start`.
@@ -333,7 +360,7 @@ AND-033*; this ticket asserts only the branch mapping on top of representative r
 - **Blank code guard:** an empty/whitespace `code` short-circuits to
   `Failure(status=0, code="totp_invalid")` with no network call (defensive; primary validation
   is in AND-020/AND-039).
-- **Malformed success** (`verified=true` but unknown/garbled `remaining_factors`): unknown
+- **Malformed success** (2xx with unknown/garbled `remaining_factors` entries): unknown
   factor strings are retained as `MfaFactor.Unknown(raw)`; the flow surfaces an "unsupported
   factor" rather than silently completing — fail-closed for an auth-critical branch.
 - `CancellationException` propagates unchanged (structured concurrency; AND-018 `apiCall`
@@ -388,20 +415,20 @@ Unit tests in `core-data/src/test` (JUnit, Truth/kotlin-test, coroutines-test). 
 faked (hand-written fake or MockK stub returning canned `MfaVerifyResp` / throwing) so this
 ticket tests **branching**, not transport (transport is AND-033's MockWebServer suite).
 
-Branch/mapping tests (the acceptance core — correct vs. incorrect code):
-- `verified=true, remaining_factors=[]` → `Success(Completed)`.
-- `verified=true, auth_required=true, remaining_factors=["sms"]` →
-  `Success(FactorsRemaining([Sms]))`.
-- `verified=true, remaining_factors=["sms","email"]` → factors map to `[Sms, Email]` in order.
-- `verified=true, remaining_factors=["webauthn"]` → `[Unknown("webauthn")]` (retained).
-- `verified=false, detail="Invalid authentication code"` →
-  `Failure(status=200, code="totp_invalid", message="Invalid authentication code")`.
-- `verified=false, detail=null` → `Failure(code="totp_invalid", message="Incorrect or
-  expired code")` (default message).
+Branch/mapping tests (the acceptance core — correct vs. incorrect code). **CORRECTED** to the
+real `MfaVerifyResp` shape: success is a 2xx with `remaining_factors`; there is no `verified`
+field, so completion is keyed on `remaining_factors` only:
+- `status="ok", remaining_factors=[]` → `Success(Completed)`.
+- `status="pending", remaining_factors=["sms"]` → `Success(FactorsRemaining([Sms]))`.
+- `remaining_factors=["sms","email"]` → factors map to `[Sms, Email]` in order.
+- `remaining_factors=["webauthn"]` → `[Unknown("webauthn")]` (retained).
 
-Failure-passthrough / remap tests (fake `AuthApi` throws or returns HTTP error):
-- `HttpException(401)` with `detail` → `Failure(...)` remapped to `code="totp_invalid"`.
-- `HttpException(400)` bad code → `code="totp_invalid"`.
+Failure-passthrough / remap tests (fake `AuthApi` throws or returns HTTP error). **CORRECTED**:
+the wrong-code path is an HTTP 4xx with a `detail` string, NOT a 200 `verified=false`:
+- `HttpException(4xx)` with `detail="Invalid authentication code"` → `Failure(...)` remapped to
+  `code="totp_invalid"`, `message="Invalid authentication code"`.
+- `HttpException(401)` (unauthenticated challenge-class) → `code="totp_invalid"`; MUST NOT
+  trigger AND-013 `session/refresh`.
 - `HttpException(404)` / `(410)` → `code="challenge_expired"`.
 - `HttpException(422)` → `Failure(status=422)` (generic, NOT `totp_invalid`).
 - `SocketTimeoutException` → `NetworkError(isTimeout=true)`.
@@ -414,8 +441,8 @@ Input-guard test:
 
 Request-shape test (one MockWebServer test, complementing AND-033):
 - `verifyTotp("chl_1", "123456")` issues `POST /ui/mfa/totp/verify` with body
-  `{"challenge_id":"chl_1","code":"123456"}` (recorded request asserted), and the code is
-  trimmed (` "123456 " ` → `"123456"`).
+  `{"challenge_id":"chl_1","totp_code":"123456"}` (recorded request asserted; **CORRECTED**
+  field name to `totp_code`), and the code is trimmed (` "123456 " ` → `"123456"`).
 
 Security test:
 - with the OkHttp logging interceptor attached, a captured log of a `verifyTotp()` call does
@@ -428,7 +455,7 @@ DI smoke test:
 ## 12. Dependencies & Sequencing
 
 - **Requires (blocking):**
-  - **AND-033** — `AuthApi.verifyTotp` + `MfaTotpVerifyRequest` / `MfaVerifyResp` DTOs must
+  - **AND-033** — `AuthApi.verifyTotp` + `TotpVerifyReq` / `MfaVerifyResp` DTOs must
     exist and be MockWebServer-verified.
   - **AND-028** — `MfaFactor` (reused for `remaining_factors`) and the `MfaRequired.
     challengeId` that feeds this call.
@@ -446,24 +473,33 @@ DI smoke test:
 
 ## 13. Risks & Open Questions
 
-- **R1 — Completion signal ambiguity.** The exact field signalling "challenge complete" is
-  assumed to be `verified=true` + empty `remaining_factors`. The backend may instead reuse
-  `auth_required` or return a `session` payload inline. Mitigation: treat non-empty
-  `remaining_factors` OR `auth_required=true` as "more required"; otherwise `Completed`.
-  Confirm against `/openapi.json` and `frontend/src/api/endpoints/*.ts` before merge.
-- **R2 — Wrong-code signalling (200 vs. 4xx).** Spec handles both `verified=false` (HTTP 200)
-  and an HTTP 4xx `detail`, normalizing to `code="totp_invalid"`. Confirm which the dev host
-  actually uses so the AND-015 remap is correct; field name `verified` and `remaining_factors`
-  casing must match the real schema (verify in AND-033 DTOs).
-- **R3 — Does `totp/verify` emit `session/finalize` implicitly on completion?** Assumed no;
-  the caller (AND-039) calls `POST /ui/session/finalize` after `Completed`. If the server
-  finalizes inline and sets the full session cookie, AND-039 may skip finalize — confirm.
-- **Q1 — 401 disambiguation.** AND-013's authenticator must NOT loop `session/refresh` on a
-  `/ui/mfa/*` verify 401. Open: confirm AND-013 scopes refresh away from MFA verify endpoints
-  (or a no-session 401 short-circuits refresh).
-- **Q2 — TOTP `begin`?** Assumed none (authenticator generates codes offline). If
-  `/ui/mfa/totp/begin` exists and is required (e.g. to nonce the challenge), this ticket must
-  add it; AND-033's endpoint list does not include one. Confirm against `/openapi.json`.
+- **R1 — Completion signal ambiguity. RESOLVED (review 2026-06-06).** The assumed
+  `verified`/`auth_required` fields **do not exist** on the verify response. Per
+  `src/api/types.ts: MfaVerifyResp` and `src/pages/Login.tsx: handleMfaVerify`, completion is
+  decided **solely** by `remaining_factors.length === 0`. The branching rule (Section 3.4) was
+  corrected accordingly; the `status` field (`"ok"|"pending"`) is informational and not used
+  for the branch. There is no inline `session` payload on verify (finalize is separate).
+- **R2 — Wrong-code signalling. RESOLVED (review 2026-06-06).** There is **no** HTTP 200
+  `verified=false` shape. A wrong code is a thrown HTTP error with a `detail` string
+  (`src/api/client.ts`, `src/pages/Login.tsx` reads `err.detail`). Spec corrected to a single
+  4xx-error path normalized to `code="totp_invalid"`. **Residual open item:** the exact HTTP
+  status (400 vs 401 vs 403) is unverified — OpenAPI declares only `200` (empty) and `422`;
+  the dev host was unreachable for live confirmation. The remap keys on the error class, not a
+  specific status, so this does not block.
+- **R3 — Does `totp/verify` finalize implicitly?** **Partially resolved.** Verified the web
+  client always calls `POST /ui/session/finalize` separately after `remaining_factors` is
+  empty (`Login.tsx`), and the verify response carries no full session — so AND-039 must
+  finalize explicitly. `session/finalize` returns `{status, session_id?, required_factors[],
+  passed}` (`SessionFinalizeResp`) and may itself still report `required_factors` (the web app
+  re-prompts). Confirmed no implicit finalize on the verify call.
+- **Q1 — 401 disambiguation. RESOLVED (review 2026-06-06).** The web client
+  (`src/api/client.ts`) auto-refreshes a 401 **only when already authenticated**; an
+  unauthenticated 401 (the MFA-verify case — there is no session yet) **propagates directly**
+  to the caller and is NOT refreshed. AND-013 must mirror this (do not loop `session/refresh`
+  for `/ui/mfa/*` verify 401s). This is now a confirmed contract, not an assumption.
+- **Q2 — TOTP `begin`? RESOLVED (review 2026-06-06).** No `/ui/mfa/totp/begin` exists in the
+  OpenAPI index (the only `totp` write endpoints are `verify` and the device
+  enroll/confirm/remove set). The "no begin" assumption is confirmed against the spec.
 
 ## 14. Acceptance Criteria
 
@@ -473,11 +509,13 @@ DI smoke test:
 2. `sealed interface MfaVerifyResult { Completed; FactorsRemaining(factors) }` exists in
    `com.testlogon.android.core.model.auth`, reusing `MfaFactor` (AND-028).
 3. `verifyTotp()` calls `POST /ui/mfa/totp/verify` with body
-   `{"challenge_id","code"}` (asserted via MockWebServer recorded request), trimming the code.
-4. **Correct and incorrect codes produce the expected results (tested):** a `verified=true`
-   no-remaining response → `Success(Completed)`; a `verified=true` with `remaining_factors` →
-   `Success(FactorsRemaining(factors))`; a `verified=false` (or 4xx bad-code) →
-   `Failure(code="totp_invalid")` — per the Section 11 table.
+   `{"challenge_id","totp_code"}` (**CORRECTED** field; asserted via MockWebServer recorded
+   request), trimming the code.
+4. **Correct and incorrect codes produce the expected results (tested):** a 2xx response with
+   empty `remaining_factors` → `Success(Completed)`; a 2xx with non-empty `remaining_factors` →
+   `Success(FactorsRemaining(factors))`; a 4xx bad-code error →
+   `Failure(code="totp_invalid")` — per the Section 11 table (**CORRECTED**: no
+   `verified` field exists; completion is keyed on `remaining_factors`).
 5. Remaining factors map via `MfaFactor.fromWire`; unknown entries → `MfaFactor.Unknown(raw)`
    and are retained.
 6. Challenge-expired (404/410) → `Failure(code="challenge_expired")`; 422 → generic
@@ -505,3 +543,213 @@ DI smoke test:
   taxonomy are frozen for consumption; open questions Q1–Q2 and risks R1–R3 either resolved
   against `/openapi.json` / `frontend/src/api/endpoints` or filed as follow-ups before AND-039
   integration.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. "OpenAPI index" =
+`reference/openapi.index.txt`; schema bodies from `reference/openapi.pretty.json`
+(`components.schemas.<Name>`); frontend paths are under `reference/src/`.
+
+1. **Endpoint is `POST /ui/mfa/totp/verify`.** VERIFIED. OpenAPI `POST /ui/mfa/totp/verify`
+   (op=`ui_totp_verify_ui_mfa_totp_verify_post`); `src/api/endpoints/auth.ts: verifyTotp`
+   (`api.post(...,"/ui/mfa/totp/verify", body)`).
+2. **Request schema name.** CORRECTED — spec said `MfaTotpVerifyRequest`; actual schema is
+   **`TotpVerifyReq`**. OpenAPI index `req=TotpVerifyReq`; `components.schemas.TotpVerifyReq`;
+   `src/api/types.ts: TotpVerifyReq`.
+3. **Request field for the code.** CORRECTED — spec said `code`; actual field is **`totp_code`**
+   (with `challenge_id`), both required. `components.schemas.TotpVerifyReq.properties`
+   (`challenge_id`, `totp_code`; `required: [challenge_id, totp_code]`);
+   `src/api/types.ts: TotpVerifyReq` and call site `src/pages/Login.tsx` (`verifyTotp({
+   challenge_id, totp_code })`). (Note: sibling SMS/email use field `code` — `SmsVerifyReq`/
+   `EmailVerifyReq` — but TOTP is `totp_code`.)
+4. **Response shape `MfaVerifyResp`.** CORRECTED — spec claimed `{verified, auth_required,
+   remaining_factors, detail}`. The OpenAPI response is **unannotated** (`resp=200:` with no
+   model), so the authoritative contract is `src/api/types.ts: MfaVerifyResp` =
+   `{ status: string; session_id?: string; required_factors: string[]; passed:
+   Record<string,boolean>; remaining_factors: string[] }`. No `verified`, no `auth_required`,
+   no `detail` on success.
+5. **Completion signal = empty `remaining_factors`.** CORRECTED/VERIFIED — spec keyed on
+   `verified==true && remaining_factors empty`. Real web logic: `src/pages/Login.tsx:
+   handleMfaVerify` branches on `resp.remaining_factors.length === 0` only, then calls
+   `sessionFinalize`.
+6. **Wrong/expired code is an HTTP error, not a 200 `verified=false`.** CORRECTED — spec's
+   central 200 `verified=false` branch is fictional. `src/api/client.ts` throws `ApiError`
+   for non-2xx; `src/pages/Login.tsx` catch reads `err.detail`. Exact 4xx status is an open
+   assumption (see below).
+7. **`session/finalize` is a separate explicit call after completion.** VERIFIED.
+   `src/pages/Login.tsx` calls `sessionFinalize({ challenge_id, remember_device })` when
+   `remaining_factors` is empty; `SessionFinalizeReq`/`SessionFinalizeResp` in
+   `src/api/types.ts` (`SessionFinalizeResp.status: "ok"|"pending"`). OpenAPI
+   `POST /ui/session/finalize` (req=`UiSessionFinalizeReq`).
+8. **`session/start` returns `{auth_required, challenge_id?, required_factors[], session_id?}`.**
+   VERIFIED. `components.schemas.UiSessionStartResp` (required: `auth_required`);
+   `src/api/types.ts: SessionStartResp`; OpenAPI `POST /ui/session/start`
+   (resp=`UiSessionStartResp`). The `challenge_id` consumed by this ticket originates here.
+9. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token`.** VERIFIED. `src/api/client.ts`
+   (`const csrf = getCookie("ui_csrf"); headers.set("X-CSRF-Token", csrf)`).
+10. **Cookie-based session transport (credentials included).** VERIFIED. `src/api/client.ts`
+    fetch uses `credentials: "include"` on every call (and retry).
+11. **401 on MFA verify must NOT loop `session/refresh`.** VERIFIED (was Q1, an assumption).
+    `src/api/client.ts`: auto-refresh runs only when `useAuthStore...isAuthenticated`; an
+    **unauthenticated** 401 (the MFA-verify state — no session yet) is thrown straight to the
+    caller. OpenAPI `POST /ui/session/refresh` exists (`resp=200:`) but the client gates it.
+12. **No `/ui/mfa/totp/begin` endpoint (TOTP is begin-less).** VERIFIED (was Q2). OpenAPI
+    index: only `totp/verify` plus device enroll endpoints (`totp/devices/begin|confirm|
+    {id}/remove`, `totp/devices` GET); no login-flow `totp/begin`.
+13. **422 error is `HTTPValidationError` (`detail` list of loc/msg/type).** VERIFIED. OpenAPI
+    `POST /ui/mfa/totp/verify` → `resp=200:;422:HTTPValidationError`; FastAPI standard shape;
+    `normalizeErrorDetail` in `src/api/client.ts` walks `detail[].msg`.
+14. **FastAPI `detail` → `ApiError` mapping (string or list).** VERIFIED against the web
+    normalizer `src/api/client.ts: normalizeErrorDetail` (handles string `detail`, array of
+    `{msg}`, and object `{code,...}` forms) — the AND-015 mapper this ticket relies on mirrors
+    it. `ApiError` carries `status` + `detail` (`src/api/client.ts: class ApiError`).
+15. **`code="totp_invalid"` / `code="challenge_expired"` taxonomy.** UNVERIFIED-ASSUMPTION —
+    these are client-invented stable codes for AND-039 localization, not backend-supplied. The
+    backend returns a `detail` string; the repository synthesizes these `code`s. Acceptable as
+    an internal contract (documented as such).
+16. **Repository/domain types (`MfaRepository`, `MfaVerifyResult`, `MfaRepositoryImpl`),
+    package names, Hilt `@Binds`.** UNVERIFIED-ASSUMPTION (forward-looking Android design; no
+    Android source exists yet in this repo). Internal design choice, consistent with
+    AND-018/AND-028/AND-033 seams.
+17. **`MfaFactor` reuse + `MfaFactor.fromWire` / `Unknown(raw)`.** UNVERIFIED-ASSUMPTION —
+    owned by AND-028 (not present in `reference/`). The wire factor strings observed
+    (`"totp"`, `"sms"`, `"email"`) come from `required_factors`/`remaining_factors` in
+    `src/api/types.ts` and the method list in `src/pages/Login.tsx` (`totp|sms|email|recovery`).
+18. **Stack (Kotlin 2.0.21, Retrofit 2.11/OkHttp 4.12/Moshi 1.15, Hilt+KSP, minSdk 24,
+    JDK 17).** UNVERIFIED-ASSUMPTION (framework choices; no Gradle files in `reference/`).
+    Labeled framework ref; Moshi `@Json`/Retrofit `@POST` usage is standard
+    (framework ref: developer.android.com / square.github.io/retrofit, square.github.io/moshi).
+19. **Dev host `http://18.222.237.167:8000`, cleartext, flaky; OpenAPI at `/openapi.json`.**
+    UNVERIFIED at review time — host was not reachable for a live call; taken from the spec.
+    The plaintext/cleartext dev posture is a stated assumption, not independently confirmed.
+
+### Corrections made
+
+- **C1 — Request schema/field (Sections 4, 5, 11, 14).** `MfaTotpVerifyRequest`/`code` →
+  **`TotpVerifyReq`/`totp_code`** (the verified backend + frontend contract).
+- **C2 — Response shape (Sections 1, 4, 5).** Removed the nonexistent `verified`,
+  `auth_required`, and success-`detail` fields; replaced with the real
+  `{status, session_id?, required_factors, passed, remaining_factors}`.
+- **C3 — Branching rule (Section 3.4, 4 impl, 11, 14).** Completion now keyed on empty
+  `remaining_factors` (matching `Login.tsx`), not a `verified` boolean. Removed the impossible
+  200-`verified=false` rejection branch.
+- **C4 — Wrong-code path (Sections 3, 4, 5, 7, 11).** A bad code is a thrown HTTP 4xx with a
+  `detail`, not an HTTP 200; normalized to `code="totp_invalid"`. Single error path.
+- **C5 — 422 example (Section 5).** Validation `loc` corrected to `["body","totp_code"]` and
+  tied to the OpenAPI-declared `HTTPValidationError`.
+- **C6 — Risks/Questions (Section 13).** R1, R2, Q1, Q2 marked RESOLVED with sources; R3
+  partially resolved (explicit finalize confirmed). Frontmatter `status: reviewed` +
+  `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **OA1 — Exact wrong-code HTTP status (400 vs 401 vs 403).** OpenAPI declares only `200`
+  (unannotated) and `422` for this op; the live dev host was unreachable, so the precise status
+  a wrong `totp_code` returns is unconfirmed. The remap keys on the error class + AND-015, not
+  a single status, so it is non-blocking; AND-033's MockWebServer suite should pin it once the
+  host is reachable.
+- **OA2 — 404/410 → `challenge_expired`.** No evidence in OpenAPI (only 200/422 declared) or
+  the web client that the backend returns 404/410 for an expired challenge. This mapping is an
+  assumption; if the backend instead returns a 4xx `detail`, AND-039's "route back to login"
+  behavior must key off the actual status. Confirm in AND-033.
+- **OA3 — `status` field values on verify (`"ok"`/`"pending"`).** Inferred from
+  `SessionFinalizeResp.status: "ok"|"pending"`; `MfaVerifyResp.status` is typed only as
+  `string`. The branch does not depend on it, so this is informational only.
+- **OA4 — All Android-side types/stack (items 15–18 above).** No Android source or build files
+  exist in `reference/`; these are design intent to be realized by AND-018/028/033/039.
+
+## 17. Test Plan
+
+Acceptance criteria referenced as AC-# map to Section 14. Test targets: **JVM** =
+JVM unit/Robolectric (local, no device); **emulator** = headless AVD `test35`
+(x86_64, API 35); **device** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a).
+This ticket is a pure data/repository seam with **no UI and no device-specific behavior**, so
+the core suite is JVM. The DI smoke test runs on emulator (Hilt). Cases that exist only
+because the spec touches a hardware-class concern (none here directly) are noted; an
+ABI/instrumented sanity case runs on the physical device to confirm Moshi codegen + arm64.
+
+- **TC-AND-034-01** — Type: unit (JVM). Target: `MfaRepositoryImpl.verifyTotp`. Preconditions:
+  fake `AuthApi` returns `MfaVerifyResp(status="ok", remaining_factors=[])`. Steps: call
+  `verifyTotp("chl_1","123456")`. Expected: `ApiResult.Success(MfaVerifyResult.Completed)`.
+  Traces: AC-4.
+- **TC-AND-034-02** — Type: unit (JVM). Target: `verifyTotp` branch. Preconditions: fake
+  returns `MfaVerifyResp(status="pending", remaining_factors=["sms"])`. Steps: call verify.
+  Expected: `Success(FactorsRemaining([Sms]))`. Traces: AC-4, AC-5.
+- **TC-AND-034-03** — Type: unit (JVM). Target: factor mapping/order + unknown retention.
+  Preconditions: fake returns `remaining_factors=["sms","email","webauthn"]`. Steps: call
+  verify. Expected: `FactorsRemaining([Sms, Email, Unknown("webauthn")])` in order; no entry
+  dropped. Traces: AC-5.
+- **TC-AND-034-04** — Type: contract/MockWebServer (JVM). Target: request shape + trimming.
+  Preconditions: MockWebServer enqueues a 200 `{status:"ok",remaining_factors:[]}`. Steps:
+  call `verifyTotp("chl_1"," 123456 ")`; capture the recorded request. Expected: `POST
+  /ui/mfa/totp/verify`, body exactly `{"challenge_id":"chl_1","totp_code":"123456"}` (trimmed;
+  field name `totp_code`, **not** `code`), `Content-Type: application/json`. Traces: AC-3.
+- **TC-AND-034-05** — Type: unit (JVM). Target: wrong-code mapping. Preconditions: fake
+  `AuthApi` throws `HttpException(4xx)` with body `{"detail":"Invalid authentication code"}`.
+  Steps: call verify. Expected: `ApiResult.Failure(ApiError(code="totp_invalid",
+  message="Invalid authentication code"))`; the result is NOT a `Success` and NOT
+  `challenge_expired`. Traces: AC-4, AC-6.
+- **TC-AND-034-06** — Type: unit (JVM). Target: 401 challenge-class disambiguation.
+  Preconditions: fake throws `HttpException(401)` with a `detail`; an observable hook on the
+  AND-013 authenticator/refresh seam. Steps: call verify. Expected: `Failure(code=
+  "totp_invalid")` (or per remap) AND the `session/refresh` path is **not** invoked (assert
+  zero refresh calls), mirroring the web client's unauthenticated-401 propagation. Traces:
+  AC-4, AC-7.
+- **TC-AND-034-07** — Type: unit (JVM). Target: challenge-expired + validation mapping.
+  Preconditions: fake throws `HttpException(404)`, then `(410)`, then `(422)` with an
+  `HTTPValidationError` `detail` list. Steps: call verify for each. Expected: 404/410 →
+  `Failure(code="challenge_expired")`; 422 → `Failure(status=422)` generic (NOT
+  `totp_invalid`). Traces: AC-6. (Note OA2: 404/410 mapping is an assumption pending AND-033.)
+- **TC-AND-034-08** — Type: unit (JVM). Target: transport/offline + flaky-dev-host path.
+  Preconditions: fake throws `SocketTimeoutException`, then a generic `IOException`. Steps:
+  call verify for each. Expected: timeout → `NetworkError(isTimeout=true)`; IOException →
+  `NetworkError(isTimeout=false)`; no exception escapes; no retry is performed (non-idempotent
+  POST). Traces: AC-7.
+- **TC-AND-034-09** — Type: unit (JVM). Target: cancellation propagation. Preconditions: fake
+  throws `CancellationException`. Steps: call verify inside a cancellable scope. Expected:
+  `CancellationException` is re-thrown unchanged (`assertFailsWith`), not folded into
+  `ApiResult`. Traces: AC-7.
+- **TC-AND-034-10** — Type: unit (JVM). Target: blank-code guard. Preconditions: spy/fake
+  `AuthApi`. Steps: call `verifyTotp("chl_1","   ")`. Expected:
+  `Failure(status=0, code="totp_invalid")` with **no** call to `AuthApi.verifyTotp` (verify
+  zero interactions). Traces: AC-7.
+- **TC-AND-034-11** — Type: contract/MockWebServer + security (JVM). Target: no-secret
+  logging. Preconditions: OkHttp client with the AND-009 logging interceptor at BASIC (or
+  `/ui/mfa/*` redaction) attached; capture log output. Steps: run `verifyTotp("chl_secret",
+  "987654")` against a MockWebServer 200. Expected: captured logs contain neither the
+  `totp_code` value `987654` nor the `challenge_id` value `chl_secret` (nor request/response
+  bodies). Traces: AC-8.
+- **TC-AND-034-12** — Type: integration (emulator `test35`). Target: Hilt DI binding.
+  Preconditions: `@HiltAndroidTest` component test on AVD `test35`. Steps: inject
+  `MfaRepository`. Expected: resolves to a `MfaRepositoryImpl` `@Singleton`; no missing-binding
+  error. Traces: AC-1, AC-9.
+- **TC-AND-034-13** — Type: instrumented/e2e (PHYSICAL DEVICE — SM-A156U, arm64-v8a, API 34).
+  Target: Moshi adapter + ABI sanity for the corrected DTOs. Preconditions: app installed on
+  the physical device (must run on device, not emulator, to exercise arm64 codegen vs the
+  x86_64 AVD). Steps: deserialize a real `MfaVerifyResp` JSON (`{status, session_id,
+  required_factors, passed, remaining_factors}`) and serialize a `TotpVerifyReq`
+  (`{challenge_id, totp_code}`) via the production Moshi instance. Expected: round-trips with
+  correct `@Json` names (`totp_code`, `remaining_factors`, etc.); no `NoClassDefFound`/codegen
+  ABI failure on arm64. Traces: AC-2, AC-3. (On-device specifically catches arm64-vs-x86 +
+  API-34-vs-35 codegen/runtime differences the emulator cannot.)
+- **TC-AND-034-14** — Type: manual. Target: end-to-end happy path against the dev host (when
+  reachable). Preconditions: dev host `http://18.222.237.167:8000` up; a real challenge from
+  `session/start`; valid authenticator code. Steps: drive `session/start` →
+  `verifyTotp(challengeId, code)` → on `Completed`, `session/finalize` → `getMe`. Expected:
+  TOTP-only challenge completes and `getMe` returns the `user_sub`; pins the real wrong-code
+  HTTP status to close OA1. Traces: AC-3, AC-4. (Manual because the dev host was unreachable
+  during this review.)
+
+### Coverage matrix
+
+| Section-14 AC | Covered by |
+|---|---|
+| AC-1 (interface + Hilt binding) | TC-12 |
+| AC-2 (`MfaVerifyResult` types) | TC-12, TC-13 |
+| AC-3 (`POST` body `{challenge_id, totp_code}`, trimmed) | TC-04, TC-13, TC-14 |
+| AC-4 (correct/incorrect → expected results) | TC-01, TC-02, TC-05, TC-06, TC-14 |
+| AC-5 (factor mapping; unknown retained) | TC-02, TC-03 |
+| AC-6 (404/410 → `challenge_expired`; 422 generic) | TC-05, TC-07 |
+| AC-7 (transport/cancel/blank-code passthrough; no retry) | TC-06, TC-08, TC-09, TC-10 |
+| AC-8 (no `code`/`challenge_id` in logs) | TC-11 |
+| AC-9 (`:core-data:test`/`:core-model:test` green; lint) | TC-01–TC-11 (the JVM suite), TC-12 |

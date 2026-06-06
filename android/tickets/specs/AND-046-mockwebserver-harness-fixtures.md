@@ -5,7 +5,8 @@ milestone: M1
 epic: E07
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-010]
 blocks: [AND-013, AND-014, AND-015, AND-016, AND-017, AND-018]
 ---
@@ -27,7 +28,7 @@ This is a **Chore** ticket; it ships no production code path and no user-visible
 - **Module:** `core-testing` (test-only library module; consumed via `testImplementation`/`androidTestImplementation` by feature and core modules).
 - **Layering:** `core-testing` sits beside the other `core-*` modules and depends only on `core-model` (for fixture-typed deserialization assertions) and `core-network` test surfaces. It must not depend on `app` or any `feature-*` module.
 - **Upstream dependency AND-010 (Retrofit + Moshi setup):** establishes Retrofit 2.11 + Moshi 1.15 (Kotlin codegen) with `baseUrl` sourced from `BuildConfig`. The harness must expose a `baseUrl` (an `HttpUrl`) that AND-010's Retrofit factory can be pointed at in tests, so the same `Moshi` instance and converter config used in production are validated against fixtures.
-- **Backend reference:** FastAPI + DynamoDB. Auth is cookie-based with a `ui_csrf` cookie echoed as `X-CSRF-Token`. OpenAPI at `/openapi.json`. Error envelope `detail` may be `string | [{msg, ...}] | {code, ...}`.
+- **Backend reference:** FastAPI + DynamoDB. Auth uses a server-set session cookie plus a `ui_csrf` cookie whose value the client echoes in the `X-CSRF-Token` header. **Correction (verified):** per `src/api/client.ts`, the web client reads the `ui_csrf` cookie and sets `X-CSRF-Token` on **every** request (GET included), not only mutations; it *additionally* sends an `Authorization: Bearer <accessToken>` header when an access token is present in the auth store, and an `X-IMPERSONATION-TOKEN` when impersonating — so auth is cookie-based **plus** an optional bearer token, not purely cookie-based. OpenAPI is at `/openapi.json`. The validation error envelope (HTTP 422) is `HTTPValidationError = {detail: [{loc, msg, type}]}` (verified: `components.schemas.HTTPValidationError` / `ValidationError`); the client's `normalizeErrorDetail` also tolerates `detail` as a plain `string` and as an object `{code, ...}` (e.g. `role_required`, `geo_blocked`), so the three `detail` variants the harness models are real client-handled shapes.
 - **Web reference for shapes:** `frontend/src/api/endpoints/*.ts` and `frontend/src/api/types.ts` document the same request/response contracts; fixtures should be cross-checked against these and against live captures.
 - **Stack:** Kotlin 2.0.21, OkHttp 4.12, Moshi 1.15, Coroutines/Flow, JUnit, Truth/AssertJ assertions, JDK 17, Gradle 8.9, AGP 8.7.3.
 - **Namespace:** `com.testlogon.android.core.testing`.
@@ -139,7 +140,10 @@ class AuthFlowDispatcher(
             "/ui/session/start" to "POST" -> Fixtures.ok("session_start_mfa_required")
                 .addHeader("Set-Cookie", "tl_session=sess-1; Path=/; HttpOnly")
                 .addHeader("Set-Cookie", "ui_csrf=$csrfToken; Path=/")
-            "/ui/mfa/totp/begin" to "POST" -> Fixtures.ok("mfa_totp_begin")
+            // NOTE (corrected): there is NO `/ui/mfa/totp/begin` endpoint — TOTP is an
+            // offline authenticator, so the login flow posts the code straight to
+            // `/ui/mfa/totp/verify`. Only SMS (`/ui/mfa/sms/begin`) and email
+            // (`/ui/mfa/email/begin`) have a "begin" step (each returns `ChallengeResp`).
             "/ui/mfa/totp/verify" to "POST" -> Fixtures.ok("mfa_totp_verify_ok")
             "/ui/session/finalize" to "POST" -> Fixtures.ok("session_finalize_ok")
             "/ui/session/refresh" to "POST" -> Fixtures.ok("session_refresh_ok")
@@ -159,43 +163,41 @@ A `JsonSubject`/`assertJsonEquals(expected, actual)` helper performs order-insen
 
 This ticket defines no new production endpoints; it *mirrors* the backend contract. The fixtures encode the authoritative shapes the harness serves. Captured fixtures (`fixtures/*.json`):
 
-`session_start_mfa_required.json` (response to `POST /ui/session/start` with body `{"challenge_context":{"username":"...","password":"..."}}`):
+`session_start_mfa_required.json` (response to `POST /ui/session/start`, req schema `UiSessionStartReq = {challenge_context?: object}`; the web client posts `{"challenge_context":{...}}`). **Corrected** to match `UiSessionStartResp` (verified schema fields: `auth_required` (required), `challenge_id?`, `required_factors[]`, `session_id?`):
 ```json
 {
   "auth_required": true,
   "challenge_id": "chal_01HZX...",
-  "required_factors": ["totp"]
+  "required_factors": ["totp"],
+  "session_id": null
 }
 ```
 
-`mfa_totp_begin.json` (`POST /ui/mfa/totp/begin` body `{"challenge_id":"chal_..."}`):
+> Removed `mfa_totp_begin.json`: **corrected** — no `/ui/mfa/totp/begin` endpoint exists (TOTP is offline; verify is posted directly). If a begin step is needed for the SMS/email factors, model `/ui/mfa/sms/begin` or `/ui/mfa/email/begin`, each returning `ChallengeResp = {challenge_id, sent_to?: string[]}` (verified: `src/api/types.ts: ChallengeResp`).
+
+`mfa_totp_verify_ok.json` (`POST /ui/mfa/totp/verify`, req schema `TotpVerifyReq = {challenge_id, totp_code}` — **corrected**: the field is `totp_code`, not `code`). Response **corrected** to `MfaVerifyResp` (verified `src/api/types.ts: MfaVerifyResp`):
 ```json
-{ "challenge_id": "chal_01HZX...", "factor": "totp", "expires_at": "2026-06-05T12:00:00Z" }
+{ "status": "ok", "session_id": "sess-1", "required_factors": ["totp"], "passed": { "totp": true }, "remaining_factors": [] }
 ```
 
-`mfa_totp_verify_ok.json` (`POST /ui/mfa/totp/verify` body `{"challenge_id":"chal_...","code":"123456"}`):
+`session_finalize_ok.json` (`POST /ui/session/finalize`, req schema `UiSessionFinalizeReq = {challenge_id, remember_device?: boolean}`). Response **corrected** to `SessionFinalizeResp` (verified `src/api/types.ts: SessionFinalizeResp`):
 ```json
-{ "verified": true, "remaining_factors": [] }
+{ "status": "ok", "session_id": "sess-1", "required_factors": [], "passed": { "totp": true } }
 ```
 
-`session_finalize_ok.json` (`POST /ui/session/finalize`):
+`me.json` (`GET /ui/me`) — **corrected**: `MeResp` is `{user_sub, session_id, ip}` (verified `src/api/types.ts: MeResp`), NOT `{user_id, username, display_name, mfa_enabled}`:
 ```json
-{ "session_active": true, "user_id": "usr_42" }
+{ "user_sub": "usr_42", "session_id": "sess-1", "ip": "203.0.113.7" }
 ```
 
-`me.json` (`GET /ui/me`):
-```json
-{ "user_id": "usr_42", "username": "demo", "display_name": "Demo User", "mfa_enabled": true }
-```
-
-`session_refresh_ok.json` (`POST /ui/session/refresh`): `{ "refreshed": true }`.
+`session_refresh_ok.json` (`POST /ui/session/refresh`) — **corrected**: the web client types this as `StatusResp = {status}` (verified `src/api/endpoints/auth.ts: refreshSession` → `StatusResp`; OpenAPI lists resp `200:` with no schema, so the body is best treated as opaque/`StatusResp`-shaped): `{ "status": "ok" }`.
 
 Error envelope fixtures cover all three `detail` variants:
 `error_detail_string.json` → `{"detail":"invalid_credentials"}`;
 `error_detail_list.json` → `{"detail":[{"loc":["body","password"],"msg":"field required","type":"value_error.missing"}]}`;
 `error_detail_object.json` → `{"detail":{"code":"mfa_locked","retry_after":30}}`.
 
-Exact field names/types must be reconciled against `frontend/src/api/types.ts` and a live capture before merge (see Open Questions).
+The success-response field names/types above have now been reconciled against the backend OpenAPI (`components.schemas.UiSessionStartResp`, `UiSessionFinalizeReq`, `TotpVerifyReq`, `HTTPValidationError`) and `src/api/types.ts` (`SessionStartResp`, `SessionFinalizeResp`, `MeResp`, `MfaVerifyResp`, `StatusResp`, `ChallengeResp`); see §16 for the per-claim audit. The placeholder *values* (synthetic ids, timestamps) still require a live capture to confirm formats, but the *shapes* are verified.
 
 ## 6. Data & State Management
 
@@ -224,7 +226,7 @@ The harness's primary purpose is exercising error paths, so it must *produce* fa
 - **Timeouts:** `Fixtures.timeout()` uses `SocketPolicy.NO_RESPONSE`; with the 2s test `readTimeout` this surfaces as `SocketTimeoutException`, letting repository tests assert `ApiResult.Error` mapping. A separate `delayed(name, ms)` helper uses `setBodyDelay` for slow-but-eventual responses.
 - **5xx / dev-host flakiness:** `Fixtures.error(detail, 503)` models the unreliable dev backend; combined with `server.enqueue(...)` sequencing, tests verify the production bounded-backoff retry for idempotent GETs (one failure then success).
 - **Malformed JSON:** `Fixtures.malformed()` validates the Moshi/converter error path maps to a parse `ApiResult.Error`, not a crash.
-- **401 refresh cycle:** the dispatcher (or an enqueue sequence) returns `401` then expects `POST /ui/session/refresh`, then serves the retried request; a helper `RefreshOnceDispatcher` returns `401` exactly once per protected path so tests can assert single-refresh behavior and CSRF cookie re-echo.
+- **401 refresh cycle:** the dispatcher (or an enqueue sequence) returns `401` then expects `POST /ui/session/refresh`, then serves the retried request; a helper `RefreshOnceDispatcher` returns `401` exactly once per protected path so tests can assert single-refresh behavior and CSRF cookie re-echo. **Verified-behavior caveats** (from `src/api/client.ts`): (1) the web client refreshes on `401` **only if the user was already authenticated** — an *unauthenticated* `401` (e.g. wrong password at `/ui/session/start`) propagates straight to the caller with **no** refresh attempt; the production-mirroring Android client must replicate this, and the harness must cover both branches. (2) The web client de-dupes concurrent refreshes via a single shared `refreshPromise`. (3) On retry the web client **re-uses the original request headers object**, so it does *not* re-read a freshly rotated `ui_csrf` cookie for the retried call — if the Android client instead re-derives CSRF from the cookie jar (recommended), that is a deliberate divergence to assert, not a faithful mirror. (4) A failed refresh triggers `logout("session_expired")`.
 - **Harness robustness:** `Fixtures.json` fails loudly on missing files; `takeRequest` uses a bounded 5s wait and fails the test rather than hanging if an expected request never arrives. `server.shutdown()` runs in a `finally` block to avoid port leakage across tests.
 
 ## 8. Security & Privacy
@@ -271,7 +273,7 @@ Run on JVM unit test source set (no device needed). Targets: 100% of harness pub
 ## 13. Risks & Open Questions
 
 - **Fixture drift vs. live backend:** the dev host is unreliable and may change shapes. Mitigation: `FixtureValidationTest` parses against `core-model`, and a documented re-capture script keeps fixtures current. Risk that captures are taken from a stale deploy — pin capture date in a `fixtures/CAPTURED.md`.
-- **Exact auth field names unconfirmed:** the JSON in §5 is reconstructed from the project context and web reference; the real `/ui/session/start` and `/ui/me` payloads must be confirmed by a live capture and against `frontend/src/api/types.ts` before merge. **Open question:** does `required_factors` ever include `sms`/`email` simultaneously, and does `/ui/session/finalize` return the full user object or just a flag?
+- **Exact auth field names — now confirmed (was unconfirmed):** the §5 shapes have been reconciled against OpenAPI and `src/api/types.ts` (see §16). Resolved corrections: `/ui/me` returns `{user_sub, session_id, ip}` (not a username/display-name object); `/ui/session/finalize` returns a `SessionFinalizeResp` *status object* `{status, session_id?, required_factors, passed}` (answering the old open question — it returns a status/flags object, **not** the full user object); `required_factors` is a free `string[]` and the schema does not constrain it, so it *can* in principle carry multiple factors (e.g. `["totp","sms"]`) — exact backend policy on simultaneous factors remains a backend-behavior question, but the harness should not assume single-element arrays. The `mfa_totp_begin` endpoint was removed (does not exist). The placeholder *values* still need a live capture; the *shapes* are verified.
 - **MockWebServer cookie handling:** `MockWebServer` does not implement a cookie store; cookie semantics are validated via the client's `CookieJar`, so the harness can only assert `Set-Cookie` emission and header echo, not server-side cookie persistence. Acceptable for client tests.
 - **Open question:** should the persistent `SharedPrefsCookieJar` get its own Robolectric-backed test fixture here, or in the auth ticket? Current plan: auth ticket owns it; harness provides only `InMemoryCookieJar`.
 
@@ -301,3 +303,79 @@ AC-8. The harness is reusable: a downstream module can add a hermetic networking
 - `mockwebserver` and test deps declared as `api` in `core-testing/build.gradle.kts`; module depends only on `core-model`/`core-network` (no `app`/`feature-*`).
 - Fixtures reconciled against `frontend/src/api/types.ts` and a live `/ui/...` capture; open questions in §13 resolved or explicitly deferred with owning ticket noted.
 - Lint/Detekt clean; no committed secrets (CI guard passes); PR reviewed and approved.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **`POST /ui/session/start` exists, takes `UiSessionStartReq`, returns `UiSessionStartResp`.** VERIFIED. OpenAPI `POST /ui/session/start` (`op=ui_session_start`, `req=UiSessionStartReq`, `resp=200:UiSessionStartResp`); `src/api/endpoints/auth.ts: sessionStart`.
+2. **`UiSessionStartReq` body is `{challenge_context?: object}`.** VERIFIED. OpenAPI `components.schemas.UiSessionStartReq` (single optional `challenge_context`, `additionalProperties: true`); `src/api/types.ts: SessionStartReq`.
+3. **`session_start` response shape = `{auth_required, challenge_id?, required_factors[], session_id?}`.** CORRECTED (spec omitted `session_id`). OpenAPI `components.schemas.UiSessionStartResp` (only `auth_required` required); `src/api/types.ts: SessionStartResp`.
+4. **`/ui/mfa/totp/begin` is part of the login flow.** CORRECTED — endpoint does not exist; removed from the dispatcher and §5 fixtures. OpenAPI has no `ui/mfa/totp/begin`; TOTP login goes straight to `POST /ui/mfa/totp/verify` (`op=ui_totp_verify`). Confirmed by `src/api/endpoints/auth.ts: verifyTotp` (posts directly to `/ui/mfa/totp/verify`). Only `POST /ui/mfa/sms/begin` and `POST /ui/mfa/email/begin` have a begin step.
+5. **TOTP verify request body field is `code`.** CORRECTED to `totp_code`. OpenAPI `components.schemas.TotpVerifyReq = {challenge_id, totp_code}` (both required); `src/api/types.ts: TotpVerifyReq`.
+6. **MFA-verify success response = `{verified, remaining_factors}`.** CORRECTED to `MfaVerifyResp = {status, session_id?, required_factors, passed, remaining_factors}`. Source: `src/api/types.ts: MfaVerifyResp` (web types `verifyTotp/verifySms/verifyEmail` → `MfaVerifyResp`). OpenAPI lists `resp=200:` with no inline schema, so the TS type is authoritative.
+7. **`POST /ui/session/finalize` takes `UiSessionFinalizeReq` and returns `{session_active, user_id}`.** CORRECTED — request verified as `UiSessionFinalizeReq = {challenge_id, remember_device?}` (OpenAPI `components.schemas.UiSessionFinalizeReq`); response corrected to `SessionFinalizeResp = {status, session_id?, required_factors, passed}` (`src/api/types.ts: SessionFinalizeResp`). OpenAPI `resp=200:` has no inline schema → TS type authoritative.
+8. **`GET /ui/me` returns `{user_id, username, display_name, mfa_enabled}`.** CORRECTED to `MeResp = {user_sub, session_id, ip}`. Source: `src/api/types.ts: MeResp` and `src/api/endpoints/auth.ts: getMe`. OpenAPI `GET /ui/me` (`op=ui_me`) lists `resp=200:` with no inline schema → TS type authoritative.
+9. **`POST /ui/session/refresh` returns `{refreshed: true}`.** CORRECTED to a `StatusResp = {status}` shape. Source: `src/api/endpoints/auth.ts: refreshSession` → `StatusResp`; OpenAPI `POST /ui/session/refresh` (`op=ui_session_refresh`, empty req, `resp=200:` no schema). Body is effectively opaque; treat as `StatusResp`.
+10. **Auth is purely cookie-based; `ui_csrf` echoed as `X-CSRF-Token`.** CORRECTED/REFINED. `src/api/client.ts` reads cookie `ui_csrf` and sets `X-CSRF-Token` on **every** request (not just mutations), AND additionally sets `Authorization: Bearer <accessToken>` when present plus `X-IMPERSONATION-TOKEN` when impersonating. So: cookie session + CSRF header + optional bearer token. Cookie name `ui_csrf` and header `X-CSRF-Token` VERIFIED (`src/api/client.ts:168-170`, `src/stores/offlineStore.ts`, `src/api/endpoints/profile.ts`, `kycCompliance.ts`).
+11. **Error envelope `detail` may be `string | [{msg,...}] | {code,...}`.** VERIFIED. 422 shape is `HTTPValidationError = {detail: [{loc, msg, type}]}` (OpenAPI `components.schemas.HTTPValidationError` + `ValidationError`). The `string` and `{code,...}` variants are handled by `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError` (codes e.g. `role_required`, `geo_blocked`).
+12. **401 → refresh → retry cycle.** VERIFIED, with refinements. `src/api/client.ts:194-237`: refresh attempted **only if already authenticated**; unauthenticated 401 propagates without refresh; concurrent refreshes de-duped via shared `refreshPromise`; retry re-uses the original headers object; failed refresh → `logout("session_expired")`.
+13. **403 CSRF-failure response modeled as `{"detail":"csrf_failed"}` with status 403.** UNVERIFIED-ASSUMPTION. The CSRF *mechanism* (cookie → header) is verified, but the exact backend rejection status/body for a missing/invalid CSRF token is not exposed in OpenAPI or the frontend. Reasonable model; flag for live-capture confirmation.
+14. **Session cookie name `tl_session`.** UNVERIFIED-ASSUMPTION. The web client uses `credentials: "include"` and never references a session-cookie name; only `ui_csrf` is named in source. The harness only needs *a* `Set-Cookie`, so the exact name is non-load-bearing, but do not assert `tl_session` against the live backend without a capture.
+15. **422 `type` value `value_error.missing` (in `error_detail_list.json`).** CORRECTED/FLAGGED. The envelope shape `{loc, msg, type}` is verified, but `value_error.missing` is Pydantic v1 wording; FastAPI on Pydantic v2 emits `type: "missing"`. Use `"missing"` (or confirm via live capture). Source: OpenAPI `ValidationError`.
+16. **MockWebServer (`com.squareup.okhttp3:mockwebserver:4.12.0`) provides `Dispatcher`, `MockResponse`, `RecordedRequest`, `SocketPolicy`, `setBodyDelay`.** VERIFIED (framework ref): OkHttp MockWebServer 4.12 API — https://square.github.io/okhttp/4.x/okhttp/okhttp3/-handshake/ and https://github.com/square/okhttp/tree/master/mockwebserver . Note (framework ref): in MockWebServer 4.x, `MockResponse` is mutable-builder style (`setResponseCode`/`setBody`/`setSocketPolicy`) as the spec uses; the newer 5.x API renames to `MockResponse.Builder` — keep on 4.12 to match the code samples, consistent with OkHttp 4.12 in §2.
+17. **JUnit4 `TestRule`/`Statement`/`Description` contract used by `MockBackendRule`.** VERIFIED (framework ref): JUnit4 rules — https://junit.org/junit4/javadoc/latest/org/junit/rules/TestRule.html .
+18. **Harness lives in `src/main` (not `src/test`) so it is visible to `testImplementation` dependents.** VERIFIED (framework ref): Android/Gradle test-fixtures visibility — a `testImplementation`-consumed library exposes only its `main` source set; https://developer.android.com/studio/test/advanced-test-setup and Gradle test-fixtures docs https://docs.gradle.org/current/userguide/java_testing.html#sec:java_test_fixtures . (Alternatively `java-test-fixtures`; the spec's `main` approach is valid.)
+
+### Corrections made
+
+- **§5 `me.json`**: `{user_id, username, display_name, mfa_enabled}` → `MeResp = {user_sub, session_id, ip}`.
+- **§5 `session_finalize_ok.json`**: `{session_active, user_id}` → `SessionFinalizeResp = {status, session_id?, required_factors, passed}`.
+- **§5 `mfa_totp_verify_ok.json`**: `{verified, remaining_factors}` → `MfaVerifyResp = {status, session_id?, required_factors, passed, remaining_factors}`; verify request field `code` → `totp_code`.
+- **§5 `session_refresh_ok.json`**: `{refreshed:true}` → `StatusResp` shape `{status:"ok"}`.
+- **§5 `session_start_mfa_required.json`**: added nullable `session_id` to match `UiSessionStartResp`.
+- **§4 dispatcher + §5**: removed the non-existent `/ui/mfa/totp/begin` route/fixture; documented that only SMS/email have a begin step (`ChallengeResp`).
+- **§2**: refined "purely cookie-based" to cookie session + CSRF header + optional bearer; documented that the web client sends `X-CSRF-Token` on all requests; pinned the 422 envelope as `HTTPValidationError`.
+- **§7**: added verified 401-refresh caveats (auth-gated refresh, shared-promise de-dupe, header re-use on retry, logout-on-failure).
+- **§13**: marked the "auth field names unconfirmed" open question as resolved with the verified shapes; answered the finalize-payload question (status object, not full user).
+
+### Open assumptions
+
+- **CSRF-failure status/body** (`403 {"detail":"csrf_failed"}`): not exposed by OpenAPI or frontend; assumed for modeling. Confirm via live capture.
+- **Session cookie name** (`tl_session`): not named anywhere in the frontend; assumed. Non-load-bearing for harness tests.
+- **Synthetic placeholder value formats** (e.g. `chal_01HZX...` ULID-style ids, ISO-8601 timestamps, `usr_42`/`sess-1`): shapes verified, exact value formats require a live capture (`fixtures/CAPTURED.md`).
+- **Backend retry/idempotency policy** for GET 5xx and **whether `required_factors` can contain multiple simultaneous factors**: not constrained by the schema (`required_factors` is a free `string[]`); harness should not assume single-element arrays, but exact backend behavior needs backend docs/capture.
+- **MFA-verify / finalize / refresh / me response bodies**: OpenAPI declares these `resp=200:` with no inline schema; the field shapes are taken from `src/api/types.ts`, which is the web client's contract but may lag the live backend — re-confirm on capture.
+
+## 17. Test Plan
+
+All cases run on the **JVM unit-test source set (JVM unit/Robolectric — local, no device)** unless noted. This is a `core-testing` chore that ships only JVM test infrastructure: there is no production UI, no Android-hardware behavior, and no on-device surface, so **no case requires the emulator AVD `test35` or the physical Galaxy A15 (SM-A156U)**. That hardware is reserved for the downstream feature tickets (login/MFA Compose screens, biometrics, camera/KYC, FCM, WebRTC) that *consume* this harness; an explicit "not applicable here" note is recorded in the coverage discussion and in TC-AND-046-12. A few cases use **Robolectric** only because `InMemoryCookieJar`/resource loading may touch Android stubs when run from an `androidTest`-consuming module; they remain CI-local.
+
+- **TC-AND-046-01** — Type: unit. Target: `MockBackendRule` (JVM unit). Preconditions: none. Steps: instantiate `MockBackendRule`, run a trivial test body via the rule, capture `baseUrl`, then let the rule complete. Expected: `server` starts on an ephemeral loopback port before the body, `baseUrl` is a reachable `http://127.0.0.1:<port>/` `HttpUrl`, and `server.shutdown()` runs in `finally` (port released — a second rule can bind a new port). Traces: AC-1.
+- **TC-AND-046-02** — Type: unit. Target: `MockBackendRule.enqueue`/`takeRequest` (JVM unit). Preconditions: rule started. Steps: `enqueue(Fixtures.ok("me"))`; issue a `GET /ui/me` via an OkHttp call; `takeRequest()`. Expected: response body is the `me` fixture; `RecordedRequest` reports path `/ui/me`, method `GET`; `takeRequest` honors the bounded 5s wait. Traces: AC-1.
+- **TC-AND-046-03** — Type: contract/MockWebServer. Target: `retrofit(moshi)` + a typed endpoint using AND-010's production `Moshi`/`MoshiConverterFactory` (JVM unit). Preconditions: rule started; production Moshi available. Steps: build Retrofit via `retrofit(moshi)`; enqueue `me` fixture; call typed `getMe()`. Expected: response deserializes into the `core-model` `MeResp`-equivalent type with fields `user_sub`, `session_id`, `ip` populated and **no field loss**; converter config matches production. Traces: AC-2, AC-6.
+- **TC-AND-046-04** — Type: unit. Target: `Fixtures.json` loader (JVM unit). Preconditions: fixtures present on classpath. Steps: load each known `FixtureName` (`session_start_mfa_required`, `mfa_totp_verify_ok`, `session_finalize_ok`, `me`, `session_refresh_ok`, error variants); then request a missing fixture. Expected: each known fixture loads non-empty; missing fixture throws `IllegalArgumentException` with message `Missing fixture: fixtures/<name>.json`. Traces: AC-3.
+- **TC-AND-046-05** — Type: contract/MockWebServer. Target: `AuthFlowDispatcher` happy path (JVM unit). Preconditions: rule started with `AuthFlowDispatcher`; client uses `InMemoryCookieJar`. Steps: drive the real typed sequence `POST /ui/session/start` → `POST /ui/mfa/totp/verify` → `POST /ui/session/finalize` → `GET /ui/me`. Expected: `start` sets `Set-Cookie` for the session and `ui_csrf=<token>` and returns `auth_required:true, required_factors:["totp"]`; subsequent mutations carry `X-CSRF-Token: <token>` (read from the cookie jar); each response deserializes into its corrected `core-model` type; `verify` returns `MfaVerifyResp` with `totp` in `passed`; `finalize` returns `SessionFinalizeResp{status:"ok"}`; `me` returns `MeResp`. Confirms NO `/ui/mfa/totp/begin` call is made. Traces: AC-4, AC-6.
+- **TC-AND-046-06** — Type: contract/MockWebServer (security). Target: `AuthFlowDispatcher` CSRF enforcement (JVM unit). Preconditions: rule + dispatcher with `requireCsrfOnMutations=true`. Steps: issue a mutating `POST` (e.g. `/ui/session/finalize`) WITHOUT the `X-CSRF-Token` header. Expected: dispatcher responds `403` with `{"detail":"csrf_failed"}` (modeled — see §16 open assumption); a GET without CSRF is allowed; with the correct token the mutation succeeds. Traces: AC-4.
+- **TC-AND-046-07** — Type: unit (security). Target: TOTP verify request contract (JVM unit). Preconditions: rule + dispatcher. Steps: call the typed `verifyTotp` and `takeRequest()`. Expected: request body JSON has keys `challenge_id` and **`totp_code`** (not `code`), validated by order-insensitive structural compare against an expected fixture; wrong field name would fail. Traces: AC-7, AC-6.
+- **TC-AND-046-08** — Type: contract/MockWebServer (error). Target: `Fixtures.error` all three `detail` variants (JVM unit). Preconditions: rule started. Steps: enqueue `error_detail_string.json` (`{"detail":"invalid_credentials"}`, 401), `error_detail_list.json` (422 `HTTPValidationError`, `type:"missing"`), and `error_detail_object.json` (`{"detail":{"code":"mfa_locked","retry_after":30}}`, 423/403); call the endpoint for each. Expected: each parses into the production error mapper's model and `normalizeErrorDetail`-equivalent logic resolves a human message (string passthrough; list joins `msg`s; object maps `code`); maps to `ApiResult.Error`, never a crash. Traces: AC-3, AC-6.
+- **TC-AND-046-09** — Type: contract/MockWebServer (offline/flaky-dev-host). Target: `Fixtures.timeout()` + `defaultTestClient()` 2s read timeout (JVM unit). Preconditions: rule started. Steps: enqueue `Fixtures.timeout()` (`SocketPolicy.NO_RESPONSE`); call an endpoint. Expected: client throws `SocketTimeoutException` within ~2s; repository mapping yields `ApiResult.Error` (network/timeout class), modeling the unreliable dev host `18.222.237.167:8000`. Also assert `delayed(name, ms)` returns a body after a sub-timeout delay (slow-but-eventual). Traces: AC-5.
+- **TC-AND-046-10** — Type: contract/MockWebServer (flaky-dev-host). Target: 5xx-then-success retry for idempotent GET (JVM unit). Preconditions: rule started. Steps: `enqueue(Fixtures.error("\"unavailable\"", 503))` then `enqueue(Fixtures.ok("me"))`; perform a GET that uses the production bounded-backoff retry. Expected: first attempt sees 503, retry succeeds, exactly two requests recorded, final result is parsed `me`. (If retry is owned by the production client, this is asserted at the consuming ticket; harness proves the enqueue sequence works.) Traces: AC-5.
+- **TC-AND-046-11** — Type: contract/MockWebServer (error). Target: `Fixtures.malformed()` parse path (JVM unit). Preconditions: rule started. Steps: enqueue malformed body `{not json` with 200; call a typed endpoint. Expected: Moshi/converter raises a parse failure that maps to `ApiResult.Error` (parse class), not an unhandled crash. Traces: AC-5.
+- **TC-AND-046-12** — Type: contract/MockWebServer (auth-state branch). Target: `RefreshOnceDispatcher` 401→refresh→retry, mirroring `src/api/client.ts` (JVM unit). Preconditions: rule + `RefreshOnceDispatcher`; cookie jar holds session + `ui_csrf`. Steps: (a) authenticated case — call a protected endpoint; dispatcher returns `401` once, test asserts a `POST /ui/session/refresh` is observed exactly once (shared-promise de-dupe under concurrent calls), then the retried request succeeds and `ui_csrf` re-echo is observed; (b) unauthenticated case — a `401` from `/ui/session/start` (wrong password) propagates with NO refresh attempt. Expected: both branches behave as the verified web-client logic (§16 item 12). Note: this is JVM-local; **no physical device needed** — the device/emulator targets apply only to downstream feature tickets, not to this harness chore. Traces: AC-5.
+- **TC-AND-046-13** — Type: unit (FixtureValidationTest, parameterized). Target: every fixture parses into its declared `core-model` type (JVM unit). Preconditions: production Moshi with strict `failOnUnknown`. Steps: for each fixture, parse into its declared type; scan raw bytes against a secret-like-pattern regex. Expected: every fixture parses with no unknown-field loss; NO fixture contains a real password/TOTP secret/session token/email/phone (only synthetic `demo`/`Demo User`/`csrf-test-token`/`sess-1` placeholders). Catches schema drift and committed-secret regressions. Traces: AC-6.
+- **TC-AND-046-14** — Type: unit. Target: `RecordedRequest` assertion helper `assertJsonEquals` (JVM unit). Preconditions: none. Steps: compare two JSON bodies with reordered keys (should pass) and bodies with a differing field value/name (should fail with a clear diff); also assert path/method/header (CSRF, cookie) checks. Expected: order-insensitive structural equality (parsed via Moshi to `Map<String,Any?>`), accurate pass/fail. Traces: AC-7.
+- **TC-AND-046-15** — Type: integration (consumer smoke). Target: harness reusability from a downstream module (JVM unit, separate Gradle module depending on `testImplementation(project(":core-testing"))`). Preconditions: a throwaway consumer test module. Steps: write a 3-line hermetic test (start rule, enqueue fixture, assert parsed `ApiResult<T>`) importing only `core-testing`, with NO bespoke MockWebServer wiring; confirm `mockwebserver`/Truth/coroutines-test are inherited via `api` exposure. Expected: compiles and passes; no `app`/`feature-*` leakage on the `core-testing` classpath (depends only on `core-model`/`core-network`). Traces: AC-8.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 (`MockBackendRule` lifecycle/baseUrl/enqueue/takeRequest) | TC-01, TC-02 |
+| AC-2 (`retrofit(moshi)` round-trips a fixture into a `core-model` type) | TC-03 |
+| AC-3 (`Fixtures` loads named JSON; success/error/timeout/malformed helpers) | TC-04, TC-08, (TC-09 timeout, TC-11 malformed) |
+| AC-4 (`AuthFlowDispatcher` full `start→totp→finalize→me`, cookie/CSRF echo, reject CSRF-missing mutations) | TC-05, TC-06 |
+| AC-5 (real timeouts, 5xx-then-success retry, malformed parse, single 401→refresh→retry) | TC-09, TC-10, TC-11, TC-12 |
+| AC-6 (fixtures match live shapes, parse into `core-model`, no PII/secrets) | TC-03, TC-05, TC-07, TC-08, TC-13 |
+| AC-7 (`RecordedRequest` assertion: path/method/headers/JSON body equality) | TC-07, TC-14 |
+| AC-8 (reusable via `testImplementation(project(":core-testing"))`, no bespoke wiring) | TC-15 |

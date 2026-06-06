@@ -5,7 +5,8 @@ milestone: M1
 epic: E06
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-013, AND-029]
 blocks: []
 ---
@@ -68,9 +69,14 @@ FR-3. The navigation host MUST react to the one-shot expiry event by navigating 
 the reason as an argument, popping the entire authenticated back stack (`popUpTo(graph root)
 { inclusive = true }`, `launchSingleTop = true`) so back-press cannot return to an authenticated screen.
 
-FR-4. The login screen MUST render a non-dismissable inline banner/snackbar describing the reason
+FR-4. The login screen MUST render an inline banner/snackbar describing the reason
 (e.g. "Your session expired. Please sign in again." vs "You were signed out." for explicit logout vs
 "Your session was revoked." for server revocation), localized via string resources.
+NOTE (web divergence, see §16): the web reference (`src/pages/Login.tsx`) renders an inline banner ONLY
+for the `session_expired` reason and that banner IS dismissable (an `aria-label="Dismiss"` `×` button
+calling `clearLogoutReason`). "Non-dismissable" and the `revoked`/`signed-out` banner variants are
+Android-side product decisions, not mirrored from the web; OQ-2 tracks the dismissable-vs-persistent
+decision with design.
 
 FR-5. Expiry MUST be idempotent and debounced: concurrent in-flight requests that each receive a
 post-refresh 401 MUST collapse into a single `Expired` event and a single navigation. No double banner,
@@ -96,7 +102,8 @@ package com.testlogon.android.core.model.session
 
 enum class LogoutReason {
     SESSION_EXPIRED,   // refresh failed after 401 (this ticket's primary path)
-    SESSION_REVOKED,   // server explicitly invalidated (e.g. 403 session_revoked)
+    SESSION_REVOKED,   // server explicitly invalidated — see §16: NO `session_revoked` code
+                       // exists in OpenAPI or web client; this branch is an unverified assumption
     USER_INITIATED,    // explicit logout (AND-032)
     UNKNOWN
 }
@@ -166,9 +173,12 @@ class DefaultSessionExpiryHandler @Inject constructor(
 
 In `SessionAuthenticator.authenticate(...)`, replace the AND-013 placeholder
 (`// emit logged-out`) with `expiryHandler.onUnrecoverableExpiry(LogoutReason.SESSION_EXPIRED)` and
-return `null` (stop authenticating, surface the 401 to the caller). Revocation (HTTP 403 with
-`detail.code == "session_revoked"`, mapped per AND-015) routes through the same handler with
-`SESSION_REVOKED` from the response interceptor rather than the authenticator.
+return `null` (stop authenticating, surface the 401 to the caller). Revocation routing
+(`SESSION_REVOKED`) is **conditional**: the assumed HTTP 403 with `detail.code == "session_revoked"`
+is NOT present in the backend OpenAPI spec nor handled by the web client (verified §16 — the web 403
+branch handles `geo_blocked`, `role_required*`, `helpdesk_*` only). Treat the 403/`session_revoked`
+interceptor branch as deferred per OQ-1 until the backend confirms a distinct revocation signal; in
+its absence a revoked session surfaces as a generic 401 and is handled as `SESSION_EXPIRED`.
 
 ### 4.4 Navigation glue (`app`)
 
@@ -214,19 +224,29 @@ from `SavedStateHandle` (FR-8).
 This ticket adds **no new endpoints**. It consumes two existing ones owned by other tickets:
 
 - `POST /ui/session/refresh` — invoked by `SessionAuthenticator` (AND-013), not by this ticket
-  directly. Success (`2xx`) sets refreshed cookies; failure (`4xx/5xx`) is the trigger for
-  `onUnrecoverableExpiry`. The request must carry the `X-CSRF-Token` header from the `ui_csrf` cookie
-  (AND-012).
-- `GET /ui/me` — owned by AND-029; not re-called here. A 401 from `/ui/me` after refresh also routes
-  through the expiry handler.
+  directly. Verified against OpenAPI: `POST /ui/session/refresh`, no request body schema, only a `200`
+  ("Successful Response", empty schema) documented; no error responses are documented. Success (`2xx`)
+  sets refreshed cookies; failure (`4xx/5xx`) is the trigger for `onUnrecoverableExpiry`.
+  NOTE/CORRECTION: the prior claim that refresh "must carry the `X-CSRF-Token` header" is NOT what the
+  web reference does — `refreshSession()` in `src/api/client.ts` issues the refresh `POST` with
+  `credentials: "include"` only and does NOT attach `X-CSRF-Token` (CSRF is attached by the general
+  `api()` wrapper on other calls, not by the dedicated refresh call). The Android refresh call should
+  mirror the web client: rely on the cookie session for refresh. Whether the backend additionally
+  requires CSRF on refresh is unverified (see §16); if AND-013 finds refresh rejects without CSRF, add
+  the header there. CSRF-on-other-requests is verified: `ui_csrf` cookie → `X-CSRF-Token` header.
+- `GET /ui/me` — owned by AND-029; not re-called here. Verified in OpenAPI: `GET /ui/me`
+  (`op=ui_me_ui_me_get`). A 401 from `/ui/me` after refresh also routes through the expiry handler.
 
-Reference unrecoverable-refresh response shapes this ticket reacts to (FastAPI `detail` per AND-015):
+Reference unrecoverable-refresh response shapes this ticket reacts to. The FastAPI `detail` envelope is
+verified (web `normalizeErrorDetail` in `src/api/client.ts` handles `detail` as string | array of
+`{msg}` | object with `code`/`msg`), but the SPECIFIC bodies below are NOT documented in OpenAPI and are
+illustrative assumptions only (see §16):
 
 ```json
-// 401 — session expired / refresh rejected
+// 401 — session expired / refresh rejected (ASSUMED FastAPI default; not in OpenAPI)
 { "detail": "Not authenticated" }
 
-// 403 — server-side revocation (routed as SESSION_REVOKED)
+// 403 — server-side revocation (ASSUMED; no `session_revoked` code exists in OpenAPI/web — deferred)
 { "detail": { "code": "session_revoked", "msg": "Session has been revoked" } }
 ```
 
@@ -356,10 +376,15 @@ Lifecycle:
   and this ticket's event-driven nav could double-navigate. Mitigated by `launchSingleTop` + the gate
   observing the same flow; verify in TS-3/TS-7.
 - OQ-1: Does the backend expose a distinct revocation signal (403 `session_revoked`) or only generic
-  401? Confirm against `/openapi.json` and `frontend/src/api/endpoints`. If only 401 exists, collapse
-  `SESSION_REVOKED` into `SESSION_EXPIRED` and drop the 403 interceptor branch.
-- OQ-2: Should the expiry banner be a dismissable snackbar or a persistent inline banner? Spec assumes
-  persistent inline (non-dismissable until re-login) for clarity; confirm with design.
+  401? **Investigated during review (see §16): NO `session_revoked` code exists in the backend OpenAPI
+  spec, and the web client's 403 handler (`src/api/client.ts`) maps only `geo_blocked`, `role_required*`,
+  and `helpdesk_*` codes — never `session_revoked`.** Default decision: collapse `SESSION_REVOKED` into
+  `SESSION_EXPIRED` and DROP the 403 interceptor branch unless the backend owner confirms a distinct
+  revocation signal. Keep the enum value for forward-compat but do not wire the 403 branch yet.
+- OQ-2: Should the expiry banner be a dismissable snackbar or a persistent inline banner? The web
+  reference uses a DISMISSABLE inline banner (see §16). Spec previously assumed persistent
+  (non-dismissable); reconcile with design — defaulting to dismissable to match web unless design says
+  otherwise.
 - OQ-3: Cookie-jar API: does AND-011 expose `clearSession()` (session-only) vs `clear()` (all)? If only
   `clear()` exists, request the narrower method from the AND-011 owner.
 
@@ -390,3 +415,184 @@ Lifecycle:
 - No PII or secrets in logs; cookies cleared before navigation verified.
 - Open questions OQ-1…OQ-3 resolved or explicitly deferred with owner sign-off; spec status moved from
   `draft` to `approved`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **`POST /ui/session/refresh` exists, method POST, no request body, returns 200 on success.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/refresh`
+   (`op=ui_session_refresh_ui_session_refresh_post`, `req=` empty, `resp=200:`); full spec confirms only
+   a `200` "Successful Response" (empty schema) is documented.
+2. **`GET /ui/me` exists and a 401 from it routes through expiry.**
+   VERDICT: Verified (endpoint). SOURCE: OpenAPI `GET /ui/me` (`op=ui_me_ui_me_get`).
+3. **Web client single-flights refresh on 401 and on refresh failure logs the user out with reason
+   "session_expired".**
+   VERDICT: Verified. SOURCE: `src/api/client.ts` — `refreshPromise` single-flight guard; `refreshSession()`
+   calls `useAuthStore.getState().logout("session_expired")` on `!res.ok`; the retry path also calls
+   `logout("session_expired")` on a post-refresh 401. This validates the spec's overall expiry model.
+4. **CSRF: `ui_csrf` cookie value is sent as `X-CSRF-Token` header on requests.**
+   VERDICT: Verified (general requests). SOURCE: `src/api/client.ts` — `getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", csrf)` inside the generic `api()` wrapper.
+5. **The refresh request must carry `X-CSRF-Token`.**
+   VERDICT: Corrected. SOURCE: `src/api/client.ts: refreshSession()` issues `POST /ui/session/refresh`
+   with `credentials: "include"` ONLY — it does NOT attach `X-CSRF-Token`. Spec §5 corrected to mirror
+   the web (cookie-session refresh, no CSRF header) and flag any backend CSRF requirement as unverified.
+6. **Auth state / logout-reason model: persisted reason string, cleared on re-login.**
+   VERDICT: Verified (web analog). SOURCE: `src/stores/authStore.ts` — `logoutReason: string | null`,
+   `logout(reason?)`, `clearLogoutReason()`, reason nulled on `login`/persisted via store. Maps directly
+   to the spec's `AuthStateStore.clear(reason)` + `last_logout_reason` + FR-8 reset.
+7. **Server-side revocation is signalled by HTTP 403 with `detail.code == "session_revoked"`.**
+   VERDICT: Unverified-assumption (likely absent). SOURCE: No `session_revoked` string anywhere in
+   `openapi.pretty.json` or `src/`; `src/api/client.ts` 403 handler maps only `geo_blocked`,
+   `role_required`, `role_required_scope`, `role_required_admin_profile_type`, `helpdesk_*`. Spec
+   §4.1/§4.3/§5 and OQ-1 amended: collapse `SESSION_REVOKED`→`SESSION_EXPIRED`, defer the 403 branch.
+8. **401 unrecoverable body is `{ "detail": "Not authenticated" }`.**
+   VERDICT: Unverified-assumption. SOURCE: OpenAPI documents no error responses for `/ui/session/refresh`;
+   the FastAPI `detail` envelope shape IS verified via `src/api/client.ts: normalizeErrorDetail` (handles
+   string | `[{msg}]` | `{code,msg}`), but the literal "Not authenticated" string is a FastAPI default
+   not present in the sources. Marked illustrative in §5.
+9. **Login screen renders a non-dismissable inline banner for the expiry reason; banners exist for
+   SESSION_EXPIRED, SESSION_REVOKED, USER_INITIATED.**
+   VERDICT: Corrected. SOURCE: `src/pages/Login.tsx` renders an inline banner ONLY when
+   `logoutReason === "session_expired"`, and that banner IS dismissable (`aria-label="Dismiss"` `×`
+   button → `clearLogoutReason`). No `revoked`/`signed-out` web variants exist. FR-4 and OQ-2 amended:
+   dismissable + the extra reason banners are Android-side decisions, not web-mirrored.
+10. **Other relevant session endpoints exist (logout, start, finalize, sessions revoke).**
+    VERDICT: Verified (context). SOURCE: OpenAPI `POST /ui/session/logout`, `POST /ui/session/start`
+    (`req=UiSessionStartReq`, `resp=200:UiSessionStartResp`), `POST /ui/session/finalize`,
+    `POST /ui/sessions/revoke`. Confirms AND-032 logout teardown reuse is consistent with backend surface.
+11. **Single-Activity + Navigation-Compose, Hilt, DataStore, OkHttp Authenticator/CookieJar, Compose
+    lifecycle collection (`repeatOnLifecycle`).**
+    VERDICT: Verified (framework refs). SOURCE (framework ref):
+    OkHttp `Authenticator` — https://square.github.io/okhttp/recipes/#handling-authentication-kt-java ;
+    `repeatOnLifecycle` — https://developer.android.com/topic/libraries/architecture/coroutines#restart ;
+    Navigation-Compose `popUpTo`/`launchSingleTop` —
+    https://developer.android.com/guide/navigation/backstack ; DataStore —
+    https://developer.android.com/topic/libraries/architecture/datastore . These are Android-side choices,
+    not derivable from the web reference.
+
+### Corrections made
+
+- **C-1 (§5):** Removed the incorrect requirement that `POST /ui/session/refresh` must send
+  `X-CSRF-Token`; the web reference sends refresh with cookies only. Backend CSRF-on-refresh is now an
+  explicit unverified assumption.
+- **C-2 (§4.1/§4.3/§5, OQ-1):** Flagged the `403 session_revoked` revocation path as unverified —
+  no such code exists in OpenAPI or the web client; default to collapsing `SESSION_REVOKED` into
+  `SESSION_EXPIRED` and deferring the 403 interceptor branch.
+- **C-3 (§5):** Marked the literal `{ "detail": "Not authenticated" }` 401 body and the
+  `session_revoked` 403 body as illustrative assumptions (the `detail` envelope itself is verified).
+- **C-4 (FR-4, §9, OQ-2):** Corrected "non-dismissable" — the web banner is dismissable and only the
+  `session_expired` reason has a banner in the reference; extra reasons + non-dismissability are
+  Android-side decisions.
+
+### Open assumptions
+
+- **OA-1:** Backend behavior of `/ui/session/refresh` on failure (exact status codes/bodies) is not
+  documented in OpenAPI (only `200` is). Why unverifiable: the spec omits error responses; relies on
+  observed web behavior (`logout("session_expired")` on any non-OK) which AND-013's MockWebServer tests
+  must pin down.
+- **OA-2:** Whether refresh requires CSRF server-side. Why: web client omits it, but backend enforcement
+  is not described in OpenAPI; resolve in AND-013 against the live dev host.
+- **OA-3:** Existence of any distinct server revocation signal (vs generic 401). Why: no
+  `session_revoked` code in sources; needs backend owner confirmation (OQ-1).
+- **OA-4:** Cookie-jar `clearSession()` vs `clear()` API surface (AND-011) and `AuthStateStore.clear`
+  taking a reason (AND-029). Why: those modules are not in the reference repo (Android-only, OQ-3).
+- **OA-5:** The exact session/`ui_csrf` cookie names and attributes on Android. Why: cookies are set by
+  the backend `Set-Cookie`; the web reads `ui_csrf` by name (verified) but session-cookie name(s) are not
+  visible in the reference and must be confirmed at runtime via the dev host.
+
+## 17. Test Plan
+
+Acceptance Criteria referenced are from §14 (AC-1…AC-6). "Physical device" = Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a); "emulator" = AVD `test35` (API 35, x86_64); "JVM" = local Robolectric/unit.
+This ticket is pure integration/UX with no camera/biometric/WebRTC/FCM surface, so most cases run on JVM
+or the emulator; only the ABI/API-skew sanity case is called out for the physical device.
+
+- **TC-AND-044-01** — Type: unit (JVM). Target: JVM unit. `SessionEventBus` single-emission idempotency.
+  Preconditions: fresh `SessionEventBus`. Steps: launch N=50 concurrent coroutines each calling
+  `notifyExpired(SESSION_EXPIRED)`; collect emitted events. Expected: exactly one `Expired` event
+  observed; after `reset()` a further `notifyExpired` emits exactly one more. Traces: AC-2.
+- **TC-AND-044-02** — Type: unit (JVM). Target: JVM unit. `DefaultSessionExpiryHandler` ordering.
+  Preconditions: fakes for `AuthStateStore`, `PersistentCookieJar`, `SessionEventBus`; `runTest` scope.
+  Steps: call `onUnrecoverableExpiry(SESSION_EXPIRED)`; await scope. Expected: `authStateStore.clear(
+  SESSION_EXPIRED)` then `cookieJar.clearSession()` then `bus.notifyExpired(SESSION_EXPIRED)` invoked,
+  in that order; cookies cleared BEFORE bus emit (security ordering). Traces: AC-2.
+- **TC-AND-044-03** — Type: contract/MockWebServer. Target: JVM (MockWebServer, extends AND-013 suite).
+  Happy unrecoverable path. Preconditions: authenticated state; OkHttp stack with `SessionAuthenticator`
+  + handler; MockWebServer dispatcher returns 401 on the protected call, 401 again on `POST
+  /ui/session/refresh`. Steps: issue a protected request. Expected: refresh attempted exactly once
+  (single-flight), `onUnrecoverableExpiry(SESSION_EXPIRED)` called exactly once, original 401 surfaced
+  to caller, `authenticate()` returns null. Verify the refresh request hit path `/ui/session/refresh`
+  with POST. Traces: AC-1, AC-2.
+- **TC-AND-044-04** — Type: contract/MockWebServer. Target: JVM (MockWebServer). Refresh-succeeds, no
+  expiry. Preconditions: authenticated; dispatcher: 401 on protected call, 200 on refresh, 200 on retry.
+  Steps: issue protected request. Expected: no `onUnrecoverableExpiry`, no `Expired` event, auth state
+  intact, retried response returned. Traces: AC-2 (negative), AC-3 (boundary).
+- **TC-AND-044-05** — Type: contract/MockWebServer. Target: JVM (MockWebServer). Flaky-dev-host / offline
+  path. Preconditions: authenticated; dispatcher: 401 on protected call, then the refresh socket
+  fails/times out (simulate `SocketPolicy.NO_RESPONSE` / disconnect, ~dev-host ~20s timeout). Steps:
+  issue protected request. Expected: refresh throws `IOException` → surfaced as `NetworkError`
+  (AND-018); `onUnrecoverableExpiry` is NOT called; auth state and cookies UNCHANGED; no navigation to
+  login. Traces: AC-3 (FR-7).
+- **TC-AND-044-06** — Type: contract/MockWebServer. Target: JVM (MockWebServer). Concurrent post-refresh
+  401 storm collapses. Preconditions: authenticated; dispatcher returns 401 on several parallel protected
+  calls and 401 on refresh. Steps: fire 10 concurrent protected requests. Expected: ≤1 refresh attempt
+  (AND-013 single-flight) and exactly ONE `Expired` event / one teardown via the `AtomicBoolean` guard;
+  no duplicate emissions. Traces: AC-2.
+- **TC-AND-044-07** — Type: integration (Navigation). Target: JVM/Robolectric with
+  `TestNavHostController`. Expiry navigates and clears back stack. Preconditions: nav graph with an
+  authenticated destination on the back stack; `rememberSessionExpiryNavigator` collecting the bus.
+  Steps: emit `SessionEvent.Expired(SESSION_EXPIRED)`. Expected: current destination is
+  `login?reason=SESSION_EXPIRED`; authenticated entries popped (`popUpTo(graph) inclusive`); a simulated
+  back-press does NOT return to an authenticated route; `launchSingleTop` prevents duplicate login
+  entries. Traces: AC-1, AC-2 (security/back-stack).
+- **TC-AND-044-08** — Type: unit (JVM). Target: JVM unit. `LoginViewModel` reason mapping + reset.
+  Preconditions: `SavedStateHandle` seeded with `reason=SESSION_EXPIRED`. Steps: construct VM; read
+  `LoginUiState`; then simulate successful login. Expected: `expiryReason == SESSION_EXPIRED` exposed;
+  on login success `bus.reset()` called AND the reason cleared from `SavedStateHandle` so it does not
+  re-show. Also assert an unknown/garbage `reason` string maps to `UNKNOWN`. Traces: AC-4, AC-5.
+- **TC-AND-044-09** — Type: Compose-UI. Target: emulator `test35` (or Robolectric Compose). Login banner
+  rendering + accessibility live region. Preconditions: `LoginUiState(expiryReason = SESSION_EXPIRED)`.
+  Steps: render `LoginScreen`; inspect semantics. Expected: localized `session_expired_message` shown
+  from `strings.xml` (no hardcoded text); node carries `liveRegion = Polite` so TalkBack announces it on
+  arrival; repeat for `SESSION_REVOKED` and `USER_INITIATED` strings. Verify any dismiss affordance has a
+  `contentDescription` and ≥48dp target. Traces: AC-4 (FR-4, A11y).
+- **TC-AND-044-10** — Type: instrumented/e2e. Target: emulator `test35`. End-to-end expiry happy path
+  with no double-banner / no nav loop. Preconditions: app driven to authenticated state; MockWebServer
+  (or fake transport) configured for a 401 storm + failed refresh. Steps: trigger the 401 storm while on
+  an authenticated screen. Expected: user lands on Login with the localized session-expired banner;
+  exactly one banner; no navigation loop; subsequent successful re-login restores a clean unauthenticated
+  back stack and the banner does not reappear. Traces: AC-1, AC-2, AC-5.
+- **TC-AND-044-11** — Type: instrumented (lifecycle). Target: emulator `test35`. Backgrounded delivery.
+  Preconditions: nav host collecting via `repeatOnLifecycle(STARTED)`; move host to STOPPED. Steps: emit
+  `Expired` while STOPPED; then move to STARTED/RESUMED. Expected: event delivered exactly once on
+  resume (buffered via `extraBufferCapacity=1` / `DROP_OLDEST`), navigation to login occurs after resume,
+  nothing lost. Traces: AC-6 (FR-6).
+- **TC-AND-044-12** — Type: instrumented (security). Target: emulator `test35`. Cookies cleared before
+  any authenticated replay. Preconditions: authenticated with session + `ui_csrf` cookies present in the
+  jar. Steps: trigger unrecoverable expiry; immediately after navigation, inspect the cookie jar and
+  attempt a protected request. Expected: session + `ui_csrf` cookies removed from the jar BEFORE
+  navigation; any subsequent request carries no session cookie (cannot replay); no PII/cookie/CSRF value
+  in logcat. Traces: AC-2 (FR-2, §8 security).
+- **TC-AND-044-13** — Type: instrumented (cold-launch). Target: emulator `test35`. Process-death
+  fallback. Preconditions: persist `authenticated=false` + `last_logout_reason=SESSION_EXPIRED` in
+  DataStore, simulate process death between teardown and nav. Steps: cold-launch the app. Expected:
+  AND-025 gate lands on Login and the persisted reason drives the banner (no stale authenticated screen).
+  Traces: AC-1, AC-5.
+- **TC-AND-044-14** — Type: instrumented/e2e (ABI/API skew sanity). Target: PHYSICAL DEVICE (Galaxy A15,
+  API 34, arm64-v8a) — MUST run on the physical device to catch arm64-vs-x86 and API-34-vs-35
+  differences in coroutine/lifecycle/DataStore timing. Preconditions: same as TC-AND-044-10. Steps: run
+  the end-to-end expiry happy path on-device. Expected: identical behavior to the emulator run (single
+  banner, back stack cleared, re-login clean); no ABI- or API-level regression. Traces: AC-1, AC-6.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 (clean re-login, back stack cleared) | TC-03, TC-07, TC-10, TC-13, TC-14 |
+| AC-2 (single teardown + single nav, even concurrent) | TC-01, TC-02, TC-03, TC-06, TC-07, TC-10, TC-12 |
+| AC-3 (network/timeout does NOT clear/route) | TC-04, TC-05 |
+| AC-4 (correct localized + announced banner per reason) | TC-08, TC-09 |
+| AC-5 (reason cleared + bus.reset, no stale banner) | TC-08, TC-10, TC-13 |
+| AC-6 (backgrounded event delivered on resume) | TC-11, TC-14 |
