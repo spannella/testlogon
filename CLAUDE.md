@@ -266,6 +266,8 @@ Feature flags (all default to `true` in `.env.local.example`):
 
 **moto S3 workers**: Run uvicorn with `--workers 1` in dev mode. moto's in-process state is per-process; multiple workers would each have isolated S3 state.
 
+**Audit export worker (ENTERPRISE-004)**: `POST /ui/admin/audit-exports` only writes a `pending` job. `app/services/audit_export_worker.py` (`run_audit_export_worker_loop`, registered via `start_audit_export_worker_task` startup hook in `main.py`, gated by `AUDIT_EXPORT_WORKER_ENABLED`) polls the `AuditExports` table, claims each job via a `status==pending` compare-and-swap, and calls `process_export_job`. `process_export_job` forks on `S.dev_mode` (SECOPS-007 dev/prod parity): dev → `_process_export_inline` (content stored on the DDB item, capped at 500 events); prod (`DEV_MODE=0`) → `_process_export_s3` (streams to S3 via `app.core.aws_clients.s3_client`, writes `s3_key`/`s3_bucket` + HMAC-signed manifest). Both paths run against moto in-process S3 in dev with `DEV_MODE=0`.
+
 **Stripe mock off-session payments**: `stripe-mock` always returns `requires_payment_method` for off-session PaymentIntents. Wallet deposit tests must seed balance directly via DynamoDB, not through the deposit API.
 
 **Conversations list pagination**: `list_conversations` paginates with `Limit=500` per page (up to 2000 total). Test runs accumulate many DMs; always create test DMs via session auth (`page.request`) not Bearer auth — Bearer-auth DMs don't appear in session-auth conversation lists.

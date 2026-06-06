@@ -8,6 +8,10 @@ import time as _time
 from app.core.settings import S
 from app.core.time import now_ts
 from app.services.job_registry import register_task, report_error, report_poll
+from app.services.webhook_circuit_breaker import (
+    record_delivery_result,
+    should_attempt_delivery,
+)
 from app.services.webhook_service import (
     _decrypt_secret,
     _get_endpoint_raw,
@@ -50,6 +54,17 @@ async def run_webhook_dispatcher_loop() -> None:
                         mark_delivery_dead_letter(delivery, reason="endpoint_disabled")
                         continue
 
+                    # Circuit breaker guard: skip delivery when the endpoint's
+                    # circuit is open and its cooldown has not yet expired
+                    # (GAP-0180 / ENTERPRISE-005).
+                    if not should_attempt_delivery(endpoint, now):
+                        logger.debug(
+                            "Circuit open for endpoint %s — skipping delivery %s",
+                            endpoint_id,
+                            delivery.get("delivery_id", ""),
+                        )
+                        continue
+
                     secret = _decrypt_secret(endpoint["secret"])
                     result = await deliver_webhook(
                         url=endpoint["url"],
@@ -62,9 +77,11 @@ async def run_webhook_dispatcher_loop() -> None:
                     if result["success"]:
                         mark_delivery_success(delivery, result)
                         reset_endpoint_failure_count(endpoint_id, user_sub)
+                        record_delivery_result(endpoint, success=True)
                         _processed += 1
                     else:
                         handle_delivery_failure(delivery, endpoint, result)
+                        record_delivery_result(endpoint, success=False)
                         _failed += 1
                 except Exception:
                     _failed += 1
@@ -117,6 +134,14 @@ async def run_webhook_dispatcher_once() -> dict:
             if not endpoint or not endpoint.get("enabled", True):
                 mark_delivery_dead_letter(delivery, reason="endpoint_disabled")
                 continue
+            # Circuit breaker guard (GAP-0180 / ENTERPRISE-005).
+            if not should_attempt_delivery(endpoint, now):
+                logger.debug(
+                    "Circuit open for endpoint %s — skipping delivery %s",
+                    endpoint_id,
+                    delivery.get("delivery_id", ""),
+                )
+                continue
             secret = _decrypt_secret(endpoint["secret"])
             result = await deliver_webhook(
                 url=endpoint["url"],
@@ -128,9 +153,11 @@ async def run_webhook_dispatcher_once() -> dict:
             if result["success"]:
                 mark_delivery_success(delivery, result)
                 reset_endpoint_failure_count(endpoint_id, user_sub)
+                record_delivery_result(endpoint, success=True)
                 processed += 1
             else:
                 handle_delivery_failure(delivery, endpoint, result)
+                record_delivery_result(endpoint, success=False)
                 failed += 1
         except Exception:
             failed += 1

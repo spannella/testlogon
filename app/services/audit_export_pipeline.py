@@ -232,6 +232,154 @@ def _process_export_inline(export_id: str, job: dict) -> None:
         )
 
 
+def _process_export_s3(export_id: str, job: dict) -> None:
+    """Process an export job for production: generate content and upload to S3.
+
+    GAP-0179: the previous pipeline had no production storage path. This streams
+    the generated export into an in-memory buffer, uploads it to S3 (real S3 in
+    prod, moto in-process in dev with DEV_MODE=0), writes an HMAC-signed manifest,
+    and marks the job ``completed`` with the S3 location recorded on the DDB item.
+    """
+    from app.core.aws_clients import s3_client
+
+    try:
+        categories = list(job.get("categories", []))
+        fmt = job.get("format", "ndjson")
+        from_ts = int(job.get("from_date", 0))
+        to_ts = int(job.get("to_date", 0))
+        actor = job.get("actor_filter") or None
+        target = job.get("target_filter") or None
+        event_actions = job.get("event_actions_filter") or None
+        if isinstance(event_actions, list) and len(event_actions) == 0:
+            event_actions = None
+
+        # Stream content into an in-memory buffer to avoid materialising the
+        # entire export as a Python string before upload.
+        buf = io.BytesIO()
+        event_count = 0
+        sha256 = hashlib.sha256()
+
+        if fmt == "csv":
+            bom = "﻿".encode("utf-8")
+            buf.write(bom)
+            sha256.update(bom)
+            header_buf = io.StringIO()
+            csv.writer(header_buf).writerow(CSV_COLUMNS)
+            header_bytes = header_buf.getvalue().encode("utf-8")
+            buf.write(header_bytes)
+            sha256.update(header_bytes)
+            for event in _merge_sorted_events(
+                categories, from_ts, to_ts, actor, target, event_actions,
+            ):
+                row_buf = io.StringIO()
+                csv.writer(row_buf).writerow(event.to_csv_row(CSV_COLUMNS))
+                line_bytes = row_buf.getvalue().encode("utf-8")
+                buf.write(line_bytes)
+                sha256.update(line_bytes)
+                event_count += 1
+        else:
+            for event in _merge_sorted_events(
+                categories, from_ts, to_ts, actor, target, event_actions,
+            ):
+                line_bytes = (event.to_ndjson_line() + "\n").encode("utf-8")
+                buf.write(line_bytes)
+                sha256.update(line_bytes)
+                event_count += 1
+
+        file_size = buf.tell()
+        file_hash = sha256.hexdigest()
+        file_extension = "csv" if fmt == "csv" else "ndjson"
+        s3_key = f"audit-exports/{export_id}/{export_id}.{file_extension}"
+
+        buf.seek(0)
+        s3 = s3_client()
+        s3.upload_fileobj(
+            buf,
+            S.audit_export_s3_bucket,
+            s3_key,
+            ExtraArgs={
+                "ContentType": "text/csv" if fmt == "csv" else "application/x-ndjson",
+                "ServerSideEncryption": "AES256",
+            },
+        )
+
+        manifest = {
+            "export_id": export_id,
+            "schema_version": "1.0",
+            "format": fmt,
+            "event_count": event_count,
+            "date_range": {
+                "from": datetime.fromtimestamp(from_ts, tz=timezone.utc).isoformat(),
+                "to": datetime.fromtimestamp(to_ts, tz=timezone.utc).isoformat(),
+            },
+            "categories": categories,
+            "filters": {
+                "actor_user_id": actor,
+                "target_user_id": target,
+                "event_actions": event_actions,
+            },
+            "s3_bucket": S.audit_export_s3_bucket,
+            "s3_key": s3_key,
+            "file_sha256": file_hash,
+            "file_size_bytes": file_size,
+            "created_at": datetime.fromtimestamp(now_ts(), tz=timezone.utc).isoformat(),
+            "created_by": job.get("created_by", ""),
+            "signing_key_id": S.audit_export_signing_key_id,
+            "contains_pii": True,
+        }
+        manifest["signature"] = _compute_manifest_signature(manifest)
+
+        logger.info(
+            "audit export %s uploaded to s3://%s/%s (%d events, %d bytes)",
+            export_id, S.audit_export_s3_bucket, s3_key, event_count, file_size,
+        )
+
+        T.audit_exports.update_item(
+            Key={"export_id": export_id, "sk": "META"},
+            UpdateExpression=(
+                "SET #st = :st, completed_at = :ca, event_count = :ec, "
+                "file_size_bytes = :fs, manifest_sha256 = :ms, events_written = :ew, "
+                "s3_key = :s3k, s3_bucket = :s3b, export_manifest = :manifest"
+            ),
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={
+                ":st": "completed",
+                ":ca": now_ts(),
+                ":ec": event_count,
+                ":fs": file_size,
+                ":ms": file_hash,
+                ":ew": event_count,
+                ":s3k": s3_key,
+                ":s3b": S.audit_export_s3_bucket,
+                ":manifest": json.dumps(manifest),
+            },
+        )
+    except Exception as exc:
+        logger.exception("S3 export job %s failed", export_id)
+        T.audit_exports.update_item(
+            Key={"export_id": export_id, "sk": "META"},
+            UpdateExpression="SET #st = :st, error_message = :em",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={
+                ":st": "failed",
+                ":em": str(exc)[:500],
+            },
+        )
+
+
+def process_export_job(export_id: str, job: dict) -> None:
+    """Process an export job, dispatching by deployment mode (dev/prod parity).
+
+    Dev (``S.dev_mode=True``): inline storage in the DDB item (capped at 500
+    events). Production: stream to S3 via :func:`_process_export_s3`. This is the
+    public entry point called by the background worker (GAP-0178).
+    """
+    if S.dev_mode:
+        _process_export_inline(export_id, job)
+    else:
+        _process_export_s3(export_id, job)
+
+
 def _compute_manifest_signature(manifest: dict) -> str:
     signable = {k: v for k, v in manifest.items() if k != "signature"}
     payload = json.dumps(signable, sort_keys=True, default=str)
