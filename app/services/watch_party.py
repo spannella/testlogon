@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from app.core.tables import T
 from app.core.time import now_ts
-from app.services.broadcast_sse import broadcast_sse_publish
+from app.services.watch_party_sse import wp_sse_publish as broadcast_sse_publish
 
 
 # ---------------------------------------------------------------------------
@@ -426,8 +426,30 @@ def _get_participant(party_id: str, user_sub: str) -> Optional[Dict[str, Any]]:
 
 
 def _update_participant_count(party_id: str, delta: int) -> None:
-    T.watch_parties.update_item(
-        Key={"party_id": party_id},
-        UpdateExpression="SET participant_count = participant_count + :d, updated_at = :u",
-        ExpressionAttributeValues={":d": delta, ":u": now_ts()},
-    )
+    """Atomically update participant count, clamping to a floor of 0 (GAP-0167).
+
+    Decrements use a ``ConditionExpression`` so the counter can never go
+    negative when a spurious double-decrement occurs (concurrent leave/kick,
+    retries). A rejected decrement (count already at 0) is a no-op.
+    """
+    if delta < 0:
+        from botocore.exceptions import ClientError
+
+        try:
+            T.watch_parties.update_item(
+                Key={"party_id": party_id},
+                UpdateExpression="SET participant_count = participant_count + :d, updated_at = :u",
+                ConditionExpression="participant_count > :zero",
+                ExpressionAttributeValues={":d": delta, ":u": now_ts(), ":zero": 0},
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                # Count already at (or below) the floor — spurious decrement, no-op.
+                return
+            raise
+    else:
+        T.watch_parties.update_item(
+            Key={"party_id": party_id},
+            UpdateExpression="SET participant_count = participant_count + :d, updated_at = :u",
+            ExpressionAttributeValues={":d": delta, ":u": now_ts()},
+        )

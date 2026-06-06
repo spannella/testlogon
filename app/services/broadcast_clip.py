@@ -333,14 +333,32 @@ def record_share(clip_id: str) -> Dict[str, Any]:
 # --- Internal helpers ---
 
 def _count_user_clips_for_session(session_id: str, user_id: str) -> int:
-    """Count clips created by a user for a specific session."""
-    resp = T.broadcast_clips.query(
-        IndexName="BySession",
-        KeyConditionExpression=Key("GSI1PK").eq(f"SESSION#{session_id}"),
-        FilterExpression=Attr("creator_user_id").eq(user_id) & Attr("status").ne("deleted"),
-        Select="COUNT",
-    )
-    return resp.get("Count", 0)
+    """Count non-deleted clips created by a user for a specific session.
+
+    Paginates through all DDB pages via ``LastEvaluatedKey`` so the
+    ``FilterExpression`` never silently under-counts on high-volume sessions.
+    DynamoDB applies ``FilterExpression`` only after reading up to 1 MB of raw
+    items per page; a single ``query()`` would miss this user's clips that fall
+    beyond the first page, letting them exceed the per-broadcast quota
+    (GAP-0168).
+    """
+    total = 0
+    kwargs: Dict[str, Any] = {
+        "IndexName": "BySession",
+        "KeyConditionExpression": Key("GSI1PK").eq(f"SESSION#{session_id}"),
+        "FilterExpression": (
+            Attr("creator_user_id").eq(user_id) & Attr("status").ne("deleted")
+        ),
+        "Select": "COUNT",
+    }
+    while True:
+        resp = T.broadcast_clips.query(**kwargs)
+        total += resp.get("Count", 0)
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+    return total
 
 
 def _mark_clip_ready(clip_id: str, duration: float) -> None:
