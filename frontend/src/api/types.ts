@@ -4190,6 +4190,44 @@ export interface EarningsTransactionsResp {
   next_cursor: string | null;
 }
 
+// ─── Payout Methods (GAP-0195 / FIN-009) ────────────────────────
+
+export type PayoutMethodType = "bank_ach" | "bank_wire" | "paypal" | "check";
+
+export interface PayoutMethod {
+  method_id: string;
+  method_type: PayoutMethodType;
+  account_last4: string;
+  routing_last4: string;
+  paypal_email: string;
+  nickname: string;
+  is_default: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PayoutMethodListResp {
+  methods: PayoutMethod[];
+}
+
+export interface PayoutMethodCreate {
+  method_type: PayoutMethodType;
+  account_last4?: string;
+  routing_last4?: string;
+  paypal_email?: string;
+  nickname?: string;
+  set_as_default?: boolean;
+}
+
+// ─── Admin Payout Queue (GAP-0196 / FIN-009) ────────────────────
+
+export interface PayoutStats {
+  total_requested: number;
+  total_requested_amount_cents: number;
+  total_approved: number;
+  total_processing: number;
+}
+
 // ─── Video Subtitles (VOD-021) ─────────────────────────────────────
 
 export interface SubtitleTrack {

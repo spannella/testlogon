@@ -194,6 +194,7 @@ def record_click(
     ip_address: str,
     user_agent: str,
     referrer: Optional[str] = None,
+    creator_id: str = "",
 ) -> Dict[str, Any]:
     """Record a click on an affiliate link."""
     now = now_ts()
@@ -221,6 +222,13 @@ def record_click(
         "GSI1PK": f"VISITOR#{visitor_hash}",
         "GSI1SK": now,
     }
+
+    # ByCreator GSI keys (creator-scoped time-range queries for the time-series
+    # endpoint). Only set when a creator_id is supplied so the click is indexed.
+    if creator_id:
+        click["creator_id"] = creator_id
+        click["GSI2PK"] = f"CREATOR#{creator_id}"
+        click["GSI2SK"] = now
 
     T.affiliate_clicks.put_item(Item=click)
     _increment_link_clicks(link_id, is_unique)
@@ -355,6 +363,123 @@ def get_link_stats(link_id: str) -> Optional[Dict[str, Any]]:
         "commission_earned_cents": commission,
         "conversion_rate_pct": conversion_rate,
     }
+
+
+# ---------------------------------------------------------------------------
+# Creator-level aggregate analytics (FIN-010 / GAP-0197)
+# ---------------------------------------------------------------------------
+
+
+def get_creator_summary(creator_id: str) -> Dict[str, Any]:
+    """Aggregate totals across all of a creator's affiliate links."""
+    links = list_creator_links(creator_id)
+    total_clicks = sum(int(l.get("click_count", 0)) for l in links)
+    total_unique = sum(int(l.get("unique_click_count", 0)) for l in links)
+    total_conversions = sum(int(l.get("conversion_count", 0)) for l in links)
+    total_revenue = sum(int(l.get("revenue_cents", 0)) for l in links)
+    total_commission = sum(int(l.get("commission_earned_cents", 0)) for l in links)
+    active_links = sum(1 for l in links if l.get("status") == "active")
+    return {
+        "total_links": len(links),
+        "active_links": active_links,
+        "total_clicks": total_clicks,
+        "unique_clicks": total_unique,
+        "total_conversions": total_conversions,
+        "total_revenue_cents": total_revenue,
+        "total_commission_cents": total_commission,
+        "overall_conversion_rate_pct": (
+            round(total_conversions / total_unique * 100, 2)
+            if total_unique > 0
+            else 0.0
+        ),
+    }
+
+
+def get_click_timeseries(
+    creator_id: str,
+    interval: str = "day",
+    from_ts: int = 0,
+    to_ts: int = 0,
+) -> List[Dict[str, Any]]:
+    """Aggregate click counts into time buckets using the ByCreator GSI.
+
+    Returns a chronologically sorted list of ``{"bucket", "clicks"}`` dicts.
+    Only clicks indexed with ``GSI2PK = CREATOR#{creator_id}`` are surfaced.
+    """
+    import datetime
+
+    kce = Key("GSI2PK").eq(f"CREATOR#{creator_id}")
+    if from_ts:
+        upper = int(to_ts) if to_ts else now_ts()
+        kce = kce & Key("GSI2SK").between(int(from_ts), int(upper))
+
+    buckets: Dict[str, int] = {}
+    last_key: Optional[Dict[str, Any]] = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByCreator",
+            "KeyConditionExpression": kce,
+            "ScanIndexForward": True,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.affiliate_clicks.query(**kwargs)
+        for item in resp.get("Items", []):
+            ts = int(item.get("clicked_at", item.get("GSI2SK", 0)))
+            if interval == "week":
+                dt = datetime.datetime.utcfromtimestamp(ts)
+                bucket = dt.strftime("%Y-W%W")
+            else:
+                bucket = str(ts // 86400 * 86400)  # floor to day-epoch seconds
+            buckets[bucket] = buckets.get(bucket, 0) + 1
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    return [{"bucket": k, "clicks": v} for k, v in sorted(buckets.items())]
+
+
+def get_earnings_breakdown(
+    creator_id: str,
+    from_ts: int = 0,
+    to_ts: int = 0,
+) -> Dict[str, Any]:
+    """Per-link earnings breakdown for a creator, sorted by commission desc."""
+    links = list_creator_links(creator_id)
+    items: List[Dict[str, Any]] = []
+    for link in links:
+        items.append(
+            {
+                "link_id": link["link_id"],
+                "target_name": link.get("target_name", ""),
+                "target_type": link.get("target_type", ""),
+                "commission_earned_cents": int(link.get("commission_earned_cents", 0)),
+                "revenue_cents": int(link.get("revenue_cents", 0)),
+                "conversions": int(link.get("conversion_count", 0)),
+            }
+        )
+    items.sort(key=lambda x: x["commission_earned_cents"], reverse=True)
+    total = sum(x["commission_earned_cents"] for x in items)
+    return {"items": items, "total_commission_cents": total}
+
+
+def get_top_products(creator_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Top N affiliate links for a creator, ranked by click count desc."""
+    links = list_creator_links(creator_id)
+    ranked = sorted(
+        links, key=lambda l: int(l.get("click_count", 0)), reverse=True
+    )
+    return [
+        {
+            "link_id": l["link_id"],
+            "target_name": l.get("target_name", ""),
+            "target_id": l.get("target_id", ""),
+            "click_count": int(l.get("click_count", 0)),
+            "conversion_count": int(l.get("conversion_count", 0)),
+            "commission_earned_cents": int(l.get("commission_earned_cents", 0)),
+        }
+        for l in ranked[:limit]
+    ]
 
 
 # ---------------------------------------------------------------------------

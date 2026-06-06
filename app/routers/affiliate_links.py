@@ -6,18 +6,28 @@ Auth: require_ui_session (cookie-based) for management; public redirect has no a
 """
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import RedirectResponse
 
 from app.core.settings import S
+from app.models import (
+    AffiliateClickTimeSeriesOut,
+    AffiliateEarningsBreakdownOut,
+    AffiliateSummaryOut,
+    AffiliateTopProductsOut,
+)
 from app.services.affiliate_links import (
     create_affiliate_link,
     delete_link,
+    get_click_timeseries,
+    get_creator_summary,
+    get_earnings_breakdown,
     get_link,
     get_link_by_code,
     get_link_stats,
+    get_top_products,
     list_creator_links,
     record_click,
     record_conversion,
@@ -58,6 +68,52 @@ def _link_to_out(item: dict) -> dict:
         "created_at": int(item.get("created_at", 0)),
         "updated_at": int(item.get("updated_at", 0)),
     }
+
+
+# ─── Creator aggregate analytics (FIN-010 / GAP-0197) ─────────────
+
+
+@router.get("/ui/affiliates/summary", response_model=AffiliateSummaryOut)
+async def creator_summary(ctx: Dict = Depends(require_ui_session)):
+    _require_enabled()
+    return get_creator_summary(ctx["user_sub"])
+
+
+@router.get("/ui/affiliates/timeseries", response_model=AffiliateClickTimeSeriesOut)
+async def click_timeseries(
+    interval: str = Query("day", pattern="^(day|week)$"),
+    from_ts: Optional[int] = Query(None, ge=0),
+    to_ts: Optional[int] = Query(None, ge=0),
+    ctx: Dict = Depends(require_ui_session),
+):
+    _require_enabled()
+    items = get_click_timeseries(
+        ctx["user_sub"],
+        interval=interval,
+        from_ts=from_ts or 0,
+        to_ts=to_ts or 0,
+    )
+    return {"items": items, "interval": interval}
+
+
+@router.get("/ui/affiliates/earnings", response_model=AffiliateEarningsBreakdownOut)
+async def earnings_breakdown(
+    from_ts: Optional[int] = Query(None, ge=0),
+    to_ts: Optional[int] = Query(None, ge=0),
+    ctx: Dict = Depends(require_ui_session),
+):
+    _require_enabled()
+    return get_earnings_breakdown(ctx["user_sub"], from_ts or 0, to_ts or 0)
+
+
+@router.get("/ui/affiliates/top-products", response_model=AffiliateTopProductsOut)
+async def top_products(
+    limit: int = Query(10, ge=1, le=50),
+    ctx: Dict = Depends(require_ui_session),
+):
+    _require_enabled()
+    items = get_top_products(ctx["user_sub"], limit=limit)
+    return {"items": items}
 
 
 # ─── CRUD ─────────────────────────────────────────────────────────
@@ -195,6 +251,7 @@ async def affiliate_redirect(
         ip_address=ip,
         user_agent=ua,
         referrer=referrer,
+        creator_id=link.get("affiliate_user_id", ""),
     )
 
     destination = link.get("destination_url", "/")

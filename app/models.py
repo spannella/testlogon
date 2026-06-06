@@ -14196,3 +14196,56 @@ class CompareResponse(BaseModel):
     current: AnalyticsSnapshotOut
     previous: AnalyticsSnapshotOut
     deltas: DeltasOut
+
+
+# ---------------------------------------------------------------------------
+# Affiliate analytics (FIN-010 / GAP-0197)
+# ---------------------------------------------------------------------------
+
+
+class AffiliateSummaryOut(BaseModel):
+    total_links: int
+    active_links: int
+    total_clicks: int
+    unique_clicks: int
+    total_conversions: int
+    total_revenue_cents: int
+    total_commission_cents: int
+    overall_conversion_rate_pct: float
+
+
+class AffiliateClickBucket(BaseModel):
+    bucket: str
+    clicks: int
+
+
+class AffiliateClickTimeSeriesOut(BaseModel):
+    items: List[AffiliateClickBucket]
+    interval: str
+
+
+class AffiliateEarningsItem(BaseModel):
+    link_id: str
+    target_name: str
+    target_type: str
+    commission_earned_cents: int
+    revenue_cents: int
+    conversions: int
+
+
+class AffiliateEarningsBreakdownOut(BaseModel):
+    items: List[AffiliateEarningsItem]
+    total_commission_cents: int
+
+
+class AffiliateTopProductItem(BaseModel):
+    link_id: str
+    target_name: str
+    target_id: str
+    click_count: int
+    conversion_count: int
+    commission_earned_cents: int
+
+
+class AffiliateTopProductsOut(BaseModel):
+    items: List[AffiliateTopProductItem]

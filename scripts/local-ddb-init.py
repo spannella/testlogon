@@ -1387,8 +1387,9 @@ def _table_defs() -> List[TableDef]:
             "click_id",
             gsi=[
                 {"index_name": "ByVisitor", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByCreator", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
-            attr_types={"GSI1SK": "N"},
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
         # Achievements & Gamification (ENGAGE-001)
         TableDef(
