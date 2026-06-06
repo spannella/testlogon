@@ -215,6 +215,7 @@ from app.services.transcode_worker import start_transcode_worker_task
 from app.routers.webhooks import router as webhooks_router
 from app.services.webhook_dispatcher import start_webhook_dispatcher_task
 from app.services.audit_export_worker import start_audit_export_worker_task
+from app.services.audit_export_schedule import start_audit_export_scheduler_task
 from app.routers.geo_rules import router as geo_rules_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.i18n import router as i18n_router
@@ -828,6 +829,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_transcode_worker_task)
     app.add_event_handler("startup", start_webhook_dispatcher_task)
     app.add_event_handler("startup", start_audit_export_worker_task)
+    app.add_event_handler("startup", start_audit_export_scheduler_task)
     app.add_event_handler("startup", start_cart_abandonment_task)
     app.add_event_handler("startup", start_marketing_publish_task)
     app.add_event_handler("startup", start_cost_collection_task)

@@ -1445,8 +1445,11 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "status-created-index", "partition_key": "status", "sort_key": "created_at"},
                 {"index_name": "user-created-index", "partition_key": "created_by", "sort_key": "created_at"},
+                # GAP-0210: scheduled (recurring) audit exports — time-ordered
+                # query for due schedules. GSI1SK (next_run_at) is numeric.
+                {"index_name": "schedules-due-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "GSI1SK": "N"},
         ),
         # Broadcast Q&A Questions (ENGAGE-003)
         TableDef(

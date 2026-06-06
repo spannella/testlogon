@@ -1,6 +1,7 @@
 """Audit export pipeline: create jobs, process exports, generate files (ENTERPRISE-004)."""
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import hmac
@@ -29,6 +30,214 @@ CSV_COLUMNS = [
 
 def _gen_export_id() -> str:
     return f"exp_{uuid.uuid4().hex}"
+
+
+# ----- PDF rendering (GAP-0209) ---------------------------------------------
+#
+# FIN-016 requires an audit-grade PDF: cover page with export metadata + content
+# SHA-256, sequential row numbers across pages (to detect row removal), per-page
+# subtotals for billing-category amounts, and a tamper-evident running SHA-256 in
+# each page footer.  We render this with a self-contained, pure-Python PDF writer
+# (the same dependency-free approach already used by ``app/services/receipts.py``)
+# rather than pulling in ``reportlab``.  This keeps dev and prod on the identical
+# code path with no new system/package dependency (SECOPS-007 parity).
+
+_PDF_ROWS_PER_PAGE = 28  # data rows per page (excluding the cover page)
+
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _pdf_clean(text: Any, max_len: int) -> str:
+    """Coerce to printable ASCII (WinAnsi-safe) and truncate."""
+    s = "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in str(text))
+    if len(s) > max_len:
+        s = s[: max_len - 1] + "~"
+    return s
+
+
+def _build_pdf(pages: list[list[str]]) -> bytes:
+    """Assemble a multi-page PDF from a list of pages, each a list of text lines.
+
+    Each line is rendered with a monospaced font at 8pt so the column layout in
+    the audit table stays aligned.  Pure-Python — no external dependencies.
+    """
+    catalog_obj = 1
+    pages_obj = 2
+    font_obj = 3
+    # Page objects start at 4, with each page using two objects (page + content).
+    first_page_obj = 4
+
+    objects: dict[int, bytes] = {}
+    page_obj_ids: list[int] = []
+
+    next_id = first_page_obj
+    for page_lines in pages:
+        page_id = next_id
+        content_id = next_id + 1
+        next_id += 2
+        page_obj_ids.append(page_id)
+
+        content_lines = ["BT", "/F1 8 Tf", "12 TL", "36 756 Td"]
+        for line in page_lines:
+            content_lines.append(f"({_pdf_escape(line)}) Tj")
+            content_lines.append("T*")
+        content_lines.append("ET")
+        stream = "\n".join(content_lines).encode("latin-1", "replace")
+
+        objects[page_id] = (
+            f"{page_id} 0 obj\n"
+            f"<< /Type /Page /Parent {pages_obj} 0 R /MediaBox [0 0 612 792] "
+            f"/Contents {content_id} 0 R /Resources << /Font << /F1 {font_obj} 0 R >> >> >>\n"
+            f"endobj\n"
+        ).encode("latin-1")
+        objects[content_id] = (
+            f"{content_id} 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("latin-1")
+            + stream
+            + b"\nendstream\nendobj\n"
+        )
+
+    kids = " ".join(f"{pid} 0 R" for pid in page_obj_ids)
+    objects[catalog_obj] = (
+        f"{catalog_obj} 0 obj\n<< /Type /Catalog /Pages {pages_obj} 0 R >>\nendobj\n"
+    ).encode("latin-1")
+    objects[pages_obj] = (
+        f"{pages_obj} 0 obj\n<< /Type /Pages /Count {len(page_obj_ids)} "
+        f"/Kids [{kids}] >>\nendobj\n"
+    ).encode("latin-1")
+    objects[font_obj] = (
+        f"{font_obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n"
+    ).encode("latin-1")
+
+    max_id = next_id - 1
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets: dict[int, int] = {}
+    for obj_id in range(1, max_id + 1):
+        body = objects.get(obj_id)
+        if body is None:
+            continue
+        offsets[obj_id] = len(pdf)
+        pdf.extend(body)
+
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {max_id + 1}\n".encode("latin-1"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for obj_id in range(1, max_id + 1):
+        off = offsets.get(obj_id)
+        if off is None:
+            pdf.extend(b"0000000000 00000 f \n")
+        else:
+            pdf.extend(f"{off:010d} 00000 n \n".encode("latin-1"))
+    pdf.extend(
+        f"trailer\n<< /Size {max_id + 1} /Root {catalog_obj} 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode("latin-1")
+    )
+    return bytes(pdf)
+
+
+def _render_audit_pdf(
+    events: list[UnifiedAuditEvent],
+    export_id: str,
+    job: dict,
+    file_hash: str,
+) -> bytes:
+    """Render audit events to a tamper-evident, audit-grade PDF (FIN-016).
+
+    Layout:
+      - Cover page: export metadata + content SHA-256.
+      - Data pages: sequential row numbers, timestamp, actor, action, outcome.
+      - Per-page footer: cumulative SHA-256 of all rows up to that page and, for
+        billing exports, the running amount_cents subtotal.
+    """
+    from_ts = int(job.get("from_date", 0))
+    to_ts = int(job.get("to_date", 0))
+    categories = list(job.get("categories", []))
+
+    pages: list[list[str]] = []
+
+    # --- Cover page ---
+    cover = [
+        "FINANCIAL AUDIT EXPORT",
+        "=" * 72,
+        "",
+        f"Export ID        : {export_id}",
+        f"Created by        : {_pdf_clean(job.get('created_by', ''), 60)}",
+        f"Generated at      : {datetime.fromtimestamp(now_ts(), tz=timezone.utc).isoformat()}",
+        f"Date range (from) : {datetime.fromtimestamp(from_ts, tz=timezone.utc).isoformat()}",
+        f"Date range (to)   : {datetime.fromtimestamp(to_ts, tz=timezone.utc).isoformat()}",
+        f"Categories        : {_pdf_clean(', '.join(categories), 60)}",
+        f"Total events      : {len(events)}",
+        f"Content SHA-256   : {file_hash}",
+        "",
+        "This document is a sealed audit record. Rows are numbered",
+        "sequentially; each page footer carries the cumulative SHA-256 of",
+        "all rows up to that page. Any removed or altered row changes the",
+        "footer hash and the content SHA-256 above.",
+    ]
+    pages.append(cover)
+
+    # --- Data pages ---
+    header = f"{'#':>5}  {'TIMESTAMP (UTC)':<20}  {'ACTOR':<22}  {'ACTION':<20}  {'OUTCOME':<8}"
+    running_hash = hashlib.sha256()
+    amount_total = 0
+    has_amounts = False
+
+    chunk: list[str] = []
+    page_amount = 0
+
+    def _flush_page() -> None:
+        nonlocal chunk, page_amount
+        if not chunk:
+            return
+        body = [header, "-" * len(header)] + chunk + [""]
+        footer = f"Cumulative row SHA-256: {running_hash.hexdigest()}"
+        body.append(footer)
+        if has_amounts:
+            body.append(
+                f"Page subtotal: {page_amount} cents | "
+                f"Running total: {amount_total} cents"
+            )
+        pages.append(body)
+        chunk = []
+        page_amount = 0
+
+    for row_num, ev in enumerate(events, start=1):
+        meta = ev.metadata or {}
+        amount_cents = meta.get("amount_cents", 0)
+        if isinstance(amount_cents, (int, float)):
+            ac = int(amount_cents)
+            if ac:
+                has_amounts = True
+            amount_total += ac
+            page_amount += ac
+        ts_str = datetime.fromtimestamp(
+            int(ev.timestamp_unix), tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        line = (
+            f"{row_num:>5}  "
+            f"{_pdf_clean(ts_str, 20):<20}  "
+            f"{_pdf_clean(ev.actor_user_id or '', 22):<22}  "
+            f"{_pdf_clean(ev.event_action or '', 20):<20}  "
+            f"{_pdf_clean(ev.outcome or '', 8):<8}"
+        )
+        chunk.append(line)
+        # Hash the canonical row representation for the tamper-evident footer.
+        running_hash.update(
+            json.dumps(
+                [row_num, ts_str, ev.actor_user_id, ev.event_action, ev.outcome],
+                default=str,
+            ).encode("utf-8")
+        )
+        if len(chunk) >= _PDF_ROWS_PER_PAGE:
+            _flush_page()
+
+    _flush_page()
+
+    if len(pages) == 1:  # no data rows — still emit an empty data page
+        pages.append([header, "-" * len(header), "", "(no events in range)"])
+
+    return _build_pdf(pages)
 
 
 def _merge_sorted_events(
@@ -125,6 +334,9 @@ def _process_export_inline(export_id: str, job: dict) -> None:
     the content would be written to S3, not stored in the DDB item.
     """
     _DEV_INLINE_MAX_EVENTS = 500
+    # PDF output is far larger per event than CSV/NDJSON; cap tighter so the
+    # base64-encoded inline copy stays under the 400KB DynamoDB item limit.
+    _DEV_INLINE_MAX_PDF_EVENTS = 200
 
     try:
         categories = list(job.get("categories", []))
@@ -140,8 +352,23 @@ def _process_export_inline(export_id: str, job: dict) -> None:
         event_count = 0
         sha256 = hashlib.sha256()
         content_parts: list[str] = []
+        pdf_bytes: Optional[bytes] = None
 
-        if fmt == "csv":
+        if fmt == "pdf":
+            events_list = list(_merge_sorted_events(
+                categories, from_ts, to_ts, actor, target, event_actions,
+                limit=_DEV_INLINE_MAX_PDF_EVENTS,
+            ))
+            event_count = len(events_list)
+            # Content hash is computed over the canonical NDJSON representation
+            # so a PDF and an NDJSON export of the same events share the same
+            # file_sha256 and the hash is reproducible/verifiable.
+            for event in events_list:
+                sha256.update((event.to_ndjson_line() + "\n").encode("utf-8"))
+            file_hash = sha256.hexdigest()
+            pdf_bytes = _render_audit_pdf(events_list, export_id, job, file_hash)
+            file_size = len(pdf_bytes)
+        elif fmt == "csv":
             bom = "﻿"
             content_parts.append(bom)
             sha256.update(bom.encode("utf-8"))
@@ -161,6 +388,9 @@ def _process_export_inline(export_id: str, job: dict) -> None:
                 content_parts.append(line)
                 sha256.update(line.encode("utf-8"))
                 event_count += 1
+            content = "".join(content_parts)
+            file_size = len(content.encode("utf-8"))
+            file_hash = sha256.hexdigest()
         else:
             for event in _merge_sorted_events(
                 categories, from_ts, to_ts, actor, target, event_actions,
@@ -170,10 +400,9 @@ def _process_export_inline(export_id: str, job: dict) -> None:
                 content_parts.append(line)
                 sha256.update(line.encode("utf-8"))
                 event_count += 1
-
-        content = "".join(content_parts)
-        file_size = len(content.encode("utf-8"))
-        file_hash = sha256.hexdigest()
+            content = "".join(content_parts)
+            file_size = len(content.encode("utf-8"))
+            file_hash = sha256.hexdigest()
 
         # Build manifest
         manifest = {
@@ -200,12 +429,21 @@ def _process_export_inline(export_id: str, job: dict) -> None:
         }
         manifest["signature"] = _compute_manifest_signature(manifest)
 
+        # PDF is binary → store base64 under a distinct attribute and serve it via
+        # a binary-safe Response in the download endpoint. CSV/NDJSON stay textual.
+        if fmt == "pdf":
+            content_attr = "export_content_b64"
+            content_value = base64.b64encode(pdf_bytes or b"").decode("ascii")
+        else:
+            content_attr = "export_content"
+            content_value = content
+
         T.audit_exports.update_item(
             Key={"export_id": export_id, "sk": "META"},
             UpdateExpression=(
                 "SET #st = :st, completed_at = :ca, event_count = :ec, "
                 "file_size_bytes = :fs, manifest_sha256 = :ms, events_written = :ew, "
-                "export_content = :content, export_manifest = :manifest"
+                f"{content_attr} = :content, export_manifest = :manifest"
             ),
             ExpressionAttributeNames={"#st": "status"},
             ExpressionAttributeValues={
@@ -215,7 +453,7 @@ def _process_export_inline(export_id: str, job: dict) -> None:
                 ":fs": file_size,
                 ":ms": file_hash,
                 ":ew": event_count,
-                ":content": content,
+                ":content": content_value,
                 ":manifest": json.dumps(manifest),
             },
         )
@@ -259,7 +497,19 @@ def _process_export_s3(export_id: str, job: dict) -> None:
         event_count = 0
         sha256 = hashlib.sha256()
 
-        if fmt == "csv":
+        if fmt == "pdf":
+            # Collect events, hash the canonical NDJSON form (reproducible
+            # content hash, identical to an NDJSON export of the same events),
+            # then render the audit-grade PDF into the buffer.
+            events_list = list(_merge_sorted_events(
+                categories, from_ts, to_ts, actor, target, event_actions,
+            ))
+            event_count = len(events_list)
+            for event in events_list:
+                sha256.update((event.to_ndjson_line() + "\n").encode("utf-8"))
+            file_hash = sha256.hexdigest()
+            buf.write(_render_audit_pdf(events_list, export_id, job, file_hash))
+        elif fmt == "csv":
             bom = "﻿".encode("utf-8")
             buf.write(bom)
             sha256.update(bom)
@@ -277,6 +527,7 @@ def _process_export_s3(export_id: str, job: dict) -> None:
                 buf.write(line_bytes)
                 sha256.update(line_bytes)
                 event_count += 1
+            file_hash = sha256.hexdigest()
         else:
             for event in _merge_sorted_events(
                 categories, from_ts, to_ts, actor, target, event_actions,
@@ -285,10 +536,13 @@ def _process_export_s3(export_id: str, job: dict) -> None:
                 buf.write(line_bytes)
                 sha256.update(line_bytes)
                 event_count += 1
+            file_hash = sha256.hexdigest()
 
         file_size = buf.tell()
-        file_hash = sha256.hexdigest()
-        file_extension = "csv" if fmt == "csv" else "ndjson"
+        _EXT = {"csv": "csv", "pdf": "pdf"}
+        _CT = {"csv": "text/csv", "pdf": "application/pdf"}
+        file_extension = _EXT.get(fmt, "ndjson")
+        content_type = _CT.get(fmt, "application/x-ndjson")
         s3_key = f"audit-exports/{export_id}/{export_id}.{file_extension}"
 
         buf.seek(0)
@@ -298,7 +552,7 @@ def _process_export_s3(export_id: str, job: dict) -> None:
             S.audit_export_s3_bucket,
             s3_key,
             ExtraArgs={
-                "ContentType": "text/csv" if fmt == "csv" else "application/x-ndjson",
+                "ContentType": content_type,
                 "ServerSideEncryption": "AES256",
             },
         )

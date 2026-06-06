@@ -106,6 +106,7 @@ export default function AuditExportPage() {
               <SelectContent>
                 <SelectItem value="ndjson">NDJSON</SelectItem>
                 <SelectItem value="csv">CSV</SelectItem>
+                <SelectItem value="pdf">PDF (audit-grade)</SelectItem>
               </SelectContent>
             </Select>
           </div>

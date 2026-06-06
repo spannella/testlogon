@@ -1978,6 +1978,9 @@ class Settings:
     audit_export_worker_enabled: bool = os.environ.get("AUDIT_EXPORT_WORKER_ENABLED", "1") not in ("0", "false", "False")
     audit_export_worker_poll_interval_seconds: int = int(os.environ.get("AUDIT_EXPORT_WORKER_POLL_INTERVAL_SECONDS", "10"))
     audit_export_worker_max_concurrent: int = int(os.environ.get("AUDIT_EXPORT_WORKER_MAX_CONCURRENT", "3"))
+    # GAP-0210: scheduled (recurring) audit export reports (FIN-016).
+    audit_export_scheduler_enabled: bool = os.environ.get("AUDIT_EXPORT_SCHEDULER_ENABLED", "1") not in ("0", "false", "False")
+    audit_export_scheduler_poll_interval_seconds: int = int(os.environ.get("AUDIT_EXPORT_SCHEDULER_POLL_INTERVAL_SECONDS", "3600"))
 
     # Broadcast Clips (ENGAGE-005)
     broadcast_clips_table_name: str = os.environ.get("BROADCAST_CLIPS_TABLE_NAME", "broadcast_clips")

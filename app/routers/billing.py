@@ -1577,7 +1577,35 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
         pk = user_pk(user_id)
         ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
-        if event_type == "charge.dispute.funds_withdrawn":
+        if event_type == "charge.dispute.created":
+            # GAP-0208 (FIN-015): record the chargeback for fraud-detection risk
+            # scoring so the chargeback_threshold auto-flag fires on real Stripe
+            # events, not only on manual admin POSTs. A failure here must never
+            # cause a non-2xx response (Stripe would retry and double-count).
+            try:
+                fd.record_chargeback(
+                    user_id=user_id,
+                    amount_cents=amount,
+                    tx_id=pi_id or charge_id or "",
+                )
+                audit_event(
+                    "billing_chargeback_recorded_from_webhook",
+                    user_id,
+                    None,
+                    outcome="info",
+                    charge_id=charge_id,
+                    payment_intent_id=pi_id,
+                    amount_cents=amount,
+                    currency=currency,
+                    dispute_id=dispute.get("id"),
+                )
+            except Exception:
+                logger.exception(
+                    "record_chargeback_failed",
+                    extra={"user_id": user_id, "charge_id": charge_id},
+                )
+
+        elif event_type == "charge.dispute.funds_withdrawn":
             pay = ddb_get(T.billing, pk, pay_sk(pi_id)) if pi_id else None
             led_sk_value, led_item = new_ledger_entry(
                 key_name="pk",
