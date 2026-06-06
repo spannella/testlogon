@@ -141,8 +141,14 @@ def _table_defs() -> List[TableDef]:
                 # (only items carrying both entity_type + admin_sub are projected),
                 # so workload lookups Query instead of full-table Scanning.
                 {"index_name": S.kyc_cases_entity_type_index_name, "partition_key": "entity_type", "sort_key": "admin_sub"},
+                # GAP-0283 (KYC-019): sparse index over the top-level denormalized
+                # ``assigned_admin_sub`` (written on assignment, removed on unclaim)
+                # + ``gsi_status_pk``. Only assigned cases project, so per-admin
+                # active-case counts run a targeted Select=COUNT Query per admin
+                # instead of loading every active case into memory.
+                {"index_name": S.kyc_cases_assigned_admin_index_name, "partition_key": "assigned_admin_sub", "sort_key": "gsi_status_pk"},
             ],
-            attr_types={"gsi_pii_accessor_sk": "N", "entity_type": "S", "admin_sub": "S"},
+            attr_types={"gsi_pii_accessor_sk": "N", "entity_type": "S", "admin_sub": "S", "assigned_admin_sub": "S", "gsi_status_pk": "S"},
         ),
         TableDef(
             _resolve_table_name(S.kyc_business_cases_table_name, "kyc_business_cases"),

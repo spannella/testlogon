@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "kyc."
 _VALID_STATUSES = {"published", "draft", "needs_review"}
+_BATCH_GET_CHUNK = 100  # DynamoDB BatchGetItem hard limit (max 100 keys/call)
 
 # Locale display metadata.  Mirrors the platform i18n metadata but extended to
 # cover all KYC-supported locales (KYC-020 §1.2).
@@ -176,12 +177,73 @@ class KycTranslationService:
         return result
 
     def _bulk_fetch(self, *, language: str, keys: List[str]) -> Dict[str, str]:
-        """Fetch values for keys in one language (chunked GetItem)."""
-        out: Dict[str, str] = {}
+        """Fetch values for multiple keys in one language using BatchGetItem.
+
+        Chunks requests at 100 keys per call (DynamoDB's hard limit) and
+        re-queues any ``UnprocessedKeys`` (returned under heavy throttling) so
+        no key is silently dropped.  Falls back to individual ``GetItem`` for a
+        chunk only if ``BatchGetItem`` raises (e.g. the table is absent in a
+        minimal test environment), preserving correctness.
+
+        ``BatchGetItem`` is supported identically by DynamoDB Local / moto (dev,
+        tests) and AWS DynamoDB (prod), so there is no mock-specific path
+        (SECOPS-007 dev/prod parity).
+        """
+        if not keys:
+            return {}
+
+        # De-duplicate while preserving order; BatchGetItem rejects dupe keys.
+        seen: set = set()
+        pending: List[str] = []
         for k in keys:
-            item = self._get_item(language=language, key=k)
-            if item and item.get("value"):
-                out[k] = str(item["value"])
+            if k not in seen:
+                seen.add(k)
+                pending.append(k)
+
+        table = T.kyc_translations
+        table_name = table.name
+        client = table.meta.client
+        out: Dict[str, str] = {}
+
+        while pending:
+            chunk, pending = pending[:_BATCH_GET_CHUNK], pending[_BATCH_GET_CHUNK:]
+            request_items = {
+                table_name: {
+                    "Keys": [{"language_code": language, "key": k} for k in chunk],
+                }
+            }
+            try:
+                resp = client.batch_get_item(RequestItems=request_items)
+            except Exception:
+                logger.exception(
+                    "kyc_translations._bulk_fetch batch_get_item failed "
+                    "language=%s keys_count=%d (falling back to GetItem)",
+                    language,
+                    len(chunk),
+                )
+                # Fall back to individual GetItem for this chunk on failure.
+                for k in chunk:
+                    item = self._get_item(language=language, key=k)
+                    if item and item.get("value"):
+                        out[k] = str(item["value"])
+                continue
+
+            for item in resp.get("Responses", {}).get(table_name, []):
+                if item.get("value"):
+                    out[str(item["key"])] = str(item["value"])
+
+            # Re-queue any unprocessed keys (rare; occurs under heavy throttling).
+            unprocessed = (
+                resp.get("UnprocessedKeys", {}).get(table_name, {}).get("Keys", [])
+            )
+            if unprocessed:
+                logger.warning(
+                    "kyc_translations._bulk_fetch unprocessed_keys count=%d language=%s",
+                    len(unprocessed),
+                    language,
+                )
+                pending = [k["key"] for k in unprocessed] + pending
+
         return out
 
     def _query_language(

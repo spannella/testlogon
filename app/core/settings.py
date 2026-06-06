@@ -1206,6 +1206,11 @@ class Settings:
     # GAP-0282 (KYC-019): sparse GSI on entity_type+admin_sub so admin availability
     # records are fetched with a targeted Query instead of a full-table Scan.
     kyc_cases_entity_type_index_name: str = os.environ.get("KYC_CASES_ENTITY_TYPE_INDEX_NAME", "entity-type-index")
+    # GAP-0283 (KYC-019): sparse GSI keyed on the top-level denormalized
+    # ``assigned_admin_sub`` (PK) + ``gsi_status_pk`` (SK). Only cases that carry
+    # an assignment project into this index, so per-admin active-case counts use a
+    # targeted ``Select=COUNT`` Query instead of scanning every active case.
+    kyc_cases_assigned_admin_index_name: str = os.environ.get("KYC_CASES_ASSIGNED_ADMIN_INDEX_NAME", "assigned-admin-index")
     # KYC-023: PII field-level encryption & audited decryption
     kyc_encryption_enabled: bool = os.environ.get("KYC_ENCRYPTION_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     kyc_encryption_audit_enabled: bool = os.environ.get("KYC_ENCRYPTION_AUDIT_ENABLED", "true").lower() in ("1", "true", "yes", "on")

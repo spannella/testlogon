@@ -209,15 +209,17 @@ class KycCaseAssignmentService:
 
     def get_admin_availability(self, admin_sub: str) -> AdminAvailability:
         item = self._table.get_item(Key={"pk": _admin_pk(admin_sub), "sk": "AVAILABILITY"}).get("Item")
-        counts = self._active_case_counts()
+        # GAP-0283 (KYC-019): single-admin count via one targeted GSI Query
+        # instead of fetching the whole roster's counts.
+        count = self._count_active_for_admin(admin_sub)
         if not item:
             return AdminAvailability(
                 admin_sub=admin_sub,
                 on_duty=False,
-                current_case_count=counts.get(admin_sub, 0),
+                current_case_count=count,
                 max_cases=S.kyc_assignment_default_max_cases,
             )
-        return self._item_to_availability(item, case_count=counts.get(admin_sub, 0))
+        return self._item_to_availability(item, case_count=count)
 
     def set_admin_availability(
         self,
@@ -248,17 +250,71 @@ class KycCaseAssignmentService:
         if item["last_assigned_at"] is None:
             item.pop("last_assigned_at")
         self._table.put_item(Item=item)
-        counts = self._active_case_counts()
-        return self._item_to_availability(item, case_count=counts.get(admin_sub, 0))
+        # GAP-0283 (KYC-019): single-admin count via one targeted GSI Query.
+        return self._item_to_availability(item, case_count=self._count_active_for_admin(admin_sub))
 
     # ── workload aggregation ────────────────────────────────────────
 
+    # Active statuses that count toward an admin's workload (mirrors
+    # ``_scan_active_cases``). Stored as ``gsi_status_pk`` values on each case.
+    _ACTIVE_STATUS_PKS: tuple[str, ...] = (
+        "STATUS#submitted",
+        "STATUS#under_review",
+        "STATUS#needs_more_info",
+    )
+
+    def _count_active_for_admin(self, admin_sub: str) -> int:
+        """Number of active cases assigned to one admin via the GSI.
+
+        GAP-0283 (KYC-019): instead of loading every active case into memory and
+        bucketing by assignee in Python, Query the sparse ``assigned-admin-index``
+        GSI (PK ``assigned_admin_sub``) with ``Select=COUNT`` and a status filter,
+        paginating ``LastEvaluatedKey`` so the count is exact regardless of how
+        many cases an admin holds. Only assigned cases project into the index, so
+        the read is O(cases-for-this-admin), not O(all-active-cases).
+        """
+        admin_sub = str(admin_sub or "").strip()
+        if not admin_sub:
+            return 0
+        total = 0
+        ekey: dict[str, Any] | None = None
+        status_placeholders = {f":s{i}": pk for i, pk in enumerate(self._ACTIVE_STATUS_PKS)}
+        while True:
+            kwargs: dict[str, Any] = {
+                "IndexName": S.kyc_cases_assigned_admin_index_name,
+                "KeyConditionExpression": "assigned_admin_sub = :a",
+                "FilterExpression": "gsi_status_pk IN (" + ", ".join(status_placeholders) + ")",
+                "ExpressionAttributeValues": {":a": admin_sub, **status_placeholders},
+                "Select": "COUNT",
+            }
+            if ekey:
+                kwargs["ExclusiveStartKey"] = ekey
+            resp = self._table.query(**kwargs)
+            total += int(resp.get("Count") or 0)
+            ekey = resp.get("LastEvaluatedKey")
+            if not ekey:
+                break
+        return total
+
     def _active_case_counts(self) -> dict[str, int]:
+        """Per-admin active-case counts ({admin_sub: count}).
+
+        GAP-0283 (KYC-019): rewritten from an O(N-active-cases) scan-and-bucket to
+        O(A) targeted ``Select=COUNT`` Queries against the ``assigned-admin-index``
+        GSI — one per admin enumerated from the (small) availability roster. Return
+        shape is unchanged. Admins target only candidates drawn from the
+        availability roster, so enumerating it covers every realistic assignee.
+        """
         counts: dict[str, int] = {}
-        for case in self._scan_active_cases():
-            assigned = str((case.get("review") or {}).get("assigned_admin_sub") or "").strip()
-            if assigned:
-                counts[assigned] = counts.get(assigned, 0) + 1
+        seen: set[str] = set()
+        for item in self._scan_availability_items():
+            sub = str(item.get("admin_sub") or str(item.get("pk") or "").removeprefix("ADMIN#")).strip()
+            if not sub or sub in seen:
+                continue
+            seen.add(sub)
+            n = self._count_active_for_admin(sub)
+            if n:
+                counts[sub] = n
         return counts
 
     def list_admin_workloads(self) -> list[AdminAvailability]:
@@ -501,11 +557,24 @@ class KycCaseAssignmentService:
             review["sla_due_at"] = ts + int(sla["target_hours"]) * 3600
         else:
             review["sla_due_at"] = None
-        self._table.update_item(
-            Key=self._case_key(case_id),
-            UpdateExpression="SET review = :review, updated_at = :u",
-            ExpressionAttributeValues={":review": review, ":u": ts},
-        )
+        # GAP-0283 (KYC-019): denormalize the assignee to a TOP-LEVEL attribute so
+        # the sparse ``assigned-admin-index`` GSI can be Queried per admin. DynamoDB
+        # only projects items that carry the partition-key attribute, so on unclaim
+        # (new_admin_sub is None) we REMOVE the attribute to drop the case out of the
+        # index entirely. ``review.assigned_admin_sub`` (nested) remains the source
+        # of truth for reads; this top-level copy is index plumbing only.
+        if new_admin_sub:
+            self._table.update_item(
+                Key=self._case_key(case_id),
+                UpdateExpression="SET review = :review, updated_at = :u, assigned_admin_sub = :a",
+                ExpressionAttributeValues={":review": review, ":u": ts, ":a": new_admin_sub},
+            )
+        else:
+            self._table.update_item(
+                Key=self._case_key(case_id),
+                UpdateExpression="SET review = :review, updated_at = :u REMOVE assigned_admin_sub",
+                ExpressionAttributeValues={":review": review, ":u": ts},
+            )
         # Bump the assignee's last_assigned_at to spread future load.
         if new_admin_sub:
             try:
@@ -683,11 +752,20 @@ class KycCaseAssignmentService:
         new_review["escalation_level"] = next_level
         sla = self.get_sla_config().get(tier, _DEFAULT_SLA["tier_1"])
         new_review["sla_due_at"] = ts + int(sla["target_hours"]) * 3600
-        self._table.update_item(
-            Key=self._case_key(case_id),
-            UpdateExpression="SET review = :review, updated_at = :u",
-            ExpressionAttributeValues={":review": new_review, ":u": ts},
-        )
+        # GAP-0283 (KYC-019): keep the top-level ``assigned_admin_sub`` GSI key in
+        # sync with the (possibly new) assignee chosen during escalation.
+        if new_admin:
+            self._table.update_item(
+                Key=self._case_key(case_id),
+                UpdateExpression="SET review = :review, updated_at = :u, assigned_admin_sub = :a",
+                ExpressionAttributeValues={":review": new_review, ":u": ts, ":a": new_admin},
+            )
+        else:
+            self._table.update_item(
+                Key=self._case_key(case_id),
+                UpdateExpression="SET review = :review, updated_at = :u REMOVE assigned_admin_sub",
+                ExpressionAttributeValues={":review": new_review, ":u": ts},
+            )
         if new_admin:
             try:
                 self._table.update_item(

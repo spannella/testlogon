@@ -69,6 +69,7 @@ from app.services.kyc_signature_templates import (
 from app.routers.tickets import get_kyc_sync_snapshot
 from app.services.tickets import STORE as TICKET_STORE, TicketStateError
 from app.services.sessions import require_ui_session
+from app.services.kyc_translations import kyc_translation_service
 from app.services.kyc_sanctions_screening import (
     STORE as SCREENING_STORE,
     TRIGGER_SUBMISSION,
@@ -783,6 +784,51 @@ def _ensure_decision_ticket_updates(case: dict, *, admin_sub: str, decision_hash
         pass
 
 
+def _send_kyc_notification_email(
+    *,
+    user_sub: str,
+    event: str,
+    variables: dict,
+    accept_language: str | None = None,
+) -> None:
+    """Dispatch a KYC case-status transition email in the user's locale.
+
+    GAP-0285 (KYC-020 §4.9): resolve the recipient's locale and run the email
+    subject/body through ``kyc_translation_service.localize_email`` before
+    dispatch. Entirely best-effort — any failure (locale resolution, translation
+    lookup, missing email, SES) is swallowed so it never blocks the admin
+    decision response. ``localize_email`` itself falls back to English / the
+    event key when no localized template is seeded (dev/prod parity, SECOPS-007).
+    """
+    if not user_sub:
+        return
+    try:
+        locale = kyc_translation_service.resolve_locale_for_user(
+            user_sub, accept_language=accept_language
+        )
+        subject, body = kyc_translation_service.localize_email(
+            event=event, language=locale, variables=variables
+        )
+        if not subject or not body:
+            return
+        from app.services.alerts import send_alert_email
+        from app.services.profile import get_profile
+
+        email = (get_profile(user_sub) or {}).get("email")
+        if not email:
+            return
+        send_alert_email([email], subject, body)
+        logger.info(
+            "kyc.notification_email_sent user_sub=%s event=%s locale=%s",
+            user_sub, event, locale,
+        )
+    except Exception:
+        logger.warning(
+            "kyc.notification_email_failed user_sub=%s event=%s",
+            user_sub, event, exc_info=True,
+        )
+
+
 @router.post("", response_model=KycCaseEnvelope)
 def create_kyc_case(
     body: KycCaseCreateRequest,
@@ -960,6 +1006,7 @@ def start_kyc_questionnaire(
     case_id: str,
     body: KycStartQuestionnaireRequest,
     request: Request,
+    lang: str | None = Query(default=None, description="BCP-47 language code override for the KYC questionnaire locale"),
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
@@ -970,6 +1017,30 @@ def start_kyc_questionnaire(
     if case.get("user_sub") != user.sub:
         audit_event("kyc_questionnaire_start_denied", user.sub, request, outcome="failure", reason="forbidden", kyc_case_id=case_id)
         _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    # GAP-0285 (KYC-020 §4.9): resolve the user's KYC locale at questionnaire-start
+    # time so downstream rendering / PDF export pick up the correct language.
+    # ``?lang=`` is an explicit override (normalised against supported locales);
+    # otherwise we fall back to the profile locale → Accept-Language → English.
+    # Best-effort: any failure degrades gracefully to the default locale.
+    accept_lang = request.headers.get("accept-language")
+    try:
+        if lang:
+            resolved_locale = kyc_translation_service.normalize_locale(lang)
+        else:
+            resolved_locale = kyc_translation_service.resolve_locale_for_user(
+                user.sub, accept_language=accept_lang
+            )
+    except Exception:
+        resolved_locale = kyc_translation_service.default_locale()
+        logger.warning(
+            "kyc.questionnaire_locale_resolve_failed user_sub=%s case_id=%s",
+            user.sub, case_id, exc_info=True,
+        )
+    logger.info(
+        "kyc.questionnaire_locale_resolved locale=%s user_sub=%s case_id=%s",
+        resolved_locale, user.sub, case_id,
+    )
 
     qref = case.get("questionnaire") or {}
     existing_qid = str(qref.get("questionnaire_id") or "").strip()
@@ -984,6 +1055,24 @@ def start_kyc_questionnaire(
     if not version:
         audit_event("kyc_questionnaire_start_denied", user.sub, request, outcome="failure", reason="invalid_request", kyc_case_id=case_id)
         _raise_kyc_error("kyc_invalid_request", details={"published_slug": body.published_slug, "reason": "published_questionnaire_not_found"})
+
+    # GAP-0285: localize the published questionnaire content for the resolved
+    # locale. Best-effort — translation lookups fall back to English / the
+    # literal value, so a failure here never blocks questionnaire start.
+    try:
+        _localized_version, _fallback_keys = kyc_translation_service.localize_questionnaire(
+            questionnaire=dict(version), language=resolved_locale
+        )
+        if _fallback_keys:
+            logger.info(
+                "kyc.questionnaire_localize_fallbacks locale=%s case_id=%s count=%d",
+                resolved_locale, case_id, len(_fallback_keys),
+            )
+    except Exception:
+        logger.warning(
+            "kyc.questionnaire_localize_failed locale=%s user_sub=%s case_id=%s",
+            resolved_locale, user.sub, case_id, exc_info=True,
+        )
 
     response_session_id = f"resp_{uuid4().hex}"
     session = QNR_REPO.put_response_session(
@@ -1002,6 +1091,9 @@ def start_kyc_questionnaire(
                 "version_id": str(version.get("version_id") or ""),
                 "response_session_id": str(session.get("response_session_id") or ""),
                 "response_pdf_ref": None,
+                # GAP-0285: persist the resolved locale on the questionnaire
+                # sub-object for downstream rendering / PDF export.
+                "locale": resolved_locale,
             },
         )
     except KycCaseConflictError:
@@ -1445,6 +1537,16 @@ def admin_request_more_info(
         )
     except TicketStateError:
         audit_event("kyc_admin_request_info_sync_failed", user.sub, request, outcome="failure", reason="ticket_message_conflict", kyc_case_id=case_id)
+    # GAP-0285: locale-aware needs-more-info email on the case-status transition.
+    _send_kyc_notification_email(
+        user_sub=str(updated.get("user_sub") or ""),
+        event="kyc.needs_more_info",
+        variables={
+            "case_id": case_id,
+            "requested_items": ", ".join(body.requested_items),
+            "note": body.note.strip(),
+        },
+    )
     _audit_state_transition(
         event_name="kyc_admin_request_info",
         actor_sub=user.sub,
@@ -1527,6 +1629,17 @@ def _admin_decide_case(
         decision=decision,
         reason_codes=list(body.reason_codes),
         note=body.note.strip(),
+    )
+    # GAP-0285: locale-aware approve/reject email on the case-status transition.
+    _send_kyc_notification_email(
+        user_sub=str(updated.get("user_sub") or ""),
+        event=("kyc.approved" if decision == "approve" else "kyc.rejected"),
+        variables={
+            "case_id": case_id,
+            "decision": decision,
+            "note": body.note.strip(),
+            "reason_codes": ", ".join(body.reason_codes),
+        },
     )
     _audit_state_transition(
         event_name="kyc_admin_decision",
