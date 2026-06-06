@@ -52,6 +52,25 @@ export interface SubtitleTrackInfo {
   is_default: boolean;
 }
 
+/**
+ * Full DRM configuration for EME-based key systems
+ * (Widevine / PlayReady / FairPlay). Distinct from the legacy `drmKeyUrl`
+ * which only covers AES-128 HLS key delivery (no CDM).
+ */
+export interface DrmConfig {
+  /** Widevine / PlayReady CDM license acquisition URL */
+  licenseUrl?: string;
+  /** Bearer token / DRM-system-specific auth token for the license server */
+  token?: string;
+  /** FairPlay certificate URL (Safari only; fetched once per page load) */
+  fairplayCertificateUrl?: string;
+  /** Override the key system; defaults to auto-detect from browser capabilities */
+  keySystem?:
+    | "com.widevine.alpha"
+    | "com.microsoft.playready"
+    | "com.apple.fps.1_0";
+}
+
 export interface MediaPlayerProps {
   /** HLS manifest URL */
   src: string;
@@ -75,14 +94,31 @@ export interface MediaPlayerProps {
   className?: string;
   /** Show native controls (default true for VOD, false for live) */
   controls?: boolean;
-  /** Key server URL for AES-128 HLS encryption */
+  /** Key server URL for AES-128 HLS encryption (basic HLS encryption; no CDM required) */
   drmKeyUrl?: string;
+  /** Full DRM configuration for Widevine / PlayReady / FairPlay (EME-based) content */
+  drmConfig?: DrmConfig;
   /** Subtitle tracks to render as <track> elements */
   subtitleTracks?: SubtitleTrackInfo[];
   /** Called when video playback ends naturally */
   onEnded?: () => void;
   /** Called during playback with watch percentage (0-100); throttled to ≥5% increments */
   onProgress?: (watchPct: number) => void;
+  /**
+   * Called ~30 seconds before the playback token is expected to expire.
+   * Should return a Promise resolving to the new token string. The fresh
+   * token is injected into subsequent segment / manifest / license requests
+   * without re-initialising the HLS.js instance. If the promise rejects,
+   * `onError` is invoked with code `TOKEN_REFRESH_FAILED`.
+   */
+  onTokenExpiring?: () => Promise<string>;
+  /**
+   * Unix timestamp (seconds) when the current playback token expires.
+   * Required to schedule a proactive refresh. If omitted, the player attempts
+   * to derive it from the JWT `exp` claim of the `token=` query parameter in
+   * `src`. If neither is available, no refresh is scheduled.
+   */
+  tokenExpiresAt?: number;
 }
 
 interface QualityLevel {
@@ -178,6 +214,112 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ─── Token Helpers (token-refresh, GAP-0300) ────────────────────────────────
+
+/** Extract the `token=` query parameter from a playback URL, if present. */
+function extractToken(url: string): string | null {
+  try {
+    return new URL(url, window.location.origin).searchParams.get("token");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decode the `exp` (Unix seconds) claim from a JWT without verifying the
+ * signature. Returns undefined for non-JWT tokens or missing/invalid `exp`.
+ */
+function decodeJwtExp(token: string | null | undefined): number | undefined {
+  if (!token) return undefined;
+  const parts = token.split(".");
+  if (parts.length !== 3) return undefined;
+  try {
+    const payloadSeg = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(atob(payloadSeg)) as { exp?: unknown };
+    return typeof payload.exp === "number" ? payload.exp : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Rewrite the `token=` query param on a URL with a fresh token value. */
+function withToken(url: string, token: string): string {
+  try {
+    const u = new URL(url, window.location.origin);
+    u.searchParams.set("token", token);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+// ─── Safari native FairPlay (GAP-0299) ───────────────────────────────────────
+
+/**
+ * Wire up Safari native FairPlay (com.apple.fps.1_0) DRM via the EME
+ * `encrypted` event. Fetches the FairPlay certificate once, generates a
+ * key-session request per `encrypted` event, exchanges the SPC for a CKC with
+ * the license server (Bearer auth from `drmTokenRef`), and feeds it back via
+ * `keySession.update`. Returns a detach function that removes the listener.
+ *
+ * Defensive: every async step is wrapped so a FairPlay failure surfaces via
+ * `onError` and never throws into the render path.
+ */
+function attachFairplay(
+  video: HTMLVideoElement,
+  drmConfig: DrmConfig,
+  drmTokenRef: { current: string | null },
+  onError?: (error: MediaError) => void,
+): () => void {
+  let fpsCert: ArrayBuffer | null = null;
+
+  const onEncrypted = async (event: Event) => {
+    const evt = event as MediaEncryptedEvent;
+    try {
+      if (!fpsCert) {
+        const certResp = await fetch(drmConfig.fairplayCertificateUrl!);
+        fpsCert = await certResp.arrayBuffer();
+      }
+      const mediaKeys = video.mediaKeys;
+      if (!mediaKeys) return;
+      const keySession = mediaKeys.createSession();
+      keySession.addEventListener("message", async (msgEvt: Event) => {
+        try {
+          const message = (msgEvt as MediaKeyMessageEvent).message;
+          const licenseResp = await fetch(drmConfig.licenseUrl!, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              ...(drmTokenRef.current
+                ? { Authorization: `Bearer ${drmTokenRef.current}` }
+                : {}),
+            },
+            body: message,
+          });
+          const license = await licenseResp.arrayBuffer();
+          await keySession.update(license);
+        } catch (err) {
+          onError?.({
+            code: "DRM_ERROR",
+            message: `FairPlay license exchange failed: ${String(err)}`,
+          });
+        }
+      });
+      await keySession.generateRequest(evt.initDataType, evt.initData!);
+    } catch (err) {
+      onError?.({
+        code: "DRM_ERROR",
+        message: `FairPlay key session failed: ${String(err)}`,
+      });
+    }
+  };
+
+  video.addEventListener("encrypted", onEncrypted);
+  return () => {
+    video.removeEventListener("encrypted", onEncrypted);
+  };
+}
+
 // ─── MediaPlayer Component ──────────────────────────────────────────────────
 
 export function MediaPlayer({
@@ -193,15 +335,25 @@ export function MediaPlayer({
   className,
   controls,
   drmKeyUrl,
+  drmConfig,
   subtitleTracks,
   onEnded,
   onProgress,
+  onTokenExpiring,
+  tokenExpiresAt,
 }: MediaPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const mediaRecoveryCount = useRef(0);
+  /** Mutable holder for the current playback token so xhrSetup / license
+   *  requests always use the latest value without re-creating the HLS.js
+   *  instance. Initialised from the `token=` query param of `src`. */
+  const tokenRef = useRef<string | null>(null);
+  /** Mutable holder for the current DRM license token (defaults to drmConfig.token). */
+  const drmTokenRef = useRef<string | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const [playerState, setPlayerState] = useState<PlayerState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -290,16 +442,30 @@ export function MediaPlayer({
     setErrorMessage(null);
     mediaRecoveryCount.current = 0;
 
+    // Seed the mutable token holder for the native path too (GAP-0300).
+    tokenRef.current = extractToken(src);
+    drmTokenRef.current = drmConfig?.token ?? null;
+
     // Native HLS fallback (Safari)
     if (!Hls.isSupported()) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        // Safari native FairPlay key handling (GAP-0299). Only wires up the
+        // EME `encrypted` listener when a FairPlay cert + license URL are
+        // configured; otherwise the non-DRM native path is unchanged.
+        let detachFairplay: (() => void) | undefined;
+        if (drmConfig?.fairplayCertificateUrl && drmConfig.licenseUrl) {
+          detachFairplay = attachFairplay(video, drmConfig, drmTokenRef, onError);
+        }
+
         video.src = src;
         if (autoplay) {
           video.play().catch(() => {});
         }
         setPlayerState("ready");
         onReady?.();
-        return;
+        return () => {
+          detachFairplay?.();
+        };
       }
       setErrorMessage("HLS playback is not supported in this browser.");
       setPlayerState("error");
@@ -313,6 +479,11 @@ export function MediaPlayer({
       hlsRef.current = null;
     }
 
+    // Seed the mutable token holders from the current src / drmConfig so that
+    // xhrSetup + license requests pick up refreshed values (GAP-0300).
+    tokenRef.current = extractToken(src);
+    drmTokenRef.current = drmConfig?.token ?? null;
+
     const hlsConfig: Partial<ConstructorParameters<typeof Hls>[0]> = {
       startLevel: -1,
       enableWorker: true,
@@ -324,8 +495,48 @@ export function MediaPlayer({
       levelLoadingMaxRetry: 4,
     };
 
+    // Token injection on every segment/manifest XHR (GAP-0300). Only activates
+    // when the src URL carries a `token=` query param; otherwise it's a no-op,
+    // keeping the non-token path unchanged.
+    hlsConfig.xhrSetup = (xhr: XMLHttpRequest, url: string) => {
+      if (!tokenRef.current) return;
+      try {
+        const rewritten = withToken(url, tokenRef.current);
+        // Re-open with the rewritten URL so the latest token is always used.
+        xhr.open("GET", rewritten, true);
+      } catch {
+        // Non-parseable URL: leave the request untouched.
+      }
+    };
+
+    // AES-128 HLS key delivery (legacy, no CDM) — unchanged contract.
     if (drmKeyUrl) {
       hlsConfig.emeEnabled = true;
+    }
+
+    // EME-based DRM (Widevine / PlayReady) configuration (GAP-0299).
+    if (drmConfig?.licenseUrl) {
+      hlsConfig.emeEnabled = true;
+      const licenseXhrSetup = (xhr: XMLHttpRequest) => {
+        const tok = drmTokenRef.current;
+        if (tok) {
+          xhr.setRequestHeader("Authorization", `Bearer ${tok}`);
+        }
+      };
+      const systemConfig = {
+        licenseUrl: drmConfig.licenseUrl,
+        licenseXhrSetup,
+      };
+      // Cast: hls.js 1.6 DRMSystemsConfiguration typing varies across patch
+      // releases; the runtime shape is `{ [keySystem]: { licenseUrl, licenseXhrSetup } }`.
+      const drmSystems: Record<string, typeof systemConfig> = {};
+      if (drmConfig.keySystem) {
+        drmSystems[drmConfig.keySystem] = systemConfig;
+      } else {
+        drmSystems["com.widevine.alpha"] = systemConfig;
+        drmSystems["com.microsoft.playready"] = systemConfig;
+      }
+      (hlsConfig as Record<string, unknown>).drmSystems = drmSystems;
     }
 
     const hls = new Hls(hlsConfig as ConstructorParameters<typeof Hls>[0]);
@@ -404,7 +615,57 @@ export function MediaPlayer({
       hlsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src, mode, drmKeyUrl]);
+  }, [src, mode, drmKeyUrl, drmConfig]);
+
+  // ─── Token refresh scheduler (GAP-0300) ─────────────────────────────────
+  // Schedules a refresh ~30s before the playback token expires. The expiry is
+  // taken from the explicit `tokenExpiresAt` prop, falling back to the `exp`
+  // claim of the JWT in the `src` token query param. On fire, `onTokenExpiring`
+  // returns a fresh token which is stored in `tokenRef` (and `drmTokenRef`) so
+  // subsequent segment / manifest / license XHRs pick it up. Cleared on unmount.
+
+  useEffect(() => {
+    if (!onTokenExpiring) return;
+    const expiresAt =
+      typeof tokenExpiresAt === "number"
+        ? tokenExpiresAt
+        : decodeJwtExp(extractToken(src));
+    if (!expiresAt) return;
+
+    const REFRESH_BUFFER_SEC = 30;
+    const now = Math.floor(Date.now() / 1000);
+    const refreshInSec = expiresAt - now - REFRESH_BUFFER_SEC;
+
+    const doRefresh = async () => {
+      try {
+        const newToken = await onTokenExpiring();
+        if (newToken) {
+          tokenRef.current = newToken;
+          drmTokenRef.current = newToken;
+        }
+      } catch {
+        onError?.({
+          code: "TOKEN_REFRESH_FAILED",
+          message: "Playback session could not be renewed.",
+        });
+      }
+    };
+
+    if (refreshInSec <= 0) {
+      // Token already within the refresh buffer — refresh immediately.
+      void doRefresh();
+      return;
+    }
+
+    refreshTimerRef.current = setTimeout(() => {
+      void doRefresh();
+    }, refreshInSec * 1000);
+
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, tokenExpiresAt, onTokenExpiring, onError]);
 
   // ─── Video event listeners ──────────────────────────────────────────────
 

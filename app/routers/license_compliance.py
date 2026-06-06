@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root
+from app.auth.roles import Role, normalize_role
 from app.models import (
     AdminComplianceIssueListOut,
     ComplianceCheckResultOut,
@@ -72,8 +73,11 @@ async def content_compliance_detail(
     record = svc.get_compliance_status(content_id=content_id)
     if not record:
         raise HTTPException(404, "No compliance record for this content")
-    # Creator may only view their own content's status.
-    if record.get("creator_id") and record["creator_id"] != session["user_sub"]:
+    # Content owner OR admin/root may view the compliance status (LICENSE-006).
+    caller_role = normalize_role(session.get("role"))
+    is_owner = record.get("creator_id") == session["user_sub"]
+    is_privileged = caller_role in {Role.ADMIN, Role.ROOT}
+    if record.get("creator_id") and not is_owner and not is_privileged:
         raise HTTPException(403, "Not authorized to view this content's compliance")
     return ComplianceStatusOut(**record)
 
