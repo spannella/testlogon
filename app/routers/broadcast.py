@@ -1163,17 +1163,39 @@ def accept_private_request_route(
     # Accept the private request in DDB
     result = accept_private_request(session_id, request_id, body.behavior, call_id)
 
-    # Transition broadcast to private status
-    transition_session_status(
-        session_id=session_id,
-        to_status="private",
-        reason="go_private",
-        actor=ctx["user_sub"],
-        extra_fields={
-            "private_session_id": request_id,
-            "private_behavior": body.behavior,
-        },
-    )
+    if body.behavior == "end":
+        # GAP-0124: tear down the public stream immediately. This must happen
+        # while the session is still in "ready"/"live" status, before any
+        # transition to "private" — stop_session_with_provider() guards on
+        # status in {"ready","live"} and would short-circuit otherwise.
+        try:
+            stop_session_with_provider(
+                session_id=session_id,
+                actor=ctx["user_sub"],
+                reason="go_private_end",
+                correlation_id=_correlation_id(request),
+            )
+        except Exception:
+            # Non-fatal: the private session itself must still proceed even if
+            # the provider stop fails; an operator alert will fire on the
+            # lingering session.
+            import logging
+            logging.getLogger(__name__).exception(
+                "go_private_end: stop_session_with_provider failed for session %s", session_id
+            )
+    else:
+        # Transition broadcast to private status (pause/continue keep the
+        # public stream resources; only the application-layer state changes).
+        transition_session_status(
+            session_id=session_id,
+            to_status="private",
+            reason="go_private",
+            actor=ctx["user_sub"],
+            extra_fields={
+                "private_session_id": request_id,
+                "private_behavior": body.behavior,
+            },
+        )
 
     # Record audit event
     record_broadcast_action(
@@ -1198,6 +1220,12 @@ def accept_private_request_route(
             "_type": "private:broadcast_paused",
             "session_id": session_id,
             "message": "Creator is in a private session",
+        })
+    elif body.behavior == "end":
+        broadcast_sse_publish(session_id, {
+            "_type": "private:broadcast_ended",
+            "session_id": session_id,
+            "message": "Broadcast has ended for private session",
         })
 
     return PrivateAcceptOut(

@@ -1,6 +1,6 @@
 # GAP-0122: MP4 never uploaded to S3 in production path
 
-**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: BCAST-008 · **Effort**: S
+**Status**: No change needed (covered by GAP-0121, 2026-06-05) · **Severity**: HIGH (High) · **Source ticket**: BCAST-008 · **Effort**: S
 **From**: gap audit (`docs/tickets/gaps/BCAST-008.md`); see also `docs/tickets/writeups/BCAST-008.md`
 
 ## Location

@@ -181,15 +181,40 @@ def end_private_session(
     max_mins = int(item.get("max_duration_minutes", 60))
     total_billed_cents = min(total_billed_cents, max_mins * rate)
 
-    # Write billing ledger entries
-    debit_id, credit_id = _write_private_billing(
-        viewer_id=item["viewer_id"],
-        creator_id=_get_session_creator(session_id),
-        amount_cents=total_billed_cents,
-        private_session_id=private_session_id,
-        session_id=session_id,
-        payment_method_id=item.get("payment_method_id", ""),
-    )
+    # Write billing ledger entries atomically. If the paired debit/credit
+    # transaction fails we must NOT mark the session "ended" (which would imply
+    # confirmed billing) — instead flag it "billing_failed" for reconciliation.
+    try:
+        debit_id, credit_id = _write_private_billing(
+            viewer_id=item["viewer_id"],
+            creator_id=_get_session_creator(session_id),
+            amount_cents=total_billed_cents,
+            private_session_id=private_session_id,
+            session_id=session_id,
+            payment_method_id=item.get("payment_method_id", ""),
+        )
+    except RuntimeError as exc:
+        T.broadcast_private_sessions.update_item(
+            Key={"pk": f"BCAST#{session_id}", "sk": f"PRIVATE#{private_session_id}"},
+            UpdateExpression="SET #st = :status, ended_at = :ea, ended_by = :eb, "
+            "total_billed_cents = :tbc, billing_error = :err",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={
+                ":status": "billing_failed",
+                ":ea": ts,
+                ":eb": ended_by,
+                ":tbc": total_billed_cents,
+                ":err": str(exc)[:500],
+            },
+        )
+        logger.error(
+            "broadcast.private.billing_failed session_id=%s private_id=%s billed=%d error=%s",
+            session_id, private_session_id, total_billed_cents, exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Billing transaction failed; session marked billing_failed.",
+        ) from exc
 
     T.broadcast_private_sessions.update_item(
         Key={"pk": f"BCAST#{session_id}", "sk": f"PRIVATE#{private_session_id}"},
@@ -307,8 +332,38 @@ def _write_private_billing(
 ) -> tuple[str, str]:
     """Write paired debit/credit billing ledger entries for a private session.
 
+    The viewer debit and creator credit are committed atomically via DynamoDB
+    ``TransactWriteItems`` so that either both ledger rows are written or neither
+    is. On failure a ``RuntimeError`` is raised so the caller can mark the
+    session ``billing_failed`` instead of silently losing the creator's credit.
+
     Returns (debit_entry_id, credit_entry_id).
     """
+    # Imported at function scope to keep module-level imports minimal. The
+    # low-level DynamoDB client is built using the SAME endpoint / region /
+    # credential resolution as `ddb_resource()` (the helper that wires every
+    # table), so dev (DynamoDB Local) and prod (AWS) behave identically
+    # (SECOPS-007 parity). TransactWriteItems is only available on the
+    # low-level client, not on the resource Table API.
+    import boto3
+    from boto3.dynamodb.types import TypeSerializer
+    from botocore.exceptions import ClientError
+
+    from app.core.aws_clients import (
+        _aws_region,
+        _ddb_endpoint_url,
+        _local_credentials_kwargs,
+    )
+    from app.core.settings import S
+
+    endpoint_url = _ddb_endpoint_url()
+    client = boto3.client(
+        "dynamodb",
+        region_name=_aws_region(),
+        endpoint_url=endpoint_url,
+        **_local_credentials_kwargs(endpoint_url),
+    )
+
     ts = now_ts()
     debit_id = uuid.uuid4().hex
     credit_id = uuid.uuid4().hex
@@ -322,38 +377,59 @@ def _write_private_billing(
         "payment_method_id": payment_method_id,
     }
 
-    try:
-        T.billing.put_item(Item={
-            "pk": f"USER#{viewer_id}",
-            "sk": f"LEDGER#{ts}#{debit_id}",
-            "entry_id": debit_id,
-            "ts": ts,
-            "type": "debit",
-            "amount_cents": amount_cents,
-            "currency": "USD",
-            "state": "settled",
-            "reason": reason,
-            "meta": meta,
-        })
-    except Exception:
-        logger.warning("private_billing_debit_failed viewer=%s amount=%d", viewer_id, amount_cents)
+    debit_row: Dict[str, Any] = {
+        "pk": f"USER#{viewer_id}",
+        "sk": f"LEDGER#{ts}#{debit_id}",
+        "entry_id": debit_id,
+        "ts": ts,
+        "type": "debit",
+        "amount_cents": amount_cents,
+        "currency": "USD",
+        "state": "settled",
+        "reason": reason,
+        "meta": meta,
+    }
+    credit_row: Dict[str, Any] = {
+        "pk": f"USER#{creator_id}",
+        "sk": f"LEDGER#{ts}#{credit_id}",
+        "entry_id": credit_id,
+        "ts": ts,
+        "type": "credit",
+        "amount_cents": amount_cents,
+        "currency": "USD",
+        "state": "settled",
+        "reason": reason,
+        "meta": meta,
+    }
+
+    serializer = TypeSerializer()
+    table_name = S.billing_table_name
+
+    def _serialize(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: serializer.serialize(v) for k, v in row.items()}
 
     try:
-        T.billing.put_item(Item={
-            "pk": f"USER#{creator_id}",
-            "sk": f"LEDGER#{ts}#{credit_id}",
-            "entry_id": credit_id,
-            "ts": ts,
-            "type": "credit",
-            "amount_cents": amount_cents,
-            "currency": "USD",
-            "state": "settled",
-            "reason": reason,
-            "meta": meta,
-        })
-    except Exception:
-        logger.warning("private_billing_credit_failed creator=%s amount=%d", creator_id, amount_cents)
+        client.transact_write_items(
+            TransactItems=[
+                {"Put": {"TableName": table_name, "Item": _serialize(debit_row)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(credit_row)}},
+            ]
+        )
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+        logger.error(
+            "private_billing_transact_failed viewer=%s creator=%s amount=%d error=%s",
+            viewer_id, creator_id, amount_cents, error_code,
+        )
+        raise RuntimeError(
+            f"Billing transaction failed ({error_code}): "
+            f"viewer={viewer_id} creator={creator_id} amount={amount_cents}"
+        ) from exc
 
+    logger.info(
+        "private_billing_settled viewer=%s creator=%s amount=%d debit=%s credit=%s",
+        viewer_id, creator_id, amount_cents, debit_id, credit_id,
+    )
     return debit_id, credit_id
 
 
