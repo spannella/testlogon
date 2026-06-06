@@ -120,3 +120,87 @@ def get_decrypted_tin(user_sub: str) -> Optional[str]:
     if not item or not item.get("tin_encrypted"):
         return None
     return kms_decrypt(item["tin_encrypted"]).decode()
+
+
+# ---------------------------------------------------------------------------
+# Admin TIN reveal + audit trail (GAP-0194 / SEC-004)
+# ---------------------------------------------------------------------------
+
+def _audit_pk(target_user_sub: str) -> str:
+    return f"TAX_AUDIT#{target_user_sub}"
+
+
+def write_tax_audit(*, action: str, actor: str, target: str, ip: str) -> None:
+    """Append a queryable TAX_AUDIT entry for a TIN-related operation.
+
+    Stored in the same ``tax_info`` table (no schema change):
+      - pk = TAX_AUDIT#{target}
+      - sk = AUDIT#{ts}#{id}
+
+    SEC-004 / GAP-0194 require a dedicated, queryable trail (not just a log line)
+    recording who viewed whose TIN, from which IP, and when.
+    """
+    from app.services.billing_shared import ulidish
+
+    ts = now_ts()
+    T.tax_info.put_item(
+        Item={
+            "pk": _audit_pk(target),
+            "sk": f"AUDIT#{ts}#{ulidish()}",
+            "action": action,
+            "actor": actor,
+            "target": target,
+            "ip": ip,
+            "ts": ts,
+        }
+    )
+
+
+def get_tax_info_admin(
+    *,
+    user_sub: str,
+    actor_sub: str,
+    ip_address: str,
+) -> Dict[str, Any]:
+    """Return the full decrypted TIN for admin compliance review.
+
+    Every successful call writes a ``TAX_AUDIT`` record (``action="tin_viewed"``)
+    with the actor, target, IP, and timestamp (SEC-004 / GAP-0194).
+
+    Raises ``LookupError("no_tax_info: ...")`` when the target has no W-9 on file.
+    """
+    item = T.tax_info.get_item(Key={"pk": _pk(user_sub), "sk": _SK}).get("Item")
+    if not item:
+        raise LookupError("no_tax_info: No W-9 on file for this user.")
+
+    tin_ct = item.get("tin_encrypted") or ""
+    tin_full = kms_decrypt(tin_ct).decode() if tin_ct else ""
+
+    write_tax_audit(
+        action="tin_viewed",
+        actor=actor_sub,
+        target=user_sub,
+        ip=ip_address,
+    )
+    # NOTE: the raw TIN is never logged — only the audit record (which omits it).
+    logger.info(
+        "tin_viewed",
+        extra={"actor_sub": actor_sub, "target_user_sub": user_sub, "context": "admin_reveal"},
+    )
+
+    out = _safe_view(item)
+    out["tin_full"] = tin_full  # only ever returned to ADMIN/ROOT callers
+    return out
+
+
+def list_tax_audit(*, target_user_sub: str, limit: int = 50) -> Dict[str, Any]:
+    """List TAX_AUDIT entries for a user, most-recent first."""
+    from boto3.dynamodb.conditions import Key as _Key
+
+    resp = T.tax_info.query(
+        KeyConditionExpression=_Key("pk").eq(_audit_pk(target_user_sub)),
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    items = resp.get("Items", [])
+    return {"entries": items, "count": len(items)}

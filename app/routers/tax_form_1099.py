@@ -30,6 +30,7 @@ from app.models import (
     TaxForm1099DownloadOut,
     TaxForm1099ListOut,
     TaxForm1099Out,
+    TaxInfoAdminOut,
     W9StatusOut,
     W9SubmitIn,
 )
@@ -260,3 +261,55 @@ def admin_list_year(
     _ensure_enabled()
     items = svc.list_year_forms(tax_year=tax_year)
     return TaxForm1099ListOut(items=[TaxForm1099Out(**i) for i in items])
+
+
+# ---------------------------------------------------------------------------
+# Admin TIN reveal + audit trail (GAP-0194 / SEC-004)
+# ---------------------------------------------------------------------------
+
+@tax_form_1099_router.get(
+    "/admin/info/{target_user_sub}",
+    response_model=TaxInfoAdminOut,
+    summary="Reveal a creator's full TIN (admin, audited)",
+)
+def admin_reveal_tin(
+    target_user_sub: str,
+    request: Request,
+    admin: Any = Depends(require_admin_or_root),
+) -> TaxInfoAdminOut:
+    """Retrieve a creator's full (decrypted) TIN for compliance review.
+
+    Restricted to ADMIN/ROOT. Every successful reveal writes an IP-logged
+    ``TAX_AUDIT`` record (``action="tin_viewed"``). Returns 404 when the target
+    has no W-9 on file.
+    """
+    _ensure_enabled()
+    _ensure_target_exists(target_user_sub)
+    ip = request.client.host if request.client else "unknown"
+    try:
+        result = tax_info_w9.get_tax_info_admin(
+            user_sub=target_user_sub,
+            actor_sub=admin.sub,
+            ip_address=ip,
+        )
+    except LookupError as exc:
+        code, _, message = str(exc).partition(":")
+        raise HTTPException(
+            status_code=404,
+            detail={"code": code or "no_tax_info", "message": (message or code).strip()},
+        )
+    return TaxInfoAdminOut(**result)
+
+
+@tax_form_1099_router.get(
+    "/admin/info/{target_user_sub}/audit",
+    summary="List TIN-access audit entries for a creator (admin)",
+)
+def admin_list_tin_audit(
+    target_user_sub: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    admin: Any = Depends(require_admin_or_root),
+) -> Dict[str, Any]:
+    """List the TAX_AUDIT trail for a user (most-recent first), ADMIN/ROOT only."""
+    _ensure_enabled()
+    return tax_info_w9.list_tax_audit(target_user_sub=target_user_sub, limit=limit)

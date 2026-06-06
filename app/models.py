@@ -2480,6 +2480,7 @@ class PayoutBalanceOut(BaseModel):
 class PayoutRequestIn(BaseModel):
     amount_cents: int = Field(ge=100)
     method: str = "bank_transfer"
+    method_id: Optional[str] = None
     notes: str = Field(default="", max_length=500)
 
 
@@ -2528,6 +2529,37 @@ class PayoutRejectIn(BaseModel):
 
 class PayoutMarkPaidIn(BaseModel):
     reference: str = Field(default="", max_length=500)
+
+
+# -- Payout Methods (GAP-0195 / FIN-009) --
+
+class PayoutMethodIn(BaseModel):
+    method_type: str = Field(..., pattern="^(bank_ach|bank_wire|paypal|check)$")
+    account_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
+    routing_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
+    paypal_email: str = Field(default="", max_length=254)
+    nickname: str = Field(default="", max_length=100)
+    set_as_default: bool = False
+
+
+class PayoutMethodUpdateIn(BaseModel):
+    nickname: str = Field(..., max_length=100)
+
+
+class PayoutMethodOut(BaseModel):
+    method_id: str
+    method_type: str
+    account_last4: str = ""
+    routing_last4: str = ""
+    paypal_email: str = ""
+    nickname: str = ""
+    is_default: bool = False
+    created_at: int
+    updated_at: int
+
+
+class PayoutMethodListOut(BaseModel):
+    methods: List[PayoutMethodOut]
 
 
 # ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
@@ -10460,6 +10492,16 @@ class W9StatusOut(BaseModel):
     certified: bool = False
     certified_at: Optional[int] = None
     updated_at: int = 0
+
+
+class TaxInfoAdminOut(W9StatusOut):
+    """W9StatusOut extended with the decrypted TIN (GAP-0194 / FIN-008).
+
+    Returned ONLY by the ADMIN/ROOT-gated TIN-reveal endpoint. Every reveal is
+    recorded in a queryable TAX_AUDIT trail. Never returned to non-admin callers.
+    """
+
+    tin_full: str = Field(..., description="Decrypted full TIN (SSN/EIN). Never cached or logged.")
 
 
 # ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────

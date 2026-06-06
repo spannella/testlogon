@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 PAYOUT_STATES = {"requested", "approved", "processing", "completed", "rejected", "cancelled", "failed"}
 ACTIVE_PAYOUT_STATES = {"requested", "approved", "processing"}
 
+# GAP-0195 (FIN-009): payout destination methods.
+# The CreatorPayouts table is keyed by a single HASH attribute (``payout_id``),
+# so payout-method records are co-located in the same table keyed by their
+# ``method_id`` (stored in ``payout_id``) and tagged with ``record_kind`` to
+# distinguish them from real payout records. They carry ``user_id`` so the
+# existing ``ByUserCreatedAt`` GSI can list a creator's methods.
+PAYOUT_METHOD_TYPES = {"bank_ach", "bank_wire", "paypal", "check"}
+PAYOUT_METHOD_KIND = "payout_method"
+
+
+def _is_payout_method(item: Dict[str, Any]) -> bool:
+    return item.get("record_kind") == PAYOUT_METHOD_KIND
+
 
 def _to_int(val: Any) -> int:
     """Coerce DynamoDB Decimal or string to int."""
@@ -42,6 +55,7 @@ def _payout_to_dict(item: Dict[str, Any]) -> Dict[str, Any]:
         "user_id": item.get("user_id", ""),
         "amount_cents": _to_int(item.get("amount_cents", 0)),
         "method": item.get("method", "bank_transfer"),
+        "method_id": item.get("method_id", ""),
         "status": item.get("status", ""),
         "created_at": _to_int(item.get("created_at", 0)),
         "updated_at": _to_int(item.get("updated_at", 0)),
@@ -123,6 +137,8 @@ def _get_active_payout_total(user_id: str) -> int:
         items = resp.get("Items", [])
 
         for item in items:
+            if _is_payout_method(item):
+                continue
             status = item.get("status", "")
             if status in ACTIVE_PAYOUT_STATES:
                 total += _to_int(item.get("amount_cents", 0))
@@ -149,6 +165,8 @@ def _has_active_payout(user_id: str) -> bool:
         items = resp.get("Items", [])
 
         for item in items:
+            if _is_payout_method(item):
+                continue
             status = item.get("status", "")
             if status in ACTIVE_PAYOUT_STATES:
                 return True
@@ -161,13 +179,24 @@ def _has_active_payout(user_id: str) -> bool:
     return False
 
 
-def request_payout(user_id: str, amount_cents: int, method: str = "bank_transfer", notes: str = "") -> dict:
+def request_payout(
+    user_id: str,
+    amount_cents: int,
+    method: str = "bank_transfer",
+    notes: str = "",
+    method_id: Optional[str] = None,
+) -> dict:
     """Create a payout request.
 
     Validates:
     - amount >= minimum (1000 cents / $10)
     - amount <= available_balance
     - No other active payout exists for user
+
+    When ``method_id`` is supplied it must reference a payout method owned by the
+    user; the stored ``method`` string is then derived from that method's type so
+    admins have real routing context. If omitted, the creator's default payout
+    method is used when one exists (GAP-0195 / FIN-009).
 
     Returns: {payout_id, amount_cents, status, created_at}
     """
@@ -190,6 +219,25 @@ def request_payout(user_id: str, amount_cents: int, method: str = "bank_transfer
     if amount_cents > balance["available_cents"]:
         raise ValueError(f"Insufficient balance. Available: {balance['available_cents']} cents")
 
+    # Resolve the payout destination (GAP-0195 / FIN-009).
+    resolved_method = method
+    resolved_method_id = ""
+    if method_id:
+        mitem = T.creator_payouts.get_item(Key={"payout_id": method_id}).get("Item")
+        if (
+            not mitem
+            or not _is_payout_method(mitem)
+            or mitem.get("user_id") != user_id
+        ):
+            raise ValueError("invalid_method_id:Payout method not found or not yours")
+        resolved_method = mitem.get("method_type", method)
+        resolved_method_id = method_id
+    else:
+        default = get_default_payout_method(user_id)
+        if default:
+            resolved_method = default["method_type"]
+            resolved_method_id = default["method_id"]
+
     now = now_ts()
     payout_id = f"payout_{uuid.uuid4().hex}"
 
@@ -197,7 +245,8 @@ def request_payout(user_id: str, amount_cents: int, method: str = "bank_transfer
         "payout_id": payout_id,
         "user_id": user_id,
         "amount_cents": amount_cents,
-        "method": method,
+        "method": resolved_method,
+        "method_id": resolved_method_id,
         "status": "requested",
         "created_at": now,
         "updated_at": now,
@@ -252,7 +301,7 @@ def list_user_payouts(user_id: str, *, limit: int = 25, cursor: Optional[str] = 
         query_kwargs["ExclusiveStartKey"] = start_key
 
     resp = T.creator_payouts.query(**query_kwargs)
-    items = [_payout_to_dict(item) for item in resp.get("Items", [])]
+    items = [_payout_to_dict(item) for item in resp.get("Items", []) if not _is_payout_method(item)]
     last_key = resp.get("LastEvaluatedKey")
     next_cursor = encode_cursor(last_key) if last_key else None
 
@@ -286,7 +335,7 @@ def list_payouts_admin(*, status: Optional[str] = None, limit: int = 25, cursor:
             scan_kwargs["ExclusiveStartKey"] = start_key
 
         resp = T.creator_payouts.scan(**scan_kwargs)
-        items = [_payout_to_dict(item) for item in resp.get("Items", [])]
+        items = [_payout_to_dict(item) for item in resp.get("Items", []) if not _is_payout_method(item)]
         # Sort by created_at desc since scan doesn't guarantee order
         items.sort(key=lambda x: x["created_at"], reverse=True)
         last_key = resp.get("LastEvaluatedKey")
@@ -447,3 +496,155 @@ def get_payout_stats() -> dict:
         query_kwargs3["ExclusiveStartKey"] = last_key
 
     return stats
+
+
+# ─── Payout Methods CRUD (GAP-0195 / FIN-009) ──────────────────────────────
+
+
+def _method_id() -> str:
+    return f"pmth_{uuid.uuid4().hex}"
+
+
+def _method_to_dict(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "method_id": item.get("method_id", item.get("payout_id", "")),
+        "method_type": item.get("method_type", ""),
+        "account_last4": item.get("account_last4", ""),
+        "routing_last4": item.get("routing_last4", ""),
+        "paypal_email": item.get("paypal_email", ""),
+        "nickname": item.get("nickname", ""),
+        "is_default": bool(item.get("is_default", False)),
+        "created_at": _to_int(item.get("created_at", 0)),
+        "updated_at": _to_int(item.get("updated_at", 0)),
+    }
+
+
+def list_payout_methods(user_id: str) -> List[Dict[str, Any]]:
+    """List all payout methods for a creator (via the ByUserCreatedAt GSI)."""
+    methods: List[Dict[str, Any]] = []
+    query_kwargs: Dict[str, Any] = {
+        "IndexName": "ByUserCreatedAt",
+        "KeyConditionExpression": Key("user_id").eq(user_id),
+        "ScanIndexForward": False,
+    }
+    while True:
+        resp = T.creator_payouts.query(**query_kwargs)
+        for item in resp.get("Items", []):
+            if _is_payout_method(item):
+                methods.append(_method_to_dict(item))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_kwargs["ExclusiveStartKey"] = last_key
+    return methods
+
+
+def add_payout_method(
+    user_id: str,
+    *,
+    method_type: str,
+    account_last4: str = "",
+    routing_last4: str = "",
+    paypal_email: str = "",
+    nickname: str = "",
+    set_as_default: bool = False,
+) -> Dict[str, Any]:
+    """Add a payout method. Only last-4 digits are persisted for bank accounts (SEC-004)."""
+    if method_type not in PAYOUT_METHOD_TYPES:
+        raise ValueError(f"invalid_method_type:Must be one of {sorted(PAYOUT_METHOD_TYPES)}")
+    if method_type in ("bank_ach", "bank_wire") and (not account_last4 or not routing_last4):
+        raise ValueError("bank_details_required:account_last4 and routing_last4 are required for bank methods")
+    if method_type == "paypal" and not paypal_email:
+        raise ValueError("paypal_email_required:paypal_email is required for PayPal methods")
+
+    # First method becomes default automatically.
+    existing = list_payout_methods(user_id)
+    make_default = set_as_default or not existing
+
+    ts = now_ts()
+    mid = _method_id()
+    item = {
+        "payout_id": mid,
+        "method_id": mid,
+        "user_id": user_id,
+        "record_kind": PAYOUT_METHOD_KIND,
+        "method_type": method_type,
+        "account_last4": account_last4,
+        "routing_last4": routing_last4,
+        "paypal_email": paypal_email,
+        "nickname": nickname,
+        "is_default": False,
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    T.creator_payouts.put_item(Item=item)
+
+    if make_default:
+        set_default_payout_method(user_id, mid)
+        item["is_default"] = True
+
+    logger.info("payout_method_added user_id=%s method_type=%s", user_id, method_type)
+    return _method_to_dict(item)
+
+
+def _get_method_item(user_id: str, method_id: str) -> Optional[Dict[str, Any]]:
+    item = T.creator_payouts.get_item(Key={"payout_id": method_id}).get("Item")
+    if not item or not _is_payout_method(item) or item.get("user_id") != user_id:
+        return None
+    return item
+
+
+def update_payout_method(user_id: str, method_id: str, *, nickname: str) -> Dict[str, Any]:
+    """Update mutable fields (currently only nickname)."""
+    if _get_method_item(user_id, method_id) is None:
+        raise LookupError("payout_method_not_found:Payout method not found")
+    ts = now_ts()
+    resp = T.creator_payouts.update_item(
+        Key={"payout_id": method_id},
+        UpdateExpression="SET nickname = :n, updated_at = :ts",
+        ExpressionAttributeValues={":n": nickname, ":ts": ts},
+        ReturnValues="ALL_NEW",
+    )
+    return _method_to_dict(resp["Attributes"])
+
+
+def set_default_payout_method(user_id: str, method_id: str) -> Dict[str, Any]:
+    """Mark a method as default; clears the flag on the creator's other methods."""
+    target = _get_method_item(user_id, method_id)
+    if target is None:
+        raise LookupError("payout_method_not_found:Payout method not found")
+    ts = now_ts()
+    for m in list_payout_methods(user_id):
+        desired = m["method_id"] == method_id
+        if m["is_default"] != desired:
+            T.creator_payouts.update_item(
+                Key={"payout_id": m["method_id"]},
+                UpdateExpression="SET is_default = :d, updated_at = :ts",
+                ExpressionAttributeValues={":d": desired, ":ts": ts},
+            )
+    target["is_default"] = True
+    target["updated_at"] = ts
+    logger.info("payout_method_default_set user_id=%s method_id=%s", user_id, method_id)
+    return _method_to_dict(target)
+
+
+def get_default_payout_method(user_id: str) -> Optional[Dict[str, Any]]:
+    """Return the creator's default payout method dict, or None if none set."""
+    for m in list_payout_methods(user_id):
+        if m["is_default"]:
+            return m
+    return None
+
+
+def delete_payout_method(user_id: str, method_id: str) -> None:
+    """Delete a payout method. Refuses to delete the default while others remain."""
+    existing = list_payout_methods(user_id)
+    target = next((m for m in existing if m["method_id"] == method_id), None)
+    if not target:
+        raise LookupError("payout_method_not_found:Payout method not found")
+    if target["is_default"] and len(existing) > 1:
+        raise ValueError(
+            "cannot_delete_default:Set another method as default before deleting this one"
+        )
+    T.creator_payouts.delete_item(Key={"payout_id": method_id})
+    logger.info("payout_method_deleted user_id=%s method_id=%s", user_id, method_id)
