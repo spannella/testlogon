@@ -1,0 +1,145 @@
+package com.testlogon.android.core.network.di
+
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.testlogon.android.core.network.BuildConfig
+import com.testlogon.android.core.network.SettingsStore
+import com.testlogon.android.core.network.auth.AuthEventSink
+import com.testlogon.android.core.network.auth.SessionAuthenticator
+import com.testlogon.android.core.network.cookie.PersistentCookieJar
+import com.testlogon.android.core.network.csrf.CsrfInterceptor
+import com.testlogon.android.core.network.health.HealthApi
+import com.testlogon.android.core.network.host.HostSelectionInterceptor
+import com.testlogon.android.core.network.retry.RetryInterceptor
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import java.util.concurrent.TimeUnit
+import javax.inject.Provider
+import javax.inject.Qualifier
+import javax.inject.Singleton
+
+/** Qualifies the loop-safe client (no authenticator) used to perform the session refresh call. */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class RefreshClient
+
+@Module
+@InstallIn(SingletonComponent::class)
+object NetworkModule {
+
+    private const val TIMEOUT_SECONDS = 20L
+
+    @Provides
+    @Singleton
+    fun provideAuthEventSink(): AuthEventSink = AuthEventSink.NONE
+
+    @Provides
+    @Singleton
+    fun provideMoshi(): Moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
+    @Provides
+    @Singleton
+    fun provideRetryInterceptor(): RetryInterceptor = RetryInterceptor()
+
+    @Provides
+    @Singleton
+    fun provideHttpLoggingInterceptor(): HttpLoggingInterceptor =
+        HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+            redactHeader("Authorization")
+            redactHeader("Cookie")
+            redactHeader("Set-Cookie")
+            redactHeader("X-CSRF-Token")
+            redactHeader("Proxy-Authorization")
+        }
+
+    /**
+     * Builds the base [OkHttpClient] (timeouts, cookie jar, host-selection + CSRF + retry
+     * interceptors, debug-only logging). The 401-refresh authenticator is added separately so the
+     * refresh call can reuse this exact configuration without recursing.
+     */
+    private fun baseClientBuilder(
+        cookieJar: PersistentCookieJar,
+        hostSelectionInterceptor: HostSelectionInterceptor,
+        csrfInterceptor: CsrfInterceptor,
+        retryInterceptor: RetryInterceptor,
+        loggingInterceptor: HttpLoggingInterceptor,
+    ): OkHttpClient.Builder = OkHttpClient.Builder()
+        .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .cookieJar(cookieJar)
+        // Host selection first (so downstream sees the effective URL), then CSRF, then retry,
+        // and logging last so it observes/redacts the final headers.
+        .addInterceptor(hostSelectionInterceptor)
+        .addInterceptor(csrfInterceptor)
+        .addInterceptor(retryInterceptor)
+        .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor) }
+
+    /** Loop-safe client (no authenticator) used only to perform the refresh request. */
+    @Provides
+    @Singleton
+    @RefreshClient
+    fun provideRefreshClient(
+        cookieJar: PersistentCookieJar,
+        hostSelectionInterceptor: HostSelectionInterceptor,
+        csrfInterceptor: CsrfInterceptor,
+        retryInterceptor: RetryInterceptor,
+        loggingInterceptor: HttpLoggingInterceptor,
+    ): OkHttpClient = baseClientBuilder(
+        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor, loggingInterceptor,
+    ).build()
+
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(
+        cookieJar: PersistentCookieJar,
+        hostSelectionInterceptor: HostSelectionInterceptor,
+        csrfInterceptor: CsrfInterceptor,
+        retryInterceptor: RetryInterceptor,
+        loggingInterceptor: HttpLoggingInterceptor,
+        authenticator: SessionAuthenticator,
+    ): OkHttpClient = baseClientBuilder(
+        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor, loggingInterceptor,
+    ).authenticator(authenticator).build()
+
+    @Provides
+    @Singleton
+    fun provideSessionAuthenticator(
+        @RefreshClient refreshClient: Provider<OkHttpClient>,
+        cookieJar: PersistentCookieJar,
+        settingsStore: SettingsStore,
+        authEventSink: AuthEventSink,
+    ): SessionAuthenticator = SessionAuthenticator(
+        refreshClient = refreshClient,
+        cookieJar = cookieJar,
+        settingsStore = settingsStore,
+        authEventSink = authEventSink,
+    )
+
+    @Provides
+    @Singleton
+    fun provideRetrofit(
+        client: OkHttpClient,
+        moshi: Moshi,
+        settingsStore: SettingsStore,
+    ): Retrofit = Retrofit.Builder()
+        // Placeholder base URL; HostSelectionInterceptor rewrites scheme/host/port at request time.
+        .baseUrl(settingsStore.baseUrl)
+        .callFactory(client)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+
+    @Provides
+    @Singleton
+    fun provideHealthApi(retrofit: Retrofit): HealthApi = retrofit.create(HealthApi::class.java)
+}
