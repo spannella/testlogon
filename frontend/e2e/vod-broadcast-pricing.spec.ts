@@ -230,9 +230,12 @@ test.afterAll(async () => {
 // Section 113: Subscription-Gated VOD Access
 // =============================================================================
 
-const FREE_VIDEO_ID = `e2e_free_vod_${TS}`;
-const PAID_VIDEO_ID = `e2e_paid_vod_${TS}`;
-const SUB_ONLY_VIDEO_ID = `e2e_sub_vod_${TS}`;
+// The by-creator listing (list_videos_by_creator_public) now filters to
+// real video IDs via Attr("video_id").begins_with("v_"), so seeded videos
+// must use the "v_" prefix to appear in 113.5/113.6.
+const FREE_VIDEO_ID = `v_e2e_free_vod_${TS}`;
+const PAID_VIDEO_ID = `v_e2e_paid_vod_${TS}`;
+const SUB_ONLY_VIDEO_ID = `v_e2e_sub_vod_${TS}`;
 
 test.describe("113 · Subscription-Gated VOD Access", () => {
   test.beforeAll(async () => {

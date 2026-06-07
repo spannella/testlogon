@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 import uuid
 from decimal import Decimal
 
@@ -310,8 +311,20 @@ def _case_pk(case_id: str) -> str:
     return f"KYC#{case_id}"
 
 
-def _verify_sk(ts: int, verify_id: str) -> str:
-    return f"ADDRVERIFY#{ts:013d}#{verify_id}"
+def _now_ms() -> int:
+    """Millisecond epoch timestamp.
+
+    Used for the verification sub-record sort key so two attempts that land
+    within the same wall-clock second still sort deterministically by recency
+    (the SK is the only "latest wins" signal; a same-second collision would
+    otherwise be broken by the random verify_id, making get_latest flaky).
+    The 13-digit SK width already accommodates ms precision.
+    """
+    return int(time.time() * 1000)
+
+
+def _verify_sk(ts_ms: int, verify_id: str) -> str:
+    return f"ADDRVERIFY#{ts_ms:013d}#{verify_id}"
 
 
 def _new_verify_id() -> str:
@@ -433,11 +446,12 @@ class KycAddressVerificationStore:
 
         decision = _decision_for_confidence(confidence)
         ts = now_ts()
+        ts_ms = _now_ms()
         verify_id = _new_verify_id()
 
         record: dict[str, Any] = {
             "pk": _case_pk(case_id),
-            "sk": _verify_sk(ts, verify_id),
+            "sk": _verify_sk(ts_ms, verify_id),
             "entity_type": "kyc_address_verification",
             "kyc_case_id": case_id,
             "verification_id": verify_id,

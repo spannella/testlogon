@@ -100,7 +100,7 @@ async function getCSSVar(page: Page, name: string): Promise<string> {
  */
 async function resetServerPreferences(_page: Page) {
   try {
-    const { execSync: ex } = require("child_process");
+    const ex = execSync;
     ex(
       `python3 -c "
 import boto3
@@ -113,6 +113,44 @@ table.update_item(Key={'user_sub': 'e2e_alice@test.local'}, UpdateExpression='RE
   } catch {
     // Ignore errors — best-effort cleanup
   }
+}
+
+/**
+ * Deterministically reset the server-side density preference to the default
+ * ("comfortable") and verify the write landed. We REMOVE first, then SET an
+ * explicit `comfortable` value so that even if a stale debounced PATCH from a
+ * prior density test lands afterwards, the server still reflects the default
+ * (the prior PATCH would have already fired before this runs, but this guards
+ * against the in-flight write/persist race). Read-back guarantees the value
+ * is committed before the page reload re-hydrates from the server.
+ */
+async function resetServerDensityToDefault() {
+  const ex = execSync;
+  ex(
+    `python3 -c "
+import boto3, time
+ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+table = ddb.Table('profiles')
+table.update_item(Key={'user_sub': 'e2e_alice@test.local'}, UpdateExpression='REMOVE ui_preferences')
+table.update_item(
+    Key={'user_sub': 'e2e_alice@test.local'},
+    UpdateExpression='SET ui_preferences = if_not_exists(ui_preferences, :e)',
+    ExpressionAttributeValues={':e': {}},
+)
+table.update_item(
+    Key={'user_sub': 'e2e_alice@test.local'},
+    UpdateExpression='SET ui_preferences.#d = :v',
+    ExpressionAttributeNames={'#d': 'density'},
+    ExpressionAttributeValues={':v': 'comfortable'},
+)
+for _ in range(20):
+    item = table.get_item(Key={'user_sub': 'e2e_alice@test.local'}).get('Item', {})
+    if item.get('ui_preferences', {}).get('density') == 'comfortable':
+        break
+    time.sleep(0.05)
+"`,
+    { cwd: "/home/ubuntu/testlogon", timeout: 8_000 },
+  );
 }
 
 // ─── Section 109 — Accent Color ──────────────────────────────────────────────
@@ -478,8 +516,26 @@ test.describe("111. Density", () => {
   });
 
   test("111.7 Comfortable is default", async () => {
+    // Prior density tests in this block persist non-default values (e.g.
+    // "spacious") to the SERVER. On reload uiStore.loadServerPreferences()
+    // hydrates from the server and overrides the localStorage reset, so we
+    // must reset BOTH the server density pref AND localStorage to the default.
+    //
+    // Wait for any debounced server-sync timer (500ms) from 111.6's click to
+    // drain BEFORE resetting the server, otherwise a stale "spacious" PATCH can
+    // land after our reset and re-hydrate spacious on reload.
+    await page.waitForTimeout(900);
+    await resetServerDensityToDefault();
     await resetUiStore(page);
+
+    // Reload and wait for the server-pref GET (loadServerPreferences) to settle
+    // so the hydration that could override localStorage has already happened.
+    const prefsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/settings/preferences") && r.request().method() === "GET",
+      { timeout: 10_000 },
+    );
     await page.reload({ waitUntil: "load" });
+    await prefsLoaded.catch(() => {});
     await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
 
     const comfyBtn = page.locator("button[aria-pressed]", { hasText: "Comfortable" });

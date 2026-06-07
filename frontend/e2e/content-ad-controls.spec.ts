@@ -340,19 +340,29 @@ test.describe("602 — Revenue share API", () => {
     expect(body.revenue_share_bps).toBe(7000);
   });
 
-  test("602.2 Set revenue share to 8000 bps", async () => {
+  test("602.2 Set revenue share to 6500 bps", async () => {
+    // GAP-0054: a creator may take at most 7000 bps (70%) via self-service;
+    // RevenueShareIn validates revenue_share_bps with Field(ge=0, le=7000), so
+    // 6500 is a valid below-cap value that proves the set + persistence works.
     const resp = await apiPut(alicePage, ALICE_KEY, `${PREFIX}/revenue-share`, {
-      revenue_share_bps: 8000,
+      revenue_share_bps: 6500,
     });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
-    expect(body.revenue_share_bps).toBe(8000);
+    expect(body.revenue_share_bps).toBe(6500);
 
     const get = await apiGet(alicePage, `${PREFIX}/revenue-share`);
-    expect((await get.json()).revenue_share_bps).toBe(8000);
+    expect((await get.json()).revenue_share_bps).toBe(6500);
   });
 
   test("602.3 Out-of-range bps rejected", async () => {
+    // 8000 (> 7000 cap) and 20000 are both rejected by the Field(le=7000)
+    // validator (GAP-0054).
+    const over = await apiPut(alicePage, ALICE_KEY, `${PREFIX}/revenue-share`, {
+      revenue_share_bps: 8000,
+    });
+    expect(over.status()).toBe(422);
+
     const resp = await apiPut(alicePage, ALICE_KEY, `${PREFIX}/revenue-share`, {
       revenue_share_bps: 20000,
     });
@@ -377,7 +387,8 @@ test.describe("603 — Ad-revenue breakdown + transparency API", () => {
   test("603.2 Breakdown includes revenue_share_bps", async () => {
     const resp = await apiGet(alicePage, `${PREFIX}/revenue-breakdown?days=30`);
     const body = await resp.json();
-    expect(body.revenue_share_bps).toBe(8000);
+    // Reflects the value set in 602.2 (capped at 7000 bps per GAP-0054).
+    expect(body.revenue_share_bps).toBe(6500);
   });
 
   test("603.3 Invalid days rejected", async () => {

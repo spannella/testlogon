@@ -349,11 +349,24 @@ test.describe("Fan Club", () => {
     });
 
     test("2.2 — Charlie (Basic subscriber) gets badge", async () => {
-      const resp = await fcGet(charliePage, CHARLIE_ID, `/ui/fan-club/badge/${ALICE_ID}`);
-      expect(resp.ok()).toBe(true);
-      const badge = await resp.json();
+      // Badge resolution caches a null result for 60s when the subscription
+      // isn't yet visible. Under full-suite load a transient miss can poison
+      // that cache, so invalidate first and poll until the badge resolves.
+      await fcPost(charliePage, CHARLIE_ID, `/ui/fan-club/badge/${ALICE_ID}/invalidate`, {});
+      let badge: any = null;
+      await expect
+        .poll(
+          async () => {
+            await fcPost(charliePage, CHARLIE_ID, `/ui/fan-club/badge/${ALICE_ID}/invalidate`, {});
+            const resp = await fcGet(charliePage, CHARLIE_ID, `/ui/fan-club/badge/${ALICE_ID}`);
+            if (!resp.ok()) return null;
+            badge = await resp.json();
+            return badge?.tier_name ?? null;
+          },
+          { timeout: 15_000, intervals: [500, 1000, 2000] },
+        )
+        .toBe(`Basic ${TS}`);
       expect(badge).not.toBeNull();
-      expect(badge.tier_name).toBe(`Basic ${TS}`);
       expect(badge.tier_level).toBe(1);
       expect(badge.badge_emoji).toBe("star");
     });

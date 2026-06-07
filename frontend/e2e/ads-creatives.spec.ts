@@ -142,9 +142,58 @@ let imageCreativeId: string;
 let videoCreativeId: string;
 let nativeCreativeId: string;
 
+// ─── DDB cleanup helper ───────────────────────────────────────────────────────
+
+// GAP-0039: a user may own at most 5 (non-terminal) ad accounts; POST
+// /ui/ads/accounts returns 422 once the cap is hit. E2E runs accumulate ad
+// accounts for Alice/Bob across runs (and across specs in the suite), so without
+// cleanup the account-creating setup below eventually trips the cap (422 →
+// cascading failures). Delete all ad accounts owned by the given users (and
+// their campaigns) directly in DDB before the run so the create paths always
+// have headroom.
+function ddbDeleteOwnerAccounts(ownerSubs: string[]): void {
+  const script = `
+import boto3, os
+from pathlib import Path
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+from boto3.dynamodb.conditions import Key
+ddb = boto3.resource('dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'),
+    region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+accts = ddb.Table('AdAccounts')
+camps = ddb.Table('AdCampaigns')
+owners = os.environ['OWNER_SUBS'].split(',')
+for owner in owners:
+    resp = accts.query(IndexName='ByOwner', KeyConditionExpression=Key('owner_sub').eq(owner))
+    for item in resp.get('Items', []):
+        acct_pk = item['pk']
+        cresp = camps.query(KeyConditionExpression=Key('pk').eq(acct_pk))
+        for c in cresp.get('Items', []):
+            camps.delete_item(Key={'pk': c['pk'], 'sk': c['sk']})
+        accts.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
+print('ok')
+`;
+  execSync("python3 -", {
+    cwd: "/home/ubuntu/testlogon",
+    timeout: 20_000,
+    input: script,
+    env: { ...process.env, OWNER_SUBS: ownerSubs.join(",") },
+  });
+}
+
 // ── Setup: create account + campaign ──────────────────────────────────────────
 
 test.beforeAll(async ({ browser }) => {
+  // GAP-0039: wipe accumulated ad accounts so the 5-account cap never blocks
+  // the account-creation setup below regardless of suite order.
+  ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+
   alicePage = await newIdentityPage(browser, ALICE_ID);
   bobPage = await newIdentityPage(browser, BOB_ID);
   rootPage = await newIdentityPage(browser, ROOT_ID);

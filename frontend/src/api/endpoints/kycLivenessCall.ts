@@ -38,8 +38,11 @@ export const adminGetKycLivenessCall = (callId: string) =>
 
 // GAP-0251: admin per-case latest-call lookup. May not be deployed in every
 // environment yet; callers should fall back to listing by status on 404.
+// NOTE: the admin endpoint returns the full call record directly
+// (KycLivenessCallOut), not the {verification_call} status projection that the
+// owner-scoped /case/{case_id} endpoint returns.
 export const adminGetKycLivenessCallForCase = (caseId: string) =>
-  api.get<KycLivenessCallStatusResponse>(
+  api.get<KycLivenessCallOut>(
     `/ui/kyc/liveness-call/admin/case/${caseId}`,
   );
 

@@ -20,6 +20,61 @@ const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice";
 const CHARLIE_KEY = "charlie_admin";
 const TS = Date.now();
+const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+
+// Seed a settled (past-hold) billing credit so Alice has payout balance, and
+// clear any leftover per-user payout sentinel (GAP-0309) so /payouts/request
+// can mint a fresh requested payout for admin-queue tests.
+function seedAliceBalanceForPayout(): void {
+  const userSub = "e2e_alice@test.local";
+  execSync(
+    `${PYTHON} -c "
+import boto3, os, time, uuid
+from pathlib import Path
+env = Path('/home/ubuntu/testlogon/.env.local')
+for line in env.read_text().splitlines():
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        k, v = line.split('=', 1)
+        os.environ.setdefault(k.strip(), v.strip())
+from boto3.dynamodb.conditions import Key, Attr
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+b = ddb.Table('billing')
+ts = int(time.time()) - 700000
+eid = uuid.uuid4().hex
+b.put_item(Item={'pk': 'USER#${userSub}', 'sk': f'LEDGER#{ts}#{eid}', 'entry_id': eid, 'ts': ts, 'type': 'credit', 'amount_cents': 50000, 'currency': 'USD', 'state': 'settled', 'reason': 'admin queue seed', 'meta': {'content_type': 'message', 'content_id': 'admin_seed_${TS}'}})
+
+# Cancel ALL active payouts (GSI + base-table scan) so accumulated pending balance
+# is freed and the next request has funds, then drop the per-user sentinel.
+cp = ddb.Table('CreatorPayouts')
+active = {}
+try:
+    qresp = cp.query(IndexName='ByUserCreatedAt', KeyConditionExpression=Key('user_id').eq('${userSub}'))
+    for item in qresp.get('Items', []):
+        if item.get('status') in ('requested', 'approved', 'processing'):
+            active[item['payout_id']] = item
+except Exception:
+    pass
+scan_kwargs = {'FilterExpression': Attr('user_id').eq('${userSub}') & Attr('status').is_in(['requested', 'approved', 'processing'])}
+while True:
+    sresp = cp.scan(**scan_kwargs)
+    for item in sresp.get('Items', []):
+        active[item['payout_id']] = item
+    lek = sresp.get('LastEvaluatedKey')
+    if not lek:
+        break
+    scan_kwargs['ExclusiveStartKey'] = lek
+for pid in active:
+    cp.update_item(Key={'payout_id': pid}, UpdateExpression='SET #s = :s', ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'cancelled'})
+try:
+    cp.delete_item(Key={'payout_id': 'PAYOUT_STATE#${userSub}'})
+except Exception:
+    pass
+print('seeded')
+"`,
+    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+  );
+}
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────────
 
@@ -128,6 +183,7 @@ test.describe("Section 220: Payout Methods UI", () => {
     await apiPost(page, ALICE_KEY, "/ui/payouts/methods", {
       method_type: "bank_ach",
       account_last4: "1111",
+      routing_last4: "2222",
       nickname: `Picker ${TS}`,
     });
 
@@ -135,7 +191,7 @@ test.describe("Section 220: Payout Methods UI", () => {
     // My Payouts is default tab; open the destination select
     await page.getByTestId("payout-destination-trigger").click();
     await expect(
-      page.getByRole("option", { name: /Picker/ }),
+      page.getByRole("option", { name: /Picker/ }).first(),
     ).toBeVisible();
   });
 
@@ -144,6 +200,7 @@ test.describe("Section 220: Payout Methods UI", () => {
     const resp = await apiPost(page, ALICE_KEY, "/ui/payouts/methods", {
       method_type: "bank_ach",
       account_last4: "9999",
+      routing_last4: "8888",
       nickname: `Delete ${TS}`,
     });
     expect(resp.ok()).toBeTruthy();
@@ -186,14 +243,44 @@ test.describe("Section 221: Admin Queue tab", () => {
   });
 
   test("221.3 admin reject dialog enforces a min-length reason", async ({ browser }) => {
-    const page = await newIdentityPage(browser, CHARLIE_KEY);
+    // Seed a requested payout for Alice so the queue is non-empty. Needs
+    // balance + a valid amount (>= $10 minimum); seed a settled credit first.
+    seedAliceBalanceForPayout();
 
-    // Seed a requested payout for Alice so the queue is non-empty.
-    await apiPost(page, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 100,
+    // IMPORTANT: the payout request must be issued as ALICE. `page.request`
+    // carries the page's browser-context cookies, so issuing it from the admin
+    // page sends Charlie's session cookies with Alice's CSRF token → CSRF
+    // mismatch (403) and no payout is created. Use a dedicated Alice page so the
+    // request is genuinely authenticated as Alice and lands in the queue.
+    const alicePage = await newIdentityPage(browser, ALICE_KEY);
+    const reqResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
+      amount_cents: 2000,
       method: "bank_transfer",
       notes: `admin-test ${TS}`,
     });
+    expect(reqResp.ok()).toBeTruthy();
+    const createdPayoutId = (await reqResp.json()).payout_id as string;
+    await alicePage.close();
+
+    const page = await newIdentityPage(browser, CHARLIE_KEY);
+
+    // The admin queue reads the eventually-consistent ByStatusCreatedAt GSI; poll
+    // the API until the freshly-created payout appears so the UI render is reliable.
+    await expect
+      .poll(
+        async () => {
+          const r = await page.request.get(
+            `${API}/v1/admin/payouts?status=requested`,
+          );
+          if (!r.ok()) return false;
+          const data = await r.json();
+          return (data.items ?? []).some(
+            (p: { payout_id: string }) => p.payout_id === createdPayoutId,
+          );
+        },
+        { timeout: 15_000, intervals: [500, 750, 1000] },
+      )
+      .toBe(true);
 
     await page.goto(`${BASE}/payouts`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Admin Queue" }).click();

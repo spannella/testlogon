@@ -336,6 +336,7 @@ test.describe("81 — Admin seed endpoint", () => {
 test.describe("82 — Progress advance + auto-unlock API", () => {
   let rootPage: Page;
   let alicePage: Page;
+  let aliceSub: string;
   const PROGRESS_METRIC = `progress_e2e_${TS}`;
   const PROGRESS_ACH_ID = `ach_prog_${TS}`;
 
@@ -345,6 +346,7 @@ test.describe("82 — Progress advance + auto-unlock API", () => {
 
     alicePage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
+    aliceSub = getSessions()[ALICE_ID].user_sub;
 
     // Create a definition for this section's metric with threshold=3
     const resp = await apiPost(rootPage, ROOT_ID, "/ui/achievements/admin/definitions", {
@@ -372,9 +374,11 @@ test.describe("82 — Progress advance + auto-unlock API", () => {
   });
 
   test("82.1 Alice can advance progress (delta=1)", async () => {
-    const resp = await apiPost(alicePage, ALICE_ID, "/ui/achievements/admin/advance", {
+    // GAP-0161: admin/advance is now ROOT-only; root advances Alice's progress.
+    const resp = await apiPost(rootPage, ROOT_ID, "/ui/achievements/admin/advance", {
       metric_key: PROGRESS_METRIC,
       delta: 1,
+      user_sub: aliceSub,
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -391,9 +395,10 @@ test.describe("82 — Progress advance + auto-unlock API", () => {
   });
 
   test("82.3 Advance to threshold triggers auto-unlock", async () => {
-    const resp = await apiPost(alicePage, ALICE_ID, "/ui/achievements/admin/advance", {
+    const resp = await apiPost(rootPage, ROOT_ID, "/ui/achievements/admin/advance", {
       metric_key: PROGRESS_METRIC,
       delta: 2,
+      user_sub: aliceSub,
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -406,9 +411,10 @@ test.describe("82 — Progress advance + auto-unlock API", () => {
   });
 
   test("82.4 Further advance does not re-unlock (idempotent)", async () => {
-    const resp = await apiPost(alicePage, ALICE_ID, "/ui/achievements/admin/advance", {
+    const resp = await apiPost(rootPage, ROOT_ID, "/ui/achievements/admin/advance", {
       metric_key: PROGRESS_METRIC,
       delta: 1,
+      user_sub: aliceSub,
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -482,10 +488,11 @@ test.describe("83 — Display badges API", () => {
       });
       expect(resp.status()).toBe(201);
 
-      // Advance to unlock
-      const advResp = await apiPost(alicePage, ALICE_ID, "/ui/achievements/admin/advance", {
+      // Advance to unlock (GAP-0161: ROOT-only; root targets Alice)
+      const advResp = await apiPost(rootPage, ROOT_ID, "/ui/achievements/admin/advance", {
         metric_key: `${BADGE_METRIC}_${i}`,
         delta: 1,
+        user_sub: aliceSub,
       });
       expect(advResp.status()).toBe(200);
     }
@@ -625,6 +632,7 @@ test.describe("84 — Leaderboard API", () => {
 test.describe("84b — Achievements UI page", () => {
   let rootPage: Page;
   let alicePage: Page;
+  let aliceSub: string;
   const UI_METRIC = `ui_ach_${TS}`;
   const UI_ACH_ID = `ach_ui_${TS}`;
   const UI_BADGE_LABEL = `UI Badge ${TS}`;
@@ -651,11 +659,13 @@ test.describe("84b — Achievements UI page", () => {
 
     alicePage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
+    aliceSub = getSessions()[ALICE_ID].user_sub;
 
-    // Advance to unlock
-    const advResp = await apiPost(alicePage, ALICE_ID, "/ui/achievements/admin/advance", {
+    // Advance to unlock (GAP-0161: ROOT-only; root targets Alice)
+    const advResp = await apiPost(rootPage, ROOT_ID, "/ui/achievements/admin/advance", {
       metric_key: UI_METRIC,
       delta: 1,
+      user_sub: aliceSub,
     });
     expect(advResp.status()).toBe(200);
   });

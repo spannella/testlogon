@@ -159,6 +159,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
               return (
                 <button
                   key={convo.conversation_id}
+                  data-testid={`conversation-row-${convo.conversation_id}`}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-lg p-3 text-left transition-colors",
                     active

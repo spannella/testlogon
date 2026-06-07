@@ -49,6 +49,13 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates the SPA on the persisted auth-store; cookies alone
+  // authenticate API calls but the router would redirect to /login. Seed the
+  // auth-store before every navigation so protected pages actually render.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 let _dmConvoId: string | null = null;
@@ -92,35 +99,52 @@ test.describe("145 · Call Lifecycle Guards (GAP-0143 / GAP-0144)", () => {
 
     await bobPage.goto(`/messages/${convoId}`);
     await bobPage.waitForLoadState("domcontentloaded");
+    // ConversationView only attaches its `messaging:call-event` listener after it
+    // mounts (i.e. once the conversation data loads). Wait for the call control to
+    // appear so the listener is guaranteed to be live before we dispatch.
+    await expect(bobPage.getByRole("button", { name: "Start audio call" })).toBeVisible({
+      timeout: 15_000,
+    });
 
     // Drive Bob's ConversationView into the incoming_ringing phase by simulating
     // the inbound `call.invite` SSE event (Bob is the callee). No `call.missed`
     // is ever dispatched, so only the local guard can dismiss the overlay.
-    await bobPage.evaluate(
-      ({ cid, callId, aliceId, bobId }) => {
-        window.dispatchEvent(
-          new CustomEvent("messaging:call-event", {
-            detail: {
-              event_type: "call.invite",
-              conversation_id: cid,
-              call_id: callId,
-              caller_user_id: aliceId,
-              callee_user_id: bobId,
-              mode: "audio",
+    // Poll the dispatch: re-fire until the React listener has processed it (the
+    // effect can re-attach when dmPartner resolves, so a single early dispatch
+    // may be missed).
+    const ringing = bobPage.getByText(/is calling you\./);
+    await expect
+      .poll(
+        async () => {
+          await bobPage.evaluate(
+            ({ cid, callId, aliceId, bobId }) => {
+              window.dispatchEvent(
+                new CustomEvent("messaging:call-event", {
+                  detail: {
+                    event_type: "call.invite",
+                    conversation_id: cid,
+                    call_id: callId,
+                    caller_user_id: aliceId,
+                    callee_user_id: bobId,
+                    mode: "audio",
+                  },
+                }),
+              );
             },
-          }),
-        );
-      },
-      {
-        cid: convoId,
-        callId: `e2e-ringguard-${TS}`,
-        aliceId: sessions()["alice"].user_sub,
-        bobId: sessions()["bob"].user_sub,
-      },
-    );
+            {
+              cid: convoId,
+              callId: `e2e-ringguard-${TS}`,
+              aliceId: sessions()["alice"].user_sub,
+              bobId: sessions()["bob"].user_sub,
+            },
+          );
+          return ringing.isVisible();
+        },
+        { timeout: 10_000, intervals: [500, 500, 1000] },
+      )
+      .toBe(true);
 
     // Ringing overlay is visible.
-    const ringing = bobPage.getByText(/is calling you\./);
     await expect(ringing).toBeVisible({ timeout: 5_000 });
 
     // Before the guard (well under 32s) the overlay must still be ringing.
@@ -140,31 +164,43 @@ test.describe("145 · Call Lifecycle Guards (GAP-0143 / GAP-0144)", () => {
 
     await bobPage.goto(`/messages/${convoId}`);
     await bobPage.waitForLoadState("domcontentloaded");
+    await expect(bobPage.getByRole("button", { name: "Start audio call" })).toBeVisible({
+      timeout: 15_000,
+    });
 
-    await bobPage.evaluate(
-      ({ cid, callId, aliceId, bobId }) => {
-        window.dispatchEvent(
-          new CustomEvent("messaging:call-event", {
-            detail: {
-              event_type: "call.invite",
-              conversation_id: cid,
-              call_id: callId,
-              caller_user_id: aliceId,
-              callee_user_id: bobId,
-              mode: "audio",
+    const ringing = bobPage.getByText(/is calling you\./);
+    await expect
+      .poll(
+        async () => {
+          await bobPage.evaluate(
+            ({ cid, callId, aliceId, bobId }) => {
+              window.dispatchEvent(
+                new CustomEvent("messaging:call-event", {
+                  detail: {
+                    event_type: "call.invite",
+                    conversation_id: cid,
+                    call_id: callId,
+                    caller_user_id: aliceId,
+                    callee_user_id: bobId,
+                    mode: "audio",
+                  },
+                }),
+              );
             },
-          }),
-        );
-      },
-      {
-        cid: convoId,
-        callId: `e2e-ringguard-sse-${TS}`,
-        aliceId: sessions()["alice"].user_sub,
-        bobId: sessions()["bob"].user_sub,
-      },
-    );
+            {
+              cid: convoId,
+              callId: `e2e-ringguard-sse-${TS}`,
+              aliceId: sessions()["alice"].user_sub,
+              bobId: sessions()["bob"].user_sub,
+            },
+          );
+          return ringing.isVisible();
+        },
+        { timeout: 10_000, intervals: [500, 500, 1000] },
+      )
+      .toBe(true);
 
-    await expect(bobPage.getByText(/is calling you\./)).toBeVisible({ timeout: 5_000 });
+    await expect(ringing).toBeVisible({ timeout: 5_000 });
 
     // call.missed arrives well before the guard — overlay dismisses immediately,
     // and the guard cleanup prevents any later double-fire.
@@ -208,6 +244,11 @@ test.describe("145 · Call Lifecycle Guards (GAP-0143 / GAP-0144)", () => {
     );
     expect(ended.status()).toBe(200);
     const body = await ended.json();
-    expect(body.state).toBe("ended");
+    // The call was never accepted (still "invited"), so the lifecycle machine
+    // terminates it as "canceled" (only connected/accepted calls become
+    // "ended" — see end_call's next_state rule). The contract under test is
+    // that the end endpoint accepts reason=reconnect_failed and terminates.
+    expect(body.state).toBe("canceled");
+    expect(body.reason).toBe("reconnect_failed");
   });
 });

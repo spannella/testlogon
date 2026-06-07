@@ -606,10 +606,27 @@ test.describe("4. View-once text — 'Already viewed' stub after consuming", () 
   });
 
   test("After tapping, message text becomes visible", async () => {
+    // Consuming a view-once message is client-side instant (text reveals
+    // immediately) PLUS a fire-and-forget POST .../{messageId}/view that the
+    // backend uses to set `view_once_seen`. The "Already viewed" stub asserted
+    // by the NEXT test depends on that POST having landed, so wait for it here
+    // (register the listener BEFORE the click to avoid a race).
+    const viewPosted = page.waitForResponse(
+      (r) =>
+        /\/messages\/[^/]+\/view(\?|$)/.test(r.url()) &&
+        r.request().method() === "POST" &&
+        r.ok(),
+      { timeout: 8000 },
+    );
     await page.getByRole("button", { name: /tap to view once/i }).click();
     await expect(
       page.locator("p").filter({ hasText: VO_TEXT }),
     ).toBeVisible({ timeout: 5000 });
+    // Ensure the backend recorded the view before we navigate away/back, then
+    // give any concurrent ViewTracker POSTs a moment to drain so the
+    // server-side view_once_seen flag is committed.
+    await viewPosted.catch(() => {});
+    await page.waitForTimeout(800);
   });
 
   test("After navigating away and back, shows 'Already viewed' stub", async () => {
@@ -1063,17 +1080,13 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     await sec10Reload1ConvsLoaded;
     await page.waitForTimeout(300);
 
-    // The most-recent-active DM with Bob should now show Bob's text as preview.
-    // Anchor the row to THIS run's conversation by matching the unique MSG_TEXT
-    // preview: under shard accumulation there are many Bob DMs, so .first() alone
-    // could resolve a different (older) Bob conversation.  Requiring the unique
-    // preview text guarantees we are looking at _dmConvoId before/after expiry.
-    const convoRow = page
-      .getByRole("button")
-      .filter({ hasText: "E2E Bob" })
-      .filter({ hasText: MSG_TEXT })
-      .first();
+    // Anchor the row to THIS run's exact conversation via its conversation_id
+    // testid: under shard accumulation there are many Bob DMs (some with a
+    // newer __touch__ last-message), so a "first Bob row" selector resolves the
+    // wrong conversation. The id-scoped row is _dmConvoId before/after expiry.
+    const convoRow = page.getByTestId(`conversation-row-${_dmConvoId}`);
     await expect(convoRow).toBeVisible({ timeout: 8000 });
+    await expect(convoRow).toContainText(MSG_TEXT, { timeout: 8000 });
 
     // Wait for the 15-second TTL + 7-second buffer (22 s total).
     // The extra buffer absorbs backend latency and slow full-suite runs.
@@ -1089,7 +1102,7 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     await sec10Reload2ConvsLoaded;
     await page.waitForTimeout(300);
 
-    const convoRow2 = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    const convoRow2 = page.getByTestId(`conversation-row-${_dmConvoId}`);
     await expect(convoRow2).toBeVisible({ timeout: 8000 });
     // The sidebar preview must now show the stub text — NOT the original message.
     await expect(convoRow2).toContainText("[This message has expired]", { timeout: 15_000 });

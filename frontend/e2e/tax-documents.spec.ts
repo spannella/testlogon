@@ -199,8 +199,10 @@ function catOf(body: any, name: string) {
 }
 
 // ─── Test data ───────────────────────────────────────────────────────────────
+// FIN-004 consumer SPENDING summaries aggregate billing-ledger *debit* entries
+// (money the user SPENT), so all seeded entries use type="debit".
 // 2024 totals: tips 5000 (2), subscriptions 12000 (1), unlocks 3500 (1),
-//              other 1000 (1)  => grand 21500, 5 debit-less credit txns.
+//              other 1000 (1)  => grand 21500, 5 spending txns.
 // 2023 totals: tips 10000 (1) => grand 10000.
 
 test.describe("FIN-004 Consumer Tax Documents", () => {
@@ -210,13 +212,13 @@ test.describe("FIN-004 Consumer Tax Documents", () => {
     cleanupLedger(ALICE_ID);
     cleanupLedger(BOB_ID);
     seedLedger(ALICE_ID, [
-      { reason: "Tip from fan", amount_cents: 2000, year: TEST_YEAR },
-      { reason: "Tip: message", amount_cents: 3000, year: TEST_YEAR },
-      { reason: "Subscription renewal", amount_cents: 12000, year: TEST_YEAR },
-      { reason: "Unlock locked post", amount_cents: 3500, year: TEST_YEAR },
-      { reason: "Platform bonus adjustment", amount_cents: 1000, year: TEST_YEAR },
-      // a credit in 2023 for comparison
-      { reason: "Tip from fan", amount_cents: 10000, year: PREV_YEAR },
+      { reason: "Tip to creator", amount_cents: 2000, year: TEST_YEAR, type: "debit" },
+      { reason: "Tip: message", amount_cents: 3000, year: TEST_YEAR, type: "debit" },
+      { reason: "Subscription renewal", amount_cents: 12000, year: TEST_YEAR, type: "debit" },
+      { reason: "Unlock locked post", amount_cents: 3500, year: TEST_YEAR, type: "debit" },
+      { reason: "Platform bonus adjustment", amount_cents: 1000, year: TEST_YEAR, type: "debit" },
+      // a debit in 2023 for comparison
+      { reason: "Tip to creator", amount_cents: 10000, year: PREV_YEAR, type: "debit" },
     ]);
     alice = await newIdentityPage(browser, "alice");
   });

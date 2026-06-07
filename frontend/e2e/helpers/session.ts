@@ -52,6 +52,15 @@ export async function injectAuth(page: Page, key = "alice"): Promise<void> {
   const sess = loadSessions()[key];
   if (!sess) throw new Error(`No seeded session for identity "${key}"`);
   await page.context().addCookies(sess.cookies);
+  // The client router gates protected routes on the persisted Zustand auth-store
+  // (ProtectedRoute → useAuthStore.isAuthenticated). Cookies alone authenticate
+  // API calls but not the SPA, so seed the auth-store before any page load to
+  // avoid a redirect to /login. addInitScript runs on every navigation in this
+  // context, so it survives reloads too.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, sess.user_sub);
   _pageSession.set(page, sess);
 }
 

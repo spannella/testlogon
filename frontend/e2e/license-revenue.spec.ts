@@ -180,13 +180,18 @@ test.describe("471 -- Revenue Split Calculation API", () => {
 test.describe("472 -- Revenue Split Processing API", () => {
   let alicePage: Page;
   let bobPage: Page;
+  let rootPage: Page;
 
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, ALICE_KEY);
     bobPage = await newIdentityPage(browser, BOB_KEY);
+    // GAP-0295/0296: register/revoke/process-split are admin/root-only.
+    // Root performs the privileged mutations on behalf of Alice/Bob
+    // (licensor_id/licensee_id are passed explicitly in each body).
+    rootPage = await newIdentityPage(browser, ROOT_KEY);
 
     // Register Alice's license on Bob's content (5% revenue share)
-    const regResp = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/register-license", {
+    const regResp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID,
       content_id: CONTENT_ID,
       licensor_id: ALICE_SUB,
@@ -198,7 +203,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     expect(regResp.status()).toBe(200);
 
     // Register license with fixed fee on separate content
-    const regFixed = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/register-license", {
+    const regFixed = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_FIXED,
       content_id: CONTENT_FIXED,
       licensor_id: ALICE_SUB,
@@ -210,7 +215,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     expect(regFixed.status()).toBe(200);
 
     // Register profit share license
-    const regProf = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/register-license", {
+    const regProf = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_PROF,
       content_id: CONTENT_PROF,
       licensor_id: ALICE_SUB,
@@ -222,7 +227,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     expect(regProf.status()).toBe(200);
 
     // Register self-license (Alice on Alice's content)
-    const regSelf = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/register-license", {
+    const regSelf = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_SELF,
       content_id: CONTENT_SELF,
       licensor_id: ALICE_SUB,
@@ -234,7 +239,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     expect(regSelf.status()).toBe(200);
 
     // Register license to revoke
-    const regRevoke = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/register-license", {
+    const regRevoke = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_REVOKE,
       content_id: CONTENT_REVOKE,
       licensor_id: ALICE_SUB,
@@ -249,10 +254,11 @@ test.describe("472 -- Revenue Split Processing API", () => {
   test.afterAll(async () => {
     await alicePage?.close();
     await bobPage?.close();
+    await rootPage?.close();
   });
 
   test("472.1 Tip on licensed content triggers revenue split", async () => {
-    const resp = await apiPost(bobPage, BOB_KEY, "/ui/licenses/revenue/process-split", {
+    const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_ID,
       licensee_id: BOB_SUB,
       source_type: "tip",
@@ -271,7 +277,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
 
   test("472.2 Fixed fee charged on first use only", async () => {
     // First split: should charge fixed fee + revenue share
-    const resp1 = await apiPost(bobPage, BOB_KEY, "/ui/licenses/revenue/process-split", {
+    const resp1 = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_FIXED,
       licensee_id: BOB_SUB,
       source_type: "tip",
@@ -284,7 +290,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     expect(data1.splits[0].split_cents).toBe(50); // 5% of 1000
 
     // Second split: same content, fixed fee should NOT be re-charged
-    const resp2 = await apiPost(bobPage, BOB_KEY, "/ui/licenses/revenue/process-split", {
+    const resp2 = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_FIXED,
       licensee_id: BOB_SUB,
       source_type: "tip",
@@ -298,7 +304,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
   });
 
   test("472.3 Profit share calculates on net after platform fee", async () => {
-    const resp = await apiPost(bobPage, BOB_KEY, "/ui/licenses/revenue/process-split", {
+    const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_PROF,
       licensee_id: BOB_SUB,
       source_type: "tip",
@@ -314,7 +320,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
   });
 
   test("472.4 Self-split is skipped", async () => {
-    const resp = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/process-split", {
+    const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_SELF,
       licensee_id: ALICE_SUB,
       source_type: "tip",
@@ -328,14 +334,14 @@ test.describe("472 -- Revenue Split Processing API", () => {
 
   test("472.5 Revoked license produces no split", async () => {
     // Revoke the license first
-    const revokeResp = await apiPost(alicePage, ALICE_KEY, "/ui/licenses/revenue/revoke-license", {
+    const revokeResp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/revoke-license", {
       content_id: CONTENT_REVOKE,
       issued_license_id: LICENSE_ID_REVOKE,
     });
     expect(revokeResp.status()).toBe(200);
 
     // Now try to process a split
-    const resp = await apiPost(bobPage, BOB_KEY, "/ui/licenses/revenue/process-split", {
+    const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_REVOKE,
       licensee_id: BOB_SUB,
       source_type: "tip",

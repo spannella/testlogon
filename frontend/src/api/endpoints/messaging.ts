@@ -280,21 +280,34 @@ export interface CallInviteResp {
   callee_user_id?: string;
 }
 
+const _genCallId = (): string => {
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  const uuid = cryptoObj?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `call_${uuid.replace(/-/g, "")}`;
+};
+
 export const createCallInvite = (
   conversationId: string,
   body: {
     callee_user_id: string;
     mode: DirectCallMode;
     idempotency_key?: string;
+    paid?: boolean;
   },
 ) =>
-  api.post<CallInviteResp>("/messages/calls/invite", {
+  // Backend route is mounted under the /messaging router prefix and expects a
+  // client-supplied call_id + `initial_mode` (not `mode`).
+  api.post<CallInviteResp>("/messaging/messages/calls/invite", {
+    call_id: _genCallId(),
     conversation_id: conversationId,
-    ...body,
+    callee_user_id: body.callee_user_id,
+    initial_mode: body.mode,
+    ...(body.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
+    ...(body.paid !== undefined ? { paid: body.paid } : {}),
   });
 
 export const acceptCallInvite = (callId: string, idempotency_key?: string) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/accept`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/accept`, {
     ...(idempotency_key ? { idempotency_key } : {}),
   });
 
@@ -302,19 +315,19 @@ export const declineCallInvite = (
   callId: string,
   body?: { reason?: "declined" | "busy"; idempotency_key?: string },
 ) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/decline`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/decline`, {
     ...(body?.reason ? { reason: body.reason } : {}),
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
 
 export const endCall = (callId: string, body?: { reason?: string; idempotency_key?: string }) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/end`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/end`, {
     ...(body?.reason ? { reason: body.reason } : {}),
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
 
 export const timeoutCall = (callId: string, body?: { reason?: string; idempotency_key?: string }) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/timeout`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/timeout`, {
     ...(body?.reason ? { reason: body.reason } : {}),
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });

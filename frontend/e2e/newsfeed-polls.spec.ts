@@ -96,6 +96,9 @@ test.describe("85 — Poll API", () => {
     const resp = await feedPost(alicePage, "/posts", {
       body_plain: "What should I stream next?",
       post_type: "poll",
+      // Public visibility so Bob (a non-follower) can cast votes — voting now
+      // enforces the post visibility gate (GAP-0164: can_view_post on /vote).
+      visibility: "public",
       poll_data: {
         questions: [
           {
@@ -328,6 +331,8 @@ test.describe("85 — Poll API", () => {
     const createResp = await feedPost(alicePage, "/posts", {
       body_plain: "No change poll",
       post_type: "poll",
+      // Public so Bob can vote (voting enforces visibility gate, GAP-0164).
+      visibility: "public",
       poll_data: {
         questions: [
           {

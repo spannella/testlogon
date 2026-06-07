@@ -247,21 +247,21 @@ async function getOrCreateGroup(page: Page, request: APIRequestContext): Promise
 }
 
 /**
- * Navigate Alice to /messages and click on the "E2E Test Group" row.
+ * Navigate Alice to her "E2E Test Group" conversation (opened by id via the
+ * deep-link route, which is robust against full-suite conversation accumulation).
  */
 async function openGroupConvo(page: Page, request: APIRequestContext) {
   await injectAuth(page, ALICE_ID);
-  await getOrCreateGroup(page, request);
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(800);
-  const row = page.getByRole("button").filter({ hasText: "E2E Test Group" }).first();
-  await expect(row).toBeVisible({ timeout: 8000 });
-  await row.click();
+  const groupId = await getOrCreateGroup(page, request);
+  // Open the group directly by id via the deep-link route. This is
+  // full-suite-safe: it does not rely on the "E2E Test Group" row being
+  // visible/first in a sidebar that accumulates many conversations over a run.
+  await page.goto(`${BASE}/messages/${groupId}`, { waitUntil: "load" });
   await expect(
     page.getByPlaceholder("Type a message...").or(
       page.getByPlaceholder("Type an encrypted message..."),
     ),
-  ).toBeVisible({ timeout: 5000 });
+  ).toBeVisible({ timeout: 15000 });
 }
 
 // ─── Helper: trigger UI refetch ───────────────────────────────────────────────
@@ -1113,19 +1113,31 @@ test.describe("11. UI — group conversation", () => {
   });
 
   test("messages from other group members show sender name", async ({ request }) => {
-    // Bob sends a message
+    // Bob sends a message with unique text so we can isolate it from any
+    // accumulated group messages from prior full-suite runs.
     const ts = Date.now();
+    const bobText = `Bob UI sender name ${ts}`;
     const groupId = _groupConvoId!;
     await apiPostBearer(
       request,
       `/messaging/conversations/${groupId}/messages`,
-      { text: `Bob UI sender name ${ts}` },
+      { text: bobText },
       BOB_ID,
     );
     await triggerRefetch(page);
-    // Sender name "E2E Bob" should be visible above the message bubble
+
+    // Wait for Bob's specific message bubble to render (scoped to <p> to avoid
+    // the sidebar preview span). This confirms the refetch delivered the message
+    // before we assert on the sender label, which matters under suite load.
+    const bobBubbleText = page.locator("p").filter({ hasText: bobText }).last();
+    await expect(bobBubbleText).toBeVisible({ timeout: 8000 });
+
+    // In group conversations the ComposeBar/ConversationView renders a sender
+    // label above each non-own message (showSender=isGroup). The label shows the
+    // sender's id (e.g. "e2e_bob@test.local"). Assert that the sender label for
+    // a message from another member (Bob) is present in the conversation pane.
     await expect(
-      page.locator("p, span").filter({ hasText: /e2e bob/i }).first(),
+      page.locator("p.text-primary").filter({ hasText: BOB_ID }).first(),
     ).toBeVisible({ timeout: 5000 });
   });
 

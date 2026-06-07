@@ -152,19 +152,37 @@ for line in env.read_text().splitlines():
 ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 tbl = ddb.Table('CreatorPayouts')
 
+# Collect active payouts via BOTH the GSI (eventually consistent) and a base-table
+# scan (catches very-recently-created payouts the GSI hasn't propagated yet) so the
+# pending-balance calculation is fully freed under full-suite accumulation.
+active = {}
 resp = tbl.query(
     IndexName='ByUserCreatedAt',
     KeyConditionExpression=boto3.dynamodb.conditions.Key('user_id').eq('${userSub}'),
 )
 for item in resp.get('Items', []):
-    status = item.get('status', '')
-    if status in ('requested', 'approved', 'processing'):
-        tbl.update_item(
-            Key={'payout_id': item['payout_id']},
-            UpdateExpression='SET #s = :s',
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={':s': 'cancelled'},
-        )
+    if item.get('status') in ('requested', 'approved', 'processing'):
+        active[item['payout_id']] = item
+scan_kwargs = {
+    'FilterExpression': boto3.dynamodb.conditions.Attr('user_id').eq('${userSub}')
+        & boto3.dynamodb.conditions.Attr('status').is_in(['requested', 'approved', 'processing']),
+}
+while True:
+    sresp = tbl.scan(**scan_kwargs)
+    for item in sresp.get('Items', []):
+        active[item['payout_id']] = item
+    lek = sresp.get('LastEvaluatedKey')
+    if not lek:
+        break
+    scan_kwargs['ExclusiveStartKey'] = lek
+for pid in active:
+    tbl.update_item(
+        Key={'payout_id': pid},
+        UpdateExpression='SET #s = :s',
+        ExpressionAttributeNames={'#s': 'status'},
+        ExpressionAttributeValues={':s': 'cancelled'},
+    )
+tbl.delete_item(Key={'payout_id': 'PAYOUT_STATE#${userSub}'})
 print('cleaned')
 "`,
     { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
@@ -224,6 +242,16 @@ except Exception:
 "`,
     { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
   );
+}
+
+/**
+ * Reset Alice's payout state for a deterministic request: cancel all active
+ * payouts + drop the sentinel, then top up settled balance so the next request
+ * has funds. Survives full-suite accumulation regardless of prior pending state.
+ */
+function resetAndSeed(userSub: string): void {
+  cleanupActivePayouts(userSub);
+  seedOldCredits(userSub, 2, 5000, "Tip: message"); // +$100 settled, past-hold
 }
 
 // =============================================================================
@@ -307,7 +335,7 @@ test.describe("210 · Balance Display", () => {
 
 test.describe("211 · Payout Request", () => {
   test("211.1 Submit valid payout request via API", async () => {
-    cleanupActivePayouts(ALICE_SUB);
+    resetAndSeed(ALICE_SUB);
     const resp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
       amount_cents: 2000,
       method: "bank_transfer",
@@ -339,7 +367,7 @@ test.describe("211 · Payout Request", () => {
   });
 
   test("211.4 Request payout via UI form", async () => {
-    cleanupActivePayouts(ALICE_SUB);
+    resetAndSeed(ALICE_SUB);
 
     await alicePage.goto(`${BASE}/payouts`);
     await alicePage.waitForLoadState("domcontentloaded");
@@ -403,7 +431,7 @@ test.describe("212 · Payout History", () => {
   });
 
   test("212.3 Cancel button on pending payout works via API", async () => {
-    cleanupActivePayouts(ALICE_SUB);
+    resetAndSeed(ALICE_SUB);
 
     // Create a fresh payout to cancel
     const createResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {

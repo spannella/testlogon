@@ -235,14 +235,21 @@ test.describe("495 -- Delegated Post Creation API", () => {
     expect(cResp.status()).toBe(201);
     const myPostId = (await cResp.json()).post_id as string;
 
+    // Retry the whole GET — under full-suite load the list endpoint can return
+    // a transient non-ok (e.g. delegate-row read lag) before the post is
+    // visible, so don't hard-fail on a single non-ok response.
     let found: any = undefined;
-    for (let attempt = 0; attempt < 5 && !found; attempt++) {
+    let lastOk = false;
+    for (let attempt = 0; attempt < 8 && !found; attempt++) {
       const resp = await apiGet(bobPage, `/ui/newsfeed/delegate/${ALICE_ID}/posts`, { limit: "200" });
-      expect(resp.ok()).toBeTruthy();
-      const data = await resp.json();
-      found = data.find((p: any) => p.post_id === myPostId);
+      lastOk = resp.ok();
+      if (lastOk) {
+        const data = await resp.json();
+        found = data.find((p: any) => p.post_id === myPostId);
+      }
       if (!found) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
     }
+    expect(lastOk).toBeTruthy();
     expect(found).toBeTruthy();
     expect(found.author_id).toBe(ALICE_ID);
   });

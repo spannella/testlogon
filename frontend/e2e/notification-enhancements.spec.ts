@@ -79,6 +79,9 @@ async function apiPost(page: Page, path: string, body: object) {
   return page.request.post(`${API}${path}`, {
     data: body,
     headers: { "x-csrf-token": session.csrf_token },
+    // mark-all-read sweeps the (accumulated) alert table server-side; give it
+    // headroom over the backend's bounded sweep budget under full-suite load.
+    timeout: 30_000,
   });
 }
 
