@@ -5,7 +5,8 @@ milestone: M7
 epic: E39
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-289, AND-288]
 blocks: [AND-292]
 ---
@@ -20,7 +21,10 @@ traverse symmetric/port-restricted NATs and mobile carrier-grade NAT if the
 deliberately left `RtcConfig.iceServers` empty and flagged the ICE-server source
 as an open question (AND-289 §13 OQ2). This ticket closes that gap: it fetches
 short-lived, ephemeral TURN/STUN credentials from the FastAPI backend
-(`turn-credentials`), maps them into the `List<RtcIceServer>` that AND-289's
+(`POST /messaging/messages/calls/{call_id}/turn-credentials`; CORRECTED — the
+backlog's bare `turn-credentials` slug resolves to this authenticated, **per-call
+POST** endpoint, verified against `/openapi.json` op
+`issue_turn_credentials_endpoint`), maps them into the `List<RtcIceServer>` that AND-289's
 `RtcConfig` already accepts, caches them with respect to their TTL, refreshes
 them before expiry, and proves that a real relay (`relay`-type) ICE candidate is
 selected when a direct/host path is unavailable.
@@ -54,11 +58,19 @@ correctly-configured, fresh `iceServers` to a freshly-created `PeerConnection`.
   This ticket *populates* that list; it does not change the wrapper API.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (PLAINTEXT HTTP, UNRELIABLE). OpenAPI at `/openapi.json`. The credentials
-  endpoint is authenticated via the cookie session + `X-CSRF-Token` echo
-  established by `core-network` (AND-011 cookie jar, AND-012 CSRF interceptor,
-  AND-013 401-refresh authenticator). Exact path/shape confirmed from
-  `/openapi.json` at implementation (see §5; web reference under
-  `frontend/src/api/endpoints/*.ts`).
+  endpoint is `POST /messaging/messages/calls/{call_id}/turn-credentials`
+  (VERIFIED, op `issue_turn_credentials_endpoint`). It is **scoped to a specific
+  `call_id`** — credentials are issued per call session, so this ticket's
+  provider/repository API takes a `callId` (see §4 correction). Auth: per the web
+  client (`src/api/client.ts`) every request carries a Bearer `Authorization`
+  header (from the auth store) **and** cookies (`credentials: include`) **and** an
+  `X-CSRF-Token` header echoed from the `ui_csrf` cookie; the OpenAPI spec lists
+  `authorization` and `X-SESSION-ID` as the documented (optional) headers for this
+  op. On Android this maps to AND-011 cookie jar, AND-012 CSRF interceptor,
+  AND-013 401-refresh authenticator, plus the Bearer-token header the existing
+  client already attaches. (CORRECTED: the prior draft implied a bare unauthed-
+  context `turn-credentials` GET with only cookie+CSRF; the real op is a per-call
+  POST and also relies on the Bearer header.)
 - **Downstream (AND-292+):** the broadcast/viewer call feature obtains
   `List<RtcIceServer>` from `IceServersProvider` and passes it into `RtcConfig`
   before calling `RtcPeerConnection.createOffer()`/`createAnswer()`.
@@ -69,14 +81,25 @@ correctly-configured, fresh `iceServers` to a freshly-created `PeerConnection`.
 
 ## 3. Functional Requirements
 
-FR-1. **Fetch.** `IceServersApi.getTurnCredentials()` performs an authenticated
-GET against the backend `turn-credentials` endpoint and returns the raw DTO.
+FR-1. **Fetch.** `IceServersApi.getTurnCredentials(callId)` performs an
+authenticated **POST** (empty body) against
+`/messaging/messages/calls/{call_id}/turn-credentials` and returns the raw DTO.
+(CORRECTED: POST not GET; takes a `call_id` path param. Because it is a non-GET
+mutation per HTTP semantics, the AND-016 idempotent-GET retry/backoff does **not**
+apply automatically — see §7 correction. The web client treats it as effectively
+idempotent and simply retries on demand.)
 
 FR-2. **Map.** `IceServersRepository` maps the DTO into
-`IceServers(servers: List<RtcIceServer>, ttlSeconds: Long, fetchedAtEpochMs: Long)`.
-STUN entries (no credential) and TURN entries (`username` + `credential`) are
-both represented as `RtcIceServer`; multiple `urls` per server entry are
-preserved (e.g. `turn:host:3478?transport=udp` and `...?transport=tcp`).
+`IceServers(servers: List<RtcIceServer>, ttlSeconds: Long, expiresAtEpochMs: Long, fetchedAtEpochMs: Long)`.
+Each `TurnIceServerOut` entry carries a required `urls: List<String>`, required
+`username`, and required `credential` (VERIFIED against schema `TurnIceServerOut`;
+all three are in `required`). Multiple `urls` per entry are preserved (e.g.
+`turn:host:3478?transport=udp` and `...?transport=tcp`). NOTE/CORRECTION: in the
+real backend shape every returned entry has credentials and `urls` is always an
+array — there is no credential-less STUN entry and no scalar-`urls` variant in
+the documented response (those were assumptions in the prior draft). STUN-only
+entries appear only in this ticket's *local fallback* list (§4.4), not from the
+endpoint.
 
 FR-3. **Cache + TTL.** Credentials are cached in-memory and persisted to
 DataStore. A cached set is reused while it has at least
@@ -115,40 +138,51 @@ DataStore copy is the only at-rest store (see §8).
 ```kotlin
 package com.testlogon.android.core.network.webrtc
 
+// Shape VERIFIED against /openapi.json schema TurnCredentialsOut / TurnIceServerOut.
 @JsonClass(generateAdapter = true)
 data class TurnCredentialsDto(
-    // shape confirmed from /openapi.json at impl; see §5 for fallbacks
-    @Json(name = "ice_servers") val iceServers: List<IceServerDto>,
-    @Json(name = "ttl") val ttlSeconds: Long? = null,            // seconds
-    @Json(name = "username") val username: String? = null,        // some shapes hoist creds
-    @Json(name = "credential") val credential: String? = null,
+    @Json(name = "ice_servers") val iceServers: List<IceServerDto>,  // required
+    @Json(name = "ttl_seconds") val ttlSeconds: Long,                // required (CORRECTED: was "ttl")
+    @Json(name = "expires_at") val expiresAtEpochSeconds: Long,      // required (NEW: was missing)
 )
 
 @JsonClass(generateAdapter = true)
 data class IceServerDto(
-    val urls: List<String>,                      // adapter coerces String -> List<String>
-    val username: String? = null,
-    val credential: String? = null,
+    val urls: List<String>,            // always an array in the backend shape
+    val username: String,              // required per TurnIceServerOut
+    val credential: String,            // required per TurnIceServerOut
 )
 ```
 
-A small Moshi adapter (`StringOrListAdapter`) coerces a scalar `"urls": "stun:..."`
-into a single-element list, because TURN providers and the FastAPI shape vary.
+CORRECTIONS vs. the prior draft:
+- TTL field is `ttl_seconds` (not `ttl`); it is **required**, so the
+  `defaultTtlSeconds` fallback is defensive only (the backend always returns it).
+- The response also includes a required `expires_at` (epoch **seconds**) — prefer
+  it as the authoritative expiry over locally computed `fetchedAt + ttl`.
+- There is **no** top-level hoisted `username`/`credential` and **no** scalar-vs-
+  array `urls` variance in the documented schema; `username`/`credential` are
+  required on each `TurnIceServerOut`. The `StringOrListAdapter` and hoisted-cred
+  mapping are therefore **removed** as unnecessary. (If a future TURN provider
+  changes the shape, re-introduce a tolerant adapter then — not now.)
 
 ### 4.2 API (`core-network`)
 
 ```kotlin
 interface IceServersApi {
-    // GET — idempotent, eligible for bounded-backoff retry (AND-016)
-    @GET("turn-credentials")
-    suspend fun getTurnCredentials(): TurnCredentialsDto
+    // POST per-call (CORRECTED: was GET "turn-credentials"). Empty body.
+    @POST("messaging/messages/calls/{callId}/turn-credentials")
+    suspend fun getTurnCredentials(@Path("callId") callId: String): TurnCredentialsDto
 }
 ```
 
 The base URL/host-selection interceptor (AND-014), cookie jar (AND-011), CSRF
-header (AND-012), 401-refresh authenticator (AND-013), 20s timeouts (AND-009),
-and idempotent-GET retry/backoff (AND-016) are all inherited from the shared
-OkHttp/Retrofit client. No per-call config beyond annotating the call as a GET.
+header (AND-012), Bearer `Authorization` header, 401-refresh authenticator
+(AND-013), and 20s timeouts (AND-009) are inherited from the shared
+OkHttp/Retrofit client. CORRECTION: AND-016 bounded backoff is scoped to
+*idempotent GETs*; since this is a POST it is not auto-retried by that policy. The
+op is read-only/idempotent in practice, so if retry is desired it must be opted in
+explicitly (e.g. a small in-repo retry around the suspend call) rather than
+relying on AND-016.
 
 ### 4.3 Domain model & mapping (`core-data`)
 
@@ -158,11 +192,12 @@ package com.testlogon.android.core.data.webrtc
 data class IceServers(
     val servers: List<RtcIceServer>,     // RtcIceServer from core-webrtc/core-model
     val ttlSeconds: Long,
+    val expiresAtEpochMs: Long,          // from backend expires_at (epoch seconds * 1000)
     val fetchedAtEpochMs: Long,
 ) {
-    fun expiresAtEpochMs(): Long = fetchedAtEpochMs + ttlSeconds * 1_000
+    // Prefer the server-provided expires_at; fall back to fetchedAt + ttl only if absent.
     fun isFreshAt(nowMs: Long, skewSec: Long): Boolean =
-        nowMs < expiresAtEpochMs() - skewSec * 1_000
+        nowMs < expiresAtEpochMs - skewSec * 1_000
 }
 
 internal fun TurnCredentialsDto.toIceServers(nowMs: Long, defaultTtlSec: Long): IceServers =
@@ -170,11 +205,12 @@ internal fun TurnCredentialsDto.toIceServers(nowMs: Long, defaultTtlSec: Long): 
         servers = iceServers.map { dto ->
             RtcIceServer(
                 urls = dto.urls,
-                username = dto.username ?: this.username,
-                credential = dto.credential ?: this.credential,
+                username = dto.username,        // required on every entry
+                credential = dto.credential,   // required on every entry
             )
         },
-        ttlSeconds = ttlSeconds ?: defaultTtlSec,   // fallback if backend omits TTL
+        ttlSeconds = ttlSeconds,                          // required field (defaultTtlSec is defensive)
+        expiresAtEpochMs = expiresAtEpochSeconds * 1_000,
         fetchedAtEpochMs = nowMs,
     )
 ```
@@ -183,8 +219,11 @@ internal fun TurnCredentialsDto.toIceServers(nowMs: Long, defaultTtlSec: Long): 
 
 ```kotlin
 interface IceServersRepository {
-    /** Returns fresh ICE servers, refetching if cache is stale/missing. */
-    suspend fun getIceServers(forceRefresh: Boolean = false): ApiResult<IceServers>
+    /**
+     * Returns fresh ICE servers for [callId], refetching if cache is stale/missing.
+     * (CORRECTED: credentials are per-call, so the cache key includes callId.)
+     */
+    suspend fun getIceServers(callId: String, forceRefresh: Boolean = false): ApiResult<IceServers>
     fun observe(): Flow<IceServersState>   // optional UI/telemetry surface
 }
 
@@ -217,15 +256,15 @@ data class TurnFetchConfig(
 
 ```kotlin
 interface IceServersProvider {
-    /** Never throws; returns fresh, cached-valid, or STUN-only fallback. */
-    suspend fun current(): List<RtcIceServer>
+    /** Never throws; returns fresh, cached-valid, or STUN-only fallback for [callId]. */
+    suspend fun current(callId: String): List<RtcIceServer>
 }
 ```
 
 `getIceServers` algorithm:
-1. If `!forceRefresh` and the in-memory/DataStore cache `isFreshAt(now, skew)` →
-   return `Ready(cache, stale=false)`.
-2. Otherwise call `api.getTurnCredentials()` wrapped in `ApiResult`:
+1. If `!forceRefresh` and the in-memory/DataStore cache for `callId`
+   `isFreshAt(now, skew)` → return `Ready(cache, stale=false)`.
+2. Otherwise call `api.getTurnCredentials(callId)` wrapped in `ApiResult`:
    - success → map via `toIceServers`, persist to `store`, return `Ready(...)`.
    - failure → if a cached set exists and is *not* fully expired, return it as
      `Ready(stale=true)`; else `FallbackStunOnly(error)`.
@@ -235,7 +274,7 @@ interface IceServersProvider {
 The call feature (AND-292+) builds the config:
 
 ```kotlin
-val iceServers = iceServersProvider.current()
+val iceServers = iceServersProvider.current(callId)   // per-call (CORRECTED)
 val pc = rtcFactory.create(
     RtcConfig(iceServers = iceServers, role = RtcRole.Offerer),
     signaling,
@@ -263,18 +302,23 @@ abstract class IceServersModule {
 
 ## 5. API Contract
 
-**Endpoint:** `GET turn-credentials` (authenticated; cookie session +
-`X-CSRF-Token`). Exact path segment and JSON shape MUST be confirmed against
-`/openapi.json` and the web reference (`frontend/src/api/endpoints/*.ts`,
-`frontend/src/api/types.ts`) at implementation time — the backlog scope names the
-resource as `turn-credentials`. Two common shapes are supported by the adapter:
+**Endpoint (VERIFIED):** `POST /messaging/messages/calls/{call_id}/turn-credentials`
+(op `issue_turn_credentials_endpoint`). Authenticated; per-call. The web client
+(`src/api/endpoints/messaging.ts: fetchTurnCredentials`) calls it as
+`api.post(\`/messaging/messages/calls/${callId}/turn-credentials\`, {})` — POST
+with an empty JSON body. Documented header params: `authorization` (Bearer) and
+`X-SESSION-ID`. The shared web client (`src/api/client.ts`) additionally sends the
+`X-CSRF-Token` header and cookies on every request.
 
-Canonical (Twilio/coturn-style) response:
+**Response 200 — schema `TurnCredentialsOut` (VERIFIED):** all three fields are
+required; each `ice_servers[]` entry (`TurnIceServerOut`) has required `urls`
+(array), `username`, and `credential`:
 
 ```json
 {
+  "ttl_seconds": 600,
+  "expires_at": 1717603800,
   "ice_servers": [
-    { "urls": ["stun:stun.testlogon.example:3478"] },
     {
       "urls": [
         "turn:turn.testlogon.example:3478?transport=udp",
@@ -284,31 +328,35 @@ Canonical (Twilio/coturn-style) response:
       "username": "1717603200:tl-ephemeral",
       "credential": "b64-hmac-derived-secret=="
     }
-  ],
-  "ttl": 600
+  ]
 }
 ```
 
-Hoisted-credential variant (single shared username/credential):
+CORRECTIONS: TTL key is `ttl_seconds` (not `ttl`); `expires_at` (epoch seconds) is
+a required field that the prior draft omitted; there is no top-level hoisted
+`username`/`credential` and no scalar `urls` variant; STUN-only credential-less
+entries do not appear in this response (they only exist in the local fallback).
 
-```json
-{
-  "ice_servers": [{ "urls": "turn:turn.testlogon.example:3478" }],
-  "username": "1717603200:tl-ephemeral",
-  "credential": "b64-hmac-derived-secret==",
-  "ttl": 600
-}
-```
+**Request:** POST with empty JSON body `{}`. `call_id` in the path. Bearer/session
+cookies + `X-CSRF-Token` applied by interceptors.
 
-**Request:** no body. Standard session cookies + `X-CSRF-Token` header applied by
-interceptors.
+**Errors (VERIFIED — structured `TurnCredentialErrorOut` with
+`detail: { code: string, message: string }`):**
+- `400` "Invalid TURN credential request"
+- `403` "Forbidden or feature disabled"
+- `404` "Call session not found"
+- `409` "Call state or participant mismatch"
+- `503` "TURN service/configuration unavailable"
+- `422` `HTTPValidationError` (FastAPI validation, `detail: [{loc,msg,type}]`)
 
-**Errors (FastAPI `detail` mapping, AND-015):** `401` → triggers one
-`POST /ui/session/refresh` + retry (AND-013) then surfaces auth error; `403`
-(missing/invalid CSRF) → `ApiError.Forbidden`; `5xx`/timeout from the unreliable
-dev host → `ApiError.Network`/`ApiError.Server`, routed to the
-cached-or-fallback path (§4.4). `detail` may be `string | [{msg}] | {code,...}`
-and is normalized by the shared error mapper.
+CORRECTION: 401 is **not** a documented response for this op; the generic
+401-refresh authenticator (AND-013) still applies at the transport layer (web does
+`POST /ui/session/refresh` then retries — `src/api/client.ts`), but auth failures
+here surface chiefly as `403`. The endpoint's own error body is the structured
+`{code, message}` shape, **not** the generic FastAPI `detail: string | [{msg}]`
+union; the shared mapper (AND-015) should read `detail.code`/`detail.message`.
+`5xx`/`503`/timeout from the unreliable dev host route to the cached-or-fallback
+path (§4.4).
 
 ## 6. Data & State Management
 
@@ -319,23 +367,27 @@ and is normalized by the shared error mapper.
   rejected in review, `core-data` takes a narrow dependency on `core-webrtc` for
   the type only. This is the single notable layering decision (see §13 OQ1).
 - **Persistence:** one ephemeral record in **DataStore** (Proto or typed
-  Preferences), key `ice_servers`. Stored fields: serialized servers (urls +
-  username + credential), `ttlSeconds`, `fetchedAtEpochMs`. No Room — this is a
-  single short-lived record, not a queryable cache. On read, if
-  `now >= expiresAtEpochMs()` the record is treated as absent.
+  Preferences), keyed by `callId` (CORRECTED: credentials are per-call). Stored
+  fields: serialized servers (urls + username + credential), `ttlSeconds`,
+  `expiresAtEpochMs` (from `expires_at`), `fetchedAtEpochMs`. No Room — a single
+  short-lived most-recent record (or a tiny bounded map keyed by callId), not a
+  queryable cache. On read, if `now >= expiresAtEpochMs` the record is treated as
+  absent.
 - **In-memory:** `DefaultIceServersRepository` holds a `@Volatile` last-known
   `IceServers` and a `Mutex` to coalesce concurrent fetches (one in-flight
   network call shared by concurrent `current()` callers).
 - **State exposure:** `observe(): Flow<IceServersState>` for optional telemetry /
-  a debug screen; the call feature uses the simpler `IceServersProvider.current()`.
+  a debug screen; the call feature uses the simpler `IceServersProvider.current(callId)`.
 - **No Paging.** Single record; not paged.
 
 ## 7. Error Handling & Resilience
 
-- **Timeouts/unreliable host:** inherits the project 20s OkHttp timeout (AND-009)
-  and bounded-backoff retry for idempotent GETs (AND-016) — this GET is
-  idempotent and eligible. Beyond retries, failures fall through to cache → STUN
-  fallback (§4.4), never throwing out of `IceServersProvider.current()`.
+- **Timeouts/unreliable host:** inherits the project 20s OkHttp timeout (AND-009).
+  CORRECTION: AND-016 bounded backoff only covers *idempotent GETs*; this op is a
+  POST, so it is not auto-retried by AND-016. The op is effectively read-only, so
+  if retry-on-5xx/timeout is wanted it must be added explicitly in the repository.
+  Beyond retries, failures fall through to cache → STUN fallback (§4.4), never
+  throwing out of `IceServersProvider.current(callId)`.
 - **Stale-while-revalidate:** an expired-but-present cache is preferred over a
   hard failure when a refetch fails, marked `stale=true` so telemetry can record
   degraded operation. (A TURN credential past its TTL will likely fail the relay
@@ -344,9 +396,13 @@ and is normalized by the shared error mapper.
 - **STUN-only fallback:** if no usable cache, return `config.stunOnlyFallback`.
   Connectivity behind symmetric NAT will fail in that case — surfaced as a
   recoverable degraded state, not a crash.
-- **401:** single `POST /ui/session/refresh` + retry via the existing
-  authenticator (AND-013); a second 401 propagates as an auth error and the call
-  feature must re-auth.
+- **401 / 403:** a transport-level `401` triggers a single `POST /ui/session/refresh`
+  + retry via the existing authenticator (AND-013) — VERIFIED against the web
+  client (`src/api/client.ts`); a second 401 propagates as an auth error and the
+  call feature must re-auth. NOTE: this op does not document a 401; its own
+  auth/permission failures surface as `403` "Forbidden or feature disabled" with a
+  `{code, message}` body, which maps to a non-retryable auth/feature-disabled
+  state (treated like the fallback path, not a refresh-retry).
 - **Clock skew:** TTL is evaluated against device `Clock`; `REFRESH_SKEW_SECONDS`
   (60s) absorbs minor skew and request latency so credentials are refreshed
   before, not after, the TURN server rejects them.
@@ -403,9 +459,11 @@ debug-only and exempt from localization.
 ## 11. Testing Strategy
 
 **Unit (JVM, `core-testing` + MockWebServer harness AND-046):**
-- `TurnCredentialsMappingTest`: both §5 JSON shapes (canonical list + hoisted
-  creds; scalar vs. array `urls`) map to the expected `List<RtcIceServer>`,
-  TTL defaulted when omitted.
+- `TurnCredentialsMappingTest`: the verified §5 `TurnCredentialsOut` shape maps to
+  the expected `List<RtcIceServer>` (each entry's array `urls` + required
+  `username`/`credential`), `ttl_seconds` and `expires_at` are carried through, and
+  a multi-`urls` entry (udp/tcp/turns) preserves all transports. (CORRECTED: the
+  hoisted-cred and scalar-`urls` cases were removed; the backend shape is fixed.)
 - `IceServersRepositoryTest`:
   - fresh cache → no network call;
   - stale cache + network success → refetch + persist;
@@ -453,10 +511,14 @@ mapping tests + config wiring; "relay path works behind NAT" ⇒
 
 ## 13. Risks & Open Questions
 
-- **R1 — Backend shape uncertainty:** the exact `turn-credentials` path and JSON
-  are not in this ticket; the adapter handles the two common shapes but MUST be
-  reconciled with `/openapi.json` and `frontend/src/api/types.ts` at impl. If the
-  shape differs materially, only the DTO + mapper change.
+- **R1 — Backend shape (RESOLVED in this review):** path/method/shape are now
+  VERIFIED against `/openapi.json` (op `issue_turn_credentials_endpoint`, schema
+  `TurnCredentialsOut`/`TurnIceServerOut`) and the web client
+  (`src/api/endpoints/messaging.ts: fetchTurnCredentials`,
+  `src/hooks/useRtcPeerConnection.ts`). The endpoint is the per-call POST; the DTO
+  matches the fixed shape (no hoisted creds, no scalar `urls`). Residual risk is
+  only if the backend later changes the schema, in which case only the DTO + mapper
+  change.
 - **R2 — TURN server availability for CI:** `RelayCandidateTest` needs a live
   TURN allocation; the dev host is unreliable and a public TURN may be unreachable
   from CI. Mitigation: stand up a coturn test fixture or tag the relay test
@@ -478,13 +540,14 @@ mapping tests + config wiring; "relay path works behind NAT" ⇒
 
 ## 14. Acceptance Criteria
 
-AC-1. `IceServersApi.getTurnCredentials()` performs an authenticated GET to the
-backend `turn-credentials` endpoint through the shared OkHttp/Retrofit client
-(cookie + CSRF + 401-refresh + GET retry all applied).
+AC-1. `IceServersApi.getTurnCredentials(callId)` performs an authenticated
+**POST** to `/messaging/messages/calls/{call_id}/turn-credentials` through the
+shared OkHttp/Retrofit client (Bearer + cookie + CSRF + 401-refresh applied).
+(CORRECTED: POST per-call, not a bare GET; AND-016 GET-retry does not apply.)
 
-AC-2. `TurnCredentialsDto` maps to `IceServers`/`List<RtcIceServer>` for both §5
-JSON shapes (canonical per-server creds and hoisted creds; scalar and array
-`urls`), with TTL defaulted when the backend omits it. (Passing
+AC-2. `TurnCredentialsDto` maps to `IceServers`/`List<RtcIceServer>` for the
+verified `TurnCredentialsOut` shape (array `urls`, required per-entry
+`username`/`credential`), carrying `ttl_seconds` and `expires_at`. (Passing
 `TurnCredentialsMappingTest`.)
 
 AC-3. The fetched `List<RtcIceServer>` is consumable directly as
@@ -497,7 +560,7 @@ treated as absent. (Passing `IceServersRepositoryTest`/`IceServersStoreTest`.)
 
 AC-5. On fetch failure, the provider returns a valid cached set (`stale=true`) if
 available, else a STUN-only fallback, and never throws from
-`IceServersProvider.current()`. (Passing failure-path tests.)
+`IceServersProvider.current(callId)`. (Passing failure-path tests.)
 
 AC-6. **(Source acceptance)** With a reachable TURN server and a `RELAY` config,
 the connected candidate pair is of type `relay` and the session reaches
@@ -528,3 +591,185 @@ analytics events (verified by `RedactionTest` + log-site review).
   AND-292+ can wire it without reading the implementation.
 - ktlint/detekt clean, no new lint baseline regressions; code reviewed and merged
   to `android-port`; AND-292 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with VERDICT and exact SOURCE pointer.
+
+1. **Endpoint is `POST /messaging/messages/calls/{call_id}/turn-credentials`** (per-call,
+   POST, empty body) — **Corrected** (draft said bare `GET turn-credentials`).
+   Source: OpenAPI `POST /messaging/messages/calls/{call_id}/turn-credentials`
+   (op `issue_turn_credentials_endpoint`, openapi.index.txt line 407); frontend
+   `src/api/endpoints/messaging.ts: fetchTurnCredentials` → `api.post(.../turn-credentials, {})`.
+2. **Response schema fields: `ttl_seconds` (int, required), `expires_at` (int epoch,
+   required), `ice_servers` (array, required)** — **Corrected** (draft used `ttl` and
+   omitted `expires_at`). Source: OpenAPI schema `TurnCredentialsOut`
+   (openapi.pretty.json); frontend `src/api/endpoints/messaging.ts: TurnCredentialsResp`.
+3. **Each `ice_servers[]` entry (`TurnIceServerOut`) has `urls: string[]`, `username`,
+   `credential`, ALL required** — **Corrected** (draft assumed optional creds, scalar-or-
+   array `urls`, and a hoisted top-level cred variant; none exist). Source: OpenAPI
+   schema `TurnIceServerOut` (`required: [urls, username, credential]`);
+   frontend `src/api/endpoints/messaging.ts: TurnIceServer`.
+4. **No credential-less STUN entries and no scalar-`urls` coercion needed** —
+   **Corrected** (removed `StringOrListAdapter` and hoisted-cred mapping). Source: same
+   as #3 (urls is `array<string>`; creds required).
+5. **Error responses are structured `TurnCredentialErrorOut` with
+   `detail: {code, message}` for 400/403/404/409/503; 422 is `HTTPValidationError`** —
+   **Corrected** (draft assumed the generic FastAPI `detail: string | [{msg}]` union
+   and a 401 path on this op). Source: OpenAPI responses block for the op
+   (openapi.pretty.json lines ~122064–122123); schemas `TurnCredentialErrorOut`,
+   `TurnCredentialErrorDetailOut` (`required: [code, message]`).
+6. **401 → single `POST /ui/session/refresh` + retry, then re-auth** — **Verified** (as a
+   transport-layer behavior, not specific to this op). Source: frontend
+   `src/api/client.ts` (401 handler calls `refreshSession()` → `fetch("/ui/session/refresh")`,
+   then retries) and `src/api/endpoints/auth.ts: refreshSession` → `api.post("/ui/session/refresh")`.
+7. **Auth carries Bearer `Authorization` + cookies + `X-CSRF-Token` (from `ui_csrf` cookie)**
+   — **Verified** (Bearer/cookie/CSRF) with a refinement. Source: frontend
+   `src/api/client.ts` (sets `Authorization: Bearer`, `X-CSRF-Token` from `getCookie("ui_csrf")`,
+   `credentials: "include"`). OpenAPI lists `authorization` and `X-SESSION-ID` as the
+   documented header params for this op.
+8. **Web behavior: fetch TURN per call, map `ice_servers` 1:1 to `RTCIceServer`, and on
+   failure continue with empty ICE servers** — **Verified**. Source: frontend
+   `src/hooks/useRtcPeerConnection.ts` (`fetchTurnCredentials(callId)`, `.map(...)`, and a
+   `catch {}` that proceeds with empty `iceServers`). NOTE: the web does NOT inject a STUN-
+   only fallback; the STUN fallback in this spec (§4.4/FR-7) is an Android-side design
+   addition, marked below as an assumption.
+9. **AND-016 bounded-backoff applies only to idempotent GETs; this POST is not auto-retried**
+   — **Corrected** (draft claimed the call is an eligible idempotent GET). Source: HTTP
+   method per #1 + the AND-016 policy scope as cited in the spec's own §2/§7. (Project-
+   internal ticket; not independently re-verifiable from the provided sources — see Open
+   assumptions.)
+10. **Relay verification via `PeerConnection.getStats()` selected candidate-pair type
+    `relay`** — **Unverified-assumption** (Android/WebRTC framework usage; no source in the
+    provided references). Framework ref: WebRTC `RTCPeerConnection.getStats()` /
+    `RTCIceCandidatePairStats` (https://www.w3.org/TR/webrtc/#dom-rtcicecandidatepairstats)
+    and stream-webrtc-android `PeerConnection.getStats`. Standard and low-risk.
+11. **`expires_at` is epoch seconds** — **Unverified-assumption** (schema types it as
+    `integer` with no unit). Treated as seconds (×1000 to ms) consistent with `ttl_seconds`;
+    confirm at impl. Source: OpenAPI `TurnCredentialsOut.expires_at` (type integer only).
+
+### Corrections made
+
+- Endpoint method/path: `GET turn-credentials` → `POST /messaging/messages/calls/{call_id}/turn-credentials`
+  (per-call). Propagated through §1, §2, FR-1, §4.1/§4.2/§4.3/§4.4/§4.5, §5, §6, §7, AC-1.
+- DTO fields: `ttl` → `ttl_seconds` (required); added required `expires_at`; removed the
+  nullable hoisted `username`/`credential` and the `StringOrListAdapter` (urls is always an
+  array; per-entry creds are required). Updated §3 FR-2, §4.1, §4.3, §11, AC-2.
+- Repository/provider APIs now take `callId` (`getIceServers(callId, …)`,
+  `current(callId)`); cache keyed by `callId`. Updated §4.4, §6, §4.5, AC-5.
+- Error model: structured `{code, message}` for 400/403/404/409/503, `HTTPValidationError`
+  for 422; 401 is a transport-level concern, this op's auth/feature failure is 403. Updated
+  §5, §7.
+- Retry semantics: removed the "idempotent GET → AND-016 retry" claim (POST is out of
+  AND-016 scope). Updated FR-1, §4.2, §7.
+- R1 in §13 reclassified from open risk to RESOLVED (shape verified).
+
+### Open assumptions
+
+- **STUN-only local fallback list (FR-7 / §4.4 `stunOnlyFallback`)** — not present in the
+  backend response or web behavior (web simply continues with empty ICE servers). This is an
+  Android design choice; keep it, but it is unverified against the reference contract.
+- **`expires_at` unit = seconds** — schema gives only `integer`; assumed seconds to match
+  `ttl_seconds`. Confirm at impl against a live response.
+- **AND-016 / AND-011/012/013/018 baseline behavior** — internal Android-port tickets, not in
+  the provided sources; assumed present and behaving as the web client's transport
+  (cookie/CSRF/Bearer/refresh) demonstrates.
+- **Relay candidate-pair assertion mechanics** — framework-standard `getStats()` usage;
+  no project source, treated as a framework ref (claim #10).
+- **`X-SESSION-ID` header** — documented optional param for the op; whether the Android
+  client must send it (vs. cookie session) is unconfirmed. Assume cookie/Bearer suffices,
+  send `X-SESSION-ID` if the session id is available.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (no device); **emu35** = headless
+emulator AVD `test35` (x86_64, API 35); **A15** = physical Samsung Galaxy A15 5G
+(SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). Hardware/relay/real-network cases
+prefer **A15**.
+
+- **TC-AND-291-01** — Type: unit (JVM). Target: `TurnCredentialsMappingTest`.
+  Preconditions: a fixture matching the verified `TurnCredentialsOut` JSON (one entry with
+  udp/tcp/turns `urls`, `username`, `credential`, `ttl_seconds=600`, `expires_at`).
+  Steps: deserialize via Moshi → `TurnCredentialsDto` → `toIceServers(now, default)`.
+  Expected: one `RtcIceServer` with all three `urls` preserved, `username`/`credential`
+  populated, `ttlSeconds=600`, `expiresAtEpochMs = expires_at*1000`. Traces: AC-2.
+- **TC-AND-291-02** — Type: contract/MockWebServer (JVM). Target: `IceServersApi.getTurnCredentials`.
+  Preconditions: MockWebServer enqueues a 200 `TurnCredentialsOut` body; Retrofit client wired.
+  Steps: call `getTurnCredentials("call-123")`; capture the recorded request.
+  Expected: method **POST**, path `/messaging/messages/calls/call-123/turn-credentials`,
+  empty/`{}` body, parsed DTO equals fixture. Traces: AC-1.
+- **TC-AND-291-03** — Type: contract/MockWebServer (JVM). Target: shared client auth headers.
+  Preconditions: cookie jar holds session + `ui_csrf`; Bearer token set.
+  Steps: invoke the API; inspect recorded headers.
+  Expected: request carries `Authorization: Bearer …`, cookie header, and `X-CSRF-Token`.
+  Traces: AC-1, AC-7 (no creds in request log).
+- **TC-AND-291-04** — Type: unit (JVM). Target: `IceServersRepositoryTest` (fresh cache).
+  Preconditions: store holds a record for `call-123` fresh at injected `Clock`.
+  Steps: `getIceServers("call-123")`. Expected: returns `Ready(stale=false)` with **no**
+  MockWebServer request dispatched. Traces: AC-4.
+- **TC-AND-291-05** — Type: unit (JVM). Target: `IceServersRepositoryTest` (skew/expiry boundary).
+  Preconditions: cached record within `REFRESH_SKEW_SECONDS` of `expires_at`; network returns
+  fresh 200. Steps: `getIceServers("call-123")`. Expected: a refetch occurs, new record
+  persisted; an already-expired record is treated as absent → refetch. Traces: AC-4.
+- **TC-AND-291-06** — Type: unit (JVM). Target: `IceServersRepositoryTest` (stale-while-revalidate).
+  Preconditions: a valid (non-expired) cache exists; network fails (5xx/timeout).
+  Steps: force refresh path. Expected: returns cached set with `stale=true`; never throws.
+  Traces: AC-5.
+- **TC-AND-291-07** — Type: unit (JVM). Target: `IceServersProvider` (STUN-only fallback / offline).
+  Preconditions: no cache; network unreachable (simulated offline / flaky dev host timeout).
+  Steps: `current("call-123")`. Expected: returns `config.stunOnlyFallback`
+  (`stun:stun.l.google.com:19302`), emits `FallbackStunOnly`, never throws. Traces: AC-5.
+- **TC-AND-291-08** — Type: contract/MockWebServer (JVM). Target: error mapping.
+  Preconditions: enqueue 403 body `{"detail":{"code":"feature_disabled","message":"…"}}`,
+  and separately 404/409/503 variants and a 422 `HTTPValidationError`.
+  Steps: call the repo; inspect mapped `ApiError`. Expected: 403 → forbidden/feature-disabled
+  state routed to fallback (not refresh-retry); `detail.code`/`detail.message` surfaced;
+  422 mapped via the validation shape. Traces: AC-5.
+- **TC-AND-291-09** — Type: contract/MockWebServer (JVM). Target: 401 refresh-once behavior.
+  Preconditions: first response 401, then `/ui/session/refresh` succeeds, retry returns 200.
+  Steps: call the repo while authenticated. Expected: exactly one `POST /ui/session/refresh`
+  then a single retry that succeeds; a second 401 surfaces an auth error. Traces: AC-1.
+- **TC-AND-291-10** — Type: unit (JVM, coroutines test). Target: concurrent-fetch coalescing.
+  Preconditions: stale/missing cache; 3 concurrent `current("call-123")` callers; MockWebServer
+  with a single slow 200. Steps: launch concurrently. Expected: exactly **one** network request
+  (Mutex coalesces), all callers receive the same result. Traces: AC-4, AC-5.
+- **TC-AND-291-11** — Type: unit/Robolectric (JVM). Target: `IceServersStoreTest` (DataStore round-trip).
+  Preconditions: in-memory/temp DataStore. Steps: write a record keyed by `callId`, read back;
+  advance `Clock` past `expiresAtEpochMs`, read again. Expected: round-trip equal; expired read
+  returns absent. Traces: AC-4.
+- **TC-AND-291-12** — Type: unit (JVM). Target: `RedactionTest`.
+  Preconditions: an `IceServers` with real-looking `username`/`credential` and credentialed
+  TURN URLs. Steps: run the log/event formatter and analytics payload builder.
+  Expected: output contains counts/schemes/transports/TTL/outcome only; never the
+  `username`/`credential` substrings or credentialed URLs. Traces: AC-7.
+- **TC-AND-291-13** — Type: instrumented/e2e (A15 — MUST run on physical device).
+  Target: `RelayCandidateTest`. Preconditions: a reachable TURN server (coturn fixture or dev
+  TURN) and valid (or fixture) credentials; `RtcConfig` with `iceTransportPolicy = RELAY`;
+  AND-289 peer/loopback harness. Steps: create the PeerConnection with the fetched ICE servers,
+  negotiate, read `getStats()`. Expected: selected candidate-pair `local`/`remote`
+  `candidateType == "relay"` and session reaches `RtcSessionState.Connected`. Rationale for
+  device: real WebRTC media/ICE + TURN allocation + arm64/API-34 behavior; emulator NAT/media
+  stack is unreliable. Traces: AC-3, AC-6.
+- **TC-AND-291-14** — Type: instrumented (emu35 acceptable; A15 confirmatory). Target:
+  end-to-end config wiring with AND-289. Preconditions: MockWebServer returns a 200
+  `TurnCredentialsOut`; provider + wrapper wired. Steps: `current(callId)` →
+  `rtcFactory.create(RtcConfig(iceServers=…))`; assert the wrapper built
+  `PeerConnection.IceServer` entries matching the DTO (urls/username/credential).
+  Expected: ICE servers present and correctly translated; no empty `iceServers`. Traces: AC-3.
+- **TC-AND-291-15** — Type: manual/security review. Target: at-rest + logcat inspection.
+  Preconditions: run a real fetch on A15. Steps: capture full `adb logcat` during fetch+use;
+  inspect the app-private DataStore file. Expected: no `username`/`credential` in logcat or
+  analytics; the only at-rest copy is the app-private DataStore record; dev plaintext-HTTP
+  caveat noted. Traces: AC-7.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 (authenticated POST via shared client) | TC-02, TC-03, TC-09 |
+| AC-2 (DTO → IceServers mapping, verified shape) | TC-01 |
+| AC-3 (list consumable as `RtcConfig.iceServers`; wrapper configured) | TC-13, TC-14 |
+| AC-4 (TTL caching: fresh reuse / skew refetch / expired absent) | TC-04, TC-05, TC-10, TC-11 |
+| AC-5 (failure → stale cache / STUN fallback; never throws) | TC-06, TC-07, TC-08, TC-10 |
+| AC-6 (relay candidate-pair behind NAT) | TC-13 |
+| AC-7 (no credential leakage in logs/analytics) | TC-03, TC-12, TC-15 |

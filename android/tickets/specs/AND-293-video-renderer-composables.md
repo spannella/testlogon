@@ -5,9 +5,10 @@ milestone: M7
 epic: E39
 priority: P1
 size: M
-status: draft
 depends_on: [AND-288]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-293 — Video renderer composables
@@ -46,9 +47,17 @@ rotation/recompose" defects occur.
 - **Consumers:** the call-screen feature ticket(s) under epic E39 wire real
   tracks into these composables. Signaling/SDP, ICE, and track lifecycle are
   out of scope here and owned downstream.
-- **Web reference:** the `frontend/` app renders WebRTC via `<video>`
-  elements with `object-fit: cover|contain`; this ticket mirrors that scaling
-  semantics on Android via `RendererCommon.ScalingType`.
+- **Web reference:** the `frontend/` app renders live WebRTC peer video via a
+  `<video>` element (`CallSessionOverlay.tsx: VideoRenderer`) using Tailwind
+  `object-cover` (CSS `object-fit: cover`) for BOTH local and remote feeds; the
+  local preview additionally gets `muted` + `mirror` (`[transform:scaleX(-1)]`),
+  remote is unmirrored. **Correction (review):** an earlier draft claimed the web
+  used `object-fit: cover|contain` for the call surface — verified false. The
+  *live call* path is `cover`-only (our `FILL`); `object-contain` (our `FIT`)
+  appears only in VOD/media playback (`MediaPlayer.tsx`) and KYC capture preview
+  (`MediaSettingsPage.tsx`), not in the peer-video surface. We still expose a
+  `FIT` mode on Android for parity/flexibility, but FILL is the web-matched
+  default. Android maps these via `RendererCommon.ScalingType`.
 - **Platform:** Kotlin 2.0.21, Compose + Material 3, minSdk 24, compileSdk 35,
   AGP 8.7.3. `SurfaceViewRenderer` is hosted via `AndroidView`.
 - **Stack note:** This is a real-time WebRTC surface, distinct from
@@ -354,9 +363,14 @@ only "contract" AND-293 defines is the Kotlin composable surface in §4.
 - **R3 — First-frame black flash** on some OEMs until `onFirstFrameRendered`.
   Mitigation: keep placeholder visible until first frame via the optional
   `RendererEvents` callback.
-- **R4 — Scaling parity with web:** `SCALE_ASPECT_BALANCED` vs `SCALE_ASPECT_FILL`
-  may not pixel-match the web `object-fit: cover`. Open question: confirm the
-  desired crop behavior with design before finalizing `FILL` mapping.
+- **R4 — Scaling parity with web:** the web live-call surface is `object-fit:
+  cover` (verified, `CallSessionOverlay.tsx`), which is an unconditional aspect-fill
+  crop. Our `FILL` mode maps to `SCALE_ASPECT_BALANCED` (matched) /
+  `SCALE_ASPECT_FILL` (mismatched); `SCALE_ASPECT_BALANCED` does **not**
+  guarantee a full edge-to-edge crop the way CSS `cover` does, so the BALANCED
+  branch may letterbox slightly where the web would crop. Open question: confirm
+  with design whether `FILL` should map to `SCALE_ASPECT_FILL` unconditionally to
+  pixel-match web `cover`, accepting more aggressive cropping.
 
 ## 14. Acceptance Criteria
 
@@ -404,3 +418,308 @@ AC-8. `LocalInspectionMode` (`@Preview`) renders the placeholder and never calls
   `android-port` branch; merged behind AND-288.
 - Public composable API reviewed by the E39 call-screen ticket owner so the
   downstream integration consumes it without changes.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. "framework
+ref" denotes an Android/WebRTC framework fact verified against documentation
+(not derivable from this repo's reference sources, which are a web app + backend
+OpenAPI).
+
+1. **Claim:** This ticket adds no network calls / consumes no FastAPI
+   endpoints (§5).
+   **VERDICT:** Verified.
+   **SOURCE:** `reference/openapi.index.txt` — the only WebRTC-adjacent
+   endpoints are signaling/broadcast (`POST /broadcast/sessions/{session_id}/inputs/{input_id}/webrtc-offer`
+   → `BroadcastWebRTCOfferIn`/`BroadcastWebRTCOfferOut`, and the
+   `/messages/calls/{call_id}/...` recording/consent routes). None render video;
+   all are owned by signaling/recording tickets downstream. The renderer
+   composables touch no HTTP.
+
+2. **Claim:** The web client renders live peer video with `object-fit: cover`
+   for both local and remote feeds (§2, §13-R4).
+   **VERDICT:** Corrected (was "`object-fit: cover|contain`").
+   **SOURCE:** `src/pages/messages/CallSessionOverlay.tsx: VideoRenderer`
+   (`className={cn("h-full w-full object-cover", ...)}`). `object-contain` is
+   used only in non-live surfaces: `src/components/shared/MediaPlayer.tsx` (VOD)
+   and `src/pages/calls/MediaSettingsPage.tsx` (KYC preview). The live call path
+   is cover-only.
+
+3. **Claim:** The web mirrors the local preview by default and leaves remote
+   unmirrored; mirroring is a horizontal flip (§2, §4, FR-2, AC-2).
+   **VERDICT:** Verified.
+   **SOURCE:** `src/pages/messages/CallSessionOverlay.tsx` — local renderer is
+   invoked with `mirror` (and `muted`, `aria-label="Local video preview"`);
+   remote renderer omits `mirror` (prop defaults to `false`). Mirror is applied
+   as `mirror && "[transform:scaleX(-1)]"`.
+
+4. **Claim:** Mirroring the local preview is appropriate because the local
+   camera is the front ("user") camera (§1, FR-2).
+   **VERDICT:** Verified (web parity).
+   **SOURCE:** `src/lib/webrtc.ts: acquireLocalMedia` — video constraints use
+   `facingMode: "user"`. (Android front-vs-back capturer selection is owned by
+   AND-288; this ticket only flips the view.)
+
+5. **Claim:** The web detaches the media sink when the renderer leaves the DOM
+   (parity for FR-4 "release on dispose") (§4, §8, AC-6).
+   **VERDICT:** Verified.
+   **SOURCE:** `src/pages/messages/CallSessionOverlay.tsx: VideoRenderer` —
+   `useEffect` cleanup sets `videoRef.current.srcObject = null` on unmount/stream
+   change. Android analogue: `removeSink` + `release()` in `onRelease`.
+
+6. **Claim:** `SurfaceViewRenderer` is an `org.webrtc` `View` initialised via
+   `init(EglBase.Context, RendererCommon.RendererEvents)` and torn down via
+   `release()` (§4, FR-4).
+   **VERDICT:** Unverified-assumption (framework ref).
+   **SOURCE:** WebRTC Android API (`org.webrtc.SurfaceViewRenderer`,
+   `org.webrtc.EglBase`). No Android/WebRTC source exists in this repo's
+   reference (web app only), so the exact signatures cannot be repo-verified;
+   they match the published `io.github.webrtc-sdk:android` API and should be
+   confirmed against the version AND-288 pins.
+
+7. **Claim:** Scaling maps to `RendererCommon.ScalingType` values
+   `SCALE_ASPECT_FIT` (FIT), and `SCALE_ASPECT_BALANCED`/`SCALE_ASPECT_FILL`
+   (FILL) via `setScalingType(fit, fill)` (§3 FR-3, §4, AC-3).
+   **VERDICT:** Unverified-assumption (framework ref).
+   **SOURCE:** WebRTC Android API (`org.webrtc.RendererCommon.ScalingType`,
+   `SurfaceViewRenderer.setScalingType`). Enum names match the published API;
+   the design correctly notes (§13-R4) that BALANCED is not a strict CSS-`cover`
+   equivalent — that is a real framework caveat, not a repo claim.
+
+8. **Claim:** `setMirror`, `setEnableHardwareScaler`, and per-track
+   `addSink`/`removeSink` (on `org.webrtc.VideoTrack`) exist and are the
+   attach/detach/mutation primitives (§4, FR-5, FR-6).
+   **VERDICT:** Unverified-assumption (framework ref).
+   **SOURCE:** WebRTC Android API (`SurfaceViewRenderer.setMirror`,
+   `.setEnableHardwareScaler`; `VideoTrack.addSink(VideoSink)` /
+   `.removeSink(VideoSink)` — `SurfaceViewRenderer` implements `VideoSink`).
+   Confirm against the AND-288-pinned SDK version.
+
+9. **Claim:** Compose hosting via `AndroidView` with `factory`/`update`/
+   `onRelease`, plus `LocalInspectionMode.current` to short-circuit preview
+   (§4, FR-8, AC-8).
+   **VERDICT:** Unverified-assumption (framework ref).
+   **SOURCE:** Jetpack Compose API
+   (`androidx.compose.ui.viewinterop.AndroidView` with the `onRelease`
+   parameter; `androidx.compose.ui.platform.LocalInspectionMode`). These are
+   standard Compose UI APIs available on the project's Compose version; not
+   repo-verifiable here.
+
+10. **Claim:** `EglBase`/`EglBase.Context` and `VideoTrack` are owned and
+    released by AND-288, not by this ticket (§2, §6, §13-R2).
+    **VERDICT:** Unverified-assumption (cross-ticket contract).
+    **SOURCE:** AND-288 ("webrtc-android integration + permissions") scope as
+    referenced in this spec's §2/§12. AND-288's spec is the authoritative source
+    for the EglBase lifecycle; this is a stated dependency, not a verified fact.
+
+11. **Claim:** Optional `RendererCommon.RendererEvents`
+    (`onFirstFrameRendered`, `onFrameResolutionChanged`) can drive a
+    "reconnecting"/telemetry hook (§7, §10, §13-R3).
+    **VERDICT:** Unverified-assumption (framework ref).
+    **SOURCE:** WebRTC Android API
+    (`org.webrtc.RendererCommon.RendererEvents`). Callback names match the
+    published API; confirm against the pinned SDK.
+
+12. **Claim:** The real-time WebRTC path shares no code with Media3/ExoPlayer
+    HLS/VOD playback (§2 stack note).
+    **VERDICT:** Verified (by analogy to web separation).
+    **SOURCE:** In the web reference these are distinct: live calls use
+    `<video srcObject=MediaStream>` (`CallSessionOverlay.tsx`), whereas VOD uses
+    the HTMLMediaElement player in `src/components/shared/MediaPlayer.tsx`. The
+    Android equivalence (WebRTC vs Media3) is the standard separation; treat the
+    Android specifics as a framework assumption.
+
+### Corrections made
+
+- **§2 web reference:** changed "`object-fit: cover|contain`" to reflect the
+  actual web live-call surface, which is `object-cover` only
+  (`CallSessionOverlay.tsx`); clarified that `object-contain` (our `FIT`) is a
+  VOD/KYC-only style. (Citation 2.)
+- **§13-R4:** sharpened the scaling-parity risk: web `cover` is an unconditional
+  aspect-fill crop, so our `SCALE_ASPECT_BALANCED` branch may letterbox where the
+  web crops; flagged the open design question of mapping `FILL` to
+  `SCALE_ASPECT_FILL` unconditionally. (Citation 7.)
+- **Frontmatter:** `status: draft` → `status: reviewed`; added
+  `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **All `org.webrtc.*` API surface** (`SurfaceViewRenderer.init/release/
+  setMirror/setScalingType/setEnableHardwareScaler`, `RendererCommon.ScalingType`
+  / `RendererEvents`, `VideoTrack.addSink/removeSink`): unverifiable from this
+  repo — the reference is a web app and the backend OpenAPI; there is no Android
+  WebRTC source. Must be confirmed against the exact `io.github.webrtc-sdk:android`
+  version AND-288 pins. Risk: minor API drift between WebRTC SDK builds (e.g.,
+  `init` overloads, sink-attachment surface).
+- **Compose `AndroidView(onRelease = ...)` and `LocalInspectionMode`:** standard
+  Jetpack Compose APIs but version-dependent; not repo-verifiable. Confirm
+  against the project's Compose BOM.
+- **AND-288 EglBase/VideoTrack lifecycle and permission gating:** a cross-ticket
+  contract, not verified here; depends on AND-288 landing as described.
+- **`@Preview`/`LocalInspectionMode` placeholder behavior on a real device:**
+  cannot be exercised until consumers (E39) wire real tracks; verified only at
+  the composable boundary.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM unit/Robolectric (no device);
+**emu35** = headless AVD `test35`, x86_64, Android 15 / API 35 (CI fast lane);
+**deviceA15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R),
+Android 14 / API 34, arm64-v8a. Anything that paints real WebRTC frames, decodes
+hardware video, or depends on OEM SurfaceView/EGL behavior MUST run on
+**deviceA15** (the headless x86 emulator does not faithfully reproduce
+arm64 hardware decode/SurfaceView compositing or first-frame timing).
+
+- **TC-AND-293-01 — Scaling enum → ScalingType mapping (happy path).**
+  Type: unit. Target: JVM.
+  Preconditions: `VideoScaling.toFitType()/toFillType()` extracted as pure
+  functions.
+  Steps: call both helpers for `FIT` and `FILL`.
+  Expected: `FIT` → (`SCALE_ASPECT_FIT`, `SCALE_ASPECT_FIT`); `FILL` →
+  (`SCALE_ASPECT_BALANCED`, `SCALE_ASPECT_FILL`), matching §4 / Citation 7.
+  Traces: AC-3.
+
+- **TC-AND-293-02 — Track-swap decision logic.**
+  Type: unit. Target: JVM.
+  Preconditions: attach decision extracted to `shouldSwap(current, next)` using
+  reference identity.
+  Steps: assert `shouldSwap(a, a)==false`, `shouldSwap(a, b)==true`,
+  `shouldSwap(a, null)==true`, `shouldSwap(null, b)==true`.
+  Expected: identity-based swap detection matches §6 identity contract.
+  Traces: AC-4, AC-5.
+
+- **TC-AND-293-03 — Renders and attaches sink exactly once (happy path).**
+  Type: contract/MockWebServer-style with mocked WebRTC (MockK; no actual
+  MockWebServer — no HTTP). Target: JVM (Robolectric) / emu35.
+  Preconditions: fake `EglBase.Context`, mocked `VideoTrack` and
+  `SurfaceViewRenderer`.
+  Steps: compose `VideoRenderer(track, eglContext)`; let it settle.
+  Expected: `init(eglContext, …)` called once; `track.addSink(view)` called
+  exactly once; no `removeSink`.
+  Traces: AC-4.
+
+- **TC-AND-293-04 — Track swap A→B reattaches without re-init.**
+  Type: Compose-UI. Target: JVM (Robolectric) / emu35.
+  Preconditions: as TC-03, two mocked tracks A and B.
+  Steps: compose with A, then recompose with B.
+  Expected: `A.removeSink(view)` ×1, `B.addSink(view)` ×1, `init` NOT called a
+  second time, `release` not called.
+  Traces: AC-5.
+
+- **TC-AND-293-05 — Null track shows placeholder and removes sink.**
+  Type: Compose-UI. Target: JVM (Robolectric) / emu35.
+  Preconditions: mocked track A attached, placeholder tagged with
+  `contentDescription`/test tag.
+  Steps: compose with A, then recompose with `track = null`.
+  Expected: `A.removeSink(view)` called; placeholder node asserted present via
+  `onNodeWithContentDescription(...)`; no crash; no `addSink(null)`.
+  Traces: AC-4.
+
+- **TC-AND-293-06 — mirror & scaling change in place (no recreation).**
+  Type: Compose-UI. Target: JVM (Robolectric) / emu35.
+  Preconditions: mocked renderer.
+  Steps: compose with `mirror=true, scaling=FILL`; recompose with
+  `mirror=false, scaling=FIT`.
+  Expected: `setMirror(false)` and `setScalingType(SCALE_ASPECT_FIT,
+  SCALE_ASPECT_FIT)` invoked; `init` NOT called again; no `release`.
+  Traces: AC-2, AC-3.
+
+- **TC-AND-293-07 — Dispose releases renderer and sink exactly once.**
+  Type: Compose-UI. Target: JVM (Robolectric) / emu35.
+  Preconditions: mocked track A attached.
+  Steps: place the composable behind a toggle; remove it from composition.
+  Expected: `A.removeSink(view)` ×1 then `view.release()` ×1; handle nulled; a
+  subsequent disposal does not double-`release` (idempotency per §7).
+  Traces: AC-6.
+
+- **TC-AND-293-08 — LocalInspectionMode renders placeholder, never inits.**
+  Type: Compose-UI. Target: JVM (Robolectric).
+  Preconditions: wrap composable in `CompositionLocalProvider(LocalInspectionMode
+  provides true)`.
+  Steps: compose `VideoRenderer`/`LocalVideoRenderer`/`RemoteVideoRenderer`.
+  Expected: placeholder node present; `init` and `addSink` never called.
+  Traces: AC-8.
+
+- **TC-AND-293-09 — init() failure is non-crashy.**
+  Type: Compose-UI. Target: JVM (Robolectric).
+  Preconditions: mocked `SurfaceViewRenderer.init` throws (bad EGL).
+  Steps: compose with a non-null track.
+  Expected: exception caught and logged at ERROR (tag `WebRtcRenderer`);
+  placeholder remains; renderer handle stays null; `addSink` never called; no
+  app crash (§7).
+  Traces: AC-4, AC-8.
+
+- **TC-AND-293-10 — Accessibility: content descriptions present.**
+  Type: Compose-UI (a11y assertions). Target: emu35.
+  Preconditions: default strings `R.string.video_local_preview` /
+  `R.string.video_remote_feed`.
+  Steps: compose local and remote renderers; query semantics tree.
+  Expected: hosting `Box` exposes the localized `contentDescription`; placeholder
+  text resolves from `strings.xml` (no hardcoded literals); mirroring does not
+  alter semantics order (§9). Optionally run with TalkBack on deviceA15 to
+  confirm the label is announced once and frame content is not.
+  Traces: AC-2, AC-4 (and §9 a11y).
+
+- **TC-AND-293-11 — Real remote + local frames render on hardware (happy path).**
+  Type: instrumented/e2e (loopback). **Target: deviceA15 (MUST).**
+  Preconditions: AND-288 loopback sample provides a real local-capturer
+  `VideoTrack` and a shared `EglBase.Context`; camera permission granted.
+  Steps: wire the capturer track into both `LocalVideoRenderer` and
+  `RemoteVideoRenderer`; observe for ≥3 s.
+  Expected: both surfaces paint live frames; `onFirstFrameRendered` fires; local
+  is mirrored, remote is not; no black surface. (Emulator's synthetic camera and
+  x86 decode do not validate real arm64 hardware compositing — hence physical
+  device.)
+  Traces: AC-1, AC-2.
+
+- **TC-AND-293-12 — FIT letterboxes vs FILL crops on hardware.**
+  Type: instrumented/manual (visual). **Target: deviceA15 (MUST).**
+  Preconditions: loopback track with a known aspect ratio (e.g., 16:9) into a
+  non-matching container (e.g., square/portrait).
+  Steps: toggle `scaling` between `FIT` and `FILL`.
+  Expected: `FIT` shows letterbox bars (no crop); `FILL` fills the container
+  (cropped), visually matching the web `object-cover` behavior. Note BALANCED vs
+  FILL caveat from §13-R4.
+  Traces: AC-3.
+
+- **TC-AND-293-13 — Rotation & dark-mode keep painting (no black frame).**
+  Type: instrumented/e2e. **Target: deviceA15 (MUST).**
+  Preconditions: loopback rendering active.
+  Steps: rotate device portrait↔landscape several times; toggle system dark mode.
+  Expected: video continues painting after each config change with no persistent
+  black frame; surface is re-created and re-attached cleanly (§4/§7). Real OEM
+  SurfaceView config-change behavior is not reproduced on the headless emulator.
+  Traces: AC-7.
+
+- **TC-AND-293-14 — No SurfaceViewRenderer/EGL leak across navigate in/out.**
+  Type: instrumented/e2e with LeakCanary. Target: deviceA15 (preferred) or
+  emu35.
+  Preconditions: LeakCanary enabled in the debug loopback app.
+  Steps: navigate into the renderer screen and back out 5–10 times.
+  Expected: LeakCanary reports no retained `SurfaceViewRenderer`/`EglRenderer`;
+  the shared `EglBase` is NOT released by the composable (§6/§8).
+  Traces: AC-6.
+
+- **TC-AND-293-15 — Local-preview privacy: frames stop off-screen.**
+  Type: instrumented (security/privacy). **Target: deviceA15 (MUST).**
+  Preconditions: `LocalVideoRenderer` active on the camera.
+  Steps: navigate away / background the app; verify the renderer left
+  composition.
+  Steps (verify): assert `removeSink` was invoked so the view stops consuming
+  frames (camera capture stop itself is AND-288's responsibility); on-device,
+  confirm no preview is painted off-screen.
+  Expected: sink removed promptly on leave; no off-screen frame painting (§8).
+  Traces: AC-6 (and §8 privacy).
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (remote + local paint on device) | TC-11 |
+| AC-2 (local mirrored by default; in-place mirror toggle) | TC-06, TC-10, TC-11 |
+| AC-3 (FIT letterbox / FILL crop; ScalingType mapping) | TC-01, TC-06, TC-12 |
+| AC-4 (null→track / track→null add/remove sink; placeholder) | TC-02, TC-03, TC-05, TC-09, TC-10 |
+| AC-5 (swap A→B, no second init) | TC-02, TC-04 |
+| AC-6 (release + sink removed once; no leak) | TC-07, TC-14, TC-15 |
+| AC-7 (rotation/dark-mode keep painting) | TC-13 |
+| AC-8 (LocalInspectionMode renders placeholder, never inits) | TC-08, TC-09 |

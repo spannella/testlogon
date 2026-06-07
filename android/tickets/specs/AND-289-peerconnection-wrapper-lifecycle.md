@@ -5,7 +5,8 @@ milestone: M7
 epic: E39
 priority: P0
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-288]
 blocks: [AND-290]
 ---
@@ -23,8 +24,10 @@ callback-driven libwebrtc API as suspend functions and a single
 `StateFlow<RtcSessionState>`, so that higher layers (signaling in AND-290, the
 call/broadcast feature) never touch the raw libwebrtc threading model.
 
-Out of scope: actual signaling transport over the backend `/signal` endpoint
-(owned by AND-290), media capture/render surface construction (camera/mic
+Out of scope: actual signaling transport over the backend call-signaling
+endpoint `POST /messaging/messages/calls/{call_id}/signal` (owned by AND-290;
+the spec previously called this `/signal`, which does not exist as a top-level
+path), media capture/render surface construction (camera/mic
 permission + capturer come from AND-288), and any UI. The deliverable is proven
 when an in-process test harness runs two `RtcPeerConnection` instances against
 each other and an offer → answer → ICE-candidate exchange drives both to
@@ -42,7 +45,10 @@ each other and an offer → answer → ICE-candidate exchange drives both to
   there.
 - **Downstream (AND-290):** signaling transport. AND-289 defines the
   `SignalingPort` SAM interface and the local-SDP/local-ICE callbacks that
-  AND-290 will pump over `/signal` (SSE/poll). This ticket includes a fake
+  AND-290 will pump over `POST /messaging/messages/calls/{call_id}/signal`
+  (the web client uses request/response POST, not SSE — `sendSignalingEvent`
+  in `src/api/endpoints/messaging.ts` is a plain `api.post`; the SSE/poll
+  delivery model is an unverified assumption, see §16). This ticket includes a fake
   in-memory transport in `core-testing` to satisfy acceptance without a backend.
 - **Stack:** Kotlin 2.0.21, Coroutines/Flow, Hilt (KSP) for DI, JDK 17, minSdk
   24 / compileSdk 35, Gradle 8.9 / AGP 8.7.3.
@@ -189,23 +195,60 @@ and `EglBase` provided by AND-288's module.
 
 No HTTP/REST contract is owned by this ticket. WebRTC negotiation is peer-to-peer;
 the only "wire" artifacts are the SDP/ICE payloads that AND-290 will serialize to
-the backend `/signal` endpoint. For forward compatibility, this ticket fixes the
-JSON shape that `RtcSessionDescription`/`RtcIceCandidate` MUST serialize to so
+the backend call-signaling endpoint. For forward compatibility, this ticket fixes
+the JSON shape that `RtcSessionDescription`/`RtcIceCandidate` MUST serialize to so
 AND-290 can adopt it without changing model classes:
 
 ```json
-// session description
+// session description (RtcSessionDescription)
 { "type": "offer", "sdp": "v=0\r\no=- 46117341 2 IN IP4 127.0.0.1\r\n..." }
 
-// ice candidate
+// ice candidate (RtcIceCandidate)
 { "sdpMid": "0", "sdpMLineIndex": 0, "candidate": "candidate:842163049 1 udp 1677729535 ..." }
 ```
 
 `type` is the lowercase libwebrtc SDP type (`offer`|`answer`|`pranswer`).
 Moshi adapters for these two types are provided in `core-webrtc` and reused by
-AND-290. The actual `POST /signal` request/response envelope (challenge_id /
-session correlation, CSRF via `X-CSRF-Token`, SSE framing) is **defined and
-owned by AND-290** and is N/A here.
+AND-290.
+
+> **Correction (verified against backend OpenAPI + web client).** These two
+> JSON objects are NOT sent at the top level of the signaling request. The
+> verified endpoint is `POST /messaging/messages/calls/{call_id}/signal`
+> (op `send_signaling_event_...`, request schema `CallSignalingIn`, success
+> `200:CallSignalingOut`). The backend `CallSignalingIn` envelope is:
+>
+> ```json
+> {
+>   "type": "webrtc.offer",            // pattern: webrtc.offer|webrtc.answer|
+>                                      //   webrtc.ice_candidate|
+>                                      //   webrtc.screen_share_start|
+>                                      //   webrtc.screen_share_stop
+>   "event_id": "<=128 chars",
+>   "conversation_id": "<=128 chars",
+>   "recipient_user_id": "<=128 chars",
+>   "nonce": "8..128 chars",
+>   "sent_at": 1717795200,             // integer (epoch)
+>   "payload": { /* arbitrary object */ }
+> }
+> ```
+>
+> The two `RtcSessionDescription`/`RtcIceCandidate` JSON objects above belong
+> INSIDE `payload`, and the discriminator is the envelope's `type`
+> (`webrtc.offer` / `webrtc.answer` / `webrtc.ice_candidate`) — NOT the bare
+> SDP `type` field. The success response `CallSignalingOut` is
+> `{ event_id, call_id, conversation_id, event_type, delivered_to, status }`
+> (`status` is `delivered`|`duplicate` per the web client). Envelope
+> construction, `call_id`/`conversation_id`/`nonce` correlation, CSRF via
+> `X-CSRF-Token`, and the `authorization` + `X-SESSION-ID` headers the endpoint
+> declares are **defined and owned by AND-290** and remain N/A to this wrapper.
+> This ticket only guarantees the `payload`-level SDP/ICE shapes shown above.
+>
+> TURN/STUN servers (referenced by `RtcConfig.iceServers` in §4) are issued by
+> a separate endpoint `POST /messaging/messages/calls/{call_id}/turn-credentials`
+> (`200:TurnCredentialsOut` = `{ ttl_seconds, expires_at, ice_servers[] }`,
+> each `TurnIceServerOut` = `{ urls[], username, credential }`). That fetch is
+> AND-290's responsibility; `RtcIceServer` in §4.1 already matches this shape
+> (`urls`/`username`/`credential`).
 
 ## 6. Data & State Management
 
@@ -282,7 +325,12 @@ sealed class RtcException(msg: String, cause: Throwable? = null) : Exception(msg
   logged.
 - **No PII storage:** nothing from a session is persisted.
 - This module performs no auth; it consumes already-authenticated signaling
-  injected by AND-290 (cookie/CSRF session handling stays in `core-network`).
+  injected by AND-290. Auth/CSRF handling stays in `core-network`: the web
+  client (`src/api/client.ts`) sends `Authorization: Bearer <token>`, an
+  `X-CSRF-Token` header read from the `ui_csrf` cookie, and `credentials:
+  "include"`. The signaling endpoints additionally declare `authorization` and
+  `X-SESSION-ID` parameters in the OpenAPI index — AND-290 owns supplying these;
+  none of it is handled in `core-webrtc`.
 
 ## 9. Accessibility & i18n
 
@@ -343,8 +391,10 @@ instrumented tests, not pure JVM unit tests).
   camera/mic permissions. AND-289 cannot start until AND-288's loopback sample
   renders.
 - **Blocks AND-290** (Signaling transport): AND-290 implements `SignalingPort`
-  over backend `/signal` (SSE/poll) and reuses the SDP/ICE Moshi adapters and
-  the `InMemorySignalingTransport` fake defined here.
+  over backend `POST /messaging/messages/calls/{call_id}/signal` (verified
+  endpoint; delivery model SSE-vs-poll unconfirmed, see §16) plus
+  `POST /messaging/messages/calls/{call_id}/turn-credentials`, and reuses the
+  SDP/ICE Moshi adapters and the `InMemorySignalingTransport` fake defined here.
 - Transitively part of milestone **M7**, epic **E39** (real-time/WebRTC).
 - No dependency on `core-network` or the feature layer. New Gradle module
   `core-webrtc` must be registered in `settings.gradle.kts` and the version
@@ -418,3 +468,318 @@ code review of log sites; redaction summaries only).
   JVM `RtcSerializationTest` green.
 - No native leaks under repeated create/close (verified in teardown test).
 - Code reviewed and merged; AND-290 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Claim:** The signaling transport endpoint is `/signal`.
+   **VERDICT: Corrected.** No top-level `/signal` path exists. The verified
+   endpoint is `POST /messaging/messages/calls/{call_id}/signal`.
+   **Source:** OpenAPI `POST /messaging/messages/calls/{call_id}/signal`
+   (op `send_signaling_event_messaging_messages_calls__call_id__signal_post`);
+   `src/api/endpoints/messaging.ts: sendSignalingEvent`.
+
+2. **Claim:** The wire JSON for a session description is
+   `{ "type": "offer", "sdp": "..." }` sent at the top level.
+   **VERDICT: Corrected.** That object is valid only INSIDE the envelope's
+   `payload`. The request body is `CallSignalingIn` with required fields
+   `type, event_id, conversation_id, recipient_user_id, nonce, sent_at` and an
+   optional `payload` object; `type` is the envelope discriminator
+   (`webrtc.offer|webrtc.answer|webrtc.ice_candidate|webrtc.screen_share_start|webrtc.screen_share_stop`).
+   **Source:** OpenAPI schema `CallSignalingIn`; `src/api/endpoints/messaging.ts:
+   SignalingPayload`.
+
+3. **Claim:** The signaling response is an SSE-framed envelope with
+   challenge_id / session correlation.
+   **VERDICT: Corrected (partial) / Unverified-assumption (SSE).** The success
+   response is `CallSignalingOut` =
+   `{ event_id, call_id, conversation_id, event_type, delivered_to, status }`
+   (`status` ∈ `delivered|duplicate` per the web client). There is no
+   `challenge_id`. SSE framing is not evidenced — `sendSignalingEvent` is a
+   plain request/response `api.post`. SSE/poll inbound delivery is an open
+   assumption (see Open assumptions).
+   **Source:** OpenAPI schema `CallSignalingOut`; `src/api/endpoints/messaging.ts:
+   SignalingAck` and `sendSignalingEvent`.
+
+4. **Claim:** STUN/TURN servers are injected via `RtcConfig.iceServers`;
+   population is AND-290's concern (§13 OQ2).
+   **VERDICT: Verified.** A dedicated endpoint issues them:
+   `POST /messaging/messages/calls/{call_id}/turn-credentials` →
+   `TurnCredentialsOut` = `{ ttl_seconds, expires_at, ice_servers[] }`, each
+   `TurnIceServerOut` = `{ urls[], username, credential }`. The §4.1
+   `RtcIceServer(urls, username, credential)` shape matches exactly.
+   **Source:** OpenAPI `POST /messaging/messages/calls/{call_id}/turn-credentials`,
+   schemas `TurnCredentialsOut` / `TurnIceServerOut`; `src/api/endpoints/messaging.ts:
+   TurnIceServer`, `fetchTurnCredentials`.
+
+5. **Claim:** Signaling is protected by CSRF via `X-CSRF-Token`.
+   **VERDICT: Verified (and expanded).** The web transport sets `X-CSRF-Token`
+   from the `ui_csrf` cookie, `Authorization: Bearer <token>`, and
+   `credentials: "include"`. The signaling endpoints also declare
+   `authorization` and `X-SESSION-ID` parameters.
+   **Source:** `src/api/client.ts` (lines ~158-170, `getCookie("ui_csrf")` →
+   `X-CSRF-Token`; `Authorization`; `credentials: "include"`); OpenAPI index
+   `params=call_id,authorization,X-SESSION-ID` on the signal endpoint.
+
+6. **Claim:** Media is encrypted by libwebrtc default (DTLS-SRTP, mandatory);
+   no plaintext media path.
+   **VERDICT: Verified (framework ref).** DTLS-SRTP is mandatory in WebRTC; SRTP
+   keying is negotiated via DTLS and unencrypted RTP is not permitted.
+   **Source:** framework ref — WebRTC security architecture
+   (https://datatracker.ietf.org/doc/html/rfc8827, RFC 8827 "WebRTC Security
+   Architecture"; DTLS-SRTP keying per RFC 5764).
+
+7. **Claim:** libwebrtc is callback/threading-sensitive; `PeerConnection`
+   mutations must be serialized off the signaling thread, and SDP/ICE callbacks
+   arrive via `SdpObserver` / `PeerConnection.Observer`.
+   **VERDICT: Verified (framework ref).** Matches the org.webrtc Android API
+   (Observer/SdpObserver callback model; single-threaded access guidance).
+   **Source:** framework ref — WebRTC Android (org.webrtc) native API docs
+   (https://webrtc.github.io/webrtc-org/native-code/android/).
+
+8. **Claim:** SDP type values are lowercase `offer|answer|pranswer`.
+   **VERDICT: Verified (framework ref).** Matches `RTCSdpType`; libwebrtc
+   `SessionDescription.Type` serializes to lowercase canonical form.
+   **Source:** framework ref — `RTCSdpType` enum
+   (https://www.w3.org/TR/webrtc/#dom-rtcsdptype).
+
+9. **Claim:** Unified-plan is the libwebrtc default (§13 OQ3).
+   **VERDICT: Verified (framework ref).** Plan-B was removed; Unified Plan is
+   the only supported semantics in current libwebrtc / per spec.
+   **Source:** framework ref — Unified Plan transition
+   (https://www.w3.org/TR/webrtc/#rtcsdptype) and WebRTC project Plan-B
+   deprecation notes.
+
+10. **Claim:** The Android port serializes models with Moshi.
+    **VERDICT: Verified (project convention, not frontend).** The frontend is
+    TypeScript and has no Moshi; Moshi is the established Android-port choice in
+    sibling specs (version catalog `moshi = "1.15.1"`, `core-network` uses
+    Retrofit/Moshi).
+    **Source:** `specs/AND-001-gradle-project-skeleton.md` (version catalog
+    `moshi`, `retrofit-moshi`, `network` bundle); `specs/AND-003-core-module-structure.md`
+    (Moshi codegen in `core-network`/AND-018).
+
+11. **Claim:** The dev backend host is `http://18.222.237.167:8000` and is
+    irrelevant to this peer-to-peer module (§2 Note).
+    **VERDICT: Unverified-assumption (host) / Verified (irrelevance).** The host
+    IP is an environment/build-server detail not present in frontend source
+    (which resolves base URL from `VITE_API_BASE_URL`); its irrelevance to
+    peer-to-peer media is sound since WebRTC media does not transit FastAPI.
+    **Source:** `src/api/client.ts: API_BASE_URL` (env-derived);
+    `specs/AND-003-core-module-structure.md` §16 note classifying the IP as an
+    unverified Android-side assumption.
+
+12. **Claim (framework choices, no external contract):** `core-webrtc` depends
+    only on `core-model` + `core-testing`, uses Hilt (KSP) DI, Coroutines/Flow,
+    a single-thread dispatcher for native access, `AutoCloseable` teardown,
+    `suspendCancellableCoroutine` bridges, and `Turbine` for flow assertions.
+    **VERDICT: Unverified-assumption (internal design).** These are
+    AND-289-internal design decisions with no backend/frontend contract to
+    verify against; they are consistent with the project's Kotlin/Hilt/Coroutines
+    stack declared in §2 and sibling specs.
+    **Source:** N/A external — internal design; stack corroborated by
+    `specs/AND-001-gradle-project-skeleton.md` (Turbine, Hilt/KSP, Coroutines).
+
+### Corrections made
+
+- **§2 (Overview/Out of scope, Context):** replaced the non-existent `/signal`
+  path with the verified `POST /messaging/messages/calls/{call_id}/signal`;
+  reclassified "SSE/poll" delivery as an unverified assumption (the web client
+  uses request/response POST).
+- **§5 (API Contract):** added a correction block — the bare
+  `{type,sdp}` / `{sdpMid,sdpMLineIndex,candidate}` objects live inside the
+  `CallSignalingIn.payload`, not at the top level; documented the real envelope
+  (`type` discriminator is `webrtc.offer|webrtc.answer|webrtc.ice_candidate`,
+  plus `event_id/conversation_id/recipient_user_id/nonce/sent_at`), the
+  `CallSignalingOut` response, removed the fictional `challenge_id`, and added
+  the TURN-credentials endpoint/shape.
+- **§8 (Security):** expanded the CSRF claim with the verified
+  `Authorization: Bearer` + `X-CSRF-Token` (from `ui_csrf` cookie) +
+  `credentials: "include"` transport, and the endpoint-declared `authorization`
+  / `X-SESSION-ID` params.
+- **§12 (Dependencies):** corrected the AND-290 signaling endpoint reference and
+  added the TURN-credentials endpoint.
+
+### Open assumptions
+
+- **Inbound signaling delivery model (SSE vs. long-poll vs. WebSocket).** The
+  outbound send is a verified POST, but how AND-290 receives the peer's SDP/ICE
+  is not evidenced in the OpenAPI index or the web client snippets reviewed;
+  only the POST send path is confirmed. Owned by AND-290.
+- **Dev host `http://18.222.237.167:8000`.** Environment detail, not in frontend
+  source; carried forward from sibling specs as unverified. Irrelevant to this
+  module's correctness (peer-to-peer media).
+- **Internal wrapper design** (dispatcher model, state-collapse mapping, Hilt
+  binding, timeout semantics): no external contract exists to verify; treated as
+  design decisions, not facts.
+- **`PRANSWER` usage.** §4.2 lists `pranswer` as a valid SDP type; the call flow
+  in scope (offer/answer) does not exercise it. Included for completeness; not
+  required by the verified envelope.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM/Robolectric unit (no device);
+**EMU** = headless emulator AVD `test35` (x86_64, API 35); **DEV** = physical
+Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, arm64-v8a, API 34).
+libwebrtc requires the Android runtime, so any test that instantiates a real
+`PeerConnection` is instrumented (EMU or DEV), never pure JVM.
+
+- **TC-AND-289-01 — Happy-path loopback offer/answer/ICE to Connected**
+  Type: instrumented/e2e (loopback harness).
+  Target: EMU (`test35`).
+  Preconditions: `core-webrtc` built; AND-288 `PeerConnectionFactory`+`EglBase`
+  available; fake `InMemorySignalingTransport` cross-wires two peers.
+  Steps: (1) create offerer + answerer via factory; (2) `offerer.createOffer()`;
+  (3) fake forwards SDP → `answerer.setRemoteDescription`; (4)
+  `answerer.createAnswer()` forwarded back to offerer; (5) relay ICE candidates
+  both ways; (6) collect both `state` flows with Turbine.
+  Expected: both `state` flows reach `RtcSessionState.Connected` within
+  `negotiationTimeoutMs`; no exceptions.
+  Traces: AC-2, AC-3.
+
+- **TC-AND-289-02 — ICE-before-SDP buffering**
+  Type: instrumented/integration.
+  Target: EMU.
+  Preconditions: loopback harness with the fake configured to deliver one remote
+  ICE candidate to the answerer BEFORE its `setRemoteDescription`.
+  Steps: (1) deliver one remote candidate early via `addIceCandidate`; assert it
+  is buffered (not applied / no throw); (2) complete `setRemoteDescription`;
+  (3) verify the buffered candidate is flushed; (4) drive to Connected.
+  Expected: early candidate is queued then applied after remote SDP; session
+  reaches `Connected`; no `IceFailed`.
+  Traces: AC-4, AC-3.
+
+- **TC-AND-289-03 — Idempotent teardown + post-close fail-fast**
+  Type: instrumented/integration.
+  Target: EMU.
+  Preconditions: a created `RtcPeerConnection`.
+  Steps: (1) call `close()`; (2) call `close()` again; (3) call each public
+  suspend method (`createOffer`, `setRemoteDescription`, `createAnswer`,
+  `addIceCandidate`) after close.
+  Expected: second `close()` is a no-op (no crash, no native double-dispose);
+  state == `RtcSessionState.Closed`; every post-close call throws
+  `RtcException.Closed`.
+  Traces: AC-5.
+
+- **TC-AND-289-04 — Negotiation timeout → Failed(NegotiationTimeout) + auto-close**
+  Type: instrumented/integration.
+  Target: EMU.
+  Preconditions: fake `SignalingPort` that drops the answer; short
+  `negotiationTimeoutMs` (e.g. 500 ms).
+  Steps: (1) `offerer.createOffer()`; (2) never deliver an answer; (3) observe
+  `state`.
+  Expected: state transitions to `Failed(RtcException.NegotiationTimeout)` and
+  the connection auto-closes (subsequent calls throw `RtcException.Closed`)
+  within the configured timeout.
+  Traces: AC-6.
+
+- **TC-AND-289-05 — Moshi round-trip of RtcSessionDescription**
+  Type: unit (JVM).
+  Target: JVM.
+  Preconditions: Moshi adapters registered.
+  Steps: serialize `RtcSessionDescription(SdpType.OFFER, "v=0...")` → JSON →
+  deserialize.
+  Expected: JSON is `{ "type": "offer", "sdp": "..." }` (lowercase type) and the
+  round-trip is value-equal. (This object is what goes inside
+  `CallSignalingIn.payload`.)
+  Traces: AC-7.
+
+- **TC-AND-289-06 — Moshi round-trip of RtcIceCandidate (incl. null sdpMid)**
+  Type: unit (JVM).
+  Target: JVM.
+  Preconditions: Moshi adapters registered.
+  Steps: round-trip `RtcIceCandidate("0", 0, "candidate:...")` and a variant with
+  `sdpMid = null`.
+  Expected: JSON is `{ "sdpMid": ..., "sdpMLineIndex": 0, "candidate": "..." }`;
+  null `sdpMid` round-trips correctly; value-equal.
+  Traces: AC-7.
+
+- **TC-AND-289-07 — Contract: payload nests inside CallSignalingIn envelope**
+  Type: contract/MockWebServer.
+  Target: JVM (MockWebServer; no real PeerConnection needed).
+  Preconditions: a thin serializer that wraps an `RtcSessionDescription` into the
+  AND-290 envelope shape (test-only stand-in to lock the §5 contract for the fake
+  transport).
+  Steps: (1) build a `CallSignalingIn`-shaped body with the SDP JSON under
+  `payload` and `type="webrtc.offer"`; (2) POST to MockWebServer; (3) inspect the
+  recorded request body.
+  Expected: top-level keys are exactly
+  `type, event_id, conversation_id, recipient_user_id, nonce, sent_at, payload`;
+  the SDP `{type,sdp}` object appears under `payload`, NOT at top level; `type`
+  matches the envelope pattern. Guards against the corrected §5 mistake.
+  Traces: AC-7 (serialization contract), AC-3 (transport-shape compatibility).
+
+- **TC-AND-289-08 — ICE FAILED maps to Disconnected(recoverable=false), no auto-restart**
+  Type: instrumented/integration.
+  Target: EMU.
+  Preconditions: harness able to force `IceConnectionState.FAILED` (e.g. invalid
+  ICE servers / no connectivity path).
+  Steps: (1) drive negotiation; (2) induce ICE failure; (3) observe `state`.
+  Expected: state == `Disconnected(recoverable = false)`; wrapper does NOT
+  auto-restart ICE; session remains usable only via re-creation.
+  Traces: AC-3 (state mapping correctness; §6/§7 rules).
+
+- **TC-AND-289-09 — Coroutine cancellation leaves PeerConnection consistent**
+  Type: instrumented/integration.
+  Target: EMU.
+  Preconditions: a created peer mid-`createOffer`.
+  Steps: (1) launch `createOffer()` in a job; (2) cancel the job before
+  completion; (3) inspect state / attempt a fresh `close()`.
+  Expected: `suspendCancellableCoroutine` is cancelled cleanly; no half-applied
+  description; `close()` still succeeds; no native crash.
+  Traces: AC-5 (consistency/teardown), AC-3.
+
+- **TC-AND-289-10 — Security: no full SDP/ICE strings in release logs (redaction)**
+  Type: manual + unit (JVM static check).
+  Target: JVM (log-site assertion) + manual code review.
+  Preconditions: release build config (`BuildConfig.DEBUG == false`).
+  Steps: (1) run negotiation through a capturing logger with DEBUG off;
+  (2) assert no log line contains a full `candidate:` string or full SDP body;
+  (3) confirm only length+type summaries (e.g. `"local offer sdp len=2143"`)
+  are emitted.
+  Expected: zero full-SDP/full-candidate log lines in release; TURN
+  `credential` never logged.
+  Traces: AC-8.
+
+- **TC-AND-289-11 — Permission/availability fail-fast when capturer unavailable**
+  Type: instrumented/integration.
+  Target: DEV (physical Galaxy A15) — MUST run on the physical device because
+  real `CAMERA`/`RECORD_AUDIO` capturer availability and runtime-permission
+  state are hardware-backed and not faithfully reproduced on the emulator.
+  Preconditions: revoke `CAMERA`/`RECORD_AUDIO` (or make the capturer
+  unavailable) with `enableVideo/enableAudio = true`.
+  Steps: (1) call `factory.create(config)`; (2) observe failure.
+  Expected: `create()` fails fast with a clear message (no native crash, no
+  silent black media); does not add new manifest permissions beyond AND-288.
+  Traces: AC-2 (creation contract; §8 permission rule).
+
+- **TC-AND-289-12 — Real-network negotiation over TURN on physical device (ABI/API parity)**
+  Type: instrumented/e2e.
+  Target: DEV (physical Galaxy A15, arm64-v8a, API 34) — MUST run on the
+  physical device to exercise the arm64 libwebrtc binary and real-network
+  ICE/TURN behavior that the x86_64/API-35 emulator does not represent.
+  Preconditions: real `RtcIceServer` list (STUN+TURN) injected via `RtcConfig`;
+  network reachable.
+  Steps: (1) run the loopback/relay flow with real ICE servers; (2) drive to
+  Connected; (3) compare against the EMU run of TC-01 for behavioral parity.
+  Expected: reaches `RtcSessionState.Connected` on arm64/API 34; no ABI- or
+  API-level regressions vs. emulator; DTLS-SRTP media path established.
+  Traces: AC-2, AC-3.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (module exists, builds, deps `core-model`+`core-testing`) | Verified by build/CI (compile of TC-01..12); no behavioral TC needed |
+| AC-2 (factory returns working connection from shared factory/EGL) | TC-01, TC-11, TC-12 |
+| AC-3 (loopback offer→answer→ICE → Connected, CI) | TC-01, TC-02, TC-07, TC-08, TC-09, TC-12 |
+| AC-4 (ICE-before-SDP buffered then applied) | TC-02 |
+| AC-5 (idempotent close, post-close throws, no double-dispose) | TC-03, TC-09 |
+| AC-6 (no-answer → Failed(NegotiationTimeout) + auto-close) | TC-04 |
+| AC-7 (Moshi round-trip matches §5 shapes) | TC-05, TC-06, TC-07 |
+| AC-8 (no full SDP/ICE strings in release logs) | TC-10 |
+
+Note: AC-1 is a build/structure criterion satisfied by successful compilation in
+CI rather than a dedicated runtime case; every other AC has at least one
+explicit TC.

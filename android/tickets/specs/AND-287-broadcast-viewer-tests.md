@@ -5,7 +5,8 @@ milestone: M6
 epic: E38
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-286]
 blocks: []
 ---
@@ -64,8 +65,10 @@ The suite must verify the following observable behaviors of the viewer feature.
 - **FR-1 Session lifecycle.** On `start(broadcastId)` the ViewModel transitions
   `Loading → (Live | Offline | Ended | Error)`. `Live` requires a successful `playback/verify`
   and a non-null playback URL.
-- **FR-2 Authorization gating.** When `playback/verify` returns `authorized=false`, state
-  becomes `Error(Unauthorized)` and no playback URL is exposed.
+- **FR-2 Authorization gating.** When `playback/verify` returns `valid=false` (or the
+  `playback-url` mint returns `403`), state becomes `Error(Unauthorized)` and no playback URL
+  is exposed. (CORRECTED: the verify response field is `valid`, not `authorized`; there is no
+  `reason` field — see §5/§16.)
 - **FR-3 Chat merge.** Incoming chat batches are merged into the existing list: deduped by
   `messageId`, ordered by `(serverTs, messageId)` ascending, capped at `MAX_CHAT = 500`
   (oldest evicted). Optimistic local sends are reconciled when the server echo arrives.
@@ -144,7 +147,8 @@ class FakeClock(var nowMs: Long = 0L) { fun advance(ms: Long) { nowMs += ms } }
 
 // Builders
 fun chatMessage(id: String, ts: Long, text: String = "hi", local: Boolean = false): ChatMessage
-fun playbackVerify(authorized: Boolean = true): PlaybackVerifyResponse
+// CORRECTED: verify response field is `valid` (BroadcastPlaybackTokenVerifyOut), not `authorized`.
+fun playbackVerify(valid: Boolean = true): PlaybackVerifyResponse   // { "valid": Boolean }
 ```
 
 ### 4.3 Unit test design (JVM, virtual time)
@@ -157,7 +161,7 @@ fun playbackVerify(authorized: Boolean = true): PlaybackVerifyResponse
 
 @Test fun start_authorized_emitsLoadingThenLive() = runTest {
     repo.queuePlaybackUrl("https://cdn/live/abc.m3u8")
-    repo.queueVerify(authorized = true)
+    repo.queueVerify(valid = true)   // CORRECTED: BroadcastPlaybackTokenVerifyOut.valid
     vm.uiState.test {
         assertThat(awaitItem()).isInstanceOf(UiState.Loading::class.java)
         vm.start("abc")
@@ -216,37 +220,78 @@ This ticket does **not** define the API — it asserts against the contracts own
 (`playback-url`, `playback/verify`) and **AND-285** (join/leave/heartbeat). The canned responses
 the suite enqueues are the authoritative fixtures and must track those tickets.
 
-Playback URL (idempotent GET; retried):
-```
-GET /ui/broadcasts/{id}/playback-url      -> 200
-{ "url": "https://cdn.example/live/abc.m3u8", "expires_at": "2026-06-05T12:00:00Z" }
-```
+> **CORRECTED 2026-06-06 (review):** the paths, methods, and response shapes below were
+> wrong in the draft. They are now reconciled with the backend OpenAPI and the web client
+> (`reference/src/api/endpoints/broadcast.ts`). All viewer/playback routes live under
+> `/broadcast/sessions/{session_id}/…` (NOT `/ui/broadcasts/{id}/…`). The test fixtures MUST
+> use the corrected shapes. See §16 for the per-claim audit.
 
-Playback verify (POST; not retried):
+Mint playback URL — **POST**, no body (idempotent enough to retry on transient GET-like
+failure; but note it is a POST, so retry policy must treat it as a safe-to-replay mint, see §7):
 ```
-POST /ui/broadcasts/{id}/playback/verify
-{ "url": "https://cdn.example/live/abc.m3u8" }
--> 200 { "authorized": true,  "reason": null }
--> 200 { "authorized": false, "reason": "not_entitled" }
+POST /broadcast/sessions/{session_id}/playback-url   -> 200  (schema BroadcastPlaybackUrlOut)
+{ "session_id": "abc", "playback_url": "https://cdn.example/live/abc.m3u8", "expires_at": 1780000000 }
 ```
+Note: `playback_url` (NOT `url`); `expires_at` is an **integer epoch seconds** (NOT an ISO-8601 string).
 
-Join / heartbeat / leave (AND-285):
+Playback token verify — **GET** with query params; not retried:
 ```
-POST /ui/broadcasts/{id}/viewers/join       -> 200 { "viewer_count": 41, "session_token": "..." }
-POST /ui/broadcasts/{id}/viewers/heartbeat  -> 200 { "viewer_count": 42 }
-POST /ui/broadcasts/{id}/viewers/leave      -> 204
+GET /broadcast/playback/verify?path=<m3u8-path>&cf_token=<t>&cf_expires=<n>
+-> 200 (schema BroadcastPlaybackTokenVerifyOut) { "valid": true }
+-> 200 { "valid": false }
 ```
+Note: the only field is `valid: boolean`. There is **no** `authorized` or `reason` field.
+The viewer's "unauthorized" concept (FR-2) maps to `valid: false` here, and/or a `403` on the
+playback-url mint. Tests must use `valid`.
+
+Join / heartbeat / leave / count (AND-285):
+```
+POST /broadcast/sessions/{session_id}/viewers/join       -> 200 (ViewerJoinOut)
+     { "viewer_id": "v-001", "session_id": "abc", "viewer_count": 41 }
+POST /broadcast/sessions/{session_id}/viewers/heartbeat?viewer_id=v-001  -> 200 (ViewerHeartbeatOut)
+     { "ok": true, "viewer_count": 42 }
+POST /broadcast/sessions/{session_id}/viewers/leave?viewer_id=v-001      -> 200
+     { "ok": true, "viewer_count": 41 }
+GET  /broadcast/sessions/{session_id}/viewers/count      -> 200 (ViewerCountOut)
+     { "session_id": "abc", "viewer_count": 42 }
+```
+Notes: join returns `viewer_id` (NOT `session_token`) and the client must thread that
+`viewer_id` as a **query param** on every subsequent heartbeat/leave. Leave returns **200**
+with a body (NOT `204`). Heartbeat response includes `ok` alongside `viewer_count`.
+
+Chat is fetched/sent over the session chat routes (AND-286 merges them client-side):
+```
+GET  /broadcast/sessions/{session_id}/chat?limit=&before=  -> 200 (BroadcastChatHistoryOut)
+     { "messages": [ ChatMessage… ], "has_more": false, "oldest_sort_key": null }
+POST /broadcast/sessions/{session_id}/chat  { "text": "hi" }  -> 201 (BroadcastChatMessageOut)
+GET  /broadcast/sessions/{session_id}/chat/stream?after=&poll_ms=  -> 200 (long-poll batch)
+```
+Wire `ChatMessage` fields: `message_id`, `session_id`, `sender_id`, `sender_display_name`,
+`text` (nullable), `created_at` (**integer epoch**, used for ordering), `kind`, `deleted`.
+The §3/§6 domain model's `messageId`/`serverTs` are the client-side mappings of `message_id`/
+`created_at`; the merge/dedupe contract is unchanged but fixtures must use the wire names.
 
 FastAPI error `detail` polymorphism the tests must cover (all three shapes):
 ```
-422 { "detail": [ { "loc": ["body","url"], "msg": "field required", "type": "value_error" } ] }
+422 { "detail": [ { "loc": ["query","viewer_id"], "msg": "field required", "type": "missing" } ] }
 403 { "detail": "not_entitled" }
 409 { "detail": { "code": "broadcast_ended", "message": "Broadcast has ended" } }
 ```
+Note: the `422` list shape is schema-backed (`HTTPValidationError` → `ValidationError{loc,msg,type}`;
+`loc` is an array whose first element is the param source, e.g. `["query","viewer_id"]` for the
+heartbeat viewer_id or `["path","session_id"]`). The `403` string `detail` and `409` object
+`detail` shapes are FastAPI `HTTPException` conventions (not enumerated as response schemas in the
+OpenAPI doc); the web client's `normalizeErrorDetail` (`reference/src/api/client.ts`) already
+handles all three, so the repo error mapper and its tests must too. Treat the exact `403`/`409`
+bodies as representative fixtures, not contract-guaranteed strings (see §16 Open assumptions).
 
 Resilience fixtures: a `SocketPolicy.NO_RESPONSE` enqueue to exercise the ~20 s read timeout;
-two `503` then one `200` to exercise bounded-backoff retry of the idempotent GET; a `401`
+two `503` then one `200` to exercise bounded-backoff retry of a replay-safe call (the
+playback-url mint POST and the `viewers/count` GET are the retried calls — see §7); a `401`
 followed by a `200` on `/ui/session/refresh` then a `200` retry to exercise the refresh path.
+(CORRECTED: the draft labelled playback-url an "idempotent GET" — it is in fact a **POST**, and
+`playback/verify` is a **GET**. The retry policy is keyed on a per-call "replay-safe" flag, not
+on HTTP verb alone.)
 
 ## 6. Data & State Management
 
@@ -289,11 +334,14 @@ reconcile. Caching: tests confirm the ViewModel does not write playback URLs to 
 
 Coverage matrix (each row is at least one test):
 
-- **Timeout** (`NO_RESPONSE`): GET `playback-url` exceeds read timeout → mapped to
+- **Timeout** (`NO_RESPONSE`): the `playback-url` mint (POST) exceeds read timeout → mapped to
   `ApiResult.Failure(Network)`; with no prior `Live`, state → `Offline`/`Error(Network)`.
-- **Bounded backoff**: two `503` + one `200` on the idempotent GET → success after retries;
-  assert exactly 3 recorded requests and that a non-idempotent POST (`verify`) is **never**
-  retried (single recorded request on `503`).
+  (CORRECTED: mint is a POST, not a GET.)
+- **Bounded backoff**: two `503` + one `200` on a replay-safe call (`playback-url` mint or
+  `viewers/count`) → success after retries; assert exactly 3 recorded requests, and that a
+  non-replay-safe state-changing call (`viewers/join`) is **never** auto-retried (single
+  recorded request on `503`). (CORRECTED: the draft used `verify` as the "non-retried POST"
+  example, but `verify` is a GET; the no-retry exemplar is now `viewers/join`.)
 - **401 refresh**: `401` then refresh `200` then retry `200` → success; recorded requests show
   one `session/refresh`. A second consecutive `401` → `Error(SessionExpired)`, no infinite loop.
 - **detail mapping**: each of string / list / object `detail` shapes parses to the right
@@ -377,9 +425,12 @@ This ticket *is* the testing strategy; the deliverable is the suite itself.
 - **Heartbeat interval / chat cap constants**: assumed `15s` and `500`. *Open*: confirm the
   exact values defined in AND-285/286 and source them from a shared constant rather than
   hard-coding in tests.
-- **Chat transport**: spec assumes polling/SSE batches merged via `ChatMerger`. *Open*: if
-  chat arrives over WebSocket, the repo test harness needs a fake socket instead of
-  MockWebServer for that path.
+- **Chat transport**: VERIFIED as HTTP **long-poll**, not WebSocket/SSE. The web client uses
+  `GET /broadcast/sessions/{id}/chat` (history, paginated by `before`/`oldest_sort_key`) plus
+  `GET /broadcast/sessions/{id}/chat/stream?after=&poll_ms=` (long-poll batch). MockWebServer
+  covers both — no fake socket needed. Batches are merged via `ChatMerger`. *Residual open*:
+  AND-286's exact polling cadence / `after` cursor handling — source it from AND-286, do not
+  hard-code.
 - **Viewer-count monotonicity**: server may legitimately decrease the count; tests treat
   server-provided decreases as valid (FR-5) — confirm with backend.
 - **UI test runtime**: managed-device tests are slower; if CI budget is tight, gate them to a
@@ -416,3 +467,257 @@ The backlog acceptance is "Pass". Concretely, this ticket is accepted when:
   definitions rather than duplicated literals.
 - PR description links AND-286/AND-280/AND-285 and lists the coverage numbers; squash-merged
   with the standard trailer.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer. "OpenAPI" =
+`reference/openapi.index.txt` / `reference/openapi.pretty.json`; "FE" = `reference/src`.
+
+1. **Playback URL endpoint is `GET /ui/broadcasts/{id}/playback-url` returning `{url, expires_at(ISO)}`.**
+   VERDICT: **Corrected.** Actual: `POST /broadcast/sessions/{session_id}/playback-url` →
+   `BroadcastPlaybackUrlOut { session_id, playback_url, expires_at:integer }`.
+   SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/playback-url` (op
+   `mint_playback_url_route…`), schema `BroadcastPlaybackUrlOut`; FE `src/api/endpoints/broadcast.ts:191`
+   `mintPlaybackUrl` + `interface BroadcastPlaybackUrl` (`playback_url`, `expires_at:number`).
+
+2. **Playback verify is `POST /ui/broadcasts/{id}/playback/verify` with body `{url}` returning `{authorized, reason}`.**
+   VERDICT: **Corrected.** Actual: `GET /broadcast/playback/verify?path&cf_token&cf_expires` →
+   `BroadcastPlaybackTokenVerifyOut { valid:boolean }` (no `authorized`, no `reason`).
+   SOURCE: OpenAPI `GET /broadcast/playback/verify` (op `verify_playback_token_route…`,
+   params `path,cf_token,cf_expires`), schema `BroadcastPlaybackTokenVerifyOut`.
+
+3. **Viewer join `POST …/viewers/join` → `{viewer_count, session_token}`.**
+   VERDICT: **Corrected.** Actual: `POST /broadcast/sessions/{session_id}/viewers/join` →
+   `ViewerJoinOut { viewer_id, session_id, viewer_count }` (`viewer_id`, not `session_token`).
+   The returned `viewer_id` is threaded as a query param into heartbeat/leave.
+   SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/viewers/join`, schema `ViewerJoinOut`;
+   FE `src/api/endpoints/broadcast.ts:199,215` (`ViewerJoinResponse`, `viewerJoin`).
+
+4. **Viewer heartbeat `POST …/viewers/heartbeat` → `{viewer_count}`.**
+   VERDICT: **Corrected.** Actual: `POST /broadcast/sessions/{session_id}/viewers/heartbeat?viewer_id=…`
+   → `ViewerHeartbeatOut { ok:boolean, viewer_count:int }`. `viewer_id` is a query param.
+   SOURCE: OpenAPI `POST …/viewers/heartbeat` (param `viewer_id`), schema `ViewerHeartbeatOut`;
+   FE `src/api/endpoints/broadcast.ts:205,218`.
+
+5. **Viewer leave `POST …/viewers/leave` → `204` (no body).**
+   VERDICT: **Corrected.** Actual: `POST /broadcast/sessions/{session_id}/viewers/leave?viewer_id=…`
+   → `200` with `{ ok, viewer_count }` (not 204). SOURCE: OpenAPI `POST …/viewers/leave`
+   (resp `200`, param `viewer_id`); FE `src/api/endpoints/broadcast.ts:225` (`{ ok; viewer_count }`).
+
+6. **Viewer count endpoint exists.** VERDICT: **Verified** (and added to §5). `GET
+   /broadcast/sessions/{session_id}/viewers/count` → `ViewerCountOut { session_id, viewer_count }`.
+   SOURCE: OpenAPI `GET …/viewers/count`, schema `ViewerCountOut`; FE `getViewerCount` line 232.
+
+7. **Chat merge keys: dedupe by `messageId`, order by `(serverTs, messageId)`.**
+   VERDICT: **Verified with mapping note.** Wire fields are `message_id` and `created_at`
+   (integer epoch); the domain `messageId`/`serverTs` are client mappings of those. Chat is
+   fetched via `GET /broadcast/sessions/{id}/chat` (history; `before`/`oldest_sort_key`
+   pagination) + `GET …/chat/stream` long-poll; sent via `POST …/chat`.
+   SOURCE: schema `BroadcastChatMessageOut` (required `message_id, session_id, sender_id,
+   sender_display_name, created_at`); FE `src/api/endpoints/broadcast-chat.ts:5` (`interface
+   ChatMessage`), `:49 sendChatMessage`, `:64 getChatHistory`, OpenAPI `GET …/chat/stream`.
+
+8. **Auth is cookie-based; `ui_csrf` cookie echoed as `X-CSRF-Token`; single `session/refresh` on 401.**
+   VERDICT: **Verified.** SOURCE: FE `src/api/client.ts:16 getCookie`, `:124/:183/:220
+   credentials:"include"`, `:168 getCookie("ui_csrf")` → `:170 headers.set("X-CSRF-Token", csrf)`,
+   `:119 refreshPromise` single-flight, `:194` 401 handling → one `refreshSession()` (`:122`
+   `POST /ui/session/refresh`) then one retry. OpenAPI `POST /ui/session/refresh` (resp 200).
+
+9. **Session lifecycle `/ui/session/start → MFA → /ui/session/finalize → /ui/me`.**
+   VERDICT: **Verified.** SOURCE: OpenAPI `POST /ui/session/start` (`UiSessionStartReq` →
+   `UiSessionStartResp`), `POST /ui/session/finalize` (`UiSessionFinalizeReq`), `GET /ui/me`.
+
+10. **422 validation error shape `{detail:[{loc,msg,type}]}`.** VERDICT: **Verified.**
+    SOURCE: schemas `HTTPValidationError` (detail: array of `ValidationError`) and
+    `ValidationError { loc:[str|int], msg, type }`. (Corrected the example `loc` to a real
+    viewer param, `["query","viewer_id"]`.)
+
+11. **403 string `detail` and 409 object `{code,message}` `detail` shapes.** VERDICT:
+    **Unverified-assumption** (plausible). These are FastAPI `HTTPException` detail conventions,
+    not enumerated response schemas in the OpenAPI doc. The web client already normalizes all
+    three (`normalizeErrorDetail`, FE `src/api/client.ts`), so handling them is correct, but the
+    exact strings/codes (`not_entitled`, `broadcast_ended`) are illustrative.
+
+12. **`HEARTBEAT_INTERVAL = 15s`, `MAX_CHAT = 500`.** VERDICT: **Unverified-assumption.** Not
+    present in OpenAPI or FE; these are AND-285/AND-286 client constants. Spec already flags
+    this (§13); tests must import the shared constants rather than literals.
+
+13. **Retry policy: "idempotent GET retried; verify POST not retried".** VERDICT: **Corrected.**
+    `playback-url` mint is a POST (not GET) and `playback/verify` is a GET (not POST). Retry is
+    keyed on a per-call replay-safe flag; retried exemplars = `playback-url` mint + `viewers/count`;
+    non-retried state-changing exemplar = `viewers/join`. SOURCE: OpenAPI methods above.
+
+14. **`ViewerPlayer` interface / `FakeViewerPlayer` to avoid ExoPlayer on JVM.** VERDICT:
+    **Unverified-assumption** (design choice; depends on AND-280). Media3/ExoPlayer is
+    Android-only and cannot run on a JVM unit test. SOURCE: framework ref —
+    https://developer.android.com/media/media3/exoplayer and
+    https://developer.android.com/training/testing/local-tests (Robolectric/local tests).
+
+15. **CI device target `pixel6api34` (Gradle Managed Device).** VERDICT: **Unverified-assumption**
+    (project convention). Note: this review's available CI targets are the headless emulator AVD
+    `test35` (API 35, x86_64) and a physical Samsung Galaxy A15 5G (API 34, arm64-v8a); see §17
+    for device assignment per case. SOURCE: framework ref —
+    https://developer.android.com/studio/test/gradle-managed-devices.
+
+### Corrections made
+
+- §5: rewrote all viewer/playback endpoints — correct paths (`/broadcast/sessions/{id}/…`),
+  methods (mint = POST, verify = GET), and response schemas (`playback_url` not `url`;
+  `expires_at` integer; `valid` not `authorized`/`reason`; join → `viewer_id` not
+  `session_token`; heartbeat adds `ok`; leave = 200 not 204). Added `viewers/count` and the
+  chat history/stream/send routes with their real wire field names.
+- §3 FR-2: `authorized=false` → `valid=false` (+ 403-on-mint path).
+- §4.2 / §4.3: `playbackVerify(authorized=…)` / `queueVerify(authorized=…)` → `valid=…`.
+- §5/§7: corrected the "idempotent GET" mislabel of `playback-url` and the "non-retried POST"
+  use of `verify`; reframed retry policy on a replay-safe flag with correct exemplars.
+- §5 (422 example) and detail-polymorphism note: realistic `loc`, and clarified which shapes
+  are schema-backed vs HTTPException conventions.
+- §13: chat transport confirmed as HTTP long-poll (`/chat/stream`), not WebSocket/SSE.
+
+### Open assumptions
+
+- **403/409 `detail` exact bodies** (`not_entitled`, `{code:"broadcast_ended",…}`): FastAPI
+  HTTPException conventions, not in the OpenAPI response schemas — treat as representative.
+- **`HEARTBEAT_INTERVAL=15s` / `MAX_CHAT=500`**: owned by AND-285/AND-286, not in the API —
+  source from shared constants.
+- **`ViewerPlayer` abstraction ownership**: whether AND-280 already exposes it or AND-287
+  introduces it (§13) — cannot be confirmed from API/FE sources.
+- **Viewer-count monotonicity / server-driven decreases (FR-5)**: server may legitimately
+  decrease the count; no contract in OpenAPI guarantees monotonicity — confirm with backend.
+- **CSRF on cross-site cookie transport for native client**: the web flow relies on
+  `ui_csrf` cookie + `X-CSRF-Token`; the Android `CookieJar`/interceptor must replicate this.
+  Verified for the web client only; the native interceptor behaviour is this ticket's SUT.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = local JVM unit/Robolectric (no device); **MWS** =
+contract test on the real Retrofit/OkHttp stack against `MockWebServer` (JVM); **Compose-UI** =
+`createComposeRule()` UI test (emulator/device); **instrumented** = on-device. Default device
+for instrumented/Compose-UI cases is the headless emulator AVD `test35` (API 35, x86_64) for
+speed in CI; cases that exercise real ExoPlayer HLS playback or ABI/API-level differences are
+called out to run on the **physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a)**.
+
+This is a Test ticket: most cases assert the suite's own behaviour against fixtures. All times
+are virtualized (`StandardTestDispatcher`/`advanceTimeBy`); no `Thread.sleep` or real network.
+
+- **TC-AND-287-01 — Happy path: start → Live.**
+  Type: unit (JVM). Target: `BroadcastViewerViewModelTest` + `FakeViewerPlayer`.
+  Preconditions: fake repo queues `playback_url="https://cdn/live/abc.m3u8"` and verify
+  `valid=true`. Steps: observe `uiState` via Turbine; call `vm.start("abc")`; `runCurrent()`.
+  Expected: emits `Loading` then `Live` with `hlsUrl` == the minted `playback_url`;
+  `player.loadedUrl` == that URL; `viewerCount` from join surfaced. Traces: AC-1, AC-4.
+
+- **TC-AND-287-02 — Authorization gating: verify valid=false → Error(Unauthorized).**
+  Type: unit (JVM). Target: `BroadcastViewerViewModelTest`. Preconditions: verify returns
+  `{ "valid": false }` (and/or mint returns 403). Steps: `vm.start("abc")`; `runCurrent()`.
+  Expected: state == `Error(Unauthorized)`; no `hlsUrl` exposed in any emitted state; player
+  never loaded. Traces: AC-4 (ViewerError.Unauthorized), AC-6 (URL not retained).
+
+- **TC-AND-287-03 — Chat merge: dedupe + order + cap + optimistic reconcile.**
+  Type: unit (JVM). Target: `ChatMergerTest`. Preconditions: none (pure function).
+  Steps: (a) merge `[b@2]` with `[a@1,b@2]` → `[a,b]`; (b) merge 501 messages → size 500,
+  oldest (by `created_at`) evicted; (c) merge a local optimistic msg then its server echo
+  (same `message_id`) → single entry, local replaced. Expected: ordering `(created_at,
+  message_id)` asc, dedupe by `message_id`, cap 500, no duplicate on echo. Traces: AC-1, FR-3.
+
+- **TC-AND-287-04 — Heartbeat cadence + leave cancels schedule.**
+  Type: unit (JVM, virtual time). Target: `HeartbeatSchedulerTest`/`BroadcastViewerViewModelTest`.
+  Preconditions: session `Live`, `HEARTBEAT_INTERVAL` from shared constant. Steps:
+  `advanceTimeBy(15_001)` → 1 heartbeat; `advanceTimeBy(15_000)` → 2; `vm.leave()`;
+  `advanceTimeBy(45_000)`. Expected: `heartbeatCount==2` after leave (stopped), `leaveCount==1`;
+  heartbeat requests carry the join's `viewer_id` query param. Traces: AC-1, FR-4.
+
+- **TC-AND-287-05 — Contract: playback-url mint + verify shapes.**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest`. Preconditions: MWS enqueues
+  `POST …/playback-url` → 200 `{session_id, playback_url, expires_at:1780000000}` and
+  `GET /broadcast/playback/verify` → 200 `{valid:true}`. Steps: call repo mint + verify.
+  Expected: parsed model has `playback_url` (string) and `expires_at` (Long epoch), not `url`/ISO;
+  verify maps `valid` correctly; recorded mint request is **POST** and verify is **GET** with the
+  `path/cf_token/cf_expires` query params. Traces: AC-1, AC-5, FR-1, FR-2.
+
+- **TC-AND-287-06 — Contract: join/heartbeat/leave wire shapes + viewer_id threading.**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest`. Preconditions: MWS enqueues
+  join → `{viewer_id:"v-001",session_id:"abc",viewer_count:41}`, heartbeat → `{ok:true,
+  viewer_count:42}`, leave → 200 `{ok:true,viewer_count:41}`. Steps: join, then heartbeat,
+  then leave. Expected: heartbeat & leave recorded requests include `?viewer_id=v-001`; leave
+  parses a 200 body (not treated as 204/no-content); counts surfaced. Traces: AC-1, FR-4, FR-5.
+
+- **TC-AND-287-07 — Resilience: read timeout → Network failure / Offline.**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest`. Preconditions: MWS
+  `SocketPolicy.NO_RESPONSE` on the `playback-url` mint; OkHttp ~20 s read timeout (injected
+  short in test). Steps: call mint. Expected: `ApiResult.Failure(Network)`; with no prior
+  `Live`, ViewModel maps to `Offline`/`Error(Network)`. Traces: AC-5, FR-6. (Offline/flaky-host path.)
+
+- **TC-AND-287-08 — Resilience: bounded backoff retry vs no-retry of state-changing call.**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest`. Preconditions: replay-safe call
+  (`playback-url` mint or `viewers/count`) enqueued `503,503,200`; `viewers/join` enqueued `503`.
+  Backoff jitter injected as a fixed sequence. Steps: invoke both. Expected: replay-safe call
+  succeeds after exactly 3 recorded requests; `viewers/join` makes exactly 1 request (no
+  auto-retry). Traces: AC-5, FR-6.
+
+- **TC-AND-287-09 — Recovery: single refresh on 401, then double-401 → SessionExpired.**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest`. Preconditions: (a) `401` then
+  `POST /ui/session/refresh`→200 then retry→200; (b) `401` then refresh→200 then retry→`401`.
+  Steps: run both flows. Expected: (a) succeeds, exactly one `session/refresh` recorded;
+  (b) surfaces `Error(SessionExpired)` with no infinite loop (refresh invoked at most once).
+  Traces: AC-5, AC-6, FR-7.
+
+- **TC-AND-287-10 — Error-detail polymorphism mapping (422 list / 403 string / 409 object).**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest` (mirrors
+  `client.errorMapping.test.ts`). Preconditions: enqueue `422 {detail:[{loc:["query","viewer_id"],
+  msg,type}]}`, `403 {detail:"not_entitled"}`, `409 {detail:{code:"broadcast_ended",message}}`.
+  Steps: trigger each. Expected: each parses to the right `ApiError`/user-message bucket; 409
+  `broadcast_ended` → `Ended`; 403 → `Error(Unauthorized)`. Traces: AC-5, AC-4.
+
+- **TC-AND-287-11 — Heartbeat-failure isolation + player-failure affordance.**
+  Type: unit (JVM) + MWS. Target: `BroadcastViewerViewModelTest`. Preconditions: session
+  `Live`. Steps: (a) heartbeat returns `500` → assert chat/player state unchanged and next
+  tick still fires; (b) `FakeViewerPlayer.emit(Failed)` → assert player-error affordance shown
+  and session not torn down; retry reloads the same URL. Traces: AC-5, FR-6, FR-8.
+
+- **TC-AND-287-12 — Security: CSRF header on every POST + no-PII fixtures/logs.**
+  Type: contract/MWS. Target: `BroadcastViewerRepositoryTest` + `FakeAnalytics`/log tree.
+  Preconditions: in-memory `CookieJar` seeded with `ui_csrf=<token>` and session cookie.
+  Steps: invoke verify(GET) and join/heartbeat/leave(POST). Expected: every state-changing POST
+  carries `X-CSRF-Token == ui_csrf`; session cookie present; recorded analytics/log lines
+  contain neither the CSRF token nor synthetic password/chat text. Traces: AC-6, FR-7.
+
+- **TC-AND-287-13 — Compose-UI: state→node mapping for all six UiStates.**
+  Type: Compose-UI (instrumented; emulator `test35`). Target: `BroadcastViewerScreenTest`.
+  Preconditions: stateless screen + intent-capturing lambda; fabricate each `UiState`.
+  Steps: render `Loading/Live/Stale/Offline/Ended/Error`. Expected: nodes per §6 table
+  (`viewer_progress`, `viewer_player`+`viewer_count`+chat rows, `stale_banner`,
+  `offline_message`+retry enabled, `ended_message`+chat hidden, `error_message` per kind);
+  every `UiState` and `ViewerError` constructed at least once. Traces: AC-2, AC-4, FR-8.
+
+- **TC-AND-287-14 — Compose-UI: intent dispatch + accessibility/i18n.**
+  Type: Compose-UI (instrumented; emulator `test35`). Target: `BroadcastViewerScreenTest`.
+  Preconditions: stateless screen + intent capture. Steps: tap retry / send-chat / leave;
+  assert dispatched intents; assert player surface, viewer-count, retry, send-chat, leave expose
+  `contentDescription`/merged semantics and leave is reachable by
+  `onNodeWithContentDescription`; assert user-facing strings come from `stringResource`
+  (look up via `R.string.viewer_offline` etc.); re-render under a large `fontScale` and confirm
+  chat row still composes. Expected: all assertions pass. Traces: AC-2, FR-8 (§9 a11y/i18n).
+
+- **TC-AND-287-15 — Instrumented HLS playback smoke on physical device (ABI/API parity).**
+  Type: instrumented/e2e. Target: real `Media3ViewerPlayer` (the production `ViewerPlayer`
+  impl) rendering a canned HLS `.m3u8` from a loopback `MockWebServer`. **MUST run on the
+  physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a)** — ExoPlayer HLS decode is
+  hardware/codec-dependent and arm64-vs-x86 + API-34-vs-35 behaviour cannot be trusted on the
+  emulator. Preconditions: device connected via adb; short HLS test asset served locally.
+  Steps: load the URL into the real player; await `Playing`. Expected: player reaches `Playing`
+  without crash on arm64/API-34; this guards the §1 "player faked in unit tests" boundary at
+  least once on real hardware. Traces: AC-2, FR-1. (Out-of-band of the JVM/MWS lanes; nightly.)
+
+### Coverage matrix (section-14 Acceptance Criteria → TCs)
+
+| AC    | Covered by |
+|-------|------------|
+| AC-1 (unit+repo suites pass) | 01, 03, 04, 05, 06 |
+| AC-2 (UI suite passes)       | 13, 14, 15 |
+| AC-3 (coverage thresholds)   | 01–12 collectively (≥90% of VM/Merger/Scheduler/Repository) |
+| AC-4 (every UiState + ViewerError asserted) | 02, 10, 13 |
+| AC-5 (resilience matrix)     | 05, 07, 08, 09, 10 |
+| AC-6 (security: CSRF/refresh/no-PII) | 02, 09, 12 |
+| AC-7 (20/20 no-flake, no lint) | whole suite — guaranteed by virtual-time determinism (01–14) |
+| AC-8 (no prod changes beyond ViewerPlayer/core-testing) | 11, 15 (exercise the `ViewerPlayer` boundary) |

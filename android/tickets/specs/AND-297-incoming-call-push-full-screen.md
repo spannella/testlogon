@@ -5,7 +5,8 @@ milestone: M7
 epic: E40
 priority: P0
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-296, AND-108]
 blocks: [AND-298, AND-299]
 ---
@@ -48,7 +49,11 @@ connects on accept.*
 - **Backend.** FastAPI dev host `http://18.222.237.167:8000` (plaintext, unreliable). Cookie +
   `ui_csrf`/`X-CSRF-Token` session; persistent cookie jar; 401 → single
   `POST /ui/session/refresh` then retry. OpenAPI at `/openapi.json`; web reference
-  `frontend/src/api/endpoints/calls.ts` + `frontend/src/api/types.ts`.
+  `frontend/src/api/endpoints/messaging.ts` (the direct-call helpers `createCallInvite`,
+  `acceptCallInvite`, `declineCallInvite`, `timeoutCall`) + `frontend/src/api/client.ts`
+  (CSRF/refresh transport). *Note (corrected during review): there is no `calls.ts`; the 1:1
+  call helpers live in `messaging.ts`. The web app has no separate `types.ts` DTOs for calls —
+  the request/response shapes are the OpenAPI `Call*` schemas (see §5).*
 - **Platform.** minSdk 24, targetSdk 35, Kotlin 2.0.21, Compose + Material 3, Hilt (KSP),
   Coroutines/Flow.
 
@@ -63,17 +68,26 @@ connects on accept.*
    full-screen UI from a locked/asleep state.
 3. **Full-screen incoming UI.** Shows caller display name, avatar (Coil), call kind
    (audio/video), and large **Accept** / **Decline** buttons. Renders over the lock screen.
-4. **Accept.** Confirms acceptance to the backend (`POST /ui/calls/{call_id}/answer`), connects
+4. **Accept.** Confirms acceptance to the backend
+   (`POST /messaging/messages/calls/{call_id}/accept`, body `CallAcceptIn`), fetches ICE servers
+   (`POST /messaging/messages/calls/{call_id}/turn-credentials` → `TurnCredentialsOut`), connects
    the signaling session (AND-290/296), and navigates to the in-call screen (AND-298),
-   cancelling the notification and stopping the ringer.
-5. **Decline.** Posts `POST /ui/calls/{call_id}/decline`, stops ringer, dismisses UI.
+   cancelling the notification and stopping the ringer. *(Corrected: the path is
+   `/messaging/messages/calls/{id}/accept`, not `/ui/calls/{id}/answer`; ICE servers come from a
+   separate `turn-credentials` call, not embedded in the accept response.)*
+5. **Decline.** Posts `POST /messaging/messages/calls/{call_id}/decline` (body `CallDeclineIn`,
+   `reason` default `"declined"`), stops ringer, dismisses UI.
 6. **Ringer timeout.** If neither action occurs within the invite's `expires_at` (or a hard
-   default of **45 s**), auto-decline locally with `reason="timeout"`, stop ringing, dismiss.
-7. **Caller cancel / superseding state.** A `call.cancel`/`call.ended` data message (or a state
-   poll showing the call already terminal) for the active invite must immediately stop ringing
-   and dismiss.
+   default of **45 s**), notify the backend via `POST /messaging/messages/calls/{call_id}/timeout`
+   (body `CallTimeoutIn`, `reason` default `"no_answer"`), stop ringing, dismiss. *(Corrected:
+   timeout is a dedicated endpoint, not a `decline` with `reason="timeout"`. CallDeclineIn does
+   not document a `timeout` reason value.)*
+7. **Caller cancel / superseding state.** A `call.end`/`call.decline`/`call.missed` data message
+   for the active invite must immediately stop ringing and dismiss. *(Corrected: the backend
+   emits `call.end`/`call.missed`, not `call.cancel`/`call.ended`; see §13 Open Q1.)*
 8. **Single-call invariant.** Only one incoming-call surface at a time. A second invite while
-   one is ringing is auto-declined with `reason="busy"`.
+   one is ringing is auto-declined with `reason="busy"` (a documented `CallDeclineIn` value used
+   by the web client).
 9. **De-duplication.** Repeated FCM deliveries of the same `call_id` are idempotent (ring once).
 10. **Runtime gating.** Honor `POST_NOTIFICATIONS` (API 33+) and `RECORD_AUDIO`/`CAMERA`
     permission state; on accept without media permission, request inline before connecting.
@@ -205,59 +219,98 @@ class IncomingCallNotifier @Inject constructor(@ApplicationContext ctx: Context)
 
 Consumes the AND-295 call endpoints (cookie-authed, `X-CSRF-Token` required on mutations).
 
-**Invite payload (FCM `data`, strings only):**
+> **Review correction.** The original draft referenced `/ui/calls/{id}/answer|decline` and a
+> `GET /ui/calls/{id}` state endpoint. **None of those exist.** The authoritative 1:1 call
+> endpoints (OpenAPI index lines 399–406) are mounted under `/messaging/messages/calls/...`. The
+> answer verb is **`accept`** (not `answer`); there is **no** single-call `GET` resync endpoint;
+> ICE servers come from a dedicated `turn-credentials` POST. Shapes below are taken verbatim from
+> `components.schemas.*` in `openapi.pretty.json`.
+
+**Invite payload (FCM `data`, strings only).** *Unverified-assumption — Android-only.* The
+backend's web client receives invites over the SSE messaging stream as a `call.invite` event
+(`src/hooks/useMessagingStream.ts`), **not** over FCM; OpenAPI does not document any FCM
+data-message schema. The field set below is this ticket's proposed Android push contract and must
+be confirmed with the backend push producer before GA. Where possible field names mirror
+`CallInviteOut` (`call_id`, `conversation_id`, `caller_user_id`, `callee_user_id`, `initial_mode`).
 ```json
 {
   "type": "call.invite",
   "call_id": "c_01HYZ...",
-  "thread_id": "t_42",
-  "caller_id": "u_7",
-  "caller_name": "Jordan Vega",
-  "caller_avatar_url": "https://.../u_7.png",
-  "kind": "video",
-  "expires_at": "2026-06-05T17:04:30Z"
+  "conversation_id": "conv_42",      // CallInviteOut.conversation_id (was wrongly "thread_id")
+  "caller_user_id": "u_7",           // CallInviteOut.caller_user_id (was "caller_id")
+  "caller_name": "Jordan Vega",      // display-only; not in OpenAPI, push-augmented
+  "caller_avatar_url": "https://.../u_7.png", // display-only; not in OpenAPI, push-augmented
+  "initial_mode": "video",           // CallInviteIn/Out.initial_mode: "audio" | "video"
+  "expires_at": "2026-06-05T17:04:30Z" // not in OpenAPI; see §13 Open Q2
 }
 ```
 
-**Answer:** `POST /ui/calls/{call_id}/answer`
+**Accept:** `POST /messaging/messages/calls/{call_id}/accept`  (req `CallAcceptIn`, resp `CallActionOut`)
 ```json
-// request
-{ "client": "android", "media": { "audio": true, "video": true } }
-// 200
-{ "call_id": "c_01HYZ...", "state": "connecting", "signaling": { "session_id": "s_9", "ice_servers": [ ... ] } }
+// request — CallAcceptIn (all optional)
+{ "idempotency_key": "..." }
+// 200 — CallActionOut
+{ "call_id": "c_01HYZ...", "conversation_id": "conv_42", "state": "accepted",
+  "event_ts": 1749142000, "from_state": "ringing", "reason": null, "voicemail_eligible": false }
+```
+*(Note: no `signaling`/`ice_servers` block in the response — that was invented. There is no
+`media:{audio,video}` request field; media kind is carried by `initial_mode` on the invite.)*
+
+**TURN/ICE (separate call, do this before connecting):**
+`POST /messaging/messages/calls/{call_id}/turn-credentials` (no body) → `TurnCredentialsOut`
+```json
+{ "ttl_seconds": 3600, "expires_at": 1749145600,
+  "ice_servers": [ { "urls": ["turn:..."], "username": "...", "credential": "..." } ] }
 ```
 
-**Decline:** `POST /ui/calls/{call_id}/decline`
+**Decline:** `POST /messaging/messages/calls/{call_id}/decline`  (req `CallDeclineIn`, resp `CallActionOut`)
 ```json
-{ "reason": "user" }   // user | timeout | busy
-// 200 { "call_id": "c_01HYZ...", "state": "declined" }
+{ "reason": "declined" }   // CallDeclineIn.reason default "declined"; web client also sends "busy"
+// 200 CallActionOut: { "call_id": "...", "conversation_id": "...", "state": "declined", "event_ts": ... }
 ```
 
-**State fetch (resync after cold start / stale push):** `GET /ui/calls/{call_id}`
+**Timeout (no-answer):** `POST /messaging/messages/calls/{call_id}/timeout`  (req `CallTimeoutIn`, resp `CallActionOut`)
 ```json
-{ "call_id": "c_01HYZ...", "state": "ringing", "expires_at": "2026-06-05T17:04:30Z" }
+{ "reason": "no_answer" }   // CallTimeoutIn.reason default "no_answer"; optional idempotency_key
 ```
+
+**Resync after cold start / stale push.** *No 1:1 single-call `GET` endpoint exists.* For group
+calls there is `GET /ui/calls/group/{call_id}`, but it does not apply to direct calls. Options
+(see §7/§13): rely on FCM redelivery + a subsequent `call.end`/`call.missed` event, or query
+billing/heartbeat side-channels (`GET /messaging/messages/calls/{call_id}/billing`). This ticket
+**drops the GET-based resync**; treat absence of a terminal event within the ring window as the
+authority for the local timeout.
 
 **Retrofit signatures (in `CallApi`, AND-295):**
 ```kotlin
-@POST("ui/calls/{id}/answer")  suspend fun answer(@Path("id") id: String, @Body b: AnswerRequest): Response<AnswerResponse>
-@POST("ui/calls/{id}/decline") suspend fun decline(@Path("id") id: String, @Body b: DeclineRequest): Response<CallStateDto>
-@GET("ui/calls/{id}")          suspend fun get(@Path("id") id: String): Response<CallStateDto>
+@POST("messaging/messages/calls/{id}/accept")
+suspend fun accept(@Path("id") id: String, @Body b: CallAcceptIn): Response<CallActionOut>
+@POST("messaging/messages/calls/{id}/decline")
+suspend fun decline(@Path("id") id: String, @Body b: CallDeclineIn): Response<CallActionOut>
+@POST("messaging/messages/calls/{id}/timeout")
+suspend fun timeout(@Path("id") id: String, @Body b: CallTimeoutIn): Response<CallActionOut>
+@POST("messaging/messages/calls/{id}/turn-credentials")
+suspend fun turnCredentials(@Path("id") id: String): Response<TurnCredentialsOut>
 ```
 
 Error `detail` follows the project mapping (`string | [{msg}] | {code,...}`) via the shared
-`ApiResult<T>` decoder. `GET /ui/calls/{id}` is idempotent → eligible for bounded backoff retry;
-`answer`/`decline` are **not** retried automatically (decline is retried only on idempotent-safe
-network failure, see §7).
+`ApiResult<T>` decoder — **verified** against `src/api/client.ts: normalizeErrorDetail`, which
+handles all three shapes; 422 bodies are `HTTPValidationError` (`detail: [ValidationError]`, each
+with `msg`/`loc`/`type`). `accept`/`decline`/`timeout` are **not** retried automatically
+(`decline`/`timeout` carry an optional `idempotency_key`, so a single network-failure retry is
+safe; see §7). All `CallAcceptIn`/`CallDeclineIn`/`CallTimeoutIn` accept an `idempotency_key`,
+which the de-dup layer should populate (derive from `call_id`).
 
 ## 6. Data & State Management
 
 ```kotlin
 @JsonClass(generateAdapter = true)
 data class CallInvite(
-    val callId: String, val threadId: String?, val callerId: String,
+    // Corrected field names to mirror CallInviteOut: conversationId (not threadId),
+    // callerUserId (not callerId). kind maps to CallInviteIn/Out.initial_mode ("audio"|"video").
+    val callId: String, val conversationId: String, val callerUserId: String,
     val callerName: String, val callerAvatarUrl: String?,
-    val kind: CallKind /* AUDIO, VIDEO */, val expiresAt: Instant,
+    val kind: CallKind /* AUDIO, VIDEO -> initial_mode */, val expiresAt: Instant?,
 )
 
 sealed interface IncomingCallState {
@@ -269,7 +322,10 @@ sealed interface IncomingCallState {
     data object Dismissed : IncomingCallState
 }
 
-enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), BUSY("busy") }
+// Corrected to match CallDeclineIn (web sends "declined" | "busy"); TIMEOUT is routed to the
+// /timeout endpoint (CallTimeoutIn, wire "no_answer"), NOT to /decline.
+enum class DeclineReason(val wire: String) { USER("declined"), BUSY("busy") }
+enum class TimeoutReason(val wire: String) { NO_ANSWER("no_answer") }
 ```
 
 - **Single source of truth:** `IncomingCallController._state` (a `MutableStateFlow`). The
@@ -278,8 +334,10 @@ enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), B
   recovers state from the next FCM redelivery or via `GET /ui/calls/{id}`. The set of
   recently-handled `call_id`s is held in an in-memory LRU (size 32) for de-dup; a short TTL copy
   is mirrored to DataStore (`incoming_call_seen`) so a fast process restart still de-dups.
-- **Timeout:** armed via `scope.launch { delay(until(deadline)); decline(TIMEOUT) }`, cancelled
-  on any terminal transition. `deadline = min(invite.expiresAt, now + 45s)`.
+- **Timeout:** armed via `scope.launch { delay(until(deadline)); timeout(NO_ANSWER) }` (calls the
+  `/timeout` endpoint, not `/decline`), cancelled on any terminal transition.
+  `deadline = invite.expiresAt?.coerceAtMost(now + 45s) ?: now + 45s` — `expires_at` is
+  unverified/optional (see §13 Open Q2), so the 45 s client default is the authority when absent.
 - **Handoff to AND-298:** on `Connected`, the `SignalingHandle` is published into
   `CallSessionManager` (AND-290/296) and navigation passes only `call_id`; the in-call screen
   rebinds to the live session rather than re-establishing it.
@@ -287,15 +345,22 @@ enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), B
 ## 7. Error Handling & Resilience
 
 - **Plaintext/unreliable backend:** all call HTTP uses the shared OkHttp client with **20 s**
-  call timeout. `GET /ui/calls/{id}` uses bounded exponential backoff (3 attempts,
-  250 ms→1 s, jitter). `answer`/`decline` do not auto-retry beyond one network-failure retry
-  for `decline` (safe to repeat).
-- **Answer failure (timeout / 5xx / signaling fail):** transition to `Failed`, keep the user on
-  the incoming screen with a brief inline error and a **Retry** that re-issues `answer`; if the
-  call has since expired (`409`/state `ended`), dismiss with a toast.
-- **401 during answer/decline:** the OkHttp authenticator performs one
+  call timeout. *(Corrected: the bounded-backoff `GET /ui/calls/{id}` resync was removed — no such
+  endpoint exists; see §5.)* `accept`/`decline`/`timeout` do not auto-retry beyond one
+  network-failure retry for `decline`/`timeout`, made safe to repeat via the `idempotency_key` on
+  `CallDeclineIn`/`CallTimeoutIn` (`accept` likewise carries an `idempotency_key`).
+- **Accept failure (timeout / 5xx / signaling fail / turn-credentials fail):** transition to
+  `Failed`, keep the user on the incoming screen with a brief inline error and a **Retry** that
+  re-issues `accept` (reusing the same `idempotency_key`); if the call has since terminated
+  (e.g. a `call.end`/`call.missed` event arrives, or `accept` returns a non-2xx terminal `state`
+  such as `ended` in `CallActionOut.state`), dismiss with a toast. *(Note: 409 handling is an
+  assumption — the OpenAPI for `/accept` documents only 200 and 422; backend may instead signal
+  terminal state via `CallActionOut.state`/`from_state`.)*
+- **401 during accept/decline/timeout:** the OkHttp authenticator performs one
   `POST /ui/session/refresh` then retries; persistent failure → `Failed` ("Sign in to take
-  calls"). The FCM service itself never blocks on auth — it always rings first.
+  calls"). *(Verified against `src/api/client.ts`: 401 → single `refreshSession()` →
+  `POST /ui/session/refresh` with `credentials: include` → one retry.)* The FCM service itself
+  never blocks on auth — it always rings first.
 - **Race conditions:** `onRemoteCancel` and the timeout both funnel through a single
   `transitionToTerminal()` guarded so the first terminal cause wins; subsequent causes are
   no-ops. Accept-after-cancel surfaces "Call ended".
@@ -354,8 +419,10 @@ enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), B
   - `IncomingCallController` state machine: invite→ring→accept→connected; →decline; →timeout
     (virtual `TestScope` clock); remote-cancel during ring; busy second invite; duplicate
     `call_id` de-dup; accept-after-cancel race resolves to `Failed`/dismiss.
-  - HTTP: `answer`/`decline` success, 401→refresh→retry, 409 expired, 20 s timeout, `detail`
-    error-shape decoding; `get` backoff retry count.
+  - HTTP: `accept`/`decline`/`timeout`/`turn-credentials` success (CallActionOut/TurnCredentialsOut),
+    401→`/ui/session/refresh`→retry, terminal-state handling, 20 s timeout, `detail` error-shape
+    decoding (string | [{msg}] | {code}); idempotency-key reuse on retry. *(The `get` backoff case
+    was removed — no single-call GET endpoint exists.)*
 - **Instrumented / UI (Compose test + JUnit4):** `IncomingCallScreen` renders caller + buttons;
   Accept/Decline invoke controller; a11y semantics present; `IncomingCallActivity` sets
   show-when-locked flags.
@@ -395,12 +462,19 @@ enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), B
 - **R3 — Process-killed cold start latency:** restarting the process + Hilt graph before ringing
   may exceed the p95 budget on low-end devices. Mitigation: keep the push path allocation-light;
   post the notification before any DI-heavy work.
-- **R4 — Stale push after caller cancel:** dedupe + `GET /ui/calls/{id}` resync on render.
-- **Open Q1:** Does the backend emit a distinct `call.cancel` data message, or only
-  `call.ended`? (Confirm against `/openapi.json` + `frontend/src/api/endpoints/calls.ts`;
-  parser currently treats both as cancel.)
-- **Open Q2:** Is there a server-authoritative `expires_at`, or must the client own the 45 s
-  default? (Spec assumes `expires_at` when present, client default otherwise.)
+- **R4 — Stale push after caller cancel:** dedupe + treat any `call.end`/`call.missed`/
+  `call.decline` event for the active `call_id` as terminal. *(Updated: the previously-proposed
+  `GET /ui/calls/{id}` resync is removed — no such endpoint exists; see §5.)*
+- **Open Q1 — RESOLVED (web stream).** The backend does **not** emit `call.cancel` or
+  `call.ended`. The web SSE stream (`src/hooks/useMessagingStream.ts` `EVENT_TYPES`) lists
+  `call.invite`, `call.accept`, `call.decline`, `call.end`, `call.missed`. The parser must treat
+  `call.end`/`call.missed`/`call.decline` (for the active call) as cancel/terminal. **Remaining
+  unknown:** the exact FCM data-message `type` strings (the push transport is not in OpenAPI);
+  assume they mirror the SSE event names. File a backend confirmation before GA.
+- **Open Q2 — PARTIALLY RESOLVED.** There is **no** server-authoritative `expires_at` in any
+  documented call schema (`CallInviteOut`, `CallActionOut`); none carries an expiry. The client
+  must own the 45 s default. If `expires_at` appears in the FCM payload it is an undocumented
+  push-only augmentation; treat it as advisory and clamp to the 45 s ceiling.
 - **Open Q3:** Should a missed/declined call leave a persistent "missed call" notification
   (likely a follow-up ticket, not in this scope)?
 
@@ -409,13 +483,15 @@ enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), B
 1. **(Backlog gate)** With the app backgrounded **and** swiped from recents **and** the screen
    locked, an FCM `call.invite` causes the device to **ring** (ringtone + vibration) and display
    the **full-screen incoming UI** within p95 ≤ 1.5 s of receipt.
-2. Tapping **Accept** calls `POST /ui/calls/{id}/answer`, connects the signaling session, and
-   navigates to the in-call screen (AND-298) with live audio/video for the negotiated `kind`.
-3. Tapping **Decline** calls `POST /ui/calls/{id}/decline` with `reason="user"`, stops the
-   ringer, and dismisses the UI.
-4. With no user action, the call auto-declines with `reason="timeout"` at
-   `min(expires_at, +45s)`, notifies backend, and dismisses.
-5. A `call.cancel`/`call.ended` for the ringing call stops ringing and dismisses immediately.
+2. Tapping **Accept** calls `POST /messaging/messages/calls/{id}/accept`, obtains ICE servers via
+   `POST /messaging/messages/calls/{id}/turn-credentials`, connects the signaling session, and
+   navigates to the in-call screen (AND-298) with live audio/video for the negotiated `initial_mode`.
+3. Tapping **Decline** calls `POST /messaging/messages/calls/{id}/decline` with `reason="declined"`,
+   stops the ringer, and dismisses the UI.
+4. With no user action, the client calls `POST /messaging/messages/calls/{id}/timeout`
+   (`reason="no_answer"`) at `expires_at?.coerceAtMost(+45s) ?: +45s`, stops the ringer, and dismisses.
+5. A `call.end`/`call.missed`/`call.decline` event for the ringing call stops ringing and
+   dismisses immediately.
 6. Duplicate deliveries of the same `call_id` ring exactly once; a second concurrent invite is
    auto-declined `busy`.
 7. `401` during answer/decline triggers one `POST /ui/session/refresh` + retry; a 20 s timeout
@@ -438,5 +514,209 @@ enum class DeclineReason(val wire: String) { USER("user"), TIMEOUT("timeout"), B
 - Telemetry events (§10) emitted and verified; no PII/token/cookie/CSRF in logs.
 - Handoff contract to AND-298 (publish `SignalingHandle` to `CallSessionManager`, navigate by
   `call_id`) documented and unblocked.
-- Open questions Q1–Q2 resolved against `/openapi.json` or filed as follow-ups before release;
-  spec status moved `draft → approved` after review.
+- Open questions Q1–Q2 resolved against `/openapi.json` + web reference or filed as follow-ups
+  before release (see §16); spec status moved `draft → approved` after review.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its review VERDICT, and the exact source pointer.
+
+1. **1:1 call endpoints are `POST /messaging/messages/calls/{id}/{accept|decline|timeout}`.**
+   VERDICT: **Corrected** (draft said `/ui/calls/{id}/answer|decline`). SOURCE: OpenAPI index
+   `POST /messaging/messages/calls/{call_id}/accept` (op `accept_call_invite_...`),
+   `.../decline` (op `decline_call_invite_...`), `.../timeout` (op `timeout_call_endpoint_...`).
+2. **Answer verb is `accept`, not `answer`.** VERDICT: **Corrected.** SOURCE: OpenAPI
+   `POST /messaging/messages/calls/{call_id}/accept`; frontend `src/api/endpoints/messaging.ts:
+   acceptCallInvite`.
+3. **Accept request body = `CallAcceptIn` (only optional `idempotency_key`); no
+   `media:{audio,video}` field.** VERDICT: **Corrected** (draft invented a media block). SOURCE:
+   `components.schemas.CallAcceptIn`.
+4. **Accept response = `CallActionOut` (`call_id`, `conversation_id`, `state`, `event_ts`,
+   `from_state?`, `reason?`, `voicemail_eligible`); no embedded `signaling`/`ice_servers`.**
+   VERDICT: **Corrected.** SOURCE: `components.schemas.CallActionOut`; OpenAPI
+   `resp=200:CallActionOut` on `/accept`.
+5. **ICE servers come from `POST /messaging/messages/calls/{id}/turn-credentials` →
+   `TurnCredentialsOut` (`ttl_seconds`, `expires_at`, `ice_servers[].{urls,username,credential}`).**
+   VERDICT: **Corrected** (draft embedded them in the answer response). SOURCE:
+   `components.schemas.TurnCredentialsOut` + `TurnIceServerOut`; OpenAPI
+   `POST /messaging/messages/calls/{call_id}/turn-credentials`; frontend
+   `src/api/endpoints/messaging.ts` (`/messaging/messages/calls/${callId}/turn-credentials`).
+6. **Decline body = `CallDeclineIn` (`reason` default `"declined"`); web client sends
+   `"declined" | "busy"`; `"user"` is not a valid value.** VERDICT: **Corrected** (draft used
+   `reason="user"` and `"timeout"`). SOURCE: `components.schemas.CallDeclineIn`; frontend
+   `src/api/endpoints/messaging.ts: declineCallInvite` (`reason?: "declined" | "busy"`).
+7. **Timeout is a dedicated endpoint `/timeout` with `CallTimeoutIn` (`reason` default
+   `"no_answer"`), not a `decline` variant.** VERDICT: **Corrected.** SOURCE:
+   `components.schemas.CallTimeoutIn`; OpenAPI `POST /messaging/messages/calls/{call_id}/timeout`;
+   frontend `src/api/endpoints/messaging.ts: timeoutCall`.
+8. **There is no single-call state-fetch `GET` endpoint (`GET /ui/calls/{id}` does not exist).**
+   VERDICT: **Corrected** (resync via GET removed). SOURCE: OpenAPI index — the only `/messaging/
+   messages/calls/{call_id}/...` reads are `/billing` and (POST) `/signal`; group calls have
+   `GET /ui/calls/group/{call_id}` but that is not the 1:1 path.
+9. **Backend emits `call.end`/`call.missed`/`call.decline`, not `call.cancel`/`call.ended`.**
+   VERDICT: **Corrected.** SOURCE: frontend `src/hooks/useMessagingStream.ts` `EVENT_TYPES`
+   (lines ~188–192: `call.invite`, `call.accept`, `call.decline`, `call.end`, `call.missed`).
+10. **Auth/CSRF: cookie session + `X-CSRF-Token` echo of `ui_csrf` cookie on mutations;
+    `credentials: include`.** VERDICT: **Verified.** SOURCE: `src/api/client.ts` (`getCookie
+    ("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`; `credentials: "include"`).
+11. **401 → single `POST /ui/session/refresh` then one retry.** VERDICT: **Verified.** SOURCE:
+    `src/api/client.ts: refreshSession()` → `fetch(withApiBase("/ui/session/refresh"))`; 401 path
+    calls it once (guarded by `refreshPromise`) then retries.
+12. **Error `detail` decodes as `string | [{msg,...}] | {code,...}`; 422 = `HTTPValidationError`.**
+    VERDICT: **Verified.** SOURCE: `src/api/client.ts: normalizeErrorDetail`;
+    `components.schemas.HTTPValidationError` (`detail: [ValidationError]`).
+13. **Invite carries `conversation_id` + `caller_user_id` + `initial_mode` (`audio|video`), not
+    `thread_id`/`caller_id`/`kind`.** VERDICT: **Corrected** (field names aligned to schemas).
+    SOURCE: `components.schemas.CallInviteIn`/`CallInviteOut` (`conversation_id`, `callee_user_id`,
+    `caller_user_id`, `initial_mode` default `"audio"`); frontend `DirectCallMode = "audio"|"video"`.
+14. **FCM data-message transport + payload (the whole receive trigger).** VERDICT:
+    **Unverified-assumption.** SOURCE: none — OpenAPI documents no FCM/push schema; the web client
+    receives invites over SSE (`src/hooks/useMessagingStream.ts`), which does not apply to a
+    backgrounded mobile app. The payload in §5 is this ticket's proposed contract.
+15. **Server-authoritative `expires_at` on the invite.** VERDICT: **Unverified-assumption** (and
+    not present in any documented schema). SOURCE: `CallInviteOut`/`CallActionOut` carry no
+    expiry field; client owns the 45 s default.
+16. **`signal` uses typed errors `CallSignalingErrorOut` (`code`/`message`) with 4xx/5xx codes.**
+    VERDICT: **Verified** (informational; signaling is AND-290's surface). SOURCE: OpenAPI
+    `POST /messaging/messages/calls/{call_id}/signal` (`resp=...400:CallSignalingErrorOut;...`);
+    `components.schemas.CallSignalingErrorOut`.
+17. **Full-screen-intent / lock-screen framework choices.** VERDICT: **Verified (framework ref).**
+    SOURCES: `CallStyle.forIncomingCall` requires API 31+
+    (https://developer.android.com/reference/androidx/core/app/NotificationCompat.CallStyle);
+    `setShowWhenLocked`/`setTurnScreenOn` API 27+
+    (https://developer.android.com/reference/android/app/Activity#setShowWhenLocked(boolean));
+    `USE_FULL_SCREEN_INTENT` + `NotificationManager.canUseFullScreenIntent()` gating on API 34+
+    (https://developer.android.com/reference/android/app/NotificationManager#canUseFullScreenIntent());
+    `POST_NOTIFICATIONS` runtime permission API 33+
+    (https://developer.android.com/develop/ui/views/notifications/notification-permission).
+
+### Corrections made
+
+- §2/§5: replaced non-existent `frontend/.../calls.ts` + `calls.ts`-DTO references with
+  `messaging.ts`/`client.ts`; removed the claimed `types.ts` call DTOs.
+- §3/§5/§6/§7/§14: changed all call paths from `/ui/calls/{id}/answer|decline` and
+  `GET /ui/calls/{id}` to the real `/messaging/messages/calls/{id}/{accept|decline|timeout}` and
+  `/turn-credentials`; removed the non-existent single-call GET resync.
+- §5: corrected accept request (`CallAcceptIn`, no media block) and response (`CallActionOut`, no
+  embedded `signaling`/`ice_servers`); added the separate `turn-credentials` step.
+- §6/§3/§14: decline `reason` `"user"`→`"declined"`; timeout moved to the `/timeout` endpoint with
+  `"no_answer"`; split `DeclineReason`/`TimeoutReason`.
+- §6: `CallInvite` field names → `conversationId`/`callerUserId`/`initial_mode`; `expiresAt` made
+  nullable.
+- §3/§7/§13/§14: cancel events `call.cancel`/`call.ended` → `call.end`/`call.missed`/`call.decline`.
+- §11: dropped the `get` backoff test; updated HTTP cases to the real endpoints/DTOs.
+
+### Open assumptions
+
+- **A1 — FCM push transport & exact `data` keys/`type` strings.** Unverifiable from OpenAPI (no
+  push schema) or the web app (uses SSE). Must be confirmed with the backend push producer.
+- **A2 — `expires_at` in the invite.** Not in any documented schema; treated as advisory, clamped
+  to a 45 s client ceiling.
+- **A3 — Conflict/terminal signalling on `accept` (e.g. HTTP 409).** OpenAPI documents only
+  200/422 for `/accept`; whether a late accept returns 409 vs. a terminal `CallActionOut.state`
+  is unconfirmed — handle both defensively.
+- **A4 — `voicemail_eligible` in `CallActionOut`.** Present in the schema but out of scope for
+  this ticket; not consumed here (possible follow-up, cf. §13 Open Q3 missed-call UX).
+
+## 17. Test Plan
+
+IDs `TC-AND-297-NN`. "Traces" link to §14 Acceptance Criteria (AC-1…AC-10). Target legend matches
+the available CI/dev targets; hardware-dependent cases call out the **physical device**
+(Samsung Galaxy A15 5G, SM-A156U, API 34, arm64) vs the **emulator** (AVD `test35`, API 35,
+x86_64) vs **JVM/Robolectric**.
+
+- **TC-AND-297-01 — Push parse: valid invite → `CallInvite`.** Type: unit (JVM). Target:
+  JVM/Robolectric. Preconditions: `CallPushParser` instantiated. Steps: feed a `data` map with
+  `type=call.invite`, `call_id`, `conversation_id`, `caller_user_id`, `caller_name`,
+  `initial_mode=video`, `expires_at`. Expected: `CallPushEvent.Invite` with correctly mapped
+  fields (`conversationId`, `callerUserId`, `kind=VIDEO`, nullable `expiresAt` parsed). Traces:
+  AC-1.
+- **TC-AND-297-02 — Push parse: malformed/oversized/wrong-type dropped.** Type: unit (JVM).
+  Target: JVM. Preconditions: parser. Steps: feed (a) wrong `type`, (b) missing `call_id`,
+  (c) oversized strings, (d) bad `expires_at`. Expected: `CallPushEvent.Ignore` (or dropped),
+  no throw, telemetry `call_invite_dropped`. Traces: AC-1, AC-8.
+- **TC-AND-297-03 — Controller state machine: invite→ring→accept→connected.** Type: unit (JVM,
+  `TestScope` virtual clock + Turbine). Target: JVM. Preconditions: fakes for repo/ringer/
+  notifier/session. Steps: `onInvite()`, then `accept()`. Expected: state Ringing→Connecting→
+  Connected; ringer started then stopped; `accept` + `turn-credentials` invoked once each.
+  Traces: AC-2.
+- **TC-AND-297-04 — Contract: accept happy path (MockWebServer).** Type: contract/MockWebServer.
+  Target: JVM. Preconditions: MockWebServer enqueues 200 `CallActionOut` then 200
+  `TurnCredentialsOut`. Steps: call `CallApi.accept()` then `turnCredentials()`. Expected: POST to
+  `/messaging/messages/calls/{id}/accept` with `X-CSRF-Token` header and `CallAcceptIn` body;
+  parsed `state`/`event_ts`; ICE servers parsed from `TurnCredentialsOut`. Traces: AC-2.
+- **TC-AND-297-05 — Contract: decline / timeout endpoints & reasons.** Type: contract/MockWebServer.
+  Target: JVM. Preconditions: MWS returns 200 `CallActionOut`. Steps: invoke `decline(USER)` and
+  `timeout(NO_ANSWER)`. Expected: POST `/decline` with `{"reason":"declined"}` and POST `/timeout`
+  with `{"reason":"no_answer"}`; both carry `idempotency_key`. Traces: AC-3, AC-4.
+- **TC-AND-297-06 — Contract: 401 → refresh → retry; error `detail` shapes.** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: MWS returns 401 once, then 200; separately a
+  422 `HTTPValidationError` and a `{code,...}` body. Steps: call `accept()`. Expected: a single
+  `POST /ui/session/refresh` then one retry succeeds; `detail` decoded for string/`[{msg}]`/
+  `{code}` shapes without crash. Traces: AC-7.
+- **TC-AND-297-07 — Controller: timeout auto-fires at deadline.** Type: unit (JVM, virtual clock).
+  Target: JVM. Preconditions: invite with no `expires_at`. Steps: `onInvite()`, advance virtual
+  time 45 s with no action. Expected: `/timeout` (`no_answer`) called once, ringer stopped, state
+  Dismissed; with `expires_at < 45 s` the earlier deadline wins. Traces: AC-4.
+- **TC-AND-297-08 — Controller: remote terminal + dedupe + busy.** Type: unit (JVM). Target: JVM.
+  Steps: (a) `onRemoteCancel(call.end)` during ring → immediate stop/dismiss; (b) duplicate
+  `call_id` invite → ring exactly once (LRU/DataStore de-dup); (c) second distinct invite while
+  ringing → auto-decline `busy`; (d) accept-after-cancel race → first terminal cause wins →
+  Failed/dismiss. Expected: as stated; `transitionToTerminal()` idempotent. Traces: AC-5, AC-6.
+- **TC-AND-297-09 — Notification: CallStyle full-screen-intent built correctly.** Type:
+  Robolectric (shadow NotificationManager). Target: JVM/Robolectric. Preconditions: API 31+
+  shadow. Steps: `IncomingCallNotifier.showRinging()`. Expected: `CATEGORY_CALL`, `PRIORITY_MAX`,
+  ongoing, `setFullScreenIntent(..., highPriority=true)`, `CallStyle.forIncomingCall` actions on
+  the `calls` channel. Traces: AC-1, AC-8.
+- **TC-AND-297-10 — Notification fallback when `canUseFullScreenIntent()==false`.** Type:
+  Robolectric. Target: JVM/Robolectric. Preconditions: shadow returns false (simulating API 34
+  policy). Steps: post ringing notification. Expected: degrade to high-priority heads-up call
+  notification with action buttons; ringer still starts; telemetry warning. Traces: AC-1, AC-10.
+- **TC-AND-297-11 — Compose UI: incoming screen + accessibility.** Type: Compose-UI test. Target:
+  emulator `test35` (or Robolectric Compose). Preconditions: controller stub in Ringing. Steps:
+  render `IncomingCallScreen`; assert caller name/avatar/kind shown; Accept/Decline have
+  `contentDescription` "Accept call from {name}"/"Decline call from {name}", ≥48 dp targets,
+  Accept first in focus order, `liveRegion` announcement; clicking invokes
+  `controller.accept()`/`decline()`. Traces: AC-3, AC-9.
+- **TC-AND-297-12 — Instrumented: Activity lock-screen flags.** Type: instrumented. Target:
+  emulator `test35`. Preconditions: launch `IncomingCallActivity` via its PendingIntent. Steps:
+  inspect window flags. Expected: `setShowWhenLocked(true)`, `setTurnScreenOn(true)`,
+  `requestDismissKeyguard` invoked; `excludeFromRecents`. Traces: AC-1, AC-8.
+- **TC-AND-297-13 — Security: untrusted payload + lock-screen privacy + CSRF.** Type: integration
+  (MockWebServer + Robolectric). Target: JVM/Robolectric. Steps: (a) inject hostile fields
+  (script in `caller_name`, huge avatar URL, attacker `conversation_id`) → display-only, never
+  used to build privileged routes, length-bounded; (b) assert lock-screen UI shows only
+  name/avatar/kind (no message/thread content); (c) assert every mutation carries `X-CSRF-Token`
+  and no token/cookie/CSRF/PII appears in logs. Traces: AC-7, AC-8.
+- **TC-AND-297-14 — E2E acceptance gate: backgrounded + swiped + locked rings & connects.**
+  Type: instrumented/e2e (manual + scripted). Target: **PHYSICAL DEVICE (SM-A156U, API 34)** —
+  required: real FCM delivery, real ringtone/vibration/audio-focus, lock-screen full-screen-intent
+  behavior, and live WebRTC audio to an AND-296 peer. Preconditions: app installed, signed in,
+  `calls` channel + `POST_NOTIFICATIONS` granted, app swiped from recents, screen locked.
+  Steps: deliver a real `call.invite` FCM to the device; observe ring + full-screen UI; tap
+  Accept; verify audio flows; in a second run, tap Decline; in a third, let it time out at 45 s.
+  Expected: rings within p95 ≤ 1.5 s; Accept connects with live media; Decline → `/decline`
+  (`declined`) + dismiss; timeout → `/timeout` (`no_answer`) + dismiss. (Emulator `test35` cannot
+  validate real FCM push + ringer/lock-screen hardware behavior; use it only for the UI subset.)
+  Traces: AC-1, AC-2, AC-3, AC-4.
+- **TC-AND-297-15 — OEM / API matrix + restrictive battery manager.** Type: instrumented/manual.
+  Target: emulator `test35` (API 35) for API-35 path; **physical device** (API 34, arm64) for the
+  `USE_FULL_SCREEN_INTENT` API-34 gating and ABI/API-34-vs-35 differences; one restrictive-OEM
+  device for battery/notification suppression of the full-screen intent. Steps: repeat the ring +
+  accept flow per target. Expected: ring + full-screen (or documented heads-up fallback) on each;
+  document OEM whitelisting needs. Traces: AC-10, AC-1.
+
+### Coverage matrix
+
+| §14 AC | Covered by |
+| ------ | ---------- |
+| AC-1 (rings backgrounded/locked ≤1.5 s p95) | TC-01, TC-02, TC-09, TC-10, TC-12, TC-14, TC-15 |
+| AC-2 (Accept → accept+turn-credentials → connect) | TC-03, TC-04, TC-14 |
+| AC-3 (Decline → `/decline` `declined`) | TC-05, TC-11, TC-14 |
+| AC-4 (timeout → `/timeout` `no_answer`) | TC-05, TC-07, TC-14 |
+| AC-5 (remote terminal stops/dismisses) | TC-08 |
+| AC-6 (dedupe once / busy second) | TC-08 |
+| AC-7 (401→refresh→retry; 20 s timeout no crash) | TC-06, TC-13 |
+| AC-8 (lock-screen shows only name/avatar/kind) | TC-02, TC-09, TC-12, TC-13 |
+| AC-9 (a11y: contentDescription, ≥48 dp, TalkBack) | TC-11 |
+| AC-10 (API 24/31/33/34 + restrictive OEM) | TC-10, TC-15 |

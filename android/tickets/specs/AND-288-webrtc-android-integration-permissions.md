@@ -5,9 +5,10 @@ milestone: M7
 epic: E39
 priority: P0
 size: M
-status: draft
 depends_on: [AND-004]
 blocks: [AND-289, AND-290, AND-291, AND-294]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-288 — webrtc-android integration + permissions
@@ -28,7 +29,7 @@ Success means a clean `:app:assembleDebug`, the loopback sample rendering on a p
 - **Stack baseline:** Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Coroutines/Flow, minSdk 24, compileSdk/targetSdk 35, JDK 17, Gradle 8.9, AGP 8.7.3.
 - **DI baseline:** AND-004 provides `@HiltAndroidApp` and the component graph; this module contributes a `@Module @InstallIn(SingletonComponent::class)` for the `EglBase` and `PeerConnectionFactory`.
 - **WebRTC artifact:** `io.getstream:stream-webrtc-android` (Stream's maintained packaging of upstream libwebrtc; chosen over the unmaintained `org.webrtc:google-webrtc` which is removed from Maven and lacks 16KB-page / recent NDK builds). Pin to a fixed version (proposed `1.3.8`) in the catalog.
-- **Downstream owners:** `AND-289` owns the production `PeerConnection` wrapper and lifecycle; the loopback in this ticket is a throwaway sample, not that wrapper. `AND-290` owns `/signal` transport. `AND-291` owns ICE/TURN config.
+- **Downstream owners:** `AND-289` owns the production `PeerConnection` wrapper and lifecycle; the loopback in this ticket is a throwaway sample, not that wrapper. `AND-290` owns the signaling transport — the web client SENDS SDP/ICE via `POST /messaging/messages/calls/{call_id}/signal` and RECEIVES peer signaling over the messaging SSE stream (event `messaging:webrtc-signal`), so it is not a single bidirectional `/signal` channel. `AND-291` owns ICE/TURN config, fetched via `POST /messaging/messages/calls/{call_id}/turn-credentials` (verified — see §16). These downstream paths are documented here only for context; none are called by this ticket.
 - **No backend interaction** in this ticket; the dev FastAPI host is irrelevant here.
 
 ## 3. Functional Requirements
@@ -210,7 +211,7 @@ Compose hosts the two renderers via `AndroidView { SurfaceViewRenderer(it) }`; `
 
 ## 5. API Contract
 
-**Not applicable — no backend interaction in this ticket.** This is a build-wiring + native-integration + permissions ticket with a purely in-process loopback. There are no HTTP requests, no JSON shapes, and no cookie/CSRF/auth involvement. The first network contract in this epic is the signaling transport over `/signal` (SSE/poll for remote SDP/ICE), owned by **AND-290**; ICE server/TURN credential fetch (`turn-credentials`) is owned by **AND-291**. The only "contracts" this ticket defines are the in-process Kotlin/JNI surfaces in §4 (`WebRtcModule` providers, `AvPermissionsController`, `WebRtcLoopbackViewModel`).
+**Not applicable — no backend interaction in this ticket.** This is a build-wiring + native-integration + permissions ticket with a purely in-process loopback. There are no HTTP requests, no JSON shapes, and no cookie/CSRF/auth involvement. The first network contract in this epic is the signaling transport, owned by **AND-290**: outbound SDP/ICE is `POST /messaging/messages/calls/{call_id}/signal` (request `CallSignalingIn`, success `CallSignalingOut`/`SignalingAck`), and inbound peer signaling arrives over the messaging SSE stream (not poll); ICE server/TURN credential fetch is `POST /messaging/messages/calls/{call_id}/turn-credentials` (note: POST, not GET; empty body; response `TurnCredentialsOut` → `{ ttl_seconds, expires_at, ice_servers[] }`), owned by **AND-291**. Both require `Authorization: Bearer` + `X-SESSION-ID` (and, in the web client, an `X-CSRF-Token` from the `ui_csrf` cookie with `credentials: include`). The only "contracts" this ticket defines are the in-process Kotlin/JNI surfaces in §4 (`WebRtcModule` providers, `AvPermissionsController`, `WebRtcLoopbackViewModel`).
 
 ## 6. Data & State Management
 
@@ -316,3 +317,87 @@ Foundation/lifecycle tests for the *production* wrapper and signaling are owned 
 - Unit tests (permission mapping, initializer idempotency) and instrumentation tests (`WebRtcLinkTest`, `LoopbackRenderTest`, `LoopbackLifecycleTest`) implemented and green; render/lifecycle tests gated to device-capable runners.
 - Logging facade wired with the specified levels; WebRTC internal tracing disabled; debug-only WebRTC logging.
 - All acceptance criteria in §14 verified; code reviewed and merged to `android-port`; CI `assembleDebug` + unit tests pass; no new R8/lint regressions.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. "framework ref" marks Android/library documentation choices that are not in the backend/frontend sources.
+
+1. **Claim:** This ticket makes no backend HTTP calls; the first network contract in the epic belongs to AND-290/AND-291. **VERDICT: Verified.** No WebRTC/signaling endpoint is invoked by build-wiring/permissions code. The only related endpoints in the API surface are the messaging call endpoints below, which are out of scope here. Source: OpenAPI index has no generic `/signal` or `/webrtc` foundation endpoint; only `POST /messaging/messages/calls/{call_id}/signal` and `POST /messaging/messages/calls/{call_id}/turn-credentials` exist, both consumed only by call features (`src/hooks/useRtcPeerConnection.ts`).
+
+2. **Claim (corrected):** Downstream signaling is "`/signal` transport (SSE/poll for remote SDP/ICE)". **VERDICT: Corrected.** Outbound signaling is `POST /messaging/messages/calls/{call_id}/signal`; inbound peer signaling is delivered over the messaging SSE stream (custom event `messaging:webrtc-signal`), not a poll and not the same `/signal` URL. Source: OpenAPI `POST /messaging/messages/calls/{call_id}/signal` (op=send_signaling_event...; req=`CallSignalingIn`; resp=200:`CallSignalingOut`); `src/api/endpoints/messaging.ts: sendSignalingEvent` (line 1043, `POST /messaging/messages/calls/${callId}/signal`); `src/hooks/useRtcPeerConnection.ts` (window event `messaging:webrtc-signal`, line ~355).
+
+3. **Claim (corrected):** TURN/ICE credentials fetched via "`turn-credentials`" (method unspecified, implied GET). **VERDICT: Corrected.** It is a **POST with an empty body**: `POST /messaging/messages/calls/{call_id}/turn-credentials`. Source: OpenAPI `POST /messaging/messages/calls/{call_id}/turn-credentials` (op=issue_turn_credentials_endpoint...; resp=200:`TurnCredentialsOut`); `src/api/endpoints/messaging.ts: fetchTurnCredentials` (line 1065, `api.post(... , {})`).
+
+4. **Claim:** TURN response shape used downstream by AND-291. **VERDICT: Verified.** `TurnCredentialsResp = { ttl_seconds: number; expires_at: number; ice_servers: TurnIceServer[] }`, where `TurnIceServer = { urls: string[]; username: string; credential: string }`. Source: `src/api/types.ts`/`src/api/endpoints/messaging.ts: TurnCredentialsResp, TurnIceServer` (lines 1053–1063); OpenAPI schema `TurnCredentialsOut`.
+
+5. **Claim:** Signaling/TURN endpoints require auth (relevant to downstream AND-290/291 context, not this ticket). **VERDICT: Verified.** Both require `authorization` and `X-SESSION-ID` params; the web transport also attaches `X-CSRF-Token` from the `ui_csrf` cookie and sends `credentials: "include"`. Source: OpenAPI index `params=call_id,authorization,X-SESSION-ID` for both endpoints; `src/api/client.ts` (Authorization Bearer line 158–159, `X-CSRF-Token` from `ui_csrf` line 168–170, `credentials: "include"` line 124/183/220).
+
+6. **Claim:** The web client negotiates with **unified-plan** SDP semantics; the loopback should set `sdpSemantics = UNIFIED_PLAN`. **VERDICT: Verified (web) / framework ref (Android).** Web uses unified-plan (browser default, noted explicitly). Source: `src/hooks/useRtcPeerConnection.ts` line ~139 ("Use unified-plan (default in modern browsers)"). Android equivalent `PeerConnection.RTCConfiguration.sdpSemantics = UNIFIED_PLAN`: framework ref (org.webrtc API).
+
+7. **Claim:** ICE candidates must be buffered until the remote description is set, then flushed. **VERDICT: Verified.** The web client implements an explicit ICE candidate buffer flushed after `setRemoteDescription`. The loopback's in-process cross-wiring must preserve this ordering. Source: `src/lib/webrtc.ts: createIceCandidateBuffer` (lines 106–135); `src/hooks/useRtcPeerConnection.ts` `iceBuffer.flush(pc)` after `setRemoteDescription` (lines 296–297, 327).
+
+8. **Claim:** `getUserMedia` permission-denied surfaces as a distinct error the UI must handle (parallels Android runtime-permission deny). **VERDICT: Verified (web analogue).** Web maps `NotAllowedError` → permission denied, `NotFoundError` → no device. Android uses runtime permissions instead, but the deny/no-device UX requirement is mirrored. Source: `src/lib/webrtc.ts: acquireLocalMedia` (lines 15–41); `src/hooks/useRtcPeerConnection.ts` NotAllowedError mapping (lines 164–168).
+
+9. **Claim:** Artifact is `io.getstream:stream-webrtc-android`; `org.webrtc:google-webrtc` is unmaintained/unpublished. **VERDICT: Unverified-assumption.** Not present in any backend/frontend source (the web client uses the browser's native WebRTC, not a Maven artifact). This is an Android packaging decision. framework ref: Stream `stream-webrtc-android` (Maven `io.getstream:stream-webrtc-android`). The specific version `1.3.8` and its 16KB-page `.so` alignment for targetSdk 35 remain to be confirmed at implementation time (already flagged as R1).
+
+10. **Claim:** `PeerConnectionFactory.initialize(...)` must run exactly once before factory/EglBase use; `EglBase`/`PeerConnectionFactory` are heavyweight native singletons. **VERDICT: Unverified-assumption (framework ref).** Consistent with the org.webrtc contract but not verifiable from the provided sources. framework ref: org.webrtc `PeerConnectionFactory.initialize` / `EglBase`.
+
+11. **Claim:** Runtime permissions `CAMERA` + `RECORD_AUDIO` are "dangerous" and must be requested at point-of-use; permanent denial detected via `shouldShowRequestPermissionRationale`. **VERDICT: Unverified-assumption (framework ref).** Standard Android behavior, not in the provided sources; OEM/API variance is correctly flagged in R3. framework ref: Android permissions API (`ActivityResultContracts.RequestMultiplePermissions`, `ActivityCompat#shouldShowRequestPermissionRationale`, `Settings.ACTION_APPLICATION_DETAILS_SETTINGS`).
+
+12. **Claim:** Stack baseline (Kotlin 2.0.21, compileSdk/targetSdk 35, minSdk 24, AGP 8.7.3, Gradle 8.9, Hilt/KSP). **VERDICT: Unverified-assumption.** No Android build files are in the provided reference set (frontend is TS/React); inherited from AND-004 / project setup tickets. Cannot be verified against backend/frontend sources.
+
+13. **Claim:** Loopback performs offer/answer/ICE entirely in-process with empty `iceServers` and renders the remote track to a `SurfaceViewRenderer`. **VERDICT: Unverified-assumption (framework ref).** Pure Android/org.webrtc design; not represented in the web sources (the web app always uses real signaling + TURN). framework ref: org.webrtc `PeerConnection`, `SurfaceViewRenderer`, `Camera2Enumerator`.
+
+### Corrections made
+- §2 "Downstream owners": replaced the inaccurate "`AND-290` owns `/signal` transport" with the real send path `POST /messaging/messages/calls/{call_id}/signal` plus the SSE inbound channel; noted TURN is fetched via the verified POST endpoint.
+- §5 "API Contract": replaced "signaling transport over `/signal` (SSE/poll…)" and the GET-implying "`turn-credentials`" with the verified methods/paths/schemas (`CallSignalingIn`/`CallSignalingOut`, `TurnCredentialsOut`), corrected TURN to **POST empty-body**, corrected inbound transport to **SSE (not poll)**, and added the real auth requirements (`Authorization` + `X-SESSION-ID` + web `X-CSRF-Token`/`ui_csrf`/`credentials: include`).
+- Frontmatter: removed duplicate `status` key, set `status: reviewed`, added `reviewed_on: 2026-06-06`.
+- No factual errors were found in the core build-wiring, DI, permission, lifecycle, or loopback designs (claims 9–13 are framework-level and remain as documented assumptions, not corrections).
+
+### Open assumptions
+- **Artifact + version (claim 9):** `io.getstream:stream-webrtc-android` `1.3.8` and its 16KB-page `.so` alignment — not in sources; must be confirmed against Maven at implementation (R1).
+- **org.webrtc lifecycle/init/render contracts (claims 6 Android-half, 10, 13):** verifiable only against org.webrtc docs/source, which are outside the provided reference set.
+- **Android permission semantics + permanent-denial heuristic (claim 11):** framework behavior with documented OEM variance (R3); not in sources.
+- **Android build baseline (claim 12):** no Gradle/build files in the reference set; inherited from AND-004.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **AVD test35** = headless emulator, API 35 x86_64 (CI); **A15** = physical Samsung Galaxy A15 5G (SM-A156U, R5CX821TA9R), API 34 arm64-v8a. Hardware/ABI-dependent cases MUST run on **A15**; fast logic/UI cases run on JVM or AVD.
+
+- **TC-AND-288-01** — Type: unit (JVM). Target: JVM. Preconditions: `PeerConnectionFactoryInitializer` with mocked static `PeerConnectionFactory.initialize`. Steps: invoke `ensureInitialized(ctx)` from N concurrent threads, then again single-threaded. Expected: `initialize` is called exactly once; no exception; second-pass is a no-op. Traces: AC-2 (runtime link guard), AC under R5.
+
+- **TC-AND-288-02** — Type: unit (JVM). Target: JVM. Preconditions: permission status mapper. Steps: feed the matrix (granted bool × shouldShowRationale bool × wasRequested bool). Expected: maps to `GRANTED`/`DENIED`/`PERMANENTLY_DENIED`/`NOT_REQUESTED`; the (denied=true, rationale=false, wasRequested=true) case → `PERMANENTLY_DENIED`. Traces: AC-3, AC-4.
+
+- **TC-AND-288-03** — Type: unit (JVM). Target: JVM. Preconditions: `AvPermissionsState`. Steps: evaluate `allGranted` across camera×mic status combinations. Expected: true only when both `GRANTED`. Traces: AC-3, AC-4.
+
+- **TC-AND-288-04** — Type: integration/build. Target: CI build host (Gradle). Preconditions: `webrtc-android` in `libs.versions.toml`, `api(libs.webrtc.android)` in `core-webrtc`, `:core-webrtc` in `settings.gradle.kts`. Steps: run `:core-webrtc:assembleDebug` then `:app:assembleDebug`. Expected: both succeed; `org.webrtc.*` types resolve in a consumer module (compile-only smoke). Traces: AC-1.
+
+- **TC-AND-288-05** — Type: contract/MockWebServer. Target: JVM (Robolectric/MockWebServer). Preconditions: none — this is a **negative network assertion** for the foundation. Steps: instrument `core-webrtc` runtime with a MockWebServer/OkHttp interceptor (or static scan) while driving loopback start/stop. Expected: **zero** HTTP requests issued; no Retrofit/OkHttp dependency is reachable from `core-webrtc`. Traces: AC-8.
+
+- **TC-AND-288-06** — Type: instrumented/e2e. Target: **A15 (MUST)**. Preconditions: Hilt test component; app installed on arm64-v8a device. Steps: inject `PeerConnectionFactory` via the test graph and construct it. Expected: non-null factory; **no `UnsatisfiedLinkError`** (JNI loads for arm64-v8a); INFO log records ABI + webrtc version. Traces: AC-2. (Rerun on AVD test35 to cover x86_64 per AC-2.)
+
+- **TC-AND-288-07** — Type: instrumented/e2e. Target: **AVD test35** (x86_64 leg of AC-2). Preconditions: API 35 emulator. Steps: same factory-injection link assertion as TC-06. Expected: factory constructs without `UnsatisfiedLinkError` on x86_64; confirms both ABI legs of AC-2 and surfaces API-34-vs-35 init differences. Traces: AC-2.
+
+- **TC-AND-288-08** — Type: instrumented/e2e (render). Target: **A15 (MUST — real front camera)**. Preconditions: `GrantPermissionRule` for `CAMERA`+`RECORD_AUDIO`; loopback screen launched. Steps: drive `start(localRenderer, remoteRenderer)`; attach a frame listener to the remote renderer; wait up to timeout. Expected: `uiState` reaches `LoopbackUiState.Rendering`; remote renderer receives ≥1 frame. Traces: AC-5. (Emulator camera is unreliable per R4 → physical device required.)
+
+- **TC-AND-288-09** — Type: Compose-UI / instrumented. Target: AVD test35 (no camera needed). Preconditions: permissions NOT yet granted; loopback opened. Steps: observe that the runtime permission prompt for CAMERA+RECORD_AUDIO appears **on opening the sample**, not at app launch; verify app launch alone triggered no prompt. Expected: in-context prompt shown; `start()` is a no-op emitting `AwaitingPermission` until granted. Traces: AC-3.
+
+- **TC-AND-288-10** — Type: Compose-UI / instrumented. Target: AVD test35. Preconditions: loopback opened. Steps: deny the permission once → assert rationale + "request again" affordance; deny permanently (set rationale=false) → assert Settings deep-link affordance; tap it → assert `Settings.ACTION_APPLICATION_DETAILS_SETTINGS` intent fired; simulate grant-in-Settings and `ON_RESUME` → assert state re-checks and reaches rendering path without activity restart. Expected: all three branches behave as specified; never crashes. Traces: AC-4. (For real OEM heuristic behavior per R3, smoke-rerun on A15.)
+
+- **TC-AND-288-11** — Type: instrumented (lifecycle/leak). Target: **A15 (MUST — real capturer threads)**. Preconditions: permissions granted; loopback rendering. Steps: perform start→stop→start cycles and an activity recreation mid-negotiation; capture capturer/`SurfaceTextureHelper` thread count and surface handles before/after. Expected: thread count returns to baseline; no leaked surfaces; no `EglBase` re-init crash; singletons survive recreation. Traces: AC-6.
+
+- **TC-AND-288-12** — Type: instrumented (error path / offline-analogue). Target: AVD test35 (no camera). Preconditions: emulator with no usable front camera (the R4 flaky-host condition). Steps: open loopback with permissions granted and `Camera2Enumerator` reporting no front device. Expected: graceful `LoopbackUiState.Failed("No camera available")`; no crash; resources released; ERROR logged. Traces: AC-5 (negative), AC-6. (This deliberately exercises the device-absent/“flaky dev host” path on the emulator.)
+
+- **TC-AND-288-13** — Type: security/release-hygiene. Target: CI build host + AVD test35. Preconditions: `release` variant assembled. Steps: assemble release; inspect that `WebRtcLoopbackScreen` and its debug nav entry are absent (debug source set / `BuildConfig.DEBUG` gate); verify R8 keep rule `-keep class org.webrtc.** { *; }` is applied (no stripped JNI symbols → smoke factory init in a release-shrunk test build). Expected: no loopback/camera-capture path in release; no `NoSuchMethodError` from R8 stripping. Traces: AC-7, AC-2 (release link safety).
+
+- **TC-AND-288-14** — Type: Compose-UI (accessibility) + manual. Target: AVD test35 (automated) + A15 (TalkBack manual). Preconditions: permission UI + loopback shown. Steps: assert `contentDescription` on both `SurfaceViewRenderer` `AndroidView`s ("Local camera preview"/"Remote loopback video"); grant/open-settings touch targets ≥ 48dp; strings sourced from `strings.xml` (no hardcoded text); WCAG AA contrast on rationale/error; TalkBack focus order is sensible (manual on A15). Expected: all a11y checks pass. Traces: AC-3, AC-4 (permission UI quality).
+
+### Coverage matrix (§14 AC → TCs)
+- AC-1 (build / `api` wiring): TC-04
+- AC-2 (runtime link, no `UnsatisfiedLinkError`, arm64 + x86_64): TC-01, TC-06 (arm64, MUST device), TC-07 (x86_64), TC-13 (release link safety)
+- AC-3 (in-context permission prompt): TC-02, TC-03, TC-09, TC-14
+- AC-4 (deny/permanent-deny/Settings round-trip): TC-02, TC-03, TC-10, TC-14
+- AC-5 (loopback reaches Rendering, ≥1 frame): TC-08 (MUST device), TC-12 (negative no-camera)
+- AC-6 (no thread/surface leak across lifecycle): TC-11 (MUST device), TC-12
+- AC-7 (sample/nav absent from release): TC-13
+- AC-8 (no network during loopback): TC-05

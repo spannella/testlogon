@@ -5,7 +5,8 @@ milestone: M7
 epic: E40
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: [AND-289, AND-290, AND-291, AND-292]
 ---
@@ -196,13 +197,23 @@ data class CallInviteIn(
 The `payload` field on `CallSignalingIn` uses Moshi's built-in
 `Map<String, Any?>` adapter (already available via the standard `Moshi` from
 AND-010; if a Kotlin `Any` adapter is needed it is registered there, not in this
-ticket). A small enum-like `object CallSignalType` of `String` constants
-(`"offer"`, `"answer"`, `"ice"`, `"bye"`) is provided for caller convenience but
-the wire field stays a raw `String` to remain forward-compatible.
+ticket). A small enum-like `object CallSignalType` of `String` constants is provided for
+caller convenience but the wire field stays a raw `String` to remain
+forward-compatible. **Correction (review):** the actual signaling `type` values
+are dotted `webrtc.*` tokens, not bare words. The OpenAPI `CallSignalingIn.type`
+field is regex-constrained to exactly
+`^(webrtc\.offer|webrtc\.answer|webrtc\.ice_candidate|webrtc\.screen_share_start|webrtc\.screen_share_stop)$`,
+confirmed by the web client (`src/api/endpoints/messaging.ts: SignalingPayload`
+and `src/hooks/useRtcPeerConnection.ts`). There is no `"bye"`/`"ice"` token.
 
 ```kotlin
-object CallSignalType { const val OFFER="offer"; const val ANSWER="answer"
-    const val ICE="ice"; const val BYE="bye" }
+object CallSignalType {
+    const val OFFER = "webrtc.offer"
+    const val ANSWER = "webrtc.answer"
+    const val ICE_CANDIDATE = "webrtc.ice_candidate"
+    const val SCREEN_SHARE_START = "webrtc.screen_share_start"
+    const val SCREEN_SHARE_STOP = "webrtc.screen_share_stop"
+}
 
 object IdempotencyKey { fun new(): String = UUID.randomUUID().toString() }
 ```
@@ -257,13 +268,13 @@ shared interceptors (AND-011/012); not modeled per-call.
 **POST `…/{call_id}/signal`** → `200 CallSignalingOut` | `400/403/404/409/429/503
 CallSignalingErrorOut` | `422`
 ```jsonc
-// CallSignalingIn
-{ "type":"offer", "event_id":"evt_01H...", "conversation_id":"conv_123",
-  "recipient_user_id":"u_456", "nonce":"n_abc", "sent_at":1733400000,
+// CallSignalingIn  (type MUST be a dotted webrtc.* token; nonce minLength=8)
+{ "type":"webrtc.offer", "event_id":"evt_01H...", "conversation_id":"conv_123",
+  "recipient_user_id":"u_456", "nonce":"nonce_abc", "sent_at":1733400000,
   "payload": { "sdp":"v=0...", "sdpMLineIndex":0 } }
-// CallSignalingOut
+// CallSignalingOut  (status is "delivered" | "duplicate")
 { "event_id":"evt_01H...", "call_id":"c_01H...", "conversation_id":"conv_123",
-  "event_type":"offer", "delivered_to":"u_456", "status":"delivered" }
+  "event_type":"webrtc.offer", "delivered_to":"u_456", "status":"delivered" }
 // CallSignalingErrorOut
 { "code":"rate_limited", "message":"too many signals" }
 ```
@@ -475,3 +486,287 @@ line coverage on the DTO + API package. Acceptance ("Call payloads map
   decision and the out-of-scope group-call endpoints.
 - Spec linked from the PR; downstream tickets (AND-289–292) updated to reference
   the concrete DTO names.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, with VERDICT and an exact source pointer. OpenAPI
+pointers reference `reference/openapi.index.txt` (METHOD/path index) and
+`reference/openapi.pretty.json` (`components.schemas.<Name>`). Frontend pointers
+reference `reference/src/…`.
+
+1. **`POST /messaging/messages/calls/invite` → 200 `CallInviteOut` | 422.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /messaging/messages/calls/invite`
+   (op `create_call_invite_…`, req=`CallInviteIn`, resp=`200:CallInviteOut;422:HTTPValidationError`).
+2. **`POST …/{call_id}/accept` → `CallActionOut` (req `CallAcceptIn`).** VERDICT:
+   Verified. SOURCE: OpenAPI `POST /messaging/messages/calls/{call_id}/accept`;
+   frontend `src/api/endpoints/messaging.ts: acceptCall`.
+3. **`POST …/{call_id}/decline` → `CallActionOut` (req `CallDeclineIn`).**
+   VERDICT: Verified. SOURCE: OpenAPI `POST …/{call_id}/decline`.
+4. **`POST …/{call_id}/end` → `CallActionOut` (req `CallEndIn`).** VERDICT:
+   Verified. SOURCE: OpenAPI `POST …/{call_id}/end`.
+5. **`POST …/{call_id}/timeout` → `CallActionOut` (req `CallTimeoutIn`).**
+   VERDICT: Verified. SOURCE: OpenAPI `POST …/{call_id}/timeout`.
+6. **`heartbeat` uses HTTP PATCH (not POST) → `HeartbeatOut` (req
+   `HeartbeatIn`).** VERDICT: Verified. SOURCE: OpenAPI
+   `PATCH /messaging/messages/calls/{call_id}/heartbeat`; frontend
+   `src/api/endpoints/callBilling.ts: sendCallHeartbeat` uses `api.patch`.
+7. **`billing` uses HTTP GET → `CallBillingStatusOut`.** VERDICT: Verified.
+   SOURCE: OpenAPI `GET /messaging/messages/calls/{call_id}/billing`; frontend
+   `src/api/endpoints/callBilling.ts: getCallBilling` uses `api.get`.
+8. **`POST …/{call_id}/signal` → 200 `CallSignalingOut`; 400/403/404/409/429/503
+   `CallSignalingErrorOut`; 422 `HTTPValidationError`.** VERDICT: Verified.
+   SOURCE: OpenAPI `POST …/{call_id}/signal` resp list enumerates exactly those
+   six error codes mapping to `CallSignalingErrorOut`.
+9. **`POST …/{call_id}/turn-credentials` → 200 `TurnCredentialsOut`;
+   400/403/404/409/503 `TurnCredentialErrorOut`; 422.** VERDICT: Verified. SOURCE:
+   OpenAPI `POST …/{call_id}/turn-credentials` (note: turn errors are
+   400/403/404/409/**503** — there is no 429, unlike `signal`). Frontend
+   `src/api/endpoints/messaging.ts: fetchTurnCredentials` uses `api.post` with `{}`.
+10. **`turn-credentials` is POST with an empty body (no request schema).**
+    VERDICT: Verified. SOURCE: OpenAPI index shows `req=` (empty) for that op;
+    frontend posts `{}`. The `CallApi.turnCredentials` interface method correctly
+    sends no `@Body`.
+11. **`CallInviteIn` fields: `call_id`,`conversation_id`,`callee_user_id`
+    (required); `initial_mode` default `"audio"`; `paid` default `false`;
+    `idempotency_key` nullable; `rate_cents_per_min` nullable int.** VERDICT:
+    Verified. SOURCE: schema `CallInviteIn`. Note the request field is
+    `rate_cents_per_min` while the *response* field is `rate_cents_per_minute`
+    (different spelling — both already correct in §5).
+12. **`CallInviteOut` required: `call_id`,`conversation_id`,`caller_user_id`,
+    `callee_user_id`,`state`,`initial_mode`,`start_ts`; `paid` default `false`;
+    `rate_cents_per_minute` nullable.** VERDICT: Verified. SOURCE: schema
+    `CallInviteOut`.
+13. **`CallActionOut` required: `call_id`,`conversation_id`,`state`,`event_ts`;
+    `from_state` & `reason` nullable; `voicemail_eligible` default `false`.**
+    VERDICT: Verified. SOURCE: schema `CallActionOut`.
+14. **`CallAcceptIn` = `{idempotency_key?}` only.** VERDICT: Verified. SOURCE:
+    schema `CallAcceptIn`.
+15. **`CallDeclineIn.reason` default `"declined"`.** VERDICT: Verified. SOURCE:
+    schema `CallDeclineIn`.
+16. **`CallEndIn` = `{reason default "ended", idempotency_key?}`.** VERDICT:
+    Verified. SOURCE: schema `CallEndIn`.
+17. **`CallTimeoutIn` = `{reason default "no_answer", idempotency_key?}`.**
+    VERDICT: Verified. SOURCE: schema `CallTimeoutIn`.
+18. **`HeartbeatIn` = `{client_ts?}` (nullable integer).** VERDICT: Verified.
+    SOURCE: schema `HeartbeatIn`. Web client sends epoch seconds
+    (`Math.floor(Date.now()/1000)`), confirming the `Long` epoch-second modeling.
+19. **`HeartbeatOut` required: only `call_id`; all numeric/bool fields have
+    defaults; `action` default `"ok"`; `minutes_remaining` is a JSON `number`.**
+    VERDICT: Verified. SOURCE: schema `HeartbeatOut` (`minutes_remaining` has
+    `type: number`, default `0`) — confirms R4: model as `Double`.
+20. **`CallSignalingIn` required: `type`,`event_id`,`conversation_id`,
+    `recipient_user_id`,`nonce`,`sent_at`; `payload` is a free-form object
+    (`additionalProperties: true`).** VERDICT: Verified. SOURCE: schema
+    `CallSignalingIn`; mirrors `src/api/endpoints/messaging.ts: SignalingPayload`.
+    `payload` → `Map<String, Any?>` is correct.
+21. **`CallSignalingIn.type` allowed values.** VERDICT: **Corrected.** The spec
+    previously listed bare tokens `offer/answer/ice/bye`. Actual constraint:
+    `^(webrtc\.offer|webrtc\.answer|webrtc\.ice_candidate|webrtc\.screen_share_start|webrtc\.screen_share_stop)$`.
+    SOURCE: schema `CallSignalingIn.type.pattern`; frontend
+    `src/api/endpoints/messaging.ts: SignalingPayload.type`,
+    `src/hooks/useRtcPeerConnection.ts`.
+22. **`CallSignalingIn.nonce` has `minLength: 8`** (the old example `"n_abc"` was
+    5 chars). VERDICT: Corrected (example fixed). SOURCE: schema
+    `CallSignalingIn.nonce`.
+23. **`CallSignalingOut` required: `event_id`,`call_id`,`conversation_id`,
+    `event_type`,`delivered_to`,`status`; `status` ∈ {`delivered`,`duplicate`}.**
+    VERDICT: Corrected (status enum noted). SOURCE: schema `CallSignalingOut`;
+    frontend `SignalingAck.status: "delivered" | "duplicate"`.
+24. **`CallSignalingErrorOut` = `{code, message}` (both required, flat).**
+    VERDICT: Verified. SOURCE: schema `CallSignalingErrorOut`.
+25. **`TurnCredentialsOut` = `{ttl_seconds:int, expires_at:int,
+    ice_servers:[TurnIceServerOut]}` (all required).** VERDICT: Verified. SOURCE:
+    schema `TurnCredentialsOut`; frontend `TurnCredentialsResp`.
+26. **`TurnIceServerOut` = `{urls:[string], username, credential}` (all
+    required).** VERDICT: Verified. SOURCE: schema `TurnIceServerOut`; frontend
+    `TurnIceServer`.
+27. **`TurnCredentialErrorOut` = `{detail: TurnCredentialErrorDetailOut}` where
+    detail = `{code, message}` — nested, distinct from the flat signaling error
+    shape.** VERDICT: Verified. SOURCE: schemas `TurnCredentialErrorOut` +
+    `TurnCredentialErrorDetailOut`.
+28. **`CallBillingStatusOut` required: only `call_id` and `paid`; all other
+    numeric fields default `0`, `billing_status` default `""`.** VERDICT:
+    Verified. SOURCE: schema `CallBillingStatusOut`. (The §5 example shows
+    populated values; the *required* set is just `call_id`,`paid` — non-required
+    fields should be modeled with defaults to tolerate absence.)
+29. **Auth: session is cookie-based; CSRF travels as `X-CSRF-Token`; OpenAPI
+    `authorization`/`X-SESSION-ID`/`user_sub`/`X-IMPERSONATION-TOKEN` params are
+    NOT modeled on the interface.** VERDICT: Verified. SOURCE: frontend
+    `src/api/client.ts` reads the `ui_csrf` cookie → sets header `X-CSRF-Token`,
+    sends `credentials: "include"` (cookies). OpenAPI index `params=` columns
+    list those header params on the call ops, but they are server/transport
+    concerns. Web parity confirms cookie-only auth is the working contract.
+30. **401 → single `/ui/session/refresh` retry.** VERDICT: Verified. SOURCE:
+    frontend `src/api/client.ts` calls `withApiBase("/ui/session/refresh")` with
+    `credentials: "include"` on 401.
+31. **Group-call endpoints (`/ui/calls/group/*`) exist and are out of scope.**
+    VERDICT: Verified. SOURCE: OpenAPI index lists 10 `/ui/calls/group/*` ops
+    (create/join/leave/end/media/signal/participants/active/history/{call_id}).
+    Correctly excluded from the 1:1 `/messaging/messages/calls/*` surface.
+32. **`ApiResult<T>`, Hilt provision, Moshi KSP codegen, AND-016 GET-only
+    retry.** VERDICT: Unverified-assumption (Android-side conventions, not
+    verifiable from backend/frontend sources). These mirror sibling tickets
+    AND-018/AND-010/AND-016. Framework refs: Retrofit interfaces
+    (https://square.github.io/retrofit/), Moshi codegen
+    (https://github.com/square/moshi#codegen), Hilt
+    (https://developer.android.com/training/dependency-injection/hilt-android).
+
+### Corrections made
+
+- **§4 `CallSignalType` constants** rewritten from `offer/answer/ice/bye` to the
+  five real dotted tokens (`webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate`,
+  `webrtc.screen_share_start`, `webrtc.screen_share_stop`) per the
+  `CallSignalingIn.type` regex and the web client.
+- **§5 `CallSignalingIn` example** `"type":"offer"` → `"type":"webrtc.offer"`;
+  `nonce` bumped to satisfy `minLength: 8`; added pattern/minLength notes.
+- **§5 `CallSignalingOut` example** `"event_type"` aligned to a `webrtc.*` token
+  and `status` documented as `delivered | duplicate`.
+- All endpoint paths, HTTP verbs (incl. PATCH heartbeat / GET billing), request
+  and response schemas, field names, nullability, and defaults in §3–§5 were
+  re-checked and found accurate; no further changes required.
+
+### Open assumptions
+
+- **OA-1 — Android transport stack** (`ApiResult<T>`, Hilt module, Moshi KSP,
+  `MoshiCodegen`, 20s timeouts, AND-016 retry interceptor, redacting logging
+  interceptor). Cannot be verified from backend OpenAPI or the web client; these
+  are inherited from AND-010/015/016/018/027 and are framework-convention
+  assumptions (claim 32).
+- **OA-2 — Cookie-only acceptance on the dev host.** The backend declares
+  `authorization`/`X-SESSION-ID` header params; the web client succeeds with
+  cookies + `X-CSRF-Token` only. We assume the Android cookie jar is accepted
+  identically on `18.222.237.167:8000`; not independently confirmed against a
+  live exchange (matches §13 R2).
+- **OA-3 — `idempotency_key` server dedup semantics** (window/scope) are
+  undocumented in OpenAPI; downstream retry behavior depends on them (§13 R6).
+- **OA-4 — `signal` payload envelope key set.** OpenAPI types `payload` as an
+  open object; the exact SDP/ICE envelope keys the server expects are not in the
+  schema (§13 R1). Modeling as `Map<String, Any?>` is a deliberate pass-through.
+
+## 17. Test Plan
+
+All cases live in `core-network` unit/contract suites unless noted. Contract
+cases use the AND-046 MockWebServer harness with fixtures under
+`core-network/src/test/resources/fixtures/call/`. Since this ticket is a pure
+network-contract layer (no UI, no device sensors), the JVM/Robolectric target
+covers nearly everything; emulator/physical-device targets are only relevant for
+the dev-host reachability and ABI smoke cases.
+
+- **TC-AND-295-01 — Round-trip serialization of every DTO.** Type:
+  unit (JVM). Target: JVM unit/Robolectric. Preconditions: project `Moshi`
+  instance; one captured fixture per response DTO. Steps: for each request DTO,
+  build Kotlin object → serialize → assert JSON equals fixture; for each response
+  DTO, deserialize fixture → assert field-by-field equality; serialize back and
+  assert stable. Expected: byte/structure-stable round-trip for `CallInviteIn/Out`,
+  `CallAcceptIn`, `CallDeclineIn`, `CallEndIn`, `CallTimeoutIn`, `CallActionOut`,
+  `HeartbeatIn/Out`, `CallSignalingIn/Out`, `CallSignalingErrorOut`,
+  `TurnCredentialsOut`, `TurnIceServerOut`, `TurnCredentialErrorOut`,
+  `TurnCredentialErrorDetailOut`, `CallBillingStatusOut`. Traces: AC-2, AC-3.
+- **TC-AND-295-02 — Default-value emission.** Type: unit (JVM). Target: JVM unit.
+  Preconditions: none. Steps: serialize `CallInviteIn(callId,conversationId,
+  calleeUserId)` with all defaults; serialize `CallDeclineIn()`, `CallEndIn()`,
+  `CallTimeoutIn()`. Expected: emitted JSON contains `"initial_mode":"audio"`,
+  `"paid":false`; `CallDeclineIn` → `"reason":"declined"`; `CallEndIn` →
+  `"reason":"ended"`; `CallTimeoutIn` → `"reason":"no_answer"`. Traces: AC-3.
+- **TC-AND-295-03 — Nullable & absent-key handling.** Type: unit (JVM). Target:
+  JVM unit. Preconditions: none. Steps: serialize objects with `idempotency_key`,
+  `rate_cents_per_min`, `client_ts` = null and assert keys present-with-null (or
+  omitted, per adapter config — assert the chosen policy); deserialize
+  `CallActionOut` fixtures with `from_state`/`reason` absent and present-null.
+  Expected: nullable Kotlin fields deserialize to `null` for both absent and
+  explicit-null keys; no exception. Traces: AC-2, AC-3.
+- **TC-AND-295-04 — Required-field-missing rejection.** Type: unit (JVM). Target:
+  JVM unit. Preconditions: none. Steps: attempt to deserialize a `CallInviteOut`
+  fixture missing the required `start_ts`; same for `CallSignalingIn` missing
+  `nonce`. Expected: Moshi raises `JsonDataException` (required field absent),
+  proving non-null modeling of required fields. Traces: AC-2.
+- **TC-AND-295-05 — Endpoint verb/path/content-type/CSRF (MockWebServer).** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: `CallApi` bound to a
+  MockWebServer base URL with the real CSRF interceptor + a seeded `ui_csrf`
+  cookie. Steps: invoke each of the nine methods with a 200 stub; inspect each
+  `RecordedRequest`. Expected: `invite`=POST `…/calls/invite`; `accept/decline/
+  end/timeout/signal/turn-credentials`=POST `…/calls/{id}/…` with the supplied
+  `call_id` substituted; `heartbeat`=PATCH; `billing`=GET; bodied requests carry
+  `Content-Type: application/json`; `turn-credentials` sends an empty/`{}` body;
+  every request carries an `X-CSRF-Token` header. Traces: AC-1, AC-4.
+- **TC-AND-295-06 — Free-form signaling payload pass-through.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: `CallSignalingIn` with
+  `type="webrtc.offer"` and a nested `payload` map (`{sdp, sdpMLineIndex,
+  candidate:{…}}`). Steps: POST via `signal`; capture request body and also
+  round-trip the payload. Expected: nested `payload` object is transmitted with
+  no structural loss (key-order tolerant); `type` serializes as the dotted token.
+  Traces: AC-3, AC-5.
+- **TC-AND-295-07 — Signaling `type` token validity.** Type: unit (JVM). Target:
+  JVM unit. Preconditions: `CallSignalType` constants. Steps: assert each constant
+  matches the backend regex
+  `^(webrtc\.offer|webrtc\.answer|webrtc\.ice_candidate|webrtc\.screen_share_start|webrtc\.screen_share_stop)$`;
+  assert serializing `CallSignalingIn(type=CallSignalType.OFFER,…)` emits
+  `"type":"webrtc.offer"` (regression guard for the corrected tokens). Expected:
+  all five constants match; no bare `offer`/`ice`/`bye` token exists. Traces:
+  AC-2, AC-3.
+- **TC-AND-295-08 — Typed signaling error body parsing.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: enqueue HTTP 429 with
+  body `{"code":"rate_limited","message":"too many signals"}`. Steps: call
+  `signal`; inspect the `ApiResult` error branch. Expected: error branch exposes a
+  parsed `CallSignalingErrorOut` with `code="rate_limited"`,
+  `message="too many signals"`; caller can switch on `code`. Repeat for 404
+  `{"code":"not_found",…}` and 409 `{"code":"conflict",…}`. Traces: AC-5.
+- **TC-AND-295-09 — Typed TURN error body (nested `detail`).** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: enqueue HTTP 404 with
+  `{"detail":{"code":"call_not_active","message":"no active call"}}`. Steps: call
+  `turnCredentials`; inspect error branch. Expected: parsed `TurnCredentialErrorOut`
+  with `detail.code="call_not_active"`, `detail.message="no active call"`;
+  distinct from the flat signaling shape. Verify a 503 case parses the same way.
+  Traces: AC-5.
+- **TC-AND-295-10 — Generic 422 `HTTPValidationError` mapping.** Type:
+  contract/MockWebServer. Target: JVM unit. Preconditions: enqueue HTTP 422 with a
+  FastAPI `{"detail":[{"loc":["body","call_id"],"msg":"field required","type":
+  "value_error.missing"}]}`. Steps: call `invite`. Expected: routed through the
+  AND-015 error mapper to the generic validation error (not a typed call error).
+  Traces: AC-5.
+- **TC-AND-295-11 — TURN/SDP log redaction.** Type: contract/MockWebServer.
+  Target: JVM unit (Robolectric for the logging interceptor if needed).
+  Preconditions: the AND-009/052 redacting logging interceptor installed; a test
+  log sink. Steps: call `turnCredentials` (200 with username/credential) and
+  `signal` (200, SDP in payload); capture interceptor output. Expected: request
+  and response bodies for `…/turn-credentials` and `…/signal` are replaced with
+  `<redacted>`; `username`, `credential`, and SDP text never appear in logs.
+  Traces: AC-6.
+- **TC-AND-295-12 — Retry eligibility (GET-only).** Type: contract/MockWebServer.
+  Target: JVM unit. Preconditions: AND-016 retry interceptor active; MockWebServer
+  enqueues one 503 then one 200 per endpoint. Steps: call `billing` (GET) and
+  `accept`/`signal` (POST). Expected: `billing` is retried once and ultimately
+  succeeds (2 recorded requests); POST/PATCH ops are NOT retried (1 recorded
+  request, surfaced as a failed `ApiResult`). Traces: AC-7.
+- **TC-AND-295-13 — Flaky/offline dev-host path.** Type: integration. Target:
+  Headless emulator AVD `test35` (API 35) reaching the real dev host
+  `http://18.222.237.167:8000`, run only in the integration profile. Preconditions:
+  network toggled off, then a slow/timeout host. Steps: call `billing` and
+  `signal` with no connectivity, then with an induced read timeout (~20s).
+  Expected: each returns a failed `ApiResult` (IO/timeout) without crashing; no
+  partial/garbage deserialization; cleartext HTTP to the dev host is permitted by
+  the dev network-security config. Traces: AC-1, AC-7. (Emulator suffices — no
+  device-specific hardware involved; may also be smoke-checked on the physical
+  Galaxy A15 to confirm arm64 cleartext behavior.)
+- **TC-AND-295-14 — ABI / API-level DTO smoke on physical device.** Type:
+  instrumented/e2e. Target: PHYSICAL DEVICE Samsung Galaxy A15 5G (SM-A156U,
+  serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). Preconditions: app debug
+  build installed via adb. Steps: run the round-trip serialization + endpoint
+  contract suite (subset of TC-01/05) as an instrumented test on-device. Expected:
+  Moshi KSP-generated adapters behave identically on arm64-v8a/API 34 as on the
+  x86_64/API 35 emulator and JVM (no JSON number-precision or codegen ABI
+  divergence, esp. `minutes_remaining` Double). MUST run on the physical device
+  to catch arm64-vs-x86 / API-34-vs-35 differences. Traces: AC-3, AC-8.
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+| --- | --- |
+| AC-1 (`CallApi` nine ops, verbs/paths, `ApiResult`, Hilt) | TC-05, TC-13 |
+| AC-2 (all request/response DTOs with `@Json` names & nullability) | TC-01, TC-03, TC-04, TC-07 |
+| AC-3 (call payloads map; defaults & nullables tested) | TC-01, TC-02, TC-03, TC-06, TC-07, TC-14 |
+| AC-4 (MockWebServer verb/path/`call_id`/content-type/CSRF) | TC-05 |
+| AC-5 (typed signaling & TURN error bodies parse) | TC-08, TC-09, TC-10 |
+| AC-6 (TURN/signaling bodies redacted in logs) | TC-11 |
+| AC-7 (`billing` GET retry only; POST/PATCH excluded) | TC-12, TC-13 |
+| AC-8 (tests green in CI; ktlint/detekt clean) | TC-14 (+ all TCs run in CI per AND-050) |
