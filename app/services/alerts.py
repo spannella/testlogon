@@ -803,7 +803,11 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
                     lines.append(json.dumps(payload, indent=2)[:4000])
                     send_alert_email(emails, subj, "\n".join(lines))
     except Exception:
-        pass
+        # GAP-0325: do NOT silently swallow email fanout failures (security
+        # alert emails like new-device login / MFA changes could vanish with
+        # no trace). Log and continue to the other channels (SMS/webhook) so
+        # a single channel failure does not break multi-channel fanout.
+        logger.exception("alert email fanout failed")
 
     # Optional SMS fanout
     try:

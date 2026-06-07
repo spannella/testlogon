@@ -211,6 +211,11 @@ class Settings:
     sms_daily_limit_per_number: int = int(os.environ.get("SMS_DAILY_LIMIT_PER_NUMBER", "10"))
     sms_suppression_enabled: bool = os.environ.get("SMS_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
     sms_cost_per_segment_usd: float = float(os.environ.get("SMS_COST_PER_SEGMENT_USD", "0.00645"))
+    # Global platform-wide daily SMS spend cap in USD (SEC-014 / GAP-0326).
+    # 0 = disabled (default; backward compatible — no behaviour change). When set
+    # to a positive value, send_sms() returns status="rate_limited" for all
+    # outbound SMS once the estimated cumulative daily segment cost reaches it.
+    sms_daily_cost_cap_usd: float = float(os.environ.get("SMS_DAILY_COST_CAP_USD", "0"))
 
     alerts_webhook_url: str = os.environ.get("ALERTS_WEBHOOK_URL", "")
     alerts_webhook_secret: str = os.environ.get("ALERTS_WEBHOOK_SECRET", "")
