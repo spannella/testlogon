@@ -100,7 +100,7 @@ async function getCSSVar(page: Page, name: string): Promise<string> {
  */
 async function resetServerPreferences(_page: Page) {
   try {
-    const { execSync: ex } = require("child_process");
+    const ex = execSync;
     ex(
       `python3 -c "
 import boto3
@@ -125,7 +125,7 @@ table.update_item(Key={'user_sub': 'e2e_alice@test.local'}, UpdateExpression='RE
  * is committed before the page reload re-hydrates from the server.
  */
 async function resetServerDensityToDefault() {
-  const { execSync: ex } = require("child_process");
+  const ex = execSync;
   ex(
     `python3 -c "
 import boto3, time

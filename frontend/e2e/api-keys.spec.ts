@@ -534,7 +534,7 @@ test.describe("8. Capability scopes", () => {
     await expect(details.getByText("Scopes", { exact: true })).toBeVisible();
     await expect(details.getByText("ads:read")).toBeVisible();
     await expect(details.getByText("ads:manage")).not.toBeVisible();
-    await details.getByRole("button", { name: "Close" }).click();
+    await details.getByRole("button", { name: "Close" }).first().click();
   });
 
   test("POST /ui/api_keys honours a scoped capabilities list", async () => {

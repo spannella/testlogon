@@ -66,10 +66,13 @@ async function injectAuth(page: Page, userId = ALICE_ID) {
   // ProtectedRoute gates on the persisted auth-store; cookies alone are not
   // enough for UI navigation. Seed the zustand auth-store so UI routes render.
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
-  await page.evaluate((uid: string) => {
-    const state = { userId: uid, accessToken: null, isAuthenticated: true };
-    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
+  await page.evaluate(
+    ({ uid, token }: { uid: string; token: string }) => {
+      const state = { userId: uid, accessToken: token, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    { uid: userId, token: session.access_token },
+  );
 }
 
 function csrfHeader(userId: string) {

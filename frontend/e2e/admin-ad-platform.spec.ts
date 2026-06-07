@@ -67,10 +67,15 @@ async function injectAuth(page: Page, identity: string) {
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
-  await page.evaluate((uid: string) => {
-    const state = { userId: uid, accessToken: null, isAuthenticated: true };
-    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, session.user_sub);
+  // Seed the auth-store WITH the real access token so role-aware UI (e.g. the
+  // ROOT-only Emergency Controls tab, gated on getRoleFromAccessToken) renders.
+  await page.evaluate(
+    ({ uid, token }: { uid: string; token: string }) => {
+      const state = { userId: uid, accessToken: token, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    { uid: session.user_sub, token: session.access_token },
+  );
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
