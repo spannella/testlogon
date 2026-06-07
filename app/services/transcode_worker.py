@@ -94,6 +94,23 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         return
 
     logger.info("Claimed transcode job %s", job_id)
+
+    # GAP-0369: Advance video metadata status to "encoding" now that the job is
+    # claimed. The state machine requires pending_encoding -> encoding before the
+    # completion transition to pending_review can succeed.
+    try:
+        from app.services.video_metadata_store import (
+            transition_video_status as _transition_to_encoding,
+        )
+
+        _transition_to_encoding(video_id=job["video_id"], to_status="encoding")
+    except Exception:
+        logger.warning(
+            "Could not transition video %s to encoding after claim",
+            job["video_id"],
+            exc_info=True,
+        )
+
     scratch_dir = Path(S.transcode_scratch_dir) / job_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -202,7 +219,10 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         )
         logger.info("Transcode job %s completed successfully", job_id)
 
-        # Transition video to published if video_metadata store is available.
+        # GAP-0369: Transition video to pending_review on completion (NOT
+        # published — encoding -> published is an illegal transition and the
+        # video must pass the human review gate pending_review -> approved ->
+        # published before public distribution).
         # GAP-0034: also persist the playback URL, thumbnail, and rendition
         # metadata so the listing/playback APIs (which gate on hls_manifest_url)
         # expose a playable video.
@@ -233,14 +253,14 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
 
             transition_video_status(
                 video_id=job["video_id"],
-                to_status="published",
+                to_status="pending_review",
                 hls_manifest_url=manifest_url,
                 thumbnail_url=thumb_url,
                 renditions=rendition_list or None,
             )
         except Exception:
             logger.warning(
-                "Could not transition video %s to published",
+                "Could not transition video %s to pending_review",
                 job["video_id"],
                 exc_info=True,
             )
