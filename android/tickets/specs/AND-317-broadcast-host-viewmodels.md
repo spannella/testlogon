@@ -5,9 +5,10 @@ milestone: M7
 epic: E41
 priority: P1
 size: L
-status: draft
 depends_on: [AND-308]
 blocks: [AND-318]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-317 — Broadcast host ViewModels
@@ -47,7 +48,7 @@ FR-5. The ViewModel must reflect the WebRTC ingest connection status from AND-30
 
 FR-6. The ViewModel derives a `HostHealth` snapshot (uptime, ingest state, dropped-frame/bitrate hints when supplied, last-error) on a periodic health tick while `Live`/`Paused`/`Reconnecting`, exposed within the state object for AND-309's health report UI.
 
-FR-7. Session lifecycle must survive process death / config change: persist the active `sessionId` and last-known status to DataStore so a relaunch enters `PreFlight`/`Reconnecting` and rehydrates from `GET /broadcasts/host/sessions/{session_id}`.
+FR-7. Session lifecycle must survive process death / config change: persist the active `sessionId` and last-known status to DataStore so a relaunch enters `PreFlight`/`Reconnecting` and rehydrates from `GET /broadcast/sessions/{session_id}` (CORRECTED path — singular `broadcast`, no `/host/` segment; verified against OpenAPI and `src/api/endpoints/broadcast.ts: getSession`).
 
 FR-8. All long-running work runs in `viewModelScope` on an injected `CoroutineDispatcher` (default = `Dispatchers.Default`) so tests can substitute `StandardTestDispatcher`.
 
@@ -138,7 +139,7 @@ Transition matrix (primary edges):
 | Scheduling | ControlResult(ok) | Scheduled | Persist |
 | Scheduled/PreFlight | GoLive | Connecting(attempt=1) | CallControl(Start), OpenIngest |
 | Connecting | IngestStatusChanged(Connected) | Live | StartHealthTicker, Persist |
-| Live | Pause | Paused | CallControl(Pause) |
+| Live | Pause | Paused | CloseIngest / mute inputs (NO server pause endpoint — see note) |
 | Paused | Resume | Live | CallControl(Resume) |
 | Live | IngestStatusChanged(Disconnected) | Reconnecting | (none; AND-308 owns retry) |
 | Reconnecting | IngestStatusChanged(Connected) | Live | StartHealthTicker |
@@ -149,6 +150,8 @@ Transition matrix (primary edges):
 | Error(recoverable) | Refresh | previous ?: Idle | LoadSession |
 
 Any unmatched (state, event) pair returns `Result(state, listOf(LogIllegalTransition(state::class.simpleName, event::class.simpleName)))`.
+
+> **CORRECTION (verified):** There is **no** `POST .../pause` control endpoint on the backend. `Pause` is therefore a **client-side-only** state (mute primary input / close ingest locally) with no server control RPC; only `Resume` maps to a real call (`POST /broadcast/sessions/{id}/resume`). `ControlAction.Pause` MUST NOT emit a `CallControl(Pause)` effect. Verified: OpenAPI index has `/broadcast/sessions/{session_id}/resume` but no `.../pause` (the only `/pause` in the API is the unrelated `/ui/agent/orchestrator/{worker_id}/pause`); frontend `src/api/endpoints/broadcast.ts` exposes only `startSession`/`stopSession` (no pause).
 
 ### 4.4 ViewModel
 
@@ -176,17 +179,28 @@ class BroadcastHostViewModel @Inject constructor(
 
 This ViewModel does not define new endpoints; it composes use cases from AND-307/AND-308/AND-309. The contracts it relies on (consumed via `BroadcastHostRepository` returning `ApiResult<T>`):
 
-- `GET /broadcasts/host/sessions/{session_id}` → rehydrate (FR-7).
-  ```json
-  { "session_id": "bs_01H...", "status": "live",
-    "scheduled_start": "2026-06-05T18:00:00Z", "started_at": "2026-06-05T18:01:12Z",
-    "ingest": { "state": "connected", "bitrate_kbps": 2400, "dropped_frames": 3 } }
-  ```
-  `status ∈ {scheduled, preflight, live, paused, ended}`.
-- `POST /broadcasts/host/sessions/{session_id}/start | /pause | /resume | /stop` (AND-309) → returns the updated `HostSession` body above.
-- WebRTC ingest (`POST .../inputs`, `POST .../webrtc-offer`) is wholly owned by AND-308 and surfaced only as `IngestStatus`.
+> **CORRECTED — the original shapes below were wrong.** Authoritative path prefix is `/broadcast/sessions/{session_id}` (singular `broadcast`, no `/host/`). The response DTO is `BroadcastSessionOut` (web `BroadcastSession`), whose id field is `id` (NOT `session_id`); there is no nested `ingest` object and no `scheduled_start` field; scheduling time is `scheduled_at` (epoch **integer**, not ISO string). Health is a **separate** endpoint, not embedded in the session GET.
 
-All mutating calls send `X-CSRF-Token` (from `ui_csrf` cookie) via the shared OkHttp auth/CSRF interceptor. FastAPI errors map `detail` (`string | [{msg}] | {code,...}`) to `HostError` through the shared `ErrorMapper` in `core-network`. Retry/backoff applies to the idempotent `GET` only; control POSTs are **not** auto-retried (non-idempotent — surfaced as `Error` for explicit re-tap). N/A for endpoint *definition*: owned by AND-307/308/309.
+- `GET /broadcast/sessions/{session_id}` → rehydrate (FR-7). Real shape (subset, from `src/api/endpoints/broadcast.ts: BroadcastSession` / OpenAPI `BroadcastSessionOut`):
+  ```json
+  { "id": "bs_01H...", "profile_id": "bp_...", "status": "live",
+    "scheduled_at": 1749146400, "schedule_status": "scheduled",
+    "started_at": "2026-06-05T18:01:12Z", "stopped_at": null,
+    "ingest_url": "...", "cloudfront_playback_url": "...", "created_at": "...", "updated_at": "..." }
+  ```
+  CORRECTED status vocabulary (web `BroadcastSessionStatus`): `status ∈ {draft, scheduled, provisioning, ready, live, stopping, stopped, cancelled, error}`. There is **no** `preflight`, `paused`, or `ended` server status — `PreFlight`/`Paused`/`Ended`/`Reconnecting` are **client-only** FSM phases. Map: server `ready` → client `PreFlight`; server `stopping` → client `Ending`; server `stopped`/`cancelled` → client `Ended`; server `provisioning` → client `Connecting`.
+- Control RPCs (AND-309), all returning `BroadcastSessionOut`, request body `BroadcastSessionActionIn` = `{ "reason"?: string }` (default `"operator-request"`):
+  - `POST /broadcast/sessions/{session_id}/start` → **202 Accepted** (async). Accepts optional `x-idempotency-key` and `x-correlation-id` headers — use `x-idempotency-key` to harden FR-9 idempotency server-side.
+  - `POST /broadcast/sessions/{session_id}/stop` → **202 Accepted** (async). Same idempotency/correlation headers.
+  - `POST /broadcast/sessions/{session_id}/resume` → 200. **No request body.**
+  - `POST /broadcast/sessions/{session_id}/schedule` (`BroadcastScheduleIn` = `{ scheduled_at: int, name?, description? }`) and `POST .../reschedule` (`BroadcastRescheduleIn` = `{ scheduled_at: int }`) and `POST .../cancel-schedule` (no body) — all → `BroadcastSessionOut`.
+  - **No `/pause` endpoint exists** (see §4.3 correction). `Pause` is client-only.
+- Health (resolves OQ1 — backend DOES expose health, separately):
+  - `GET /broadcast/sessions/{session_id}/health` → `BroadcastHealthOut` (web `BroadcastHealthResponse`): `{ ingest_bitrate_kbps, ingest_framerate, dropped_frames, dropped_frames_pct, connection_quality, viewer_count, output_errors, input_loss_seconds, updated_at }`.
+  - `POST /broadcast/sessions/{session_id}/health/report` (`BroadcastHealthReportIn`, required `ingest_bitrate_kbps, ingest_framerate, dropped_frames, dropped_frames_pct`) → `BroadcastHealthOut`. `HostHealth` may be sourced from either local WebRTC stats or this endpoint.
+- WebRTC ingest is wholly owned by AND-308 and surfaced only as `IngestStatus`. Underlying calls: `POST /broadcast/sessions/{session_id}/inputs` (`BroadcastInputCreateIn` = `{ input_type?: "primary"|"guest"|"screen", label? }` → `BroadcastInputCreateOut` with `input_id`, `ingest_url`) and `POST /broadcast/sessions/{session_id}/inputs/{input_id}/webrtc-offer` (`BroadcastWebRTCOfferIn` = `{ sdp_offer }` → `BroadcastWebRTCOfferOut`/web `BroadcastWebRTCAnswer`).
+
+All mutating calls send `X-CSRF-Token` (from the `ui_csrf` cookie) via the shared OkHttp auth/CSRF interceptor (VERIFIED: `src/api/client.ts` reads `getCookie("ui_csrf")` and sets header `X-CSRF-Token`, with `credentials: "include"`). FastAPI 422 errors return `detail` as an array of `{loc, msg, type}` (`HTTPValidationError` → `ValidationError`); the shared `normalizeErrorDetail` also handles `detail` as a plain string or an object with a `code` (e.g. 403 `{code: "geo_blocked", message}`). These map to `HostError` through the shared `ErrorMapper` in `core-network`. Retry/backoff applies to the idempotent `GET` only; control POSTs are **not** blindly auto-retried — but `start`/`stop` are async **202** calls that accept an `x-idempotency-key`, so an explicit re-tap SHOULD reuse the same idempotency key to avoid duplicate side effects rather than rely on transport retry. N/A for endpoint *definition*: owned by AND-307/308/309.
 
 ## 6. Data & State Management
 
@@ -252,9 +266,9 @@ Acceptance is "Unit-tested"; tests proper land in AND-318, but this ticket must 
 
 - **R1 — Ingest interface churn (AND-308):** controller status enum shape may shift. Mitigation: own the consumed `IngestStatus`/`WebRtcIngestController` interface in this module.
 - **R2 — Reconnect ownership split:** unclear whether ICE-restart backoff lives in AND-308 or here. Assumption: AND-308 owns retry; this VM only bounds total reconnect window. *Open question for AND-308 owner.*
-- **R3 — Server status vocabulary:** `status` enum values for host sessions are assumed from the web reference; confirm against `/openapi.json` (`HostSessionStatus`). If `preflight` is not a server status, treat it as client-only.
+- **R3 — Server status vocabulary:** ~~assumed~~ **RESOLVED.** Server enum (web `BroadcastSessionStatus`) is `{draft, scheduled, provisioning, ready, live, stopping, stopped, cancelled, error}`. `preflight`/`paused`/`ended`/`reconnecting` are confirmed client-only; mapping documented in §5. The DTO is `BroadcastSessionOut` with id field `id`, not a `HostSession`/`session_id` shape.
 - **R4 — Dev host unreliability:** flaky control POSTs may strand state in `Ending`. Mitigation: rehydrate-on-resume + explicit `Refresh`. Non-idempotent POSTs are not auto-retried.
-- **OQ1:** Does the backend emit health (bitrate/dropped frames) on the session GET, or must it come solely from local WebRTC stats? Affects `HostHealth` source.
+- **OQ1:** ~~Does the backend emit health on the session GET?~~ **RESOLVED:** health is NOT on the session GET; it is a dedicated `GET /broadcast/sessions/{session_id}/health` (`BroadcastHealthOut`) plus host-pushed `POST .../health/report` (`BroadcastHealthReportIn`). `HostHealth` may source from local WebRTC stats and/or these endpoints.
 - **OQ2:** Is `Reschedule` allowed while `Live`, or only `Scheduled`? Spec assumes `Scheduled`-only.
 
 ## 14. Acceptance Criteria
@@ -265,7 +279,7 @@ Acceptance is "Unit-tested"; tests proper land in AND-318, but this ticket must 
 4. `BroadcastHostViewModel` exposes `StateFlow<HostSessionState>` and a single `onEvent`; all mutation flows through the reducer; effects re-dispatch internal events.
 5. Collecting `WebRtcIngestController.status` drives `Live ↔ Reconnecting`, with reconnect-window exhaustion → `Error(IngestFailed, recoverable=true)`.
 6. Double-`GoLive` opens ingest exactly once; double-`Stop` closes exactly once (idempotency tests pass).
-7. Active `sessionId` + status persist to DataStore and rehydrate on relaunch via `GET /broadcasts/host/sessions/{session_id}`.
+7. Active `sessionId` + status persist to DataStore and rehydrate on relaunch via `GET /broadcast/sessions/{session_id}` (CORRECTED path).
 8. Control-call failures and exhausted 401-refresh produce `Error` states preserving `previous`, recoverable via `Refresh`.
 9. All long-running work uses the injected dispatcher; tests run deterministically under `StandardTestDispatcher` with no real network/Android deps.
 10. Unit tests for the FSM and ViewModel pass in CI with ≥90% line coverage on the two core classes.
@@ -279,3 +293,76 @@ Acceptance is "Unit-tested"; tests proper land in AND-318, but this ticket must 
 - KDoc on `HostSessionStateMachine`, the sealed types, and `BroadcastHostViewModel`; transition matrix documented in code.
 - Hilt module binds `BroadcastHostRepository`, `WebRtcIngestController` (or adapter), `HostSessionPrefs`, and `@DefaultDispatcher`; app compiles with DI graph resolved.
 - PR description links AND-308 (dep) and AND-318 (blocked); reviewed and approved by an E41 owner.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Rehydrate endpoint is `GET /broadcast/sessions/{session_id}`.** VERDICT: **Corrected** (spec said `/broadcasts/host/sessions/...`). SOURCE: OpenAPI `GET /broadcast/sessions/{session_id}` (op `get_session_route...`, resp `200:BroadcastSessionOut`); `src/api/endpoints/broadcast.ts: getSession`.
+2. **Session response DTO is `BroadcastSessionOut` (web `BroadcastSession`); id field is `id`, scheduling time is `scheduled_at` (epoch int), timestamps `started_at`/`stopped_at`; no nested `ingest` object.** VERDICT: **Corrected** (spec JSON used `session_id`, `scheduled_start`, nested `ingest`). SOURCE: OpenAPI `components.schemas.BroadcastSessionOut` (fields `id`, `status`, `scheduled_at`, `schedule_status`, `started_at`, `stopped_at`); `src/api/endpoints/broadcast.ts: BroadcastSession`.
+3. **Session status vocabulary = `{draft, scheduled, provisioning, ready, live, stopping, stopped, cancelled, error}`; `preflight`/`paused`/`ended` are NOT server statuses.** VERDICT: **Corrected** (spec said `{scheduled, preflight, live, paused, ended}`). SOURCE: `src/api/endpoints/broadcast.ts: BroadcastSessionStatus`. (OpenAPI types `status` as a free string, so the web type is authoritative.)
+4. **No `POST .../pause` control endpoint exists; `Pause` is client-only.** VERDICT: **Corrected** (spec listed `/pause` as a control RPC). SOURCE: OpenAPI index has `/broadcast/sessions/{session_id}/resume` and `.../start`, `.../stop` but no `.../pause`; the only `/pause` in the API is `POST /ui/agent/orchestrator/{worker_id}/pause` (unrelated); `src/api/endpoints/broadcast.ts` exports only `startSession`/`stopSession`.
+5. **`/start` and `/stop` return 202 Accepted (async) and accept `x-idempotency-key` + `x-correlation-id` headers; body `BroadcastSessionActionIn = {reason?: string="operator-request"}`.** VERDICT: **Corrected/augmented** (spec implied 200 and "non-idempotent, not retried"; idempotency key was unmentioned). SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/start` & `.../stop` (`resp=202:BroadcastSessionOut`, `params=...,x-correlation-id,x-idempotency-key,...`); `components.schemas.BroadcastSessionActionIn`; `src/api/endpoints/broadcast.ts: startSession/stopSession`.
+6. **`/resume` exists (200), no request body; returns `BroadcastSessionOut`.** VERDICT: **Verified.** SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/resume` (op `resume_broadcast_route...`).
+7. **`/schedule`, `/reschedule`, `/cancel-schedule` exist and return `BroadcastSessionOut`; schedule/reschedule use `scheduled_at` (epoch int).** VERDICT: **Verified.** SOURCE: OpenAPI `POST .../schedule` (`req=app__routers__broadcast__BroadcastScheduleIn`), `.../reschedule` (`BroadcastRescheduleIn`), `.../cancel-schedule`; `src/api/endpoints/broadcastSchedule.ts: scheduleSession/rescheduleSession/cancelSchedule` (`ScheduleSessionReq.scheduled_at: number`).
+8. **Health is a dedicated endpoint, not embedded in the session GET: `GET .../health` (`BroadcastHealthOut`) and `POST .../health/report` (`BroadcastHealthReportIn`).** VERDICT: **Corrected** (resolves OQ1; spec implied health on session GET or local-only). SOURCE: OpenAPI `GET /broadcast/sessions/{session_id}/health`, `POST .../health/report`; `components.schemas.BroadcastHealthReportIn` (required `ingest_bitrate_kbps, ingest_framerate, dropped_frames, dropped_frames_pct`); `src/api/endpoints/broadcast.ts: getHealth/reportHealth`.
+9. **WebRTC offer endpoint is `POST /broadcast/sessions/{session_id}/inputs/{input_id}/webrtc-offer`, body `{sdp_offer}`; inputs created via `POST .../inputs` with `{input_type, label}`.** VERDICT: **Verified.** SOURCE: OpenAPI `.../inputs/{input_id}/webrtc-offer` (`req=BroadcastWebRTCOfferIn`), `.../inputs` (`req=BroadcastInputCreateIn`, `input_type` pattern `^(primary|guest|screen)$`); `src/api/endpoints/broadcast-inputs.ts: sendWebRTCOffer/addInput`.
+10. **Mutating calls send `X-CSRF-Token` from the `ui_csrf` cookie with `credentials: include`.** VERDICT: **Verified.** SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`, `credentials: "include"`).
+11. **401 → single `POST /ui/session/refresh` then one retry; a second 401 → logout/re-login (no infinite loop).** VERDICT: **Verified.** SOURCE: OpenAPI `POST /ui/session/refresh`; `src/api/client.ts` (refresh-once via shared `refreshPromise`, single retry, `logout("session_expired")` on retry 401).
+12. **422 error body shape is `detail: ValidationError[]` (`{loc, msg, type}`); client also handles string `detail` and `{code}` objects (e.g. 403 `geo_blocked`).** VERDICT: **Corrected/refined** (spec wrote `string | [{msg}] | {code,...}`). SOURCE: OpenAPI `components.schemas.HTTPValidationError` → `ValidationError`; `src/api/client.ts: normalizeErrorDetail` (string/array/object handling, geo_blocked `code`).
+13. **DataStore Preferences for `active_session_id`/`last_status`; backup-excluded; ViewModel + StateFlow + Hilt + injected dispatcher.** VERDICT: **Unverified-assumption** (Android client-architecture choices; no backend/web source). SOURCE: framework ref — Jetpack DataStore (developer.android.com/topic/libraries/architecture/datastore), Hilt ViewModel (developer.android.com/training/dependency-injection/hilt-jetpack), `kotlinx-coroutines-test` injected-dispatcher pattern.
+14. **AND-308 `WebRtcIngestController` / `IngestStatus` shape and ownership of ICE-restart/backoff.** VERDICT: **Unverified-assumption** (dependency not yet final; interface owned in this module per R1). SOURCE: spec §2/§12 (AND-308); no authoritative source available.
+
+### Corrections made
+
+- C1 (claims 1, 7-AC): endpoint path `/broadcasts/host/sessions/...` → `/broadcast/sessions/...` (FR-7, §5, AC-7).
+- C2 (claim 2): session JSON example rewritten to real `BroadcastSessionOut` field names (`id`, `scheduled_at` epoch int, `started_at`/`stopped_at`; removed nested `ingest` and `scheduled_start`).
+- C3 (claim 3): status enum corrected; added explicit client↔server status mapping in §5; R3 marked resolved.
+- C4 (claim 4): removed `/pause` as a real control RPC; `Pause` documented as client-only in §4.3 and §5; transition matrix `CallControl(Pause)` row corrected.
+- C5 (claim 5): start/stop documented as 202 async with `x-idempotency-key`/`x-correlation-id`; §5 retry paragraph refined to use idempotency key on re-tap.
+- C6 (claim 8): health documented as dedicated `GET .../health` + `POST .../health/report`; OQ1 resolved.
+- C7 (claim 12): 422/error `detail` shape refined to FastAPI `ValidationError[]` plus client `normalizeErrorDetail` variants.
+
+### Open assumptions
+
+- OA1: AND-308 `WebRtcIngestController`/`IngestStatus` contract (claim 14) — upstream not final; this module defines the consumed interface as a seam. Unverifiable until AND-308 lands.
+- OA2: All Android-layer choices (DataStore keys, Hilt wiring, `@DefaultDispatcher`, Turbine/Robolectric absence) (claim 13) — client architecture, no backend/web contract to verify against; validated only against framework docs.
+- OA3: OQ2 (is `Reschedule` allowed while `Live`?) — backend exposes `/reschedule` but does not document the legal pre-state; spec assumes `Scheduled`-only. Unverifiable from OpenAPI (no documented state guard).
+- OA4: Exact server-side status emitted immediately after a 202 `start`/`stop` (e.g. `provisioning` vs `live`, `stopping` vs `stopped`) — async; not deterministically documented. Client polls `GET` to converge.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **Emu35** = headless emulator AVD `test35` (x86_64, API 35); **PhysA15** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). This ticket is a pure presentation/state-machine layer (no Android framework, network, or media at runtime), so the bulk of cases are JVM unit / contract (MockWebServer). Physical-device cases apply only where real WebRTC ingest/camera/mic behavior must be exercised end-to-end with the real controller (AND-308 integration), which is why PhysA15 is preferred there over the emulator (emulators lack real camera/mic capture and arm64 codec behavior).
+
+- **TC-AND-317-01** — Type: unit (JVM). Target: `HostSessionStateMachine.reduce`. Preconditions: none. Steps: feed every legal `(state,event)` edge from the §4.3 matrix as a parameterized table. Expected: each yields the documented `nextState` and exact `effects` list (e.g. `Scheduled/PreFlight + GoLive → Connecting(attempt=1)` with `[CallControl(Start), OpenIngest]`; `Connecting + IngestStatusChanged(Connected) → Live` with `[StartHealthTicker, Persist]`). Traces: AC-1, AC-3.
+- **TC-AND-317-02** — Type: unit (JVM). Target: `reduce` illegal transitions. Preconditions: none. Steps: feed a representative sample of illegal pairs (e.g. `Idle + Pause`, `Ended + GoLive`, `Live + Schedule`). Expected: state returned unchanged + exactly one `LogIllegalTransition(from, event)` effect; never throws; identical input → identical output (purity). Traces: AC-2.
+- **TC-AND-317-03** — Type: unit (JVM). Target: `reduce` Pause edge. Preconditions: state = `Live`. Steps: dispatch `Pause`. Expected: `nextState = Paused` and effects **do NOT** contain `CallControl(Pause)` (client-only; per §4.3 correction there is no server pause). `Resume` from `Paused` DOES yield `CallControl(Resume)`. Traces: AC-3.
+- **TC-AND-317-04** — Type: unit (JVM, coroutines-test). Target: `BroadcastHostViewModel` GoLive happy path. Preconditions: `FakeBroadcastHostRepository` returns ok; `FakeWebRtcIngestController`; `StandardTestDispatcher`. Steps: from `Scheduled`, `onEvent(GoLive)`; advance; emit ingest `Connected`. Expected (Turbine on `uiState`): `Scheduled → Connecting → Live`; `OpenIngest` + `StartHealthTicker` each ran once; `Persist(status=live)` written. Traces: AC-4, AC-9.
+- **TC-AND-317-05** — Type: unit (JVM, coroutines-test). Target: ingest reconnect cycle. Preconditions: state `Live`. Steps: fake controller emits `Disconnected`; then `Connected` before window expiry. Expected: `Live → Reconnecting → Live`; health ticker resumes; no `Error`. Traces: AC-5.
+- **TC-AND-317-06** — Type: unit (JVM, coroutines-test). Target: reconnect-window exhaustion. Preconditions: state `Live`; injected reconnect window (e.g. 30s). Steps: controller emits `Disconnected`/`Failed`; advance past window with no recovery. Expected: `Reconnecting → Error(IngestFailed, recoverable=true)`; `CloseIngest` + `StopHealthTicker` ran. Traces: AC-5.
+- **TC-AND-317-07** — Type: unit (JVM, coroutines-test). Target: idempotency guard. Preconditions: state `Scheduled`. Steps: dispatch two rapid `GoLive` (and separately two rapid `Stop` from `Live`). Expected: `OpenIngest` called exactly once for double-GoLive; `CloseIngest` exactly once for double-Stop; in-flight guard blocks the second. Traces: AC-6.
+- **TC-AND-317-08** — Type: unit (JVM, coroutines-test). Target: control-failure → recoverable Error. Preconditions: state `Live`; repository returns `ApiResult.Error` for stop. Steps: `onEvent(Stop)`; fold `ControlResult(err)`. Expected: `Error(cause, recoverable=true, previous=Live)`; subsequent `Refresh` re-loads and restores prior phase. Traces: AC-8.
+- **TC-AND-317-09** — Type: contract/MockWebServer (JVM). Target: `BroadcastHostRepository` against real wire shapes. Preconditions: MockWebServer enqueues a `BroadcastSessionOut` JSON body (real fields: `id`, `status:"live"`, `scheduled_at` int, `started_at`). Steps: call rehydrate `GET /broadcast/sessions/{id}`; call start (assert request path `/broadcast/sessions/{id}/start`, response **202**). Expected: parsing maps `id`→sessionId and `status`→client phase per §5 mapping; 202 accepted as success; no crash on absent `ingest` object. Traces: AC-7, AC-4.
+- **TC-AND-317-10** — Type: contract/MockWebServer (JVM). Target: idempotency + CSRF on control POST. Preconditions: MockWebServer. Steps: invoke start twice from a retry path; inspect recorded requests. Expected: `X-CSRF-Token` header present (from cookie jar) and `x-idempotency-key` is identical across the original and the re-tap so the server can dedupe. Traces: AC-6, AC-8.
+- **TC-AND-317-11** — Type: contract/MockWebServer (JVM). Target: 422 / validation error mapping. Preconditions: MockWebServer returns 422 with `{"detail":[{"loc":["body","scheduled_at"],"msg":"...","type":"value_error"}]}`. Steps: invoke schedule with bad payload. Expected: mapped to `HostError.Validation("scheduled_at")` (field extracted from `loc`); not `Unknown`. Traces: AC-8.
+- **TC-AND-317-12** — Type: contract/MockWebServer (JVM). Target: 401 refresh-then-retry. Preconditions: MockWebServer enqueues 401, then (after a refresh hit) 200. Steps: invoke a control call; assert exactly one `POST /ui/session/refresh` then one retry. Expected: success after single refresh; a second consecutive 401 → `HostError.Auth` + `Error(Auth)` state, no loop. Traces: AC-8.
+- **TC-AND-317-13** — Type: unit (JVM, coroutines-test). Target: process-death restore + offline/flaky-dev-host path. Preconditions: in-memory `HostSessionPrefs` pre-seeded `active_session_id` + `last_status=live`; repository rehydrate `GET` fails with network error. Steps: construct VM (`init`), let restore run. Expected: VM seeds `Reconnecting` (not `Idle`), dispatches `Load`, and on GET failure stays `Reconnecting` with stale-banner flag (does not drop to `Idle`). Traces: AC-7, AC-8.
+- **TC-AND-317-14** — Type: unit (JVM). Target: no-PII security invariant on persistence/logs. Preconditions: spy `Logger`/`HostAnalytics`; DataStore prefs. Steps: drive a full lifecycle. Expected: persisted keys are only `active_session_id` (opaque) + status enum; no tokens/usernames/media; log/analytics payloads contain only `session_id`, `from`, `to`, `action` — assert no cookie/CSRF value ever logged; prefs cleared on `Ended`/`CancelSchedule`. Traces: AC-7 (and §8 security DoD).
+- **TC-AND-317-15** — Type: instrumented/e2e (PhysA15 — MUST run on physical device). Target: real AND-308 `WebRtcIngestController` + camera/mic capture driving `Live ↔ Reconnecting`. Preconditions: physical SM-A156U (arm64-v8a, API 34) with camera+mic permissions granted; reachable dev host. Steps: GoLive with real WebRTC ingest (`/inputs` + `/inputs/{id}/webrtc-offer`); toggle network to force ingest drop, then restore. Expected: VM observes real `IngestStatus` transitions → `Live → Reconnecting → Live`; on sustained loss → `Error(IngestFailed)`. Why physical: emulator `test35` lacks real camera/mic capture and arm64 codec/ABI behavior; WebRTC ingest must exercise real mic/camera + TURN. Traces: AC-5, AC-9.
+- **TC-AND-317-16** — Type: unit (JVM). Target: permission-blocker handling (security/permission case). Preconditions: host screen reports camera/mic permission absent (PreFlight). Steps: dispatch `GoLive` while permission marker absent. Expected: VM does NOT call `OpenIngest`/request permissions itself; state surfaces `HostError.Validation("permissions")` as a `PreFlight` blocker. Traces: AC-4 (and §8).
+- **TC-AND-317-17** — Type: unit (JVM). Target: accessibility/i18n contract of state object. Preconditions: none. Steps: inspect each `HostSessionState` phase and `Error` cause. Expected: each carries a `statusLabelKey: Int` (`@StringRes`) and error messages are `@StringRes` + args — no raw English strings, no pre-formatted dates (Instant/Duration carried raw). Ensures downstream TalkBack/translation. Traces: AC-1, AC-4.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 (types/reduce exist per §4) | TC-01, TC-17 |
+| AC-2 (reduce pure; illegal → unchanged + one LogIllegalTransition) | TC-02 |
+| AC-3 (every §4.3 transition table-tested) | TC-01, TC-03 |
+| AC-4 (StateFlow + single onEvent; mutation via reducer; effects re-dispatch) | TC-04, TC-09, TC-16, TC-17 |
+| AC-5 (Live ↔ Reconnecting; exhaustion → Error(IngestFailed)) | TC-05, TC-06, TC-15 |
+| AC-6 (double-GoLive opens once; double-Stop closes once) | TC-07, TC-10 |
+| AC-7 (persist + rehydrate via GET /broadcast/sessions/{id}) | TC-09, TC-13, TC-14 |
+| AC-8 (control failure + 401 exhaustion → Error preserving previous; Refresh recovers) | TC-08, TC-11, TC-12, TC-13 |
+| AC-9 (injected dispatcher; deterministic under StandardTestDispatcher; no real net/Android) | TC-04, TC-09, TC-15 |
+| AC-10 (FSM + VM ≥90% line coverage in CI) | TC-01–TC-08, TC-13, TC-14, TC-16, TC-17 (aggregate) |

@@ -5,9 +5,10 @@ milestone: M7
 epic: E41
 priority: P1
 size: M
-status: draft
 depends_on: [AND-278]
 blocks: [AND-308, AND-309]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-307 — Host session create/schedule
@@ -93,36 +94,55 @@ and ViewModel.
 ## 3. Functional Requirements
 
 FR-1. Extend `BroadcastApi` with host mutation methods: **create** a session
-(`POST broadcast/sessions`), **schedule / reschedule at create-time**
-(`PATCH broadcast/sessions/{sessionId}`), and **cancel a scheduled session**
-(`POST broadcast/sessions/{sessionId}/cancel`). Exact verbs/paths reconciled
-against `/openapi.json` + `broadcast.ts`; Section 5 is the working contract.
+(`POST broadcast/sessions`), **schedule (set title/description/start time)**
+(`POST broadcast/sessions/{sessionId}/schedule`), and **cancel a scheduled
+session** (`POST broadcast/sessions/{sessionId}/cancel-schedule`). **[CORRECTED
+v2026-06-06 against OpenAPI]** The schedule verb is **POST `.../schedule`**, not
+`PATCH broadcast/sessions/{sessionId}` (no such PATCH route exists), and the
+cancel path is **`.../cancel-schedule`**, not `.../cancel`. Verbs/paths confirmed
+against the OpenAPI index; Section 5 is the working contract. Note also that the
+web `broadcast.ts` does NOT call schedule/cancel-schedule (it only does
+create/start/stop/delete), so the Android client is the first consumer of these
+two routes — they are verified from OpenAPI alone.
 
 FR-2. Each method is `suspend`, takes a typed `@Body` request DTO (never a raw
 `Map`/`JsonObject`), and returns a `BroadcastSessionDto` (the AND-278 superset)
 so the resulting/updated session decodes through the existing mappers.
 
-FR-3. **Create** supports two modes from one screen: *start now* (no
-`scheduled_start_at` → backend returns a session ready to go live, typically
-`status:"scheduled"` or a host-pending status) and *schedule* (a future
-`scheduled_start_at` Instant). The request also carries `title` (required) and
-optional `description`.
+FR-3. **[CORRECTED v2026-06-06 against OpenAPI]** `POST broadcast/sessions`
+(`BroadcastSessionCreateIn`) takes **`profile_id` (required)** plus optional
+ingest/stream-key/ad config — it does **NOT** accept `title`, `description`, or
+any scheduled-start field. The title (`name`), `description`, and the scheduled
+start time are therefore **set on the `POST .../schedule` call**, not at create.
+The screen models two modes: *start now* (create only, then hand off to AND-308
+go-live) and *schedule* (create, then immediately POST `.../schedule` with
+`scheduled_at` + `name`/`description`). The "single create call carries title +
+optional schedule" design in the draft was based on an unverified DTO and is
+incorrect; see Section 5 and §16.
 
-FR-4. **Schedule / reschedule (create-time)** sets or changes
-`scheduled_start_at` on a not-yet-live session via `PATCH`. (Runtime reschedule
-of a live/started session is **AND-309**; this ticket only schedules a session
-that has not yet started.)
+FR-4. **Schedule (create-time)** sets `name`, optional `description`, and the
+required `scheduled_at` on a not-yet-live session via **`POST
+broadcast/sessions/{sessionId}/schedule`** (`BroadcastScheduleIn`). `scheduled_at`
+is a **Unix epoch-seconds integer** (`>= min lead time from now`), NOT an ISO-8601
+string. (Runtime *reschedule* of a session is the separate `POST
+.../reschedule` route + `BroadcastRescheduleIn`, owned by **AND-309**; this ticket
+uses only `.../schedule`.)
 
 FR-5. **Cancel-schedule** cancels a `SCHEDULED`/`UPCOMING` session the host
 created, transitioning it to `CANCELLED`. Cancelling is only offered for sessions
 the current host owns and that have not gone live.
 
-FR-6. Define request DTOs with Moshi `@JsonClass(generateAdapter = true)`:
-`CreateBroadcastSessionReqDto(title, description?, scheduled_start_at?)` and
-`UpdateBroadcastScheduleReqDto(scheduled_start_at)`. Wire fields snake_case;
-`scheduled_start_at` is an `Instant` serialized via the shared
-`InstantJsonAdapter` (ISO-8601 UTC). Cancel takes no body (or an optional reason
-— reconciled in Q-3).
+FR-6. **[CORRECTED v2026-06-06]** Define request DTOs with Moshi
+`@JsonClass(generateAdapter = true)`:
+`CreateBroadcastSessionReqDto(profile_id, ingest_url?, stream_key_ref?,
+stream_key_rotation_interval_seconds?)` and
+`ScheduleBroadcastReqDto(scheduled_at: Long, name?: String, description?:
+String)`. Wire fields snake_case. **`scheduled_at` is a `Long` epoch-seconds
+value (Unix timestamp), serialized as a JSON integer — NOT an `Instant`/ISO-8601
+string, so the `InstantJsonAdapter` is NOT used for the request body.** The
+ViewModel converts the picked local time to `Instant.epochSecond` for the wire.
+**Cancel takes NO request body** (the `cancel-schedule` route has `req=` empty in
+OpenAPI), so there is no `CancelBroadcastReqDto`/`reason` (resolves Q-3).
 
 FR-7. Provide a `HostBroadcastRepository` (`core-data`) exposing
 `suspend fun createSession(req): ApiResult<BroadcastSession>`,
@@ -137,10 +157,12 @@ FR-8. Provide a `CreateBroadcastViewModel` exposing
 `onScheduledTimeChange(Instant)`, `submit()`, and `cancelSchedule()`. All network
 work runs in `viewModelScope` on an injected IO dispatcher.
 
-FR-9. **Validation (client-side, before submit):** `title` is non-blank
-(trimmed, ≤ a max length, default 120 chars — confirm Q-4); when schedule mode is
-`At`, `scheduledStartAt` must be **in the future** relative to a `Clock` (a small
-skew buffer, e.g. ≥ 1 minute ahead). Invalid input yields field-level errors in
+FR-9. **Validation (client-side, before submit):** the title (`name`) is non-blank
+when scheduling (trimmed, **≤ 200 chars** per `BroadcastScheduleIn.name`
+maxLength — resolves Q-4; description ≤ 2000); when schedule mode is `At`, the
+chosen `scheduled_at` must be **in the future** relative to a `Clock` (use a skew
+buffer ≥ the backend "min lead time"; default to ≥ 1 minute and surface any
+backend `422` lead-time rejection). Invalid input yields field-level errors in
 `uiState` and disables the submit button; it does **not** hit the network.
 
 FR-10. Provide the Compose screen `CreateBroadcastScreen` (Material 3): a title
@@ -183,27 +205,34 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import java.time.Instant
 
+// [CORRECTED v2026-06-06 against OpenAPI: BroadcastSessionCreateIn requires
+// profile_id and has NO title/description/scheduled_start_at]
 @JsonClass(generateAdapter = true)
 data class CreateBroadcastSessionReqDto(
-    val title: String,
+    @Json(name = "profile_id") val profileId: String,
+    @Json(name = "ingest_url") val ingestUrl: String? = null,
+    @Json(name = "stream_key_ref") val streamKeyRef: String? = null,
+    @Json(name = "stream_key_rotation_interval_seconds")
+    val streamKeyRotationIntervalSeconds: Int? = null,
+)
+
+// [CORRECTED v2026-06-06: route is POST .../schedule with BroadcastScheduleIn;
+// scheduled_at is a Unix epoch-SECONDS integer, name = the title (max 200),
+// description max 2000]
+@JsonClass(generateAdapter = true)
+data class ScheduleBroadcastReqDto(
+    @Json(name = "scheduled_at") val scheduledAt: Long,   // Unix epoch seconds
+    val name: String? = null,
     val description: String? = null,
-    // null => "start now"; non-null => schedule for a future Instant (ISO-8601 UTC)
-    @Json(name = "scheduled_start_at") val scheduledStartAt: Instant? = null,
 )
 
-@JsonClass(generateAdapter = true)
-data class UpdateBroadcastScheduleReqDto(
-    @Json(name = "scheduled_start_at") val scheduledStartAt: Instant,
-)
-
-@JsonClass(generateAdapter = true)
-data class CancelBroadcastReqDto(
-    val reason: String? = null, // optional; omitted if backend takes no body (Q-3)
-)
+// Cancel-schedule takes NO body (OpenAPI req= empty) — no DTO needed.
 ```
 
-Responses reuse the AND-278 `BroadcastSessionDto` and its `toDomain()` mapper —
-no new response DTOs.
+Responses reuse the AND-278 `BroadcastSessionDto` (decoded from
+`BroadcastSessionOut`) and its `toDomain()` mapper — no new response DTOs. Note
+the response has **no `host` object**: ownership is the `created_by` string and
+the title is the nullable `name` field (see §5 / §16).
 
 ### 4.2 `BroadcastApi` additions (core-network)
 
@@ -217,32 +246,36 @@ import retrofit2.http.Path
 interface BroadcastApi {
     // ... AND-278 read methods (listSessions, getSession) ...
 
-    /** Create a broadcast session ("start now" when scheduled_start_at is null). */
+    // [CORRECTED v2026-06-06 against OpenAPI]
+    /** Create a broadcast session. Requires profile_id; sets no title/schedule. */
     @POST("broadcast/sessions")
     suspend fun createSession(
         @Body body: CreateBroadcastSessionReqDto,
     ): BroadcastSessionDto
 
-    /** Set/change the scheduled start of a not-yet-live session. */
-    @PATCH("broadcast/sessions/{sessionId}")
-    suspend fun updateSchedule(
+    /** Set title/description and the scheduled start of a not-yet-live session. */
+    @POST("broadcast/sessions/{sessionId}/schedule")
+    suspend fun scheduleSession(
         @Path("sessionId") sessionId: String,
-        @Body body: UpdateBroadcastScheduleReqDto,
+        @Body body: ScheduleBroadcastReqDto,
     ): BroadcastSessionDto
 
-    /** Cancel a scheduled/upcoming session before it goes live. */
-    @POST("broadcast/sessions/{sessionId}/cancel")
-    suspend fun cancelSession(
+    /** Cancel a scheduled session before it goes live. No request body. */
+    @POST("broadcast/sessions/{sessionId}/cancel-schedule")
+    suspend fun cancelSchedule(
         @Path("sessionId") sessionId: String,
-        @Body body: CancelBroadcastReqDto = CancelBroadcastReqDto(),
     ): BroadcastSessionDto
 }
 ```
 
-Paths are leading-slash-free (AND-010 convention). If `/openapi.json` shows
-cancel as a `DELETE broadcast/sessions/{id}/schedule` or a `PATCH` with
-`status:"cancelled"`, the method signature is adjusted to match (Q-2); the
-repository/ViewModel surface is unchanged.
+Paths are leading-slash-free (AND-010 convention). **Verified against the OpenAPI
+index:** create = `POST /broadcast/sessions` (201 `BroadcastSessionOut`), schedule
+= `POST /broadcast/sessions/{session_id}/schedule` (200 `BroadcastSessionOut`),
+cancel = `POST /broadcast/sessions/{session_id}/cancel-schedule` (200
+`BroadcastSessionOut`, no body). There is **no** `PATCH .../{id}` route and **no**
+`.../cancel` route; the draft's Q-2 is resolved (it is `cancel-schedule`, not a
+`DELETE` or status-PATCH). A separate `DELETE /broadcast/sessions/{id}` (hard
+delete) and `POST .../reschedule` (runtime, AND-309) exist but are out of scope.
 
 ### 4.3 Repository (core-data)
 
@@ -253,12 +286,17 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.broadcast.BroadcastSession
 import java.time.Instant
 
+// [CORRECTED v2026-06-06] createSession takes profile_id (title/desc/schedule
+// are applied via scheduleSession, which carries name/description/scheduled_at).
 interface HostBroadcastRepository {
     suspend fun createSession(
-        title: String, description: String?, scheduledStartAt: Instant?,
+        profileId: String, ingestUrl: String? = null,
     ): ApiResult<BroadcastSession>
 
-    suspend fun scheduleSession(id: String, startAt: Instant): ApiResult<BroadcastSession>
+    /** scheduledAt = Unix epoch SECONDS; name = title (<=200), description (<=2000). */
+    suspend fun scheduleSession(
+        id: String, scheduledAt: Long, name: String?, description: String?,
+    ): ApiResult<BroadcastSession>
 
     suspend fun cancelSchedule(id: String): ApiResult<BroadcastSession>
 }
@@ -271,21 +309,27 @@ class DefaultHostBroadcastRepository @Inject constructor(
 ) : HostBroadcastRepository {
 
     override suspend fun createSession(
-        title: String, description: String?, scheduledStartAt: Instant?,
+        profileId: String, ingestUrl: String?,
     ): ApiResult<BroadcastSession> = withContext(io) {
         apiCall { // shared apiCall{} from AND-018/AND-015 maps body + errors
             api.createSession(
-                CreateBroadcastSessionReqDto(title.trim(), description?.trim(), scheduledStartAt)
+                CreateBroadcastSessionReqDto(profileId = profileId, ingestUrl = ingestUrl)
             ).toDomain()
         }
     }
 
-    override suspend fun scheduleSession(id: String, startAt: Instant) = withContext(io) {
-        apiCall { api.updateSchedule(id, UpdateBroadcastScheduleReqDto(startAt)).toDomain() }
+    override suspend fun scheduleSession(
+        id: String, scheduledAt: Long, name: String?, description: String?,
+    ) = withContext(io) {
+        apiCall {
+            api.scheduleSession(
+                id, ScheduleBroadcastReqDto(scheduledAt, name?.trim(), description?.trim())
+            ).toDomain()
+        }
     }
 
     override suspend fun cancelSchedule(id: String) = withContext(io) {
-        apiCall { api.cancelSession(id).toDomain() }
+        apiCall { api.cancelSchedule(id).toDomain() }
     }
 }
 ```
@@ -415,56 +459,63 @@ session and carry the `X-CSRF-Token` header (AND-012). Shapes below are the
 working contract, reconciled against `/openapi.json` + `broadcast.ts` before
 merge.
 
-### POST `broadcast/sessions` — create (start now)
-Request:
+**[SECTION 5 CORRECTED v2026-06-06 against the OpenAPI spec — the original bodies
+were unverified and largely wrong: see §16.]**
+
+### POST `broadcast/sessions` — create  (`BroadcastSessionCreateIn` → `201 BroadcastSessionOut`)
+Request (only `profile_id` is required; title/description/schedule are NOT sent here):
 ```json
-{ "title": "Friday Night Live", "description": "Weekly Q&A" }
+{ "profile_id": "bp_01HX0" }
 ```
-Response `201`/`200` — a created session (AND-278 superset). "Start now" returns
-a host-ready session; `playback.hls_url` is typically absent until ingest begins
-(AND-308):
+Response `201` — a `BroadcastSessionOut`. Required fields: `id`, `profile_id`,
+`status`, `created_by`, `created_at`, `updated_at`. There is **no `host`
+object** (owner = `created_by` string) and **no `title`** (the title is the
+nullable `name` field):
 ```json
 {
   "id": "bcs_01HY9",
-  "title": "Friday Night Live",
-  "description": "Weekly Q&A",
-  "status": "scheduled",
-  "host": { "id": "usr_42", "username": "dana", "display_name": "Dana Ruiz" },
-  "scheduled_start_at": null
+  "profile_id": "bp_01HX0",
+  "status": "draft",
+  "name": null,
+  "description": null,
+  "scheduled_at": null,
+  "schedule_status": null,
+  "created_by": "usr_42",
+  "created_at": "2026-06-07T17:00:00Z",
+  "updated_at": "2026-06-07T17:00:00Z"
 }
 ```
 
-### POST `broadcast/sessions` — create (scheduled)
-Request:
+### POST `broadcast/sessions/{sessionId}/schedule` — schedule (`BroadcastScheduleIn` → `200 BroadcastSessionOut`)
+Sets the title (`name`), `description`, and the required `scheduled_at`
+(**Unix epoch SECONDS integer**, must be `>= min lead time from now`):
 ```json
 {
-  "title": "Album listening party",
-  "description": null,
-  "scheduled_start_at": "2026-06-07T18:00:00Z"
+  "scheduled_at": 1781020800,
+  "name": "Album listening party",
+  "description": "Weekly Q&A"
 }
 ```
-Response `201`/`200` — `status:"scheduled"`, `scheduled_start_at` echoed.
+Response `200` — the updated `BroadcastSessionOut` with `name`,
+`scheduled_at` (integer) and `schedule_status` populated; `status` is typically
+`"scheduled"`. `422` if `scheduled_at` is in the past / under min lead time, or
+`name` exceeds 200 / `description` exceeds 2000.
 
-### PATCH `broadcast/sessions/{sessionId}` — schedule / reschedule
-Request:
-```json
-{ "scheduled_start_at": "2026-06-08T20:30:00Z" }
-```
-Response `200` — the updated session with the new `scheduled_start_at`. `404` if
-unknown; `409`/`422` if the session has already started (reschedule of a live
-session is AND-309).
+### POST `broadcast/sessions/{sessionId}/cancel-schedule` — cancel schedule (`200 BroadcastSessionOut`)
+Request: **no body** (`req=` empty in OpenAPI). Response `200` — the session with
+`status:"cancelled"` (and `cancelled_at` set). `422` if the session is not in a
+cancellable state (e.g. already live/ended).
 
-### POST `broadcast/sessions/{sessionId}/cancel` — cancel schedule
-Request: `{}` (or `{ "reason": "..." }` if supported — Q-3).
-Response `200` — the session with `status:"cancelled"`. `409`/`422` if already
-live/ended.
-
-**Error envelope (all endpoints):** FastAPI `detail` union
-(`string | [{msg,type,loc}] | {code,...}`) decoded to `ApiError` by **AND-015**;
-notably `422` validation errors (e.g. past `scheduled_start_at`, blank title)
-carry a `loc` pointing at the offending field, which the ViewModel maps to a
-field-level error where possible (R-2). `403` indicates the user is not a host /
-not the session owner.
+**Error envelope (all endpoints):** the OpenAPI declares only `422
+HTTPValidationError` (FastAPI standard) for these three routes; `HTTPValidationError`
+is `{ "detail": [{ "loc": [...], "msg": "...", "type": "..." }] }`. Decoded to
+`ApiError` by **AND-015**; a `422` for a past `scheduled_at` or an over-length
+`name` carries a `loc` (e.g. `["body","scheduled_at"]`,
+`["body","name"]`) the ViewModel maps to a field-level error where possible (R-2).
+`401`/`403` (unauthenticated / not a host or owner) are **not** enumerated in the
+OpenAPI for these routes but are handled defensively (AND-013 refresh / AND-025
+auth gating) — treated as an unverified assumption (§16). The earlier draft's
+field name `scheduled_start_at` is wrong; the wire field is `scheduled_at`.
 
 ## 6. Data & State Management
 
@@ -486,8 +537,12 @@ not the session owner.
 - **Session/auth state** lives in cookies (AND-011); CSRF (`ui_csrf` →
   `X-CSRF-Token`) is attached globally (AND-012). The ViewModel reads neither.
 - **Time:** the ViewModel injects a `java.time.Clock` so "is the scheduled time
-  in the future" is deterministic and testable; UTC `Instant` is the wire/domain
-  representation, with local-timezone presentation handled in the picker UI.
+  in the future" is deterministic and testable. **[CORRECTED v2026-06-06]** The
+  **wire** representation of `scheduled_at` is a **Unix epoch-seconds integer**
+  (not ISO-8601). The domain/UI may hold an `Instant`, but the request DTO sends
+  `instant.epochSecond` (a `Long`); local-timezone presentation is handled in the
+  picker UI. (Response timestamps like `created_at` are ISO-8601 strings, but
+  `scheduled_at` in `BroadcastSessionOut` is also an integer.)
 - **Threading:** repository calls run on an injected `@IoDispatcher`; the
   ViewModel launches in `viewModelScope`. No blocking on the main thread.
 
@@ -552,7 +607,8 @@ not the session owner.
 - **i18n:** every string (labels, button text, validation/error messages,
   confirmation dialog) is a string resource (AND-111), no hardcoded literals.
   The scheduled time is shown in the **device locale and timezone** (the picker
-  works in local time; the wire value is UTC `Instant`); relative phrasing like
+  works in local time; the wire value is a Unix epoch-seconds integer);
+  relative phrasing like
   "starts in 2h" is not required here. RTL layouts supported (AND-114). Server
   error text from AND-015 is surfaced per the i18n policy.
 
@@ -573,20 +629,22 @@ not the session owner.
 **Transport (core-network, JVM + MockWebServer)** using the production Moshi/
 Retrofit config (shared `InstantJsonAdapter`):
 
-- **T-1 — create (now)** `createSession(CreateBroadcastSessionReqDto("Friday
-  Night Live", "Weekly Q&A", null))` issues `POST /broadcast/sessions`; the
-  request body JSON has `title`, `description`, and **no** `scheduled_start_at`
-  key (null omitted); the `201` response decodes and `toDomain()` yields the
-  expected `BroadcastSession`.
-- **T-2 — create (scheduled)** request body serializes `scheduled_start_at` as
-  ISO-8601 UTC matching the input `Instant`; response `status:"scheduled"` maps
-  to `BroadcastSessionStatus.SCHEDULED` with the right `scheduledStartAt`.
-- **T-3 — update schedule** `updateSchedule(id, ...)` issues
-  `PATCH /broadcast/sessions/bcs_01HY9` with the new `scheduled_start_at`; path
-  param interpolated; response decodes.
-- **T-4 — cancel** `cancelSession(id)` issues
-  `POST /broadcast/sessions/bcs_01HY9/cancel`; response `status:"cancelled"` maps
-  to `CANCELLED`.
+- **T-1 — create** `createSession(CreateBroadcastSessionReqDto(profileId =
+  "bp_01HX0"))` issues `POST /broadcast/sessions`; the request body JSON has
+  `profile_id` and omits null optional keys; the `201` `BroadcastSessionOut`
+  response decodes and `toDomain()` yields the expected `BroadcastSession`.
+  **[CORRECTED: body is profile_id, not title/description.]**
+- **T-2 — schedule** `scheduleSession(id, scheduledAt = 1781020800L, name, desc)`
+  issues `POST /broadcast/sessions/bcs_01HY9/schedule`; the request body
+  serializes `scheduled_at` as a **JSON integer** (epoch seconds, not ISO-8601),
+  plus `name`/`description`; response `status:"scheduled"` maps to
+  `BroadcastSessionStatus.SCHEDULED` with the right `scheduledAt`.
+- **T-3 — schedule path param** `scheduleSession("bcs_01HY9", ...)` interpolates
+  the path correctly to `.../bcs_01HY9/schedule`; response decodes.
+- **T-4 — cancel-schedule** `cancelSchedule(id)` issues
+  `POST /broadcast/sessions/bcs_01HY9/cancel-schedule` with **no body**; response
+  `status:"cancelled"` maps to `CANCELLED`. **[CORRECTED: path is
+  `/cancel-schedule`, not `/cancel`; no request body.]**
 - **T-5 — error propagation** a `422` with a `detail` array surfaces as
   `HttpException(code=422)` carrying the body for AND-015.
 
@@ -682,16 +740,17 @@ entry point.
   post-create destination depend on AND-308 (not yet merged) and the host hub
   IA. Mitigation: until AND-308 lands, create pops back with a nav result; the
   route is designed to accept the AND-308 destination later.
-- **Q-1** Is create `POST broadcast/sessions` returning `201` with the session,
-  or a thinner create-response (just an id)? *Proposed:* assume the full AND-278
-  superset; if thinner, follow with a `getSession`.
-- **Q-2** Is cancel `POST .../cancel`, `DELETE .../schedule`, or a
-  `PATCH status:"cancelled"`? *Proposed:* `POST .../cancel`; reconcile with
-  OpenAPI/`broadcast.ts`. Guarded by T-4.
-- **Q-3** Does cancel accept/require a `reason` body? *Proposed:* optional;
-  send `{}` if not. 
-- **Q-4** Title max length and whether description is length-bounded server-side?
-  *Proposed:* client cap title at 120 chars; confirm against `/openapi.json`.
+- **Q-1 [RESOLVED v2026-06-06].** `POST broadcast/sessions` returns `201
+  BroadcastSessionOut` (the full session), required `id, profile_id, status,
+  created_by, created_at, updated_at`. No follow-up `getSession` needed.
+- **Q-2 [RESOLVED v2026-06-06].** Cancel is `POST .../cancel-schedule` (verified
+  in the OpenAPI index) — NOT `.../cancel`, a `DELETE`, or a status-PATCH. Guarded
+  by T-4.
+- **Q-3 [RESOLVED v2026-06-06].** Cancel-schedule takes **no body** (`req=` empty
+  in OpenAPI); there is no `reason` field. Send no body.
+- **Q-4 [RESOLVED v2026-06-06].** Title is the `BroadcastScheduleIn.name` field,
+  maxLength **200** (not 120); `description` maxLength **2000**. Client caps
+  accordingly. (Note: title is not a create-time field at all.)
 - **Q-5** Can a host create multiple concurrent scheduled sessions, and is there
   a per-host limit that should be surfaced pre-submit? *Proposed:* allow; surface
   any backend `409`/limit error via AND-015. (Defer enforcement to backend.)
@@ -702,19 +761,21 @@ entry point.
 ## 14. Acceptance Criteria
 
 - **AC-1 (backlog).** A host can **create** and **schedule** a session: from
-  `CreateBroadcastScreen`, entering a title and choosing "Start now" creates a
-  session (`POST broadcast/sessions`, no `scheduled_start_at`), and choosing a
-  future time creates a scheduled session (with `scheduled_start_at`); both
+  `CreateBroadcastScreen`, "Start now" creates a session (`POST broadcast/sessions`
+  with `profile_id`), and "Schedule for later" creates then schedules it
+  (`POST broadcast/sessions/{id}/schedule` with `scheduled_at` + `name`); both
   succeed end-to-end through repository → ViewModel → UI, proven by T-1, T-2, T-9,
-  and the UI test T-13.
+  and the UI test T-13. **[CORRECTED: title/schedule go on the schedule call.]**
 - **AC-2.** A host can **cancel a scheduled** session
-  (`POST broadcast/sessions/{id}/cancel`), transitioning it to `CANCELLED`,
-  behind a confirmation dialog (T-4, T-11, T-13).
-- **AC-3.** `BroadcastApi` declares `createSession`, `updateSchedule`, and
-  `cancelSession` with typed `@Body` request DTOs returning `BroadcastSessionDto`;
-  verbs/paths/bodies match Section 5, asserted with MockWebServer (T-1..T-4).
-- **AC-4.** Request DTOs serialize via Moshi codegen with `scheduled_start_at` as
-  ISO-8601 UTC; null schedule omits the key on "start now" (T-1, T-2).
+  (`POST broadcast/sessions/{id}/cancel-schedule`, no body), transitioning it to
+  `CANCELLED`, behind a confirmation dialog (T-4, T-11, T-13).
+- **AC-3.** `BroadcastApi` declares `createSession`, `scheduleSession`, and
+  `cancelSchedule` with typed `@Body` request DTOs (cancel has no body) returning
+  `BroadcastSessionDto`; verbs/paths/bodies match Section 5, asserted with
+  MockWebServer (T-1..T-4).
+- **AC-4.** Request DTOs serialize via Moshi codegen with `scheduled_at` as a
+  **Unix epoch-seconds integer** (not ISO-8601); `createSession` omits null
+  optional keys (T-1, T-2).
 - **AC-5.** `HostBroadcastRepository` wraps each call in `ApiResult` (AND-018),
   maps non-2xx via AND-015, and maps responses through AND-278's `toDomain()`
   (T-5, T-6).
@@ -737,8 +798,10 @@ entry point.
 
 ## 15. Definition of Done
 
-- Request DTOs (`CreateBroadcastSessionReqDto`, `UpdateBroadcastScheduleReqDto`,
-  `CancelBroadcastReqDto`) and the `BroadcastApi` host methods live in
+- Request DTOs (`CreateBroadcastSessionReqDto` with `profile_id`,
+  `ScheduleBroadcastReqDto` with `scheduled_at`/`name`/`description`; cancel has
+  no body) and the `BroadcastApi` host methods (`createSession`,
+  `scheduleSession`, `cancelSchedule`) live in
   `core-network` (`com.testlogon.android.core.network.broadcast`);
   `HostBroadcastRepository` + impl + Hilt binding live in `core-data`
   (`com.testlogon.android.core.data.broadcast`); `CreateBroadcastViewModel`,
@@ -766,3 +829,246 @@ entry point.
 - A one-line note in the `core-network` / `feature-broadcast-host` README records
   the host create/schedule/cancel path/verb map and the CSRF requirement on these
   mutations.
+
+## 16. Citations & Assumption Audit
+
+Reviewed 2026-06-06 against the OpenAPI index/spec and the frontend reference
+source. Each numbered claim lists the claim, a VERDICT, and the exact SOURCE.
+
+1. **Create endpoint = `POST /broadcast/sessions`.** VERDICT: Verified.
+   SOURCE: OpenAPI `POST /broadcast/sessions` (op `create_session_route...`,
+   `req=BroadcastSessionCreateIn`, `resp=201:BroadcastSessionOut`); frontend
+   `src/api/endpoints/broadcast.ts: createSession` (`api.post("/broadcast/sessions")`).
+2. **Create request body has `title`, `description`, optional `scheduled_start_at`.**
+   VERDICT: Corrected. The real `BroadcastSessionCreateIn` requires **`profile_id`**
+   and offers only `ingest_url`, `stream_key_ref`,
+   `stream_key_rotation_interval_seconds`, and ad-config fields — no
+   title/description/schedule. SOURCE: OpenAPI `components.schemas.BroadcastSessionCreateIn`
+   (required: `["profile_id"]`); frontend `src/api/endpoints/broadcast.ts:
+   CreateSessionReq`.
+3. **Schedule endpoint = `PATCH /broadcast/sessions/{sessionId}`.** VERDICT:
+   Corrected → **`POST /broadcast/sessions/{session_id}/schedule`**. No `PATCH
+   .../{id}` route exists. SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/schedule`
+   (op `schedule_session_route...`, `req=app__routers__broadcast__BroadcastScheduleIn`,
+   `resp=200:BroadcastSessionOut`).
+4. **Schedule body field `scheduled_start_at`, an ISO-8601 `Instant` via
+   `InstantJsonAdapter`.** VERDICT: Corrected → field is **`scheduled_at`, a Unix
+   epoch-seconds integer** (required, `>= min lead time`); also optional `name`
+   (≤200) and `description` (≤2000). The InstantJsonAdapter is NOT used for the
+   request body. SOURCE: OpenAPI
+   `components.schemas.app__routers__broadcast__BroadcastScheduleIn`
+   (`scheduled_at: integer`, `name`, `description`; required `["scheduled_at"]`).
+5. **Title field named `title`, max 120.** VERDICT: Corrected → the title is
+   `name` (maxLength **200**), `description` maxLength **2000**, and it lives on
+   the schedule body, not create. SOURCE: same as #4.
+6. **Cancel endpoint = `POST /broadcast/sessions/{sessionId}/cancel`.** VERDICT:
+   Corrected → **`POST /broadcast/sessions/{session_id}/cancel-schedule`**.
+   SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/cancel-schedule`
+   (op `cancel_schedule_route...`, `resp=200:BroadcastSessionOut`).
+7. **Cancel accepts an optional `reason` body.** VERDICT: Corrected → cancel-schedule
+   takes **no request body** (`req=` empty). SOURCE: OpenAPI index line for
+   `cancel-schedule` (`req=` empty). (Distinct from start/stop's
+   `BroadcastSessionActionIn { reason }`.)
+8. **Response is a session "superset" with `host: {id, username, display_name}`.**
+   VERDICT: Corrected → `BroadcastSessionOut` has **no `host` object**; owner is the
+   `created_by` string. Required fields: `id, profile_id, status, created_by,
+   created_at, updated_at`. Title is the nullable `name`; schedule time is
+   `scheduled_at` (integer). SOURCE: OpenAPI `components.schemas.BroadcastSessionOut`;
+   frontend `src/api/endpoints/broadcast.ts: BroadcastSession`.
+9. **All mutations carry `X-CSRF-Token` from the `ui_csrf` cookie (global
+   interceptor).** VERDICT: Verified. SOURCE: frontend `src/api/client.ts`
+   (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`; `credentials:
+   "include"`).
+10. **`status` is a typed enum incl. `scheduled`/`cancelled`.** VERDICT: Verified
+    (web models `draft | scheduled | provisioning | ready | live | stopping |
+    stopped | cancelled | error`); on the wire `status` is a free string, so the
+    AND-278 mapper must tolerate unknown values. SOURCE: frontend
+    `src/api/endpoints/broadcast.ts: BroadcastSessionStatus`; OpenAPI
+    `BroadcastSessionOut.status: string`.
+11. **Cancel transitions session to `status:"cancelled"`.** VERDICT: Verified
+    (response type) / partially Unverified (exact value). The route returns
+    `BroadcastSessionOut`; `cancelled_at` is a field and `cancelled` is a known
+    status, but the precise post-cancel status string is not pinned by the schema.
+    SOURCE: OpenAPI `BroadcastSessionOut` (`cancelled_at`, `status`).
+12. **Web `broadcast.ts` calls schedule/cancel-schedule.** VERDICT: Corrected →
+    the web client only implements create/start/stop/delete/playback; it does NOT
+    call `/schedule` or `/cancel-schedule`. Android is the first consumer; those
+    two routes are verified from OpenAPI only. SOURCE: `src/api/endpoints/broadcast.ts`
+    (no schedule/cancel functions present).
+13. **POST/PATCH mutations must not be auto-retried (AND-016 GET-only).** VERDICT:
+    Unverified-assumption (Android-internal policy; not in the backend sources).
+    Note the schedule/cancel routes are POST, so "PATCH" wording in the draft is
+    moot. SOURCE: internal AND-016 reference (not in OpenAPI/frontend).
+14. **`403` = not host / not owner; `401` refresh applies.** VERDICT:
+    Unverified-assumption. The OpenAPI declares only `422 HTTPValidationError` for
+    these three routes; 401/403 are not enumerated. SOURCE: OpenAPI index resp
+    columns for the three routes (`...;422:HTTPValidationError` only).
+15. **`422` is FastAPI `HTTPValidationError` with `detail[].loc`.** VERDICT:
+    Verified. SOURCE: OpenAPI `components.schemas.HTTPValidationError`
+    (`detail: [{loc, msg, type}]`).
+16. **Stack pins (Compose, Material 3 DatePicker/TimePicker, `collectAsStateWithLifecycle`,
+    core-library desugaring for `java.time`).** VERDICT: Unverified-assumption
+    (framework choices, not backend contract). SOURCE (framework ref):
+    Material 3 date/time pickers — https://developer.android.com/develop/ui/compose/components/datepickers ;
+    lifecycle-aware collection — https://developer.android.com/topic/libraries/architecture/coroutines#statef ;
+    desugaring — https://developer.android.com/studio/write/java8-support .
+
+### Corrections made
+
+- Create body: `title/description/scheduled_start_at` → **`profile_id` (+ optional
+  ingest/stream-key)** (claims #2, #5; FR-3, FR-6, §4.1, §4.3, §5, T-1, AC-1, AC-4).
+- Schedule route: `PATCH /broadcast/sessions/{id}` → **`POST .../{id}/schedule`**
+  (claim #3; FR-1, FR-4, §4.2, §5, T-2/T-3, AC-1, AC-3).
+- Schedule field: `scheduled_start_at` ISO-8601 `Instant` → **`scheduled_at` Unix
+  epoch-seconds `Long`/integer**; title is **`name` (≤200)**, description **≤2000**
+  (claims #4, #5; FR-6, FR-9, §4.1, §6, §9, §5, AC-4, Q-4).
+- Cancel route: `POST .../{id}/cancel` (+ optional `reason`) → **`POST
+  .../{id}/cancel-schedule` with no body** (claims #6, #7; FR-1, FR-6, §4.2, §5,
+  T-4, AC-2, Q-2, Q-3).
+- Response shape: removed the fictitious `host` object; owner = `created_by`,
+  title = `name` (claim #8; §4.1, §5).
+- DTO/method renames: `UpdateBroadcastScheduleReqDto`→`ScheduleBroadcastReqDto`,
+  `CancelBroadcastReqDto` removed, `updateSchedule`→`scheduleSession`,
+  `cancelSession`→`cancelSchedule` (§4.1, §4.2, §4.3, §15).
+- Resolved Q-1..Q-4 against the sources.
+
+### Open assumptions
+
+- **`profile_id` provenance (NEW, unresolved).** Create now requires a
+  `profile_id` the original spec never modeled. Where the host's broadcast profile
+  comes from (a `GET /broadcast/profiles` pick, a default, or `POST
+  /broadcast/profiles` first) is **not specified** by this ticket and is not
+  resolvable from AND-278/the backlog. Assumption: a profile already exists and
+  its id is supplied to the create call; if not, a profile-selection step (likely a
+  separate ticket) is a prerequisite. *Why unverifiable:* no backlog/spec source
+  defines the host profile UX.
+- **"Start now" semantics (R-3).** Whether a freshly created session is `draft`
+  vs immediately go-live-ready is not pinned; `BroadcastSessionOut.status` is a
+  free string and the actual go-live is AND-308's `start`. *Why unverifiable:*
+  status transitions are server-side and not enumerated.
+- **401/403 behavior** for these routes (claim #14) — not enumerated in OpenAPI.
+- **Min schedule lead time** — `scheduled_at` must be `>= min lead time from now`
+  but the exact value is server-side; client uses a ≥1-minute buffer and surfaces
+  any `422`.
+- **AND-278 DTO field names** (`BroadcastSessionDto`/mapper) are assumed to track
+  `BroadcastSessionOut` (esp. `name`, `created_by`, integer `scheduled_at`); not
+  re-verified here as AND-278 is a separate (unmerged) ticket.
+- **Android framework pins** (claim #16) are standard choices, not contract-verified.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = local JVM unit/Robolectric (no device); **emu35** =
+headless AVD `test35` (x86_64, API 35) for CI UI/instrumented suites; **deviceA15**
+= physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a) for real-hardware
+behavior. This ticket has **no** camera/biometric/WebRTC/FCM/Telecom surface, so
+nearly all cases run on JVM/emu35; one ABI/API-parity smoke is pinned to
+deviceA15.
+
+- **TC-AND-307-01 — Create happy path (contract).** Type: contract/MockWebServer.
+  Target: JVM (`core-network`). Preconditions: MockWebServer enqueues `201` with a
+  `BroadcastSessionOut` body (`id, profile_id, status, created_by, created_at,
+  updated_at`). Steps: call `BroadcastApi.createSession(CreateBroadcastSessionReqDto(profileId="bp_01HX0"))`.
+  Expected: request line `POST /broadcast/sessions`; body JSON contains
+  `profile_id` and omits null optionals; response decodes; `toDomain()` yields the
+  expected `BroadcastSession`. Traces: AC-1, AC-3, AC-4.
+- **TC-AND-307-02 — Schedule serializes epoch-seconds integer (contract).** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: MockWebServer enqueues `200`
+  with `status:"scheduled"`, `scheduled_at` integer, `name` set. Steps: call
+  `scheduleSession("bcs_01HY9", scheduledAt=1781020800L, name="Album party",
+  description="...")`. Expected: request `POST /broadcast/sessions/bcs_01HY9/schedule`;
+  body has `scheduled_at` as a **JSON number** (not a quoted ISO string) plus
+  `name`/`description`; response maps to `SCHEDULED` with `scheduledAt` preserved.
+  Traces: AC-1, AC-3, AC-4.
+- **TC-AND-307-03 — Cancel-schedule path + empty body (contract).** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: enqueue `200` with
+  `status:"cancelled"`. Steps: call `cancelSchedule("bcs_01HY9")`. Expected:
+  request `POST /broadcast/sessions/bcs_01HY9/cancel-schedule` with **empty body**
+  (Content-Length 0 / no JSON); response maps to `CANCELLED`. Traces: AC-2, AC-3.
+- **TC-AND-307-04 — 422 validation error propagation (contract).** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: enqueue `422` with
+  `{"detail":[{"loc":["body","scheduled_at"],"msg":"...","type":"value_error"}]}`.
+  Steps: call `scheduleSession(...)` with a past time. Expected: the repository
+  returns `ApiResult.Error` carrying an AND-015 `ApiError` whose mapped `loc`
+  identifies `scheduled_at`. Traces: AC-5, AC-8.
+- **TC-AND-307-05 — Repository ApiResult wrapping + trimming (unit).** Type: unit.
+  Target: JVM (`core-data`) with a fake `BroadcastApi`. Preconditions: fake returns
+  a success DTO; a second case throws `IOException`. Steps: call `createSession`
+  and `scheduleSession(name=" Padded ")`. Expected: success → `ApiResult.Success`;
+  `IOException` → `ApiResult.Error`; `name`/`description` are trimmed before send.
+  Traces: AC-5.
+- **TC-AND-307-06 — CSRF header present on mutations, absent rationale on GET
+  (contract).** Type: contract/MockWebServer + integration (real OkHttp stack with
+  AND-012 interceptor + seeded `ui_csrf` cookie). Target: JVM/emu35. Preconditions:
+  cookie jar seeded with `ui_csrf=abc`. Steps: issue create, schedule, and
+  cancel-schedule. Expected: each request carries `X-CSRF-Token: abc`; no manual
+  `Cookie`/`Authorization` header set in the interface. Traces: AC-7.
+- **TC-AND-307-07 — Client-side validation gates the network (unit).** Type: unit.
+  Target: JVM (ViewModel + fixed `Clock` + fake repo). Preconditions: schedule
+  mode. Steps: (a) blank `name`; (b) `scheduled_at` in the past; (c) `name` >200
+  chars; (d) valid future time + valid name. Expected: (a)-(c) set the matching
+  field error, `canSubmit=false`, `submit()` makes **no** repo call; (d) clears
+  errors, enables submit. Traces: AC-6.
+- **TC-AND-307-08 — Submit success emits one-shot Created event (unit).** Type:
+  unit (`runTest` + Turbine). Target: JVM. Preconditions: fake repo returns success.
+  Steps: valid input → `submit()`. Expected: `isSubmitting` toggles true→false-path
+  and exactly one `CreateBroadcastEvent.Created(sessionId, scheduled)` is emitted;
+  `scheduled` reflects now-vs-scheduled mode; re-collection after a simulated
+  config change does not re-deliver. Traces: AC-1, AC-9.
+- **TC-AND-307-09 — Submit failure surfaces typed error, no event (unit).** Type:
+  unit. Target: JVM. Preconditions: fake repo returns `ApiResult.Error` (a `422`
+  with `loc=["body","name"]`). Steps: `submit()`. Expected: `submitError`
+  populated, `isSubmitting=false`, no `Created` event; the `422` `loc` maps to the
+  `name` field error (fallback to form-level if unknown). Traces: AC-8.
+- **TC-AND-307-10 — Cancel in edit mode + guard (unit).** Type: unit. Target: JVM.
+  Preconditions: `editingSessionId="bcs_01HY9"` (case A) vs null (case B). Steps:
+  `cancelSchedule()`. Expected: A → repo `cancelSchedule` called, one `Cancelled`
+  event; B → no-op (no repo call). Traces: AC-2.
+- **TC-AND-307-11 — Duplicate-submit guard (unit).** Type: unit. Target: JVM.
+  Preconditions: first `submit()` in flight (`isSubmitting=true`). Steps: call
+  `submit()` again immediately. Expected: the second call starts **no** second repo
+  invocation. Traces: AC-7.
+- **TC-AND-307-12 — Compose screen behavior + accessibility (Compose-UI).** Type:
+  Compose-UI. Target: emu35 (Robolectric acceptable for logic; emu35 for true
+  rendering/semantics). Preconditions: screen with default state. Steps: type a
+  name (submit enables); toggle "Schedule for later" (DatePicker/TimePicker
+  appear); trigger submit (spinner shows); drive an error state (AND-021 error
+  composable + retry shows); tap cancel (confirmation `AlertDialog` appears before
+  `cancelSchedule`). A11y assertions: name/description fields have labels and
+  error semantics (`semantics { error(...) }`), toggle is a labeled selectable
+  group, buttons announce disabled/loading, touch targets ≥48dp, errors are
+  programmatically associated (not color-only). Traces: AC-1, AC-2, AC-8, AC-10.
+- **TC-AND-307-13 — Offline / flaky-dev-host path, no auto-retry (integration).**
+  Type: integration. Target: JVM/emu35 with MockWebServer simulating
+  `SocketPolicy.NO_RESPONSE` / connection drop (and a `UnknownHostException` case).
+  Preconditions: schedule submit. Steps: submit while the host is unreachable.
+  Expected: `submitError` becomes a retryable offline state via the AND-021
+  offline composable; the client does **not** auto-retry the POST; a manual retry
+  re-issues exactly one request. Traces: AC-7, AC-8.
+- **TC-AND-307-14 — Auth/permission defensive handling (contract).** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: enqueue `403` then `401`
+  (note: not enumerated in OpenAPI — assumption per §16 #14). Steps: call create.
+  Expected: `403` → not-authorized UI state (no crash); `401` defers to the
+  AND-013 refresh authenticator / AND-025 gating. Traces: AC-7, AC-8.
+- **TC-AND-307-15 — ABI/API parity smoke (instrumented, physical device).** Type:
+  instrumented/e2e. Target: **deviceA15 (physical, arm64-v8a, API 34)** — MUST run
+  on the device to catch arm64-vs-x86 and API-34-vs-35 differences in `java.time`
+  desugaring (epoch-seconds conversion) and Moshi codegen. Preconditions: app
+  installed on SM-A156U; MockWebServer or dev host reachable. Steps: run the
+  create→schedule→cancel flow end-to-end. Expected: identical request
+  bodies/decoding as emu35; `scheduled_at` integer round-trips correctly; no
+  ABI-specific crashes. Traces: AC-1, AC-2, AC-4, AC-10.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 (create + schedule) | TC-01, TC-02, TC-08, TC-12, TC-15 |
+| AC-2 (cancel-schedule) | TC-03, TC-10, TC-12, TC-15 |
+| AC-3 (API verbs/paths/bodies) | TC-01, TC-02, TC-03 |
+| AC-4 (Moshi serialization, epoch-seconds) | TC-01, TC-02, TC-15 |
+| AC-5 (ApiResult + AND-015 mapping) | TC-04, TC-05 |
+| AC-6 (client-side validation) | TC-07 |
+| AC-7 (CSRF + no auto-retry + dup guard) | TC-06, TC-11, TC-13, TC-14 |
+| AC-8 (typed/localized/retryable errors, loc→field) | TC-04, TC-09, TC-12, TC-13, TC-14 |
+| AC-9 (one-shot event + process-death state) | TC-08 |
+| AC-10 (a11y/i18n/build) | TC-12, TC-15 |

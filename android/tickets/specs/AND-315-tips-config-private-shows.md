@@ -5,7 +5,8 @@ milestone: M7
 epic: E41
 priority: P2
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-282]
 blocks: []
 ---
@@ -24,14 +25,16 @@ The goal is a working, testable private show lifecycle plus a tips-config editor
 - **Namespace:** `com.testlogon.android` (e.g. `com.testlogon.android.feature.broadcast.privateshow`).
 - **Dependency AND-282 (Tips & goals):** provides `chat/tip` submission, tips summary, and goals display models (`TipMenuItem`, `GoalProgress`, viewer `TipApi`). AND-315 reuses these models and adds the host-side *configuration* of the menu/goals and the private-show flow.
 - **Upstream broadcast tickets:** AND-278 (broadcast API DTOs), AND-281 (live chat / SSE channel used to deliver private-show request events), AND-307–AND-313 (host session create, controls, moderation) provide the host session context (`broadcast_id`) this ticket operates within.
-- **Web reference:** `frontend/src/api/endpoints/broadcast*.ts` and `frontend/src/api/types.ts` for the request/response shapes; OpenAPI at `http://18.222.237.167:8000/openapi.json` is authoritative for paths and field names — reconcile drift at implementation and record it in section 13.
-- **Auth:** Cookie session + `ui_csrf` echoed as `X-CSRF-Token`; on 401 the OkHttp authenticator (AND-013) performs one `POST /ui/session/refresh` then retries. Persistent cookie jar (AND-011) and CSRF interceptor (AND-012) assumed in place.
-- **Real-time:** Private-show events arrive over the broadcast SSE stream from AND-281/AND-143; this ticket subscribes and reconciles, it does not build the SSE transport.
+- **Web reference:** `src/api/endpoints/broadcast-tips.ts`, `src/api/endpoints/broadcastPrivate.ts`, `src/api/endpoints/broadcast.ts`, and `src/components/broadcast/PrivateRequestNotification.tsx` for the request/response shapes and host UX; OpenAPI at `http://18.222.237.167:8000/openapi.json` is authoritative for paths and field names — reconcile drift at implementation and record it in section 13. **[CORRECTED]** The real endpoints live under `/broadcast/sessions/{session_id}/...` (no `/ui` prefix; path param is `session_id`), not the `/ui/broadcast/{id}/...` paths originally drafted in section 5.
+- **Auth:** Cookie session + `ui_csrf` cookie echoed as `X-CSRF-Token`, **plus** an `Authorization: Bearer <accessToken>` header that the web client (`src/api/client.ts`) attaches to every call from its auth store; an optional `X-IMPERSONATION-TOKEN` header is sent only when impersonating (not used by this host flow). On 401 the OkHttp authenticator (AND-013) performs one `POST /ui/session/refresh` then retries. Persistent cookie jar (AND-011) and CSRF interceptor (AND-012) assumed in place. **[CORRECTED]** Original draft omitted the bearer token; mirror `client.ts` (cookie + CSRF + bearer).
+- **Real-time:** **[CORRECTED]** The web reference does NOT use SSE for private-show state — `PrivateRequestNotification.tsx` polls `GET /broadcast/sessions/{id}/private/requests` every 5 s (and `BroadcastPage` polls session detail every 5 s). This spec's original SSE-driven design is unverified against the reference; treat polling as the contract-confirmed mechanism. If an SSE channel exists (AND-281/AND-143) it MAY be used as an optimization, but the baseline implementation must poll `listPrivateRequests` / `getPrivateStatus` on an interval. See §13 and the audit in §16.
 
 ## 3. Functional Requirements
 
+> **[REVIEW NOTE — scope correction]** The verified API supports only `tip_enabled` / `tip_min_cents` / `tip_max_cents` for tip config (PATCH), with goals as a separate resource and per-minute private-show rate set by the viewer on the request. The richer tip-menu / currency / custom-bounds / goal-linkage / host private-show-rate config described below (items 2,3,6) is **not backed by the current backend** and is retained as a product aspiration; implement only what the API supports unless a backend change lands. See §5 and §16.
+
 **Tips configuration (host):**
-1. Host can open a "Tip settings" editor for the active/owned broadcast and view current config.
+1. Host can open a "Tip settings" editor for the active/owned broadcast and view current config (read from the session object's tip fields; there is no dedicated config GET).
 2. Host can edit: ordered list of suggested tip amounts (label + amount), enable/disable custom amounts, min/max custom amount, currency (read-only display, server-driven), and whether tips are enabled at all.
 3. Host can link the tip menu to an active goal (from AND-282 goals) so tips contribute to goal progress.
 4. Saving validates locally (amounts > 0, min ≤ max, at least one menu item when tips enabled, no duplicate amounts) before POST/PUT; server validation errors map back to per-field messages.
@@ -120,70 +123,95 @@ DI: a Hilt `@Module` binds `BroadcastMonetizationRepository` and provides the Re
 
 ## 5. API Contract
 
-Paths below follow the broadcast/UI session conventions; field names must be reconciled against `/openapi.json` and `frontend/src/api/types.ts` at implementation. All calls carry session cookies + `X-CSRF-Token`.
+**[CORRECTED — this section was substantially rewritten to match the verified OpenAPI index and the web reference.]** All calls carry session cookies + `X-CSRF-Token` + `Authorization: Bearer`. The base path is `/broadcast/sessions/{session_id}/...` (no `/ui` prefix). Field names below are taken verbatim from the OpenAPI schemas and `broadcastPrivate.ts`/`broadcast.ts`; see §16 for per-claim sources.
 
-**Retrofit interface:**
+> **Tips "config" is much smaller than originally drafted.** The server has NO tip-menu, currency, custom-bounds, or `linked_goal_id` config object, and NO `GET tips/config`. Tip config is a single `PATCH .../tips/config` taking `BroadcastTipConfigIn = {tip_enabled?, tip_min_cents?, tip_max_cents?}` (both cents fields bounded 100–100000) and returning the full `BroadcastSession` (`BroadcastSessionOut`). The current values are read from the session object's `tip_enabled` / `tip_min_cents` / `tip_max_cents` fields (via `GET /broadcast/sessions/{id}`), not a dedicated config GET. "Goals" are a separate resource (`GET/POST/DELETE .../goals`); there is no menu↔goal linkage field. Any richer "tip menu" / custom-amount editor described elsewhere in this spec is an **unverified product assumption** not backed by the API and must not be implemented against a non-existent endpoint without a backend change (see §13/§16).
+
+> **Private-show per-minute rate is set by the VIEWER on the request, not by host config.** `PrivateRequestIn` carries `rate_per_minute_cents` (100–10000) and `payment_method_id`; there is no host-side "accepting / rate / min-duration" config endpoint in the API. The host's role is to poll incoming requests and accept (choosing a broadcast `behavior`) / decline.
+
+**Retrofit interface (corrected paths & shapes):**
 
 ```kotlin
 interface BroadcastMonetizationApi {
-    @GET("ui/broadcast/{id}/tips/config")
-    suspend fun getTipsConfig(@Path("id") id: String): TipsConfigDto
+    // Tip config: PATCH only; returns the full session. No GET tips/config exists.
+    @PATCH("broadcast/sessions/{id}/tips/config")
+    suspend fun patchTipConfig(@Path("id") id: String, @Body body: BroadcastTipConfigInDto): BroadcastSessionDto
 
-    @PUT("ui/broadcast/{id}/tips/config")
-    suspend fun putTipsConfig(@Path("id") id: String, @Body body: TipsConfigDto): TipsConfigDto
+    // Read current tip config + status via the session object.
+    @GET("broadcast/sessions/{id}")
+    suspend fun getSession(@Path("id") id: String): BroadcastSessionDto
 
-    @GET("ui/broadcast/{id}/private-show/status")
-    suspend fun getPrivateShowStatus(@Path("id") id: String): PrivateShowStatusDto
+    // Host: list pending private-show requests (POLLED every ~5s in the web client).
+    @GET("broadcast/sessions/{id}/private/requests")
+    suspend fun listPrivateRequests(@Path("id") id: String): PrivateRequestListDto
 
-    @POST("ui/broadcast/{id}/private-show/{requestId}/accept")
-    suspend fun acceptPrivateShow(@Path("id") id: String, @Path("requestId") requestId: String): PrivateShowSessionDto
+    // Current private session status for the broadcast.
+    @GET("broadcast/sessions/{id}/private/status")
+    suspend fun getPrivateStatus(@Path("id") id: String): PrivateStatusDto
 
-    @POST("ui/broadcast/{id}/private-show/{requestId}/decline")
-    suspend fun declinePrivateShow(@Path("id") id: String, @Path("requestId") requestId: String): Response<Unit>
+    // Accept REQUIRES a body: behavior = pause | end | continue (what happens to the public broadcast).
+    @POST("broadcast/sessions/{id}/private/{requestId}/accept")
+    suspend fun acceptPrivateRequest(
+        @Path("id") id: String,
+        @Path("requestId") requestId: String,
+        @Body body: PrivateRequestAcceptInDto,   // {"behavior":"pause"}
+    ): PrivateAcceptDto
 
-    @POST("ui/broadcast/{id}/private-show/{sessionId}/end")
-    suspend fun endPrivateShow(@Path("id") id: String, @Path("sessionId") sessionId: String): PrivateShowSummaryDto
+    @POST("broadcast/sessions/{id}/private/{requestId}/decline")
+    suspend fun declinePrivateRequest(@Path("id") id: String, @Path("requestId") requestId: String): Response<Unit>
+
+    // End uses the PRIVATE SESSION id (private_session_id), not the request id.
+    @POST("broadcast/sessions/{id}/private/{privateId}/end")
+    suspend fun endPrivateSession(@Path("id") id: String, @Path("privateId") privateId: String): PrivateSessionEndDto
 }
 ```
 
-**`GET .../tips/config` → 200:**
+**`PATCH .../tips/config`** body `BroadcastTipConfigIn` → 200 `BroadcastSessionOut`:
+```json
+// request body (all optional, cents 100..100000)
+{ "tip_enabled": true, "tip_min_cents": 100, "tip_max_cents": 50000 }
+// response: full BroadcastSession; relevant fields:
+{ "id": "sess_1", "status": "live", "tip_enabled": true, "tip_min_cents": 100, "tip_max_cents": 50000, "tip_total_cents": 0, "tip_count": 0 /* ...many other session fields... */ }
+```
+
+**`GET .../private/requests` → 200 `PrivateRequestListOut`:** `{ "requests": [PrivateRequestOut, ...] }`. Each `PrivateRequestOut` (timestamps are **epoch integers**, viewer fields are **flat**, not nested):
 ```json
 {
-  "tips_enabled": true,
-  "currency": "USD",
-  "menu": [
-    {"id": "m1", "label": "Coffee", "amount_cents": 500},
-    {"id": "m2", "label": "Big tip", "amount_cents": 5000}
-  ],
-  "custom_amount_enabled": true,
-  "custom_min_cents": 100,
-  "custom_max_cents": 100000,
-  "linked_goal_id": "goal_123",
-  "private_show": {
-    "accepting": true,
-    "rate_per_minute_cents": 2000,
-    "min_duration_seconds": 300
-  }
+  "request_id": "req_9",
+  "private_session_id": "ps_7",
+  "session_id": "sess_1",
+  "viewer_id": "u_42",
+  "viewer_display_name": "Ada",
+  "rate_per_minute_cents": 2000,
+  "status": "pending",
+  "behavior": null,
+  "call_id": null,
+  "max_duration_minutes": 60,
+  "requested_at": 1749146400,
+  "accepted_at": null, "started_at": null, "ended_at": null, "ended_by": null,
+  "total_billed_cents": 0
 }
 ```
-`PUT` accepts the same shape (without server-assigned `id`s on new menu items) and returns the persisted object.
+Required fields: `request_id, private_session_id, session_id, viewer_id, rate_per_minute_cents, status, requested_at`. There is **no `expires_at`** field — TTL/expiry is not exposed in the schema (see §13/§16).
 
-**`GET .../private-show/status` → 200** (one of):
+**`GET .../private/status` → 200 `PrivateStatusResponse`** (web type; OpenAPI declares an untyped 200 body). Fields: `status` plus optional `request_id, private_session_id, session_id, viewer_id, viewer_display_name, rate_per_minute_cents, behavior, call_id`.
+
+**`POST .../{requestId}/accept`** body `{"behavior":"pause"|"end"|"continue"}` → 200 `PrivateAcceptOut`:
 ```json
-{ "state": "idle" }
-{ "state": "pending", "request": {"request_id":"req_9","viewer":{"u":"u_42","display_name":"Ada"},"rate_per_minute_cents":2000,"requested_duration_seconds":600,"expires_at":"2026-06-05T18:00:30Z"} }
-{ "state": "active", "session": {"session_id":"ps_7","viewer":{"u":"u_42","display_name":"Ada"},"rate_per_minute_cents":2000,"started_at":"2026-06-05T17:55:00Z"} }
+{ "private_session_id":"ps_7", "session_id":"sess_1", "status":"active", "behavior":"pause", "call_id":"call_123", "rate_per_minute_cents":2000 }
+```
+(`behavior` controls the public broadcast on accept; `call_id` is the WebRTC call handle for the private session.)
+
+**`POST .../{requestId}/decline` → 200** empty body in OpenAPI; web client types it as `{ "ok": true, "request_id": "req_9" }`. **`POST .../{requestId}/cancel`** is the viewer-side cancellation (out of host scope here, listed for completeness).
+
+**`POST .../{privateId}/end` → 200 `PrivateSessionEndOut`** (note `total_billed_cents`, not `total_amount_cents`; no `currency`/viewer in the summary):
+```json
+{ "private_session_id":"ps_7", "session_id":"sess_1", "status":"ended", "duration_seconds":420, "total_billed_cents":14000, "ended_by":"host" }
 ```
 
-**`POST .../{requestId}/accept` → 200:** `PrivateShowSessionDto` (as in `active.session`).
-**`POST .../{sessionId}/end` → 200:**
-```json
-{"session_id":"ps_7","duration_seconds":420,"total_amount_cents":14000,"currency":"USD","viewer":{"u":"u_42","display_name":"Ada"}}
-```
+**Real-time:** **[CORRECTED]** Delivery of new requests / status changes is by **polling** in the web reference (`listPrivateRequests` @5s, session detail @5s), not SSE. No `event: private_show` SSE schema is present in the reference; the previously-described event types (`request.created` etc.) are **unverified assumptions**. Baseline Android implementation must poll; an SSE fast-path is optional and unconfirmed.
 
-**SSE events** (over AND-281 channel): `event: private_show` with `data` `{"type":"request.created|request.expired|session.started|session.ended", ...payload matching the DTOs above}`.
-
-**Errors:** FastAPI `detail` mapped per AND-015 (`string | [{msg}] | {code,...}`). Notable: `409` (request already accepted/expired, or session already ended), `404` (stale `requestId`/`sessionId`), `403` (not the host / not authorized). Idempotent re-`end`/`decline` on an already-terminal resource is treated as success by the VM.
+**Errors:** FastAPI returns `422:HTTPValidationError` for body/param validation (the only documented error response on these routes); `detail` mapped per AND-015 (`string | [{msg}] | {code,...}`, per `normalizeErrorDetail` in `client.ts`). `401` → one `POST /ui/session/refresh` + retry (per `client.ts`); `403` → permission denied / not your broadcast. `404`/`409` for stale/terminal request/session are plausible but **not documented in the OpenAPI for these routes** (only 200 + 422 are declared) — treat them as defensive handling, not a verified contract (see §16). Idempotent re-`end`/`decline` on an already-terminal resource is treated by the VM as success/converge-to-truth.
 
 ## 6. Data & State Management
 
@@ -196,9 +224,11 @@ data class TipsConfig(
     val customAmountEnabled: Boolean, val customMinCents: Long?, val customMaxCents: Long?,
     val linkedGoalId: String?, val privateShow: PrivateShowConfig,
 )
-data class PrivateShowRequest(val requestId: String, val viewer: ViewerRef, val ratePerMinuteCents: Long, val requestedDurationSeconds: Int, val expiresAt: Instant)
-data class PrivateShowSession(val sessionId: String, val viewer: ViewerRef, val ratePerMinuteCents: Long, val startedAt: Instant)
-data class PrivateShowSummary(val sessionId: String, val durationSeconds: Int, val totalAmountCents: Long, val currency: String, val viewer: ViewerRef)
+// [CORRECTED] viewer fields are FLAT (viewer_id/viewer_display_name), timestamps are epoch seconds (Long/Instant from epoch),
+// duration is max_duration_MINUTES, summary uses total_billed_cents and has no currency/viewer. No expires_at exists.
+data class PrivateShowRequest(val requestId: String, val privateSessionId: String, val viewerId: String, val viewerDisplayName: String, val ratePerMinuteCents: Long, val status: String, val maxDurationMinutes: Int, val requestedAt: Instant)
+data class PrivateShowSession(val privateSessionId: String, val sessionId: String, val status: String, val behavior: String, val callId: String, val ratePerMinuteCents: Long)
+data class PrivateShowSummary(val privateSessionId: String, val sessionId: String, val status: String, val durationSeconds: Int, val totalBilledCents: Long, val endedBy: String)
 ```
 DTOs live in `core-network` with Moshi adapters; `Instant`/`Long`-cents conversions in mapper functions (`TipsConfigDto.toDomain()`).
 
@@ -261,8 +291,9 @@ DTOs live in `core-network` with Moshi adapters; `Instant`/`Long`-cents conversi
 
 ## 13. Risks & Open Questions
 
-- **Endpoint/field drift:** exact paths and field names (`tips/config` vs `monetization/tips`, `private-show` vs `private_show`) must be confirmed against `/openapi.json`; this spec's paths are best-effort from web reference conventions. Resolve before coding and update section 5.
-- **SSE event schema:** whether private-show events ride the existing live-chat SSE channel (AND-281) or a dedicated stream is unconfirmed; if dedicated, an additional `BroadcastEventSource` subscription is needed.
+- **Endpoint/field drift:** **[RESOLVED in this review]** verified against the OpenAPI index and web reference. Correct base path is `/broadcast/sessions/{session_id}/...`; tip config is `PATCH .../tips/config` with `{tip_enabled,tip_min_cents,tip_max_cents}` only; private routes are `.../private/{requests,status,{id}/accept,{id}/decline,{id}/end,{id}/cancel}`. Section 5 has been corrected. Remaining product-level gap: the rich tip-menu/custom-bounds/host-rate config has no backend support and needs a backend ticket if desired.
+- **SSE event schema:** **[CORRECTED]** the web reference uses 5s polling (`listPrivateRequests`, session detail), not SSE, for private-show state. No private-show SSE event schema exists in the reference. Baseline = polling; an SSE fast-path remains an unconfirmed optimization that would need a backend channel + schema.
+- **Request expiry / TTL:** `PrivateRequestOut` exposes no `expires_at`; the assumed auto-expire/TTL behavior is unverified. Confirm whether expiry is server-driven (and how it is surfaced) before relying on it in the UI.
 - **Billing authority & metering:** does the server meter private-show cost server-side and bill on `end`, or expect periodic heartbeats? Spec assumes server-side metering with client-estimated display; confirm to avoid double-charging or under-billing on abrupt disconnect.
 - **Abrupt termination:** behavior if host process dies mid-session (does the server auto-end after a timeout?) affects whether a stale `Active` must be force-ended on next launch. Mitigated by `refreshStatus` rehydrate, but server auto-end policy is an open question.
 - **Goal linkage semantics:** whether private-show payments contribute to the linked goal, or only tips, needs confirmation for goal-progress accuracy.
@@ -286,3 +317,76 @@ DTOs live in `core-network` with Moshi adapters; `Instant`/`Long`-cents conversi
 - Strings externalized (no hardcoded UI text), currency/amount formatting locale-aware, accessibility labels and ≥48dp targets verified; RTL-clean.
 - Lint/format/static analysis (AND-005) clean; redacted telemetry verified to contain no viewer PII.
 - Section 13 open questions (endpoint drift, SSE channel, billing authority) resolved or explicitly deferred with owning ticket noted; PR merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with VERDICT and an exact source pointer. Sources: OpenAPI index `reference/openapi.index.txt`, OpenAPI spec `reference/openapi.pretty.json` (schemas under `components.schemas`), and frontend files under `reference/src/`.
+
+1. **Tip config endpoint is `PATCH /broadcast/sessions/{session_id}/tips/config` (not GET+PUT `/ui/broadcast/{id}/tips/config`).** — VERDICT: Corrected. SOURCE: OpenAPI `PATCH /broadcast/sessions/{session_id}/tips/config` (op `update_tip_config_route...`, req=`BroadcastTipConfigIn`, resp=`200:BroadcastSessionOut`); `src/api/endpoints/broadcast-tips.ts: updateTipConfig` (uses `api.patch`).
+2. **`BroadcastTipConfigIn` contains only `tip_enabled`, `tip_min_cents`, `tip_max_cents` (cents bounded 100–100000); no menu/currency/custom-bounds/linked_goal/private_show.** — VERDICT: Corrected. SOURCE: `components.schemas.BroadcastTipConfigIn` (openapi.pretty.json ~L12662); `src/api/endpoints/broadcast.ts: BroadcastTipConfigIn` (L108-112).
+3. **There is no `GET tips/config`; current tip config is read from the `BroadcastSession` object's `tip_enabled`/`tip_min_cents`/`tip_max_cents` fields.** — VERDICT: Corrected. SOURCE: `src/api/endpoints/broadcast.ts: BroadcastSession` (L57-62, "Tipping fields (BCAST-013)"); no `tips/config` GET in OpenAPI index.
+4. **Tip goals are a separate resource (`GET/POST/DELETE /broadcast/sessions/{id}/goals`); no menu↔goal `linked_goal_id` config field exists.** — VERDICT: Corrected (refutes spec's goal-linkage config). SOURCE: OpenAPI `GET/POST /broadcast/sessions/{session_id}/goals`, `DELETE .../goals/{goal_id}`; `src/api/endpoints/broadcast-tips.ts: createTipGoal/listTipGoals/deleteTipGoal`.
+5. **Private-show base path is `/broadcast/sessions/{session_id}/private/...` (not `/ui/broadcast/{id}/private-show/...`).** — VERDICT: Corrected. SOURCE: OpenAPI index lines 212-218; `src/api/endpoints/broadcastPrivate.ts` (all functions).
+6. **Host lists pending requests via `GET .../private/requests` → `PrivateRequestListOut {requests:[PrivateRequestOut]}`.** — VERDICT: Verified/Corrected (path & shape). SOURCE: OpenAPI `GET .../private/requests` (resp=`PrivateRequestListOut`); `components.schemas.PrivateRequestListOut`; `src/api/endpoints/broadcastPrivate.ts: listPrivateRequests`.
+7. **`PrivateRequestOut` viewer fields are flat (`viewer_id`, `viewer_display_name`) and timestamps are epoch integers (`requested_at` etc.); the spec's nested `viewer:{u,display_name}` + ISO `expires_at` was wrong.** — VERDICT: Corrected. SOURCE: `components.schemas.PrivateRequestOut` (openapi.pretty.json L57945-58067); `src/api/endpoints/broadcastPrivate.ts: PrivateRequest` (L5-22).
+8. **No `expires_at` / TTL field exists on the request schema; auto-expire is unverified.** — VERDICT: Unverified-assumption. SOURCE: absence in `components.schemas.PrivateRequestOut` (no expiry/ttl property).
+9. **Accept = `POST .../private/{request_id}/accept` with REQUIRED body `PrivateRequestAcceptIn {behavior: "pause"|"end"|"continue"}` → `PrivateAcceptOut` (200).** — VERDICT: Corrected (spec had a bodyless accept). SOURCE: OpenAPI `POST .../private/{request_id}/accept` (req=`PrivateRequestAcceptIn`); `components.schemas.PrivateRequestAcceptIn` (pattern `^(pause|end|continue)$`, L57889); `src/api/endpoints/broadcastPrivate.ts: acceptPrivateRequest`; `src/components/broadcast/PrivateRequestNotification.tsx` (L32-47,101-116) shows the behavior selector.
+10. **`PrivateAcceptOut` fields: `private_session_id, session_id, status, behavior, call_id, rate_per_minute_cents` (includes WebRTC `call_id`).** — VERDICT: Verified. SOURCE: `components.schemas.PrivateAcceptOut` (L57335-57371); `src/api/endpoints/broadcastPrivate.ts: PrivateAcceptResponse`.
+11. **Decline = `POST .../private/{request_id}/decline` (no body); OpenAPI declares empty 200, web types it `{ok, request_id}`.** — VERDICT: Verified/Corrected (return shape). SOURCE: OpenAPI `POST .../private/{request_id}/decline` (resp=`200:` empty); `src/api/endpoints/broadcastPrivate.ts: declinePrivateRequest`.
+12. **End = `POST .../private/{private_id}/end` keyed by the PRIVATE SESSION id (not the request id) → `PrivateSessionEndOut`.** — VERDICT: Corrected (spec keyed end by `sessionId` ambiguously / wrong path segment). SOURCE: OpenAPI `POST .../private/{private_id}/end` (resp=`PrivateSessionEndOut`); `src/api/endpoints/broadcastPrivate.ts: endPrivateSession`.
+13. **End summary uses `total_billed_cents` (not `total_amount_cents`), plus `duration_seconds`, `status`, `ended_by`, `private_session_id`, `session_id`; no `currency`/viewer.** — VERDICT: Corrected. SOURCE: `components.schemas.PrivateSessionEndOut` (L58069-58105); `src/api/endpoints/broadcastPrivate.ts: PrivateSessionEndResponse`.
+14. **Status = `GET .../private/status`; OpenAPI declares an untyped 200, web type `PrivateStatusResponse {status, request_id?, private_session_id?, session_id?, viewer_id?, viewer_display_name?, rate_per_minute_cents?, behavior?, call_id?}`.** — VERDICT: Verified (path) / Corrected (state-key names; spec used `state` + nested objects). SOURCE: OpenAPI `GET .../private/status` (resp=`200:` untyped); `src/api/endpoints/broadcastPrivate.ts: getPrivateStatus`/`PrivateStatusResponse`.
+15. **Real-time delivery is 5s POLLING, not SSE.** — VERDICT: Corrected. SOURCE: `src/components/broadcast/PrivateRequestNotification.tsx` (L36-41, `refetchInterval: 5000` on `listPrivateRequests`); `src/pages/broadcast/BroadcastPage.tsx` (L148-153, session detail `refetchInterval: 5_000`). No `private_show` SSE schema found in `reference/src`.
+16. **Auth model = cookie session + `ui_csrf` cookie echoed as `X-CSRF-Token` + `Authorization: Bearer <accessToken>`; optional `X-IMPERSONATION-TOKEN`.** — VERDICT: Corrected (spec omitted the bearer token). SOURCE: `src/api/client.ts` (L156-171 sets Authorization from auth store, X-CSRF-Token from `ui_csrf`, X-IMPERSONATION-TOKEN when impersonating).
+17. **401 handling: one `POST /ui/session/refresh` then retry; second 401 → logout/session_expired.** — VERDICT: Verified. SOURCE: `src/api/client.ts` (L121-130 `refreshSession`, L194-237 retry-once logic).
+18. **Error `detail` shapes: `string | [{msg}] | {code,...}` normalized.** — VERDICT: Verified. SOURCE: `src/api/client.ts: normalizeErrorDetail` (L66-102) and `mapAuthorizationError` (L34-64).
+19. **Documented error responses on these routes are only `422 HTTPValidationError` (+200); 404/409 are not in the OpenAPI for them.** — VERDICT: Unverified-assumption (defensive handling). SOURCE: OpenAPI index lines 212-218 & 247 (`resp` columns show only `200`/`201` and `422:HTTPValidationError`).
+20. **Private-show per-minute rate + payment method are set by the VIEWER on `PrivateRequestIn {rate_per_minute_cents(100..10000), payment_method_id, max_duration_minutes(5..120, default 60)}`; there is no host "accepting/rate/min-duration" config endpoint.** — VERDICT: Corrected (refutes spec's host private-show config, FR item 6). SOURCE: `components.schemas.PrivateRequestIn` (L57903-57930); `src/api/endpoints/broadcastPrivate.ts: submitPrivateRequest`.
+21. **Cancel (`POST .../private/{request_id}/cancel`) exists as the viewer-side cancel; not a host action.** — VERDICT: Verified (added for completeness). SOURCE: OpenAPI index line 217; `src/api/endpoints/broadcastPrivate.ts: cancelPrivateRequest`.
+22. **`Active.elapsed`/`accruedCents` is client-estimated; server `total_billed_cents` on end is authoritative.** — VERDICT: Unverified-assumption (billing/metering model). SOURCE: no metering/heartbeat endpoint in OpenAPI for these routes; `total_billed_cents` present on `PrivateRequestOut`/`PrivateSessionEndOut` only — server-side metering is assumed, not proven.
+23. **Framework choices (Hilt `@HiltViewModel`, `StateFlow`, Retrofit `@PATCH`/`@POST`/`@Path`/`@Body`, Compose stateless screens, Moshi).** — VERDICT: Verified (framework ref). SOURCE: framework ref — Android `StateFlow` (developer.android.com/kotlin/flow/stateflow-and-sharedflow), Hilt (developer.android.com/training/dependency-injection/hilt-android), Retrofit (square.github.io/retrofit), Jetpack Compose state (developer.android.com/jetpack/compose/state).
+
+### Corrections made
+- §2: web-reference file list updated to the actual files; **auth corrected** to include `Authorization: Bearer` (+ optional impersonation header); **real-time corrected** from SSE to 5s polling.
+- §3: added scope-correction note — server tip config is only `tip_enabled/min/max`; rich menu/custom-bounds/goal-linkage/host private-show-rate config (FR 2,3,6) is not backed by the API.
+- §5: rewritten — base path `/broadcast/sessions/{session_id}/...`; `PATCH tips/config` (no GET/PUT, minimal body, returns full session); private routes & corrected DTO shapes (flat viewer fields, epoch-int timestamps, `max_duration_minutes`, accept requires `behavior` body, end keyed by `private_session_id`, summary `total_billed_cents`); removed invented SSE event schema; corrected error-contract notes.
+- §6: domain models corrected to flat viewer fields, epoch timestamps, `maxDurationMinutes`, `total_billed_cents`, no `currency`/`expires_at`; added `behavior`/`callId`.
+- §13: marked endpoint/field drift RESOLVED, SSE→polling corrected, added request-TTL open question.
+
+### Open assumptions
+- **Auto-expire / TTL of pending requests** — no `expires_at`/ttl in `PrivateRequestOut`; whether and how requests expire is unconfirmed (claim 8).
+- **404/409 reconciliation behavior** — these statuses are not documented for the private routes (only 200/201/422); converge-on-409/404 logic is defensive, not contract-backed (claim 19).
+- **Billing/metering model** — server-side metering with client-estimated display is assumed; no heartbeat/metering endpoint observed; abrupt-disconnect billing is unknown (claim 22; §13).
+- **SSE fast-path** — existence of a private-show SSE channel (AND-281/143) is unconfirmed; baseline must poll (claim 15).
+- **Goal contribution from private-show payments** — not expressible in the API (no linkage field); unresolved product question (§13).
+- **`X-SESSION-ID` / `user_sub` params** shown in the OpenAPI index params column are not used by the web client (which relies on cookie+bearer); their role for the Android client is unverified.
+
+## 17. Test Plan
+
+Acceptance Criteria (AC) referenced are from §14 (AC-1..AC-8). Targets: JVM = JVM/Robolectric unit; MWS = MockWebServer contract; EMU = headless emulator AVD `test35` (API 35 x86_64); DEV = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Compose-UI tests run on EMU unless ABI/API-specific.
+
+- **TC-AND-315-01** — Type: contract/MockWebServer (MWS, JVM). Target: `BroadcastMonetizationApi.patchTipConfig` + mapper. Preconditions: MWS enqueues 200 with a full `BroadcastSessionOut` echoing `tip_enabled/tip_min_cents/tip_max_cents`. Steps: call `saveTipsConfig` with `{tip_enabled=true, tip_min_cents=100, tip_max_cents=50000}`. Expected: request is `PATCH /broadcast/sessions/{id}/tips/config` with exactly those three fields; response maps to domain config from the session's tip fields; `ApiResult.Success`. Traces: AC-2.
+- **TC-AND-315-02** — Type: unit (JVM). Target: `TipsConfigViewModel` local validation. Preconditions: VM in `Editing`. Steps: set `tip_min_cents=60000`, `tip_max_cents=50000` (min>max) and a below-bound value (`50` < 100). Expected: per-field errors; Save blocked; no network call. Traces: AC-2.
+- **TC-AND-315-03** — Type: contract/MockWebServer (MWS, JVM). Target: `patchTipConfig` 422 mapping. Preconditions: MWS enqueues 422 `HTTPValidationError` with `detail=[{loc:[...,"tip_max_cents"],msg:"..."}]`. Steps: call save. Expected: error normalized per `normalizeErrorDetail`; mapped to the `tip_max_cents` field; state stays dirty. Traces: AC-2.
+- **TC-AND-315-04** — Type: contract/MockWebServer (MWS, JVM). Target: `listPrivateRequests` + `getPrivateStatus` decode. Preconditions: MWS returns `PrivateRequestListOut` with one `PrivateRequestOut` (flat `viewer_id`/`viewer_display_name`, epoch `requested_at`, `max_duration_minutes`, no `expires_at`). Steps: poll once. Expected: DTO→domain maps flat viewer fields and epoch→Instant correctly; state becomes `Pending(request)`. Traces: AC-3.
+- **TC-AND-315-05** — Type: unit (JVM). Target: `PrivateShowViewModel` polling reconciliation. Preconditions: fake repo returns empty list, then a pending request, then active status, then idle. Steps: advance virtual time across poll intervals. Expected: state machine walks `Idle→Pending→Active→Idle` purely from polled status (no SSE); ticker starts on `Active`, stops on leave. Traces: AC-3, AC-6.
+- **TC-AND-315-06** — Type: contract/MockWebServer (MWS, JVM). Target: `acceptPrivateRequest` body + response. Preconditions: MWS 200 `PrivateAcceptOut`. Steps: call `accept(requestId)` with behavior `pause`. Expected: request body is `{"behavior":"pause"}`, path `.../private/{requestId}/accept`; response maps `private_session_id`, `call_id`, `rate_per_minute_cents`; state → `Active`. Traces: AC-4.
+- **TC-AND-315-07** — Type: contract/MockWebServer (MWS, JVM). Target: `endPrivateSession`. Preconditions: MWS 200 `PrivateSessionEndOut` with `total_billed_cents=14000, duration_seconds=420, ended_by="host"`. Steps: from `Active`, call `endShow()` using `private_session_id`. Expected: path `.../private/{privateId}/end`; summary maps `total_billed_cents` (server-authoritative) overriding client estimate; state → `Ended(summary)`. Traces: AC-5.
+- **TC-AND-315-08** — Type: unit/contract (JVM+MWS). Target: peer-end + decline idempotency. Preconditions: MWS returns idle status after a session that the VM still thinks is `Active`; decline enqueues 200 empty then a repeat. Steps: poll status (peer ended) → expect converge to `Idle`/summary; call `decline` twice. Expected: peer-end reconciled without error; second decline treated as success/converge. Traces: AC-5, AC-7.
+- **TC-AND-315-09** — Type: contract/MockWebServer (MWS, JVM). Target: 401 refresh-retry. Preconditions: MWS returns 401, then (after `POST /ui/session/refresh` 200) 200 on retry of `getPrivateStatus`. Steps: poll status while session expired. Expected: exactly one refresh call then a successful retry; no user-visible error. Traces: AC-7.
+- **TC-AND-315-10** — Type: integration (JVM+MWS). Target: offline / flaky-dev-host path. Preconditions: tip config cached in Room; network disabled (MWS connection failure / `ApiError(0)`); private actions attempted offline. Steps: open editor offline; attempt accept/end offline. Expected: cached config rendered with Offline banner, Save disabled; private-show action buttons disabled offline; no crash; on reconnect a poll rehydrates state. Traces: AC-1, AC-6.
+- **TC-AND-315-11** — Type: Compose-UI (instrumented, EMU). Target: `TipsConfigScreen` + `PrivateShowRequestSheet`/`PrivateShowActiveBar`/`PrivateShowSummaryDialog`. Preconditions: VM seeded with fake states. Steps: render `Pending` (sheet shows `viewer_display_name`, rate/min, Accept+Decline with behavior selector), tap Accept → `Active` (ticking timer + running estimated cost + End), tap End → summary dialog with server totals. Expected: each surface renders the corrected fields and invokes the right VM actions. Traces: AC-3, AC-4, AC-5.
+- **TC-AND-315-12** — Type: instrumented (EMU). Target: security/ownership + CSRF/bearer headers. Preconditions: MWS (via test transport) returns 403 for a non-owned broadcast; CSRF interceptor + auth header configured. Steps: open editor for a broadcast the user does not host; inspect outgoing mutating request headers. Expected: 403 navigates back ("not your broadcast"), never silently retried; every mutating call carries `X-CSRF-Token` (from `ui_csrf`) and `Authorization: Bearer`. Traces: AC-7, AC-8.
+- **TC-AND-315-13** — Type: instrumented/unit (EMU). Target: telemetry redaction. Preconditions: in-memory telemetry sink. Steps: drive request-received → accepted → ended; capture emitted events. Expected: events contain only counts/codes/amounts (`rate_cents`, `duration_seconds`, `total_cents`, `error_code`); NO `viewer_id`/`viewer_display_name` anywhere. Traces: AC-8.
+- **TC-AND-315-14** — Type: Compose-UI accessibility (instrumented, EMU). Target: active bar + request sheet + Accept/Decline/End buttons. Steps: enable a11y assertions; verify the elapsed/cost `contentDescription` updates on tick, buttons have ≥48dp targets and descriptive labels, request sheet announced as a live region. Expected: all a11y assertions pass; RTL layout clean. Traces: AC-4 (UI quality; supports AC-3/AC-5 surfaces).
+- **TC-AND-315-15** — Type: instrumented/e2e on PHYSICAL DEVICE (DEV — MUST run on SM-A156U, arm64/API 34). Target: full host private-show lifecycle against the dev backend, including the WebRTC `call_id` returned on accept and arm64-vs-x86 / API-34-vs-35 differences. Preconditions: real broadcast session live on dev backend (`http://18.222.237.167:8000`); a viewer submits a private request. Steps: poll surfaces the request → Accept (behavior=pause) → media/`call_id` wiring engages on real hardware → End → summary. Expected: lifecycle completes on the physical device with real arm64 build; billing summary from `PrivateSessionEndOut` shown; no ABI/API-34-specific failure. Note: MUST be the physical device (real WebRTC media/`call_id` + ABI/API coverage); the emulator cannot validate the arm64 path. Traces: AC-4, AC-5, AC-6.
+
+### Coverage matrix
+- **AC-1** (load config / cached + offline banner): TC-01-ish read path, TC-10.
+- **AC-2** (edit + validation + persist via PATCH): TC-01, TC-02, TC-03.
+- **AC-3** (request appears with requester/rate/duration): TC-04, TC-05, TC-11.
+- **AC-4** (Accept→active timer/cost; Decline): TC-06, TC-11, TC-14, TC-15.
+- **AC-5** (End→summary; viewer-end reflected): TC-07, TC-08, TC-11, TC-15.
+- **AC-6** (survive reconnect/process death via status): TC-05, TC-10, TC-15.
+- **AC-7** (409/404 converge; 401 refresh): TC-08, TC-09, TC-12.
+- **AC-8** (no viewer PII logged; redacted telemetry; ownership): TC-12, TC-13.

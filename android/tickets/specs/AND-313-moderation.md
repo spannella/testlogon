@@ -5,7 +5,8 @@ milestone: M7
 epic: E41
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-281]
 blocks: []
 ---
@@ -32,6 +33,10 @@ moderation-log view.
 This ticket also wires **delegate moderation routes**: when the auth store is in
 managing-as-creator mode (`managingCreator`, owned by AND-359), moderation calls target
 delegate-scoped path variants so a delegate can moderate the creator's broadcast.
+**[CORRECTED]** Per the backend + web reference, the moderation surface is **primarily**
+delegate-scoped under `ui/broadcast/delegate/{creatorId}/...`: ban/unban, pin/unpin,
+list-bans, and the moderation-log exist **only** under that prefix, so a `creatorId` is
+required for those regardless of mode. Only mute and delete also have host-scoped variants.
 
 Deliverables:
 - `ModerationApi` (Retrofit) — mute/unmute, ban/unban, delete, pin/unpin, log read.
@@ -64,9 +69,13 @@ server-side enforcement policy (FastAPI backend).
   `LiveChatPanel`. This ticket extends the reducer and renders controls into the panel.
 - **AND-359 — Delegates:** supplies `AuthStateStore.managingCreator: StateFlow<CreatorRef?>`.
   This ticket reads it to choose delegate-scoped routes; it does **not** own mode entry.
-- **Web reference:** `frontend/src/api/endpoints/broadcast.ts` (moderation calls),
-  `frontend/src/api/endpoints/delegates.ts`, shared types `frontend/src/api/types.ts`.
-  Confirm exact paths against `/openapi.json` before merge (see OQ-1).
+- **Web reference:** **[CORRECTED]** moderation calls live in
+  `src/api/endpoints/delegateBroadcast.ts` (delegate-scoped pin/unpin/delete/mute/ban/
+  unban/list-bans/moderation-log) and host-scoped delete/mute in
+  `src/api/endpoints/broadcast-chat.ts`; shared DTOs in `src/api/types.ts`
+  (`BroadcastMuteReq`, `BroadcastBanReq`, `BroadcastModerationLogEntry`, `BroadcastBanOut`,
+  `BroadcastModeratorOut`). Transport/auth in `src/api/client.ts`. (The originally cited
+  `broadcast.ts`/`delegates.ts` are not the moderation files.)
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext,
   unreliable; ~20s timeouts, bounded backoff for idempotent GETs only).
 
@@ -80,14 +89,20 @@ server-side enforcement policy (FastAPI backend).
   reversible via **unban** from the moderation log.
 - **FR-3 Delete message:** An authorized actor can delete any message by id. The
   message is removed from the visible list optimistically and confirmed by a
-  `chat.message.deleted` SSE frame.
-- **FR-4 Pin / unpin:** An authorized actor can pin exactly one message at a time; the
-  pinned message renders in a sticky banner at the top of the chat panel for all
-  viewers (delivered via SSE). Pinning a new message replaces the previous pin.
-  Unpin clears the banner.
+  **[CORRECTED]** `chat:delete` SSE frame (`{message_id}`) — not `chat.message.deleted`.
+- **FR-4 Pin / unpin:** An authorized actor can pin a message; the pinned message renders
+  in a sticky banner at the top of the chat panel. **[CORRECTED]** Pin/unpin are
+  **delegate-scoped only** (`POST`/`DELETE .../chat/{mid}/pin`) and are **not delivered via
+  any chat SSE frame**; the banner is driven from the pin/unpin response (and reconciled
+  via the moderation log), not from the stream. The backend exposes single pin/unpin per
+  message; whether multiple pins can coexist is unverified (OQ-1 / Section 13 risk).
 - **FR-5 Moderation log:** A `ModerationLogScreen` lists recent moderation actions
-  (action type, actor, target, reason, timestamp), newest first, paged (Paging 3),
-  with pull-to-refresh. Unban/unmute can be triggered from a log row.
+  (`moderation_type`, `moderator_display_name`, target id, `details`, `ts`), newest first,
+  with pull-to-refresh. **[CORRECTED]** The backend log is a **single non-paged array
+  capped by `limit` (default 100)** — there is no cursor; Paging 3 cursor pagination is not
+  applicable. Use a single bounded GET (raise `limit` if needed) rendered in a plain
+  `LazyColumn`. Unban can be triggered from a log row; **unmute has no endpoint** and is not
+  offered (or is emulated as a short re-mute, OQ-1).
 - **FR-6 Authorization gate:** Moderation affordances are visible **only** when the
   current actor is the broadcast host OR `managingCreator != null` for the broadcast's
   creator. Non-authorized viewers never see the controls; a server `403` is treated as
@@ -97,8 +112,10 @@ server-side enforcement policy (FastAPI backend).
   the delegate-as-creator.
 - **FR-8 Optimistic + reconcile:** Each action applies optimistically, then reconciles
   to the SSE-confirmed state; on REST failure it rolls back and surfaces a typed error.
-- **FR-9 Reason (optional):** Mute/ban/delete accept an optional free-text `reason`
-  (≤200 chars) recorded in the log.
+- **FR-9 Reason (optional):** **[CORRECTED]** Only **ban** accepts a free-text `reason`
+  (optional, server cap **maxLength 500**; the prior "≤200 chars" and "mute/delete accept
+  reason" were wrong — neither the mute nor the delete request schema has a `reason` field).
+  The reason is recorded in the moderation log `details`.
 - **FR-10 Idempotent log read:** The log GET is retriable with bounded backoff
   (AND-016); mutations are **not** auto-retried (non-idempotent).
 
@@ -131,16 +148,22 @@ data class ModerationLogEntry(
 **Repository:**
 ```kotlin
 interface ModerationRepository {
+    // creatorId required for ban/unban/pin/unpin/log (delegate-only); nullable for mute/delete (host fallback)
     suspend fun mute(sessionId: String, userId: String, spec: MuteSpec): ApiResult<Unit>
-    suspend fun unmute(sessionId: String, userId: String): ApiResult<Unit>
     suspend fun ban(sessionId: String, userId: String, reason: String?): ApiResult<Unit>
     suspend fun unban(sessionId: String, userId: String): ApiResult<Unit>
-    suspend fun deleteMessage(sessionId: String, messageId: String, reason: String?): ApiResult<Unit>
+    suspend fun deleteMessage(sessionId: String, messageId: String): ApiResult<Unit>
     suspend fun pin(sessionId: String, messageId: String): ApiResult<Unit>
     suspend fun unpin(sessionId: String, messageId: String): ApiResult<Unit>
-    fun moderationLog(sessionId: String): Flow<PagingData<ModerationLogEntry>>
+    suspend fun moderationLog(sessionId: String, limit: Int = 100): ApiResult<List<ModerationLogEntry>>
 }
 ```
+**[CORRECTED]** vs the original draft: `unmute(...)` is removed (no backend endpoint —
+unmute is unsupported, OQ-1); `deleteMessage` drops the `reason` param (delete takes no
+body); `pin`/`unpin` map to `POST`/`DELETE .../pin`; `moderationLog` returns a one-shot
+`ApiResult<List<...>>` (no `Flow<PagingData>` — the log is a non-paged array). `MuteSpec`
+should drop `reason` (mute has no reason field). All delegate-scoped ops require a
+`creatorId` (from `managingCreator` or the broadcast's creator).
 The implementation injects `ModerationApi`, `AuthStateStore`, and a `Json`-error
 mapper. Before each mutation it reads `authStateStore.managingCreator.value` and
 selects the base path (Section 5). Every mutation returns `ApiResult<Unit>` mapped via
@@ -191,87 +214,131 @@ Controls are wrapped in `if (canModerate)`; long-press on a chat row opens the s
 
 ## 5. API Contract
 
-Base path (dev): `http://18.222.237.167:8000/`. All calls ride the cookie session +
-`X-CSRF-Token`. Paths declared without a leading slash. **Host-scoped** variants are
-used by default; **delegate-scoped** variants (prefix `creators/{creatorId}/`) are used
-when `managingCreator != null` (FR-7). Confirm exact shapes against `/openapi.json` +
-`broadcast.ts`/`delegates.ts` before merge (OQ-1).
+Base path (dev): `http://18.222.237.167:8000/`. **[CORRECTED]** Verified against the
+OpenAPI index + `client.ts`, the real API surface differs substantially from the draft
+below; the interface and shapes here are now the corrected versions. Transport: calls
+ride the persistent cookie session + `X-CSRF-Token` (from the `ui_csrf` cookie) **and**
+an `Authorization: Bearer <accessToken>` header; delegate/impersonation mode adds an
+`X-IMPERSONATION-TOKEN` header (and `X-SESSION-ID` per the OpenAPI `params`). Paths
+declared without a leading slash.
+
+**[CORRECTED] Two endpoint families exist:**
+- **Host-scoped chat ops** (no delegate prefix): only **mute** and **delete** are
+  exposed here — `POST /broadcast/sessions/{id}/chat/mute` and
+  `DELETE /broadcast/sessions/{id}/chat/{messageId}`.
+- **Delegate-scoped moderation** under prefix **`ui/broadcast/delegate/{creatorId}/sessions/{id}/...`**
+  (NOT `creators/{creatorId}/...`). This is where **ban/unban, pin/unpin, moderation-log,
+  list-bans, list-moderators, delete, and mute** all live, and is the surface the web
+  reference app uses for moderation. **Ban, unban, pin, unpin, list-bans, and the
+  moderation-log have NO host-scoped variant — they exist ONLY under the delegate prefix.**
+  FR-7's "delegate variant when `managingCreator != null`" therefore only meaningfully
+  applies to mute/delete; ban/pin/log require a `creatorId` unconditionally.
 
 ```kotlin
 interface ModerationApi {
-    @POST("broadcast/sessions/{id}/moderation/mute")
-    suspend fun mute(@Path("id") s: String, @Body b: MuteRequestDto): Response<Unit>
+    // ---- Host-scoped (no delegate prefix) ----
+    @POST("broadcast/sessions/{id}/chat/mute")              // req=BroadcastChatMuteIn
+    suspend fun muteHost(@Path("id") s: String, @Body b: ChatMuteRequestDto): Response<ChatMuteResponseDto>
 
-    @POST("broadcast/sessions/{id}/moderation/unmute")
-    suspend fun unmute(@Path("id") s: String, @Body b: UserTargetDto): Response<Unit>
+    @DELETE("broadcast/sessions/{id}/chat/{mid}")           // NO request body
+    suspend fun deleteMessageHost(@Path("id") s: String, @Path("mid") m: String): Response<DeleteResultDto>
 
-    @POST("broadcast/sessions/{id}/moderation/ban")
-    suspend fun ban(@Path("id") s: String, @Body b: BanRequestDto): Response<Unit>
+    // ---- Delegate-scoped (the moderation surface the web app uses) ----
+    @POST("ui/broadcast/delegate/{cid}/sessions/{id}/mute") // req=BroadcastMuteIn
+    suspend fun mute(@Path("cid") c: String, @Path("id") s: String, @Body b: MuteRequestDto): Response<Unit>
 
-    @POST("broadcast/sessions/{id}/moderation/unban")
-    suspend fun unban(@Path("id") s: String, @Body b: UserTargetDto): Response<Unit>
+    @POST("ui/broadcast/delegate/{cid}/sessions/{id}/ban")  // req=BroadcastBanIn
+    suspend fun ban(@Path("cid") c: String, @Path("id") s: String, @Body b: BanRequestDto): Response<Unit>
 
-    @HTTP(method="DELETE", path="broadcast/sessions/{id}/chat/{mid}", hasBody=true)
-    suspend fun deleteMessage(@Path("id") s: String, @Path("mid") m: String,
-                              @Body b: DeleteRequestDto): Response<Unit>
+    @DELETE("ui/broadcast/delegate/{cid}/sessions/{id}/ban/{uid}")
+    suspend fun unban(@Path("cid") c: String, @Path("id") s: String, @Path("uid") u: String): Response<Unit>
 
-    @POST("broadcast/sessions/{id}/chat/{mid}/pin")
-    suspend fun pin(@Path("id") s: String, @Path("mid") m: String): Response<Unit>
+    @GET("ui/broadcast/delegate/{cid}/sessions/{id}/bans")
+    suspend fun listBans(@Path("cid") c: String, @Path("id") s: String): List<BanDto>
 
-    @POST("broadcast/sessions/{id}/chat/{mid}/unpin")
-    suspend fun unpin(@Path("id") s: String, @Path("mid") m: String): Response<Unit>
+    @DELETE("ui/broadcast/delegate/{cid}/sessions/{id}/chat/{mid}")  // NO body
+    suspend fun deleteMessage(@Path("cid") c: String, @Path("id") s: String, @Path("mid") m: String): Response<Unit>
 
-    @GET("broadcast/sessions/{id}/moderation/log")
-    suspend fun log(@Path("id") s: String, @Query("cursor") cursor: String?,
-                    @Query("limit") limit: Int = 30): ModerationLogPageDto
+    @POST("ui/broadcast/delegate/{cid}/sessions/{id}/chat/{mid}/pin")   // NO body
+    suspend fun pin(@Path("cid") c: String, @Path("id") s: String, @Path("mid") m: String): Response<Unit>
 
-    // Delegate-scoped variants mirror the above under:
-    //   creators/{creatorId}/broadcast/sessions/{id}/moderation/...
+    @DELETE("ui/broadcast/delegate/{cid}/sessions/{id}/chat/{mid}/pin") // unpin = DELETE
+    suspend fun unpin(@Path("cid") c: String, @Path("id") s: String, @Path("mid") m: String): Response<Unit>
+
+    @GET("ui/broadcast/delegate/{cid}/sessions/{id}/moderation-log")
+    suspend fun log(@Path("cid") c: String, @Path("id") s: String,
+                    @Query("limit") limit: Int = 100): List<ModerationLogEntryDto>  // plain array, no cursor
 }
 ```
 
-**Mute — `POST broadcast/sessions/{id}/moderation/mute`**
-```json
-{ "user_id": "usr_9", "duration_seconds": 300, "reason": "spam" }
-```
-→ `204`/`200`. Reflected to room via `chat.user_muted` SSE frame.
+**[CORRECTED] Notes vs the original draft:**
+- There is **no `/moderation/mute|unmute|ban|unban` path** and **no `unmute` endpoint at
+  all** in the backend. The original `moderation/*` paths were invented. Unmute must be
+  modeled as mute with a very short duration, or treated as not-yet-supported (OQ-1).
+- **Unpin is `DELETE .../chat/{mid}/pin`**, not `POST .../unpin`.
+- The **moderation log is a plain JSON array** (param `limit`, default 100), **not** a
+  cursor-paged `{items,next_cursor}` object. Cursor-based Paging 3 must be replaced with a
+  limit-only fetch (see Section 6 correction).
 
-**Ban — `POST broadcast/sessions/{id}/moderation/ban`**
+**[CORRECTED] Mute — `POST broadcast/sessions/{id}/chat/mute` (host)** req `BroadcastChatMuteIn`:
+```json
+{ "target_user_id": "usr_9", "duration_seconds": 300 }
+```
+Field is **`target_user_id`** (host schema), `duration_seconds` integer (min 30, max
+86400, default 300). **No `reason` field on mute.** → `200` with `BroadcastChatMuteOut`
+`{ "target_user_id", "muted_until": <epoch int>, "session_id" }`. The **delegate** mute
+(`ui/broadcast/delegate/{cid}/sessions/{id}/mute`, req `BroadcastMuteIn`) uses field
+**`user_id`** + `duration_seconds` (both required). No SSE `chat.user_muted` frame exists
+(see SSE note); the room is not notified of mutes via the chat stream.
+
+**[CORRECTED] Ban — `POST ui/broadcast/delegate/{cid}/sessions/{id}/ban`** req `BroadcastBanIn`:
 ```json
 { "user_id": "usr_9", "reason": "abuse" }
 ```
-→ `204`. Reflected via `chat.user_banned` SSE frame.
+`user_id` required; `reason` optional, default `""`, **maxLength 500** (the draft's 200 cap
+is wrong — see FR-9 / Section 7). → `200`. **No `chat.user_banned` SSE frame** — ban is
+not reflected on the chat stream.
 
-**Delete — `DELETE broadcast/sessions/{id}/chat/{messageId}`** body
-`{ "reason": "off-topic" }` → `204`. Reflected via `chat.message.deleted`.
+**[CORRECTED] Delete — `DELETE .../chat/{messageId}`** (host or delegate) takes **NO request
+body** → `200` (host returns `{ "ok": true, "message_id": "..." }`). The draft's
+`{ "reason": "off-topic" }` body and `204` were wrong. The SSE confirmation event is
+**`chat:delete`** with `{"message_id":"..."}` (not `chat.message.deleted`).
 
-**Pin — `POST broadcast/sessions/{id}/chat/{messageId}/pin`** → `204`. Reflected via
-`chat.message.pinned`; unpin via `chat.message.unpinned` (`message_id: null`).
+**[CORRECTED] Pin — `POST .../chat/{messageId}/pin`** (delegate, no body) → `200`
+`{ "ok", "message_id", "pinned" }`; **unpin = `DELETE .../chat/{messageId}/pin`** → `200`.
+**There is no pin/unpin SSE frame** and no `pinned` field on the chat message model, so the
+pinned banner cannot be reconciled from the chat stream — it must be driven from the
+POST/DELETE response and/or the moderation log (see Risk in Section 13).
 
-**Log — `GET broadcast/sessions/{id}/moderation/log?cursor&limit=30`** (idempotent):
+**[CORRECTED] Log — `GET ui/broadcast/delegate/{cid}/sessions/{id}/moderation-log?limit=100`**
+(idempotent) returns a **plain array** of `BroadcastModerationLogEntry`:
 ```json
-{ "items": [
-    { "id":"mod_01HZ","action":"ban","actor":{"id":"usr_self","username":"me","display_name":"Me","is_host":true},
-      "target":{"user_id":"usr_9","message_id":null},"target_label":"@mira",
-      "reason":"abuse","created_at":"2026-06-05T23:10:00Z" } ],
-  "next_cursor": null }
+[ { "event_id":"mod_01HZ", "moderator_id":"usr_self", "moderator_display_name":"Me",
+    "moderation_type":"ban", "target_user_id":"usr_9", "target_message_id":null,
+    "details":{}, "ts": 1749165000 } ]
 ```
+Fields are flat: `event_id`, `moderator_id`, `moderator_display_name`, `moderation_type`,
+`target_user_id?`, `target_message_id?`, `details?`, `ts` (epoch **integer** seconds). The
+draft's nested `actor`/`target` objects, `target_label`, top-level `reason`, ISO
+`created_at`, and `next_cursor` do **not** exist. Map domain `ModerationLogEntry` from
+these fields (timestamp = `Instant.ofEpochSecond(ts)`).
 
-**New SSE frames (consumed by the AND-281 stream parser):**
+**[CORRECTED] SSE frames (consumed by the AND-281 stream parser):** the chat stream is an
+`EventSource`/SSE at `GET /broadcast/sessions/{id}/chat/stream?poll_ms=500`. The only
+moderation-relevant frame is delete:
 ```
-event: chat.message.deleted
+event: chat:delete
 data: {"message_id":"cm_01HXA"}
-
-event: chat.message.pinned
-data: {"message_id":"cm_01HXA"}
-
-event: chat.user_muted
-data: {"user_id":"usr_9","until":"2026-06-05T23:15:00Z"}
 ```
+(Other frames: `chat:message`, `chat:reaction`, `chat:unlock`, `chat:lottery`.) The draft's
+`chat.message.deleted`, `chat.message.pinned`, and `chat.user_muted` frame names are wrong;
+pin/mute/ban have **no** chat-stream frames at all.
 
-**Moshi DTOs** use `@Json` aliases (`user_id`, `duration_seconds`, `message_id`,
-`target_label`, `created_at`, `next_cursor`, `is_host`); timestamps parse to `Instant`
-via the shared `InstantJsonAdapter` (AND-026).
+**Moshi DTOs** use `@Json` aliases for the real wire names (`target_user_id`, `user_id`,
+`duration_seconds`, `muted_until`, `message_id`, `event_id`, `moderator_id`,
+`moderator_display_name`, `moderation_type`, `target_message_id`, `details`, `ts`);
+epoch-integer timestamps (`muted_until`, `ts`) parse via `Instant.ofEpochSecond` (the
+prior `InstantJsonAdapter`/ISO-8601 assumption does not apply to these integer fields).
 
 ## 6. Data & State Management
 
@@ -280,17 +347,23 @@ via the shared `InstantJsonAdapter` (AND-026).
   fold into the same `StateFlow<LiveChatUiState>` so chat + moderation render
   consistently. `ModerationViewModel` holds only transient sheet/in-flight/event state.
 - **Reducer extensions (added to AND-281):**
-  - `MessageDeleted(id)` — remove the message from the list (already partially present
-    in AND-281; this ticket guarantees it is host-triggerable).
-  - `MessagePinned(id)` / `MessageUnpinned` — set/clear `pinnedMessage`.
+  - `MessageDeleted(id)` — remove the message from the list. **[CORRECTED]** This is the
+    only case the chat SSE stream actually reconciles, via the `chat:delete` frame; the
+    web reference also removes optimistically on the delete response.
+  - `MessagePinned(id)` / `MessageUnpinned` — set/clear `pinnedMessage`. **[CORRECTED]**
+    There is **no pin SSE frame**, so these cases are driven only by the local pin/unpin
+    response (and the moderation log), not by the stream.
   - `UserMuted(userId, until)` / `UserBanned(userId)` — mark the author so their rows
-    render a "muted/banned" affordance and (for self) disable the composer.
+    render a "muted/banned" affordance and (for self) disable the composer. **[CORRECTED]**
+    No `chat.user_muted`/`chat.user_banned` SSE frames exist; these are applied locally
+    from the mute/ban response only (other viewers learn via send-rejection / the log).
 - **Optimistic write path:** on action invoke, apply the corresponding reducer case
   immediately, snapshot the prior list, call REST; on success keep (SSE echo is a
   no-op dedup), on failure restore the snapshot and emit `ModerationEvent.Failure`.
-- **Moderation log** is paged via Paging 3 (`PagingData`, `cachedIn(viewModelScope)`),
-  cursor-based; **not** cached in Room (low value after the broadcast; ephemeral like
-  live chat). Pull-to-refresh calls `invalidate()` on the `PagingSource`.
+- **Moderation log** **[CORRECTED]**: the backend returns a single capped array (no
+  cursor), so this is **not** Paging-3 cursor pagination. Model it as a single
+  `StateFlow<List<ModerationLogEntry>>` from one bounded GET (`limit`, default 100);
+  pull-to-refresh re-issues the GET. Not cached in Room (ephemeral, like live chat).
 - **Delegate context:** `managingCreator` is read at call time, not cached in
   `ModerationUiState`, so a mid-session delegate-mode toggle (AND-359) is honored.
 - **Process death:** `sessionId` restored from `SavedStateHandle`; open sheets and
@@ -303,17 +376,21 @@ via the shared `InstantJsonAdapter` (AND-026).
 
 - **Mutations are non-idempotent → never auto-retried.** A failed action rolls back
   optimistic state and surfaces a typed snackbar with a manual **Retry** action.
-- **`401`** → single `POST /ui/session/refresh` + retry by the AND-013 authenticator; a
-  second `401` is fatal and routes to re-auth.
+- **`401`** → **[VERIFIED]** single `POST /ui/session/refresh` + retry, matching
+  `client.ts` `refreshSession()` (AND-013 authenticator); a second `401` is fatal and
+  routes to re-auth (web calls `logout("session_expired")`).
 - **`403`** (not authorized / lost delegate scope) → non-retryable
   `ModerationError.Forbidden`; hide controls (`canModerate=false`) and show
   "You no longer have moderation permission."
 - **`404`** (message/user gone, or session ended) → non-retryable; for delete/pin the
   optimistic removal is kept (already gone) and a neutral toast is shown.
-- **`409`** (already muted/banned, or pin race) → treated as success-equivalent;
-  reconcile to server truth, suppress error.
-- **`422`** (bad duration/reason length) → field-level error in the sheet via AND-015
-  `detail` array mapping.
+- **`409`** (already muted/banned, or pin race) → **[UNVERIFIED]** treated as
+  success-equivalent. The OpenAPI documents only `200`/`422` for these routes; `409` is an
+  assumed backend behavior, not confirmed — guard defensively but do not rely on it.
+- **`422`** (bad duration/`reason` length, missing `target_user_id`/`user_id`) →
+  **[VERIFIED]** the documented validation error (`HTTPValidationError`); field-level error
+  in the sheet via AND-015 `detail` array mapping. Note real bounds: `duration_seconds`
+  30–86400, ban `reason` ≤500.
 - **`429`** (`Retry-After`) → transient; show retry hint, do not auto-retry.
 - **Network/timeout (~20s)** → `ModerationError.Network`, rollback + retry affordance.
 - **Log GET** is the only retriable call: bounded backoff (AND-016); on persistent
@@ -325,11 +402,16 @@ via the shared `InstantJsonAdapter` (AND-026).
 - **Authorization is server-enforced.** The client gate (FR-6) is UX-only; the backend
   is authoritative and `403` is always honored. The client never assumes an action
   succeeded without a `2xx`.
-- **Session & CSRF:** all calls use the persistent cookie jar (AND-011) and the
-  `X-CSRF-Token` header (AND-012); CSRF is mandatory on these state-changing POST/DELETE
-  calls.
-- **Delegate attribution:** delegate-scoped routes ensure actions are attributed to the
-  acting delegate in the server-side log; the client does not spoof actor identity.
+- **Session & CSRF:** **[VERIFIED + AMENDED]** all calls use the persistent cookie jar
+  (AND-011), the `X-CSRF-Token` header sourced from the `ui_csrf` cookie (AND-012), **and**
+  an `Authorization: Bearer <accessToken>` header (per `client.ts`). CSRF + bearer are
+  mandatory on these state-changing POST/DELETE calls. The OpenAPI also lists `X-SESSION-ID`
+  on every broadcast/delegate route; include it where the session-store provides it.
+- **Delegate attribution:** **[CORRECTED]** delegate scope is conveyed two ways that must
+  both be honored: the **`{creatorId}` path segment** (`ui/broadcast/delegate/{creatorId}/...`)
+  and the **`X-IMPERSONATION-TOKEN` header** (set by the web client when impersonation is
+  active). It is NOT a `creators/{creatorId}/...` prefix. The client does not spoof actor
+  identity; the server attributes the action to the acting delegate.
 - **Transport caveat:** dev host is plaintext HTTP — no production secrets; release
   builds require HTTPS hosts (cleartext disabled outside dev flavor per AND-006).
 - **PII:** moderation reasons and target usernames are user content; they are not
@@ -401,16 +483,20 @@ via the shared `InstantJsonAdapter` (AND-026).
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (paths/shapes):** exact moderation endpoint paths and request keys
-  (`mute`/`unmute` vs a single `mute` toggle; delete via `DELETE` body vs a
-  `moderation/delete` POST; pin path) must be confirmed against `/openapi.json` and
-  `broadcast.ts` before merge. Section 5 reflects the best current reading.
-- **OQ-2 (delegate route shape):** confirm whether delegate moderation uses a
-  `creators/{creatorId}/...` prefix or a header/query scope (AND-359). Adjust
-  `ModerationRepository` path selection accordingly.
-- **OQ-3 (SSE frame names):** confirm `chat.message.deleted` / `chat.message.pinned` /
-  `chat.user_muted` event names; AND-281 already handles `MessageDeleted`, so align on
-  one canonical name set.
+- **OQ-1 (paths/shapes) — RESOLVED (this review):** paths/shapes verified against OpenAPI +
+  `delegateBroadcast.ts`/`broadcast-chat.ts`. Findings: mute=`.../chat/mute` (host) or
+  `.../delegate/{cid}/sessions/{id}/mute` (delegate); delete=`DELETE .../chat/{mid}` **no
+  body**; pin=`POST`/unpin=`DELETE .../chat/{mid}/pin`. **There is NO unmute endpoint** —
+  remaining open: model unmute as short re-mute or drop it. Pin cardinality (single vs
+  multiple) still unconfirmed.
+- **OQ-2 (delegate route shape) — RESOLVED (this review):** delegate moderation uses BOTH a
+  **`{creatorId}` path segment** under `ui/broadcast/delegate/...` AND the
+  **`X-IMPERSONATION-TOKEN`** header (not `creators/{creatorId}/...`). ban/unban/pin/unpin/
+  log/list-bans are delegate-only; mute/delete also have host variants. `ModerationRepository`
+  selects host vs delegate per op + `managingCreator`.
+- **OQ-3 (SSE frame names) — RESOLVED (this review):** the only moderation chat-stream frame
+  is **`chat:delete`** (`{message_id}`). There are **no** pin/mute/ban SSE frames; those are
+  reconciled from REST responses + the moderation log. Align AND-281 on `chat:delete`.
 - **Risk — optimistic/SSE race:** mitigated by id-based dedup in the reducer (tested).
 - **Risk — single global pin assumption:** if the backend allows multiple pins, the
   banner becomes a list; confirm cardinality (OQ-1).
@@ -453,3 +539,220 @@ via the shared `InstantJsonAdapter` (AND-026).
   place.
 - OQ-1/OQ-2/OQ-3 resolved against `/openapi.json` (or explicitly deferred with a
   follow-up) and reflected in code; PR reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. OpenAPI pointers are
+`METHOD /path` from `reference/openapi.index.txt`; schema pointers are
+`components.schemas.<Name>` in `reference/openapi.pretty.json`; frontend pointers are
+`reference/src/...`.
+
+1. **Mute endpoint & method.** Host: `POST /broadcast/sessions/{session_id}/chat/mute`;
+   delegate: `POST /ui/broadcast/delegate/{creator_id}/sessions/{sid}/mute`. **VERDICT:
+   Corrected** (draft used `POST .../moderation/mute`). Source: OpenAPI
+   `POST /broadcast/sessions/{session_id}/chat/mute`,
+   `POST /ui/broadcast/delegate/{creator_id}/sessions/{sid}/mute`;
+   `src/api/endpoints/broadcast-chat.ts: muteChatUser`,
+   `src/api/endpoints/delegateBroadcast.ts: muteViewer`.
+2. **Mute request fields.** Host schema `target_user_id` + `duration_seconds`; delegate
+   schema `user_id` + `duration_seconds`; `duration_seconds` min 30 / max 86400 / default
+   300; **no `reason`**. **VERDICT: Corrected** (draft used `user_id` + a `reason`). Source:
+   schemas `BroadcastChatMuteIn`, `BroadcastMuteIn`; `src/api/types.ts: BroadcastMuteReq`.
+3. **Mute response.** `200` with `BroadcastChatMuteOut` `{target_user_id, muted_until (epoch
+   int), session_id}`. **VERDICT: Corrected** (draft said `204`/`200`, no body). Source:
+   schema `BroadcastChatMuteOut`; `src/api/endpoints/broadcast-chat.ts: ChatMuteResponse`.
+4. **Ban endpoint.** `POST /ui/broadcast/delegate/{creator_id}/sessions/{sid}/ban` — delegate
+   only. **VERDICT: Corrected** (draft used host `POST .../moderation/ban`). Source: OpenAPI
+   `POST /ui/broadcast/delegate/{creator_id}/sessions/{sid}/ban`;
+   `src/api/endpoints/delegateBroadcast.ts: banViewer`.
+5. **Ban request fields.** `user_id` (required) + `reason` (optional, default `""`, **maxLength
+   500**). **VERDICT: Corrected** (draft capped reason at 200). Source: schema `BroadcastBanIn`;
+   `src/api/types.ts: BroadcastBanReq`.
+6. **Unban endpoint.** `DELETE /ui/broadcast/delegate/{creator_id}/sessions/{sid}/ban/{uid}`.
+   **VERDICT: Corrected** (draft used `POST .../moderation/unban`). Source: OpenAPI
+   `DELETE /ui/broadcast/delegate/{creator_id}/sessions/{sid}/ban/{uid}`;
+   `src/api/endpoints/delegateBroadcast.ts: unbanViewer`.
+7. **Unmute endpoint.** Does **not** exist. **VERDICT: Corrected** (draft defined
+   `POST .../moderation/unmute`). Source: absence in `openapi.index.txt` (no unmute path) and
+   in `delegateBroadcast.ts`/`broadcast-chat.ts`.
+8. **Delete message endpoint & body.** `DELETE /broadcast/sessions/{session_id}/chat/{message_id}`
+   (host) and `DELETE /ui/broadcast/delegate/{creator_id}/sessions/{sid}/chat/{mid}` (delegate),
+   **no request body**, resp `200`. **VERDICT: Corrected** (draft sent a `{reason}` body, claimed
+   `204`). Source: OpenAPI both DELETE paths show `req=`;
+   `src/api/endpoints/broadcast-chat.ts: deleteChatMessage`,
+   `src/api/endpoints/delegateBroadcast.ts: deleteMessage` (both call `api.del` with no body).
+9. **Pin / unpin endpoints.** Pin `POST .../delegate/{cid}/sessions/{sid}/chat/{mid}/pin` (no
+   body); unpin `DELETE .../chat/{mid}/pin`. Delegate-only. **VERDICT: Corrected** (draft used
+   `POST .../unpin`). Source: OpenAPI pin POST + pin DELETE paths;
+   `src/api/endpoints/delegateBroadcast.ts: pinMessage / unpinMessage`.
+10. **Moderation log endpoint & shape.** `GET /ui/broadcast/delegate/{creator_id}/sessions/{sid}/moderation-log?limit=`
+    returns a **plain array** (no cursor). **VERDICT: Corrected** (draft used
+    `GET .../moderation/log?cursor&limit` returning `{items,next_cursor}`). Source: OpenAPI
+    `GET /ui/broadcast/delegate/{creator_id}/sessions/{sid}/moderation-log` (`params=...,limit`);
+    `src/api/endpoints/delegateBroadcast.ts: getModerationLog` (returns `BroadcastModerationLogEntry[]`).
+11. **Log entry fields.** `event_id, moderator_id, moderator_display_name, moderation_type,
+    target_user_id?, target_message_id?, details?, ts (epoch int)`. **VERDICT: Corrected**
+    (draft used nested `actor`/`target`, `target_label`, top-level `reason`, ISO `created_at`,
+    `next_cursor`). Source: `src/api/types.ts: BroadcastModerationLogEntry`.
+12. **Delegate route shape.** `ui/broadcast/delegate/{creator_id}/sessions/{sid}/...` path
+    segment + `X-IMPERSONATION-TOKEN` header. **VERDICT: Corrected** (draft used
+    `creators/{creatorId}/broadcast/...` prefix). Source: OpenAPI `ui/broadcast/delegate/...`
+    paths; `src/api/endpoints/delegateBroadcast.ts: BASE`; `src/api/client.ts` (sets
+    `X-IMPERSONATION-TOKEN` when impersonation active).
+13. **Chat SSE delete frame.** Event name is `chat:delete` with `{message_id}`. **VERDICT:
+    Corrected** (draft used `chat.message.deleted`). Source:
+    `src/pages/broadcast/BroadcastChat.tsx` (`es.addEventListener("chat:delete", ...)`).
+14. **Pin / mute / ban SSE frames.** None exist. **VERDICT: Corrected** (draft defined
+    `chat.message.pinned` and `chat.user_muted`/`chat.user_banned`). Source:
+    `src/pages/broadcast/BroadcastChat.tsx` (only `chat:message`, `chat:delete`,
+    `chat:reaction`, `chat:unlock`, `chat:lottery` listeners).
+15. **Chat stream transport.** SSE `EventSource` at
+    `GET /broadcast/sessions/{id}/chat/stream?poll_ms=500`. **VERDICT: Verified.** Source:
+    OpenAPI `GET /broadcast/sessions/{session_id}/chat/stream` (`params=...,after,poll_ms`);
+    `src/pages/broadcast/BroadcastChat.tsx` (`new EventSource(...chat/stream?poll_ms=500)`).
+16. **CSRF + cookie session on mutations.** `X-CSRF-Token` (from `ui_csrf` cookie) + cookie
+    credentials are sent. **VERDICT: Verified.** Source: `src/api/client.ts` (`getCookie("ui_csrf")`
+    → `X-CSRF-Token`; `credentials: "include"`).
+17. **Authorization bearer + session headers.** `Authorization: Bearer <accessToken>` is also
+    required; `X-SESSION-ID` / `X-IMPERSONATION-TOKEN` appear on these routes. **VERDICT:
+    Corrected** (draft omitted bearer/impersonation/session headers). Source: `src/api/client.ts`
+    (sets `Authorization` and `X-IMPERSONATION-TOKEN`); OpenAPI `params=...,X-SESSION-ID,
+    X-IMPERSONATION-TOKEN` on every broadcast/delegate route.
+18. **401 refresh path.** `POST /ui/session/refresh`, single retry, second 401 → logout.
+    **VERDICT: Verified.** Source: `src/api/client.ts: refreshSession` (`/ui/session/refresh`),
+    retry-once logic + `logout("session_expired")`.
+19. **422 validation error shape.** `HTTPValidationError` (FastAPI `detail` array of `{msg,...}`)
+    is the documented validation error. **VERDICT: Verified.** Source: OpenAPI `resp=...;422:
+    HTTPValidationError` on all moderation routes; `src/api/client.ts: normalizeErrorDetail`
+    (handles string | array-of-`{msg}` | object-with-`code`).
+20. **403 authorization handling.** `403` surfaces an authorization message; `silent403` allows
+    suppression. **VERDICT: Verified** (client gate is UX-only; server authoritative). Source:
+    `src/api/client.ts` (403 branch, `mapAuthorizationError`, `role_required*` codes).
+21. **List bans / list moderators / moderator register.** Real delegate endpoints not in the
+    draft. **VERDICT: Verified (additional surface).** Source: OpenAPI
+    `GET .../bans`, `GET .../moderators`, `POST .../moderator/register`;
+    `src/api/endpoints/delegateBroadcast.ts: listBans / listModerators / registerModerator`.
+22. **Android framework choices** (Compose/Material 3, Hilt+KSP, Retrofit/OkHttp/Moshi,
+    Coroutines/Flow, `Instant`). **VERDICT: Unverified-assumption** (not checkable against
+    backend/frontend; standard Android stack). framework ref:
+    https://developer.android.com/jetpack/compose ,
+    https://square.github.io/retrofit/ , https://github.com/square/moshi .
+23. **AND-281 reducer / `LiveChatViewModel` / `LiveChatPanel` / `sessionId` nav contract, and
+    AND-359 `managingCreator`.** **VERDICT: Unverified-assumption** — these are other Android
+    tickets not present in the provided sources; treated as inherited contracts.
+24. **`409` already-muted/banned → success-equivalent.** **VERDICT: Unverified-assumption** —
+    OpenAPI documents only `200`/`422` for these routes; `409` behavior is assumed.
+
+### Corrections made
+- Mute path/fields/response: `/moderation/mute` → host `chat/mute` (`target_user_id`) +
+  delegate `mute` (`user_id`); removed `reason`; response is `BroadcastChatMuteOut` (200).
+- Ban/unban: moved to delegate prefix; `reason` cap 200 → 500.
+- Removed the non-existent **unmute** endpoint (and the repo method / log-row unmute / FR-5).
+- Delete: removed `{reason}` body and `204`; it is a bodiless `DELETE` returning `200`.
+- Pin/unpin: unpin is `DELETE .../pin` (not `POST .../unpin`); delegate-only; no SSE frame.
+- Moderation log: cursor-paged `{items,next_cursor}` → plain capped array (`limit`), flat
+  entry fields (`event_id`/`moderator_*`/`moderation_type`/`target_*`/`ts`); dropped Paging 3.
+- Delegate routing: `creators/{creatorId}/...` → `ui/broadcast/delegate/{creatorId}/...` +
+  `X-IMPERSONATION-TOKEN` header.
+- SSE frame names: `chat.message.deleted` → `chat:delete`; removed invented pin/mute/ban frames.
+- Transport: added `Authorization: Bearer`, `X-IMPERSONATION-TOKEN`, `X-SESSION-ID` to the
+  documented header set (CSRF + cookies were already correct).
+- Timestamp adapters: log `ts` and `muted_until` are epoch integers (not ISO-8601 `Instant`).
+
+### Open assumptions
+- **Unmute UX:** no backend endpoint; whether to omit unmute or emulate via a short re-mute is
+  unresolved (OQ-1) — needs product/backend decision.
+- **Pin cardinality:** single-pin-per-room vs multiple pins is not expressed in the schema; the
+  banner-vs-list decision is unverifiable from sources (OQ-1 risk).
+- **Pin/mute/ban reconciliation for other viewers:** with no SSE frames, how non-acting clients
+  learn of pins/mutes/bans (send-rejection? poll? log refresh?) is not specified by the sources.
+- **`409` semantics:** assumed; only `200`/`422` are documented.
+- **AND-281 / AND-359 contracts:** inherited from sibling tickets not in the provided sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **MWS** = MockWebServer
+contract; **emu35** = headless AVD `test35` (x86_64, API 35); **A15** = physical Samsung
+Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Moderation has no camera/biometric/WebRTC/FCM
+surface, so most instrumented/Compose cases run fine on **emu35**; one ABI/API-parity case is
+called out for **A15**.
+
+- **TC-AND-313-01 — Mute happy path (host) contract.** Type: contract/MWS. Target: MWS+JVM.
+  Pre: repo wired to MockWebServer; `managingCreator == null`. Steps: call
+  `repo.mute(sessionId, "usr_9", MuteSpec(300))`; capture request. Expected: `POST
+  /broadcast/sessions/{id}/chat/mute`, JSON body `{"target_user_id":"usr_9","duration_seconds":300}`,
+  no `reason` key; enqueue `200 {"target_user_id":"usr_9","muted_until":1749165300,"session_id":"..."}`
+  → `ApiResult.Success`. Traces: AC-1.
+- **TC-AND-313-02 — Mute via delegate route + headers.** Type: contract/MWS. Target: MWS+JVM.
+  Pre: `managingCreator = CreatorRef("cr_7")`; impersonation token present. Steps: call
+  `repo.mute(...)`. Expected: request path `ui/broadcast/delegate/cr_7/sessions/{id}/mute`,
+  body `{"user_id":"usr_9","duration_seconds":300}`, headers include `X-CSRF-Token`,
+  `Authorization: Bearer ...`, `X-IMPERSONATION-TOKEN`. Traces: AC-1, AC-6.
+- **TC-AND-313-03 — Ban happy path + confirmation.** Type: contract/MWS + Compose-UI.
+  Target: MWS+emu35. Pre: host authorized; ban sheet open. Steps: tap Ban → confirm dialog →
+  confirm; capture request. Expected: confirm dialog shown first (no call until confirmed);
+  then `POST ui/broadcast/delegate/{cid}/sessions/{id}/ban` body `{"user_id":"usr_9","reason":"abuse"}`;
+  `200` → success event; row marked banned. Traces: AC-2.
+- **TC-AND-313-04 — Ban reason length validation (422).** Type: contract/MWS. Target: MWS+JVM.
+  Pre: reason > 500 chars. Steps: enqueue `422 HTTPValidationError` `{"detail":[{"loc":["body","reason"],
+  "msg":"ensure this value has at most 500 characters"}]}`; call ban. Expected: AND-015 maps
+  `detail[].msg` to a field-level error in the sheet; no optimistic state retained. Traces: AC-2, AC-7.
+- **TC-AND-313-05 — Unban from log row.** Type: contract/MWS. Target: MWS+JVM. Pre: log row for
+  `usr_9` ban. Steps: invoke `repo.unban(sessionId,"usr_9")`. Expected: `DELETE
+  ui/broadcast/delegate/{cid}/sessions/{id}/ban/usr_9`, no body, `200` → success. Traces: AC-2.
+- **TC-AND-313-06 — Delete message (no body) + optimistic remove + SSE reconcile.** Type:
+  integration. Target: JVM (reducer) + MWS. Pre: message `cm_1` in list. Steps: call
+  `repo.deleteMessage(sessionId,"cm_1")`; then feed an SSE `chat:delete {"message_id":"cm_1"}`.
+  Expected: `DELETE .../chat/cm_1` with **empty body**; `MessageDeleted("cm_1")` removes the row;
+  subsequent `chat:delete` is a dedup no-op. Traces: AC-3.
+- **TC-AND-313-07 — Pin sets banner; unpin clears (delegate, no SSE).** Type: contract/MWS +
+  Compose-UI. Target: MWS+emu35. Steps: pin `cm_1` then unpin. Expected: pin = `POST
+  .../chat/cm_1/pin` (no body), unpin = `DELETE .../chat/cm_1/pin`; `PinnedMessageBanner`
+  appears on pin and clears on unpin, driven by the response (no SSE frame consumed). Traces: AC-4.
+- **TC-AND-313-08 — Moderation log fetch (array, no cursor) + render newest-first +
+  pull-to-refresh.** Type: contract/MWS + Compose-UI. Target: MWS+emu35. Steps: enqueue a JSON
+  **array** of `BroadcastModerationLogEntry`; load screen; pull-to-refresh. Expected: `GET
+  ui/broadcast/delegate/{cid}/sessions/{id}/moderation-log?limit=100`; rows sorted by `ts`
+  descending; `ts` rendered via `Instant.ofEpochSecond`; refresh re-issues the same GET (no
+  cursor param). Traces: AC-8.
+- **TC-AND-313-09 — Authorization gate hides controls; 403 handling.** Type: Compose-UI +
+  contract/MWS. Target: emu35+MWS. Pre: non-host (`canModerate == false`) and a host whose
+  mutate returns `403`. Steps: (a) render chat as non-host → assert no moderation affordances;
+  (b) as host, enqueue `403 {"detail":"Permission denied"}` on a mute → assert controls hidden
+  (`canModerate=false`) + authorization snackbar; not retried. Traces: AC-5, AC-7.
+- **TC-AND-313-10 — Failed mutation rolls back optimistic UI + Retry.** Type: integration +
+  Compose-UI. Target: emu35+MWS. Pre: pin `cm_1` optimistically. Steps: enqueue `500` (or socket
+  timeout) on the pin POST. Expected: banner reverts to prior state; `ModerationEvent.Failure`
+  snackbar with a **Retry** action; mutation **not** auto-retried (non-idempotent). Traces: AC-7.
+- **TC-AND-313-11 — Flaky/offline dev host: log GET backoff + Offline state.** Type: integration.
+  Target: A15 (toggle airplane mode for real offline) or emu35 (MWS socket failure). Pre: log
+  screen. Steps: simulate timeout/connection-drop on the log GET. Expected: AND-016 bounded
+  backoff retries the GET (idempotent), then AND-021 Error/Offline state with Retry while keeping
+  any prior page; mutations are still never auto-retried. Note: prefer **A15** for genuine
+  airplane-mode/offline behavior. Traces: AC-7, AC-8.
+- **TC-AND-313-12 — CSRF/cookie/bearer required on mutations (security).** Type: contract/MWS.
+  Target: MWS+JVM. Steps: perform mute/ban/delete/pin; inspect outgoing headers. Expected: each
+  state-changing POST/DELETE carries `X-CSRF-Token`, `Authorization: Bearer`, session cookie, and
+  (delegate) `X-IMPERSONATION-TOKEN`; absence in test harness yields the expected server-error
+  mapping. Traces: AC-5, AC-6.
+- **TC-AND-313-13 — Accessibility of sheets/banner/destructive actions.** Type: Compose-UI (a11y).
+  Target: emu35 (TalkBack assertions via semantics). Steps: open `UserModerationSheet` and confirm
+  dialog; inspect semantics. Expected: Ban/Delete expose `Role.Button` + destructive accessible
+  labels; touch targets ≥ 48dp; confirm dialog focus-trapped; duration chips and pinned banner
+  expose `contentDescription`; banner "show full message" expand is announced. Traces: AC-2, AC-4, AC-5.
+- **TC-AND-313-14 — ABI/API parity (arm64 / API 34 vs x86_64 / API 35).** Type: instrumented/e2e.
+  Target: **A15 (must)** + emu35 for comparison. Steps: run the mute→delete→pin→log e2e suite on
+  both. Expected: identical behavior (Moshi epoch-int parsing of `muted_until`/`ts`, `java.time`
+  formatting, SSE `chat:delete` handling) with no arm64-vs-x86 or API-34-vs-35 divergence. Note:
+  the physical device is the authoritative target for ABI/API differences. Traces: AC-1, AC-3, AC-4, AC-8.
+
+### Coverage matrix
+- **AC-1 (mute applies + logged, unmute reverses):** TC-01, TC-02, TC-14. (Unmute has no
+  endpoint — see §16 Open assumptions; not test-covered.)
+- **AC-2 (ban w/ confirm + logged, unban reverses):** TC-03, TC-04, TC-05, TC-13.
+- **AC-3 (delete removes + logged):** TC-06, TC-14.
+- **AC-4 (pin/unpin banner + logged, replace):** TC-07, TC-13, TC-14.
+- **AC-5 (controls hidden for non-host; 403 message):** TC-09, TC-12, TC-13.
+- **AC-6 (delegate route via path assertion):** TC-02, TC-12.
+- **AC-7 (rollback + Retry; log backoff + Offline/Error):** TC-04, TC-09, TC-10, TC-11.
+- **AC-8 (log newest-first, pull-to-refresh):** TC-08, TC-11, TC-14.

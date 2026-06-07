@@ -5,7 +5,8 @@ milestone: M7
 epic: E41
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-309]
 blocks: []
 ---
@@ -258,8 +259,12 @@ routes). All calls carry the session cookie + `X-CSRF-Token` (AND-012).
 { "ok": true, "duration_seconds": 30, "started_at": 1749081600, "skip_after_seconds": 5 }
 ```
 
-**POST `/broadcast/sessions/{session_id}/ad-break/end`** (no body) → `200 {}`
-(empty object; mapped to `Unit`).
+**POST `/broadcast/sessions/{session_id}/ad-break/end`** (no body) → `200`.
+*(Correction: the OpenAPI declares the 200 content schema as `{}` — i.e. an
+**untyped** JSON schema, not literally an empty object. The web reference
+(`src/api/endpoints/broadcast-ads.ts: endAdBreak`) types the response as
+`{ ok: boolean }`. Either way the body is not load-bearing for this client, so we
+deserialize to `Unit`/ignore it and rely on a follow-up `GET ad-config`.)*
 
 **Error body shape (all routes):** FastAPI `{"detail": ...}` where `detail` is a
 string, an array `[{"msg": "...", "loc": [...]}]` (422), or an object
@@ -306,7 +311,11 @@ string, an array `[{"msg": "...", "loc": [...]}]` (422), or an object
 
 - All four calls are broadcaster-only mutations/reads authorized by the cookie session
   (no bearer tokens stored). The client never persists credentials; it relies on the
-  persistent cookie jar (AND-011).
+  persistent cookie jar (AND-011). *(Note: the web reference client additionally sends
+  `Authorization: Bearer <accessToken>` alongside the cookie — see
+  `src/api/client.ts`. The Android port's cookie-only posture is a deliberate
+  app-side decision inherited from the M2 auth milestone, not a property of the
+  backend contract; the backend accepts the cookie session for these routes.)*
 - Every mutating request (`PATCH`, `POST`) must carry the `X-CSRF-Token` header echoed
   from the `ui_csrf` cookie (AND-012). Verify the CSRF interceptor applies to the
   `broadcast/*` host calls and not only `/ui/*`.
@@ -377,14 +386,23 @@ string, an array `[{"msg": "...", "loc": [...]}]` (422), or an object
 ## 13. Risks & Open Questions
 
 - **R1 — Live ad-break propagation to viewers is server-driven.** The host trigger only
-  returns `AdBreakOut`; how viewers learn a break started (push/WS/poll) is not in this
-  ticket. Risk: "ad break triggers" acceptance is host-observable only. *Open:* confirm
-  whether the host needs any signal that viewers actually entered the break, or whether
-  host-side state is sufficient for AND-316.
-- **R2 — No server "end" event for natural expiry.** The client infers expiry from
-  `started_at + duration`. Clock skew or a missed refresh could briefly mis-display
-  state. Mitigated by reconcile-on-expiry; *open:* is there a polling cadence the host
-  panel already runs (from AND-309 health) we can piggyback on instead of a local timer?
+  returns `AdBreakOut`. *Correction:* the backend DOES expose a server-driven channel —
+  `GET /broadcast/sessions/{session_id}/stream` (SSE / `EventSource`), which publishes
+  `ad_break:start` / `ad_break:end` events (plus `viewer_count` / `health_update` /
+  `session_status`). The web reference (`src/hooks/useBroadcastStream.ts`) drives the
+  broadcaster's *own* live ad-break state from this stream, not from a local timer. So a
+  signal that a break started/ended is available; AND-316 chooses (per §6) to model
+  host-side state locally rather than open a second SSE connection. *Open:* whether the
+  host needs confirmation that viewers actually *entered* the break, or whether
+  host-side state is sufficient for AND-316 — still unverified from the sources.
+- **R2 — Server end signal exists via SSE, not a typed REST body.** *Correction to the
+  prior draft:* there IS a server-side end event (`ad_break:end` on the SSE stream); the
+  earlier claim of "no server end event for natural expiry" was inaccurate. This ticket
+  deliberately infers expiry locally from `started_at + duration_seconds` (no SSE
+  subscription in scope), so clock skew or a missed refresh could briefly mis-display
+  state; mitigated by reconcile-on-expiry. *Open:* whether to subscribe to the AND-309
+  SSE/health stream and consume `ad_break:end` instead of a local timer is a viable
+  future refinement (would remove the round-trip and the skew window).
 - **R3 — `ad-break/end` returns `{}` (no typed body).** We map to `Unit` and rely on a
   follow-up `GET ad-config` for truth. Acceptable but adds a round-trip.
 - **R4 — Concurrent breaks / double-trigger** under flaky network: mitigated by
@@ -428,3 +446,256 @@ string, an array `[{"msg": "...", "loc": [...]}]` (422), or an object
   logged.
 - CSRF header confirmed on `broadcast/*` mutations; GET-only backoff confirmed.
 - PR reviewed and merged to `android-port`; spec status moved from `draft` to `done`.
+
+## 16. Citations & Assumption Audit
+
+Each claim is listed with a VERDICT (Verified / Corrected / Unverified-assumption) and
+an exact source pointer. OpenAPI pointers reference
+`reference/openapi.index.txt` / `reference/openapi.pretty.json`
+(`components.schemas.<Name>`); frontend pointers reference `reference/src/...`.
+
+1. **`GET /broadcast/sessions/{session_id}/ad-config` → 200 `BroadcastAdConfigOut`.**
+   VERDICT: Verified. SOURCE: OpenAPI `GET /broadcast/sessions/{session_id}/ad-config`
+   (op `get_ad_config_route_...`, resp `200:BroadcastAdConfigOut`);
+   `src/api/endpoints/broadcast-ads.ts: getAdConfig`.
+2. **`PATCH /broadcast/sessions/{session_id}/ad-config` body `BroadcastAdConfigIn` →
+   200 `BroadcastAdConfigOut`.** VERDICT: Verified. SOURCE: OpenAPI
+   `PATCH /broadcast/sessions/{session_id}/ad-config` (`req=BroadcastAdConfigIn`,
+   `resp=200:BroadcastAdConfigOut`); `src/api/endpoints/broadcast-ads.ts: updateAdConfig`.
+3. **`POST /broadcast/sessions/{session_id}/ad-break` (no request body) → 200
+   `AdBreakOut`.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /broadcast/sessions/{session_id}/ad-break` (`req=` empty, `resp=200:AdBreakOut`);
+   `src/api/endpoints/broadcast-ads.ts: triggerAdBreak`.
+4. **`POST /broadcast/sessions/{session_id}/ad-break/end` (no body) → 200, body
+   ignored / mapped to `Unit`.** VERDICT: Corrected. The OpenAPI 200 schema is `{}`
+   (an **untyped** JSON schema, not literally an empty object); the web client types it
+   `{ ok: boolean }`. SOURCE: OpenAPI
+   `POST /broadcast/sessions/{session_id}/ad-break/end` (`responses.200.content.
+   application/json.schema = {}`); `src/api/endpoints/broadcast-ads.ts: endAdBreak`.
+5. **`BroadcastAdConfigOut` fields: `session_id` (str), `pre_roll_enabled` (bool),
+   `mid_roll_ad_break_duration_seconds` (int), `mid_roll_skip_after_seconds` (int),
+   `ad_break_active` (bool), `ad_break_started_at` (int|null), `total_ad_breaks`
+   (int).** VERDICT: Verified — names, types, and the nullable-only-on-`ad_break_started_at`
+   shape all match; `required` = all except `ad_break_started_at`. SOURCE:
+   `components.schemas.BroadcastAdConfigOut`; `src/api/endpoints/broadcast-ads.ts:
+   BroadcastAdConfig`.
+6. **`BroadcastAdConfigIn` fields all optional/nullable: `pre_roll_enabled`,
+   `mid_roll_ad_break_duration_seconds`, `mid_roll_skip_after_seconds`.** VERDICT:
+   Verified — every property is `anyOf [T, null]` with no `required` block, confirming
+   true partial-update semantics. SOURCE: `components.schemas.BroadcastAdConfigIn`;
+   `src/api/endpoints/broadcast-ads.ts: BroadcastAdConfigUpdate`.
+7. **Server range constraints: duration ∈ [15,60], skip-after ∈ [5,30].** VERDICT:
+   Verified — `mid_roll_ad_break_duration_seconds` `minimum:15 maximum:60`,
+   `mid_roll_skip_after_seconds` `minimum:5 maximum:30`. SOURCE:
+   `components.schemas.BroadcastAdConfigIn`.
+8. **`AdBreakOut` fields: `ok` (bool, default true), `duration_seconds` (int),
+   `started_at` (int), `skip_after_seconds` (int).** VERDICT: Verified — `ok` has
+   `default: true` and is NOT in `required`; the other three are required integers.
+   SOURCE: `components.schemas.AdBreakOut`; `src/api/endpoints/broadcast-ads.ts:
+   AdBreakResponse`.
+9. **Timestamps (`ad_break_started_at`, `started_at`) are epoch integers.** VERDICT:
+   Verified as integer type (OpenAPI shows `type: integer`); the **seconds-vs-millis**
+   interpretation is an assumption — see Open assumptions. SOURCE:
+   `components.schemas.BroadcastAdConfigOut`, `components.schemas.AdBreakOut`.
+10. **CSRF: every request carries `X-CSRF-Token` echoed from the `ui_csrf` cookie, and
+    this applies to `broadcast/*` routes (not only `/ui/*`).** VERDICT: Verified — the
+    web client sets the header unconditionally for all paths. SOURCE:
+    `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`
+    in the shared `api()` wrapper used by all endpoints).
+11. **401 handling: a single transparent refresh via `POST /ui/session/refresh` then one
+    retry; a second 401 logs out / surfaces session-expired.** VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (`refreshSession()` posts `/ui/session/refresh`;
+    single-flight `refreshPromise`; retry once; on retry 401 → `logout("session_expired")`).
+12. **Trigger button enabled only when session live AND no active break AND no request in
+    flight.** VERDICT: Verified — web disables on `!isLive || adBreakActive ||
+    mutation.isPending`. SOURCE: `src/pages/broadcast/AdBreakButton.tsx` (`const disabled
+    = !isLive || adBreakActive || mutation.isPending`).
+13. **Optional backend params `user_sub` (query), `X-SESSION-ID`, `X-IMPERSONATION-TOKEN`
+    (headers) exist on all four routes and are not required.** VERDICT: Verified — listed
+    as `params=session_id,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN` and all marked
+    `required: false` in the path spec. SOURCE: OpenAPI index lines for the four
+    `ad-config`/`ad-break` routes; path object for `.../ad-break/end`.
+14. **Error body is FastAPI `{"detail": ...}` where `detail` may be a string, a `422`
+    array of `{msg, loc}`, or an object with a `code`.** VERDICT: Verified — `422` uses
+    `HTTPValidationError` (array of `ValidationError` with `msg`/`loc`); the web error
+    normalizer handles string, `[{msg}]`, and `{code}` object forms. SOURCE: OpenAPI
+    `responses.422` = `HTTPValidationError` on all four routes;
+    `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError`.
+15. **Server-driven ad-break propagation exists via SSE
+    `GET /broadcast/sessions/{session_id}/stream` with `ad_break:start` /
+    `ad_break:end` events.** VERDICT: Corrected (the prior draft asserted no server end
+    signal). SOURCE: OpenAPI `GET /broadcast/sessions/{session_id}/stream`
+    (op `broadcast_event_stream_route_...`); `src/hooks/useBroadcastStream.ts`
+    (`EventSource(".../stream")`, `addEventListener("ad_break:start"|"ad_break:end")`).
+16. **Web reference also sends `Authorization: Bearer <accessToken>` alongside the
+    cookie.** VERDICT: Corrected/clarified the §8 "cookie-only, no bearer" framing as an
+    app-side choice, not a backend constraint. SOURCE: `src/api/client.ts`
+    (`headers.set("Authorization", \`Bearer ${accessToken}\`)`).
+17. **DTO/Retrofit choices (Moshi `@JsonClass`, omit-null serialization for partial
+    PATCH, Retrofit `@PATCH`/`@POST`/`@GET`, Hilt `SingletonComponent`).** VERDICT:
+    Unverified-assumption (framework ref). These are standard Android patterns, not
+    derivable from the backend/frontend sources. Framework refs:
+    Moshi `https://github.com/square/moshi`, Retrofit `https://square.github.io/retrofit/`,
+    Hilt `https://developer.android.com/training/dependency-injection/hilt-android`,
+    Compose `https://developer.android.com/jetpack/compose`.
+18. **Accessibility approach (`liveRegion = LiveRegionMode.Polite`, ≥48dp targets,
+    `contentDescription`).** VERDICT: Unverified-assumption (framework ref). SOURCE:
+    `https://developer.android.com/jetpack/compose/accessibility`.
+
+### Corrections made
+
+- **§5** `ad-break/end` response: changed "→ `200 {}` (empty object)" to clarify the
+  OpenAPI schema is an *untyped* `{}` and the web client types it `{ ok: boolean }`;
+  body is non-load-bearing and mapped to `Unit`.
+- **§13 R1/R2**: corrected the assertion that there is "no server end event for natural
+  expiry." A server-driven SSE stream (`.../stream`) emits `ad_break:start` /
+  `ad_break:end`; the web client drives broadcaster ad-break state from it. Reframed the
+  local-timer design as a deliberate scope choice rather than a workaround for a missing
+  server capability, and noted the SSE route as a future refinement.
+- **§8**: noted that the web client sends `Authorization: Bearer` in addition to the
+  cookie; the Android cookie-only posture is an app-side decision, not a backend
+  contract property.
+- All other concrete API/DTO/auth claims in the draft were checked and found accurate;
+  no further edits required.
+
+### Open assumptions
+
+- **Timestamp units (seconds vs. milliseconds).** OpenAPI/frontend only declare
+  `integer`; nothing in the sources fixes the unit. The spec assumes **epoch seconds**.
+  The example `started_at: 1749081600` (~2025-06-05) is consistent with seconds, but
+  this should be confirmed against the dev backend before relying on the countdown math.
+- **Whether `POST ad-break` returns a conflict when a break is already active** (§7
+  "race — break already active"). No `409`/conflict response is declared in OpenAPI
+  (only `200`/`422`); the handling is defensive and unverified — confirm against the dev
+  host.
+- **Whether the host needs viewer-entered-break confirmation** (R1). Not derivable from
+  the sources; product/backend confirmation needed.
+- **`total_ad_breaks` increment timing** (on trigger vs. on completion). The countdown
+  reconcile (FR-5/AC-6) assumes the server increments it; the exact moment is not
+  specified by the sources — confirm against the dev backend.
+- **All Android framework/library choices** (Moshi/Retrofit/Hilt/Compose, AND-0xx
+  infra tickets AND-011..AND-021/046/047) are project conventions, not verifiable from
+  the backend or web reference; accepted as-is per the dependency milestones.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **emu35** =
+headless emulator AVD `test35` (x86_64, API 35) for fast UI/instrumented CI suites;
+**A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial `R5CX821TA9R`, API 34,
+arm64-v8a) for real-hardware behavior. This ticket has **no** camera / biometrics /
+WebRTC / push / Telecom surface, so most cases run on JVM or emu35; only the
+ABI/API-parity smoke (TC-13) and the real-network flaky-host case (TC-12) call for the
+physical device.
+
+- **TC-AND-316-01 — Load config happy path (GET).**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer enqueues
+  `200 BroadcastAdConfigOut` ( `ad_break_active=false`, `total_ad_breaks=2`).
+  Steps: open the Ads section / call `repo.getAdConfig(sessionId)`. Expected: request is
+  `GET /broadcast/sessions/{sessionId}/ad-config`; DTO deserializes with all 7 fields;
+  state renders pre-roll, duration, skip-after, total=2; not active. Traces: AC-1.
+- **TC-AND-316-02 — DTO (de)serialization contract.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: captured OpenAPI example
+  payloads for `BroadcastAdConfigOut`, `AdBreakOut`, and a partial `BroadcastAdConfigIn`
+  (`{pre_roll_enabled, mid_roll_ad_break_duration_seconds}` only). Steps: round-trip each
+  through Moshi. Expected: field names map per `@Json`; `ad_break_started_at=null`
+  tolerated; `AdBreakOut.ok` defaults true when absent; serializing the partial
+  `BroadcastAdConfigIn` **omits** the unset `mid_roll_skip_after_seconds` key entirely.
+  Traces: AC-3.
+- **TC-AND-316-03 — PATCH sends only changed fields.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: loaded config; user toggles
+  pre-roll and changes duration to 45, leaves skip-after untouched; MockWebServer returns
+  `200 BroadcastAdConfigOut`. Steps: `saveConfig()`. Expected: recorded request is
+  `PATCH .../ad-config` whose JSON body contains exactly `pre_roll_enabled` and
+  `mid_roll_ad_break_duration_seconds` (no `mid_roll_skip_after_seconds`); UI updates from
+  the returned body. Traces: AC-3.
+- **TC-AND-316-04 — Range validation disables Save.**
+  Type: unit (ViewModel). Target: JVM. Preconditions: loaded config. Steps: set duration
+  to 14 then 61; set skip-after to 4 then 31; then set valid values (30 / 5). Expected:
+  out-of-range values set `durationValid=false` / `skipValid=false` and Save disabled
+  with field-level error; valid values enable Save; no network call occurs for invalid
+  input. Traces: AC-2.
+- **TC-AND-316-05 — Trigger ad break happy path.**
+  Type: unit (ViewModel) + contract/MockWebServer. Target: JVM. Preconditions: session
+  live, no active break; MockWebServer returns `200 AdBreakOut {ok:true,
+  duration_seconds:30, started_at:<now>, skip_after_seconds:5}`. Steps: `triggerAdBreak()`.
+  Expected: request `POST .../ad-break` (no body); state flips `adBreakActive=true`,
+  `remainingSeconds≈30` derived from `started_at + duration_seconds`, skip-after=5,
+  countdown coroutine running, total incremented after reconcile. Traces: AC-4.
+- **TC-AND-316-06 — Countdown auto-expiry reconciles.**
+  Type: unit (ViewModel). Target: JVM (virtual-time test dispatcher + controllable clock).
+  Preconditions: active break with duration 30; a refresh `GET` is stubbed to return
+  `ad_break_active=false, total_ad_breaks=3`. Steps: advance virtual clock past
+  `started_at + 30s`. Expected: at 0 the VM clears `adBreakActive`, invokes `refresh()`,
+  and `total_ad_breaks` updates to 3 from the server response (not trusted to local timer
+  alone). Traces: AC-6.
+- **TC-AND-316-07 — End ad break early.**
+  Type: unit (ViewModel) + contract/MockWebServer. Target: JVM. Preconditions: active
+  break; `POST .../ad-break/end` returns `200` (body ignored); follow-up `GET` returns
+  inactive. Steps: `endAdBreak()`. Expected: request `POST .../ad-break/end`; response
+  body deserializes to `Unit` without error even if body is `{}` or `{"ok":true}`; state
+  returns to non-active; End button hidden; reconcile GET fired. Traces: AC-5.
+- **TC-AND-316-08 — 422 validation mapping.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: force an out-of-range PATCH to
+  the server (bypassing client guard); MockWebServer returns `422 HTTPValidationError`
+  with `detail:[{"msg":"ensure this value is less than or equal to 60","loc":["body",
+  "mid_roll_ad_break_duration_seconds"]}]`. Steps: `saveConfig()`. Expected: `ApiErrorMapper`
+  produces a `UiError` whose message/loc maps to the duration field's supporting text;
+  optimistic change rolled back. Traces: AC-2, AC-3.
+- **TC-AND-316-09 — 401 single refresh + retry on GET.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: GET returns `401` once, then
+  the refresh endpoint `200`, then GET `200`. Steps: `getAdConfig()`. Expected: exactly one
+  `POST /ui/session/refresh` then a single GET retry that succeeds; a second consecutive
+  `401` instead surfaces a session-expired error (no infinite loop). Traces: AC-7.
+- **TC-AND-316-10 — Mutations not retried; GET uses backoff.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: PATCH returns a transient
+  `503`; separately GET returns `503` twice then `200`. Steps: `saveConfig()` then
+  `getAdConfig()`. Expected: PATCH makes exactly **one** attempt and surfaces the error
+  with optimistic rollback (no auto-retry); GET retries with bounded jittered backoff
+  (≤3 attempts) and ultimately succeeds. Traces: AC-7.
+- **TC-AND-316-11 — Compose UI gating & a11y.**
+  Type: Compose-UI. Target: emu35. Preconditions: render `AdControlSection` with seeded
+  states. Steps/Expected: (a) Save disabled until `dirty && durationValid && skipValid`;
+  (b) Trigger disabled while `adBreakActive` or `mutationInFlight`; (c) End visible only
+  while active; (d) active countdown chip renders and exposes `liveRegion=Polite`
+  semantics; (e) all controls have non-empty `contentDescription` and ≥48dp touch
+  targets; (f) no hardcoded strings (assert via resource lookups). Traces: AC-2, AC-4,
+  AC-5, AC-9.
+- **TC-AND-316-12 — Flaky dev-host / offline path.**
+  Type: integration. Target: **A15 (physical device — must run here)**. Preconditions:
+  app pointed at the plaintext dev host `http://18.222.237.167:8000`; toggle device
+  Wi-Fi/airplane mode and induce slow/lost responses on real radio. Steps: load Ads
+  section while offline, then trigger/save while offline, then restore connectivity.
+  Expected: offline banner shown; Trigger/End/Save disabled while offline; last-loaded
+  snapshot still readable; ~20s timeout honored on a stalled GET then AND-021 error/retry
+  state; on reconnect a retry succeeds. Rationale for physical device: real cellular/Wi-Fi
+  transitions and the unreliable plaintext host exercise timeout/offline behavior an
+  emulator's synthetic network cannot faithfully reproduce. Traces: AC-7, AC-8.
+- **TC-AND-316-13 — ABI / API-parity smoke.**
+  Type: instrumented/e2e. Target: **A15 (arm64-v8a, API 34)** vs **emu35 (x86_64, API
+  35)**. Preconditions: built APK installable on both. Steps: run the core flow
+  (load → save → trigger → countdown → end) on each. Expected: identical behavior and DTO
+  parsing across ABI and API level; no Moshi/codegen or API-34-vs-35 divergence.
+  Rationale for physical device: only arm64/API-34 hardware surfaces ABI- or
+  platform-version-specific regressions. Traces: AC-1, AC-3, AC-4, AC-5, AC-6.
+- **TC-AND-316-14 — CSRF header present on broadcast mutations (security).**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: cookie jar seeded with a
+  `ui_csrf` cookie; CSRF interceptor (AND-012) installed. Steps: perform `PATCH .../ad-config`,
+  `POST .../ad-break`, `POST .../ad-break/end`. Expected: every recorded mutating request
+  carries `X-CSRF-Token` equal to the `ui_csrf` value, applied to `broadcast/*` (not just
+  `/ui/*`); GET need not be asserted but must not fail for lacking it; no cookie/CSRF
+  value appears in logcat at the configured log level. Traces: AC-7 (auth/transport),
+  §8 security.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (load config & state on entry) | TC-01, TC-13 |
+| AC-2 (range validation gates Save) | TC-04, TC-08, TC-11 |
+| AC-3 (PATCH only changed fields; UI updates) | TC-02, TC-03, TC-08, TC-13 |
+| AC-4 (trigger → active + countdown + total) | TC-05, TC-11, TC-13 |
+| AC-5 (End early → non-active) | TC-07, TC-11, TC-13 |
+| AC-6 (auto-expiry clears + refetch) | TC-06, TC-13 |
+| AC-7 (no mutation retry; GET backoff; 401 single refresh) | TC-09, TC-10, TC-12, TC-14 |
+| AC-8 (offline disables actions; last-known snapshot) | TC-12 |
+| AC-9 (localized strings; a11y; polite countdown) | TC-11 |

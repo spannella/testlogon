@@ -5,9 +5,10 @@ milestone: M7
 epic: E41
 priority: P2
 size: L
-status: draft
 depends_on: [AND-282, AND-283]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-314 — Goals & products management
@@ -67,13 +68,29 @@ catalog browsing screen — those belong to sibling/upstream tickets named in §
 - Backend: FastAPI + DynamoDB. Dev backend `http://18.222.237.167:8000` is
   **plaintext HTTP** and an **unreliable dev host**: ~20s timeouts, bounded backoff
   for idempotent GETs only, offline/stale UI states. OpenAPI at `/openapi.json`.
-- Auth is cookie-based: requests carry session cookies + the `ui_csrf` cookie echoed
-  as `X-CSRF-Token`; on 401 the client does `POST /ui/session/refresh` once then
-  retries. All mutating calls in this ticket (POST/PATCH/DELETE) require the CSRF
+- Auth (verified against `src/api/client.ts`): the web client sends THREE auth
+  signals on requests — (1) `Authorization: Bearer <accessToken>` from the auth
+  store, (2) session cookies (`credentials: "include"`), and (3) the `ui_csrf`
+  cookie value echoed as the `X-CSRF-Token` header. **Correction:** earlier drafts
+  described auth as "cookie-based only"; the reference client also attaches the
+  Bearer access token, and it sends `X-CSRF-Token` on **every** request (not only
+  mutations) whenever the `ui_csrf` cookie is present. The Android client must
+  therefore attach the Bearer token (from the shared token store / E04 auth) in
+  addition to the cookie jar + CSRF interceptor. On 401, if the user was
+  authenticated, the client does `POST /ui/session/refresh` once then retries the
+  original request exactly once (verified: `client.ts` `refreshSession` + single
+  retry). All mutating calls in this ticket (POST/PATCH/DELETE) require the CSRF
   header and are **not** eligible for GET backoff retry.
-- Web reference: `frontend/src/api/endpoints/*.ts` and `frontend/src/api/types.ts`.
-  Field shapes below are verified against `/openapi.json`
-  (`BroadcastTipGoal*`, `BroadcastShelf*`, `BroadcastPrice*` schemas).
+- Web reference: `src/api/endpoints/broadcast-tips.ts` (goals) and
+  `src/api/endpoints/broadcast-shelf.ts` (shelf add/remove/list/reorder).
+  **Note:** the web client implements goals + shelf add/remove/list/reorder, but
+  does NOT implement the broadcast price set/clear endpoints, and its `ShelfItem`
+  interface OMITS the LCOM-004 pricing fields (`broadcast_price_cents`,
+  `effective_price_cents`, `discount_pct`, etc.). Those endpoints/fields are
+  therefore verified against `/openapi.json` only (`BroadcastPriceSetIn`,
+  `BroadcastPriceOut`, `BroadcastShelfItemOut`) — no web-client precedent exists.
+  Field shapes below are verified against the OpenAPI schemas
+  (`BroadcastTipGoal*`, `BroadcastShelf*`, `BroadcastPrice*`).
 
 ## 3. Functional Requirements
 
@@ -171,6 +188,8 @@ data class ShelfItemDto(
     @Json(name = "added_at") val addedAt: Long,
     @Json(name = "broadcast_price_cents") val broadcastPriceCents: Long? = null,
     @Json(name = "broadcast_price_expires_at") val broadcastPriceExpiresAt: Long? = null,
+    // Present in BroadcastShelfItemOut (verified); was missing from earlier drafts:
+    @Json(name = "broadcast_price_set_at") val broadcastPriceSetAt: Long? = null,
     @Json(name = "effective_price_cents") val effectivePriceCents: Long? = null,
     @Json(name = "is_broadcast_price") val isBroadcastPrice: Boolean = false,
     @Json(name = "discount_pct") val discountPct: Int = 0,
@@ -193,6 +212,18 @@ data class ShelfAddDto(
 
 @JsonClass(generateAdapter = true)
 data class ShelfReorderDto(@Json(name = "item_order") val itemOrder: List<String>)
+
+// CORRECTION: DELETE goal / DELETE product / reorder do NOT return empty bodies in
+// practice. The web client types DELETE goal as `{ ok, goal_id }`
+// (broadcast-tips.ts: deleteTipGoal), DELETE product as `{ ok, item_id }`
+// (broadcast-shelf.ts: removeShelfProduct), and reorder as `{ ok }`. We parse a
+// tolerant ack (all fields optional) so a bare 200/204 also deserializes cleanly.
+@JsonClass(generateAdapter = true)
+data class OkAckDto(
+    val ok: Boolean? = null,
+    @Json(name = "goal_id") val goalId: String? = null,
+    @Json(name = "item_id") val itemId: String? = null,
+)
 
 @JsonClass(generateAdapter = true)
 data class PriceSetDto(
@@ -230,7 +261,7 @@ interface BroadcastManageApi {
     suspend fun deleteGoal(
         @Path("sessionId") sessionId: String,
         @Path("goalId") goalId: String,
-    ): Response<Unit>
+    ): Response<OkAckDto>   // body `{ ok, goal_id }` (verified vs deleteTipGoal)
 
     @GET("broadcast/sessions/{sessionId}/products")
     suspend fun listProducts(@Path("sessionId") sessionId: String): Response<ShelfListDto>
@@ -245,13 +276,16 @@ interface BroadcastManageApi {
     suspend fun removeProduct(
         @Path("sessionId") sessionId: String,
         @Path("itemId") itemId: String,
-    ): Response<Unit>
+    ): Response<OkAckDto>  // body `{ ok, item_id }` (verified vs removeShelfProduct)
 
+    // CORRECTION: reorder does NOT return the re-ordered shelf. OpenAPI declares
+    // resp=200 with no schema; the web client (broadcast-shelf.ts: reorderShelf)
+    // types it as `{ ok: boolean }`. So we parse an ack and re-fetch the list.
     @PATCH("broadcast/sessions/{sessionId}/products/reorder")
     suspend fun reorder(
         @Path("sessionId") sessionId: String,
         @Body body: ShelfReorderDto,
-    ): Response<ShelfListDto>
+    ): Response<OkAckDto>
 
     @PATCH("broadcast/sessions/{sessionId}/products/{itemId}/price")
     suspend fun setPrice(
@@ -283,6 +317,8 @@ class BroadcastManageRepository @Inject constructor(
     suspend fun products(sessionId: String): ApiResult<List<ShelfItem>>
     suspend fun addProduct(sessionId: String, req: ShelfAddDto): ApiResult<ShelfItem>
     suspend fun removeProduct(sessionId: String, itemId: String): ApiResult<Unit>
+    // reorder PATCHes the order, then re-fetches the shelf (the PATCH returns only
+    // an `{ ok }` ack, not the re-ordered list — corrected from earlier draft).
     suspend fun reorder(sessionId: String, order: List<String>): ApiResult<List<ShelfItem>>
     suspend fun setPrice(sessionId: String, itemId: String, req: PriceSetDto): ApiResult<ShelfItem>
     suspend fun clearPrice(sessionId: String, itemId: String): ApiResult<Unit>
@@ -356,7 +392,10 @@ session cookies + `X-CSRF-Token` (mutations require it).
   ```
   Constraints: `label` 1–200; `target_cents` 100–10_000_000; `sort_order` 0–4
   (default 0). → 201 `BroadcastTipGoalOut` (single goal, shape as above).
-- `DELETE /broadcast/sessions/{session_id}/goals/{goal_id}` → 200/204 (empty body).
+- `DELETE /broadcast/sessions/{session_id}/goals/{goal_id}` → 200. **Correction:**
+  not an empty body — the web client (`deleteTipGoal`) types the response as
+  `{ "ok": true, "goal_id": "g1" }`. OpenAPI declares resp=200 with no schema, so
+  the Android client parses a tolerant `OkAckDto` (and treats a bare 204 as success).
 
 **Products**
 
@@ -377,10 +416,15 @@ session cookies + `X-CSRF-Token` (mutations require it).
   ```
   Constraints: `item_id`/`category_id` 1–128; `display_order` 0–999.
   → 201 `BroadcastShelfItemOut`.
-- `DELETE /broadcast/sessions/{session_id}/products/{item_id}` → 200/204.
+- `DELETE /broadcast/sessions/{session_id}/products/{item_id}` → 200. **Correction:**
+  not empty — `removeShelfProduct` types it as `{ "ok": true, "item_id": "p1" }`.
 - `PATCH /broadcast/sessions/{session_id}/products/reorder` body
   `BroadcastShelfReorderIn`: `{ "item_order": ["p2","p1","p3"] }` (1–50 ids).
-  → 200 `BroadcastShelfListOut` (re-ordered).
+  **Correction:** does NOT return the re-ordered shelf. OpenAPI declares resp=200
+  with no schema and the web client (`reorderShelf`) types it as `{ "ok": true }`.
+  The client must therefore re-fetch `GET .../products` after a successful reorder
+  to obtain the authoritative order (or apply its optimistic order and reconcile on
+  the next list read).
 - `PATCH /broadcast/sessions/{session_id}/products/{item_id}/price` body
   `BroadcastPriceSetIn`:
   ```json
@@ -408,9 +452,10 @@ All map through the shared `ApiErrorMapper` (AND-015).
   strings happens in the UI layer using `currency` from the DTO (default `USD`).
 - **Sorting**: goals by `(sortOrder, createdAt)`; products by `(displayOrder)`.
 - **Optimistic reorder**: `onReorder` immediately writes the reordered list into
-  `state.products`, calls `PATCH .../reorder`; on success it replaces state with the
-  server response; on failure it restores the pre-drag snapshot and emits
-  `transientError`.
+  `state.products`, calls `PATCH .../reorder`; on success it **re-fetches**
+  `GET .../products` and reconciles state from that authoritative list (corrected:
+  the reorder PATCH returns only an `{ ok }` ack, not the shelf); on failure it
+  restores the pre-drag snapshot and emits `transientError`.
 - **Per-item in-flight locks**: `pendingItemIds` tracks items with an active
   mutation; the corresponding row controls (delete, price, drag) are disabled and
   show a small progress indicator.
@@ -505,7 +550,9 @@ All map through the shared `ApiErrorMapper` (AND-015).
   - 201 create goal returns mapped `TipGoal`.
   - 422 create goal (label too long / target below min) → `ApiResult.Failure` with
     field-mapped `ApiError`.
-  - reorder PATCH sends exact `{"item_order":[...]}` and returns re-ordered list.
+  - reorder PATCH sends exact `{"item_order":[...]}`, parses the `{ ok }` ack, then
+    the repo issues a follow-up `GET .../products` and returns that re-ordered list
+    (corrected: PATCH itself does not return the shelf).
   - set price sends `broadcast_price_cents` + `expires_in_seconds`; clear price
     issues DELETE with no body.
   - 401 → refresh-then-retry succeeds (authenticator integration).
@@ -608,3 +655,258 @@ All map through the shared `ApiErrorMapper` (AND-015).
   any drift reconciled and noted in the PR.
 - PR description links AND-314, AND-282, AND-283 and documents R1 (no goal-edit
   endpoint) for reviewer awareness.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **GET `/broadcast/sessions/{session_id}/goals` → 200 `BroadcastTipGoalsListOut`.**
+   VERDICT: Verified. SOURCE: OpenAPI `GET /broadcast/sessions/{session_id}/goals`
+   (op `list_tip_goals_route...`, resp=200:BroadcastTipGoalsListOut); frontend
+   `src/api/endpoints/broadcast-tips.ts: listTipGoals`.
+2. **POST `/broadcast/sessions/{session_id}/goals` body `BroadcastTipGoalCreateIn` → 201
+   `BroadcastTipGoalOut`.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /broadcast/sessions/{session_id}/goals` (req=BroadcastTipGoalCreateIn,
+   resp=201:BroadcastTipGoalOut); frontend `broadcast-tips.ts: createTipGoal`.
+3. **Goal create constraints: `label` 1–200; `target_cents` 100–10_000_000;
+   `sort_order` 0–4 (default 0); required = label,target_cents.** VERDICT: Verified.
+   SOURCE: OpenAPI `components.schemas.BroadcastTipGoalCreateIn` (label minLength 1 /
+   maxLength 200; target_cents min 100 / max 10000000; sort_order min 0 / max 4
+   default 0; required [label, target_cents]).
+4. **`BroadcastTipGoalOut` fields: goal_id, session_id, label, target_cents,
+   current_cents(=0), reached(=false), reached_at(nullable), sort_order(=0),
+   created_at; required = goal_id,session_id,label,target_cents,created_at.**
+   VERDICT: Verified. SOURCE: OpenAPI `components.schemas.BroadcastTipGoalOut`.
+5. **DELETE `/broadcast/sessions/{session_id}/goals/{goal_id}` → empty body.**
+   VERDICT: Corrected. The response is `{ "ok": true, "goal_id": "..." }`, not empty.
+   SOURCE: frontend `broadcast-tips.ts: deleteTipGoal` (`api.del<{ ok; goal_id }>`);
+   OpenAPI declares resp=200 with no schema (no goal PATCH/PUT exists — confirms R1).
+6. **No goal edit (PATCH/PUT) endpoint exists; "CRUD" = create+read+delete (R1).**
+   VERDICT: Verified. SOURCE: OpenAPI index — only goal verbs are GET/POST/DELETE
+   under `/broadcast/sessions/{session_id}/goals`; the sole goal-PATCH in the API is
+   the unrelated `PATCH /ui/groups/{group_id}/treasury/goal`.
+7. **GET `/broadcast/sessions/{session_id}/products` → 200 `BroadcastShelfListOut`
+   ({session_id, items[], count}).** VERDICT: Verified. SOURCE: OpenAPI
+   `GET /broadcast/sessions/{session_id}/products` + `components.schemas.BroadcastShelfListOut`;
+   frontend `broadcast-shelf.ts: getShelfProducts`.
+8. **POST `/broadcast/sessions/{session_id}/products` body `BroadcastShelfAddIn`
+   (item_id/category_id 1–128, display_order 0–999) → 201 `BroadcastShelfItemOut`.**
+   VERDICT: Verified. SOURCE: OpenAPI `components.schemas.BroadcastShelfAddIn`
+   (item_id/category_id minLength 1 maxLength 128; display_order min 0 max 999 default
+   0; required [item_id, category_id]); frontend `broadcast-shelf.ts: addShelfProduct`.
+9. **DELETE `/broadcast/sessions/{session_id}/products/{item_id}` → empty body.**
+   VERDICT: Corrected. Response is `{ "ok": true, "item_id": "..." }`. SOURCE:
+   frontend `broadcast-shelf.ts: removeShelfProduct` (`api.del<{ ok; item_id }>`);
+   OpenAPI resp=200 no schema.
+10. **PATCH `/broadcast/sessions/{session_id}/products/reorder` body
+    `BroadcastShelfReorderIn` `{item_order:[...]}` (1–50) → 200 `BroadcastShelfListOut`
+    (re-ordered list).** VERDICT: Corrected. The reorder does NOT return the shelf;
+    it returns `{ "ok": true }`. The client must re-fetch `GET .../products` to get the
+    authoritative order. SOURCE: OpenAPI `PATCH .../products/reorder` (resp=200, NO
+    schema) + `components.schemas.BroadcastShelfReorderIn` (item_order minItems 1
+    maxItems 50, required); frontend `broadcast-shelf.ts: reorderShelf`
+    (`api.patch<{ ok: boolean }>`).
+11. **PATCH `/broadcast/sessions/{session_id}/products/{item_id}/price` body
+    `BroadcastPriceSetIn` (broadcast_price_cents > 0, max 99_999_999, strictly < catalog
+    price; expires_in_seconds 60–86400 or null) → 200 `BroadcastPriceOut`.**
+    VERDICT: Verified (OpenAPI only — no web-client usage). SOURCE: OpenAPI
+    `components.schemas.BroadcastPriceSetIn` (broadcast_price_cents exclusiveMinimum 0,
+    maximum 99999999, required; expires_in_seconds anyOf{min 60,max 86400}|null; schema
+    description states it MUST be strictly less than catalog price, enforced in the
+    service layer against DDB) and `components.schemas.BroadcastPriceOut`
+    (session_id,item_id,original_price_cents,broadcast_price_cents,discount_pct,set_by,
+    set_at required; broadcast_price_expires_at nullable).
+12. **DELETE `/broadcast/sessions/{session_id}/products/{item_id}/price` → 200.**
+    VERDICT: Verified (OpenAPI only). SOURCE: OpenAPI
+    `DELETE .../products/{item_id}/price` (op `clear_broadcast_price...`, resp=200 no
+    schema). Not implemented in the web client; treated as an empty-body ack.
+13. **`BroadcastShelfItemOut` pricing fields (broadcast_price_cents,
+    broadcast_price_expires_at, broadcast_price_set_at, effective_price_cents,
+    is_broadcast_price, discount_pct, original_price_cents, currency default USD).**
+    VERDICT: Corrected. SOURCE: OpenAPI `components.schemas.BroadcastShelfItemOut`. The
+    schema includes `broadcast_price_set_at` (integer|null) which earlier drafts of the
+    `ShelfItemDto` omitted — now added. The web client's `ShelfItem`
+    (`broadcast-shelf.ts`) OMITS all pricing fields, so these are OpenAPI-verified only.
+14. **Auth: cookie session + `ui_csrf`→`X-CSRF-Token`; 401 → one
+    `POST /ui/session/refresh` then retry.** VERDICT: Corrected/clarified. The web
+    client also sends `Authorization: Bearer <accessToken>` (from the auth store) on
+    every request and sends `X-CSRF-Token` on ALL requests (not only mutations) when
+    `ui_csrf` is present; refresh-then-single-retry only fires when the user was already
+    authenticated. SOURCE: `src/api/client.ts` (lines ~157–171 set Bearer + CSRF;
+    ~194–237 the 401 refresh-once + single retry; `refreshSession` POSTs
+    `/ui/session/refresh`).
+15. **FastAPI error mapping: 422 `HTTPValidationError`
+    `{detail:[{loc,msg,type}]}`; other 4xx → `{detail:"string"}` or
+    `{detail:{code,...}}`.** VERDICT: Verified. SOURCE: OpenAPI
+    `components.schemas.HTTPValidationError` (+ `ValidationError`); mapping behaviour in
+    `src/api/client.ts: normalizeErrorDetail` (handles string | array-of-{msg} |
+    object-with-`code`) and `mapAuthorizationError` (e.g. `role_required` codes for 403).
+16. **403 permission handling exists and surfaces a clear message.** VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (403 branch ~240–255 + `mapAuthorizationError`
+    `role_required*` codes). Backend authorization (host-only mutation) is server-enforced.
+17. **Reorder a11y alternative ("Move up/Move down") + drag handle semantics; M3
+    `TabRow`/`PullToRefreshBox`; reorderable `LazyColumn`.** VERDICT: Unverified-
+    assumption (Android UI design choice; no backend/frontend contract governs it).
+    Framework ref: Compose Material 3 `PullToRefreshBox` and list/drag patterns —
+    https://developer.android.com/develop/ui/compose/components and TalkBack custom
+    actions https://developer.android.com/develop/ui/compose/accessibility .
+18. **Base dev host `http://18.222.237.167:8000`, plaintext HTTP, ~20s timeouts,
+    GET-only bounded backoff.** VERDICT: Unverified-assumption (environment/infra
+    config not derivable from OpenAPI or frontend; inherited from core-network tickets
+    AND-009/AND-016). Cleartext-traffic policy framework ref:
+    https://developer.android.com/privacy-and-security/security-config .
+
+### Corrections made
+
+- **C1 (reorder response):** PATCH `.../products/reorder` returns `{ ok }`, NOT
+  `BroadcastShelfListOut`. Fixed in §4 (Retrofit now returns `OkAckDto`; repo
+  re-fetches), §5, §6, and §11. (claim 10)
+- **C2 (DELETE goal/product bodies):** both return small JSON acks
+  (`{ok, goal_id}` / `{ok, item_id}`), not empty bodies. Fixed in §4 (now
+  `Response<OkAckDto>`, added `OkAckDto`) and §5. (claims 5, 9)
+- **C3 (auth model):** added the `Authorization: Bearer` token requirement and noted
+  CSRF is sent on all requests; clarified the 401-refresh precondition. Fixed in §2.
+  (claim 14)
+- **C4 (missing DTO field):** added `broadcast_price_set_at` to `ShelfItemDto` to match
+  `BroadcastShelfItemOut`. Fixed in §4. (claim 13)
+- **C5 (frontend coverage gap):** noted in §2 that the price set/clear endpoints and
+  the LCOM-004 pricing fields are OpenAPI-verified only — the web client does not
+  exercise them. (claims 11, 12, 13)
+
+### Open assumptions
+
+- **OA1 — Host-ownership UI gate (§8):** hiding management controls when the session is
+  not owned by the current user, derived from `added_by`/host context, is assumed; no
+  verified field on the session schema confirms a per-user host flag in this ticket's
+  scope. Authorization is in any case server-enforced (403). (Unverifiable: session
+  ownership schema not examined here.)
+- **OA2 — Dev-host behaviour (timeouts, backoff, plaintext):** infra/config, not in
+  OpenAPI or frontend. Inherited from AND-009/AND-016. (claim 18)
+- **OA3 — Price-expiry GET semantics (R3):** the assumption that a GET after expiry
+  returns `is_broadcast_price=false` / catalog price is not provable from the static
+  schema; needs a live backend check. (Unverifiable from sources.)
+- **OA4 — `session_id` nav-arg key (R4):** the E41 hosting screen's arg name is assumed
+  to be `sessionId`; depends on an unmerged sibling ticket. (Unverifiable here.)
+- **OA5 — Telemetry event names (§10):** app-internal analytics contract, not governed
+  by the backend/frontend sources. (Unverifiable from sources.)
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM unit/Robolectric (no device); **MWS** =
+contract test over MockWebServer (JVM); **EMU** = headless emulator AVD `test35`
+(x86_64, API 35); **DEV** = physical Samsung Galaxy A15 5G (SM-A156U, API 34,
+arm64-v8a). UI/instrumented cases run on EMU unless a row says otherwise. None of this
+ticket's behaviour is camera/biometric/WebRTC/Telecom/push-dependent, so the physical
+device is required only for ABI/API-level confidence (TC-AND-314-12).
+
+- **TC-AND-314-01 — Create goal happy path (contract).**
+  Type: contract/MockWebServer (MWS). Target: `BroadcastManageApi.createGoal` +
+  repository mapper. Preconditions: MWS enqueues 201 with a `BroadcastTipGoalOut` body.
+  Steps: call `createGoal(sessionId, TipGoalCreateDto("New mic", 50000, 0))`.
+  Expected: request is `POST /broadcast/sessions/{id}/goals`, body
+  `{"label":"New mic","target_cents":50000,"sort_order":0}`, `Content-Type:
+  application/json`, `X-CSRF-Token` + `Authorization: Bearer` headers present; result is
+  `ApiResult.Success<TipGoal>` mapped from the response. Traces: AC1.
+- **TC-AND-314-02 — Goal create 422 maps to field error (contract).**
+  Type: MWS. Target: repository + `ApiErrorMapper`. Preconditions: MWS enqueues 422
+  `{"detail":[{"loc":["body","label"],"msg":"String should have at most 200
+  characters","type":"string_too_long"}]}`. Steps: call `createGoal` with an
+  over-long label. Expected: `ApiResult.Failure` whose `ApiError` carries the `label`
+  field + `msg`; no crash. Traces: AC3.
+- **TC-AND-314-03 — Client-side validation blocks submit (unit).**
+  Type: unit (JVM, Turbine + fake repo). Target: `GoalsProductsViewModel.submitGoal`.
+  Preconditions: fake repo records calls. Steps: submit `target_cents = 50` (below 100)
+  and separately `label = ""`. Expected: inline field errors set in state, `state`
+  shows the validation error, and the fake repo's `createGoal` is **never** invoked
+  (no network call). Traces: AC3.
+- **TC-AND-314-04 — Delete goal happy path + confirm (Compose-UI).**
+  Type: Compose-UI (EMU). Target: `GoalsProductsScreen` + ViewModel with fake repo.
+  Preconditions: one goal rendered. Steps: tap delete → confirm dialog appears → confirm.
+  Expected: `DELETE .../goals/{goal_id}` issued, `OkAckDto`/204 treated as success, row
+  removed; cancelling the dialog issues no request. Traces: AC2.
+- **TC-AND-314-05 — Add product happy path (contract).**
+  Type: MWS. Target: `addProduct`. Preconditions: MWS enqueues 201
+  `BroadcastShelfItemOut`. Steps: `addProduct(sessionId, ShelfAddDto("p1","cat1",0))`.
+  Expected: `POST .../products` with body `{"item_id":"p1","category_id":"cat1",
+  "display_order":0}`; mapped `ShelfItem` returned including pricing fields when present.
+  Traces: AC4.
+- **TC-AND-314-06 — Reorder sends item_order, parses ack, re-fetches (contract).**
+  Type: MWS. Target: `reorder` repository path. Preconditions: MWS enqueues (a) 200
+  `{"ok":true}` for the PATCH, then (b) 200 `BroadcastShelfListOut` for the follow-up
+  GET. Steps: `reorder(sessionId, ["p2","p1","p3"])`. Expected: first request is
+  `PATCH .../products/reorder` body `{"item_order":["p2","p1","p3"]}`; the client does
+  NOT expect a shelf in the PATCH response; a second request `GET .../products` is made
+  and its list is returned as `ApiResult.Success`. (Guards correction C1.) Traces: AC6.
+- **TC-AND-314-07 — Optimistic reorder rollback on failure (unit).**
+  Type: unit (JVM, Turbine + fake repo). Target: `GoalsProductsViewModel.onReorder`.
+  Preconditions: products [p1,p2,p3] in state; fake repo `reorder` returns Failure.
+  Steps: call `onReorder(["p3","p1","p2"])`. Expected: state updates to the new order
+  immediately, then on failure restores [p1,p2,p3] and sets `transientError`;
+  `pendingItemIds` cleared. Traces: AC6.
+- **TC-AND-314-08 — Set broadcast price below catalog (contract).**
+  Type: MWS. Target: `setPrice`. Preconditions: MWS enqueues 200 `BroadcastPriceOut`
+  (`discount_pct`, `original_price_cents`, etc.). Steps: `setPrice(sessionId,"p1",
+  PriceSetDto(1999, 3600))` where catalog = 2500. Expected: `PATCH
+  .../products/p1/price` body `{"broadcast_price_cents":1999,"expires_in_seconds":3600}`;
+  mapped result reflects discount %, effective price. Traces: AC7.
+- **TC-AND-314-09 — Price not strictly below catalog is rejected (unit + contract).**
+  Type: unit (client pre-check) + MWS (server rejection). Target: ViewModel
+  `setBroadcastPrice` + repo. Preconditions: catalog price 2500. Steps: (a) attempt
+  `cents = 2500` → client pre-check blocks, no request; (b) force a 422
+  `{"detail":[{"loc":["body","broadcast_price_cents"],"msg":"must be less than catalog
+  price","type":"value_error"}]}` and assert the field error surfaces. Expected: (a)
+  no network call; (b) inline field error shown. Traces: AC7.
+- **TC-AND-314-10 — Clear broadcast price reverts row (Compose-UI + contract).**
+  Type: Compose-UI (EMU) + MWS. Target: `clearPrice` + row rendering. Preconditions:
+  a product showing a broadcast price; confirm dialog enabled. Steps: tap clear →
+  confirm. Expected: `DELETE .../products/p1/price` issued (no body), row reverts to
+  catalog `price_cents` after the subsequent refresh; discount badge gone. Traces: AC8.
+- **TC-AND-314-11 — Offline / flaky dev-host states (Compose-UI).**
+  Type: Compose-UI/integration (EMU). Target: `GoalsProductsScreen` + ViewModel.
+  Preconditions: connectivity probe reports unreachable, or MWS delays past the OkHttp
+  ~20s timeout for a GET. Steps: open the panel; trigger a list load and a mutation
+  attempt. Expected: section renders the Offline (or Error+Retry) state; submit/mutation
+  buttons disabled with an explanatory message; no crash/ANR; a mutation is NOT
+  auto-retried; pull-to-refresh recovers when the host responds. (GET uses bounded
+  backoff; mutations do not.) Traces: AC9.
+- **TC-AND-314-12 — ABI/API parity on physical device (instrumented/e2e).**
+  Type: instrumented/e2e — **MUST run on DEV** (Samsung Galaxy A15 5G, arm64-v8a, API
+  34) to confirm Moshi/codegen + Compose behaviour on real arm64/API-34 vs the x86_64
+  API-35 emulator. Target: full goals + products happy-path flow against the dev backend
+  (or MWS). Steps: install the debug build on serial R5CX821TA9R via adb; run
+  create-goal → add-product → reorder → set-price → clear-price → delete. Expected: all
+  flows succeed identically to EMU; no ABI-specific Moshi/JSON or rendering issues.
+  Traces: AC11.
+- **TC-AND-314-13 — 401 refresh-then-retry (contract).**
+  Type: MWS. Target: shared OkHttp authenticator + any mutation. Preconditions: MWS
+  enqueues 401, then 200 for `POST /ui/session/refresh`, then 201 for the retried
+  request. Steps: call `createGoal` while "authenticated". Expected: a single
+  `POST /ui/session/refresh` occurs, the original request is retried once and succeeds;
+  a second consecutive 401 surfaces a re-auth prompt and does not loop. Traces: AC1, AC9.
+- **TC-AND-314-14 — Accessibility: reorder without drag + semantics (Compose-UI/a11y).**
+  Type: Compose-UI accessibility (EMU). Target: `ProductRow` overflow + drag handle.
+  Preconditions: ≥2 products. Steps: assert content descriptions ("Reorder {name}",
+  "Delete goal {label}", "Set broadcast price for {name}"); invoke "Move up"/"Move down"
+  overflow actions. Expected: actions reorder via the same `onReorder` path (drag is not
+  the only route); touch targets ≥48dp; "reached"/"on sale" convey state by icon+text,
+  not color alone. Traces: AC6, AC10.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC1 (create goal) | TC-AND-314-01, -13 |
+| AC2 (delete goal + confirm) | TC-AND-314-04 |
+| AC3 (goal validation + 422) | TC-AND-314-02, -03 |
+| AC4 (add product) | TC-AND-314-05 |
+| AC5 (remove product + confirm) | TC-AND-314-04 (delete-confirm pattern), -12 |
+| AC6 (reorder drag + a11y, persist, rollback) | TC-AND-314-06, -07, -14 |
+| AC7 (set price below catalog; invalid rejected) | TC-AND-314-08, -09 |
+| AC8 (clear price reverts) | TC-AND-314-10 |
+| AC9 (pull-to-refresh; offline/slow host) | TC-AND-314-11, -13 |
+| AC10 (tests pass / coverage) | TC-AND-314-01..-14 (suite) |
+| AC11 (all §5 endpoints wired, visible) | TC-AND-314-12 (e2e) + -05/-06/-08/-10 |
+
+Note on AC5: this ticket has no dedicated remove-product Compose case beyond the shared
+delete-confirm flow (TC-04) and the e2e pass (TC-12); add a focused MWS remove case if
+the implementer wants endpoint-level isolation for `removeProduct`.

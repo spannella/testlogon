@@ -5,7 +5,8 @@ milestone: M7
 epic: E42
 priority: P1
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-321]
 blocks: []
 ---
@@ -161,9 +162,15 @@ a `409`/version conflict re-fetches the case and prompts the user to retry submi
 
 ## 5. API Contract
 
-All calls carry the persistent cookie jar; mutating calls echo the `ui_csrf` cookie as
-`X-CSRF-Token`. On `401`, the OkHttp authenticator calls `POST /ui/session/refresh` once,
-then retries (shared client behavior, not owned here).
+All calls carry the persistent cookie jar; calls echo the `ui_csrf` cookie as
+`X-CSRF-Token` whenever the cookie is present. (Verified against the web reference
+`src/api/client.ts`: the header is set on *every* request when `ui_csrf` exists, not only
+on mutating verbs — earlier drafts said "mutating calls only"; corrected.) The web client
+additionally sends `Authorization: Bearer <accessToken>` from its auth store and an optional
+`X-IMPERSONATION-TOKEN`; the Android shared `:core-network` stack is assumed cookie-jar +
+CSRF only (Bearer/impersonation are web-session concepts — flagged as an open assumption in
+§16). On `401`, the OkHttp authenticator calls `POST /ui/session/refresh` once, then retries
+(shared client behavior, not owned here — matches `client.ts` `refreshSession()` exactly).
 
 Retrofit service (`:feature-kyc`):
 
@@ -205,9 +212,13 @@ Request/response shapes (Moshi DTOs mirror these):
 ```json
 // request
 { "expected_version": 7, "path": "/kyc/<case_id>/selfie-<uuid>.jpg", "file_type": "selfie" }
-// 200 -> { "case": { ... KycCaseOut ... } }
+// 200 -> KycCaseEnvelope: { "case": { ... KycCaseOut ... } }
 ```
-`file_type` enum: `selfie | id_front | id_back | proof_of_address`. This ticket uses `selfie`.
+Response is `KycCaseEnvelope` (wraps `case: KycCaseOut`). The optimistic-concurrency token
+is `case.version` (integer, required); the case id field on `KycCaseOut` is `kyc_case_id`
+(not `case_id` — `case_id` is only the path/query param name). `expected_version` is
+required and `minimum: 1` per `KycFileAttachmentRequest`. (Verified: §16 #6/#9.)
+`file_type` enum: `selfie | id_front | id_back | proof_of_address` (exact, verified). This ticket uses `selfie`.
 
 `POST /v1/kyc/cases/{case_id}/compare-face` — empty body.
 ```json
@@ -216,9 +227,9 @@ Request/response shapes (Moshi DTOs mirror these):
   "comparison_id": "cmp_...",
   "confidence_score": 92,                 // 0..100
   "result": "pass",                       // pass | review | fail
-  "anti_spoof": {
+  "anti_spoof": {                          // AntiSpoofResultOut (not inline)
     "passed": true,
-    "checks": [ { /* AntiSpoofCheckOut */ } ],
+    "checks": [ { "check": "not_screenshot", "passed": true, "detail": "..." } ], // AntiSpoofCheckOut[]: {check,passed,detail}
     "total_checks": 4, "passed_checks": 4
   },
   "attempt_number": 1,                     // 1..3
@@ -384,13 +395,18 @@ and a `FaceComparisonResultOut` is parsed and rendered.
 
 ## 13. Risks & Open Questions
 
-- **R1 — compare-face request body:** OpenAPI documents no request body for
-  `POST /v1/kyc/cases/{case_id}/compare-face`; the server appears to resolve the latest
-  `selfie` + ID files attached to the case. Confirm with backend/web reference
-  (`frontend/src/api/endpoints/`) that no `selfie_path`/`file_id` body is expected. Design
-  assumes empty body; adjust DTO if the contract differs.
-- **R2 — attach `expected_version`:** the exact source of the optimistic-concurrency
-  version must be confirmed (KYC case envelope `version` field). Mishandling yields `409`.
+- **R1 — compare-face request body: RESOLVED.** OpenAPI shows `req=` (no request body) for
+  `POST /v1/kyc/cases/{case_id}/compare-face`, and the web reference confirms it: `src/api/
+  endpoints/kycFacialComparison.ts` calls `api.post(.../compare-face, {})` with an empty body
+  object and no `selfie_path`/`file_id`. The server resolves the latest `selfie` + ID files
+  attached to the case. Android Retrofit signature takes no `@Body` — correct. (§16 #4.)
+- **R2 — attach `expected_version`: RESOLVED.** Confirmed the source is `KycCaseOut.version`
+  (integer, required) returned inside `KycCaseEnvelope.case` (verified in `openapi.pretty.json`
+  `KycCaseOut`/`KycCaseEnvelope`). `KycFileAttachmentRequest.expected_version` is required,
+  `minimum: 1`. Mishandling yields `409`. (§16 #6/#9.) Note: the comparison history endpoint
+  comment in the web client states results are returned newest-first (`comparisons[0]` is the
+  latest), though the OpenAPI schema does not formally guarantee ordering — treat order as a
+  soft contract and sort defensively by `created_at` desc on the Android side.
 - **R3 — anti-spoof on-device vs server:** assumed entirely server-side (the API returns
   `anti_spoof`). If on-device liveness is later required it is a separate ticket; note the
   unrelated `/ui/kyc/liveness-call/*` endpoints are a human video-call feature, NOT this flow.
@@ -444,3 +460,112 @@ manual Retry; no auto-retry of POSTs.
 - Lint/detekt/ktlint clean; KSP/Hilt graph compiles; no new permissions beyond `CAMERA`.
 - Open questions R1–R5 resolved or explicitly tracked with backend before merge; PR reviewed
   and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **`POST /v1/fs/presign-upload` returns `PresignUploadOut`; request is `PresignUploadIn`.**
+   VERIFIED. OpenAPI `POST /v1/fs/presign-upload` (op=`presign_fs_upload_v1_fs_presign_upload_post`, req=`PresignUploadIn`, resp=`200:PresignUploadOut`). Schemas: `PresignUploadIn` requires `path` (string), optional nullable `content_type`; `PresignUploadOut` requires `upload_url, bucket, key, ticket_id, path, content_type` — exactly the fields the spec's §5 JSON lists. Web usage pattern confirmed in `src/hooks/useCallRecording.ts: apiPresignUpload` (presign → bare `fetch PUT` → complete).
+
+2. **Presigned `PUT` uses `Content-Type: image/jpeg`, raw bytes, and carries NO session cookies/CSRF.**
+   VERIFIED. `src/hooks/useCallRecording.ts` (lines ~286-290): `fetch(presignData.upload_url, { method: "PUT", body: blob, headers: { "Content-Type": mimeType } })` — a bare `fetch` with NO `credentials: "include"`, so no cookies/CSRF, and an exact-match `Content-Type`. Mirrors spec §5/§8 and answers R4.
+
+3. **`POST /v1/kyc/cases/{case_id}/files` attaches a file; request `KycFileAttachmentRequest`, response `KycCaseEnvelope`; `file_type` enum = `selfie|id_front|id_back|proof_of_address`; `expected_version` required (min 1).**
+   VERIFIED. OpenAPI `POST /v1/kyc/cases/{case_id}/files` (op=`attach_kyc_file...`, req=`KycFileAttachmentRequest`, resp=`200:KycCaseEnvelope`). Schema `KycFileAttachmentRequest`: required `expected_version` (int, minimum 1), `path` (1..1024), `file_type` (the exact 4-value enum). (Spec's Retrofit/DTO names `KycFileAttachmentDto`/`...InDto` are local Moshi mirrors of these — naming only.)
+
+4. **`POST /v1/kyc/cases/{case_id}/compare-face` takes an EMPTY body and returns `FaceComparisonResultOut`.**
+   VERIFIED (resolves R1). OpenAPI op=`run_face_comparison...`, `req=` (no body), `resp=200:FaceComparisonResultOut`. Frontend: `src/api/endpoints/kycFacialComparison.ts: compareFace` → `api.post(.../compare-face, {})` (empty object, no `selfie_path`/`file_id`).
+
+5. **`FaceComparisonResultOut` fields: `comparison_id`, `confidence_score` (0..100 int), `result` (pass|review|fail), `anti_spoof`, `attempt_number` (1..3), `max_attempts` (default 3), `remaining_attempts` (0..3), `created_at` (epoch-seconds int), `admin_override` (nullable).**
+   VERIFIED. Schema `FaceComparisonResultOut` in `openapi.pretty.json`: `confidence_score` int min 0 max 100; `attempt_number` int min 1 max 3; `remaining_attempts` int min 0 max 3; `max_attempts` int default 3; `created_at` int (epoch seconds — spec maps to `Instant`); `result` enum [pass,review,fail]; `admin_override` anyOf `FaceComparisonAdminOverrideOut`|null. Frontend mirror: `src/api/types.ts: FaceComparisonResult` (lines ~11566-11576). The spec §6 domain `overridden: Boolean` is derived from `admin_override != null` — a local convenience, not a wire field.
+
+6. **`anti_spoof` is `AntiSpoofResultOut` with `passed` (bool), `checks[]` (`AntiSpoofCheckOut` = {check,passed,detail}), `total_checks`, `passed_checks`.**
+   CORRECTED. The spec §5 originally implied an inline object containing `AntiSpoofCheckOut`; the actual wrapper schema is `AntiSpoofResultOut` (`openapi.pretty.json` line ~5298) and each check is `AntiSpoofCheckOut` with required `check, passed, detail` (line ~5273; `check` ∈ {file_size, image_format, not_screenshot, ...}). Fixed inline in §5. Frontend: `src/api/types.ts: AntiSpoofResult`/`AntiSpoofCheck` (lines ~11546-11557). The spec's §6 domain `antiSpoofPassed/PassedChecks/TotalChecks` flattening is a valid mapping.
+
+7. **`GET /v1/kyc/cases/{case_id}/face-comparisons` returns `FaceComparisonListOut { comparisons: FaceComparisonResultOut[] }`.**
+   VERIFIED. OpenAPI op=`list_face_comparisons...`, `resp=200:FaceComparisonListOut`. Schema `FaceComparisonListOut` requires `comparisons` (array of `FaceComparisonResultOut`). Frontend: `src/api/endpoints/kycFacialComparison.ts: listFaceComparisons`; its doc comment says "newest first" (soft ordering contract — see Open assumptions). Frontend `FaceComparisonResult.tsx` reads `list.comparisons[0]` as the latest.
+
+8. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token`.**
+   CORRECTED (scope). VERIFIED that the mechanism exists, but the spec said "mutating calls only". `src/api/client.ts` (lines ~167-171) sets `X-CSRF-Token` on EVERY request whenever the `ui_csrf` cookie is present, regardless of HTTP verb. Spec §5 corrected.
+
+9. **`expected_version` source is the KYC case `version` field; conflict → 409.**
+   VERIFIED (resolves R2). `KycCaseOut.version` (int, required) nested under `KycCaseEnvelope.case` (`openapi.pretty.json` lines ~41484/41612). The case identifier on the body is `kyc_case_id` (the `case_id` token is only the URL path param). 409 conflict semantics are inferred from optimistic-concurrency design (not an explicitly documented response code in the index — see Open assumptions).
+
+10. **401 → `POST /ui/session/refresh` once, then retry; shared transport.**
+    VERIFIED. `src/api/client.ts: refreshSession()` POSTs `/ui/session/refresh` with `credentials: include`; the 401 handler (lines ~194-237) refreshes at most once (single shared `refreshPromise`) then retries the original request, logging out on a second 401. Matches spec §5/AC-8.
+
+11. **Error handling: `422 → HTTPValidationError`; `detail` may be `string | [{msg}] | {code,...}`; offline → network error.**
+    VERIFIED. Every KYC/fs op in the index lists `422:HTTPValidationError`. `src/api/client.ts: normalizeErrorDetail` handles all three `detail` shapes (string; array of `{msg}`; object with `code`/`msg`), and a thrown `fetch` becomes `ApiError(0, "Network error")` — matching spec §7's offline/`IOException` path.
+
+12. **CameraX front-camera selfie capture (`DEFAULT_FRONT_CAMERA`, `CAPTURE_MODE_MINIMIZE_LATENCY`).**
+    UNVERIFIED-ASSUMPTION (framework ref). Not derivable from backend/frontend sources (web uses a browser `getUserMedia`/file input, not CameraX). Android API names are correct per CameraX docs: `CameraSelector.DEFAULT_FRONT_CAMERA` and `ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY` (framework ref: developer.android.com/training/camerax + reference for `androidx.camera.core.CameraSelector` / `ImageCapture`). Concrete wrapper API depends on AND-321's implementation.
+
+13. **Hilt+KSP ViewModel, Navigation-Compose route, `SavedStateHandle` arg, `StateFlow` UI state.**
+    UNVERIFIED-ASSUMPTION (framework ref). Android architecture choices; APIs are valid (framework ref: developer.android.com/jetpack/compose/navigation, .../topic/libraries/architecture/viewmodel/viewmodel-savedstate, dagger.dev/hilt). Concrete module/package conventions depend on AND-319/321.
+
+13b. **`FLAG_SECURE` blocks screenshots/recents while the selfie is on screen.**
+    VERIFIED (framework ref). `WindowManager.LayoutParams.FLAG_SECURE` (developer.android.com/reference/android/view/WindowManager.LayoutParams#FLAG_SECURE) prevents screenshots and excludes the window from non-secure displays/recents. Sound for §8/AC-7.
+
+### Corrections made
+- **§5 CSRF scope (claim #8):** changed "mutating calls echo `ui_csrf`" → "every request echoes `ui_csrf` when present", per `src/api/client.ts`.
+- **§5 anti-spoof schema (claim #6):** the result wrapper is `AntiSpoofResultOut` (not an inline object); each check is `AntiSpoofCheckOut {check,passed,detail}`. Inline JSON example corrected.
+- **§5 attach response (claims #3/#9):** annotated response as `KycCaseEnvelope`, identified `case.version` as the concurrency token and `kyc_case_id` as the case-id field; noted `expected_version` is required (min 1).
+- **§5 auth model:** added that the web client also sends `Authorization: Bearer` + optional `X-IMPERSONATION-TOKEN`; flagged the Android cookie-only assumption.
+- **§13 R1/R2:** marked RESOLVED with exact citations; added the history newest-first soft-ordering note.
+
+### Open assumptions
+- **A1 — Android shared-network auth model.** The web client sends BOTH session cookies and an `Authorization: Bearer <accessToken>` (plus optional `X-IMPERSONATION-TOKEN`). The spec assumes the Android `:core-network` stack is cookie-jar + CSRF only. Unverifiable from these sources (no Android stack in the reference); must be confirmed against the actual `:core-network` implementation / AND-321.
+- **A2 — 409 on version conflict.** Optimistic-concurrency 409 is a design inference; the OpenAPI index only enumerates `200`/`422` for the attach op. Confirm the backend actually returns 409 (vs 422/409) for a stale `expected_version`.
+- **A3 — history ordering.** "Newest first" is stated only in a web-client doc comment, not the OpenAPI schema. Sort defensively by `created_at` desc on Android.
+- **A4 — presigned PUT success status & extra signed headers (R4 residual).** Web code does not assert the PUT response status or send extra signed headers; spec assumes 200/204 and no extra headers. Storage-backend-specific; confirm against the dev backend.
+- **A5 — image size/format constraints (R5).** No max-dimension/byte limits found in sources; `GET .../files/validation` (`KycFileValidationEnvelope`) exists and may carry constraints — query it to confirm rather than hardcoding 1080px/q85.
+- **A6 — CameraX capture wrapper API (claim #12).** Concrete capture interface is owned by AND-321; only the standard CameraX symbol names are verified.
+- **A7 — anti-spoof is fully server-side (R3).** Assumed; the API returns `anti_spoof` and no on-device liveness contract exists in sources. The `/ui/kyc/liveness-call/*` endpoints are a separate human video-call feature.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **MWS** = MockWebServer contract; **emu(test35)** = headless AVD API 35 x86_64; **device(A15)** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Camera-dependent cases MUST run on **device(A15)** for real front-camera/selfie behavior; faked-camera UI cases run on **emu(test35)**.
+
+- **TC-AND-323-01 — DTO→domain mapping (happy).** Type: unit (JVM). Target: `FaceComparisonResultDto.toDomain()`. Preconditions: canned `FaceComparisonResultOut` JSON (result=pass, confidence_score=92, attempt_number=1, max_attempts=3, remaining_attempts=2, created_at=1733356800, anti_spoof.passed=true 4/4, admin_override=null). Steps: deserialize (Moshi) → map. Expected: `FaceComparison(result=PASS, confidenceScore=92, antiSpoofPassed=true, antiSpoofPassedChecks=4, antiSpoofTotalChecks=4, attemptNumber=1, maxAttempts=3, remainingAttempts=2, createdAt=Instant.ofEpochSecond(1733356800), overridden=false)`. Traces: AC-3, AC-6.
+
+- **TC-AND-323-02 — DTO edge mapping.** Type: unit (JVM). Target: `toDomain()`. Preconditions: variants — (a) `result=review`; (b) `result=fail` with `remaining_attempts=0`; (c) non-null `admin_override` ⇒ `overridden=true`; (d) boundary values confidence_score=0/100, attempt_number=3. Steps: map each. Expected: enum parses correctly; `overridden` reflects null-ness; no exceptions at bounds. Traces: AC-4, AC-5.
+
+- **TC-AND-323-03 — Full submit chain happy path (contract).** Type: contract/MockWebServer (JVM/MWS). Target: `FaceComparisonRepository.runComparison()` + `FaceComparisonViewModel.submit()`. Preconditions: MWS enqueues, in order: presign 200 (`PresignUploadOut`), PUT 200 (presigned), attach 200 (`KycCaseEnvelope`), compare 200 (`FaceComparisonResultOut` pass). A fake captured JPEG temp file. Steps: invoke submit; collect state via Turbine. Expected: requests issued in order POST `/v1/fs/presign-upload` → PUT `{upload_url}` → POST `/v1/kyc/cases/{caseId}/files` → POST `/v1/kyc/cases/{caseId}/compare-face`; attach body `{expected_version, path, file_type:"selfie"}`; UI state `Submitting`→`Result(PASS)`. Traces: AC-2, AC-3.
+
+- **TC-AND-323-04 — CSRF/cookie + presigned-PUT isolation (security/contract).** Type: contract/MockWebServer (JVM/MWS). Target: OkHttp transport for the 4 calls. Preconditions: `ui_csrf` cookie set in the jar; MWS for API base + a separate MWS (or recorded dispatcher) for the presigned URL. Steps: run submit; inspect recorded requests. Expected: every API-base request (presign/attach/compare) carries `X-CSRF-Token` equal to `ui_csrf` and the session cookie; the presigned PUT carries `Content-Type: image/jpeg`, the raw JPEG bytes, and NO `Cookie`/`X-CSRF-Token` header. Traces: AC-8.
+
+- **TC-AND-323-05 — 401 single refresh + retry.** Type: contract/MockWebServer (JVM/MWS). Target: shared authenticator + compare call. Preconditions: MWS returns 401 once for compare, then 200 on retry; a `POST /ui/session/refresh` 200 enqueued. Steps: run submit. Expected: exactly one `/ui/session/refresh` POST occurs, the compare is retried once and succeeds; a second consecutive 401 would surface auth failure (assert no infinite loop). Traces: AC-8.
+
+- **TC-AND-323-06 — 422 validation error → Review with localized message.** Type: contract/MockWebServer (JVM/MWS). Target: `submit()` error path + `detail` mapper. Preconditions: MWS returns 422 `HTTPValidationError` on attach (detail as `[{msg:"path: field required"}]`); also a variant with `detail` as a `{code,...}` object. Steps: run submit. Expected: state returns to `Review` (captured frame retained), `KycError` carries the mapped message; NO auto-retry of the POST; temp file retained for manual re-submit. Traces: AC-9.
+
+- **TC-AND-323-07 — 409 version conflict re-fetch + prompt.** Type: contract/MockWebServer (JVM/MWS). Target: attach conflict handling. Preconditions: MWS returns 409 on attach. Steps: run submit. Expected: app re-fetches the case (new `version`) and prompts the user to retry Submit; no auto-PUT loop. (If backend actually returns 422 not 409 — see Open assumption A2 — this case documents the expected mapping; adjust dispatcher once confirmed.) Traces: AC-9.
+
+- **TC-AND-323-08 — Offline / flaky dev-host path.** Type: integration (emu(test35), airplane mode toggled) + MWS unit variant. Target: connectivity handling in `submit()`/repository. Preconditions: network disabled (or MWS socket policy DISCONNECT_AT_START to simulate `IOException`). Steps: capture selfie offline (must still work), tap Submit. Expected: capture/review usable with no network; Submit shows an offline banner with a manual Retry; no POST auto-retry; on reconnect, Retry re-runs the full chain. Traces: AC-9. (Capture-offline portion is hardware-independent; the airplane-mode integration variant is most realistic on device(A15) but acceptable on emu(test35).)
+
+- **TC-AND-323-09 — Partial-failure re-submit (resilience).** Type: contract/MockWebServer (JVM/MWS). Target: `runComparison()` retry semantics. Preconditions: first run — presign 200, PUT 200, attach 200, compare 500; second run — full fresh chain 200 (pass). Steps: submit, fail at compare, return to Review, Submit again. Expected: second Submit issues a fresh presign+PUT+attach+compare (a new attempt is keyed on the compare call); final state Result(PASS). Traces: AC-3, AC-9.
+
+- **TC-AND-323-10 — Capture → Review → Result UI phases (Compose-UI).** Type: Compose-UI (emu(test35), CameraX faked behind AND-321 interface). Target: `FaceComparisonRoute`/screen. Preconditions: fake capture interface returns a canned frame; MWS canned pass result. Steps: tap Capture → assert Review (Retake/Submit, no network yet) → tap Submit → assert Result shows result label, confidence, anti-spoof `passed_checks/total_checks`, attempt N of max, remaining attempts. Steps cont.: tap Retake from Review → returns to Capture. Expected: phase transitions render; no network call before Submit. Traces: AC-1, AC-2, AC-3.
+
+- **TC-AND-323-11 — Attempt-model CTAs (Compose-UI).** Type: Compose-UI (emu(test35)). Target: result-screen CTA logic / `canRetry`. Preconditions: three canned results — fail+remaining=1; fail+remaining=0; pass; review. Steps: render each. Expected: fail+remaining>0 shows "Try again" returning to Capture; fail+remaining=0 hides retry and shows the manual-review message; pass shows success+Done; review shows neutral pending-review. Traces: AC-4, AC-5.
+
+- **TC-AND-323-12 — History list (Compose-UI + contract).** Type: Compose-UI (emu(test35)) backed by MWS. Target: `loadHistory()` + history UI. Preconditions: MWS `FaceComparisonListOut` with 2 attempts; also an empty-list variant. Steps: open screen, expand history. Expected: rows show result, score, timestamp; ordering is newest-first (sorted by `created_at` desc defensively); empty list renders an empty state without error. Traces: AC-6.
+
+- **TC-AND-323-13 — Camera permission gate (security/permission).** Type: instrumented (emu(test35) for grant/deny via UiAutomator; device(A15) for the real system dialog). Target: AND-129 permission gate on the screen. Preconditions: `CAMERA` permission not yet granted. Steps: open screen → deny → assert rationale + Settings deep link, capture controls disabled; grant → assert live preview appears. Expected: denied state blocks capture with rationale; granted state enables capture; no permission beyond `CAMERA`. Traces: AC-1.
+
+- **TC-AND-323-14 — Real selfie capture + temp-file lifecycle + FLAG_SECURE (e2e, device).** Type: instrumented/e2e (MUST run on device(A15) — real front camera). Target: end-to-end capture→submit against MWS (or dev backend) + privacy invariants. Preconditions: `CAMERA` granted; MWS canned pass; file observer on `cacheDir`, `filesDir`, MediaStore. Steps: capture a real front-camera selfie, Submit, reach Result, then leave the screen. Expected: a `cacheDir/kyc-selfie-*.jpg` exists transiently and is deleted after submission completes and on `onCleared()`; nothing written to `filesDir`/gallery/MediaStore; `FLAG_SECURE` is set while preview/selfie is on-screen (screenshot attempt yields a black frame). Traces: AC-3, AC-7. (Front-camera + FLAG_SECURE black-frame behavior is hardware/real-display dependent → device only.)
+
+- **TC-AND-323-15 — Accessibility (TalkBack/semantics).** Type: Compose-UI/instrumented (emu(test35); spot-check TalkBack on device(A15)). Target: a11y semantics on capture + result screens. Preconditions: canned pass and fail results. Steps: assert Capture button `contentDescription` "Capture selfie"; oval-guide live-region hint present; result/score/remaining-attempts exposed via `semantics` and announced as a live region on resolve; pass/fail conveyed by text+icon (not color alone); touch targets ≥48dp; remaining-attempts uses `plurals`. Expected: all semantics present; no hardcoded strings. Traces: AC-3, AC-4, AC-5 (a11y aspects).
+
+### Coverage matrix
+| AC | Description | Covered by |
+| --- | --- | --- |
+| AC-1 | Open screen, live front preview + guide, permission honored | TC-10, TC-13 |
+| AC-2 | Capture → Review (Retake/Submit), no network before Submit | TC-03, TC-10 |
+| AC-3 | Submit chain → renders `FaceComparisonResultOut` (primary) | TC-01, TC-03, TC-10, TC-14, TC-15 |
+| AC-4 | fail+remaining>0 Try again; remaining==0 hides retry + manual-review | TC-02, TC-11, TC-15 |
+| AC-5 | pass → success+Done; review → pending-review | TC-02, TC-11, TC-15 |
+| AC-6 | History loads via GET; result/score/timestamp | TC-01, TC-12 |
+| AC-7 | Temp selfie deleted; nothing to gallery/filesDir; FLAG_SECURE | TC-14 |
+| AC-8 | POST carry `X-CSRF-Token`; presigned PUT no cookies/CSRF; 401→refresh once | TC-04, TC-05 |
+| AC-9 | 422/offline → Review + localized message + manual Retry; no POST auto-retry | TC-06, TC-07, TC-08, TC-09 |

@@ -5,7 +5,8 @@ milestone: M7
 epic: E40
 priority: P1
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-297]
 blocks: []
 ---
@@ -211,20 +212,42 @@ layer (peer answered / peer hung up) call `connection.setActive()` /
 No new backend HTTP endpoints. Telecom is a device-local framework; call
 signalling (accept/decline/hangup, peer state) is owned by AND-297's existing
 call signalling layer (WS + the call REST routes). For reference, the disposition
-actions this ticket triggers map to existing calls of the form:
+actions this ticket triggers map to existing call-disposition endpoints. **Corrected
+against OpenAPI (the earlier draft used `/calls/{call_id}/...` and a `hangup`
+verb, both of which do not exist):**
 
 ```
-POST /calls/{call_id}/accept      X-CSRF-Token: <ui_csrf cookie>
-POST /calls/{call_id}/decline
-POST /calls/{call_id}/hangup
+POST /messaging/messages/calls/{call_id}/accept    req=CallAcceptIn  resp=200:CallActionOut
+POST /messaging/messages/calls/{call_id}/decline   req=CallDeclineIn resp=200:CallActionOut
+POST /messaging/messages/calls/{call_id}/end       req=CallEndIn     resp=200:CallActionOut
 ```
 
-These ride the cookie-based session (§8) with the `ui_csrf` cookie echoed as
-`X-CSRF-Token`; on 401 the shared OkHttp authenticator performs the single
-`POST /ui/session/refresh` then retries (idempotency: these POSTs are *not*
-auto-retried on transient network errors — only the refresh-once rule applies).
-Exact request/response shapes are defined by AND-297 and the call epic E40; this
-ticket consumes the `CallSignaling` interface, not raw Retrofit:
+Notes verified against the sources:
+- The disposition verb is **`/end`**, not `hangup`. There is no `/hangup`
+  endpoint anywhere in the OpenAPI index.
+- The web reference app calls these via the shorter `/messages/calls/{id}/...`
+  prefix (`src/api/endpoints/messaging.ts: acceptCallInvite/declineCallInvite/
+  endCall`); the canonical server paths in the OpenAPI index are
+  `/messaging/messages/calls/{id}/...`. Use the canonical OpenAPI paths for the
+  Android Retrofit client; the difference is a frontend base-path artifact.
+- Request bodies are small/optional: `CallAcceptIn { idempotency_key? }`,
+  `CallDeclineIn { reason="declined" }`, `CallEndIn { reason="ended",
+  idempotency_key? }`. All three return `CallActionOut { call_id,
+  conversation_id, state, event_ts, from_state?, reason?, voicemail_eligible }`.
+- WebRTC media signalling (offer/answer/ICE) is a separate endpoint,
+  `POST /messaging/messages/calls/{call_id}/signal` (req=CallSignalingIn,
+  resp=200:CallSignalingOut), which returns typed `CallSignalingErrorOut
+  { code, message }` on 400/403/404/409/429/503. This ticket does not call
+  `/signal` directly — it consumes the `CallSignaling` abstraction — but the
+  real error shape is noted here for the test plan.
+
+These ride the **authenticated session** (§8): `Authorization: Bearer
+<accessToken>` **plus** the `ui_csrf` cookie echoed as `X-CSRF-Token`, with
+cookies sent (`credentials: include`). On 401 the shared OkHttp authenticator
+performs the single `POST /ui/session/refresh` (no body) then retries once
+(idempotency: these POSTs are *not* auto-retried on transient network errors —
+only the refresh-once rule applies). This ticket consumes the `CallSignaling`
+interface, not raw Retrofit:
 
 ```kotlin
 interface CallSignaling {
@@ -241,7 +264,7 @@ The Telecom→signalling and signalling→Telecom mappings:
 |-------------------------|----------------------------------|
 | `onAnswer()`            | `accept(callId)`                 |
 | `onReject()`            | `decline(callId)`                |
-| `onDisconnect()`        | `hangup(callId)`                 |
+| `onDisconnect()`        | `hangup(callId)` → `POST .../end` |
 | `CallSignalState.ANSWERED`   | `connection.setActive()`    |
 | `CallSignalState.REMOTE_HANGUP` | `connection.setDisconnected(REMOTE)` |
 
@@ -296,8 +319,11 @@ The Telecom→signalling and signalling→Telecom mappings:
 - Bluetooth SCO routing on API 31+ requires `BLUETOOTH_CONNECT` (runtime). If the
   user denies it, BT is silently dropped from `available` routes; the call
   continues on earpiece/speaker.
-- Call signalling continues to ride the **cookie-based session** with a persistent
-  cookie jar and `ui_csrf`→`X-CSRF-Token` echo; no credentials or tokens are
+- Call signalling continues to ride the **authenticated session**: an
+  `Authorization: Bearer <accessToken>` header **and** a persistent cookie jar
+  with `ui_csrf`→`X-CSRF-Token` echo (verified in `src/api/client.ts`; the
+  earlier draft mentioned only the cookie/CSRF half and omitted the Bearer
+  header). No credentials or tokens are
   placed into Telecom `extras`/`Uri` (which can be logged by the OS). Only the
   opaque `callId` and a display name appear in Telecom extras.
 - No call content, peer identifiers, or audio is persisted by this ticket.
@@ -427,3 +453,331 @@ AC-8. No cookies, CSRF token, or raw `callId` appear in logs or Telecom extras.
 - Telemetry events emit with no PII; debug overlay present only in debug builds.
 - Code review approved; merged to `android-port`; no regressions in the AND-297
   call flow; risks/open questions in §13 either resolved or logged as follow-ups.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its verdict and an exact source pointer.
+
+1. **Disposition endpoints are `POST /calls/{call_id}/accept|decline|hangup`.**
+   VERDICT: **Corrected.** No `/calls/...` path and no `hangup` verb exist. The
+   real endpoints are `POST /messaging/messages/calls/{call_id}/accept`,
+   `/decline`, and `/end`. SOURCE: OpenAPI index lines for
+   `POST /messaging/messages/calls/{call_id}/accept`,
+   `POST /messaging/messages/calls/{call_id}/decline`,
+   `POST /messaging/messages/calls/{call_id}/end`; frontend
+   `src/api/endpoints/messaging.ts: acceptCallInvite / declineCallInvite /
+   endCall` (which call them under the `/messages/calls/...` base prefix).
+
+2. **The disposition endpoints return `CallActionOut`.**
+   VERDICT: Verified. SOURCE: OpenAPI `POST /messaging/messages/calls/{call_id}/accept`
+   `resp=200:CallActionOut` (same for decline/end); schema
+   `components.schemas.CallActionOut { call_id, conversation_id, state,
+   event_ts, from_state?, reason?, voicemail_eligible }`.
+
+3. **Request bodies for accept/decline/end.**
+   VERDICT: Verified. SOURCE: schemas `CallAcceptIn { idempotency_key? }`,
+   `CallDeclineIn { reason="declined" }`, `CallEndIn { reason="ended",
+   idempotency_key? }` (openapi.pretty.json components.schemas).
+
+4. **Auth = cookie-based session with `ui_csrf`→`X-CSRF-Token`.**
+   VERDICT: **Corrected (incomplete).** The CSRF/cookie half is right, but the
+   client ALSO sends `Authorization: Bearer <accessToken>` and uses
+   `credentials: include`. SOURCE: `src/api/client.ts` (`headers.set
+   ("Authorization", "Bearer …")`, `getCookie("ui_csrf")` →
+   `headers.set("X-CSRF-Token", …)`, `credentials: "include"`).
+
+5. **On 401, refresh once via `POST /ui/session/refresh`, then retry.**
+   VERDICT: Verified. SOURCE: `src/api/client.ts` `refreshSession()` →
+   `POST /ui/session/refresh` (no body), single in-flight `refreshPromise`,
+   one retry of the original request; OpenAPI index
+   `POST /ui/session/refresh | req= | resp=200`.
+
+6. **No new backend HTTP endpoints are introduced by this ticket.**
+   VERDICT: Verified. SOURCE: all consumed paths
+   (`/messaging/messages/calls/{call_id}/accept|decline|end|signal`,
+   `/ui/session/refresh`) already exist in openapi.index.txt; Telecom is
+   device-local.
+
+7. **WebRTC media signalling rides a `/signal` endpoint with a typed error
+   shape.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /messaging/messages/calls/{call_id}/signal | req=CallSignalingIn |
+   resp=200:CallSignalingOut; 400/403/404/409/429/503:CallSignalingErrorOut`;
+   `CallSignalingErrorOut { code, message }`; `CallSignalingIn` `type` is a
+   regex over `webrtc.offer|webrtc.answer|webrtc.ice_candidate|
+   webrtc.screen_share_start|webrtc.screen_share_stop`.
+
+8. **`CallInvite` model, full-screen ringing UI, and `CallSignaling` come from
+   AND-297.** VERDICT: Unverified-assumption (cross-ticket dependency). AND-297
+   is not in the provided sources; an `CallInviteIn/CallInviteOut` schema and a
+   `POST /messaging/messages/calls/invite` endpoint do exist in the OpenAPI
+   index, which is consistent with the dependency. SOURCE: OpenAPI
+   `POST /messaging/messages/calls/invite | req=CallInviteIn |
+   resp=200:CallInviteOut`; AND-297 spec not provided.
+
+9. **The `CallSignalState` enum (`ANSWERED`, `REMOTE_HANGUP`) used in §5.**
+   VERDICT: Unverified-assumption. This is an Android-internal abstraction over
+   WS/signalling, not a backend schema; no such enum exists in the OpenAPI
+   spec. SOURCE: none (Android-side type defined by AND-297/this ticket).
+
+10. **The web app has no Telecom analogue / Telecom is Android-only.**
+    VERDICT: Verified. SOURCE: no Telecom/ConnectionService/PhoneAccount
+    references anywhere in `reference/src/`; the web call path is WebRTC-based
+    (`src/hooks/useRtcPeerConnection.ts`, `src/pages/messages/...`).
+
+11. **Self-managed `ConnectionService` requires API 26+ (`O`).**
+    VERDICT: Verified (framework ref). `PhoneAccount.CAPABILITY_SELF_MANAGED`
+    and self-managed ConnectionService were added in API 26. SOURCE: framework
+    ref — developer.android.com/reference/android/telecom/PhoneAccount
+    (CAPABILITY_SELF_MANAGED, added in API level 26).
+
+12. **`CallEndpoint` / `requestCallEndpointChange` is API 34+.**
+    VERDICT: Verified (framework ref). SOURCE: framework ref —
+    developer.android.com/reference/android/telecom/CallEndpoint (added in API
+    level 34); `Connection.requestCallEndpointChange` added in API 34.
+
+13. **The exported service is protected by
+    `BIND_TELECOM_CONNECTION_SERVICE`.** VERDICT: Verified (framework ref).
+    SOURCE: framework ref —
+    developer.android.com/reference/android/telecom/ConnectionService
+    (service must require permission BIND_TELECOM_CONNECTION_SERVICE and declare
+    the `android.telecom.ConnectionService` intent-filter).
+
+14. **`MANAGE_OWN_CALLS` is required for self-managed calls; BT SCO on API 31+
+    needs runtime `BLUETOOTH_CONNECT`.** VERDICT: Verified (framework ref).
+    SOURCE: framework ref — developer.android.com/reference/android/telecom/
+    TelecomManager (`addNewIncomingCall`/`placeCall` for self-managed require
+    `MANAGE_OWN_CALLS`); developer.android.com/.../Manifest.permission
+    (BLUETOOTH_CONNECT, runtime, API 31+).
+
+15. **Backend dev host `http://18.222.237.167:8000` (plaintext, unreliable).**
+    VERDICT: Unverified-assumption. Host/port is environment config, not
+    derivable from the OpenAPI/frontend sources (frontend uses
+    `VITE_API_BASE_URL`). SOURCE: `src/api/client.ts: API_BASE_URL` (env-driven,
+    value not in repo); treat the literal IP as deployment config.
+
+### Corrections made
+
+- **§5 endpoint paths:** replaced the nonexistent `POST /calls/{call_id}/accept|
+  decline|hangup` with the real `POST /messaging/messages/calls/{call_id}/
+  accept|decline|end`, added request schemas (`CallAcceptIn`/`CallDeclineIn`/
+  `CallEndIn`) and the `CallActionOut` response, and documented the
+  frontend `/messages/...` base-prefix difference. (claim 1, 2, 3)
+- **§5 verb `hangup` → `end`:** the disposition verb is `/end`; updated the
+  prose and the Telecom→signalling mapping table row. (claim 1)
+- **§5 + §8 auth model:** added the omitted `Authorization: Bearer
+  <accessToken>` header (the draft cited only the cookie/CSRF half). (claim 4)
+- **§5:** noted the real `/signal` endpoint and its `CallSignalingErrorOut
+  { code, message }` error shape for use in the test plan. (claim 7)
+
+### Open assumptions
+
+- **AND-297 surface (`CallInvite`, full-screen UI, `CallSignaling`,
+  foreground call service):** not in the provided sources; assumed correct per
+  the cross-ticket dependency. Consistent with the existing
+  `/messaging/messages/calls/invite` + `CallInviteIn/Out` schemas. (claim 8)
+- **`CallSignalState` enum (`ANSWERED`/`REMOTE_HANGUP`):** an Android-side
+  abstraction over the WS/signalling layer, not a backend schema; cannot be
+  verified against OpenAPI. (claim 9)
+- **Dev host IP/port and HTTPS-vs-plaintext:** deployment/env config; the
+  frontend derives its base URL from `VITE_API_BASE_URL`, so the literal value
+  is not verifiable here. (claim 15)
+- **OEM Telecom fragmentation behavior** (which OEMs silently break
+  self-managed ConnectionService): empirical/per-device; not derivable from any
+  source — must be established by the §11 manual device matrix.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-304-NN`. "Traces" links to §14 acceptance criteria. Targets:
+JVM/Robolectric (local, no device), emulator AVD `test35` (x86_64, API 35), and
+the physical **Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 /
+API 34, arm64-v8a)**. Hardware-dependent cases (real Bluetooth/wired headset,
+hardware end-call/hook button, real cellular interop, real-network flakiness)
+MUST run on the physical device; framework/state logic runs on JVM/Robolectric;
+ABI/API-34-vs-35 differences are checked on both the emulator and the device.
+
+**TC-AND-304-01 — Capability probe gating & caching**
+- Type: unit (JVM/Robolectric).
+- Target: `TelecomCapabilities`.
+- Preconditions: fake `Build.VERSION.SDK_INT`, fake `TelecomManager`, DataStore
+  in-memory.
+- Steps: probe at SDK 25, 26, 35; force a registration `SecurityException`;
+  re-probe after a simulated app-version bump.
+- Expected: SDK<26 → unsupported without touching TelecomManager; SDK≥26 with
+  successful registration → supported and cached `telecom_supported=true`;
+  registration exception → cached `false`; version bump → re-probe occurs.
+- Traces: AC-6.
+
+**TC-AND-304-02 — Connection callback → signalling mapping**
+- Type: unit (JVM).
+- Target: `TestLogonConnection` with a fake `CallSignaling`.
+- Preconditions: connection in `RINGING`/`ACTIVE`.
+- Steps: invoke `onAnswer()`, `onReject()`, `onDisconnect()`, `onHold()`,
+  `onUnhold()`, `onAbort()`.
+- Expected: `onAnswer`→`setActive()`+`accept(callId)`; `onReject`→
+  `decline(callId)`+`DisconnectCause(REJECTED)`; `onDisconnect`→`hangup(callId)`
+  which maps to the **`POST .../end`** disposition + `DisconnectCause(LOCAL)`;
+  `onHold`→`setOnHold()`+`audioRouter.pause()`; `onUnhold`→`setActive()`+
+  `resume()`; `onAbort`→`DisconnectCause(CANCELED)`.
+- Traces: AC-3, AC-5.
+
+**TC-AND-304-03 — Audio route/mute mapping (CallAudioState ⇄ CallAudioStateUi)**
+- Type: unit (JVM/Robolectric).
+- Target: `CallAudioRouter`.
+- Preconditions: fake `CallAudioState` (legacy, API 26–33) and `CallEndpoint`
+  set (API 34+).
+- Steps: feed earpiece/speaker/BT/wired states and mute toggles through both the
+  legacy `onCallAudioStateChanged` path and the API-34 `CallEndpoint` path.
+- Expected: `CallAudioRouter.audioState` StateFlow emits the correct `active`
+  route, `available` set, and `muted` flag for both code paths; no route desync
+  between the two paths.
+- Traces: AC-4.
+
+**TC-AND-304-04 — Disposition contract (accept/decline/end) shapes**
+- Type: contract / MockWebServer.
+- Target: Retrofit call layer behind `CallSignaling`.
+- Preconditions: MockWebServer scripting the three endpoints.
+- Steps: trigger accept/decline/hangup; capture outbound requests; return
+  `200:CallActionOut`.
+- Expected: requests go to `POST /messaging/messages/calls/{id}/accept` (body
+  `CallAcceptIn`), `/decline` (`CallDeclineIn { reason }`), and **`/end`**
+  (`CallEndIn`) — NOT `/hangup`; each carries `Authorization: Bearer …` and
+  `X-CSRF-Token` headers; responses deserialize to `CallActionOut` with
+  `call_id, conversation_id, state, event_ts`.
+- Traces: AC-3, AC-8.
+
+**TC-AND-304-05 — 401 refresh-once then retry**
+- Type: contract / MockWebServer.
+- Target: OkHttp authenticator + `CallSignaling`.
+- Preconditions: MockWebServer returns 401 on first disposition call, 200 on
+  retry; `/ui/session/refresh` returns 200.
+- Steps: invoke a disposition action.
+- Expected: exactly one `POST /ui/session/refresh` (no body) is issued, then the
+  original request is retried once and succeeds; a second consecutive 401 does
+  not loop (surfaces as auth failure, local teardown still proceeds per §7).
+- Traces: AC-3, AC-6.
+
+**TC-AND-304-06 — Signalling error shape handling**
+- Type: contract / MockWebServer.
+- Target: signalling error mapping.
+- Preconditions: MockWebServer returns 409 and 503 with body
+  `CallSignalingErrorOut { code, message }` on the `/signal` (and disposition)
+  path.
+- Steps: drive a signalling action that fails.
+- Expected: the typed `{ code, message }` error is parsed (not treated as raw
+  text); per §7 a decline/hangup failure does NOT block local `Connection`
+  teardown.
+- Traces: AC-7.
+
+**TC-AND-304-07 — ConnectionService create returns correct initial state +
+fallback on create-failed**
+- Type: Robolectric.
+- Target: `TestLogonConnectionService`.
+- Preconditions: Robolectric shadows for `TelecomManager`/`AudioManager`.
+- Steps: call `onCreateIncomingConnection` and `onCreateOutgoingConnection`;
+  then invoke `onCreateIncomingConnectionFailed`/`onCreateOutgoingConnectionFailed`.
+- Expected: incoming → `STATE_RINGING`, outgoing → `STATE_DIALING`, registered
+  in `ConnectionRegistry` keyed by callId (exactly one per id); the failed
+  callbacks trigger the AND-297 fallback path and leave no registry entry.
+- Traces: AC-1, AC-2, AC-6, AC-9-equivalent (no leak).
+
+**TC-AND-304-08 — Watchdog / no leaked Telecom connection**
+- Type: unit (JVM, virtual time) + Robolectric assertion.
+- Target: stuck-connection watchdog + `ConnectionRegistry`.
+- Preconditions: a `TestLogonConnection` left non-terminal with no matching live
+  signalling state.
+- Steps: advance virtual time past 60s; also simulate signalling `observe`
+  closing.
+- Expected: connection is disconnected (`DisconnectCause`), removed from the
+  registry, and `destroy()` is called; no entry remains.
+- Traces: AC-7.
+
+**TC-AND-304-09 — Outgoing self-managed call end-to-end (emulator)**
+- Type: instrumented / e2e.
+- Target: full Telecom flow on AVD `test35` (API 35).
+- Preconditions: PhoneAccount registered; MockWebServer/test signalling double.
+- Steps: place a call via `TelecomManager.placeCall`; simulate peer answer via
+  signalling; inspect `dumpsys telecom`.
+- Expected: a self-managed call appears in Telecom (`DIALING`→`ACTIVE`); on local
+  end the call disappears from `dumpsys telecom` (no phantom).
+- Traces: AC-2, AC-7.
+
+**TC-AND-304-10 — Incoming call + cellular interop hold/unhold (PHYSICAL
+DEVICE)**
+- Type: instrumented / e2e. MUST run on the physical Samsung A15 5G (real
+  cellular radio; emulator cannot raise a real CS call).
+- Target: `addNewIncomingCall` + `onHold`/`onUnhold`.
+- Preconditions: device has an active SIM; TestLogon call in `ACTIVE`.
+- Steps: report an incoming TestLogon call, accept it; place/receive a real GSM
+  cellular call; end the cellular call.
+- Expected: TestLogon call rings even when backgrounded, connects on accept and
+  shows in the system call UI; when the cellular call goes active the OS issues
+  `onHold` → TestLogon reports `STATE_HOLDING` and media pauses; on cellular end,
+  `onUnhold` → `STATE_ACTIVE` and media resumes.
+- Traces: AC-1, AC-5.
+
+**TC-AND-304-11 — Audio routing + hardware controls across real devices
+(PHYSICAL DEVICE)**
+- Type: instrumented / manual. MUST run on the physical device (real BT/wired
+  headset, hardware end-call/hook button).
+- Target: `CallAudioRouter` + `CallAudioState`/`CallEndpoint`.
+- Preconditions: a paired Bluetooth headset and a wired headset available;
+  `BLUETOOTH_CONNECT` granted.
+- Steps: during an active call, toggle earpiece→speaker→wired→BT SCO; press the
+  headset hook (mute toggle) and the hardware/system end-call.
+- Expected: active/available routes and mute state in the in-call UI track the
+  real device; headset hook toggles mute; hardware/system end-call drives
+  `onDisconnect`/`onAbort` and tears down media + clears notification.
+- Traces: AC-4, AC-7.
+
+**TC-AND-304-12 — Graceful degradation / flaky-host + offline teardown**
+- Type: instrumented (emulator `test35`) + contract.
+- Target: fallback path + §7 resilience.
+- Preconditions: build with Telecom forced-unsupported (probe→false); separately,
+  airplane-mode/offline and a 20s-timeout dev-host scenario via MockWebServer
+  delay.
+- Steps: (a) on the forced-unsupported build, receive/accept/conduct a call;
+  (b) with the network offline/timed-out, end a call locally.
+- Expected: (a) the AND-297 notification fallback completes a full call with
+  correct manual audio focus, no crash, no phantom OS call; (b) the local
+  `Connection` disconnects immediately without waiting on the network — the
+  disposition POST is fire-and-forget with a single best-effort retry; the call
+  UI never hangs.
+- Traces: AC-6, AC-7.
+
+**TC-AND-304-13 — Security: no secrets in logs or Telecom extras + permission
+boundary**
+- Type: instrumented / manual (emulator or device).
+- Target: logging, Telecom `extras`/`Uri`, manifest permission.
+- Preconditions: debug build with Timber capture; `dumpsys telecom` access.
+- Steps: run a full call; capture logs and `dumpsys telecom` extras; verify the
+  service binding.
+- Expected: no cookie, no CSRF token, no Bearer token, and no raw `callId`
+  appear in logs (callId is hashed) or in Telecom `extras`/`Uri` (only opaque
+  callId + display name); the `ConnectionService` is bound only by the system
+  (protected by `BIND_TELECOM_CONNECTION_SERVICE`); denying `BLUETOOTH_CONNECT`
+  silently drops BT from `available` without crashing.
+- Traces: AC-8, AC-4.
+
+**TC-AND-304-14 — Accessibility of the fallback in-call audio controls**
+- Type: Compose-UI (emulator `test35`) + manual TalkBack pass on device.
+- Target: in-app fallback in-call screen (route selector + mute).
+- Preconditions: fallback in-call screen rendered.
+- Steps: assert semantics; run a TalkBack pass; toggle a route.
+- Expected: each route button and the mute toggle expose `contentDescription`
+  and `Role.Button`/`Role.Switch` with selected state announced (e.g. "Speaker,
+  selected"); strings come from `strings.xml` (no hardcoded literals), RTL-safe;
+  a route change is announced via a live region.
+- Traces: AC-4.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|----------|-----------|
+| AC-1 (incoming registered, rings backgrounded, connects on accept) | TC-07, TC-10 |
+| AC-2 (outgoing DIALING→ACTIVE) | TC-07, TC-09 |
+| AC-3 (accept/decline/hangup route through callbacks → backend) | TC-02, TC-04, TC-05 |
+| AC-4 (audio routing + mute + headset hook in UI) | TC-03, TC-11, TC-13, TC-14 |
+| AC-5 (cellular interop hold/unhold, media pause/resume) | TC-02, TC-10 |
+| AC-6 (fallback on API<26 / unsupported, no crash, no phantom) | TC-01, TC-05, TC-07, TC-12 |
+| AC-7 (no leaked Telecom connection; resilient teardown) | TC-06, TC-08, TC-09, TC-11, TC-12 |
+| AC-8 (no secrets/raw callId in logs or extras) | TC-04, TC-13 |

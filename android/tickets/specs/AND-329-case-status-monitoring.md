@@ -5,7 +5,8 @@ milestone: M7
 epic: E42
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-319]
 blocks: []
 ---
@@ -17,8 +18,10 @@ blocks: []
 This ticket delivers the **KYC case status and ongoing-monitoring** surface of the
 TestLogon Android app: the screen(s) and supporting repository/ViewModel layer that
 let an authenticated user view the state of any open compliance/KYC case opened on
-their behalf (typically by `POST /v1/kyc/evaluate` returning a `case_id`, see
-AND-319) and the chronological **timeline/history** of that case as it moves through
+their behalf (a KYC case is created by `POST /v1/kyc/cases` → `KycCaseEnvelope`
+returning `case.kyc_case_id`; see AND-319 — note: tier *evaluation* is a separate
+endpoint `POST /v1/kyc/tiers/me/evaluate`, corrected from the original "`POST /v1/kyc/evaluate`")
+and the chronological **timeline/history** of that case as it moves through
 review, plus the ongoing `kycMonitoring` signal that surfaces re-verification or
 re-screening requirements after a tier was already granted.
 
@@ -57,26 +60,46 @@ banner, the repository + ViewModels, and a full state/test matrix proving
 - **Module layering:** `app -> feature-kyc -> core-*`. ViewModels expose
   `StateFlow<UiState>`; the repository returns `ApiResult<T>` (AND-018). No
   `feature-*` symbol leaks into `core-*`.
-- **Upstream dependency — AND-319 (KYC API + DTOs):** provides `KycApi.cases(): KycCasesResp`,
-  `KycApi.case(caseId): KycCase`, and the `KycCase` / `KycStatus` / `KycTierId` types
-  this ticket consumes. AND-319 is the **only hard backlog dependency** named on this
-  ticket. The timeline-event sub-shape is consumed from `KycCase` (see R-1/Q-1).
+- **Upstream dependency — AND-319 (KYC API + DTOs):** provides the `KycApi` wrappers for
+  `GET /v1/kyc/cases` (resp **`KycCaseListEnvelope`** = `{ items: KycCaseOut[], next_cursor: string|null }`)
+  and `GET /v1/kyc/cases/{case_id}` (resp **`KycCaseEnvelope`** = `{ case: KycCaseOut }`), plus the
+  `KycCaseOut` / `KycCaseStatus` types this ticket consumes. **Corrected:** the original spec named
+  `KycCasesResp` / `KycCase` and a `KycTierId` — the verified contract uses `KycCaseListEnvelope` /
+  `KycCaseEnvelope` / `KycCaseOut`, and there is **no `target_tier`/`KycTierId` field on a case** (see §5).
+  `KycCaseStatus` is the 7-value enum `draft | submitted | under_review | needs_more_info | approved |
+  rejected | expired` (NOT `pending/review/verified/unverified/unknown`; see FR-3 correction).
+  AND-319 is the **only hard backlog dependency** named on this ticket. **There is no inline
+  `history`/`events` array on `KycCaseOut`** — the timeline must be synthesized (confirmed; see R-1/§4.1).
 - **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` is plaintext
   HTTP and unreliable: design for ~20s timeouts, bounded backoff on the idempotent
   case GETs (AND-016), and offline/stale UI states (AND-021 / AND-045 patterns).
-  Inspect `/openapi.json` for the `/v1/kyc/cases*` and monitoring schemas; web
-  reference field names: `frontend/src/api/endpoints/kyc.ts`, `frontend/src/api/types.ts`.
+  Verified schemas: `/v1/kyc/cases*` and `/v1/kyc/monitoring/*`; web reference field
+  names confirmed in `src/api/endpoints/kyc.ts` (`listKycCases`/`getKycCase`),
+  `src/api/endpoints/kycMonitoring.ts` (`getMySchedule`/`getMyTriggers`), and
+  `src/api/types.ts` (`KycSelfServiceCase`, `KycReviewSchedule`, `KycTriggerEvent`).
 - **Shared composables:** loading/empty/error/offline state composables (AND-021),
   Material 3 theme (AND-019), navigation host/routes (AND-022). Reuse, do not fork.
-- **Auth:** cookie-based session (cookie jar AND-011, CSRF AND-012, 401-refresh
-  AND-013) is inherited via the shared OkHttp/Retrofit; case endpoints 401 without it.
+- **Auth (verified against `src/api/client.ts`):** the web client sends **three** auth
+  artifacts on every call — an `Authorization: Bearer <accessToken>` header, an
+  `X-CSRF-Token` header sourced from the `ui_csrf` cookie, and `credentials: include`
+  (session cookies). On `401` it calls `POST /ui/session/refresh` **once** then retries the
+  original request; a second failure logs out. **Corrected:** the original "cookie-based
+  session" description was incomplete — it omitted the Bearer token and the `X-CSRF-Token`/`ui_csrf`
+  mechanism, and the refresh endpoint is `/ui/session/refresh`. This transport/refresh
+  behavior is **owned by AND-011/012/013** and inherited via the shared OkHttp/Retrofit;
+  the exact ticket numbers owning each piece are an unverified assumption (not in these sources).
+  Case endpoints 401 without a valid session.
 
 ## 3. Functional Requirements
 
 FR-1. **Case list.** `KycCaseListScreen` renders the caller's cases from
-`KycApi.cases()`, each row showing `caseId`, a human-readable status chip
-(`KycStatus`), `targetTier`, `openedAt`, and `updatedAt` (relative time). Rows are
-ordered by `openedAt` descending. Tapping a row navigates to detail.
+`GET /v1/kyc/cases` (`KycCaseListEnvelope.items`), each row showing `kyc_case_id`, a
+human-readable status chip (`KycCaseStatus`), and `created_at`/`updated_at` rendered as
+relative time. **Corrected:** there is **no `target_tier`/`opened_at` on `KycCaseOut`** —
+drop the "target tier" row field and use `created_at` (epoch seconds, integer) as the
+"opened" timestamp; sort rows by `created_at` descending. `next_cursor` is present for
+pagination but, per §4.4, case counts are bounded so first-page rendering suffices (cursor
+follow-up is an enhancement, flagged). Tapping a row navigates to detail.
 
 FR-2. **Case detail + timeline.** `KycCaseDetailScreen(caseId)` renders the current
 status prominently and an **ordered, vertical timeline** of history events
@@ -84,17 +107,30 @@ status prominently and an **ordered, vertical timeline** of history events
 per design (default: oldest→newest top-to-bottom with the latest emphasized). Each
 event shows its timestamp, event kind/status, and any `note`.
 
-FR-3. **Status semantics.** Map `KycStatus` to a status presentation:
-`PENDING`/`REVIEW` → "In review" (amber, in-progress affordance), `VERIFIED` →
-"Approved" (positive), `REJECTED` → "Rejected" (negative, surface `rejectReason`/note),
-`UNVERIFIED` → "Not started", `UNKNOWN` → a non-silent "Status unavailable" state
-(never rendered as blank — per AND-319 R-5).
+FR-3. **Status semantics.** **Corrected** to the verified `KycCaseStatus` enum
+(`draft | submitted | under_review | needs_more_info | approved | rejected | expired`).
+Map each to a presentation: `draft` → "Not started"/"Draft" (neutral), `submitted` →
+"Submitted" (neutral/in-progress), `under_review` → "In review" (amber, in-progress
+affordance), `needs_more_info` → "Action needed" (amber, CTA to AND-321/AND-320),
+`approved` → "Approved" (positive), `rejected` → "Rejected" (negative — surface the
+review `reason_codes` from `KycCaseOut.review.reason_codes`; there is **no top-level
+`reject_reason`/`note` field** on the case, corrected), `expired` → "Expired" (negative,
+re-verify CTA). Any unrecognized/additive token maps to a non-silent "Status unavailable"
+state (never rendered as blank). Note: the original `PENDING/REVIEW/VERIFIED/UNVERIFIED/UNKNOWN`
+tokens do **not** exist in the contract.
 
-FR-4. **Monitoring (`kycMonitoring`).** When an active monitoring item exists for the
-caller (ongoing re-verification / periodic re-screening after a granted tier), surface
-a dismissible-but-recurring **monitoring banner** at the top of the case list (and the
-KYC hub if linked) describing the required action and a deep-link to the relevant case
-or the requirements screen (AND-320). Absence of monitoring items renders no banner.
+FR-4. **Monitoring (`kycMonitoring`).** **Corrected/confirmed source:** there is **no
+`GET /v1/kyc/monitoring` returning `{items:[]}`**. The caller-scoped monitoring surface is
+**two endpoints**: `GET /v1/kyc/monitoring/schedule` → `KycReviewScheduleEnvelope`
+(`{ schedule: KycReviewSchedule | null }`) and `GET /v1/kyc/monitoring/triggers` →
+`KycTriggerEventListEnvelope` (`{ events: KycTriggerEvent[] }`). An **active monitoring
+condition** is derived as: `schedule != null` AND `schedule.status` ∈
+{`needs_review`, `grace_period`, `downgraded`} (the `active` state surfaces no banner), or
+the presence of recent trigger events. When active, surface a dismissible-but-recurring
+**monitoring banner** at the top of the case list describing the required action (derived
+from `schedule.status` + `next_review_date`/`grace_deadline`) and a deep-link to
+`schedule.case_id` or the requirements screen (AND-320). Absence (schedule null / `active`
+and no triggers) renders no banner.
 
 FR-5. **States.** Every screen renders the AND-021 state set: Loading (skeleton/spinner),
 Loaded (content), Empty (no cases → friendly empty state with a CTA to start
@@ -129,52 +165,55 @@ repository + domain in `core-data/src/main/kotlin/com/testlogon/android/core/dat
 
 ### 4.1 Domain models + mappers (`core-data`)
 
-DTOs (`KycCase`, `KycStatus`, `KycTierId`) from AND-319 are wire types; map to immutable
-domain models with parsed `Instant` timestamps and a derived presentation status.
+DTOs (`KycCaseOut`, `KycCaseStatus`) from AND-319 are wire types; map to immutable
+domain models. **Corrected:** `KycCaseOut.created_at`/`updated_at` are **epoch integers
+(seconds)**, not ISO-8601 strings — map via `Instant.ofEpochSecond(...)`, not a string
+parser. There is no `target_tier` and no top-level `note`/`reject_reason` on the case.
 
 ```kotlin
 package com.testlogon.android.core.data.kyc
 
-import com.testlogon.android.core.model.kyc.KycStatus
-import com.testlogon.android.core.model.kyc.KycTierId
+import com.testlogon.android.core.model.kyc.KycCaseStatus
 import java.time.Instant
 
 data class KycCaseSummary(
-    val caseId: String,
-    val status: KycStatus,
-    val targetTier: KycTierId,
-    val openedAt: Instant,
-    val updatedAt: Instant?,
-    val note: String?,
+    val caseId: String,          // <- KycCaseOut.kyc_case_id
+    val status: KycCaseStatus,
+    val createdAt: Instant,      // <- epoch-seconds Int
+    val updatedAt: Instant,      // <- epoch-seconds Int (required, not nullable)
+    val missingRequirements: List<String>,  // <- KycCaseOut.missing_requirements
 )
 
-enum class KycEventKind { OPENED, STATUS_CHANGE, NOTE, DECISION, MONITORING, UNKNOWN }
+enum class KycEventKind { OPENED, STATUS_CHANGE, DECISION, MONITORING, UNKNOWN }
 
 data class KycCaseEvent(
     val at: Instant,
     val kind: KycEventKind,
-    val status: KycStatus?,     // status the case moved into, when applicable
-    val message: String?,       // backend-supplied display string, passed through
+    val status: KycCaseStatus?, // status the case moved into, when applicable
+    val message: String?,       // client-composed display string (see note)
 )
 
 data class KycCaseDetail(
     val summary: KycCaseSummary,
+    val reasonCodes: List<String>,  // <- KycCaseOut.review.reason_codes (rejection detail)
     val timeline: List<KycCaseEvent>,   // sorted ascending by `at`
 )
 
+// Derived client-side from KycReviewSchedule + KycTriggerEvent (no single backend item type)
 data class KycMonitoringItem(
-    val caseId: String?,        // null when a new case must be opened
-    val requiredAction: String, // display string from backend
-    val dueAt: Instant?,
-    val targetTier: KycTierId?,
+    val caseId: String?,        // <- KycReviewSchedule.case_id, null when none
+    val requiredAction: String, // composed from schedule.status / trigger_type
+    val dueAt: Instant?,        // <- next_review_date or grace_deadline (epoch seconds)
 )
 ```
 
-Mappers parse ISO-8601 strings (deferred by AND-319) to `Instant`, with a tolerant
-parser that drops malformed timestamps to `Instant.EPOCH`-guarded null rather than
-throwing. If `KycCase` carries an inline `history`/`events` array (R-1/Q-1), it maps to
-`timeline`; otherwise the timeline is synthesized from `openedAt`/`updatedAt`/`status`
-as a two-event fallback (documented to the user via a "limited history" note).
+Mappers convert **epoch-second integers** to `Instant` via `Instant.ofEpochSecond`, with a
+tolerant guard (non-positive/garbage epoch → drop to null rather than throw). **Confirmed
+(R-1/Q-1): `KycCaseOut` carries no `history`/`events` array**, so the timeline is **always
+synthesized** from `created_at` (OPENED), `updated_at` + `status` (STATUS_CHANGE/DECISION),
+and — for `rejected`/`needs_more_info` — `review.reason_codes` / `review.decided_at`. The UI
+shows a "Limited history available" note (4.1) because no transition log is provided. The
+`message` strings are **client-composed** from enum tokens + i18n, not backend free text.
 
 ### 4.2 Repository (`core-data`)
 
@@ -198,7 +237,12 @@ class DefaultKycCaseRepository @Inject constructor(
     private val api: KycApi,
     @IoDispatcher private val io: CoroutineDispatcher,
     // private val cache: KycCaseCache,   // AND-116 SWR seam; optional until merged
-) : KycCaseRepository { /* wraps api.cases()/case(id)/monitoring in ApiResult, maps DTO->domain */ }
+) : KycCaseRepository {
+    /* wraps GET /v1/kyc/cases (KycCaseListEnvelope), GET /v1/kyc/cases/{id}
+       (KycCaseEnvelope), GET /v1/kyc/monitoring/schedule (KycReviewScheduleEnvelope)
+       and GET /v1/kyc/monitoring/triggers (KycTriggerEventListEnvelope) in ApiResult,
+       maps DTO->domain. getMonitoring() fans out schedule+triggers and derives items. */
+}
 ```
 
 All calls run on the injected IO dispatcher; results are wrapped via the AND-018
@@ -294,51 +338,71 @@ declares `implementation(project(":core-data"))`, `:core-ui`, `:core-network`,
 
 ## 5. API Contract
 
-This ticket issues **no new endpoints**; it consumes the `/v1/kyc/cases*` endpoints
-declared by AND-319 plus a monitoring read (see Q-2). Base path (`dev`):
-`http://18.222.237.167:8000/`. All require an authenticated session (cookies +
-inherited CSRF on any mutating verb — none here). All GETs are idempotent.
+This ticket issues **no new endpoints**; it consumes the `/v1/kyc/cases*` and
+`/v1/kyc/monitoring/*` endpoints declared by AND-319. Base path (`dev`):
+`http://18.222.237.167:8000/`. All paths are **leading-slash absolute** (`/v1/kyc/...`) per
+the web client `BASE` constants. All require an authenticated session (Bearer + `ui_csrf`
+cookie + session cookies; §2 auth). No mutating verbs here; all GETs are idempotent.
+(All paths/shapes below are **verified** against `reference/openapi.index.txt`,
+`openapi.pretty.json`, and `src/api/endpoints/*.ts`; the original §5 was substantially wrong.)
 
-### GET `v1/kyc/cases`
-Response `200` (per AND-319 `KycCasesResp`):
-```json
-{ "cases": [
-  { "case_id": "case_77", "status": "review", "target_tier": "tier1",
-    "opened_at": "2026-06-05T12:01:00Z", "updated_at": "2026-06-05T13:30:00Z",
-    "note": "Awaiting document review" }
-] }
-```
-
-### GET `v1/kyc/cases/{caseId}`
-Path: `v1/kyc/cases/case_77`. Response `200`: a single `KycCase`. The timeline is read
-from the case's `history`/`events` array if present (consumed shape, pending Q-1):
-```json
-{ "case_id": "case_77", "status": "verified", "target_tier": "tier1",
-  "opened_at": "2026-06-05T12:01:00Z", "updated_at": "2026-06-06T09:00:00Z",
-  "note": null,
-  "history": [
-    { "at": "2026-06-05T12:01:00Z", "kind": "opened",        "status": "review", "message": "Case opened" },
-    { "at": "2026-06-05T13:30:00Z", "kind": "note",          "status": "review", "message": "Awaiting document review" },
-    { "at": "2026-06-06T09:00:00Z", "kind": "decision",      "status": "verified", "message": "Approved" }
-  ] }
-```
-`404` → `KycCaseDetailUiState.NotFound`. `401` → AND-013 refresh-then-retry once, else login.
-
-### GET `v1/kyc/monitoring` (proposed — confirm via `/openapi.json`, Q-2)
-Response `200`:
+### GET `/v1/kyc/cases`  (op `list_my_kyc_cases`)
+Response `200` = **`KycCaseListEnvelope`** (`items` + `next_cursor`), each item a `KycCaseOut`:
 ```json
 { "items": [
-  { "case_id": null, "required_action": "Re-verify your ID (expires in 30 days)",
-    "due_at": "2026-07-05T00:00:00Z", "target_tier": "tier1" }
+  { "contract_version": "2026-03-kyc-v1", "kyc_case_id": "case_77",
+    "user_sub": "auth0|abc", "status": "under_review",
+    "created_at": 1749124860, "updated_at": 1749129000, "version": 3,
+    "missing_requirements": ["proof_of_address"],
+    "files": [], "submission": {},
+    "questionnaire": { "questionnaire_id": null },
+    "signature": { "packet_id": null, "status": null },
+    "review": { "decision": null, "reason_codes": [], "assigned_admin_sub": null } }
+], "next_cursor": null }
+```
+Note: timestamps are **epoch-second integers**; there is **no `case_id`/`target_tier`/
+`opened_at`/`note`** field (the original example invented all of these).
+
+### GET `/v1/kyc/cases/{case_id}`  (op `get_my_kyc_case`)
+Path: `/v1/kyc/cases/case_77`. Response `200` = **`KycCaseEnvelope`** = `{ "case": KycCaseOut }`
+(same `KycCaseOut` shape as above). **There is no inline `history`/`events` array** — the
+timeline is **synthesized** client-side (§4.1). `KycCaseOut.review.reason_codes` carries
+rejection detail. The documented contract declares only `200` and `422:HTTPValidationError`;
+a `404` is **not in the documented responses** (an unverified runtime assumption — FastAPI may
+still raise it). `401` → session refresh (`POST /ui/session/refresh`) then retry once, else login.
+
+### Monitoring — `/v1/kyc/monitoring/schedule` and `/v1/kyc/monitoring/triggers`
+**Corrected:** no `GET /v1/kyc/monitoring` and no `{items:[]}` shape exists. Two GETs:
+
+`GET /v1/kyc/monitoring/schedule` (op `get_my_schedule`) → **`KycReviewScheduleEnvelope`**:
+```json
+{ "schedule": {
+    "user_sub": "auth0|abc", "risk_tier": "tier1",
+    "review_frequency_days": 365, "last_review_date": 1717545600,
+    "next_review_date": 1749081600, "grace_period_days": 30,
+    "grace_deadline": 1751673600, "status": "needs_review",
+    "case_id": "case_77", "created_at": 1717545600, "updated_at": 1749081600 } }
+```
+`schedule` may be `null` (no monitoring). `status` ∈ {`active`,`needs_review`,`grace_period`,`downgraded`};
+all timestamps epoch-second integers (frontend `src/api/types.ts: KycReviewSchedule`).
+
+`GET /v1/kyc/monitoring/triggers` (op `list_my_triggers`) → **`KycTriggerEventListEnvelope`**:
+```json
+{ "events": [
+  { "event_id": "evt_1", "user_sub": "auth0|abc", "trigger_type": "periodic_review",
+    "details": {}, "created_at": 1749081600, "created_by": "system" }
 ] }
 ```
-If no dedicated monitoring endpoint exists, monitoring is derived client-side from
-`me`/`cases` (a case in `review`/`rejected`, or a `next_tier` re-verification flag) —
-resolved by Q-2 before coding; either way the `KycMonitoringItem` domain model is stable.
+`getMonitoring()` fetches both and derives `KycMonitoringItem`s (FR-4). The OpenAPI types both
+envelopes' inner objects as opaque (`additionalProperties: true`); the **richer field set above is
+the web client's typed view** in `src/api/types.ts` and is treated as the de-facto contract,
+flagged as a typed-from-frontend assumption.
 
-**Error envelope (all):** FastAPI `detail` union; mapping owned by AND-015/AND-018. The
-repository converts non-2xx/transport failures into `ApiResult.Error`; the ViewModel
-maps that to `Error`/`Offline`/`NotFound`.
+**Error envelope (all):** the `/v1/kyc/*` endpoints declare FastAPI `422:HTTPValidationError`
+(`{ "detail": [ ValidationError, ... ] }`) only; other statuses surface as raw
+`{ "detail": "..." }`. (The `ErrorEnvelope` shape seen on `/tickets/*` does **not** apply here.)
+Mapping owned by AND-015/AND-018. The repository converts non-2xx/transport failures into
+`ApiResult.Error`; the ViewModel maps that to `Error`/`Offline`/`NotFound`.
 
 ## 6. Data & State Management
 
@@ -419,7 +483,8 @@ maps that to `Error`/`Offline`/`NotFound`.
 
 - **HTTP logging** inherited from AND-009's redacting interceptor (debug only); case/monitoring
   response bodies (which may carry PII notes) must be in AND-009's redaction set — add
-  `v1/kyc/cases` and `v1/kyc/monitoring` paths to it (constraint flagged for AND-009, R-4-style).
+  `/v1/kyc/cases`, `/v1/kyc/monitoring/schedule`, and `/v1/kyc/monitoring/triggers` paths to it
+  (constraint flagged for AND-009, R-4-style).
 - **Analytics events** (via the app's telemetry layer, redacted): `kyc_case_list_view`,
   `kyc_case_detail_view {status}`, `kyc_monitoring_banner_shown {action_kind}`,
   `kyc_monitoring_banner_tapped`, `kyc_case_refresh`. Event properties carry only
@@ -501,14 +566,17 @@ monitoring source against `/openapi.json` + `frontend/src/api/endpoints/kyc.ts` 
 
 ## 13. Risks & Open Questions
 
-- **R-1 / Q-1 — Timeline shape.** The `KycCase` DTO (AND-319) does not currently declare a
-  `history`/`events` array; this ticket consumes one. *Mitigation:* confirm the field name and
-  element shape in `/openapi.json`; if absent, AND-319 must add the field (small DTO addition)
-  or this ticket synthesizes a minimal timeline (4.1/T-2) — guarded by tests either way.
-- **R-2 / Q-2 — Monitoring source.** A dedicated `/v1/kyc/monitoring` endpoint may not exist;
-  monitoring may be derived from `me`/`cases`. *Mitigation:* confirm via OpenAPI; the
-  `KycMonitoringItem` domain model and `getMonitoring()` signature are stable regardless of
-  source.
+- **R-1 / Q-1 — Timeline shape. [RESOLVED via review]** Confirmed against
+  `openapi.pretty.json: KycCaseOut` and `src/api/types.ts: KycSelfServiceCase`: the case DTO has
+  **no `history`/`events` array**. Decision: the timeline is **always synthesized** client-side
+  from `created_at`/`updated_at`/`status`/`review.reason_codes` (§4.1, T-2), with a "Limited
+  history available" note. No AND-319 DTO change is required. Residual risk: a future backend
+  transition log would supersede the synthesized view.
+- **R-2 / Q-2 — Monitoring source. [RESOLVED via review]** Confirmed: no `GET /v1/kyc/monitoring`
+  `{items}` endpoint. The caller-scoped source is **`GET /v1/kyc/monitoring/schedule`**
+  (`KycReviewScheduleEnvelope`) + **`GET /v1/kyc/monitoring/triggers`** (`KycTriggerEventListEnvelope`).
+  `getMonitoring()` derives `KycMonitoringItem`s from both. Residual risk: the OpenAPI types the
+  envelope inner objects as opaque; the richer field set is taken from the frontend typed view.
 - **R-3 — SWR availability.** If AND-116 is not merged when this ships, offline/stale uses the
   in-memory fallback; behavior is correct but cache does not survive process death.
   *Mitigation:* gate the Room backing behind the repository interface; swap when AND-116 lands.
@@ -526,11 +594,14 @@ monitoring source against `/openapi.json` + `frontend/src/api/endpoints/kyc.ts` 
 - **AC-1 (backlog).** Given a case (by list selection or deep-link `caseId`), the case-detail
   screen **renders the current status and the ordered history/timeline of events**, each with
   timestamp and message. [T-8]
-- **AC-2.** `KycCaseListScreen` renders the caller's cases from `GET /v1/kyc/cases` ordered by
-  `openedAt` descending, each row showing status chip, target tier, and relative times; tapping
-  navigates to `kyc/cases/{caseId}`. [T-3, T-8]
-- **AC-3.** Status presentation maps every `KycStatus` per FR-3, communicates status by text
-  (not color alone), and renders `UNKNOWN` as a non-silent "Status unavailable" state. [T-8, T-11]
+- **AC-2.** `KycCaseListScreen` renders the caller's cases from `GET /v1/kyc/cases`
+  (`KycCaseListEnvelope.items`) ordered by `created_at` descending, each row showing the status
+  chip and relative times (no target tier — corrected); tapping navigates to `kyc/cases/{caseId}`.
+  [T-3, T-8]
+- **AC-3.** Status presentation maps every `KycCaseStatus` value (`draft|submitted|under_review|
+  needs_more_info|approved|rejected|expired`) per FR-3, communicates status by text (not color
+  alone), and renders any unrecognized/additive token as a non-silent "Status unavailable" state.
+  [T-8, T-11]
 - **AC-4.** The monitoring banner renders only when active `kycMonitoring` items exist, announces
   as a live region, and its action routes to the case/requirements target; absence renders no
   banner. [T-9]
@@ -570,3 +641,102 @@ monitoring source against `/openapi.json` + `frontend/src/api/endpoints/kyc.ts` 
   with no new lint/detekt violations (AND-005 config).
 - Code reviewed and merged to `android-port`; CTAs to AND-320/AND-321 wired (or stubbed with
   TODO + ticket id where those screens are not yet merged).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its VERDICT and exact SOURCE pointer.
+
+1. **List endpoint is `GET /v1/kyc/cases` returning a `KycCaseListEnvelope`** (`{ items: KycCaseOut[], next_cursor }`).
+   VERDICT: **Corrected** (spec said `KycCasesResp` with a `cases` array). SOURCE: OpenAPI `GET /v1/kyc/cases` op=`list_my_kyc_cases` resp=`KycCaseListEnvelope`; schema `KycCaseListEnvelope`; `src/api/endpoints/kyc.ts: listKycCases`; `src/api/types.ts: KycSelfServiceCaseListEnvelope`.
+2. **Detail endpoint is `GET /v1/kyc/cases/{case_id}` returning `KycCaseEnvelope`** (`{ case: KycCaseOut }`).
+   VERDICT: **Corrected** (spec said a bare single `KycCase`). SOURCE: OpenAPI `GET /v1/kyc/cases/{case_id}` op=`get_my_kyc_case` resp=`KycCaseEnvelope`; schema `KycCaseEnvelope`; `src/api/endpoints/kyc.ts: getKycCase`.
+3. **Case id field is `kyc_case_id`** (not `case_id`).
+   VERDICT: **Corrected**. SOURCE: schema `KycCaseOut.kyc_case_id` (required); `src/api/types.ts: KycSelfServiceCase.kyc_case_id`.
+4. **`created_at`/`updated_at` are epoch-second integers** (not ISO-8601 strings).
+   VERDICT: **Corrected**. SOURCE: schema `KycCaseOut` (`created_at`/`updated_at` `type: integer`, both required); `src/api/types.ts: KycSelfServiceCase` (`created_at: number`).
+5. **`KycCaseStatus` enum = `draft | submitted | under_review | needs_more_info | approved | rejected | expired`.**
+   VERDICT: **Corrected** (spec used `PENDING/REVIEW/VERIFIED/UNVERIFIED/UNKNOWN`, none of which exist). SOURCE: schema `KycCaseOut.status` enum; `src/api/types.ts: KycCaseStatus`.
+6. **No `target_tier` / `KycTierId` on a case.**
+   VERDICT: **Corrected**. SOURCE: schema `KycCaseOut` properties (absent); `src/api/types.ts: KycSelfServiceCase` (absent).
+7. **No top-level `note`/`reject_reason`; rejection detail lives in `review.reason_codes`.**
+   VERDICT: **Corrected**. SOURCE: schema `KycCaseReviewRef.reason_codes` (array of string); `src/api/types.ts: KycCaseReviewRef`.
+8. **No inline `history`/`events` array on the case → timeline is synthesized.**
+   VERDICT: **Corrected/Confirmed** (was R-1/Q-1, now resolved). SOURCE: schema `KycCaseOut` (no such property); `src/api/types.ts: KycSelfServiceCase` (no such property).
+9. **List is cursor-paginated via `next_cursor`.**
+   VERDICT: **Verified** (added; original spec omitted it). SOURCE: schema `KycCaseListEnvelope.next_cursor`.
+10. **Monitoring is `GET /v1/kyc/monitoring/schedule` (`KycReviewScheduleEnvelope`) + `GET /v1/kyc/monitoring/triggers` (`KycTriggerEventListEnvelope`)**, not `GET /v1/kyc/monitoring` `{items}`.
+    VERDICT: **Corrected** (was R-2/Q-2, resolved). SOURCE: OpenAPI `GET /v1/kyc/monitoring/schedule` op=`get_my_schedule`, `GET /v1/kyc/monitoring/triggers` op=`list_my_triggers`; `src/api/endpoints/kycMonitoring.ts: getMySchedule, getMyTriggers`.
+11. **`KycReviewSchedule` fields (`status`, `next_review_date`, `grace_deadline`, `case_id`, `risk_tier`, …) drive the banner; `status` ∈ {active, needs_review, grace_period, downgraded}.**
+    VERDICT: **Verified (frontend typed view)**. SOURCE: `src/api/types.ts: KycReviewSchedule`. NOTE: OpenAPI types `KycReviewScheduleEnvelope.schedule` as opaque object → see Open assumptions.
+12. **`KycTriggerEvent` fields (`event_id`, `trigger_type`, `created_at`, `details`).**
+    VERDICT: **Verified (frontend typed view)**. SOURCE: `src/api/types.ts: KycTriggerEvent`. NOTE: OpenAPI `events` items opaque → Open assumptions.
+13. **Tier evaluation is `POST /v1/kyc/tiers/me/evaluate`; case creation is `POST /v1/kyc/cases`** — the spec's `POST /v1/kyc/evaluate` does not exist.
+    VERDICT: **Corrected**. SOURCE: OpenAPI `POST /v1/kyc/tiers/me/evaluate` op=`evaluate_my_tier`; `POST /v1/kyc/cases` op=`create_kyc_case`; `src/api/endpoints/kyc.ts: createKycCase`.
+14. **Auth = `Authorization: Bearer <token>` + `X-CSRF-Token` (from `ui_csrf` cookie) + session cookies (`credentials: include`); 401 → `POST /ui/session/refresh` once then retry.**
+    VERDICT: **Corrected** (spec described "cookie-based session" only). SOURCE: `src/api/client.ts` (lines ~157-184, 194-221, `refreshSession` → `/ui/session/refresh`).
+15. **Error shape on `/v1/kyc/*` is FastAPI `422:HTTPValidationError` (`{detail: ValidationError[]}`); the `/tickets/*` `ErrorEnvelope` does not apply.**
+    VERDICT: **Verified / Corrected** (spec vaguely said "FastAPI detail union"). SOURCE: OpenAPI per-path `resp=...;422:HTTPValidationError`; schema `HTTPValidationError`.
+16. **Detail `404 → NotFound`.**
+    VERDICT: **Unverified-assumption**. SOURCE: OpenAPI `GET /v1/kyc/cases/{case_id}` declares only `200` + `422` (no `404`). FastAPI may raise 404 at runtime, but it is not in the documented contract.
+17. **Read-only screen issues no POST/PUT/DELETE.**
+    VERDICT: **Verified** (consistent with consuming only GETs above). SOURCE: this ticket's endpoint set is GET-only; mutating KYC verbs (`create_kyc_case`, `submit_kyc_case`, etc.) are out of scope.
+18. **Compose + Material 3 + Navigation-Compose + Hilt/KSP + Retrofit/OkHttp/Moshi are appropriate Android choices.**
+    VERDICT: **Verified (framework ref)**. SOURCE: https://developer.android.com/jetpack/compose ; https://developer.android.com/guide/navigation ; https://square.github.io/retrofit/ .
+19. **`stateIn(WhileSubscribed(5_000))` + `collectAsStateWithLifecycle()` for StateFlow UI.**
+    VERDICT: **Verified (framework ref)**. SOURCE: https://developer.android.com/topic/architecture/ui-layer/stateflow ; https://developer.android.com/jetpack/androidx/releases/lifecycle .
+20. **Relative time via `android.text.format.DateUtils`; a11y via Compose `semantics`/live region.**
+    VERDICT: **Verified (framework ref)**. SOURCE: https://developer.android.com/reference/android/text/format/DateUtils ; https://developer.android.com/jetpack/compose/accessibility .
+
+### Corrections made
+
+- Overview: replaced non-existent `POST /v1/kyc/evaluate` with `POST /v1/kyc/cases` (create) and noted `POST /v1/kyc/tiers/me/evaluate` (tier eval).
+- §2: corrected upstream-DTO names to `KycCaseListEnvelope`/`KycCaseEnvelope`/`KycCaseOut`; corrected status enum; corrected auth to Bearer + `X-CSRF-Token`/`ui_csrf` + cookies with `/ui/session/refresh`; corrected reference file pointers.
+- FR-1: dropped invented `target_tier`/`opened_at`; use `kyc_case_id` + `created_at`/`updated_at`; sort by `created_at` desc; noted `next_cursor`.
+- FR-3: replaced the fictional status tokens with the real 7-value enum and its presentation map; rejection detail from `review.reason_codes`.
+- FR-4: replaced the fictional `GET /v1/kyc/monitoring` `{items}` with `schedule` + `triggers` endpoints and a client-side derivation rule.
+- §4.1: domain models re-typed (`kyc_case_id`, epoch-second `Instant.ofEpochSecond`, `missingRequirements`, `reasonCodes`); timeline always synthesized; `KycMonitoringItem` documented as derived from schedule+triggers.
+- §4.2: repository comment corrected to the four real endpoints.
+- §5: rewritten with verified paths, JSON shapes, and error envelope.
+- §10: redaction path list corrected to `/v1/kyc/cases`, `/v1/kyc/monitoring/schedule`, `/v1/kyc/monitoring/triggers`.
+- §13: R-1 and R-2 marked RESOLVED with the verified outcomes.
+- §14: AC-2 (sort key/no target tier) and AC-3 (real enum) corrected.
+
+### Open assumptions
+
+- **Detail `404`** is not in the documented OpenAPI responses for `GET /v1/kyc/cases/{case_id}` (only `200`/`422`); the `NotFound` UI state relies on a runtime FastAPI 404 that we could not confirm from the sources. Verify against a live dev call during implementation.
+- **Monitoring inner-object fields** (`KycReviewSchedule`, `KycTriggerEvent`): the OpenAPI schemas type these as opaque `additionalProperties: true`; the field names/types used here come from the frontend `src/api/types.ts` typed view and are treated as the de-facto contract.
+- **Ownership of transport tickets** (AND-011 cookie jar, AND-012 CSRF, AND-013 401-refresh, AND-015/AND-018 result mapping, AND-016/AND-009 timeouts/backoff, AND-021 state composables, AND-116/AND-118 SWR cache) is asserted by the spec but those tickets are not in the provided sources — accepted as project-internal assumptions, not independently verifiable here.
+- **`intake_profile`, `version`, `files`, `submission`, `questionnaire`, `signature`** on `KycCaseOut` exist but are not consumed by this read-only status surface; ignoring them is a deliberate scope assumption.
+
+## 17. Test Plan
+
+Acceptance criteria referenced are from §14 (AC-1..AC-9). Test targets: **JVM** (local JVM/Robolectric, no device), **emulator** (headless AVD `test35`, API 35 x86_64), **device** (physical Samsung Galaxy A15 5G, SM-A156U, API 34 arm64-v8a). Contract tests use MockWebServer with fixtures mirroring the verified §5 shapes.
+
+- **TC-AND-329-01 — List happy path (contract/MockWebServer).** Target: JVM. Preconditions: MockWebServer enqueues a `KycCaseListEnvelope` with 3 `KycCaseOut` items (varying `created_at`, `status`). Steps: call `repo.refreshCases()` (or collect `observeCases()`). Expected: request path `GET /v1/kyc/cases`; `ApiResult.Success` with 3 `KycCaseSummary` mapped (`kyc_case_id`→`caseId`, epoch→`Instant`) and ordered by `createdAt` desc. Traces: AC-2.
+- **TC-AND-329-02 — Mapper: epoch + status + synthesized timeline (unit).** Target: JVM. Preconditions: a `KycCaseOut` fixture (`status=rejected`, `review.reason_codes=["doc_mismatch"]`, no history). Steps: map to `KycCaseDetail`. Expected: `created_at`/`updated_at` are `Instant.ofEpochSecond`; timeline synthesized (OPENED + DECISION) ascending by `at`; `reasonCodes` populated; "limited history" flagged. Traces: AC-1, AC-3.
+- **TC-AND-329-03 — Mapper: unknown/additive status token (unit).** Target: JVM. Preconditions: a case JSON with `status="some_new_state"`. Steps: map + present. Expected: no throw; presentation = non-silent "Status unavailable"; never blank. Traces: AC-3.
+- **TC-AND-329-04 — Detail happy path (contract/MockWebServer).** Target: JVM. Preconditions: enqueue `KycCaseEnvelope` `{case: KycCaseOut}` for `case_77`. Steps: `repo.getCase("case_77")`. Expected: path `GET /v1/kyc/cases/case_77`; `ApiResult.Success(KycCaseDetail)` with status + synthesized ordered timeline. Traces: AC-1.
+- **TC-AND-329-05 — Detail 404 / not-found (contract/MockWebServer).** Target: JVM. Preconditions: enqueue HTTP 404 (or 422) for an unknown id. Steps: `repo.getCase("nope")` then ViewModel maps. Expected: `ApiResult.Error`; `KycCaseDetailUiState.NotFound`. Note: 404 is an unverified-runtime assumption (§16#16) — also assert 422 → `Error(retryable=false)` does not crash. Traces: AC-5.
+- **TC-AND-329-06 — Monitoring derivation: schedule + triggers (contract/MockWebServer).** Target: JVM. Preconditions: enqueue `KycReviewScheduleEnvelope` (`schedule.status="needs_review"`, `case_id="case_77"`, `next_review_date` set) and `KycTriggerEventListEnvelope` with one event. Steps: `repo.getMonitoring()`. Expected: paths `GET /v1/kyc/monitoring/schedule` and `GET /v1/kyc/monitoring/triggers`; derives a `KycMonitoringItem` (caseId=`case_77`, dueAt from `next_review_date`). Also assert `schedule=null` + no events → empty list (no banner). Traces: AC-4.
+- **TC-AND-329-07 — List ViewModel state machine (unit).** Target: JVM. Preconditions: fake repo emitting `ApiResult`s. Steps/Expected: empty `items` → `Empty`; success → `Content` (sorted); network error w/ cache → `Content(isStale=true)`; network error w/o cache → `Offline`; HTTP 500 → `Error(retryable=true)`; refresh failure keeps existing `Content`. Traces: AC-5, AC-6.
+- **TC-AND-329-08 — Status + history render = backlog AC (Compose-UI).** Target: emulator (CI). Preconditions: `KycCaseDetailScreen` fed a `Content` state with status `under_review` and a 3-node synthesized timeline. Steps: assert status chip text + `contentDescription`; assert each event node (timestamp + message) present and in order. Expected: current status and ordered timeline render. Traces: AC-1, AC-2.
+- **TC-AND-329-09 — Status presentation by text-not-color + a11y (Compose-UI).** Target: emulator. Preconditions: parametrize all 7 statuses + one unknown token. Steps: assert each renders a distinct text label (not color only) and a `contentDescription`; merged-descendant semantics on timeline nodes; touch targets ≥48dp. Expected: passes for every value incl. "Status unavailable". Traces: AC-3, AC-9 (a11y).
+- **TC-AND-329-10 — Monitoring banner visibility + live region + action (Compose-UI).** Target: emulator. Preconditions: (a) non-empty monitoring item, (b) empty. Steps: assert banner shows only in (a), is announced as an assertive live region, and tap invokes the action callback with the right `KycMonitoringItem` (deep-link target). Expected: per FR-4. Traces: AC-4.
+- **TC-AND-329-11 — State surfaces + Empty CTA routing (Compose-UI).** Target: emulator. Preconditions: feed Loading / Empty / Error / Offline states. Steps: assert each renders the shared AND-021 composable; retry/refresh invoke ViewModel intents; Empty CTA routes to verification (AND-320). Expected: per FR-5/AC-5. Traces: AC-5.
+- **TC-AND-329-12 — Flaky-dev-host / offline + stale (integration).** Target: **device** (real radio toggling against the plaintext dev host `http://18.222.237.167:8000`; arm64/API-34 path). Preconditions: one successful list load cached, then airplane mode ON. Steps: trigger refresh; observe; restore network; refresh. Expected: with cache → last-known content + stale badge + retry (never cleared); with no cache + no network → `Offline`; recovery clears stale. Note: MUST run on the physical device to exercise real connectivity loss/cleartext transport (emulator network is too clean for the flaky-host case). Traces: AC-6.
+- **TC-AND-329-13 — Auth: 401 refresh-then-retry; no PII logged; read-only (integration + unit).** Target: JVM (MockWebServer for 401→refresh→retry; log capture) with a device smoke pass. Preconditions: MockWebServer returns 401 then 200 after a `/ui/session/refresh`; logcat/log sink captured. Steps: issue list fetch; inspect outbound verbs and logs. Expected: exactly one refresh + retry; on second 401 routes to login; **no POST/PUT/DELETE** issued by the screen; response bodies / `reason_codes` / monitoring `details` never appear in logs; analytics carry only status tokens/hashed ids. Traces: AC-7, AC-8.
+- **TC-AND-329-14 — i18n / RTL + relative-time formatting (Compose-UI).** Target: emulator. Preconditions: locale set to an RTL locale; cases with various `created_at`. Steps: render list + detail. Expected: client strings localized (no hardcoded UI strings), timeline connector mirrors in RTL, relative timestamps locale-formatted via `DateUtils`. Traces: AC-9 (i18n/a11y).
+
+### Coverage matrix
+
+| AC (§14) | Test case(s) |
+|---|---|
+| AC-1 (status + history render) | TC-02, TC-04, TC-08 |
+| AC-2 (list from GET /v1/kyc/cases, sort, nav) | TC-01, TC-08 |
+| AC-3 (status enum mapping, text-not-color, unknown) | TC-02, TC-03, TC-09 |
+| AC-4 (monitoring banner from schedule+triggers) | TC-06, TC-10 |
+| AC-5 (all states + NotFound) | TC-05, TC-07, TC-11 |
+| AC-6 (offline/stale, refresh never clears) | TC-07, TC-12 |
+| AC-7 (read-only, no mutations) | TC-13 |
+| AC-8 (no PII logged/sent; redacted analytics) | TC-13 |
+| AC-9 (build/lint/a11y/i18n/coverage) | TC-09, TC-14 (+ all contract/unit tests for coverage) |

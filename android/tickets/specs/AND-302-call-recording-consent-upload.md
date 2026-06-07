@@ -5,7 +5,8 @@ milestone: M7
 epic: E40
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-296, AND-129]
 blocks: []
 ---
@@ -47,12 +48,19 @@ recordings (separate M7 ticket), and storage retention policy (backend concern).
   request and confirm payload; it does **not** reimplement upload transport.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext,
   unreliable). OpenAPI at `/openapi.json`. Cookie-based session with `ui_csrf` echoed as
-  `X-CSRF-Token`; 401 triggers a single `POST /ui/session/refresh` then retry. Web
-  reference under `frontend/src/api/endpoints/*.ts`.
+  `X-CSRF-Token`; 401 triggers a single `POST /ui/session/refresh` then retry (verified in
+  `src/api/client.ts`). Web reference for this feature is the hook
+  `src/hooks/useCallRecording.ts` (the consent/upload protocol is implemented there, not in
+  `src/api/endpoints/*.ts`).
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Retrofit 2.11 / OkHttp 4.12 / Moshi
   1.15, Coroutines/Flow, DataStore for transient prefs, minSdk 24 / target 35, JDK 17.
-- Audio capture uses `MediaRecorder` (AAC in an `.m4a`/MPEG-4 container) writing to app
-  cache; no third-party media library is required for mono voice capture.
+- Capture uses `MediaRecorder` writing to app cache; no third-party media library is
+  required. **CORRECTION:** the backend presign endpoint constrains `content_type` to
+  `^video/(webm|mp4)$` (`RecordingUploadPresignIn`), so the uploaded artifact MUST be a
+  **video container** — use `MediaRecorder` with `setOutputFormat(MPEG_4)` producing an
+  `.mp4` advertised as `video/mp4`. The web client likewise records `video/webm`/`video/mp4`
+  (see `useCallRecording.ts`) and mixes both call streams. An audio-only `audio/mp4`/`.m4a`
+  artifact (as assumed in earlier drafts) would be rejected by the presign validator.
 
 ## 3. Functional Requirements
 
@@ -74,9 +82,15 @@ state becomes `granted` and the requester runs `start`. Capture must not begin b
 server confirms consent. If consent is `declined` or the request times out, no capture
 occurs and the UI returns to idle with a non-blocking message.
 
-FR-5. **Withdraw / stop.** Either party may withdraw consent mid-call (`POST .../consent`
-with `decision=withdraw`). On withdrawal the recorder stops within 500 ms, the partial
-file is **discarded**, and no upload is attempted.
+FR-5. **Withdraw / stop.** Either party may stop an in-progress recording mid-call; the
+recorder stops within 500 ms, the partial file is **discarded**, and no upload is attempted.
+**CORRECTION:** there is **no backend `withdraw` endpoint** (`POST .../recording/consent`
+takes no body and only means "accept"; no `decision=withdraw` exists). Stop is therefore
+**client-local** in v1: the stopping client tears down its own `MediaRecorder` and emits a
+`call.recording_stopped` signaling event (matching the web `useCallRecording` SSE
+`call.recording_stopped` handler) so the peer reflects the stop. Server-side revocation of
+consent is an open question for backend (see §13/§16). The web client also has no withdraw
+call — it only exposes `stopRecording()`, confirming this gap.
 
 FR-6. **Auto-stop on end.** When the call ends (any reason) with active recording, the
 recorder is finalized, the file flushed, and the recording transitions to
@@ -149,71 +163,114 @@ interface AudioRecorder {
 ```
 
 `MediaRecorder` config: `setAudioSource(MIC)`, `setOutputFormat(MPEG_4)`,
-`setAudioEncoder(AAC)`, single channel, 64 kbps. Output written to
-`cacheDir/recordings/<callId>.m4a`. On API < 26 the `MediaRecorder(Context)` constructor
-is unavailable; use the deprecated no-arg constructor (minSdk 24).
+`setAudioEncoder(AAC)`, single channel, 64 kbps. **Output MUST be a video container**
+(`video/mp4`) to satisfy the backend presign regex `^video/(webm|mp4)$`; write to
+`cacheDir/recordings/<callId>.mp4` and presign with `content_type = "video/mp4"`. (If only
+mic audio is captured the MPEG-4 file still validates as `video/mp4`; if video frames are
+also captured, add `setVideoSource`/`setVideoEncoder`. The exact field-side capture content
+is an open question — see §13.) On API < 26 the `MediaRecorder(Context)` constructor is
+unavailable; use the deprecated no-arg constructor (minSdk 24).
 
 ### Repository (core-data)
 
 ```kotlin
 interface CallRecordingRepository {
-    suspend fun requestConsent(callId: String): ApiResult<ConsentState>
-    suspend fun respondConsent(callId: String, decision: ConsentDecision): ApiResult<ConsentState>
-    suspend fun presign(callId: String, sizeBytes: Long): ApiResult<RecordingPresign>
-    suspend fun confirm(callId: String, recordingId: String, key: String): ApiResult<RecordingMeta>
+    // POST .../recording/request  → RecordingRequestOut
+    suspend fun requestRecording(callId: String): ApiResult<RecordingRequestOut>
+    // POST .../recording/consent  → RecordingConsentOut
+    suspend fun consent(callId: String): ApiResult<RecordingConsentOut>
+    // POST .../recording/decline  → RecordingDeclineOut ({ ok: true })
+    suspend fun decline(callId: String): ApiResult<RecordingDeclineOut>
+    // POST .../recording/upload/presign  body: { content_type, file_size_bytes }
+    suspend fun presign(callId: String, contentType: String, fileSizeBytes: Long): ApiResult<RecordingPresign>
+    // POST .../recording/upload/complete  body: { recording_id, duration_seconds }
+    suspend fun complete(callId: String, recordingId: String, durationSeconds: Double): ApiResult<RecordingMeta>
     fun consentEvents(callId: String): Flow<ConsentEvent>
     fun pendingUploads(): Flow<List<PendingRecording>>   // durable queue (Room)
 }
-
-enum class ConsentDecision { Request, Grant, Decline, Withdraw }
+// CORRECTION: request/consent/decline are three separate parameterless POSTs; there is no
+// `decision` field and no `withdraw` action (no backend endpoint exists for withdraw).
 ```
 
 Upload itself is delegated to AND-129's `Uploader`, fed by `presign()` output and
-completed via `confirm()`. The repository wraps the uploader's `Flow<UploadProgress>` and
-maps terminal states into `RecordingPhase`.
+completed via `complete()` (the backend op is `/upload/complete`, not "confirm"). The
+repository wraps the uploader's `Flow<UploadProgress>` and maps terminal states into
+`RecordingPhase`.
 
 ## 5. API Contract
 
 All endpoints are session-cookie authenticated; mutations send `X-CSRF-Token`
-(`ui_csrf`). Paths assume the call-recording surface under `/ui/calls`; confirm exact
-shapes against `/openapi.json` and `frontend/src/api/endpoints/calls.ts` during
-implementation, mapping any drift in a follow-up.
+(`ui_csrf`), verified against `src/api/client.ts`. **CORRECTION (verified against
+`openapi.index.txt` and `src/hooks/useCallRecording.ts`):** the call-recording surface
+lives under **`/messages/calls/{call_id}/recording/...`**, NOT `/ui/calls/...`. The
+consent protocol is **three distinct endpoints** (request / consent / decline) — there is
+no single `consent` endpoint that takes a `decision` field, and **there is no withdraw
+endpoint** anywhere in the backend (`grep withdraw` over `openapi.index.txt` returns only
+billing/license/appeals routes). See §13 and FR-5 for the implication. Upload uses
+**`/recording/upload/presign`** and **`/recording/upload/complete`** ("complete", not
+"confirm"). Timestamps in responses are **integer epoch** (e.g. `started_at`,
+`created_at`), not ISO strings.
 
-**Request / respond consent**
-`POST /ui/calls/{call_id}/recording/consent`
+**Request recording** (initiator)
+`POST /messages/calls/{call_id}/recording/request` — req: none; resp 200
+`RecordingRequestOut`:
 ```json
-// request
-{ "decision": "request" | "grant" | "decline" | "withdraw" }
-// response 200
-{ "recording_id": "rec_01H. . .", "consent": "pending" | "granted" | "declined" | "withdrawn",
-  "requested_by": "user_42", "participants": [{"user_id":"user_42","decision":"grant"}] }
+{ "recording_id": "rec_...", "status": "...", "created_at": 1749146531 }
+```
+
+**Consent** (peer accepts)
+`POST /messages/calls/{call_id}/recording/consent` — req: none; resp 200
+`RecordingConsentOut`:
+```json
+{ "recording_id": "rec_...", "status": "...", "started_at": 1749146540 }
+```
+
+**Decline** (peer rejects)
+`POST /messages/calls/{call_id}/recording/decline` — req: none; resp 200
+`RecordingDeclineOut`:
+```json
+{ "ok": true }
 ```
 
 **Presign upload** (after capture finalized)
-`POST /ui/calls/{call_id}/recording/{recording_id}/presign`
+`POST /messages/calls/{call_id}/recording/upload/presign` — req `RecordingUploadPresignIn`:
 ```json
 // request
-{ "content_type": "audio/mp4", "size_bytes": 184320, "duration_ms": 73400 }
-// response 200
-{ "upload_url": "https://. . ./put?X-Amz-Signature=. . .", "method": "PUT",
-  "headers": {"Content-Type": "audio/mp4"}, "key": "recordings/rec_01H.m4a", "expires_in": 900 }
+{ "content_type": "video/mp4", "file_size_bytes": 184320 }
+// response 200 (RecordingUploadPresignOut)
+{ "upload_url": "https://. . ./put?X-Amz-Signature=. . .", "recording_id": "rec_...",
+  "s3_key": "recordings/rec_....mp4", "expires_at": 1749147431 }
 ```
+**CORRECTION:** the presign request field is `file_size_bytes` (not `size_bytes`); there is
+**no** `duration_ms` field on presign. `content_type` is constrained by the backend to
+the regex `^video/(webm|mp4)$` — i.e. the artifact MUST be a **video** container
+(`video/webm` or `video/mp4`), NOT `audio/mp4`. The response returns `s3_key` (not `key`),
+`expires_at` epoch (not `expires_in`), and the canonical `recording_id`; it does **not**
+return a `method` or `headers` object — the client PUTs with `Content-Type` set to the
+same `content_type` it presigned with (per `useCallRecording.ts`).
 
-**PUT** to `upload_url` (storage, no app cookies) with the file body and echoed headers —
-handled by AND-129 uploader.
+**PUT** to `upload_url` (storage, no app cookies) with the file body and the
+`Content-Type` header — handled by AND-129 uploader.
 
-**Confirm**
-`POST /ui/calls/{call_id}/recording/{recording_id}/confirm`
+**Complete** (not "confirm")
+`POST /messages/calls/{call_id}/recording/upload/complete` — req `RecordingUploadCompleteIn`:
 ```json
 // request
-{ "key": "recordings/rec_01H.m4a", "size_bytes": 184320, "duration_ms": 73400 }
-// response 200
-{ "recording_id": "rec_01H. . .", "status": "ready", "created_at": "2026-06-05T18:22:11Z" }
+{ "recording_id": "rec_...", "duration_seconds": 73.4 }
+// response 200 (RecordingUploadCompleteOut)
+{ "recording_id": "rec_...", "status": "...", "download_url": null, "download_expires_at": null }
 ```
+**CORRECTION:** the complete request takes `recording_id` + `duration_seconds` (a float,
+seconds) — NOT `key`, `size_bytes`, or `duration_ms`. The response has `recording_id` +
+`status` (required) plus nullable `download_url`/`download_expires_at`; there is no
+`created_at` on this response.
 
-**Errors** follow the standard FastAPI `detail` shape (`string | [{msg}] | {code,...}`)
-mapped through the shared `AppError` mapper. Notable codes: `409 consent_not_granted`
-(presign before grant), `410 recording_expired`, `403 not_a_participant`.
+**Errors** follow the standard FastAPI `detail` shape. All recording endpoints document
+only `422 HTTPValidationError` in the OpenAPI spec (request-validation errors). **The
+codes `409 consent_not_granted`, `410 recording_expired`, and `403 not_a_participant`
+named in earlier drafts are NOT documented in the OpenAPI spec for these routes and are
+treated as Unverified-assumptions** (see §16); handle them defensively but do not rely on
+the exact `code` strings. Map all errors through the shared `AppError` mapper.
 
 ## 6. Data & State Management
 
@@ -246,7 +303,9 @@ mapped through the shared `AppError` mapper. Notable codes: `409 consent_not_gra
   re-auth.
 - **Upload failure:** terminal failure moves to `Failed` with a Retry action; the file
   and queue row are preserved. Retry reuses `recordingId`, re-presigning if the prior URL
-  expired (`410`).
+  expired (presign returns `expires_at` epoch; treat the URL as expired once `now >=
+  expires_at` or on a storage 403/expiry response — the `410 recording_expired` code is an
+  unverified assumption, see §16).
 - **Process death mid-upload:** on next launch, `pendingUploads()` rehydrates and offers
   resume; `Uploading` rows are reset to `PendingUpload`.
 - **Recorder errors:** `MediaRecorder` `onError`/`IllegalStateException` discards the
@@ -303,7 +362,9 @@ mapped through the shared `AppError` mapper. Notable codes: `409 consent_not_gra
     timeout paths leave `Idle`.
   - Withdrawal discards partial file and aborts upload.
   - State machine transitions for every `RecordingPhase` edge.
-  - `AppError` mapping for `409 consent_not_granted`, `410 recording_expired`, `403`.
+  - `AppError` mapping for `422` (documented) plus defensive handling of `409`/`410`/`403`
+    (these recording-specific codes are NOT documented in OpenAPI — see §16; assert on
+    generic status mapping, not on `code` strings).
 - **Upload (MockWebServer, reusing AND-129 harness):** presign→PUT→confirm happy path
   asserts progress 0→100 and `Uploaded`; PUT 5xx → `Failed` then Retry succeeds; cancel
   deletes file + queue row; expired URL (`410`) triggers re-presign.
@@ -337,8 +398,11 @@ mapped through the shared `AppError` mapper. Notable codes: `409 consent_not_gra
 - **Who captures audio (Q):** this spec assumes the **requester** device captures and
   uploads after both consent. If the backend expects both sides to upload (mixed
   server-side), `presign`/`confirm` must run per-participant — confirm with backend.
-- **Exact endpoint shapes (Risk):** `/ui/calls/.../recording/*` paths inferred; verify
-  against `/openapi.json` and `frontend/` before coding; map drift in a follow-up note.
+- **Exact endpoint shapes (RESOLVED in review):** earlier `/ui/calls/.../recording/*`
+  paths were wrong. Verified paths are `/messages/calls/{call_id}/recording/{request|
+  consent|decline}` and `/recording/upload/{presign|complete}` with the shapes in §5/§16.
+  Remaining gap: **no server-side withdraw/revoke endpoint exists** — stop is client-local
+  in v1; raise with backend if server-authoritative revocation is legally required.
 - **Telephony audio routing (Risk):** capturing mic during an active VoIP call may
   conflict with the call's audio stack from AND-296; validate `MediaRecorder` coexists
   with the call audio session on device.
@@ -347,17 +411,18 @@ mapped through the shared `AppError` mapper. Notable codes: `409 consent_not_gra
 
 ## 14. Acceptance Criteria
 
-AC-1. From a `Connected` call, tapping Record sends `decision=request`; UI shows
+AC-1. From a `Connected` call, tapping Record POSTs `/recording/request`; UI shows
 `RequestPending`; the peer receives a consent prompt with the requester's name.
-AC-2. Peer **Consent** → server returns `consent=granted` → capture starts; **Decline** →
-no capture, both sides return to idle with a message (FR-3, FR-4).
+AC-2. Peer **Consent** POSTs `/recording/consent` (200 `RecordingConsentOut` with
+`started_at`) → capture starts; **Decline** POSTs `/recording/decline` (200 `{ ok: true }`)
+→ no capture, both sides return to idle with a message (FR-3, FR-4).
 AC-3. Capture provably never begins before the server reports `granted` (asserted by
 unit test on the gate).
 AC-4. Withdrawal mid-recording stops capture ≤ 500 ms and discards the partial file with
 no upload (FR-5).
 AC-5. Call end with an active recording finalizes the file and transitions to
 `PendingUpload` (FR-6).
-AC-6. A finalized recording uploads end-to-end (presign→PUT→confirm) with visible 0→100%
+AC-6. A finalized recording uploads end-to-end (presign→PUT→complete) with visible 0→100%
 progress, verified with MockWebServer; Cancel and Retry work (FR-7, AND-129).
 AC-7. `RECORD_AUDIO` is requested just-in-time; denial cancels cleanly with rationale
 (FR-8).
@@ -380,3 +445,243 @@ cookies.
   instrumented smoke test of real capture.
 - Endpoint shapes reconciled against `/openapi.json`; any drift documented.
 - Lint/detekt/ktlint clean; PR reviewed and approved.
+
+## 16. Citations & Assumption Audit
+
+Each claim below is paired with a VERDICT (Verified / Corrected / Unverified-assumption)
+and an exact SOURCE pointer.
+
+1. **Consent surface lives under `/messages/calls/{call_id}/recording/...` (request /
+   consent / decline as three separate POSTs).** VERDICT: Corrected (draft used
+   `/ui/calls/.../recording/consent` with a single `decision` body). SOURCE: OpenAPI
+   `POST /messages/calls/{call_id}/recording/request`, `POST .../recording/consent`,
+   `POST .../recording/decline` (openapi.index.txt L295–297); frontend
+   `src/hooks/useCallRecording.ts: apiRequestRecording/apiConsentRecording/apiDeclineRecording`.
+2. **`RecordingRequestOut` = `{ recording_id, status, created_at:int }`.** VERDICT:
+   Verified. SOURCE: `openapi.pretty.json` components.schemas.RecordingRequestOut.
+3. **`RecordingConsentOut` = `{ recording_id, status, started_at:int }`.** VERDICT:
+   Verified. SOURCE: components.schemas.RecordingConsentOut.
+4. **`RecordingDeclineOut` = `{ ok:boolean=true }`.** VERDICT: Verified. SOURCE:
+   components.schemas.RecordingDeclineOut.
+5. **Consent/request/decline take NO request body.** VERDICT: Verified. SOURCE:
+   openapi.index.txt L295–297 (`req=` empty); `useCallRecording.ts` posts with no payload.
+6. **Presign path is `POST .../recording/upload/presign`; request =
+   `{ content_type, file_size_bytes }`.** VERDICT: Corrected (draft used `.../{recording_id}/presign`
+   and field `size_bytes` plus a `duration_ms`). SOURCE: OpenAPI
+   `POST /messages/calls/{call_id}/recording/upload/presign`, req=RecordingUploadPresignIn
+   (openapi.index.txt L299); components.schemas.RecordingUploadPresignIn (fields
+   `content_type`, `file_size_bytes` only); `useCallRecording.ts: apiPresignUpload`.
+7. **`content_type` is constrained to `^video/(webm|mp4)$` (video container required;
+   `audio/mp4` is rejected).** VERDICT: Corrected (draft assumed `audio/mp4` / `.m4a`).
+   SOURCE: components.schemas.RecordingUploadPresignIn.content_type.pattern; corroborated by
+   `useCallRecording.ts: selectMimeType()` returning `video/webm`/`video/mp4`.
+8. **`RecordingUploadPresignOut` = `{ upload_url, recording_id, s3_key, expires_at:int }`
+   (no `method`, no `headers`, no `expires_in`, key is `s3_key`).** VERDICT: Corrected.
+   SOURCE: components.schemas.RecordingUploadPresignOut.
+9. **Upload finalize is `POST .../recording/upload/complete` ("complete", not "confirm");
+   request = `{ recording_id, duration_seconds:float }`.** VERDICT: Corrected (draft used
+   `/confirm` with `{ key, size_bytes, duration_ms }`). SOURCE: OpenAPI
+   `POST /messages/calls/{call_id}/recording/upload/complete`, req=RecordingUploadCompleteIn
+   (openapi.index.txt L298); components.schemas.RecordingUploadCompleteIn;
+   `useCallRecording.ts: apiCompleteUpload`.
+10. **`RecordingUploadCompleteOut` = `{ recording_id, status, download_url?, download_expires_at? }`
+    (no `created_at`).** VERDICT: Corrected. SOURCE: components.schemas.RecordingUploadCompleteOut.
+11. **PUT to `upload_url` carries only `Content-Type` (the presigned content_type) and no
+    app cookies/CSRF.** VERDICT: Verified. SOURCE: `useCallRecording.ts: stopRecording()`
+    (plain `fetch(presignData.upload_url, { method:"PUT", headers:{ "Content-Type": mimeType } })`,
+    no credentials); reinforced by §8 cookie-less uploader requirement.
+12. **There is NO server-side withdraw/revoke endpoint.** VERDICT: Corrected (draft FR-5
+    posted `consent` with `decision=withdraw`). SOURCE: `grep withdraw openapi.index.txt`
+    returns only billing/license/appeals routes (L52, L1203, L1617, L2191); no recording
+    withdraw; `useCallRecording.ts` exposes only `stopRecording()` (client-local).
+13. **Auth: cookie session; mutations echo `ui_csrf` cookie as `X-CSRF-Token`.** VERDICT:
+    Verified. SOURCE: `src/api/client.ts` L167–171 (`getCookie("ui_csrf")` → `X-CSRF-Token`).
+14. **401 → single `POST /ui/session/refresh` then one retry; second failure logs out.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts: refreshSession()` L121–130 and 401 block
+    L194–237 (`refreshPromise` dedup, one retry, `logout("session_expired")`).
+15. **Consent events reach the peer via a push/signaling channel (web uses SSE
+    `messaging:call-event` with `call.recording_request` / `_accept` / `_decline` /
+    `_started` / `_stopped`).** VERDICT: Verified (web mechanism). SOURCE:
+    `src/hooks/useCallRecording.ts` L104–136. NOTE: Android delivery mechanism is owned by
+    AND-296 and is an Unverified-assumption here (see §13).
+16. **Web client records the REMOTE stream (mixing local+remote audio when both present),
+    not a mic-only artifact.** VERDICT: Verified. SOURCE: `useCallRecording.ts` L193–268.
+    Implication: "who captures / what is captured" remains an open question for Android
+    (see §13, audit item below).
+17. **`RecordingMetadataOut` (GET `.../recording`) fields incl. `mime_type`,
+    `duration_seconds:number`, `file_size_bytes`, epoch timestamps, `participants:[str]`.**
+    VERDICT: Verified (reference for the metadata model). SOURCE:
+    components.schemas.RecordingMetadataOut; OpenAPI GET
+    `/messages/calls/{call_id}/recording` (openapi.index.txt L294).
+18. **Error codes `409 consent_not_granted`, `410 recording_expired`,
+    `403 not_a_participant`.** VERDICT: Unverified-assumption. SOURCE: not present in OpenAPI
+    — all recording routes document only `200` + `422 HTTPValidationError`
+    (openapi.index.txt L294–299). No `code` strings appear in the schemas. Handle
+    defensively by HTTP status, do not assert on `code`.
+19. **`MediaRecorder` co-exists with the active VoIP call audio session (AND-296).**
+    VERDICT: Unverified-assumption. SOURCE: framework ref —
+    https://developer.android.com/reference/android/media/MediaRecorder and
+    https://developer.android.com/media/optimize/audio-focus ; must be validated on the
+    physical device (mic contention with the WebRTC/Telecom audio stack).
+20. **`RECORD_AUDIO` is a runtime (dangerous) permission requested just-in-time.** VERDICT:
+    Verified. SOURCE: framework ref —
+    https://developer.android.com/reference/android/Manifest.permission#RECORD_AUDIO and
+    https://developer.android.com/training/permissions/requesting .
+21. **API < 26: `MediaRecorder(Context)` ctor unavailable; use deprecated no-arg ctor
+    (minSdk 24).** VERDICT: Verified. SOURCE: framework ref —
+    https://developer.android.com/reference/android/media/MediaRecorder#MediaRecorder(android.content.Context)
+    (added in API 31; deprecated no-arg ctor otherwise).
+
+### Corrections made
+
+- §2/§4: capture artifact changed from `audio/mp4` `.m4a` to a **video container**
+  `video/mp4` `.mp4` (presign regex `^video/(webm|mp4)$`). [items 7, 8]
+- §5 fully rewritten: paths moved from `/ui/calls/...` to `/messages/calls/.../recording/...`;
+  single `consent{decision}` endpoint split into request/consent/decline; presign field
+  `size_bytes`→`file_size_bytes` and `duration_ms` removed; presign response `key`→`s3_key`,
+  `expires_in`→`expires_at`, `method`/`headers` removed; `/confirm`→`/upload/complete` with
+  body `{ recording_id, duration_seconds }`; timestamps are integer epoch. [items 1, 6, 8, 9, 10]
+- §4 repository interface and `ConsentDecision` enum: replaced single
+  `respondConsent(decision)` with `requestRecording()/consent()/decline()`; removed
+  `Withdraw`; updated `presign`/`complete` signatures. [items 1, 6, 9, 12]
+- FR-5 / §13 / AC: removed the nonexistent `decision=withdraw` POST; stop is now defined as
+  client-local with a `call.recording_stopped` signaling event. [item 12]
+- §5/§7/§11: error codes `409`/`410`/`403` reclassified as Unverified-assumptions; retry
+  expiry keyed off `expires_at`. [item 18]
+- §2: web reference corrected from `endpoints/calls.ts` (does not exist for this feature) to
+  `src/hooks/useCallRecording.ts`. [item 1]
+
+### Open assumptions
+
+- **Signaling transport on Android (consent + stop events).** Owned by AND-296; web uses
+  SSE. Mechanism (FCM push / poll / WS) unconfirmed — affects prompt/stop latency and the
+  30 s consent timeout. [item 15]
+- **Who captures and what is captured.** Web records the remote (or mixed) stream as
+  *video*; this spec assumes the requester device captures a `video/mp4`. Whether Android
+  should capture mic-only-in-mp4, remote stream, or both per-participant is unconfirmed with
+  backend. [items 7, 16]
+- **Server-side consent revocation.** No backend endpoint; legal sufficiency of a
+  client-local stop is unconfirmed. [item 12]
+- **Recording-specific error codes (`409`/`410`/`403`).** Not in OpenAPI; cannot be verified
+  without backend confirmation. [item 18]
+- **`MediaRecorder` vs. live VoIP audio-session contention.** Cannot be verified from
+  sources; requires on-device validation. [item 19]
+
+## 17. Test Plan
+
+IDs `TC-AND-302-NN`. "Physical device" = Samsung Galaxy A15 5G (SM-A156U, API 34, arm64,
+serial R5CX821TA9R). "Emulator" = AVD `test35` (API 35, x86_64). JVM = local Robolectric/unit.
+
+- **TC-AND-302-01 — Request recording happy path.** Type: contract/MockWebServer. Target:
+  JVM. Preconditions: `Connected` call, MockWebServer queues `POST .../recording/request` →
+  200 `{recording_id, status, created_at}`. Steps: call `requestRecording()`. Expected:
+  exactly one `POST /messages/calls/{id}/recording/request` with header `X-CSRF-Token`
+  present and empty body; phase → `RequestPending`; `recording_id` captured; Record control
+  disabled. Traces: AC-1, AC-9.
+
+- **TC-AND-302-02 — Peer consent starts gated capture.** Type: contract/MockWebServer +
+  unit. Target: JVM. Preconditions: incoming `call.recording_request` event delivered;
+  MockWebServer queues `POST .../recording/consent` → 200 `RecordingConsentOut`. Steps:
+  `respondToPrompt(consent=true)`. Expected: `POST .../recording/consent` (no body) sent;
+  only after the 200 does the gate permit `AudioRecorder.start()`; phase → `Recording`.
+  Traces: AC-2, AC-3.
+
+- **TC-AND-302-03 — Consent gate negative (never capture before server grant).** Type: unit.
+  Target: JVM. Preconditions: fake `AudioRecorder`; consent response delayed/withheld.
+  Steps: drive `requestRecording()` and assert recorder state while server response is
+  pending and after a `decline`. Expected: `AudioRecorder.start()` is NEVER invoked unless a
+  successful consent/started state is observed; gate lives in the repository, not the UI.
+  Traces: AC-3.
+
+- **TC-AND-302-04 — Decline path.** Type: contract/MockWebServer. Target: JVM.
+  Preconditions: prompt shown; MockWebServer queues `POST .../recording/decline` → 200
+  `{ ok: true }`. Steps: `respondToPrompt(consent=false)`. Expected: decline POST sent; no
+  capture; both phases → `Idle` with non-blocking message; no file created. Traces: AC-2.
+
+- **TC-AND-302-05 — Stop mid-recording discards partial, no upload.** Type: unit. Target:
+  JVM. Preconditions: phase `Recording` with a partial file present; fake recorder. Steps:
+  invoke local stop (the v1 client-local stop). Expected: `AudioRecorder.discard()` called
+  within 500 ms (assert via virtual clock), partial file deleted, NO presign/PUT/complete
+  request issued, a `call.recording_stopped` signaling event emitted. Traces: AC-4.
+
+- **TC-AND-302-06 — Auto-finalize on call end.** Type: unit. Target: JVM. Preconditions:
+  phase `Recording`. Steps: `onCallEnded(reason)` from the CallSession observer. Expected:
+  recorder finalized (`stop()` returns the file), phase → `PendingUpload`, a
+  `pending_recording` Room row inserted. Traces: AC-5.
+
+- **TC-AND-302-07 — Upload happy path presign→PUT→complete.** Type: contract/MockWebServer
+  (reusing AND-129 harness). Target: JVM. Preconditions: finalized `video/mp4` file;
+  MockWebServer queues presign 200 (`upload_url`,`recording_id`,`s3_key`,`expires_at`), the
+  storage PUT 200, and complete 200. Steps: run upload. Expected: presign body =
+  `{content_type:"video/mp4", file_size_bytes:<n>}`; PUT to `upload_url` carries
+  `Content-Type: video/mp4` and **no** Cookie/`X-CSRF-Token` header; complete body =
+  `{recording_id, duration_seconds:<float>}`; progress emits 0→100; phase → `Uploaded`; Room
+  row deleted; cache file deleted. Traces: AC-6, AC-9.
+
+- **TC-AND-302-08 — Upload failure then Retry succeeds; expiry re-presign.** Type:
+  contract/MockWebServer. Target: JVM. Preconditions: presign 200 with near-past
+  `expires_at`; first PUT → 5xx (or 403 expiry). Steps: run upload, observe `Failed`, tap
+  Retry. Expected: phase → `Failed` with file + Room row preserved; Retry re-presigns
+  (because `now >= expires_at`) reusing the same `recording_id`, re-PUTs, completes →
+  `Uploaded`. (Do not assert on a `410 code` string — unverified.) Traces: AC-6.
+
+- **TC-AND-302-09 — Cancel deletes file + queue row.** Type: contract/MockWebServer. Target:
+  JVM. Preconditions: phase `Uploading`. Steps: `cancelUpload()`. Expected: in-flight PUT
+  cancelled; phase → `Cancelled`; cache file deleted; `pending_recording` row removed; no
+  `complete` call issued. Traces: AC-6.
+
+- **TC-AND-302-10 — Process-death resume from durable queue.** Type: integration
+  (Room in-memory + restart). Target: JVM (Robolectric) for the queue logic; optionally
+  emulator for full Application restart. Preconditions: a row in state `Uploading`. Steps:
+  simulate process death, re-create the repository, call `pendingUploads()`. Expected:
+  `Uploading` rows reset to `PendingUpload` and surfaced as resumable; resume re-presigns and
+  completes. Traces: AC-8.
+
+- **TC-AND-302-11 — RECORD_AUDIO just-in-time grant + denial.** Type: instrumented/e2e.
+  Target: PHYSICAL DEVICE (real runtime-permission dialog and mic; must be physical because
+  it exercises the actual mic and permission grant, not a mock). Preconditions: permission
+  not yet granted. Steps: (a) grant on prompt → start capture; (b) revoke + retry, deny on
+  prompt. Expected: (a) capture starts and writes a non-empty `video/mp4`; (b) denial
+  cancels the request cleanly, shows rationale, no file, no crash. Also assert no background
+  capture after the call is foreground-dismissed. Traces: AC-7.
+
+- **TC-AND-302-12 — MediaRecorder coexists with live VoIP audio (real hardware).** Type:
+  instrumented/e2e. Target: PHYSICAL DEVICE (mic contention with the WebRTC/Telecom audio
+  session cannot be validated on the emulator; arm64/API-34 is the shipping target). Pre:
+  active AND-296 call with mic in use. Steps: grant consent, start capture during the call.
+  Expected: `MediaRecorder.start()` succeeds without `IllegalStateException`/audio-focus
+  loss; recorded file is non-empty and contains audio; call audio unaffected. On failure,
+  recorder error path discards the partial and surfaces a recoverable error. Traces: AC-4,
+  AC-5 (capture viability underpins these).
+
+- **TC-AND-302-13 — Consent dialog accessibility (TalkBack).** Type: Compose-UI +
+  instrumented. Target: emulator `test35` (TalkBack/semantics; physical device optional).
+  Preconditions: consent prompt shown. Steps: traverse with accessibility semantics
+  enabled. Expected: dialog takes focus; Consent/Decline have `contentDescription` and ≥48 dp
+  targets; recording state announced via `liveRegion`; REC indicator is icon+text (not
+  color-only); upload progress exposes `progressBarRangeInfo`; Cancel/Retry are
+  TalkBack-reachable. Traces: AC-2, AC-6, AC-7.
+
+- **TC-AND-302-14 — Flaky/offline dev-host resilience.** Type: contract/MockWebServer +
+  manual. Target: JVM for simulated faults; manual smoke against dev host
+  `http://18.222.237.167:8000`. Preconditions: MockWebServer set to drop/delay > 20 s and to
+  return 401 once. Steps: drive request/consent and an upload through (a) a network drop
+  (offline), (b) a 20 s timeout, (c) a single 401. Expected: (a) offline → `AppError(0)`
+  surfaced, no crash, state recoverable; (b) timeout respects the 20 s read/connect bound and
+  presign/complete retry with bounded backoff while consent mutations do NOT auto-retry;
+  (c) a single 401 triggers one `POST /ui/session/refresh` then one retry, second 401 →
+  re-auth. Traces: AC-9 (and resilience for AC-1/AC-6).
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|-----------|
+| AC-1 (request → RequestPending, peer prompt) | TC-01, TC-14 |
+| AC-2 (consent→capture / decline→idle) | TC-02, TC-04, TC-13 |
+| AC-3 (capture never before server grant) | TC-02, TC-03 |
+| AC-4 (stop ≤500 ms, discard, no upload) | TC-05, TC-12 |
+| AC-5 (call-end finalize → PendingUpload) | TC-06, TC-12 |
+| AC-6 (upload e2e + progress + cancel/retry) | TC-07, TC-08, TC-09, TC-13 |
+| AC-7 (RECORD_AUDIO JIT + denial) | TC-11, TC-13 |
+| AC-8 (process-death resume) | TC-10 |
+| AC-9 (CSRF on mutations; PUT no cookies) | TC-01, TC-07, TC-14 |
