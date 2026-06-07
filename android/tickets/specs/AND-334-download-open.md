@@ -5,7 +5,8 @@ milestone: M7
 epic: E43
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-331]
 blocks: []
 ---
@@ -51,19 +52,33 @@ user already has access to.
 - **Depends on AND-331 (Files API + DTOs):** provides the `FilesApi` Retrofit
   interface and `FileDto` / `FileDownloadDto` models. AND-334 adds the streaming
   download method and download-token call to that interface but reuses its DTOs.
-- **Web reference:** `frontend/src/api/endpoints/files.ts` (download URL
-  construction, `getDownloadUrl`/`downloadFile`) and `frontend/src/api/types.ts`
-  (file shape). Mirror its endpoint contract; the web app downloads via a
-  browser-resolved presigned/streamed URL with cookies.
-- **OpenAPI:** `http://18.222.237.167:8000/openapi.json` — confirm the exact
-  download route, whether it returns a 302 redirect to a presigned URL or a
-  direct streamed body, and `Range`/`Accept-Ranges` support at integration time
-  (see Open Questions).
-- **Auth context:** cookie-based session + `ui_csrf` cookie echoed as
-  `X-CSRF-Token`; persistent cookie jar (established by the auth epic). On 401
-  the OkHttp authenticator calls `POST /ui/session/refresh` once then retries —
-  the download client must reuse that same shared `OkHttpClient` so refresh and
-  cookies apply to byte transfers too.
+- **Web reference (CORRECTED):** `frontend/src/api/endpoints/files.ts` exposes
+  `downloadUrl(path)` returning `` `/v1/fs/download?path=${encodeURIComponent(path)}` ``
+  (NOT `getDownloadUrl`/`downloadFile`, which do not exist), and
+  `frontend/src/api/types.ts` `FileEntry` (NOT `FileDto`/`FileDownloadDto`). The
+  web app downloads by `fetch(downloadUrl, { credentials: "include" })` to that
+  URL (`frontend/src/pages/files/FilesPage.tsx: performDownload`), reads the full
+  body as a Blob, then triggers a synthetic `<a download>` click. There is **no
+  presigned-redirect / 302** path in the file API; presign exists only for
+  *upload* (`fsPresignUpload`). Note: the web client decrypts encrypted files
+  (`FileEntry.is_encrypted`) client-side after fetching — see §7/Open Questions.
+- **OpenAPI (CORRECTED):** route is `GET /v1/fs/download` with a **required
+  `path` query param** (string). Documented responses are `200`, `400`, `401`,
+  `403`, `422`, `429` — there is **no documented 404 and no documented 5xx**, and
+  the 200 response advertises only `application/json` content (no `Range`/
+  `Accept-Ranges`/`Content-Disposition`/`Content-Length` headers are specified).
+  Resumability and content-disposition behavior are therefore **unverified
+  assumptions** (see Open Questions OQ-1/OQ-2). Spec endpoints `GET /ui/files/{file_id}/download`
+  and the 302-presigned variant do **not exist** in the backend.
+- **Auth context (CORRECTED):** the shared transport sends
+  `Authorization: Bearer <accessToken>` (from the auth store) **and** the
+  `ui_csrf` cookie echoed as `X-CSRF-Token`, with cookies via
+  `credentials: include` (`frontend/src/api/client.ts`). The download endpoint
+  also accepts `X-API-Key` as an alternative credential (per OpenAPI), but the UI
+  path uses Bearer+cookie+CSRF. On 401 the client refreshes once via
+  `POST /ui/session/refresh` (returns `StatusResp`) then retries — the Android
+  download client must reuse the same shared `OkHttpClient` so refresh, Bearer,
+  cookies, and CSRF apply to byte transfers too.
 
 ## 3. Functional Requirements
 
@@ -155,8 +170,11 @@ interface DownloadRepository {
 ```
 
 `download()` flow logic:
-1. Resolve metadata (`FileDto` already in browse cache, or `GET /ui/files/{id}`)
-   to get `displayName`, `mimeType`, `etag/version`, `size`.
+1. Resolve metadata (`FileEntry` already in browse cache, or `GET /v1/fs/info?path=<path>`)
+   to get `name` (displayName), `content_type` (mimeType), `size`, and
+   `updated_at`. NOTE: `FileEntry` has **no `etag`/`version` field**; the cache
+   key derives from `path` + `updated_at` (see §6 correction). Files are
+   identified by their `path` string, not an opaque `fileId`.
 2. Cache hit check via `FileCacheStore.lookup(fileId, version)`; if hit emit
    `Success` immediately.
 3. Open streamed response (see §5). Write to `cacheDir/files/.tmp/<id>.part`.
@@ -251,56 +269,70 @@ class OpenWithLauncher @Inject constructor(@ApplicationContext ctx: Context) {
 
 ## 5. API Contract
 
-Authoritative route to be confirmed against `/openapi.json` at integration
-(Open Question OQ-1); design assumes the web reference shape in
-`frontend/src/api/endpoints/files.ts`.
+Route **verified** against OpenAPI and the web client. CORRECTION: the prior
+draft assumed `GET /ui/files/{file_id}/download`; the actual backend route is
+`GET /v1/fs/download` with a required `path` **query** parameter.
 
-**Streamed download (primary):**
+**Streamed download (primary, VERIFIED route/method/param):**
 
 ```
-GET /ui/files/{file_id}/download
-Headers: Cookie: <session>; X-CSRF-Token: <ui_csrf>
-         Range: bytes=<offset>-            (only on resume)
-→ 200 OK  (or 206 Partial Content on resume)
-   Content-Type: <file mime, e.g. application/pdf>
-   Content-Length: 1048576                  (may be absent)
-   Accept-Ranges: bytes                     (when resumable)
-   Content-Disposition: attachment; filename="report.pdf"
+GET /v1/fs/download?path=<url-encoded file path>
+Headers: Authorization: Bearer <accessToken>; Cookie: <session>;
+         X-CSRF-Token: <ui_csrf>
+         (alternatively X-API-Key: <key> — UI uses Bearer+cookie)
+         Range: bytes=<offset>-            (ASSUMPTION — see OQ-2; not in OpenAPI)
+→ 200 OK
+   Content-Type: <file mime, e.g. application/pdf>   (ASSUMPTION; OpenAPI
+                  declares application/json for 200 — verify at integration)
+   Content-Length: 1048576                  (ASSUMPTION — may be absent)
+   Accept-Ranges: bytes                     (ASSUMPTION — not documented)
+   Content-Disposition: attachment; filename="report.pdf"  (ASSUMPTION)
    <binary body stream>
 ```
 
-If the backend instead returns a presigned redirect:
+There is **NO presigned-redirect (302) download path** in the file API
+(verified: presign exists only for *upload*, `fsPresignUpload`). The previous
+302/S3 design has been removed. `followRedirects` may stay enabled defensively
+but no cross-host auth-drop handling is required for the documented contract.
 
-```
-GET /ui/files/{file_id}/download  → 302 Found
-   Location: https://<bucket>.s3.amazonaws.com/...&X-Amz-Signature=...
-```
+**Web client behavior (VERIFIED, `FilesPage.tsx: performDownload`):** the web
+app does `fetch("/v1/fs/download?path=...", { credentials: "include" })`, buffers
+the **entire body to a Blob**, and for `FileEntry.is_encrypted == true` decrypts
+client-side before saving. The web app does NOT chunk/stream progress and does
+NOT use `Range`. Android's streamed/progress/resume design is an Android-side
+enhancement, not a mirror of web — call this out so reviewers don't expect
+parity. **Encrypted files are unaddressed by this spec** (see OQ-4).
 
-The repository must `followRedirects(true)` and stream from the resolved
-`Location`. The presigned URL is unauthenticated, so cookies/CSRF are NOT sent
-on the redirected leg (OkHttp drops cross-host auth headers by default; verify).
-
-**Retrofit signature (added to AND-331's `FilesApi`):**
+**Retrofit signature (added to AND-331's `FilesApi`, CORRECTED):**
 
 ```kotlin
 @Streaming
-@GET("ui/files/{fileId}/download")
+@GET("v1/fs/download")
 suspend fun downloadFile(
-    @Path("fileId") fileId: String,
-    @Header("Range") range: String? = null,
+    @Query("path") path: String,
+    @Header("Range") range: String? = null,   // sent only if server honors ranges
 ): Response<ResponseBody>
 ```
 
-`@Streaming` is mandatory so Retrofit does not buffer the whole body.
+`@Streaming` is mandatory so Retrofit does not buffer the whole body. The path
+identifier is a **filesystem path string**, not an opaque id.
 
-**Error bodies** follow the project's FastAPI `detail` mapping (string |
-`[{msg}]` | `{code,...}`): `404` file not found / no access, `403` forbidden,
-`401` expired session (→ refresh+retry once via authenticator), `5xx`/timeout
-treated as retryable transport errors.
+**Error bodies (CORRECTED to documented shapes):** OpenAPI documents `400`,
+`401`, `403`, `422`, `429` for this route — **no 404 and no 5xx are documented**.
+Detail is the object form `{ "detail": { "code", "reason", ... } }` (e.g. `403`
+→ `code: api_key_scope_denied, required_scopes: ["filemanager:read"]`; `429`
+→ `code: api_limit_exceeded`; `400` → `code: api_key_dual_credential_conflict`).
+A missing/invalid path most likely returns `422 HTTPValidationError`
+(`detail: [{msg,...}]`) or `400`, NOT `404` — map "not found / no access" from
+`403`/`422`/`400` rather than `404`. `401` → refresh+retry once via authenticator;
+`429` is retryable with backoff (honor `Retry-After` if present); transport
+`IOException`/timeout treated as retryable (even though 5xx is undocumented,
+the flaky dev host can still produce them).
 
-Filename/MIME resolution precedence: `Content-Disposition` filename →
-`FileDto.name` from AND-331 → `fileId`; MIME: response `Content-Type` →
-`FileDto.contentType` → `MimeTypeMap` from extension → `application/octet-stream`.
+Filename/MIME resolution precedence: `Content-Disposition` filename (if present —
+ASSUMPTION) → `FileEntry.name` from AND-331 → last path segment; MIME: response
+`Content-Type` → `FileEntry.content_type` → `MimeTypeMap` from extension →
+`application/octet-stream`.
 
 ## 6. Data & State Management
 
@@ -325,8 +357,12 @@ not live in SQLite. LRU eviction sorts by `lastAccessEpochMs`, evicting until
 total ≤ 256 MB; an entry whose path has an active open `FileLock`/in-flight
 reference is skipped.
 
-Cache key = `fileId` + `version` (etag). A new version invalidates the old
-cached blob (deleted on next eviction pass / on overwrite).
+Cache key = `path` + a version token. CORRECTION: `FileEntry` exposes **no
+`etag`** field, so the version token is derived from `updated_at` (and `size` as
+a tiebreaker); a stable server `ETag` is an unverified assumption (OQ-2). A
+changed `updated_at` invalidates the old cached blob (deleted on next eviction
+pass / on overwrite). (The `fileId`/`version` naming in §4.2's `CachedFile` is
+retained for code shape but is populated from `path`/`updated_at`.)
 
 Progress is held only in the ViewModel `StateFlow`; it is not persisted. A
 download interrupted by process death is restarted (resumed from `.part` if
@@ -450,16 +486,24 @@ Backlog acceptance "Download + open work" is verified by the end-to-end
 
 ## 13. Risks & Open Questions
 
-- **OQ-1:** Exact download route and whether the backend streams the body
-  directly or returns a 302 to a presigned S3 URL — confirm via `/openapi.json`
-  and `frontend/src/api/endpoints/files.ts`. Affects redirect handling and
-  whether auth headers ride the byte transfer.
+- **OQ-1 (RESOLVED):** Download route is `GET /v1/fs/download?path=<path>`
+  (verified in OpenAPI + `files.ts: downloadUrl`). There is **no** 302/presigned
+  download path; the body is returned directly. Remaining unknown: whether the
+  live server sets a binary `Content-Type` (OpenAPI declares `application/json`
+  for 200) and a `Content-Disposition` filename — verify at integration.
 - **OQ-2:** Does the server send `Accept-Ranges: bytes` and a stable `ETag`/
   checksum? Determines resumability (FR-7) and integrity validation. If absent,
   downloads restart on retry.
 - **OQ-3:** Is there a server-side max file size / does the dev host reliably
   send `Content-Length`? Drives determinate-vs-indeterminate progress and the
   256 MB cache bound default.
+- **OQ-4 (NEW, from review):** The web client decrypts files where
+  `FileEntry.is_encrypted` is true **client-side** after download
+  (`FilesPage.tsx`, with `enc_metadata`/`FileEncryptionMetadata`). This spec does
+  NOT cover client-side decryption. Decide whether Android must (a) refuse to
+  open encrypted files for now, (b) reach decryption parity, or (c) defer to a
+  follow-up ticket. Until resolved, opening an encrypted blob would hand the
+  external app ciphertext.
 - **Risk:** plaintext HTTP dev host can stall mid-stream; mitigated by 20s
   socket timeouts + resumable retry, but very large files on flaky links may
   repeatedly fail — surface a clear retryable error.
@@ -519,5 +563,256 @@ MockWebServer-download → cache → open-with `Intents` assertion.
 - No `file://` exposure; security review of cleartext scope, FileProvider grants,
   logout cache-clear, and log/analytics redaction is complete (§8).
 - Strings externalized and accessibility annotations applied (§9).
-- ktlint/detekt clean; PR reviewed and merged to `android-port`; OQ-1–OQ-3
+- ktlint/detekt clean; PR reviewed and merged to `android-port`; OQ-1–OQ-4
   resolved against the live backend or filed as follow-ups with safe defaults.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Download route is `GET /v1/fs/download` with a required `path` query param.**
+   VERDICT: Corrected (spec said `GET /ui/files/{file_id}/download`).
+   SOURCE: OpenAPI `GET /v1/fs/download` (op `download_fs_file_v1_fs_download_get`,
+   `params=path,X-API-Key`); `src/api/endpoints/files.ts: downloadUrl`.
+2. **HTTP method is GET and the body is returned directly (no 302/presigned
+   redirect).** VERDICT: Corrected (spec offered a 302→S3 presigned variant).
+   SOURCE: OpenAPI `GET /v1/fs/download` (single 200 response, no redirect);
+   presign exists only for upload — `src/api/endpoints/files.ts: fsPresignUpload`.
+3. **File identifier is a path string, not an opaque `fileId`.**
+   VERDICT: Corrected. SOURCE: `src/api/types.ts: FileEntry` (has `path`, `name`,
+   `type`, `size`, `content_type`, `updated_at`; no `id`); OpenAPI `path` param.
+4. **DTO is `FileEntry` (not `FileDto`/`FileDownloadDto`); metadata via
+   `GET /v1/fs/info?path=`.** VERDICT: Corrected. SOURCE: `src/api/types.ts:
+   FileEntry`, `FileListResp`; `src/api/endpoints/files.ts: getFileInfo`
+   (`/v1/fs/info`); OpenAPI `GET /v1/fs/info`.
+5. **Web reference exports `downloadUrl(path)`, not `getDownloadUrl`/`downloadFile`.**
+   VERDICT: Corrected. SOURCE: `src/api/endpoints/files.ts: downloadUrl`
+   (grep for `getDownloadUrl`/`downloadFile` in `src/api/` returns nothing).
+6. **Auth is `Authorization: Bearer <accessToken>` + `X-CSRF-Token` (from
+   `ui_csrf` cookie) + cookies (`credentials: include`); `X-API-Key` is an
+   accepted alternative.** VERDICT: Corrected (spec said cookie-only; missed
+   Bearer). SOURCE: `src/api/client.ts` (sets `Authorization: Bearer`, reads
+   `ui_csrf` → `X-CSRF-Token`, `credentials: "include"`); OpenAPI `X-API-Key`
+   header param on the route.
+7. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token` header.** VERDICT: Verified.
+   SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+8. **On 401 the client refreshes once via `POST /ui/session/refresh`, then
+   retries; on refresh failure it logs out.** VERDICT: Verified.
+   SOURCE: `src/api/client.ts: refreshSession`/401 branch;
+   `src/api/endpoints/auth.ts: refreshSession` (`POST /ui/session/refresh`).
+9. **Documented error statuses are 400/401/403/422/429; NO 404 and NO 5xx are
+   documented.** VERDICT: Corrected (spec mapped a `404` not-found and `5xx`).
+   SOURCE: OpenAPI `GET /v1/fs/download` (`resp=200;422:HTTPValidationError;400;401;403;429`).
+10. **Error detail uses object form `{detail:{code,reason,...}}` (e.g. 403
+    `api_key_scope_denied` + `required_scopes:["filemanager:read"]`, 429
+    `api_limit_exceeded`, 400 `api_key_dual_credential_conflict`); validation
+    errors use `HTTPValidationError` (`detail:[{msg,...}]`).** VERDICT: Verified.
+    SOURCE: OpenAPI `GET /v1/fs/download` response examples;
+    `src/api/client.ts: normalizeErrorDetail` (handles string | `[{msg}]` | `{code}`).
+11. **Web client buffers the full body to a Blob and triggers `<a download>`; it
+    does not stream progress or use `Range`.** VERDICT: Verified.
+    SOURCE: `src/pages/files/FilesPage.tsx: performDownload`
+    (`fetch(downloadUrl,{credentials:"include"})` → `resp.blob()` → anchor click).
+12. **Encrypted files (`FileEntry.is_encrypted`) are decrypted client-side by the
+    web app.** VERDICT: Verified (and unhandled by this spec — see OQ-4).
+    SOURCE: `src/pages/files/FilesPage.tsx: performDownload`;
+    `src/api/types.ts: FileEntry.is_encrypted`/`enc_metadata`/`FileEncryptionMetadata`.
+13. **`Range`/`Accept-Ranges`/`Content-Disposition`/`Content-Length` support and
+    a binary `Content-Type` on the download response.** VERDICT:
+    Unverified-assumption (OpenAPI 200 declares only `application/json` content
+    and specifies no response headers; web client never uses ranges).
+    SOURCE: OpenAPI `GET /v1/fs/download` 200 (no headers/`application/octet-stream`).
+14. **Stable server `ETag`/checksum usable as a cache-version token.** VERDICT:
+    Unverified-assumption — `FileEntry` exposes no `etag`; version derived from
+    `updated_at`. SOURCE: `src/api/types.ts: FileEntry`.
+15. **`FileProvider` content-URI sharing with `FLAG_GRANT_READ_URI_PERMISSION`;
+    raw `file://` URIs throw `FileUriExposedException`.** VERDICT: Verified
+    (framework). SOURCE (framework ref):
+    https://developer.android.com/reference/androidx/core/content/FileProvider ,
+    https://developer.android.com/reference/android/os/FileUriExposedException .
+16. **`Intent.ACTION_VIEW`/`Intent.createChooser` open-with; `ACTION_SEND`
+    fallback.** VERDICT: Verified (framework). SOURCE (framework ref):
+    https://developer.android.com/training/sharing/send ,
+    https://developer.android.com/reference/android/content/Intent#ACTION_VIEW .
+17. **Public "Save to Downloads" via MediaStore on Android 10+ needs no storage
+    permission; `WRITE_EXTERNAL_STORAGE` only on API ≤ 28.** VERDICT: Verified
+    (framework). SOURCE (framework ref):
+    https://developer.android.com/training/data-storage/shared/media .
+18. **OkHttp `@Streaming` + `ResponseBody.source()` streaming and per-call
+    timeout override.** VERDICT: Verified (framework). SOURCE (framework ref):
+    https://square.github.io/retrofit/2.x/retrofit/retrofit2/http/Streaming.html ,
+    https://square.github.io/okhttp/recipes/#timeouts-kt-java .
+
+### Corrections made
+
+- §2, §5, Retrofit signature: route corrected from `GET /ui/files/{file_id}/download`
+  to `GET /v1/fs/download?path=<path>` (query param; `@Query("path")`).
+- §2/§5: removed the 302/presigned-S3 download variant (no such path; presign is
+  upload-only).
+- §2/§4.2/§5/§6: `FileDto`/`FileDownloadDto` → `FileEntry`; identifier `fileId` →
+  `path`; metadata fetch `GET /ui/files/{id}` → `GET /v1/fs/info?path=`.
+- §2: web export names corrected (`getDownloadUrl`/`downloadFile` →
+  `downloadUrl`); web download behavior documented (Blob buffer, not streamed).
+- §2: auth corrected to include `Authorization: Bearer` (plus cookie + CSRF) and
+  the `X-API-Key` alternative.
+- §5: error mapping corrected to documented statuses (400/401/403/422/429); the
+  non-existent `404`/`5xx` mappings reframed — treat not-found/no-access as
+  403/422/400 and keep transport timeout/IOException as retryable.
+- §6: cache version token derived from `updated_at` (no `etag` field exists).
+- §13: OQ-1 marked resolved; OQ-4 (client-side decryption gap) added.
+
+### Open assumptions
+
+- Response headers `Content-Length`, `Content-Disposition`, `Accept-Ranges`, and
+  a binary `Content-Type` are assumed but NOT in the OpenAPI (200 declares
+  `application/json`, no headers). Why unverifiable: only resolvable by hitting
+  the live dev host with a real file; the static spec does not describe them.
+- `Range`/206 resumability (FR-7) is unverified for the same reason; if the
+  server ignores `Range`, downloads restart from 0.
+- A stable `ETag`/checksum for integrity + cache versioning is unverified;
+  `FileEntry` has none, so `updated_at` is the fallback version token.
+- 5xx handling: server 5xx is undocumented for this route but retained as a
+  retryable case because the flaky plaintext dev host can still emit transport
+  failures/timeouts.
+- Client-side decryption of `is_encrypted` files (OQ-4) is out of scope here;
+  behavior for encrypted files is an open product decision.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** =
+headless emulator AVD `test35` (x86_64, Android 15/API 35); **deviceA15** =
+physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a, serial
+R5CX821TA9R). Most cases here are device-agnostic; the few requiring real
+open-with app resolution / OEM chooser behavior are flagged for **deviceA15**.
+
+- **TC-AND-334-01** — Happy-path streamed download → cache → Success.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer serves
+  a known binary body for `GET /v1/fs/download?path=/docs/report.pdf` with
+  `Content-Type: application/pdf` and `Content-Length`. Steps: collect
+  `repo.download("/docs/report.pdf")`. Expected: emits `InProgress` then
+  `Success(CachedFile)` with `mimeType=application/pdf`, `sizeBytes` == body
+  length, `displayName` resolved (Content-Disposition → name → last segment), and
+  bytes on disk equal the served body. Verify the request used `@Query("path")`
+  (URL `/v1/fs/download?path=%2Fdocs%2Freport.pdf`) and carried
+  `Authorization: Bearer`, `X-CSRF-Token`, cookie. Traces: AC-1, AC-9.
+
+- **TC-AND-334-02** — Indeterminate progress when `Content-Length` absent.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: server omits
+  `Content-Length`. Steps: collect the flow. Expected: `InProgress.totalBytes ==
+  null` and `fraction == null` throughout; final `Success` with correct on-disk
+  size. Traces: AC-1.
+
+- **TC-AND-334-03** — Cache hit performs no network request (incl. offline).
+  Type: contract/MockWebServer + unit. Target: JVM. Preconditions: file already
+  cached for current version token (`path` + `updated_at`); MockWebServer enqueues
+  NO response (or connectivity reports offline). Steps: call `repo.cached(path)`
+  then `repo.download(path)`. Expected: immediate `Success` from cache;
+  `mockWebServer.requestCount` unchanged (zero new requests). Traces: AC-3, AC-6.
+
+- **TC-AND-334-04** — Offline with no cache → retryable error.
+  Type: unit. Target: JVM. Preconditions: connectivity offline, file not cached.
+  Steps: collect the flow. Expected: `Error(retryable=true)` with "You're offline"
+  message; no `.part` left behind. Traces: AC-3, AC-5.
+
+- **TC-AND-334-05** — Auth/error mapping for documented statuses.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: server returns each
+  of 403 (`{detail:{code:"api_key_scope_denied",required_scopes:["filemanager:read"]}}`),
+  422 (`HTTPValidationError` `{detail:[{msg,...}]}`), 400, 429
+  (`{detail:{code:"api_limit_exceeded"}}`). Steps: collect per case. Expected:
+  403/422/400 → `Error(retryable=false)` with a normalized message (object
+  `code`/`msg` parsed like `normalizeErrorDetail`); 429 → `Error(retryable=true)`,
+  honoring `Retry-After` when present. NO assumption of a 404 path. Traces: AC-5.
+
+- **TC-AND-334-06** — 401 triggers exactly one `/ui/session/refresh` + retry.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: download returns 401
+  once; `POST /ui/session/refresh` returns 200 (`StatusResp`); retried download
+  returns 200 body. Steps: collect the flow through the shared OkHttp
+  authenticator. Expected: exactly one refresh call, one download retry, terminal
+  `Success`; if refresh returns non-2xx → `Error(retryable=false)` and re-auth
+  routing, with NO second refresh attempt. Traces: AC-5.
+
+- **TC-AND-334-07** — Resume from `.part` via `Range` (when server is resumable).
+  Type: contract/MockWebServer. Target: JVM. Preconditions: server advertises
+  `Accept-Ranges: bytes`; first attempt is cut off mid-body, leaving `<id>.part`;
+  retry sends `Range: bytes=<offset>-` and server replies `206 Partial Content`.
+  Steps: simulate interruption then retry. Expected: `.part` reused (request
+  carried correct `Range`), appended bytes complete the file, final bytes equal
+  the full reference. Marked ASSUMPTION-dependent (OQ-2): if server lacks
+  `Accept-Ranges`, a sibling assertion verifies restart-from-0. Traces: AC-4.
+
+- **TC-AND-334-08** — Cancellation tears down the call and cleans up.
+  Type: unit/coroutines. Target: JVM. Preconditions: a slow MockWebServer body.
+  Steps: cancel the collecting scope mid-stream. Expected: `Cancelled` emitted,
+  the HTTP call is cancelled, and `.part` is deleted when non-resumable / retained
+  when resumable (per FR-7). Traces: AC-4.
+
+- **TC-AND-334-09** — Integrity: Content-Length mismatch → retryable error.
+  Type: contract/MockWebServer. Target: JVM. Preconditions: server declares
+  `Content-Length: N` but sends fewer bytes. Steps: collect the flow. Expected:
+  `Error(retryable=true)`, partial blob discarded, final cache unchanged.
+  Traces: AC-1, AC-5.
+
+- **TC-AND-334-10** — LRU eviction respects 256 MB bound and skips in-use entry.
+  Type: unit. Target: JVM. Preconditions: cache pre-populated past the bound;
+  one entry flagged as actively-open. Steps: trigger an eviction pass; also store
+  a new version of an existing `path`. Expected: total ≤ 256 MB after eviction,
+  least-recently-accessed evicted first, the in-use entry is never deleted, and a
+  changed `updated_at` invalidates the stale blob. Traces: AC-6.
+
+- **TC-AND-334-11** — FileProvider content URI + ACTION_VIEW grant (no `file://`).
+  Type: instrumented. Target: emu35 (device-agnostic; runs on deviceA15 too).
+  Preconditions: a cached file under `cacheDir/files/`. Steps: build the open
+  intent via `OpenWithLauncher`; capture with Espresso-Intents (`Intents.intended`)
+  without launching a real app. Expected: data URI is a `content://
+  com.testlogon.android.fileprovider/...` URI (NOT `file://`), type == the file's
+  MIME, and `FLAG_GRANT_READ_URI_PERMISSION` is set; no `FileUriExposedException`.
+  Traces: AC-2, AC-8.
+
+- **TC-AND-334-12** — Real open-with resolution / chooser + no-app fallback.
+  Type: instrumented/e2e (manual confirmation of chooser UI). Target:
+  **deviceA15 (MUST)** — needs real installed handler apps and OEM chooser
+  behavior the emulator lacks. Preconditions: a PDF cached (a real viewer
+  installed) and a file with an unhandleable MIME. Steps: open each. Expected:
+  PDF resolves to an external viewer via chooser; unhandleable MIME shows the
+  `ACTION_SEND` fallback / "No app can open this file" message; `Success` is still
+  emitted in the no-app case. Traces: AC-2.
+
+- **TC-AND-334-13** — "Save to Downloads" via MediaStore is readable back.
+  Type: instrumented. Target: emu35 for API 35 path; **deviceA15 (MUST)** for the
+  API ≤ 28 `WRITE_EXTERNAL_STORAGE` runtime-permission branch and the API-34
+  MediaStore behavior. Preconditions: a cached file. Steps: invoke
+  `saveToDownloads(path)`; re-open the MediaStore `Downloads` URI. Expected: file
+  appears in public `Downloads` and its bytes read back equal the cached blob; on
+  API ≤ 28, the permission request is exercised. Traces: AC-7.
+
+- **TC-AND-334-14** — Secret redaction in logs/analytics.
+  Type: unit. Target: JVM. Preconditions: a fake logger/analytics sink; a download
+  carrying cookie + `X-CSRF-Token` + Bearer. Steps: run a download lifecycle and
+  an error case; capture all emitted log lines and analytics payloads. Expected:
+  no cookie, CSRF token, Bearer token, or any URL query (the `path` carries no
+  secret, but presigned URLs—if ever introduced—must not log); analytics use a
+  hashed `fileId` and no filenames; no raw bytes. Traces: AC-8.
+
+- **TC-AND-334-15** — Compose UI state rendering + Cancel wiring + a11y.
+  Type: Compose-UI. Target: emu35. Preconditions: `FileActionsViewModel` driven
+  through `Idle → InProgress(determinate) → InProgress(indeterminate) →
+  Success / Error / Cancelled`. Steps: render each state; tap Cancel. Expected:
+  determinate `LinearProgressIndicator` exposes `progressBarRangeInfo` semantics
+  and a "Downloading <name>, NN percent" contentDescription; indeterminate when
+  `fraction==null`; Cancel invokes `viewModel.cancel()`; controls have
+  contentDescriptions and ≥ 48 dp targets; terminal states announced via
+  Snackbar/live region. Traces: AC-1, AC-4, plus §9 accessibility.
+
+### Coverage matrix (section-14 acceptance criteria → test cases)
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (progress determinate/indeterminate to cache) | TC-01, TC-02, TC-09, TC-15 |
+| AC-2 (open-with via FileProvider/ACTION_VIEW + chooser/SEND fallback) | TC-11, TC-12 |
+| AC-3 (second open = no network, incl. offline) | TC-03, TC-04 |
+| AC-4 (cancellation cleanup / resume retention) | TC-07, TC-08, TC-15 |
+| AC-5 (error mapping: 403/422/400 non-retryable, 429/timeout retryable, one 401 refresh) | TC-04, TC-05, TC-06, TC-09 |
+| AC-6 (256 MB LRU bound, no delete of in-use, version invalidation) | TC-03, TC-10 |
+| AC-7 ("Save to Downloads" via MediaStore, readable) | TC-13 |
+| AC-8 (no `file://`; secrets never logged/analytics) | TC-11, TC-14 |
+| AC-9 (unit + instrumented incl. e2e download→cache→open-with) | TC-01, TC-03, TC-11 |

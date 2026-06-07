@@ -5,9 +5,10 @@ milestone: M7
 epic: E43
 priority: P1
 size: M
-status: draft
 depends_on: [AND-331]
 blocks: [AND-332, AND-333, AND-334, AND-338]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-337 — Files ViewModels
@@ -41,13 +42,18 @@ upload transfer engine and download/open intents beyond their ViewModel entry po
   `FilesRepository` interface in `core-data`. This ticket assumes those types exist and
   consumes them; if a repository method named here is not yet present, it is added in the
   AND-331/AND-333/AND-334 surface, not invented here.
-- Web reference: `frontend/src/api/endpoints/files.ts` (browse/CRUD/search) and shared
-  types in `frontend/src/api/types.ts`. The Android paging/sort/search semantics mirror
-  the web list semantics.
+- Web reference: `src/api/endpoints/files.ts` (browse/CRUD/search) and shared
+  types in `src/api/types.ts`. The Android paging/sort/search semantics mirror
+  the web list semantics. **CORRECTION:** the real backend filesystem API is **path-based**
+  under `/v1/fs/*`, not the `/ui/files` folder-id/cursor model previously assumed here. Nodes
+  are identified by their `path` string; there is **no `id` field**. See §5 for the corrected
+  contract and the §16 audit.
 - Architecture: ViewModels expose `StateFlow<UiState>`; repositories return typed
   `ApiResult<T>`; FastAPI `detail` is mapped to `AppError` upstream. Cookie-based session
   with single `POST /ui/session/refresh` on 401 is handled in the OkHttp authenticator
-  (core-network), transparent to this layer.
+  (core-network), transparent to this layer. (Verified against `src/api/client.ts`: refresh
+  once via `POST /ui/session/refresh`, then retry; second 401 logs out. Note the web client
+  also sends `Authorization: Bearer <accessToken>` alongside cookies — see §8/§16.)
 - Backend is plaintext HTTP on an unreliable dev host (`http://18.222.237.167:8000`):
   ~20s timeouts, bounded backoff retry for idempotent GETs only, offline/stale UI states.
 
@@ -58,19 +64,29 @@ breadcrumb trail, and a paged stream of that folder's children. Navigating into 
 or up the breadcrumb re-targets the paged stream.
 
 FR-2. **Search.** A debounced (300ms) free-text query filters the listing server-side via
-the search endpoint. An empty query reverts to plain folder browse. Search is scoped to
-the current folder unless `searchAllFolders` is enabled in state.
+the search endpoint. An empty query reverts to plain folder browse. **CORRECTION:** the
+backend search is **global (not folder-scoped) and not paged**. Two modes exist:
+name/prefix search via `GET /v1/fs/search?prefix={q}&limit={n}` and full-text content search
+via `GET /v1/fs/search-text?q={q}&limit={n}`; both return `{ results: FileEntry[] }` with no
+cursor. The previously-assumed `searchAllFolders` per-folder flag has **no backend support**
+and is dropped; `searchMode` (NAME | CONTENT) replaces it, mirroring the web reference.
 
-FR-3. **Sort.** The list supports sort by `NAME`, `MODIFIED`, `SIZE`, `KIND`, each
-ascending/descending. Changing sort invalidates and re-pages without losing the current
-folder/query.
+FR-3. **Sort.** The list supports server-side sort, each ascending/descending. **CORRECTION:**
+the backend `GET /v1/fs/list` `sort_by` accepts only `name | updated | size` (regex
+`^(name|updated|size)$`) and `sort_dir` only `asc | desc`. There is **no `KIND` sort** and
+"modified" maps to the wire value `updated`. The `FileSortField` enum is therefore
+`NAME, UPDATED, SIZE` (KIND removed). Changing sort invalidates and re-pages without losing
+the current folder/query.
 
 FR-4. **Refresh.** A pull-to-refresh / manual refresh intent invalidates the `PagingSource`
 and re-fetches page 1, surfacing a `isRefreshing` flag distinct from initial load.
 
-FR-5. **Selection.** Multi-select mode tracks a `Set<String>` of selected file ids for
+FR-5. **Selection.** Multi-select mode tracks a `Set<String>` of selected **file paths**
+(not ids — the system has no ids; the web app keys `selectedKeys` by `FileEntry.path`) for
 batch actions (delete, move, share). Selection survives sort/search changes for still-visible
-items and is cleared on folder navigation.
+items and is cleared on folder navigation. **NOTE:** batch delete/move have **no batch
+endpoint**; the web reference iterates client-side calling the single-item endpoints per
+selected path (see §5/§7).
 
 FR-6. **CRUD intents.** Create folder, rename, delete (single + batch), and move emit
 through the ViewModel, call the repository, and on success invalidate the relevant paging
@@ -123,14 +139,18 @@ class FilesViewModel @Inject constructor(
 }
 ```
 
-`ListKey` is `data class ListKey(folderId: String?, query: String, sort: FileSort)`.
-`pagerFor` builds a `Pager(PagingConfig(pageSize = 30, prefetchDistance = 10,
-initialLoadSize = 30, enablePlaceholders = false)) { FilesPagingSource(repo, key, io) }`.
+`ListKey` is `data class ListKey(folderPath: String, query: String, searchMode: SearchMode,
+sort: FileSort)` (**CORRECTION:** `folderPath: String` keyed by path with `"/"` as root, not a
+nullable `folderId`). `pagerFor` builds a `Pager(PagingConfig(pageSize = 50,
+prefetchDistance = 10, initialLoadSize = 50, enablePlaceholders = false)) {
+FilesPagingSource(repo, key, io) }` (page size 50 matches the backend `limit` default; max 200).
 
 `FilesPagingSource : PagingSource<String, FileListItem>` uses an opaque cursor `String?`
-(the `nextCursor` returned by AND-331's list/search endpoints). `load()` calls
-`repo.listFolder(...)` or `repo.searchFiles(...)` per `key.query`, maps `ApiResult`:
-`Success` -> `LoadResult.Page(data, prevKey = null, nextKey = nextCursor)`;
+(the `cursor` field — **not** `nextCursor` — returned by `GET /v1/fs/list`). `load()` calls
+`repo.listFolder(...)` for browse, or `repo.searchByName(...)`/`repo.searchText(...)` when a
+query is present (search responses are **unpaged**: a single `LoadResult.Page` with
+`nextKey = null`). It maps `ApiResult`:
+`Success` -> `LoadResult.Page(data, prevKey = null, nextKey = cursor)`;
 `Failure(NetworkError)` -> if a cached page exists, mark `isStale` via the ViewModel and
 return the cached page; else `LoadResult.Error(throwable)`. CSRF/401/refresh and backoff
 retry are handled by the OkHttp stack from `core-network`, so the source treats a returned
@@ -140,8 +160,12 @@ Search debounce is implemented on the query input as a `MutableStateFlow<String>
 `.debounce(300).distinctUntilChanged()` feeding `listKey`. Selection, refresh, stale, and
 error chrome live entirely in `FilesUiState` and never inside `PagingData`.
 
-`FileListItem` is a thin UI projection of `FileEntry` (id, displayName, kind, sizeBytes,
-modifiedAt, isFolder, mimeType, transferState) so the paged list and the selection/CRUD
+`FileListItem` is a thin UI projection of `FileEntry`. **CORRECTION:** the wire `FileEntry`
+(`src/api/types.ts`) has fields `name`, `path`, `type: "file"|"folder"`, `size?`,
+`content_type?`, `updated_at?`, `created_at?` (plus encryption/preview metadata) — there is
+**no `id`, `kind`, `size_bytes`, `mime_type`, `modified_at`, or `parent_id`**. The projection
+is therefore `(path, name, isFolder = type == "folder", sizeBytes = size, contentType,
+updatedAt, transferState)` and is keyed by `path` so the paged list and the selection/CRUD
 state can co-evolve without re-fetching.
 
 ## 5. API Contract
@@ -149,90 +173,115 @@ state can co-evolve without re-fetching.
 This ticket calls repository methods only; raw HTTP is owned by AND-331. Repository
 surface consumed (from `core-data`, namespace `com.testlogon.android.core.data.files`):
 
+**CORRECTION — the repository surface below was re-derived from the real `/v1/fs/*` API and
+`src/api/endpoints/files.ts`. It is path-based with single-item mutations.**
+
 ```kotlin
 interface FilesRepository {
+    // GET /v1/fs/list?path={p}&limit={n}&cursor={c}&sort_by={name|updated|size}&sort_dir={asc|desc}
     suspend fun listFolder(
-        folderId: String?, cursor: String?, limit: Int, sort: FileSort
+        path: String, cursor: String?, limit: Int, sort: FileSort
     ): ApiResult<FilePage>
-    suspend fun searchFiles(
-        query: String, folderId: String?, cursor: String?, limit: Int, sort: FileSort
-    ): ApiResult<FilePage>
-    suspend fun createFolder(parentId: String?, name: String): ApiResult<FileEntry>
-    suspend fun rename(fileId: String, newName: String): ApiResult<FileEntry>
-    suspend fun delete(fileIds: List<String>): ApiResult<Unit>
-    suspend fun move(fileIds: List<String>, targetFolderId: String?): ApiResult<Unit>
+    // GET /v1/fs/search?prefix={q}&limit={n}        (name/prefix, unpaged)
+    suspend fun searchByName(query: String, limit: Int): ApiResult<List<FileEntry>>
+    // GET /v1/fs/search-text?q={q}&limit={n}        (full-text, unpaged)
+    suspend fun searchText(query: String, limit: Int): ApiResult<List<FileEntry>>
+    // POST /v1/fs/folder  { "path": "<parentPath>/<name>" }
+    suspend fun createFolder(path: String): ApiResult<Unit>          // resp { ok: bool }
+    // POST /v1/fs/rename-file | /v1/fs/rename-folder  { "path", "new_name" }
+    suspend fun renameFile(path: String, newName: String): ApiResult<Unit>   // {ok,src,dst}
+    suspend fun renameFolder(path: String, newName: String): ApiResult<Unit>
+    // DELETE /v1/fs/file?path={p} | DELETE /v1/fs/folder?path={p}
+    suspend fun deleteFile(path: String): ApiResult<Unit>
+    suspend fun deleteFolder(path: String): ApiResult<Unit>          // {ok,deleted_count}
+    // POST /v1/fs/move  { "src", "dst" }   (single node)
+    suspend fun move(src: String, dst: String): ApiResult<Unit>      // {ok,src,dst}
 }
-// data class FilePage(val items: List<FileEntry>, val nextCursor: String?)
+// data class FilePage(val items: List<FileEntry>, val cursor: String?)
 ```
 
-The underlying endpoints (for reference; verified against `/openapi.json` in AND-331):
-`GET /ui/files?folder_id={id}&cursor={c}&limit={n}&sort={field}:{dir}`,
-`GET /ui/files/search?q={q}&folder_id={id}&cursor={c}&limit={n}&sort=...`,
-`POST /ui/files/folders` `{ "parent_id": str|null, "name": str }`,
-`PATCH /ui/files/{id}` `{ "name": str }`,
-`POST /ui/files/delete` `{ "ids": [str] }`,
-`POST /ui/files/move` `{ "ids": [str], "target_folder_id": str|null }`.
+The underlying endpoints (verified against `reference/openapi.index.txt` /
+`reference/openapi.pretty.json` and `src/api/endpoints/files.ts`):
+`GET /v1/fs/list` params `path,limit,cursor,sort_by,sort_dir` -> `FileListResp { path, items[], cursor? }`,
+`GET /v1/fs/search` params `prefix,limit` -> `{ prefix, results: FileEntry[] }`,
+`GET /v1/fs/search-text` params `q,limit` -> `{ query, results: FileEntry[] }`,
+`POST /v1/fs/folder` body `{ "path": str }` (schema `Body_create_folder_v1_fs_folder_post`),
+`POST /v1/fs/rename-file` / `POST /v1/fs/rename-folder` body `{ "path": str, "new_name": str }`,
+`POST /v1/fs/move` body `{ "src": str, "dst": str }` (schema `Body_move_fs_node_v1_fs_move_post`),
+`DELETE /v1/fs/file?path={p}` and `DELETE /v1/fs/folder?path={p}` (query param, not body).
+There is **no `id`, no batch `ids` payload, no `PATCH`/`/ui/files`** anywhere in this API.
+Batch delete/move = client-side iteration over selected paths (see §7).
 
-Representative list response shape mapped by AND-331 into `FilePage`:
+Representative list response shape mapped by AND-331 into `FilePage` (real `FileEntry`):
 
 ```json
 {
+  "path": "/reports",
   "items": [
-    { "id": "f_01H...", "name": "report.pdf", "kind": "file",
-      "size_bytes": 80213, "mime_type": "application/pdf",
-      "modified_at": "2026-05-30T14:02:11Z", "parent_id": "d_root" }
+    { "name": "report.pdf", "path": "/reports/report.pdf", "type": "file",
+      "size": 80213, "content_type": "application/pdf",
+      "updated_at": "2026-05-30T14:02:11Z", "created_at": "2026-05-01T09:00:00Z" }
   ],
-  "next_cursor": "eyJrIjoi..."
+  "cursor": "eyJrIjoi..."
 }
 ```
 
 Error `detail` mapping (`string | [{msg}] | {code,...}`) is already normalized to
-`AppError` by the repository; this ticket consumes `ApiResult.Failure(AppError)`.
+`AppError` by the repository (verified: `normalizeErrorDetail` in `src/api/client.ts`
+handles all three shapes; FastAPI 422 uses `[{msg}]`, role/geo errors use `{code,...}`).
+This ticket consumes `ApiResult.Failure(AppError)`.
 
 ## 6. Data & State Management
 
 ```kotlin
 data class FilesUiState(
-    val currentFolderId: String? = null,
+    val currentFolderPath: String = "/",      // path-based; "/" is root (no folder ids)
     val breadcrumb: List<FolderCrumb> = emptyList(),
     val query: String = "",
-    val searchAllFolders: Boolean = false,
+    val searchMode: SearchMode = SearchMode.NAME,  // replaces searchAllFolders (no backend scope flag)
     val sort: FileSort = FileSort(FileSortField.NAME, ascending = true),
     val selectionMode: Boolean = false,
-    val selectedIds: Set<String> = emptySet(),
+    val selectedPaths: Set<String> = emptySet(),   // keyed by FileEntry.path, not id
     val isRefreshing: Boolean = false,
     val isStale: Boolean = false,
     val createFolderDialog: Boolean = false,
     val inFlight: Set<FileOp> = emptySet(),   // delete/move/rename spinners
 )
 
-enum class FileSortField { NAME, MODIFIED, SIZE, KIND }
+// CORRECTION: backend sort_by supports only name|updated|size (no KIND); UPDATED == wire "updated".
+enum class FileSortField(val wire: String) { NAME("name"), UPDATED("updated"), SIZE("size") }
+enum class SearchMode { NAME, CONTENT }    // NAME -> /v1/fs/search; CONTENT -> /v1/fs/search-text
+// FileSort.ascending maps to sort_dir asc|desc.
 data class FileSort(val field: FileSortField, val ascending: Boolean)
 
 sealed interface FilesIntent {
-    data class OpenFolder(val folderId: String?, val name: String) : FilesIntent
+    // CORRECTION: path-based throughout (no ids). Rename/delete/move take FileEntry paths.
+    data class OpenFolder(val folderPath: String, val name: String) : FilesIntent
     data class NavigateCrumb(val index: Int) : FilesIntent
     data class QueryChanged(val q: String) : FilesIntent
+    data class SearchModeChanged(val mode: SearchMode) : FilesIntent
     data class SortChanged(val sort: FileSort) : FilesIntent
     data object Refresh : FilesIntent
-    data class ToggleSelect(val fileId: String) : FilesIntent
+    data class ToggleSelect(val path: String) : FilesIntent
     data object ClearSelection : FilesIntent
-    data class CreateFolder(val name: String) : FilesIntent
-    data class Rename(val fileId: String, val newName: String) : FilesIntent
-    data class Delete(val fileIds: List<String>) : FilesIntent
-    data class Move(val fileIds: List<String>, val target: String?) : FilesIntent
+    data class CreateFolder(val name: String) : FilesIntent       // VM builds child path
+    data class Rename(val path: String, val isFolder: Boolean, val newName: String) : FilesIntent
+    data class Delete(val paths: List<FileSelection>) : FilesIntent  // batch = client-side fan-out
+    data class Move(val paths: List<String>, val targetFolderPath: String) : FilesIntent
     data class Retry(val key: ListKey) : FilesIntent
 }
+// FileSelection(val path: String, val isFolder: Boolean) so delete/move can pick file vs folder endpoint.
 
 sealed interface FilesEvent {
     data class Message(val text: UiText) : FilesEvent
-    data class NavigateToOpen(val fileId: String) : FilesIntent  // for AND-334 hook
+    data class NavigateToOpen(val path: String) : FilesEvent  // for AND-334 hook (was misdeclared FilesIntent + id)
 }
 ```
 
-State persistence: `currentFolderId`, `query`, and `sort` are mirrored into
-`SavedStateHandle` (keys `folder_id`, `query`, `sort`) so process death restores the same
-listing. `cachedIn(viewModelScope)` retains the paged stream across configuration changes.
+State persistence: `currentFolderPath`, `query`, and `sort` are mirrored into
+`SavedStateHandle` (keys `folder_path`, `query`, `sort`) so process death restores the same
+listing. (**CORRECTION:** key is `folder_path`, value is a path string, not `folder_id`.)
+`cachedIn(viewModelScope)` retains the paged stream across configuration changes.
 Selection is intentionally not persisted across process death (cleared on restore). No
 Room/DataStore writes occur here — caching of file metadata, if any, is owned by AND-331's
 repository; this ViewModel observes the repository's emitted state only.
@@ -253,16 +302,24 @@ repository; this ViewModel observes the repository's emitted state only.
 - **CRUD failures:** never mutate the list optimistically beyond a removable spinner in
   `inFlight`; on `Failure` the op is removed from `inFlight` and a message is emitted; on
   `Success` the relevant `PagingSource` is invalidated to reflect server truth.
-- **Idempotency:** Only GET-backed methods (`listFolder`, `searchFiles`) are eligible for
-  the bounded backoff retry, which is configured in OkHttp (core-network), not retried in
-  the ViewModel. Mutations are issued exactly once per intent.
+- **Batch delete/move (CORRECTION):** there is no batch endpoint. The ViewModel fans out
+  one single-item call per selected path (`deleteFile`/`deleteFolder` by `type`, or `move`
+  with `src/dst`), as the web app does, and aggregates partial failure into a single
+  `FilesEvent.Message` ("N of M failed"). It invalidates the pager once after the batch.
+- **Idempotency:** Only GET-backed methods (`listFolder`, `searchByName`, `searchText`) are
+  eligible for the bounded backoff retry, which is configured in OkHttp (core-network), not
+  retried in the ViewModel. Mutations (POST/DELETE) are issued exactly once per item per intent.
 
 ## 8. Security & Privacy
 
 No new credential or token handling is introduced. The session rides cookies + the
-`ui_csrf` cookie echoed as `X-CSRF-Token`, fully managed by core-network's persistent
-cookie jar and interceptors; ViewModels never read or log cookies, CSRF tokens, or
-presigned URLs. File names and ids may be PII-adjacent and must not be logged at INFO or
+`ui_csrf` cookie echoed as `X-CSRF-Token` (verified: `getCookie("ui_csrf")` ->
+`X-CSRF-Token` in `src/api/client.ts`), fully managed by core-network's persistent
+cookie jar and interceptors. **NOTE:** the web client additionally sends an
+`Authorization: Bearer <accessToken>` header from its auth store; whether the Android client
+relies on cookies alone or also carries a Bearer token is an AND-331/core-network decision
+(see §16 open assumptions). Either way this layer never reads them. ViewModels never read or
+log cookies, CSRF tokens, or presigned URLs. File names and ids may be PII-adjacent and must not be logged at INFO or
 above (see §10). No file contents are held in `FilesUiState`. Search queries are sent over
 the dev host's plaintext HTTP — this is a known dev-environment constraint inherited
 project-wide; production TLS enforcement is an app-shell concern, not this ticket's.
@@ -301,11 +358,12 @@ AND-338).
   new `ListKey`; `QueryChanged` debounces (assert single downstream emit after 300ms virtual
   time for rapid keystrokes); empty query reverts to browse; `SortChanged` preserves
   folder/query; `Refresh` toggles `isRefreshing` then back.
-- `FilesViewModelSelectionTest`: toggle select adds/removes ids; folder navigation clears
+- `FilesViewModelSelectionTest`: toggle select adds/removes paths; folder navigation clears
   selection; selection retained across sort change.
 - `FilesViewModelCrudTest`: `CreateFolder`/`Rename`/`Delete`/`Move` success invalidates the
   pager (assert refresh trigger) and clears `inFlight`; failure emits `FilesEvent.Message`
-  and removes `inFlight`; delete-batch passes full id list to repo.
+  and removes `inFlight`; batch delete/move fans out one single-item repo call per selected
+  path and aggregates partial failure into one message (no batch endpoint exists).
 - `FilesViewModelResilienceTest`: timeout on refresh with prior data sets `isStale=true` and
   keeps items; `Retry` re-invokes the source; `AppError.Unauthorized` emits the message
   event.
@@ -332,16 +390,16 @@ AND-338).
 
 ## 13. Risks & Open Questions
 
-- R1: AND-331's list/search pagination model (cursor vs offset/page) is assumed
-  cursor-based. If it is offset-based, `PagingSource<Int, _>` and `ListKey` change. **Confirm
-  the `next_cursor` field name and type against `/openapi.json` before coding.**
-- R2: Server-side sort support — if `sort` is not honored by `GET /ui/files`, sort must be
-  client-side over a full page, which conflicts with paging. Open question for AND-331.
-- R3: Search scope semantics (current folder vs global) may differ from web `files.ts`;
-  default chosen here is current-folder with a `searchAllFolders` flag — verify against the
-  web reference.
-- R4: Batch delete/move atomicity on the backend is unknown; partial failure handling
-  (some ids fail) may require richer result types than `ApiResult<Unit>`. Flagged to AND-331.
+- R1: **RESOLVED.** `GET /v1/fs/list` is cursor-based; the response field is `cursor` (not
+  `next_cursor`), type `string?`. `PagingSource<String, FileListItem>` stands. Verified against
+  `openapi.pretty.json` (op `list_files_v1_fs_list_get`) and `FileListResp` in `src/api/types.ts`.
+- R2: **RESOLVED.** `GET /v1/fs/list` honors server-side `sort_by` (`name|updated|size`) and
+  `sort_dir` (`asc|desc`). No client-side sort needed; KIND sort is not supported and was removed.
+- R3: **RESOLVED.** Backend search is global and unpaged, with two modes (name/prefix via
+  `/v1/fs/search`, content via `/v1/fs/search-text`). The web reference (`FilesPage.tsx`) confirms
+  no folder scoping; the invented `searchAllFolders` flag was dropped in favor of `searchMode`.
+- R4: **RESOLVED (clarified).** There is no batch endpoint. Partial failure is handled by
+  client-side fan-out + aggregated message; `ApiResult<Unit>` per item is sufficient (see §7).
 - R5: Stale-while-error UX (showing cached page on timeout) requires the `PagingSource` to
   retain a last-good page; verify memory implications for large folders.
 
@@ -358,7 +416,7 @@ AND-338).
   emit a message on failure without clearing the list (unit-tested).
 - AC-5: Timeout/offline on refresh sets `isStale=true` and preserves the prior page; `Retry`
   re-pages (unit-tested).
-- AC-6: `folder_id`, `query`, and `sort` survive a `SavedStateHandle` round-trip; selection
+- AC-6: `folder_path`, `query`, and `sort` survive a `SavedStateHandle` round-trip; selection
   is cleared (unit-tested).
 - AC-7: All async paths use the injected dispatcher and virtual time; no flakiness, no real
   network; suite green under `./gradlew :feature-files:testDebugUnitTest`.
@@ -377,6 +435,231 @@ AND-338).
 - ktlint/detekt clean; no new lint baseline entries; no unused dependencies.
 - Public types are documented with KDoc and depended-on by at least the AND-332 UI ticket's
   draft wiring (compile-level integration verified).
-- Risks R1–R3 resolved or explicitly carried forward as tracked follow-ups against AND-331.
+- Risks R1–R4 resolved during this review against the OpenAPI spec and web reference (see
+  §13 and §16); any residual AND-331 wire details carried forward as tracked follow-ups.
 - PR description links AND-337 and notes the blocked downstream tickets (AND-332..AND-336,
   AND-338).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: OpenAPI =
+`reference/openapi.index.txt` / `reference/openapi.pretty.json`; FE = `reference/src/...`.
+
+1. **File-listing endpoint is `GET /ui/files?folder_id=...&cursor=...&sort={field}:{dir}`.**
+   VERDICT: **Corrected.** No such endpoint exists. The real one is `GET /v1/fs/list` with
+   params `path,limit,cursor,sort_by,sort_dir`. SOURCE: OpenAPI `GET /v1/fs/list`
+   (op `list_files_v1_fs_list_get`); FE `src/api/endpoints/files.ts: listFiles`.
+
+2. **List response is `{ items, next_cursor }` with items `{ id, kind, size_bytes, mime_type, modified_at, parent_id }`.**
+   VERDICT: **Corrected.** Response is `FileListResp { path, items: FileEntry[], cursor? }`;
+   `FileEntry` = `{ name, path, type:"file"|"folder", size?, content_type?, updated_at?, created_at?, ... }`
+   — no `id`/`kind`/`size_bytes`/`mime_type`/`modified_at`/`parent_id`. SOURCE:
+   `src/api/types.ts: FileListResp`, `src/api/types.ts: FileEntry`.
+
+3. **Pagination cursor field name/type.** VERDICT: **Corrected** (`cursor`, `string?`, not
+   `next_cursor`). Cursor-based paging confirmed. SOURCE: OpenAPI `GET /v1/fs/list` `cursor`
+   param + `FileListResp.cursor` in `src/api/types.ts`. (Resolves R1.)
+
+4. **Server-side sort fields are NAME, MODIFIED, SIZE, KIND.** VERDICT: **Corrected.**
+   `sort_by` regex is `^(name|updated|size)$`, `sort_dir` `^(asc|desc)$`. No KIND; "modified"
+   is `updated`. SOURCE: OpenAPI `GET /v1/fs/list` `sort_by`/`sort_dir` schema patterns. (Resolves R2.)
+
+5. **Search endpoint is `GET /ui/files/search?q=&folder_id=&cursor=` (paged, folder-scoped, `searchAllFolders` flag).**
+   VERDICT: **Corrected.** Backend has two global, unpaged search endpoints: name/prefix
+   `GET /v1/fs/search?prefix=&limit=` -> `{prefix, results: FileEntry[]}`, and content
+   `GET /v1/fs/search-text?q=&limit=` -> `{query, results: FileEntry[]}`. No folder scope, no
+   cursor. SOURCE: OpenAPI `GET /v1/fs/search`, `GET /v1/fs/search-text`; FE
+   `src/api/endpoints/files.ts: searchFiles, searchText`; FE `src/pages/files/FilesPage.tsx`
+   (nameSearchQuery/contentSearchQuery, no folder param). (Resolves R3.)
+
+6. **Create folder is `POST /ui/files/folders {parent_id, name}`.** VERDICT: **Corrected.**
+   It is `POST /v1/fs/folder` with body `{ "path": str }` (caller builds `parentPath + "/" + name`).
+   SOURCE: OpenAPI schema `Body_create_folder_v1_fs_folder_post`; FE
+   `src/api/endpoints/files.ts: createFolder`; FE `FilesPage.tsx: createFolderMut`.
+
+7. **Rename is `PATCH /ui/files/{id} {name}`.** VERDICT: **Corrected.** Separate file/folder
+   POST endpoints: `POST /v1/fs/rename-file` and `POST /v1/fs/rename-folder`, body
+   `{ "path": str, "new_name": str }`. SOURCE: OpenAPI schemas
+   `Body_rename_file_v1_fs_rename_file_post` / `Body_rename_folder_v1_fs_rename_folder_post`;
+   FE `src/api/endpoints/files.ts: renameFile, renameFolder`.
+
+8. **Delete is `POST /ui/files/delete {ids:[...]}` (batch).** VERDICT: **Corrected.** Single
+   node only: `DELETE /v1/fs/file?path=` and `DELETE /v1/fs/folder?path=` (query param, no
+   body, no ids). SOURCE: OpenAPI `DELETE /v1/fs/file`, `DELETE /v1/fs/folder`; FE
+   `src/api/endpoints/files.ts: deleteFile, deleteFolder`.
+
+9. **Move is `POST /ui/files/move {ids:[...], target_folder_id}` (batch).** VERDICT:
+   **Corrected.** Single node: `POST /v1/fs/move` body `{ "src": str, "dst": str }`. SOURCE:
+   OpenAPI schema `Body_move_fs_node_v1_fs_move_post`; FE `src/api/endpoints/files.ts: moveFile`.
+
+10. **Batch delete/move semantics.** VERDICT: **Corrected.** No batch endpoint; the web app
+    iterates client-side over selected paths calling single-item endpoints. SOURCE: FE
+    `src/pages/files/BulkActions.tsx` (loop over `selectedItems` calling deleteFile/deleteFolder)
+    and `src/pages/files/FilesPage.tsx` (loop calling `moveFile` per selected). (Resolves R4.)
+
+11. **Selection is keyed by file `id` (`Set<String>` of ids).** VERDICT: **Corrected.** No ids
+    exist; selection is keyed by `path`. SOURCE: FE `src/pages/files/FilesPage.tsx`
+    (`selectedKeys: Set<string>` populated from `f.path`); FE `BulkActions.tsx`
+    (`selectedKeys.has(f.path)`).
+
+12. **401 handling = single `POST /ui/session/refresh` then retry once.** VERDICT: **Verified.**
+    SOURCE: OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`,
+    empty req body); FE `src/api/client.ts: refreshSession` + the 401 branch (single
+    `refreshPromise`, one retry, logout on second 401).
+
+13. **CSRF = `ui_csrf` cookie echoed as `X-CSRF-Token`.** VERDICT: **Verified.** SOURCE: FE
+    `src/api/client.ts` (`getCookie("ui_csrf")` -> `headers.set("X-CSRF-Token", csrf)`).
+
+14. **Error `detail` is `string | [{msg}] | {code,...}`, normalized upstream.** VERDICT:
+    **Verified.** SOURCE: FE `src/api/client.ts: normalizeErrorDetail` (handles all three);
+    OpenAPI `HTTPValidationError` (422) uses `detail: [{loc,msg,type}]`.
+
+15. **Session is purely cookie-based.** VERDICT: **Unverified-assumption (partially corrected).**
+    The web client ALSO sends `Authorization: Bearer <accessToken>` from its auth store in
+    addition to cookies. Whether the Android client mirrors that is a core-network/AND-331
+    decision, transparent to this layer. SOURCE: FE `src/api/client.ts` (sets both
+    `Authorization: Bearer` and relies on `credentials: "include"`).
+
+16. **Paging page size.** VERDICT: **Corrected for alignment** (30 -> 50). Backend `limit`
+    default is 50, max 200. Page size is a client choice but 50 matches the wire default and
+    the web client. SOURCE: OpenAPI `GET /v1/fs/list` `limit` schema (default 50, max 200);
+    FE `src/api/endpoints/files.ts: searchFiles` (default limit 50).
+
+17. **`NavigateToOpen` declared inside `FilesEvent` as `: FilesIntent` using `fileId`.**
+    VERDICT: **Corrected** (spec-internal bug). Now `data class NavigateToOpen(val path: String) : FilesEvent`.
+    SOURCE: internal consistency with the path-based model (no framework source needed).
+
+18. **Framework: Paging 3 `PagingSource`/`Pager`/`cachedIn`, Hilt `@HiltViewModel`,
+    `SavedStateHandle`, `kotlinx-coroutines-test runTest` virtual time, Turbine, `paging-testing`.**
+    VERDICT: **Verified (framework ref).** SOURCE (framework refs):
+    https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data ,
+    https://developer.android.com/training/dependency-injection/hilt-jetpack ,
+    https://developer.android.com/topic/libraries/architecture/saving-states ,
+    https://developer.android.com/kotlin/coroutines/test ,
+    https://developer.android.com/reference/kotlin/androidx/paging/testing/package-summary .
+
+### Corrections made
+
+- API surface rewritten from the fictional `/ui/files` folder-id/cursor model to the real
+  **path-based `/v1/fs/*`** API (claims 1–11): `listFolder(path,...)`, `searchByName`/`searchText`
+  (unpaged, global), `createFolder(path)`, `rename-file`/`rename-folder`, single-item
+  `deleteFile`/`deleteFolder` (query param), single-node `move(src,dst)`.
+- `FileEntry`/`FileListItem` field names corrected (`name/path/type/size/content_type/updated_at`;
+  removed `id/kind/size_bytes/mime_type/modified_at/parent_id`). Cursor field `cursor` (not `next_cursor`).
+- `FileSortField` reduced to `NAME, UPDATED, SIZE` (KIND removed); `sort_dir asc|desc`.
+- Search reworked to `searchMode {NAME, CONTENT}`; removed the invented `searchAllFolders` flag.
+- Selection and all intents re-keyed from `id` to `path`; batch ops documented as client-side fan-out.
+- `currentFolderId`->`currentFolderPath` and SavedState key `folder_id`->`folder_path`; AC-6 updated.
+- Fixed spec-internal bug: `FilesEvent.NavigateToOpen` was declared `: FilesIntent` with `fileId`.
+- Page size 30 -> 50 to match the backend default; risks R1–R4 marked resolved.
+
+### Open assumptions
+
+- **Bearer token vs cookie-only (claim 15):** unverifiable from this layer; depends on how
+  AND-331/core-network build the OkHttp stack. Web sends both; carried forward to AND-331.
+- **`FilePage.cursor` is a true forward-paging cursor on the backend:** the field exists in
+  `FileListResp`, but the web reference never threads it (it fetches a single page), so live
+  multi-page cursor behavior is unverified against a running server. Cursor-threading is exercised
+  only via fakes in unit tests; confirm against the dev host during AND-331 integration.
+- **Stale-while-error cache retention (R5):** a project-wide ViewModel/PagingSource convention,
+  not an API contract; no authoritative source — verify memory cost for large folders empirically.
+- **`core-telemetry` presence (§10 counters):** conditional/optional module; unverifiable here.
+
+## 17. Test Plan
+
+All cases are JVM/Robolectric unit tests (the ticket's acceptance is "Unit-tested"; UI/instrumented
+tests belong to AND-338). Where a target is noted as device/emulator it is a forward-looking note
+for the downstream UI ticket, not required to close AND-337. "Traces" links to §14 ACs.
+
+- **TC-AND-337-01** — Type: unit (Turbine). Target: JVM unit/Robolectric. Pre: `FilesViewModel`
+  with fake repo returning a non-empty `FilePage`. Steps: collect `uiState`, `events`, `pagedFiles`;
+  call `onIntent`. Expected: all four surfaces exist and emit; single `onIntent` entry point routes
+  intents. Traces: AC-1.
+
+- **TC-AND-337-02** — Type: unit (Turbine + virtual time). Target: JVM unit. Pre: fake repo.
+  Steps: emit 5 rapid `QueryChanged` within 300ms via `runTest` virtual time. Expected: exactly one
+  downstream `ListKey`/search emission after debounce; intervening keystrokes coalesced. Traces: AC-2.
+
+- **TC-AND-337-03** — Type: unit. Target: JVM unit. Pre: in folder `/reports` with query active.
+  Steps: dispatch `SortChanged(UPDATED desc)`. Expected: new paged stream; `currentFolderPath` and
+  `query` preserved; repo called with `sort_by=updated,sort_dir=desc`. Traces: AC-2.
+
+- **TC-AND-337-04** — Type: contract / MockWebServer. Target: JVM unit (MockWebServer; via repo
+  fake or real Retrofit if available). Pre: enqueue `FileListResp { path, items, cursor:"c2" }`.
+  Steps: `FilesPagingSource.load(Refresh)` then `load(Append(key="c2"))`. Expected: page 1
+  `nextKey="c2"`; page 2 request carries `cursor=c2`; items map `name/path/type/size/content_type/updated_at`
+  correctly. Asserts real field names (no `id`/`next_cursor`). Traces: AC-3.
+
+- **TC-AND-337-05** — Type: unit. Target: JVM unit. Pre: empty folder. Steps: `load(Refresh)` with
+  repo returning `items=[]`, `cursor=null`. Expected: `LoadResult.Page(data=[], prevKey=null, nextKey=null)`.
+  Traces: AC-3.
+
+- **TC-AND-337-06** — Type: unit (validation/error shape). Target: JVM unit. Pre: repo returns
+  `ApiResult.Failure(AppError)` derived from a 422 `{detail:[{msg:"path is required"}]}`. Steps:
+  `load(Refresh)` with no prior page. Expected: `LoadResult.Error`; message text comes from the
+  normalized `detail` (not a generic string). Traces: AC-3, AC-4.
+
+- **TC-AND-337-07** — Type: unit. Target: JVM unit. Pre: fake repo records calls. Steps: dispatch
+  `CreateFolder("new")` in `/reports`. Expected: repo `createFolder("/reports/new")` called exactly
+  once; pager invalidated on success; `inFlight` cleared. Traces: AC-4.
+
+- **TC-AND-337-08** — Type: unit. Target: JVM unit. Pre: two items selected (one file, one folder).
+  Steps: dispatch `Delete([file, folder])`. Expected: client-side fan-out — `deleteFile(path)` and
+  `deleteFolder(path)` each called once (correct endpoint per `isFolder`); pager invalidated once;
+  selection cleared. Traces: AC-4.
+
+- **TC-AND-337-09** — Type: unit (partial-failure error path). Target: JVM unit. Pre: batch of 3
+  moves; repo fails the 2nd with `AppError`. Steps: dispatch `Move([a,b,c], "/dst")`. Expected: all
+  3 single `move(src,dst)` calls attempted; one aggregated `FilesEvent.Message` ("1 of 3 failed");
+  list not cleared; pager invalidated once. Traces: AC-4.
+
+- **TC-AND-337-10** — Type: unit (offline/flaky-dev-host). Target: JVM unit. Pre: a page already
+  loaded; repo then returns `Failure(NetworkError/timeout)` on refresh. Steps: dispatch `Refresh`.
+  Expected: `isStale=true`, prior items preserved (not cleared), retry affordance reflected; no crash.
+  Traces: AC-5.
+
+- **TC-AND-337-11** — Type: unit. Target: JVM unit. Pre: stale state from TC-10. Steps: dispatch
+  `Retry(key)`. Expected: `PagingSource.invalidate()`/refresh trigger fires; repo re-queried with the
+  same `ListKey`; `isStale` clears on success. Traces: AC-5.
+
+- **TC-AND-337-12** — Type: unit (SavedState round-trip). Target: JVM unit. Pre: set
+  `currentFolderPath="/a/b"`, `query="q"`, `sort=SIZE asc`, two paths selected. Steps: write to a new
+  `SavedStateHandle`, reconstruct VM. Expected: keys `folder_path/query/sort` restored equal; selection
+  empty after restore. Traces: AC-6.
+
+- **TC-AND-337-13** — Type: unit (security / log redaction). Target: JVM unit (Robolectric Timber tree
+  or in-memory log capture). Pre: planted log tree. Steps: drive list load + a failing op with
+  PII-ish names/paths/queries; trigger 401->refresh path. Expected: no raw file names, paths, query
+  text, cookies, `X-CSRF-Token`, or presigned URLs at DEBUG+; only hashed/truncated identifiers.
+  Traces: AC-8.
+
+- **TC-AND-337-14** — Type: unit (determinism / coverage gate). Target: JVM unit. Pre: full suite.
+  Steps: run `./gradlew :feature-files:testDebugUnitTest` with injected dispatcher + virtual time.
+  Expected: green, no `Thread.sleep`, no real network; coverage >=85% on `.vm` and `.paging`.
+  Traces: AC-7, AC-9.
+
+- **TC-AND-337-15** — Type: unit. Target: JVM unit. Pre: in search mode. Steps: dispatch
+  `QueryChanged("photo")` then `SearchModeChanged(CONTENT)`, then clear query. Expected: NAME mode
+  calls `searchByName`/`/v1/fs/search` (unpaged, single page, `nextKey=null`); CONTENT mode calls
+  `searchText`/`/v1/fs/search-text`; empty query reverts to folder browse via `listFolder`. Traces:
+  AC-2, AC-3.
+
+Note on targets: every case above is device-independent and runs on **JVM unit/Robolectric** (no
+device/emulator needed) because this is a pure state+paging layer with a faked repository. The
+headless emulator `test35` and the physical Samsung Galaxy A15 (SM-A156U) become relevant only for
+the downstream UI tickets (AND-332/AND-338); no camera, biometrics, FCM, WebRTC, or ABI/API-specific
+behavior is exercised by AND-337, so no case must run on the physical device.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 | TC-01 |
+| AC-2 | TC-02, TC-03, TC-15 |
+| AC-3 | TC-04, TC-05, TC-06, TC-15 |
+| AC-4 | TC-06, TC-07, TC-08, TC-09 |
+| AC-5 | TC-10, TC-11 |
+| AC-6 | TC-12 |
+| AC-7 | TC-14 |
+| AC-8 | TC-13 |
+| AC-9 | TC-14 |

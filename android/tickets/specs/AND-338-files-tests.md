@@ -5,7 +5,8 @@ milestone: M7
 epic: E43
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-337, AND-331, AND-332, AND-333, AND-334, AND-335]
 blocks: [AND-339]
 ---
@@ -50,38 +51,57 @@ dependency chain); instrumented end-to-end against the real backend.
   (`src/test`, `src/androidTest`) of `core-data` and `feature-files`, plus
   reusable fixtures in `core-testing` (`src/main` of that test-only module).
 - Backend: FastAPI + DynamoDB. OpenAPI at `/openapi.json`. Web reference for the
-  Files API is `frontend/src/api/endpoints/files.ts`,
-  `frontend/src/api/endpoints/fileShareLinks.ts`, and shared types in
-  `frontend/src/api/types.ts`. Error envelope `detail` is `string |
-  [{msg}] | {code,...}`; tests must assert each shape maps correctly.
+  Files API is `src/api/endpoints/files.ts`,
+  `src/api/endpoints/fileShareLinks.ts`, and shared types in
+  `src/api/types.ts`. Error envelope `detail` is `string |
+  [{msg}] | {code,...}`; tests must assert each shape maps correctly. NOTE
+  (verified against `src/api/client.ts: normalizeErrorDetail`): the string shape
+  is returned verbatim; the array shape joins each item's `msg` with `", "`; the
+  object shape is mapped **only** for known `code` values (via
+  `mapAuthorizationError`) and otherwise **falls back to the generic message** —
+  an unknown `code` like `quota_exceeded` does NOT surface its fields. Tests must
+  encode this fallback, not assume arbitrary code-keyed messages.
 - Source tickets under test: AND-331 (Files API + DTOs), AND-332 (browse),
   AND-333 (upload via presign, deps AND-129), AND-334 (download/open), AND-335
   (share links, deps AND-022), AND-337 (Files ViewModels + paging).
 - Auth is cookie-based with a persistent cookie jar and `X-CSRF-Token` echoing
   the `ui_csrf` cookie; on 401 the client refreshes once via
   `POST /ui/session/refresh` then retries. Tests run against an authenticated
-  fake jar and must verify the CSRF header is attached to mutating file calls.
+  fake jar and must verify the CSRF header is attached. CORRECTION (verified
+  against `src/api/client.ts`): the web client attaches `X-CSRF-Token` to **every**
+  request whenever the `ui_csrf` cookie is present — GET *and* mutations — not only
+  to mutating calls. The Android transport should mirror this, so CSRF-presence
+  assertions are valid on browse/download as well, and "absent on GETs" is NOT a
+  correct expectation. The 401 refresh-once flow is confirmed: a single shared
+  `refreshPromise` guards against concurrent refreshes, and a second 401 after
+  retry triggers logout (no infinite loop).
 
 ## 3. Functional Requirements
 
 The test suite must verify the following observable behaviors of the feature
 under test (the requirements are on the *tests*, asserting the *feature*):
 
-1. **Browse mapping & paging.** `FilesRepository.browse(folderId, page)` maps a
-   paginated listing into domain `FileNode`s; `FilesViewModel` exposes them as a
-   `Flow<PagingData<FileNode>>`. Tests assert item count, folder-vs-file
-   discrimination, and that `cursor`/`next` paging requests the next page.
-2. **Search & sort.** Tests assert that changing the query or sort key issues a
-   new request with the correct `q`, `sort`, and `order` params and resets
-   paging.
+1. **Browse mapping & paging.** `FilesRepository.browse(path, cursor)` maps a
+   paginated `FileListResp` into domain `FileNode`s; `FilesViewModel` exposes them
+   as a `Flow<PagingData<FileNode>>`. Tests assert item count, folder-vs-file
+   discrimination (via `type == "folder"`), and that the response **`cursor`**
+   field drives the next page request (the API param is `cursor`, key `path`).
+2. **Search & sort.** Tests assert that changing the search prefix/query or sort
+   key issues the correct request. Sort is on browse via `sort_by`/`sort_dir`
+   params; filename search is `GET /v1/fs/search?prefix=` and full-text is
+   `GET /v1/fs/search-text?q=` (there is no combined `q/sort/order` on browse).
+   A new search/sort resets paging.
 3. **Upload via presign.** Two-step flow (request presign -> PUT bytes to the
    returned URL -> confirm) emits monotonic progress `0f..1f` and a terminal
    success; tests assert progress ordering and the confirm call.
 4. **Download / open.** Repository writes bytes to the app cache, returns a
    content URI via FileProvider, and is idempotent on a cache hit (no second
    network call). Tests assert both the miss and hit paths.
-5. **Share links.** Create returns a `shareUrl` + `linkId`; revoke removes it.
-   Tests assert request bodies and that revoke surfaces success state.
+5. **Share links.** Create (`POST /ui/files/share-links`, body
+   `CreateShareLinkIn` keyed by `file_node_id`) returns `201 ShareLinkOut` with
+   `share_url` + `link_id`; revoke (`DELETE /ui/files/share-links/{link_id}`)
+   returns `200 {ok, link_id}` (not `204`). Tests assert request bodies and that
+   revoke surfaces success state.
 6. **Error & resilience.** For each call: 4xx with each `detail` shape maps to
    `ApiResult.Error` with a human message; idempotent GETs retry on a transient
    5xx within the bounded budget; a 20s-class timeout surfaces the offline/stale
@@ -181,38 +201,75 @@ new endpoints. The fixtures below pin the shapes the tests assert against. If th
 live `/openapi.json` diverges, the owning feature ticket is corrected and these
 fixtures updated.
 
-**Browse** `GET /ui/files?folder_id={id}&q={q}&sort={name|size|mtime}&order={asc|desc}&cursor={c}`
+> CORRECTED in review (AND-338): the Files API is **path-based** under `/v1/fs/*`
+> (web `src/api/endpoints/files.ts`), not id-based under `/ui/files/*`. Nodes are
+> keyed by `path`, not `id`; there is no `folder_id`. Share **links** live under
+> `/ui/files/share-links` (`src/api/endpoints/fileShareLinks.ts`). The earlier
+> `/ui/files/...` shapes in this section were unverified and have been replaced
+> with the verified contracts. (`/v1/fs/share` is a *separate* user-to-user share
+> feature — `ShareFileReq {path,to_user,permission}` — and is out of scope here.)
+
+**Browse** `GET /v1/fs/list?path={path}&limit={n}&cursor={c}&sort_by={k}&sort_dir={asc|desc}`
+(verified: OpenAPI `GET /v1/fs/list`, params `path,limit,cursor,sort_by,sort_dir`;
+web `listFiles`). Response is `FileListResp`:
 
 ```json
 {
+  "path": "/Reports",
   "items": [
-    {"id":"f_01","name":"Q3.pdf","is_folder":false,"size":20481,
-     "mime":"application/pdf","modified_at":"2026-05-30T11:02:00Z"},
-    {"id":"d_09","name":"Reports","is_folder":true,"size":0,
-     "mime":null,"modified_at":"2026-05-21T09:00:00Z"}
+    {"name":"Q3.pdf","path":"/Reports/Q3.pdf","type":"file","size":20481,
+     "content_type":"application/pdf","updated_at":"2026-05-30T11:02:00Z"},
+    {"name":"Archive","path":"/Reports/Archive","type":"folder",
+     "updated_at":"2026-05-21T09:00:00Z"}
   ],
-  "next_cursor": "eyJrIjoiZl8wMSJ9"
+  "cursor": "eyJrIjoiL1JlcG9ydHMvUTMucGRmIn0="
 }
 ```
 
-**Presign upload (request)** `POST /ui/files/upload/presign`
+CORRECTIONS vs. prior draft: `FileEntry` has no `id` (path-keyed); folder vs file
+is `type: "file"|"folder"` (NOT `is_folder`); MIME is `content_type` (NOT `mime`);
+timestamp is `updated_at` (NOT `modified_at`); the page token field is **`cursor`**
+(NOT `next_cursor`).
+
+**Search** (no combined browse `q/sort/order` exists): filename search is
+`GET /v1/fs/search?prefix={p}&limit={n}` -> `{"prefix":..,"results":FileEntry[]}`;
+full-text is `GET /v1/fs/search-text?q={q}&limit={n}` -> `{"query":..,"results":FileEntry[]}`.
+Sort is applied on browse via `sort_by`/`sort_dir` query params.
+
+**Presign upload (request)** `POST /v1/fs/presign-upload`, body `PresignUploadIn`:
 
 ```json
-{"folder_id":"d_09","name":"Q3.pdf","size":20481,"mime":"application/pdf"}
+{"path":"/Reports/Q3.pdf","content_type":"application/pdf"}
 ```
--> `{"upload_url":"https://s3/...","file_id":"f_77","headers":{"x-amz-...":"v"}}`
+-> `PresignUploadOut`
+`{"upload_url":"https://s3/...","bucket":"b","key":"k","ticket_id":"t_77","path":"/Reports/Q3.pdf","content_type":"application/pdf"}`.
 
-**Confirm** `POST /ui/files/upload/confirm` body `{"file_id":"f_77"}` -> `200 {file...}`.
+**Confirm** `POST /v1/fs/complete-upload`, body `CompleteUploadIn`
+`{"path":"/Reports/Q3.pdf","key":"k","ticket_id":"t_77","content_type":"application/pdf","encrypted":false,"enc_meta":null}`
+-> `200 {"ok":true,"path":..,"size":..,"content_type":..}`. (Required body fields:
+`path`, `key`, `ticket_id`.)
 
-**Download** `GET /ui/files/{id}/content` -> binary stream (tests use a small byte fixture).
+**Download** `GET /v1/fs/download?path={path}` -> binary stream (tests use a small
+byte fixture). NOTE: the web reference also does a simple `POST /v1/fs/upload`
+multipart path (`uploadFile`); the presign+complete two-step is the large-file
+flow and is what AND-333 implements.
 
-**Create share** `POST /ui/files/{id}/share` body `{"expires_in":86400}` ->
-`{"link_id":"sl_1","share_url":"http://.../share/sl_1"}`.
-**Revoke** `DELETE /ui/files/share/{link_id}` -> `204`.
+**Create share link** `POST /ui/files/share-links`, body `CreateShareLinkIn`
+`{"file_node_id":"/Reports/Q3.pdf","expiry_hours":24,"max_downloads":1,"password":null}`
+(only `file_node_id` is required; `expiry_hours` default 24, `max_downloads`
+default 1) -> **`201` `ShareLinkOut`**
+`{"link_id":"sl_1","file_node_id":..,"file_name":..,"file_size_bytes":..,"content_type":..,"created_at":<int>,"expires_at":<int>,"max_downloads":1,"download_count":0,"has_password":false,"is_revoked":false,"share_url":"http://.../share/sl_1"}`.
+`created_at`/`expires_at` are **integer epoch** values, not ISO strings.
+**Revoke** `DELETE /ui/files/share-links/{link_id}` -> **`200 {"ok":true,"link_id":..}`**
+(NOT `204`, and the path is `/ui/files/share-links/{link_id}`, not
+`/ui/files/share/{link_id}`).
 
 **Error envelopes** (each asserted in `FilesErrorMappingTest`):
-`{"detail":"Not found"}`, `{"detail":[{"msg":"name required"}]}`,
-`{"detail":{"code":"quota_exceeded","limit":5}}`.
+`{"detail":"Not found"}` (-> verbatim), `{"detail":[{"msg":"name required"}]}`
+(-> `msg`s joined with `", "`), `{"detail":{"code":"...",...}}` (-> mapped only
+for known codes via `mapAuthorizationError`, else generic fallback). The backend
+validation error type is `HTTPValidationError`, whose `detail` is an array of
+`{loc, msg, type}` — the array shape above is the realistic 422 body.
 
 ## 6. Data & State Management
 
@@ -272,7 +329,11 @@ backend. Required cases:
 - `FakeCookieJar.authenticated()` seeds a synthetic session + `ui_csrf` cookie.
   `FilesRepositoryShareTest` and `FilesRepositoryUploadTest` assert the
   `X-CSRF-Token` request header is present and equals the `ui_csrf` value on
-  mutating calls, and absent assertions are not required on GETs.
+  mutating calls. NOTE (corrected): the web client sends `X-CSRF-Token` on **all**
+  requests when the cookie is present (`src/api/client.ts`), so an
+  "absent on GETs" assertion would be wrong — at most assert presence on GETs too
+  if the Android transport mirrors the web behavior, or scope the assertion to
+  mutations only without asserting absence on GETs.
 - Download tests write only to a sandboxed temp/cache dir and assert the returned
   URI is a `content://com.testlogon.android.fileprovider/...` (no `file://`
   leakage), validating the FileProvider grant model from AND-334.
@@ -319,7 +380,7 @@ shared deps.
 | Search/sort | `FilesViewModelTest` | params, paging reset |
 | Upload | `FilesRepositoryUploadTest` / `FileUploadViewModelTest` | presign+PUT+confirm, progress monotonic |
 | Download/open | `FilesRepositoryDownloadTest` | cache miss/hit, content URI |
-| Share | `FilesRepositoryShareTest` / `ShareLinkViewModelTest` | create body, revoke 204 |
+| Share | `FilesRepositoryShareTest` / `ShareLinkViewModelTest` | create body (`file_node_id`) -> 201, revoke -> 200 `{ok,link_id}` |
 | Errors | `FilesErrorMappingTest` | 3 detail shapes, retry, no-retry, 401 refresh |
 | UI | `FileBrowseScreenTest`, `FileUploadScreenTest`, `ShareLinkSheetTest` | Loading/Content/Empty/Error/Offline, a11y tags |
 
@@ -365,12 +426,15 @@ unit lane for UI tests). Acceptance = both green.
 1. `:core-data:testDebugUnitTest` and `:feature-files:testDebugUnitTest` pass
    with the new files-test classes present and executed.
 2. Browse test maps a multi-item payload to `FileNode`s (folder/file
-   distinguished) and a second page is fetched via `next_cursor`.
+   distinguished via `type`) and a second page is fetched via the response
+   **`cursor`** field (corrected from `next_cursor` during review).
 3. Upload test asserts the presign->PUT->confirm sequence and strictly
    non-decreasing progress ending in `Succeeded`.
 4. Download test asserts a `content://com.testlogon.android.fileprovider/...`
    URI on cache miss and **zero** additional network calls on cache hit.
-5. Share test asserts create request body and revoke `204` success state.
+5. Share test asserts create request body (`file_node_id`, `expiry_hours`,
+   `max_downloads`) -> `201 ShareLinkOut`, and revoke `200 {ok, link_id}` success
+   state (corrected from `204` during review).
 6. Error test asserts all three `detail` shapes map to `ApiResult.Error`
    messages; GET retries once on 503; mutations do not retry; one 401 ->
    refresh -> retry succeeds and two 401s fail.
@@ -394,3 +458,247 @@ unit lane for UI tests). Acceptance = both green.
   337, and confirms it gates AND-339.
 - CI guard (grep for `18.222.237.167` in test sources) is in place or the absence
   is confirmed; no flaky/ignored tests merged.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with VERDICT and SOURCE. OpenAPI pointers reference
+`reference/openapi.index.txt` / `reference/openapi.pretty.json`; frontend pointers
+reference `reference/src/...`.
+
+1. **Browse endpoint is `GET /v1/fs/list` with params `path,limit,cursor,sort_by,sort_dir`.**
+   VERDICT: Corrected (spec said `GET /ui/files?folder_id&q&sort&order&cursor`).
+   SOURCE: OpenAPI `GET /v1/fs/list`; `src/api/endpoints/files.ts: listFiles`.
+2. **Browse response is `FileListResp {path, items: FileEntry[], cursor?}`; page token field is `cursor`.**
+   VERDICT: Corrected (spec used `next_cursor`).
+   SOURCE: `src/api/types.ts: FileListResp`; `src/api/endpoints/files.ts: listFiles`.
+3. **`FileEntry` shape: `{name, path, type:"file"|"folder", size?, content_type?, updated_at?, created_at?, ...}` — no `id`; folder flag is `type`; MIME is `content_type`; timestamp is `updated_at`.**
+   VERDICT: Corrected (spec used `id`, `is_folder`, `mime`, `modified_at`).
+   SOURCE: `src/api/types.ts: FileEntry` (lines 1545-1577).
+4. **Search is `GET /v1/fs/search?prefix&limit` (filename) / `GET /v1/fs/search-text?q&limit`; sort is via browse `sort_by`/`sort_dir`.**
+   VERDICT: Corrected (spec assumed combined `q/sort/order` on browse).
+   SOURCE: OpenAPI `GET /v1/fs/search`, `GET /v1/fs/search-text`, `GET /v1/fs/list`;
+   `src/api/endpoints/files.ts: searchFiles, searchText, listFiles`.
+5. **Presign request is `POST /v1/fs/presign-upload`, body `PresignUploadIn {path, content_type?}` (only `path` required).**
+   VERDICT: Corrected (spec said `POST /ui/files/upload/presign` with `{folder_id,name,size,mime}`).
+   SOURCE: OpenAPI `POST /v1/fs/presign-upload` + `components.schemas.PresignUploadIn`;
+   `src/api/endpoints/files.ts: fsPresignUpload`.
+6. **Presign response is `PresignUploadOut {upload_url, bucket, key, ticket_id, path, content_type}`.**
+   VERDICT: Corrected (spec said `{upload_url, file_id, headers}`).
+   SOURCE: `components.schemas.PresignUploadOut`; `src/api/endpoints/files.ts: fsPresignUpload`.
+7. **Confirm is `POST /v1/fs/complete-upload`, body `CompleteUploadIn {path, key, ticket_id, content_type?, encrypted?, enc_meta?}` (required: path,key,ticket_id).**
+   VERDICT: Corrected (spec said `POST /ui/files/upload/confirm {file_id}`).
+   SOURCE: OpenAPI `POST /v1/fs/complete-upload` + `components.schemas.CompleteUploadIn`;
+   `src/api/endpoints/files.ts: completeUpload`.
+8. **Download is `GET /v1/fs/download?path=` (binary stream).**
+   VERDICT: Corrected (spec said `GET /ui/files/{id}/content`).
+   SOURCE: OpenAPI `GET /v1/fs/download`; `src/api/endpoints/files.ts: downloadUrl`.
+9. **Create share link is `POST /ui/files/share-links`, body `CreateShareLinkIn {file_node_id, expiry_hours?=24, max_downloads?=1, password?}` (required: file_node_id) -> `201 ShareLinkOut`.**
+   VERDICT: Corrected (spec said `POST /ui/files/{id}/share {expires_in}`).
+   SOURCE: OpenAPI `POST /ui/files/share-links` (resp `201:ShareLinkOut`,
+   req `CreateShareLinkIn`); `components.schemas.CreateShareLinkIn`;
+   `src/api/endpoints/fileShareLinks.ts: createShareLink`; `src/api/types.ts: CreateShareLinkInput`.
+10. **`ShareLinkOut` has `link_id, file_node_id, file_name, file_size_bytes, content_type, created_at(int), expires_at(int), max_downloads, download_count, has_password, is_revoked, share_url`.**
+    VERDICT: Corrected (spec implied only `{link_id, share_url}`; timestamps are epoch ints).
+    SOURCE: `components.schemas.ShareLinkOut`; `src/api/types.ts: ShareLink`.
+11. **Revoke is `DELETE /ui/files/share-links/{link_id}` -> `200 {ok, link_id}`.**
+    VERDICT: Corrected (spec said `DELETE /ui/files/share/{link_id}` -> `204`).
+    SOURCE: OpenAPI `DELETE /ui/files/share-links/{link_id}` (resp `200:`);
+    `src/api/endpoints/fileShareLinks.ts: revokeShareLink`.
+12. **Error envelope `detail`: string verbatim; array joins each `msg` with `", "`; object mapped only for known `code`s, else generic fallback.**
+    VERDICT: Verified (refines spec's "{code,...} -> code-keyed message").
+    SOURCE: `src/api/client.ts: normalizeErrorDetail` (lines 66-102);
+    `src/api/client.errorMapping.test.ts` (unknown code -> fallback).
+13. **422 validation body is `HTTPValidationError` (`detail: [{loc,msg,type}]`).**
+    VERDICT: Verified.
+    SOURCE: OpenAPI `components.schemas.HTTPValidationError` (referenced by all `422` responses in the index).
+14. **`X-CSRF-Token` echoes the `ui_csrf` cookie and is attached to EVERY request (GET + mutations) when the cookie is present.**
+    VERDICT: Corrected (spec implied mutations-only / GET-absent).
+    SOURCE: `src/api/client.ts` (lines 167-171, header set unconditionally before fetch).
+15. **401 handling: single shared `refreshPromise` -> `POST /ui/session/refresh` -> retry once; a second 401 after retry triggers logout (no loop).**
+    VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (lines 119-237: `refreshSession`, 401 branch, retry).
+16. **`/v1/fs/share` (`ShareFileReq {path,to_user,permission}`) is user-to-user sharing, distinct from public share-links.**
+    VERDICT: Verified (clarifies scope; out of this ticket's share-link scope).
+    SOURCE: OpenAPI `POST /v1/fs/share`; `src/api/endpoints/files.ts: shareFile`;
+    `src/api/types.ts: ShareFileReq`.
+17. **Network/transient failures: the web client raises `ApiError(0, "Network error")` on fetch throw; idempotent GET retry/backoff is an Android-side concern.**
+    VERDICT: Verified-for-web / Unverified-assumption for Android budget.
+    SOURCE: `src/api/client.ts` (lines 185-189). The web client does NOT itself
+    retry transient 5xx; bounded-retry-on-503 for GETs (spec §7) is an
+    Android-port resilience decision owned by AND-331, not a backend contract.
+18. **MockWebServer + Retrofit/Moshi as the repo-test transport; Paging via `androidx.paging:paging-testing` `asSnapshot`.**
+    VERDICT: Verified (framework ref).
+    SOURCE: framework ref https://github.com/square/okhttp/tree/master/mockwebserver
+    and https://developer.android.com/reference/kotlin/androidx/paging/testing/package-summary (`asSnapshot`).
+19. **FileProvider content URI authority `com.testlogon.android.fileprovider`.**
+    VERDICT: Unverified-assumption (no Android manifest in `reference/`).
+    SOURCE: framework ref https://developer.android.com/reference/androidx/core/content/FileProvider — authority is set by AND-334's manifest; confirm there.
+20. **Analytics events (`file_upload_succeeded`, `share_link_created`).**
+    VERDICT: Unverified-assumption (no analytics hooks found in `reference/src` for files).
+    SOURCE: absent from `src/api/endpoints/files.ts` / `fileShareLinks.ts`; owned by feature tickets / AND-339.
+
+### Corrections made
+
+- §2: error-envelope mapping clarified (array joins `msg` with `", "`; object
+  mapped only for known `code`s, else fallback) per `client.ts: normalizeErrorDetail`.
+- §2: CSRF corrected — header sent on ALL requests (not mutations-only).
+- §5: entire contract rewritten from the unverified `/ui/files/*` id-based shapes
+  to the verified path-based `/v1/fs/*` endpoints (browse/list, search, presign,
+  complete-upload, download) and `/ui/files/share-links` for share links; field
+  names fixed (`type` not `is_folder`, `content_type` not `mime`, `updated_at`
+  not `modified_at`, `cursor` not `next_cursor`, no `id`/`folder_id`); presign
+  and confirm bodies/responses fixed; revoke `200 {ok,link_id}` not `204`.
+- §3 (items 1, 2, 5), §8 (CSRF), §11 (Share row), §14 (AC2, AC5): aligned to the
+  corrected contract.
+
+### Open assumptions
+
+- **FileProvider authority** (`com.testlogon.android.fileprovider`): cannot be
+  verified — no Android source/manifest is present in `reference/` (web + OpenAPI
+  only). Confirm against AND-334's `AndroidManifest.xml` before asserting the URI.
+- **Analytics events for Files**: no analytics hooks exist in the web reference
+  for files/share-links; presence in the Android feature is unconfirmed. Tests
+  gate these assertions behind the hooks' existence and flag the gap to AND-339.
+- **Android bounded-retry/backoff for transient 5xx on GETs**: the web client
+  does not retry 5xx; this is an Android-port resilience policy (AND-331), not a
+  backend contract — treated as a design decision, not a verified fact.
+- **`PagingConfig` (pageSize/prefetch)**: must be read from production at test
+  time; not derivable from the web reference. Unverified until AND-337 source.
+- **`FilesUiState` / `UploadState` / `ApiResult` sealed shapes (§6)**: these are
+  Android-side production types owned by AND-331/AND-337; no Android source is in
+  `reference/`, so their exact members are assumed from the spec, not verified.
+
+## 17. Test Plan
+
+Test targets: **JVM** = local JVM unit/Robolectric (no device); **emulator** =
+headless AVD `test35` (x86_64, API 35); **device** = physical Samsung Galaxy A15
+5G (SM-A156U, API 34, arm64-v8a) on the build host via adb. Each case names its
+target; hardware-dependent cases prefer the physical device.
+
+- **TC-AND-338-01 — Browse maps `FileListResp` and pages via `cursor`.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesRepositoryBrowseTest`).
+  Preconditions: `FakeCookieJar.authenticated()`; MockWebServer enqueues page-1
+  (`items` with one `type:"file"` + one `type:"folder"`, `cursor:"c2"`) then page-2.
+  Steps: call `browse(path="/Reports")`, then request next page with returned
+  `cursor`. Expected: two `FileNode`s mapped with correct folder/file (`type`),
+  `content_type`, `size`, `updated_at`; second request carries `cursor=c2` and
+  `path=/Reports`; `server.requestCount == 2`. Traces: AC-1, AC-2.
+
+- **TC-AND-338-02 — Search and sort issue correct requests and reset paging.**
+  Type: unit (JVM, fake repo) + contract. Target: JVM
+  (`FilesViewModelTest` / `FilesRepositoryBrowseTest`). Preconditions: fake repo
+  records requests. Steps: set sort -> browse with `sort_by`/`sort_dir`; set a
+  prefix -> `GET /v1/fs/search?prefix=`; set full-text -> `GET /v1/fs/search-text?q=`.
+  Expected: each request has the documented params; changing sort/query resets the
+  pager to page 1. Traces: AC-1.
+
+- **TC-AND-338-03 — Upload presign -> PUT -> complete, monotonic progress.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesRepositoryUploadTest` /
+  `FileUploadViewModelTest`). Preconditions: presign response `upload_url` points
+  at the MockWebServer URL so the PUT is captured locally. Steps: presign
+  (`PresignUploadIn{path}`), PUT bytes, complete (`CompleteUploadIn{path,key,ticket_id}`).
+  Expected: three captured requests in order; `UploadState.InProgress(fraction)`
+  emissions strictly non-decreasing in `0f..1f` ending `Succeeded`; complete body
+  carries `key`+`ticket_id` from the presign response. Traces: AC-3, AC-9.
+
+- **TC-AND-338-04 — Download cache miss writes FileProvider URI; cache hit = 0 network.**
+  Type: integration/Robolectric (JVM) for FileProvider; promote to **device** if
+  the FileProvider grant must be exercised on real API 34. Target: JVM/Robolectric
+  then device (`FilesRepositoryDownloadTest`). Preconditions: MockWebServer serves
+  a small byte fixture for `GET /v1/fs/download?path=`; sandbox cache dir.
+  Steps: `download(path)` (miss) then `download(path)` again (hit). Expected: miss
+  returns `content://com.testlogon.android.fileprovider/...` (no `file://`);
+  `server.requestCount == 1` after the hit (zero extra calls). Traces: AC-4.
+  NOTE: authority is an open assumption (§16) — confirm against AND-334 manifest.
+
+- **TC-AND-338-05 — Create share link body + 201 `ShareLinkOut`.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesRepositoryShareTest` /
+  `ShareLinkViewModelTest`). Preconditions: enqueue `201` `ShareLinkOut`. Steps:
+  `createShareLink(file_node_id="/Reports/Q3.pdf", expiry_hours=24, max_downloads=1)`.
+  Expected: request is `POST /ui/files/share-links` with body keyed by
+  `file_node_id`; response parses `link_id` + `share_url`; `created_at`/`expires_at`
+  parsed as epoch ints; success state surfaced. Traces: AC-5, AC-9.
+
+- **TC-AND-338-06 — Revoke share link returns 200 {ok, link_id}.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesRepositoryShareTest`).
+  Preconditions: enqueue `200 {"ok":true,"link_id":"sl_1"}`. Steps:
+  `revokeShareLink("sl_1")`. Expected: request is
+  `DELETE /ui/files/share-links/sl_1`; result maps to success (NOT expecting 204);
+  ViewModel surfaces revoked state. Traces: AC-5.
+
+- **TC-AND-338-07 — Error `detail` shapes map to `ApiResult.Error` messages.**
+  Type: unit/contract (JVM). Target: JVM (`FilesErrorMappingTest`). Preconditions:
+  enqueue three 4xx bodies. Steps/Expected: `{"detail":"Not found"}` -> message
+  "Not found"; `{"detail":[{"msg":"name required"},{"msg":"size too big"}]}` ->
+  "name required, size too big" (joined with `", "`); `{"detail":{"code":"unknown_x"}}`
+  -> generic fallback message (unknown code is NOT surfaced). Traces: AC-6.
+
+- **TC-AND-338-08 — Idempotent GET retries once on 503; mutations do not retry.**
+  Type: contract/MockWebServer (JVM). Target: JVM
+  (`FilesRepositoryBrowseTest` / `FilesErrorMappingTest`). Preconditions: virtual
+  clock / injected delay. Steps: browse enqueues `503` then `200`
+  (`requestCount==2`); complete-upload / share-create / revoke enqueue `503`
+  (`requestCount==1`, `ApiResult.Error`). Expected: GET retried once within a
+  bounded budget; mutations not retried. Traces: AC-6, AC-8.
+  NOTE: GET-retry is an Android resilience policy (§16 open assumption), not a
+  backend guarantee.
+
+- **TC-AND-338-09 — Timeout/no-connectivity surfaces Offline without hanging.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesRepositoryBrowseTest` /
+  `FilesViewModelTest`). Preconditions: `MockResponse().setSocketPolicy(NO_RESPONSE)`;
+  20s call timeout; test wall-clock bounded. Steps: browse against the dead socket.
+  Expected: call times out -> `FilesUiState.Offline`; a later success after cached
+  rows -> `Content(stale = true)`; test does not hang. Traces: AC-6, AC-7, AC-8.
+  (This models the flaky dev host `18.222.237.167` offline path.)
+
+- **TC-AND-338-10 — 401 -> refresh-once -> retry succeeds; two 401s fail.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesErrorMappingTest`).
+  Preconditions: authenticated fake jar. Steps: (a) browse `401`, then
+  `POST /ui/session/refresh` `200`, then retry `200`; (b) browse `401` twice.
+  Expected: (a) succeeds with exactly one refresh attempt; (b) fails, no infinite
+  loop, logout signaled. Traces: AC-6.
+
+- **TC-AND-338-11 — `X-CSRF-Token` attached and equals `ui_csrf` on mutating call.**
+  Type: contract/MockWebServer (JVM). Target: JVM (`FilesRepositoryShareTest` /
+  `FilesRepositoryUploadTest`). Preconditions: jar seeds `ui_csrf=abc`. Steps:
+  perform a mutating call (share create / complete-upload). Expected: recorded
+  request header `X-CSRF-Token == "abc"`. Do NOT assert absence on GETs (web sends
+  it on all requests, §16). Traces: AC-9.
+
+- **TC-AND-338-12 — No test references the live host; suite is hermetic/deterministic.**
+  Type: unit/CI-guard (JVM). Target: JVM (build/CI step). Preconditions: test
+  sources present. Steps: grep test source sets for `18.222.237.167`; scan for
+  `Thread.sleep`. Expected: zero matches for the host; no `Thread.sleep`; all
+  network goes to MockWebServer base URL. Traces: AC-8.
+
+- **TC-AND-338-13 — Compose UI renders Loading/Content/Empty/Error/Offline and recovers.**
+  Type: Compose-UI (Robolectric on JVM where viable, else **emulator** `test35`).
+  Target: JVM/Robolectric or emulator (`FileBrowseScreenTest`). Preconditions:
+  `FakeFilesRepository` injected; fixtures for each state. Steps: drive states via
+  the fake; tap retry from Error. Expected: each state's nodes assert via semantics;
+  Empty for `items:[]`; Error shows a retry affordance that re-requests and
+  transitions to Content; Offline renders and recovers. Traces: AC-7.
+
+- **TC-AND-338-14 — Accessibility: icon-only controls have content descriptions; rows focusable; strings from resources.**
+  Type: Compose-UI / accessibility (Robolectric on JVM, or **emulator**). Target:
+  JVM/Robolectric or emulator (`FileBrowseScreenTest`, `FileUploadScreenTest`,
+  `ShareLinkSheetTest`). Preconditions: screens rendered with fixtures. Steps:
+  query sort/upload-FAB/share/overflow via `onNodeWithContentDescription`; assert
+  list rows are individually focusable/clickable; read expected error/empty text
+  via `context.getString(...)`. Expected: all icon-only controls have non-empty
+  content descriptions; rows are focusable nodes; user-facing strings resolve from
+  resources (not hardcoded). Traces: AC-7.
+
+### Coverage matrix (AC -> TC)
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 unit lanes present & executed; classes run | TC-01, TC-02 (and all JVM TCs execute the classes) |
+| AC-2 browse maps multi-item payload + 2nd page via `cursor` | TC-01 |
+| AC-3 upload presign->PUT->confirm + monotonic progress | TC-03 |
+| AC-4 download content URI on miss + 0 network on hit | TC-04 |
+| AC-5 share create body + revoke 200 success | TC-05, TC-06 |
+| AC-6 detail shapes, GET retry, no mutation retry, 401 refresh | TC-07, TC-08, TC-09, TC-10 |
+| AC-7 UI Loading/Content/Empty/Error/Offline + content descriptions | TC-13, TC-14 |
+| AC-8 hermetic & deterministic, no live host | TC-08, TC-09, TC-12 |
+| AC-9 `X-CSRF-Token` on a mutating call | TC-03, TC-05, TC-11 |

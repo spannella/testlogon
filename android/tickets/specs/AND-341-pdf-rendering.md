@@ -5,7 +5,8 @@ milestone: M7
 epic: E44
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-340]
 blocks: [AND-342]
 ---
@@ -37,9 +38,9 @@ FR-9. The document source file is read via a seekable file descriptor (`PdfRende
 - Lives in `:feature-packets` (the packet/document feature module introduced by AND-340). AND-340 owns the packet list, packet detail, document selection, and navigation into this viewer; AND-341 adds the `DocumentViewerScreen` and the rendering pipeline behind it.
 - **Depends on AND-340** for: the navigation route into the viewer, the document identifiers (packet id + document id), and the document metadata/download surface in the packets API/repository.
 - **Blocks AND-342** (Signature capture + placement), which overlays signature fields on the page geometry this ticket exposes. The `PageLayout` contract in §6 is the integration seam.
-- Module layering: `:app -> :feature-packets -> :core-network, :core-model, :core-data, :core-ui, :core-testing`. The PDF download helper reuses the authenticated OkHttp client (cookies + `X-CSRF-Token`) from `:core-network`.
+- Module layering: `:app -> :feature-packets -> :core-network, :core-model, :core-data, :core-ui, :core-testing`. The PDF download helper reuses the authenticated OkHttp client from `:core-network`. **(CORRECTED)** The web reference (`src/api/client.ts`) sends, on every call: `Authorization: Bearer <accessToken>`, session cookies (`credentials: include`), `X-CSRF-Token` (read from the `ui_csrf` cookie), and an optional `X-IMPERSONATION-TOKEN`; the OpenAPI additionally declares optional `X-SESSION-ID` header and `user_sub` query params on these routes. The earlier "cookies + `X-CSRF-Token`" phrasing was incomplete — the Bearer access token is the primary credential. The download helper must reuse all of these interceptors, not just the cookie jar.
 - Stack: Kotlin 2.0.21, Compose + Material 3, single-Activity Navigation-Compose, Hilt (KSP), Coroutines/Flow, Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15, Room 2.6, DataStore, Coil. minSdk 24, compile/target 35, JDK 17, AGP 8.7.3, Gradle 8.9.
-- Backend: FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable — design ~20s timeouts, bounded backoff for idempotent GETs, offline/stale states). Cookie-based auth; persistent cookie jar; single `POST /ui/session/refresh` retry on 401. OpenAPI at `/openapi.json` is authoritative; the document/download endpoint path and field names below MUST be reconciled against it and the web reference (`frontend/src/api/endpoints/*`) at kickoff (see §13).
+- Backend: FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable — design ~20s timeouts, bounded backoff for idempotent GETs, offline/stale states). **(CORRECTED)** Auth is Bearer access token + session cookies + `X-CSRF-Token`; persistent cookie jar; single `POST /ui/session/refresh` retry on 401 — verified in `src/api/client.ts` (`refreshSession`). OpenAPI at `/openapi.json` is authoritative; the endpoint paths and field names below have now been reconciled against it and the web reference (`reference/src/api/endpoints/signaturePackets.ts`) — see §16 for the corrections.
 - Namespace / applicationId base: `com.testlogon.android`.
 
 ## 4. Technical Design
@@ -86,7 +87,7 @@ interface FileDownloader {
     ): ApiResult<File>
 }
 ```
-`FileDownloaderImpl` uses the normal authenticated `OkHttpClient` (cookies + `X-CSRF-Token`, 401 refresh-once) but with a longer `callTimeout` (60s) for large PDFs, streaming the response body to `cacheDir/documents/{packetId}/{documentId}.pdf`. The download is content-addressed by document id + an ETag/version so a re-open hits the cache.
+`FileDownloaderImpl` uses the normal authenticated `OkHttpClient` (Bearer token + cookies + `X-CSRF-Token`, 401 refresh-once — see §3 correction) but with a longer `callTimeout` (60s) for large PDFs, streaming the response body to `cacheDir/documents/{packetId}/{documentId}.pdf`. **(CORRECTED)** since the server does not return a `version` field on these routes, cache freshness is keyed by `packetId` (+ HTTP `ETag`/`Last-Modified` if the server happens to send them); absent those, treat a cached file as fresh for a short TTL and otherwise re-download. The download verifies the body starts with `%PDF-` rather than trusting `Content-Type`.
 
 ### Page renderer (`:feature-packets`, `document/`)
 ```kotlin
@@ -136,30 +137,41 @@ class DocumentViewerViewModel @Inject constructor(
 
 ## 5. API Contract
 
-This ticket consumes the packets API surface owned by AND-340; it does not define new endpoints, but it does fetch the raw PDF bytes. Path/field names are the working contract and MUST be reconciled against `/openapi.json` and `frontend/src/api/endpoints/*` (§13).
+This ticket consumes the signature-packet API surface owned by AND-340; it does not define new endpoints, but it does fetch the raw PDF bytes.
 
-### Resolve document download (via AND-340 repository)
-`GET /ui/packets/{packet_id}/documents/{document_id}` (metadata, already modeled by AND-340) is expected to include a download reference:
+> **(CORRECTED at review.)** The original draft assumed a per-document model (`GET /ui/packets/{packet_id}/documents/{document_id}` with `document_id`/`page_count`/`download_url`/`content_type`/`version`). **No such endpoint or fields exist.** The authoritative surface is the *signature-packet* API: a packet has a single source PDF identified by `source_path` (a file-path string), plus a list of `fields` carrying page geometry. There is no per-document sub-resource and no server-reported `page_count`. The `DocumentRef.documentId` concept in §4 should be treated as a synonym for `packet_id` (a packet maps 1:1 to one PDF) unless AND-340 introduces a real multi-document model. The Android `PdfRenderer` derives `pageCount` and per-page sizes locally from the rendered file.
+
+### Resolve packet + source PDF (via AND-340 repository)
+`GET /v1/signature-packets/{packet_id}` → `200: SignaturePacketDetailOut`. **Verified** against OpenAPI (`op=get_signature_packet_detail_...`) and `src/api/endpoints/signaturePackets.ts: getSignaturePacketDetail`. Shape (verified fields; required ones marked *):
 ```json
 {
-  "document_id": "doc_8f1c",
-  "name": "Lease Agreement.pdf",
-  "page_count": 12,
-  "content_type": "application/pdf",
-  "download_url": "/ui/packets/pk_42/documents/doc_8f1c/content",
-  "version": 3
+  "packet_id": "pk_42",          // * string
+  "status": "sent",              // * string (draft|sent|partially_signed|completed|cancelled|expired)
+  "owner_user_id": "u_…",        // * string
+  "source_path": "/contracts/nda.pdf", // * string — the source PDF reference
+  "role": "signer",              // * "sender" | "signer"
+  "signers": [ { "signer_id": "…", "status": "pending" } ],   // * array
+  "fields":  [ { "field_id": "…", "page": 0, "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.05, "field_type": "signature", "required": true } ], // * array — page geometry for AND-342
+  "capabilities": { "can_edit_fields": false, "can_send": false, "can_fill_fields": true }, // * object<string,bool>
+  "legal_notice": null,          // optional object|null
+  "signer_status": "pending",    // optional
+  "created_at": null, "sent_at": null, "completed_at": null,
+  "origin_channel": null, "origin_ref": null
 }
 ```
+Note: `page_count` is NOT present; pages are discovered locally. The `fields[]` page/x/y/width/height are the geometry seam for AND-342 and are already normalized-style coords per the web client's `SignaturePacketField` type.
 
 ### Fetch PDF bytes
-`GET {download_url}` (e.g. `GET /ui/packets/pk_42/documents/doc_8f1c/content`) — authenticated UI GET (session cookie + `X-CSRF-Token`). Response: `200` with `Content-Type: application/pdf` and the raw PDF body (possibly `Content-Length`/ETag for caching). This is an **idempotent GET**, so it participates in bounded-backoff retry and the single 401 → `POST /ui/session/refresh` → retry path. The client streams the body to cache; it never holds the whole PDF in memory as a byte array beyond the OkHttp sink.
+**(CORRECTED.)** The only PDF-bytes endpoint in the spec is `GET /v1/signature-packets/{packet_id}/final-pdf` (the *final / completed* PDF), **verified** at OpenAPI `op=get_signature_packet_final_pdf_...` and `src/api/endpoints/signaturePackets.ts: downloadSignaturePacketFinalPdf`. The web client fetches it with a raw `fetch` carrying `Authorization: Bearer <accessToken>` + `credentials: include`, then downloads the blob. This is an **idempotent GET**, so it participates in bounded-backoff retry and the single 401 → `POST /ui/session/refresh` → retry path; stream the body to cache (never buffer the whole PDF as a byte array beyond the OkHttp sink).
+- *Caveat:* `final-pdf` returns the SIGNED/flattened PDF and exists only once a packet is far enough along; its OpenAPI `200` content is declared as `application/json: {}` (untyped binary passthrough), so the Android client must treat the body as raw bytes and validate the magic header (`%PDF-`) rather than trusting `Content-Type`.
+- **Open assumption (see §16):** how to fetch the *unsigned source* PDF (`source_path`) by packet id is NOT modeled in the current OpenAPI/web reference. AND-340 must surface this (e.g. a packets-repository method, an fs-download/presign route such as the `/v1/fs/presign-upload` family, or a route to be added). Until then this ticket renders whatever PDF bytes AND-340's repository hands back.
 
 ### Error envelope
-On non-PDF/error responses, FastAPI `detail` may be `string`, `[{ "msg": "...", "loc": [...] }]`, or `{ "code": "...", ... }`; the shared mapper (`:core-network`) normalizes all three into `AppError`. Notable cases: `404` (document missing → non-retryable error), `403`/`401` (session expired → refresh-once then retry; persistent 403 → non-retryable), `415`/unexpected content type (not a PDF → corrupt/unsupported error), `5xx`/timeout (retryable, dev host flakiness).
+On error responses, FastAPI `detail` may be a `string`, an array of `{ "msg": "...", "loc": [...] }` (the documented `422 HTTPValidationError` → `ValidationError` shape — **verified** in OpenAPI components), or an object with a `code` field; the shared mapper (`:core-network`) normalizes all three into `AppError`, mirroring `normalizeErrorDetail` in `src/api/client.ts`. **(CORRECTED.)** The only response codes these routes *declare* are `200` and `422`. The `404`/`403`/`415` cases in the original draft are **unverified assumptions** about runtime behavior (FastAPI dependencies routinely raise `401`/`403`, and missing packets typically `404`, but the schema does not enumerate them) — keep handling them defensively but do not present them as contract guarantees. Retry semantics: `401` → refresh-once-then-retry; `5xx`/timeout → retryable (dev-host flakiness); a body that is not a PDF (`%PDF-` check fails) → non-retryable corrupt-document error.
 
 ## 6. Data & State Management
 
-- **Document cache (filesystem):** downloaded PDFs live in `cacheDir/documents/{packetId}/{documentId}.pdf`, keyed for reuse by `version`/ETag. A re-open of the same fresh version skips the network. A startup/`onCleared` sweep removes files older than 7 days or for closed packets.
+- **Document cache (filesystem):** downloaded PDFs live in `cacheDir/documents/{packetId}/{documentId}.pdf`, keyed for reuse by HTTP `ETag`/`Last-Modified` when present (**CORRECTED:** there is no server `version` field on these routes). A re-open of the same unchanged file skips the network. A startup/`onCleared` sweep removes files older than 7 days or for closed packets.
 - **Render cache (memory):** `BitmapPageCache` LRU as described in §4; not persisted. On process death the screen restarts from `Loading` (PDF re-read from file cache, bitmaps re-rasterized) — acceptable because file cache makes this fast.
 - **No new Room entities.** Document/packet metadata persistence is owned by AND-340; this ticket reads it. If a small `documents` cache table is desired for offline document lists, that belongs to AND-340, not here.
 - **UI state** is a single `StateFlow<DocumentUiState>` in the ViewModel; per-page bitmaps are exposed as independent `StateFlow<Bitmap?>` so each `LazyColumn` item recomposes only when its own page is ready.
@@ -226,7 +238,7 @@ On non-PDF/error responses, FastAPI `detail` may be `string`, `[{ "msg": "...", 
 
 ## 13. Risks & Open Questions
 
-- **Contract drift:** the document content endpoint path, whether it's a relative `download_url` from metadata vs. a fixed `/content` route, and the content-type/ETag behavior are assumed; reconcile with `/openapi.json` and `frontend/src/api/endpoints/*` before coding. *Owner: implementer at kickoff.*
+- **Contract drift (RESOLVED at review, with one open item):** the document model was reconciled against `/openapi.json` and `src/api/endpoints/signaturePackets.ts` (see §16). Corrected: there is no per-document endpoint; the surface is `GET /v1/signature-packets/{packet_id}` (detail) and `GET /v1/signature-packets/{packet_id}/final-pdf` (signed PDF bytes); no `page_count`/`version` fields; auth is Bearer + cookies + CSRF. **Still open:** there is no modeled endpoint to fetch the *unsigned source* PDF (`source_path`) by packet id — AND-340 must surface this. *Owner: AND-340 + implementer at kickoff.*
 - **`PdfRenderer` limitations:** flat PDFs only; no AcroForm fields, JavaScript, or interactive elements, and **encrypted/password PDFs throw `SecurityException`**. If packets can be encrypted, a decrypt path (or a different renderer such as PdfBox-Android/PSPDFKit) is a follow-up — confirm packet PDF characteristics with backend. *Open.*
 - **Geometry coordinate system for AND-342:** confirm that normalized (0..1) per-page coordinates plus `PageLayout` points + `PageOnScreen` px rects are sufficient for signature placement under zoom/scroll, and agree the exact `Rect` space (content vs. viewport) with the AND-342 owner. *Open.*
 - **Performance on very large docs:** 100+ page or high-DPI scanned PDFs may stress memory/scroll; the windowed render + LRU + max-edge cap should hold, but validate on a low-RAM device. Render-scale cap value (2048 px) may need tuning.
@@ -259,3 +271,70 @@ AC-11. All user-facing strings are in `strings.xml`; page labels announce to Tal
 - Telemetry events emit with correct `stage` and no PII; debug logs gated by `BuildConfig.DEBUG`.
 - Network-security config still scopes cleartext to the dev host only; documents excluded from auto-backup.
 - PR description notes resolved/outstanding §13 items (esp. encrypted-PDF support and `FLAG_SECURE` decision).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Claim:** Document metadata is fetched via `GET /ui/packets/{packet_id}/documents/{document_id}` returning `document_id`/`name`/`page_count`/`content_type`/`download_url`/`version`. — **Verdict: Corrected.** No such path or fields exist. — **Source:** OpenAPI index (`reference/openapi.index.txt`) has no `/ui/packets/...` route; the packet detail is `GET /v1/signature-packets/{packet_id}` (`op=get_signature_packet_detail_v1_signature_packets__packet_id__get`).
+2. **Claim:** Packet detail shape. — **Verdict: Corrected to verified shape.** Fields are `packet_id, status, owner_user_id, source_path, role, signers[], fields[], capabilities` (required) plus optional `legal_notice, signer_status, created_at, sent_at, completed_at, origin_channel, origin_ref`. No `page_count`. — **Source:** OpenAPI `components.schemas.SignaturePacketDetailOut`; `src/api/endpoints/signaturePackets.ts: SignaturePacketDetail` / `getSignaturePacketDetail`.
+3. **Claim:** PDF bytes are fetched from a `…/content` route resolved via `download_url`. — **Verdict: Corrected.** The PDF-bytes route is `GET /v1/signature-packets/{packet_id}/final-pdf` (the SIGNED/final PDF). — **Source:** OpenAPI `op=get_signature_packet_final_pdf_v1_signature_packets__packet_id__final_pdf_get`; `src/api/endpoints/signaturePackets.ts: downloadSignaturePacketFinalPdf`.
+4. **Claim:** The content GET returns `Content-Type: application/pdf` with the raw body. — **Verdict: Corrected/Unverified.** OpenAPI declares `final-pdf` `200` content as `application/json: {}` (untyped binary passthrough); the client must validate the `%PDF-` magic header, not `Content-Type`. — **Source:** OpenAPI path object for `/v1/signature-packets/{packet_id}/final-pdf` responses (line ~288302).
+5. **Claim:** Fetching the *unsigned source* PDF for view-only rendering. — **Verdict: Unverified-assumption.** Packet detail exposes `source_path` (a file-path string) but no modeled endpoint streams that source PDF by packet id; `final-pdf` is the only PDF-bytes route and is the signed output. — **Source:** absence in `reference/openapi.index.txt` and `src/api/endpoints/signaturePackets.ts` (only `final-pdf`).
+6. **Claim:** Auth is "cookie-based / cookies + `X-CSRF-Token`". — **Verdict: Corrected (incomplete).** Every call sends `Authorization: Bearer <accessToken>` (primary), session cookies (`credentials: include`), `X-CSRF-Token` (from the `ui_csrf` cookie), and optional `X-IMPERSONATION-TOKEN`; OpenAPI also declares optional `X-SESSION-ID` header and `user_sub` query. — **Source:** `src/api/client.ts` (lines 156–171); OpenAPI params on these routes (`X-SESSION-ID,X-IMPERSONATION-TOKEN,user_sub`).
+7. **Claim:** Single `POST /ui/session/refresh` retry on 401. — **Verdict: Verified.** — **Source:** `src/api/client.ts: refreshSession` / 401 branch (lines 121–237); OpenAPI `op=ui_session_refresh_ui_session_refresh_post`.
+8. **Claim:** FastAPI `detail` may be string, `[{msg, loc}]`, or `{code,…}`; mapper normalizes all three. — **Verdict: Verified.** — **Source:** OpenAPI `components.schemas.HTTPValidationError` + `ValidationError` (`{loc, msg, type}`); `src/api/client.ts: normalizeErrorDetail` (lines 66–102).
+9. **Claim:** Error responses include `404`/`403`/`415` cases as part of the contract. — **Verdict: Unverified-assumption.** These signature-packet routes declare only `200` and `422` in OpenAPI; 401/403/404 occur at runtime via FastAPI deps but are not schema-enumerated. — **Source:** OpenAPI responses for the two routes (only `200`/`422`).
+10. **Claim:** The web client renders the source PDF (basis for the renderer contract). — **Verdict: Corrected.** The web reference does NOT rasterize the PDF; its "PDF editor canvas" is a dashed placeholder div with absolutely-positioned field boxes. Android must implement rendering from scratch. — **Source:** `src/pages/files/SignaturePacketComposer.tsx` (line ~606, `data-testid="signature-canvas"`; no `pdfjs`/`react-pdf` import).
+11. **Claim:** Field/page geometry is available for the AND-342 overlay. — **Verdict: Verified.** `fields[]` carry `page, x, y, width, height, field_type, required, assigned_signer_id?`. — **Source:** `src/api/endpoints/signaturePackets.ts: SignaturePacketField` (lines 23–38).
+12. **Claim:** `android.graphics.pdf.PdfRenderer` exists from API 21, is not thread-safe, allows one open page at a time, and throws `SecurityException` on encrypted PDFs. — **Verdict: Verified (framework ref).** — **Source:** framework ref — Android docs `https://developer.android.com/reference/android/graphics/pdf/PdfRenderer` and `PdfRenderer.Page`.
+13. **Claim:** `PdfRenderer` requires a seekable `ParcelFileDescriptor` over a local `File` (so remote PDFs must be downloaded to cache first). — **Verdict: Verified (framework ref).** — **Source:** framework ref — Android docs `PdfRenderer(ParcelFileDescriptor)` constructor.
+14. **Claim:** No new Room entities / no new server endpoints introduced by this ticket. — **Verdict: Verified (by scope).** This ticket only reads AND-340's surface and fetches PDF bytes. — **Source:** ticket scope `specs-src/AND-341.md`; no new ops in `reference/openapi.index.txt` attributable here.
+
+### Corrections made
+- §3 / §5 / §4 / §6 / §13: replaced the fictional `GET /ui/packets/{id}/documents/{id}` + `download_url`/`page_count`/`content_type`/`version` model with the real `GET /v1/signature-packets/{packet_id}` (`SignaturePacketDetailOut`) and `GET /v1/signature-packets/{packet_id}/final-pdf` (signed PDF bytes).
+- §3: corrected auth from "cookies + `X-CSRF-Token`" to **Bearer access token + cookies + `X-CSRF-Token` (+ optional `X-IMPERSONATION-TOKEN`/`X-SESSION-ID`)**.
+- §5: corrected the success `Content-Type` claim — body is treated as raw bytes validated by `%PDF-` magic, since OpenAPI declares `200` as `application/json: {}`; downgraded `404/403/415` from "contract" to defensive runtime handling.
+- §4/§6: removed reliance on a server `version` field for cache keying; switched to `ETag`/`Last-Modified` (+ TTL fallback).
+- §1/§5: noted the web client does not actually rasterize PDFs (placeholder canvas), so the Android renderer is greenfield.
+
+### Open assumptions
+- **Source-PDF fetch by packet id is unmodeled.** Only `final-pdf` (signed) is exposed; how to retrieve the unsigned `source_path` bytes for view-only rendering must come from AND-340 (repository method, fs presign/download route, or a new endpoint). *Why unverifiable:* not present in OpenAPI or the web reference.
+- **`DocumentRef.documentId` vs `packet_id`.** The current API is 1 packet → 1 PDF; a true multi-document model is assumed-away. *Why:* no document sub-resource exists; revisit if AND-340 adds one.
+- **Encrypted/password-protected packet PDFs.** Whether packets are ever encrypted (would make `PdfRenderer` throw `SecurityException`) is a product/backend question. *Why:* no schema field indicates encryption.
+- **`FLAG_SECURE` / screenshot policy.** Product decision, not derivable from sources.
+- **ETag/Last-Modified presence on `final-pdf`.** The server may or may not send caching headers; not declared in OpenAPI. *Why:* response headers not enumerated.
+
+## 17. Test Plan
+
+Test targets: **JVM** = local JVM/Robolectric (no device); **emu test35** = headless AVD x86_64 / Android 15 / API 35 (CI); **device A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). For ABI/API-version-sensitive native-codec behavior the physical device is preferred.
+
+- **TC-AND-341-01** — Type: contract/MockWebServer (JVM). Target: JVM. Test target: `FileDownloaderImpl`. Preconditions: MockWebServer enqueues `200` with a small fixture PDF body (starts with `%PDF-`). Steps: call `downloadToCache(url,…)`. Expected: returns `ApiResult.Success(File)`; file exists under `cacheDir/documents/{packetId}/…`, body bytes match fixture, `%PDF-` validated; request carried `Authorization: Bearer …`, cookies, and `X-CSRF-Token`. Traces: AC-7.
+- **TC-AND-341-02** — Type: contract/MockWebServer (JVM). Target: JVM. Test target: `FileDownloaderImpl` 401 path. Preconditions: server returns `401` once, then `200` PDF after a `POST /ui/session/refresh` `200`. Steps: download. Expected: exactly one refresh call, then original GET retried, success; on a second persistent `401` → `Error` (auth) with no infinite loop. Traces: AC-7.
+- **TC-AND-341-03** — Type: contract/MockWebServer (JVM). Target: JVM. Test target: error mapping. Preconditions: server returns body that is NOT a PDF (e.g. `application/json` `{"detail":[{"msg":"…","loc":["…"]}]}` or a `422`), and separately a `200` whose body fails the `%PDF-` check. Steps: download each. Expected: non-retryable `DocumentCorrupt` (or validation `AppError`) per `normalizeErrorDetail` semantics; bad cache file is deleted. Traces: AC-9.
+- **TC-AND-341-04** — Type: contract/MockWebServer (JVM). Target: JVM. Test target: retry/backoff + stale. Preconditions: server returns `5xx`/socket timeout; then a cached fresh file exists; `BackendHealthSignal` unhealthy. Steps: trigger load. Expected: idempotent GET retried with bounded backoff; if cache present → render from cache with `isStale=true` and no further network; if no cache → `Error(NetworkUnavailable, retryable=true)`. Traces: AC-8.
+- **TC-AND-341-05** — Type: unit (JVM/Robolectric). Target: JVM. Test target: `PdfRendererImpl` over a bundled ≥3-page fixture PDF in `:core-testing` assets. Preconditions: fixture opened via `ParcelFileDescriptor`. Steps: read `pageCount` and each `pageLayout(i)`; `renderPage(0, targetWidthPx)`. Expected: `pageCount`≥3; `PageLayout.widthPts/heightPts` match fixture media box; bitmap is `ARGB_8888`, non-blank, height matches aspect ratio. Traces: AC-1, AC-2.
+- **TC-AND-341-06** — Type: unit (JVM/Robolectric). Target: JVM. Test target: `PdfRendererImpl` single-thread serialization. Preconditions: fixture open. Steps: launch N concurrent `renderPage` calls across pages. Expected: all complete with correct bitmaps; no `IllegalStateException`/crash from concurrent `openPage` (access serialized via single dispatcher + `Mutex`); renderer + FD closed on `close()`. Traces: AC-10.
+- **TC-AND-341-07** — Type: unit (JVM). Target: JVM. Test target: `BitmapPageCache`. Preconditions: budget set small. Steps: insert beyond budget; request an in-flight page twice. Expected: LRU evicts least-recent and recycles only bitmaps not currently composed; concurrent request for an in-flight page returns the same `Deferred<Bitmap>` (dedupe). Traces: AC-3.
+- **TC-AND-341-08** — Type: unit (JVM). Target: JVM. Test target: `DocumentViewerViewModel` state machine. Preconditions: fakes for repo/downloader/renderer/health. Steps: drive happy path, host-down-with-cache, host-down-no-cache, corrupt PDF, encrypted PDF (renderer throws `SecurityException`). Expected: `Loading → Ready(pageCount,pages)`; cache-only → `Ready(isStale=true)` with zero network; no-cache → `Error(retryable)`; corrupt → `Error(DocumentCorrupt, retryable=false)`; encrypted → `Error(DocumentProtected, retryable=false)`; `onCleared` closes renderer + FD. Traces: AC-8, AC-9, AC-10.
+- **TC-AND-341-09** — Type: Compose-UI / instrumented (emu test35). Target: emu test35. Test target: `DocumentViewerScreen` canonical render+scroll. Preconditions: content GET stubbed via MockWebServer with the ≥3-page fixture. Steps: open viewer; assert page 1 composes; `performScrollToIndex(last)`; assert last page composes and shows a non-blank bitmap; each page label reads "Page N of M". Expected: all pages rasterize; smooth scroll to last page. Traces: AC-1, AC-2.
+- **TC-AND-341-10** — Type: instrumented (emu test35). Target: emu test35. Test target: windowing/placeholder. Preconditions: 50+ page fixture. Steps: fling through the list; observe placeholders then bitmap swap-in; monitor heap. Expected: aspect-correct placeholder holds position before bitmap ready (scroll offset stable), bitmap swaps in; off-screen bitmaps released, LRU budget never exceeded, no OOM. Traces: AC-3, AC-4.
+- **TC-AND-341-11** — Type: instrumented / Compose-UI (emu test35; confirm once on device A15). Target: emu test35 (+ device A15). Test target: zoom + geometry seam. Preconditions: fixture loaded. Steps: pinch and double-tap to zoom; settle; read `onPageLayout(List<PageOnScreen>)`. Expected: zoom clamps to [1.0x, 3.0x]; visible pages re-rasterize crisply (debounced ~150ms); `PageOnScreen.contentRect` emitted per visible page and updates on scroll/zoom. Run once on device A15 to confirm pinch gesture + arm64 raster quality (real-hardware gesture/ABI check). Traces: AC-5, AC-6.
+- **TC-AND-341-12** — Type: instrumented (emu test35). Target: emu test35. Test target: error/stale UI + retry. Preconditions: stub host-down (no cache) then host-down (with cache). Steps: load each; tap retry on the error state. Expected: retryable error state shows a labeled retry button (≥48 dp) that re-invokes load; stale state shows the shared offline affordance. Traces: AC-8.
+- **TC-AND-341-13** — Type: instrumented a11y + lint (emu test35 + JVM lint). Target: emu test35 / JVM. Test target: accessibility + strings + backup. Preconditions: viewer loaded; TalkBack/`AccessibilityChecks` enabled. Steps: scroll and read page `contentDescription`; run accessibility checks on loading/error/stale states; lint for hardcoded strings; inspect `dataExtractionRules`/`fullBackupContent`. Expected: each page announces "Page N of M"; controls labeled with adequate touch targets; no hardcoded user-facing strings (all in `strings.xml` with positional/plural args); `cacheDir/documents/` excluded from auto-backup. Traces: AC-11.
+- **TC-AND-341-14** — Type: integration / security (instrumented, device A15 preferred). Target: device A15. Test target: at-rest + transport + lifecycle leak. Preconditions: real download against a stub host. Steps: download a PDF; inspect file location/permissions; rotate + navigate away to trigger `onCleared`; verify cleartext config; grep logs. Expected: PDF stored in app-internal `cacheDir` (not external, not world-readable); cleartext allowed ONLY for the dev host; `PdfRenderer`/`ParcelFileDescriptor` closed and bitmaps recycled on `onCleared` (no leak); no cookies/CSRF/Bearer/full URLs logged; 7-day sweep removes stale files. Device A15 chosen to validate real on-device file ACLs and arm64/API-34 behavior. Traces: AC-10, AC-11.
+
+### Coverage matrix
+| AC | Covered by |
+|----|------------|
+| AC-1 (renders all pages, labeled) | TC-05, TC-09 |
+| AC-2 (scroll first→last, non-blank) | TC-05, TC-09 |
+| AC-3 (windowed, LRU, no OOM 50+) | TC-07, TC-10 |
+| AC-4 (placeholder holds, swaps in) | TC-10 |
+| AC-5 (pinch/double-tap zoom [1,3], re-render) | TC-11 |
+| AC-6 (per-page geometry emit on scroll/zoom) | TC-11 |
+| AC-7 (authenticated idempotent content GET, cached) | TC-01, TC-02 |
+| AC-8 (stale-from-cache / retryable error) | TC-04, TC-08, TC-12 |
+| AC-9 (corrupt/non-PDF/encrypted → non-retryable, cache purged) | TC-03, TC-08 |
+| AC-10 (serialized renderer, close on onCleared) | TC-06, TC-08, TC-14 |
+| AC-11 (strings, TalkBack, app-internal + no backup) | TC-13, TC-14 |

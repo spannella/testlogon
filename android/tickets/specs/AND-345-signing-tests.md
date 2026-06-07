@@ -5,7 +5,8 @@ milestone: M7
 epic: E44
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-344]
 blocks: []
 ---
@@ -53,9 +54,13 @@ as Compose instrumented/Robolectric tests for the signing screens.
   - **AND-343** Submit / sign + licenses (`licenseAgreements`).
   - **AND-344** Signing ViewModels — the state machine (direct dependency).
 - Web reference: `frontend/src/api/endpoints/signaturePackets.ts`,
-  `signatureTemplates.ts`, `licenseAgreements.ts`; shared types
-  `frontend/src/api/types.ts`. Backend OpenAPI at
-  `http://18.222.237.167:8000/openapi.json` (PLAINTEXT dev host, unreliable).
+  `signatureTemplates.ts`, `licenseAgreements.ts`; shared transport/CSRF/refresh in
+  `frontend/src/api/client.ts`; screen behaviour in
+  `frontend/src/pages/signing/SigningPage.tsx` (which renders only a
+  `SignaturePacketComposer` + `SignatureTemplateManager` — there is **no** packet-list
+  screen) and `frontend/src/pages/files/SignaturePacketComposer.tsx`. Backend OpenAPI
+  at `http://18.222.237.167:8000/openapi.json` (PLAINTEXT dev host, unreliable). The
+  signing API lives under `/v1/signature-packets/*` (not `/ui/signing/packets/*`).
 - Test infra baseline assumed present from earlier milestones: `core-testing`
   provides `MainDispatcherRule`, a `MockWebServer` harness, Hilt test runner, and
   Turbine for Flow assertions.
@@ -67,8 +72,10 @@ serialize/deserialize, null/optional field handling, enum decoding for packet an
 field status, and mapping DTO → `core-model` domain types.
 
 FR-2. Provide **JVM unit tests** for `SigningRepository`: success path, cache
-read-through (Room), stale/offline fallback, single `/ui/session/refresh` retry on
-401, and `ApiResult` error mapping (FastAPI `detail` variants).
+read-through (Room), stale/offline fallback, single `POST /ui/session/refresh`
+retry on 401 (only when already authenticated; verified in `client.ts`), and
+`ApiResult` error mapping (FastAPI `detail` variants — string, ValidationError
+array, and `{code}` object).
 
 FR-3. Provide **JVM unit tests** for the signing ViewModel state machine (AND-344):
 every documented `UiState` transition for packet detail, signature capture/adopt,
@@ -77,10 +84,16 @@ optimistic-then-rollback paths.
 
 FR-4. Provide **Compose UI tests** (Robolectric `@Config(sdk=[34])` under the
 `testDebugUnitTest` source set, or `androidTest` for device-only PdfRenderer paths)
-for: packet list rendering and empty/error states (AND-340); packet detail open
-(AND-340); multi-page PDF render + scroll (AND-341); signature draw/adopt and
-placement onto a document field (AND-342); submit produces a confirmation state
-(AND-343).
+for: packet detail open + status rendering (AND-340); multi-page PDF render +
+scroll from `/final-pdf` bytes (AND-341); signature draw/adopt and placement onto a
+document field, producing a `fill` payload (AND-342); completion (`send`/`mark-done`)
+produces a confirmation state (AND-343).
+> **CORRECTED (review 2026-06-06):** "packet list rendering" was removed as a
+> required screen because the backend exposes **no list endpoint** and the web
+> reference has **no packet-list screen** (`SigningPage.tsx`). If AND-340 actually
+> shipped an Android-only packet-list backed by a local Room cache (no server list
+> call), test that against `FakeSigningRepository`; otherwise this is descoped.
+> Confirm with the AND-340 owner (see §16 Open assumptions).
 
 FR-5. Tests must be **hermetic**: no network to the real dev host. All HTTP is
 served via `MockWebServer`; all time/dispatch is controlled via injected test
@@ -129,33 +142,40 @@ feature-signing/src/androidTest/kotlin/com/testlogon/android/feature/signing/
 Key shared fixture signatures:
 
 ```kotlin
+// NOTE (review 2026-06-06): shapes below were corrected to the real contract —
+// no PACKET_LIST_JSON (no list endpoint), detail JSON is /v1/signature-packets/{id}
+// (SignaturePacketDetailOut), packet status is the real enum, and fields use flat
+// x/y/width/height + field_type (not a nested NormalizedRect/type).
 object SigningFixtures {
-    const val PACKET_LIST_JSON: String        // GET /ui/signing/packets body
-    const val PACKET_DETAIL_JSON: String      // GET /ui/signing/packets/{id}
-    const val TEMPLATE_JSON: String
-    const val DETAIL_ERROR_DETAIL_LIST: String // 422 {"detail":[{"msg":...}]}
-    fun samplePdfBytes(pages: Int = 2): ByteArray
+    const val PACKET_DETAIL_JSON: String      // GET /v1/signature-packets/{packet_id}
+    const val CREATE_PACKET_JSON: String      // POST /v1/signature-packets resp
+    const val TEMPLATE_JSON: String           // GET /ui/signing/templates item
+    const val DETAIL_ERROR_DETAIL_LIST: String // 422 {"detail":[{"loc":..,"msg":..,"type":..}]}
+    fun samplePdfBytes(pages: Int = 2): ByteArray // for /final-pdf path
     fun packet(
         id: String = "pkt_1",
-        status: PacketStatus = PacketStatus.PENDING,
+        status: PacketStatus = PacketStatus.SENT,   // not PENDING — real enum
         fields: List<SignatureField> = listOf(signatureField()),
     ): SignaturePacket
     fun signatureField(
         id: String = "fld_1",
         page: Int = 0,
-        rect: NormalizedRect = NormalizedRect(0.1f, 0.8f, 0.4f, 0.9f),
+        fieldType: FieldType = FieldType.SIGNATURE,
+        x: Float = 0.1f, y: Float = 0.8f, width: Float = 0.3f, height: Float = 0.1f,
     ): SignatureField
 }
 
 class FakeSigningRepository : SigningRepository {
-    var listResult: ApiResult<List<SignaturePacket>> = ApiResult.Success(emptyList())
+    // Detail fetch + the fill/send/mark-done flow that replaces the imaginary "submit".
     var detailResult: ApiResult<SignaturePacket> = ApiResult.Success(SigningFixtures.packet())
-    var submitResult: ApiResult<SubmitReceipt> = ApiResult.Success(SubmitReceipt("rcpt_1"))
-    val submitted = mutableListOf<SignedPacket>()
-    override fun observePackets(): Flow<List<SignaturePacket>> = ...
-    override suspend fun refreshPackets(): ApiResult<Unit> = ...
+    var markDoneResult: ApiResult<MarkDoneResult> = ApiResult.Success(MarkDoneResult(/* SignaturePacketMarkDoneOut */))
+    val filledFields = mutableListOf<FieldFill>()
     override suspend fun getPacket(id: String): ApiResult<SignaturePacket> = detailResult
-    override suspend fun submitSigned(packet: SignedPacket): ApiResult<SubmitReceipt> = ...
+    override suspend fun fillField(packetId: String, fieldId: String, fill: FieldFill): ApiResult<Unit> = ...
+    override suspend fun send(packetId: String): ApiResult<SendResult> = ...
+    override suspend fun markDone(packetId: String): ApiResult<MarkDoneResult> = markDoneResult
+    // If the repo locally caches viewed packets, observe/refresh those rows; there is
+    // no server list endpoint to back a global observePackets() stream.
 }
 ```
 
@@ -194,37 +214,90 @@ deps.
 ## 5. API Contract
 
 No new API is defined here; this ticket **consumes** the AND-339 contract via
-`MockWebServer`. Tests assert the client correctly issues and parses these:
+`MockWebServer`. Tests assert the client correctly issues and parses these.
 
-- `GET /ui/signing/packets` → `200 [SignaturePacketDto, …]`
-- `GET /ui/signing/packets/{packetId}` → `200 SignaturePacketDto`
-- `GET /ui/signing/templates` → `200 [SignatureTemplateDto, …]`
-- `POST /ui/signing/packets/{packetId}/submit` with signed-packet body →
-  `200 {"receipt_id": "...", "status": "submitted"}`
-- `GET /ui/license-agreements` → `200 [...]` (AND-343)
+> **CORRECTED (review 2026-06-06):** the original draft listed `/ui/signing/packets`
+> paths, a `/submit` endpoint, a `document_url`/`rect`/`license_agreements`-in-packet
+> body, and `/ui/license-agreements`. **None of those exist.** The real backend
+> contract (OpenAPI index + `frontend/src/api/endpoints/signaturePackets.ts`) is the
+> `/v1/signature-packets` family below. There is **no packet-list endpoint** and the
+> web reference has **no packet-list screen** (`SigningPage.tsx` renders only a
+> `SignaturePacketComposer` + `SignatureTemplateManager`). See §16 for the audit.
 
-Representative fixture body asserted in `SigningDtoJsonTest`:
+Real endpoints (verified against OpenAPI and the web client):
+
+- `POST /v1/signature-packets` `req=CreateSignaturePacketIn` →
+  `200 CreateSignaturePacketOut` (create; body `source_path`, `origin_channel`,
+  optional `origin_ref`).
+- `GET /v1/signature-packets/{packet_id}` → `200 SignaturePacketDetailOut`.
+- `POST /v1/signature-packets/{packet_id}/fields` `req=SignaturePacketFieldMutationIn`
+  → `200 SignaturePacketFieldMutationOut` (field create/update/delete, `action` enum).
+- `POST /v1/signature-packets/{packet_id}/fields/{field_id}/fill`
+  `req=SignaturePacketFieldFillIn` → `200 SignaturePacketFieldFillOut`
+  (fill: `value`, `input_mode` typed|drawn, `drawn_strokes: number[][]`, optional
+  `notary_stamp`).
+- `POST /v1/signature-packets/{packet_id}/send` → `200 SendSignaturePacketOut`.
+- `POST /v1/signature-packets/{packet_id}/mark-done` → `200 SignaturePacketMarkDoneOut`.
+- `POST /v1/signature-packets/{packet_id}/acknowledge-legal-notice` →
+  `200 SignaturePacketLegalNoticeAckOut`.
+- `GET /v1/signature-packets/{packet_id}/events` → `200 SignaturePacketEventsOut`.
+- `GET /v1/signature-packets/{packet_id}/final-pdf` → `200` (PDF bytes; this is the
+  document/PDF source, **not** a `document_url` field on the packet).
+- `GET /ui/signing/templates` → `200 SignatureTemplateListOut` (verified — this one
+  path was correct).
+- License agreements (AND-343) live at `GET /ui/licenses/agreements` →
+  `200 LicenseAgreementListOut` (**not** `/ui/license-agreements`).
+
+There is **no submit endpoint** returning `{receipt_id, status}`. The "submit"
+flow in the AND-343 sense maps to filling required fields then
+`POST .../send` (sender) / `POST .../mark-done` (signer); the ViewModel
+"Confirmed" state corresponds to a successful `mark-done`/`send`, not a synthetic
+receipt. The `SubmitReceipt`/`submitSigned` fixtures in §4 must be renamed to wrap
+`SignaturePacketMarkDoneOut` (or removed) to match the real contract.
+
+Representative `SignaturePacketDetailOut` body asserted in `SigningDtoJsonTest`
+(required keys: `packet_id, status, owner_user_id, source_path, role, signers,
+fields, capabilities`; field geometry is flat `x/y/width/height` with
+`field_type`, **not** a nested `rect`/`type`):
 
 ```json
 {
   "packet_id": "pkt_1",
-  "status": "pending",
-  "document_url": "/ui/signing/packets/pkt_1/document.pdf",
+  "status": "sent",
+  "owner_user_id": "usr_1",
+  "source_path": "/files/contract.pdf",
+  "role": "signer",
+  "signer_status": "pending",
+  "signers": [{"signer_id": "sgr_1", "status": "pending"}],
   "fields": [
-    {"field_id": "fld_1", "type": "signature", "page": 0,
-     "rect": {"x": 0.1, "y": 0.8, "w": 0.3, "h": 0.1}, "required": true}
+    {"field_id": "fld_1", "field_type": "signature", "page": 0,
+     "x": 0.1, "y": 0.8, "width": 0.3, "height": 0.1, "required": true}
   ],
-  "license_agreements": [{"id": "lic_1", "version": "2025-01"}]
+  "capabilities": {"can_edit_fields": false, "can_send": false, "can_fill_fields": true},
+  "legal_notice": {"required": true, "accepted": false, "version": "2025-01", "text": "..."}
 }
 ```
 
-Header/CSRF behaviour under test: requests carry the `X-CSRF-Token` header echoed
-from the `ui_csrf` cookie; a `401` on a GET triggers exactly one
-`POST /ui/session/refresh` followed by a retry. `SigningApiTest` enqueues a `401`
-then `200` and asserts the recorded request sequence
-(`packets`, `session/refresh`, `packets`) and a single refresh. Error-detail
-mapping is asserted for the three FastAPI shapes: `"detail": "msg"`,
-`"detail": [{"msg": ...}]`, and `"detail": {"code": ...}`.
+`status` is one of `draft | sent | partially_signed | completed | cancelled |
+expired` (web `SignaturePacketStatus`), **not** `pending` — `pending` is only a
+per-signer/per-field status. Enum-decode tests must use the real packet-status set.
+
+Header/CSRF behaviour under test (verified in `frontend/src/api/client.ts`):
+the `X-CSRF-Token` header is set from the `ui_csrf` cookie on **every** request
+(GET and mutating), not only mutations; `Authorization: Bearer <token>` is added
+from the auth store; requests run with cookies (`credentials: include`). A `401`
+triggers **at most one** `POST /ui/session/refresh` **only if the user is already
+authenticated** (an unauthenticated 401 propagates straight through), then the
+original request is retried once; a second 401 on the retry logs the user out
+rather than looping. Concurrent 401s share a single in-flight refresh promise.
+`SigningApiTest` enqueues `401` then `200` and asserts the recorded sequence
+(`<packet req>`, `session/refresh`, `<packet req>`) with exactly one refresh, and
+a separate test enqueues `401`,`401` and asserts an auth error (no loop).
+Error-detail mapping (verified in `normalizeErrorDetail`) is asserted for the
+three shapes the client actually handles: `"detail": "msg"` (string),
+`"detail": [{"msg": ...}]` (FastAPI `HTTPValidationError`/`ValidationError`
+array — the real 422 shape), and `"detail": {"code": ...}` (authorization-error
+object, e.g. `role_required`).
 
 ## 6. Data & State Management
 
@@ -353,9 +426,14 @@ device subset, `:feature-signing:connectedDebugAndroidTest`.
   confirm final `SignUiState` subtypes and intent method names with AND-344.
 - **Analytics/redaction readiness:** telemetry assertions (§10) depend on those
   hooks existing; if not, they ship `@Ignore` with the owning ticket id.
-- **Open question:** does the backend submit endpoint accept a multipart signature
-  image or base64-in-JSON? Confirm against `/openapi.json` so the request-body
-  assertion in `SigningApiTest` matches the real contract.
+- **RESOLVED (review 2026-06-06):** there is no "submit endpoint" and no image
+  upload. Signatures are submitted as **JSON** via
+  `POST /v1/signature-packets/{packet_id}/fields/{field_id}/fill` with
+  `SignaturePacketFieldFillIn` = `{value?, input_mode: "typed"|"drawn",
+  drawn_strokes: number[][], notary_stamp?}` — i.e. vector stroke arrays, **not**
+  multipart and **not** a base64 bitmap. Completion is `POST .../send`
+  (sender) / `POST .../mark-done` (signer). `SigningApiTest` asserts this JSON body
+  shape and that no multipart/`Content-Type: multipart/*` request is ever issued.
 
 ## 14. Acceptance Criteria
 
@@ -401,3 +479,266 @@ except test sources, `core-testing` fixtures, and version-catalog test entries.
   least one reviewer from the signing feature owners approves.
 - CI job runs both `testDebugUnitTest` and the instrumented PDF subset (or the
   PDF subset is documented as nightly-only with rationale).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verification verdict, and an exact source pointer.
+OpenAPI pointers are `METHOD /path` and/or `components.schemas.<Name>` from
+`reference/openapi.index.txt` / `reference/openapi.pretty.json`. Frontend pointers
+are `reference/src/...`. Framework choices are labelled `framework ref`.
+
+1. **Create-packet endpoint is `POST /v1/signature-packets` (`CreateSignaturePacketIn`
+   → `CreateSignaturePacketOut`).** VERDICT: Corrected (draft had
+   `GET /ui/signing/packets`). SOURCE: OpenAPI `POST /v1/signature-packets`;
+   `src/api/endpoints/signaturePackets.ts: createSignaturePacket`.
+2. **Packet detail is `GET /v1/signature-packets/{packet_id}` →
+   `SignaturePacketDetailOut`.** VERDICT: Corrected (draft had
+   `GET /ui/signing/packets/{packetId}`). SOURCE: OpenAPI
+   `GET /v1/signature-packets/{packet_id}`; `components.schemas.SignaturePacketDetailOut`;
+   `src/api/endpoints/signaturePackets.ts: getSignaturePacketDetail`.
+3. **There is no packet-list endpoint and no list response array.** VERDICT:
+   Corrected (draft asserted `GET /ui/signing/packets → 200 [SignaturePacketDto…]`).
+   SOURCE: absence in `reference/openapi.index.txt` (only create + `{packet_id}`
+   sub-resources exist); `src/pages/signing/SigningPage.tsx` renders no list.
+4. **There is no `/submit` endpoint and no `{receipt_id,status:"submitted"}`
+   response.** VERDICT: Corrected. Completion = `POST .../send` and/or
+   `POST .../mark-done`. SOURCE: OpenAPI `POST /v1/signature-packets/{packet_id}/send`
+   (`SendSignaturePacketOut`), `POST /v1/signature-packets/{packet_id}/mark-done`
+   (`SignaturePacketMarkDoneOut`); `src/api/endpoints/signaturePackets.ts:
+   sendSignaturePacket, markSignaturePacketDone`.
+5. **Signature submission is JSON field-fill, not multipart/base64.**
+   `POST /v1/signature-packets/{packet_id}/fields/{field_id}/fill` with
+   `{value?, input_mode, drawn_strokes: number[][], notary_stamp?}`. VERDICT:
+   Corrected/Resolved (§13 open question). SOURCE:
+   `components.schemas.SignaturePacketFieldFillIn`; `src/api/endpoints/
+   signaturePackets.ts: fillSignaturePacketField`.
+6. **Field geometry is flat `x/y/width/height` + `field_type`, not a nested
+   `rect{x,y,w,h}` + `type`.** VERDICT: Corrected. SOURCE:
+   `src/api/endpoints/signaturePackets.ts: SignaturePacketField` (lines 23-38);
+   `SignaturePacketDetailOut.fields` (free-form objects) in OpenAPI.
+7. **Packet status enum is `draft|sent|partially_signed|completed|cancelled|
+   expired`; `pending` is per-signer/per-field only.** VERDICT: Corrected (draft
+   used `pending` as packet status). SOURCE:
+   `src/api/endpoints/signaturePackets.ts: SignaturePacketStatus` (lines 7-13) and
+   `SignaturePacketSigner.status`.
+8. **Packet has no `document_url`; the PDF is `GET /v1/signature-packets/
+   {packet_id}/final-pdf` (bytes).** VERDICT: Corrected. SOURCE: OpenAPI
+   `GET /v1/signature-packets/{packet_id}/final-pdf`; `src/api/endpoints/
+   signaturePackets.ts: downloadSignaturePacketFinalPdf`.
+9. **License agreements list is `GET /ui/licenses/agreements →
+   LicenseAgreementListOut`, not `/ui/license-agreements`.** VERDICT: Corrected.
+   SOURCE: OpenAPI `GET /ui/licenses/agreements`; `src/api/endpoints/
+   licenseAgreements.ts` (lines 40-52).
+10. **Templates list is `GET /ui/signing/templates → SignatureTemplateListOut`.**
+    VERDICT: Verified (the one path the draft got right). SOURCE: OpenAPI
+    `GET /ui/signing/templates`; `src/api/endpoints/signatureTemplates.ts`.
+11. **CSRF: `X-CSRF-Token` is set from the `ui_csrf` cookie on every request (not
+    only mutations).** VERDICT: Corrected (draft implied only "echoed" / on
+    mutating requests). SOURCE: `src/api/client.ts` lines 167-171.
+12. **401 handling: single `POST /ui/session/refresh` then one retry, only if the
+    user is already authenticated; concurrent 401s share one refresh promise; a
+    second 401 logs out (no loop).** VERDICT: Verified (with nuance added). SOURCE:
+    `src/api/client.ts` `refreshSession` + 401 block (lines 119-237).
+13. **Error `detail` has three handled shapes: string, ValidationError array
+    `[{loc,msg,type}]` (real 422 = `HTTPValidationError`), and `{code,...}` object
+    (auth errors).** VERDICT: Verified. SOURCE: `src/api/client.ts:
+    normalizeErrorDetail` + `mapAuthorizationError`;
+    `components.schemas.HTTPValidationError` / `ValidationError`.
+14. **Auth transport is `Authorization: Bearer <token>` plus cookies
+    (`credentials: include`); optional `X-IMPERSONATION-TOKEN`.** VERDICT: Verified.
+    SOURCE: `src/api/client.ts` lines 156-184; `params=...X-IMPERSONATION-TOKEN` in
+    OpenAPI index entries.
+15. **Field mutation endpoint `POST .../fields` uses `action: create|update|delete`
+    (`SignaturePacketFieldMutationIn`).** VERDICT: Verified. SOURCE:
+    `components.schemas.SignaturePacketFieldMutationIn`; `src/api/endpoints/
+    signaturePackets.ts: createSignaturePacketField / deleteSignaturePacketField`.
+16. **Robolectric Compose tests with `@Config(sdk=[34])` and instrumented-only
+    PdfRenderer.** VERDICT: Unverified-assumption re: Robolectric's PdfRenderer
+    shadow fidelity (genuinely unreliable). Framework basis is sound. SOURCE:
+    framework ref — Robolectric docs (robolectric.org) and
+    developer.android.com/jetpack/compose/testing; PdfRenderer instrumented-only is
+    a known limitation, treated as an assumption pending the AND-341 spike.
+17. **Test execution targets (JVM/Robolectric local; emulator AVD `test35` API 35
+    x86_64; physical Samsung A15 5G API 34 arm64 for device PdfRenderer).** VERDICT:
+    Unverified-assumption (CI matrix capability, not derivable from sources).
+    SOURCE: provided CI/dev target list; framework ref
+    developer.android.com/studio/test for `connectedAndroidTest`.
+
+### Corrections made
+
+- §2: fixed web-reference pointers; noted no packet-list screen; noted signing API
+  is `/v1/signature-packets/*`.
+- §3 FR-2: clarified `POST /ui/session/refresh`, authenticated-only refresh, and the
+  three real `detail` shapes. FR-4: removed "packet list rendering" as a required
+  screen (no server list / no web screen) and reframed completion as `send`/`mark-done`.
+- §4: corrected `SigningFixtures` (dropped `PACKET_LIST_JSON`, real status enum, flat
+  field geometry) and `FakeSigningRepository` (dropped `submitSigned`/`SubmitReceipt`/
+  global `observePackets`; added `fillField`/`send`/`markDone`).
+- §5: replaced the entire endpoint list, fixture JSON, status enum, and submit/CSRF
+  narrative with the verified contract; corrected `/ui/license-agreements` →
+  `/ui/licenses/agreements`.
+- §13: resolved the multipart-vs-base64 open question (JSON `drawn_strokes`).
+
+### Open assumptions
+
+- **Android packet-list screen (AND-340):** if it exists, it must be a local
+  (Room-backed) Android affordance — the backend has no list endpoint. Cannot be
+  verified from sources; confirm with the AND-340 owner. Affects FR-4 and the §6/§11
+  `observePackets` caching claims.
+- **`SignUiState` sealed hierarchy / intent names (AND-344):** the exact subtypes
+  (`Ready/Capturing/Placed/Submitting/Confirmed/Error`) are assumed from the draft;
+  not present in the reference sources (web ViewModel ≠ Android ViewModel). Confirm
+  against AND-344's merged code.
+- **Analytics events (`signing_packet_opened`, `signing_submitted`) and the OkHttp
+  redaction interceptor:** not present in the backend/web sources; assumed from
+  AND-340/343. Ship behind `@Ignore("AND-343")` if unwired.
+- **Coverage tooling/threshold (JaCoCo ≥85%) and CI 3-run determinism:** process
+  assumptions, not verifiable from API/frontend sources.
+- **Robolectric PdfRenderer fidelity / CI device matrix:** see citations 16-17.
+
+## 17. Test Plan
+
+Acceptance-criterion traces refer to §14 (AC-1…AC-8). "MWS" = MockWebServer.
+Test targets: JVM/Robolectric run locally or on the headless emulator AVD
+`test35` (API 35); instrumented PdfRenderer cases note where the **physical
+Samsung Galaxy A15 5G (API 34, arm64)** is required vs the emulator.
+
+- **TC-AND-345-01 — DTO round-trip + enum/optional decode (happy path).**
+  Type: unit (JVM). Target: `SigningDtoJsonTest`, `SigningMappersTest` (JVM local).
+  Preconditions: `SigningFixtures.PACKET_DETAIL_JSON` matching
+  `SignaturePacketDetailOut`. Steps: Moshi-decode the JSON to the DTO and back;
+  decode `status` to the packet-status enum; decode a field with flat
+  `x/y/width/height`+`field_type`; omit optional `legal_notice`/`signer_status`.
+  Expected: round-trips byte-stable; `status` ∈ {draft,sent,partially_signed,
+  completed,cancelled,expired}; unknown enum value maps to a safe `Unknown`, not a
+  crash; absent optionals decode to null/defaults; DTO→domain mapping preserves
+  geometry. Traces: AC-3.
+
+- **TC-AND-345-02 — Detail GET request shape + CSRF/auth headers (contract).**
+  Type: contract/MWS (JVM). Target: `SigningApiTest` (JVM local). Preconditions:
+  MWS enqueues `200 SignaturePacketDetailOut`; `ui_csrf` cookie + bearer token in
+  test DI. Steps: call `getPacket("pkt_1")`; inspect the recorded request.
+  Expected: `GET /v1/signature-packets/pkt_1`; headers include
+  `X-CSRF-Token: <cookie>` and `Authorization: Bearer <token>`; body parses to the
+  domain packet. Traces: AC-2, AC-3, AC-7.
+
+- **TC-AND-345-03 — Field-fill submits JSON drawn_strokes, never multipart
+  (contract + security).** Type: contract/MWS (JVM). Target: `SigningApiTest`
+  (JVM local). Preconditions: MWS enqueues `200 SignaturePacketFieldFillOut`.
+  Steps: call `fillField(pkt,fld, FieldFill(inputMode="drawn",
+  drawnStrokes=[[...]]))`; inspect recorded request. Expected: `POST
+  /v1/signature-packets/pkt/fields/fld/fill`; `Content-Type: application/json`;
+  body has `input_mode:"drawn"`, `drawn_strokes:[[...]]`; **no** `multipart/*`
+  content type and no base64 bitmap key; `X-CSRF-Token` present (CSRF guard).
+  Traces: AC-2, AC-4 (error-mapping sibling), AC-7; security §8.
+
+- **TC-AND-345-04 — Single refresh-on-401 then retry succeeds (happy auth path).**
+  Type: contract/MWS (JVM). Target: `SigningApiTest` (JVM local). Preconditions:
+  authenticated session; MWS enqueues `401`, then `200` for the refreshed retry,
+  with a `200` for `POST /ui/session/refresh`. Steps: call `getPacket`; capture the
+  recorded request sequence. Expected: exactly three requests in order
+  (`GET .../pkt`, `POST /ui/session/refresh`, `GET .../pkt`); result is Success;
+  refresh invoked once. Traces: AC-4.
+
+- **TC-AND-345-05 — Two consecutive 401s surface auth error, no loop (security/
+  resilience).** Type: contract/MWS (JVM). Target: `SigningApiTest` (JVM local).
+  Preconditions: authenticated; MWS enqueues `401`, refresh `200`, then `401`
+  again. Steps: call `getPacket`. Expected: result is `ApiResult.Failure(Auth)`;
+  refresh attempted once; no infinite retry; logout/session-expired signalled.
+  Also assert an **unauthenticated** 401 propagates without any refresh attempt.
+  Traces: AC-4, AC-7; security §8.
+
+- **TC-AND-345-06 — Three FastAPI `detail` error shapes map correctly (validation/
+  error responses).** Type: unit/contract (JVM). Target: `SigningApiTest` error
+  mapper (JVM local). Preconditions: MWS enqueues, across three runs:
+  `{"detail":"msg"}` (400), `{"detail":[{"loc":["body","value"],"msg":"field
+  required","type":"value_error"}]}` (422), `{"detail":{"code":"role_required"}}`
+  (403). Steps: call an API per shape. Expected: messages map to "msg", the joined
+  validation msg, and the humanized role-required string respectively; never a
+  crash; user-facing message non-empty. Traces: AC-4.
+
+- **TC-AND-345-07 — Repository cache read-through + stale-on-failed-refresh +
+  offline fallback (integration).** Type: integration (JVM + in-memory Room).
+  Target: `SigningRepositoryTest`, `SigningRepositoryRefreshTest` (JVM local).
+  Preconditions: in-memory Room DB; MWS. Steps: (a) detail fetch `200` upserts row
+  and emits cached packet; (b) refresh fails (`500`) → prior cached row retained
+  (stale-but-usable); (c) detail fetch with network `IOException` and warm cache →
+  returns cached packet flagged stale. Expected: each assertion holds; no row loss
+  on failure; `ApiResult` reflects stale source. Traces: AC-4, AC-7.
+
+- **TC-AND-345-08 — Timeout yields retryable failure, submit never auto-retried
+  (resilience).** Type: integration (JVM + MWS). Target: `SigningRepositoryTest`
+  (JVM local, short injected OkHttp timeout). Preconditions: MWS dispatcher with
+  `SocketPolicy.NO_RESPONSE`. Steps: (a) GET detail under NO_RESPONSE →
+  `ApiResult.Failure(Timeout)`; (b) `POST .../fields/{id}/fill` or `.../send`
+  returns `503`/timeout. Expected: GET surfaces a retryable error (no crash);
+  mutating POST is **not** auto-retried (recorded exactly once). Traces: AC-4, AC-7.
+
+- **TC-AND-345-09 — Malformed/missing-required JSON → non-crashing parse error
+  (validation).** Type: unit/contract (JVM). Target: `SigningDtoJsonTest` /
+  `SigningApiTest` (JVM local). Preconditions: MWS enqueues a body missing the
+  required `packet_id`/`capabilities`. Steps: call `getPacket`. Expected:
+  `ApiResult.Failure(Parse)`; ViewModel maps to an error state with a non-empty
+  user-facing message; no exception escapes. Traces: AC-4, AC-5, AC-7.
+
+- **TC-AND-345-10 — ViewModel state machine: fill → send/mark-done → Confirmed,
+  plus optimistic rollback (state coverage).** Type: unit (JVM + Turbine + virtual
+  time). Target: `SignViewModelTest` (JVM local). Preconditions:
+  `FakeSigningRepository`; `MainDispatcherRule(StandardTestDispatcher())`. Steps:
+  drive `onCapture/onPlace/onSubmit`; in a second case set `markDoneResult =
+  Failure`. Expected: emissions `Ready → Submitting → Confirmed` on success; on
+  failure `Ready → Submitting → Error(retryable)` with optimistic state rolled back
+  to `Ready`; every `SignUiState` subtype exercised. Traces: AC-5.
+
+- **TC-AND-345-11 — Normalized placement math clamps to 0..1, page-relative
+  (unit).** Type: unit (JVM). Target: `SignViewModelTest`/placement util (JVM
+  local). Preconditions: none. Steps: feed out-of-range and in-range placement
+  coords for given page. Expected: x/y/width/height clamped to [0,1]; coordinates
+  resolve page-relative; produces a valid `fill`/field-mutation payload. Traces:
+  AC-5.
+
+- **TC-AND-345-12 — Packet detail + signature capture/adopt/placement renders
+  (Compose-UI).** Type: Compose-UI (Robolectric `@Config(sdk=[34])`). Target:
+  `PacketDetailScreenTest`, `SignatureCaptureScreenTest` (JVM/Robolectric or
+  emulator `test35`). Preconditions: `FakeSigningRepository` / fixed `UiState`.
+  Steps: open detail (assert status text); draw on the capture canvas, tap
+  "Adopt", place onto a field; assert empty + error states render. Expected: nodes
+  present via `onNodeWithTag`/`onNodeWithText`; capture→adopt→place transitions the
+  UI; error/empty states show their semantics. Traces: AC-6.
+
+- **TC-AND-345-13 — Accessibility: content-descriptions, string resources, 48dp
+  touch targets (a11y).** Type: Compose-UI (Robolectric). Target:
+  `SignatureCaptureScreenTest` (JVM/Robolectric or emulator `test35`).
+  Preconditions: capture screen rendered. Steps: assert the canvas has a
+  `contentDescription`; "Adopt"/"Clear"/"Submit" resolved via
+  `context.getString(R.string.*)` (no hard-coded literals); placed fields are
+  focusable + labelled; `assertWidthIsAtLeast(48.dp)`/`assertHeightIsAtLeast(48.dp)`
+  on interactive nodes. Expected: all assertions pass. Traces: AC-6 (§9).
+
+- **TC-AND-345-14 — Multi-page PDF renders + scrolls from real PdfRenderer
+  (instrumented/e2e).** Type: instrumented (`androidTest`,
+  `createAndroidComposeRule`). Target: `PdfDocumentScreenTest`. **MUST run on the
+  physical Samsung Galaxy A15 5G (API 34, arm64-v8a)** because Robolectric does not
+  faithfully shadow `android.graphics.pdf.PdfRenderer` and arm64/API-34 rendering
+  differs from x86 API-35; the emulator `test35` is the fallback only if the device
+  is unavailable. Preconditions: `SigningFixtures.samplePdfBytes(pages = 2)` (or
+  bytes from `/final-pdf` via MWS on-device). Steps: render the document screen;
+  assert page 1 visible; scroll; assert page 2 visible. Expected: both pages render
+  via real PdfRenderer; scroll reveals page 2; page count = 2. Traces: AC-6.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (tests exist/compile, JDK17/AGP) | all TCs (compiled in CI) |
+| AC-2 (suite passes, zero failures) | TC-02, TC-03, TC-04 (and full green run) |
+| AC-3 (DTO round-trip/null/enum for packets + templates) | TC-01, TC-02 |
+| AC-4 (cache, stale, offline, single-refresh-401, 3 detail mappings) | TC-04, TC-05, TC-06, TC-07, TC-08, TC-09 |
+| AC-5 (every SignUiState + transitions, submit/error/rollback) | TC-09, TC-10, TC-11 |
+| AC-6 (list*/detail/capture/placement/submit + instrumented PDF) | TC-12, TC-13, TC-14 |
+| AC-7 (hermetic, deterministic, CI-runnable) | TC-02, TC-05, TC-07, TC-08, TC-09 |
+| AC-8 (no prod source modified) | enforced by review; no test asserts prod edits |
+
+\*Packet-list rendering is descoped pending the §16 Open assumption (no server list
+endpoint / no web list screen); if AND-340 shipped a local list, add a Robolectric
+case mirroring TC-12 against `FakeSigningRepository`.

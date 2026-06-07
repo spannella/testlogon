@@ -5,7 +5,8 @@ milestone: M7
 epic: E46
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-353, AND-356]
 blocks: [AND-354, AND-362]
 ---
@@ -74,9 +75,14 @@ Concretely this ticket ships, in module `feature-orgs`:
   role. Provide a `changeRole(memberId, role)` action and a
   `removeMember(memberId)` action; both optimistically update list state and
   roll back on failure, emitting a one-shot error event.
-- FR-4 **Invites.** Expose pending invites and a `sendInvite(email, role)`
-  action with inline field validation (valid email, role from allowed set) and
-  a `revokeInvite(inviteId)` action.
+- FR-4 **Invites.** Expose pending invites (from the caller-scoped
+  `GET /ui/orgs/invites/pending`, filtered to this org) and a
+  `sendInvite(email, role)` action with inline field validation (valid email,
+  role from the allowed write set `admin/member/viewer`).
+  **CORRECTED:** there is **no** backend revoke-invite endpoint, so a
+  `revokeInvite(inviteId)` action is **out of scope** for this ticket (it cannot
+  call anything). It is removed; if product needs revoke, a backend endpoint must
+  be added first (tracked as an open assumption in §16).
 - FR-5 **Role gating.** The detail/members/invite states must carry the
   caller's role (`OrgRole`) so screens can enable/disable management controls;
   the ViewModel rejects management actions when the caller lacks `ADMIN`/`OWNER`
@@ -87,8 +93,13 @@ Concretely this ticket ships, in module `feature-orgs`:
 - FR-6 **Syndicate list.** Expose syndicates the caller belongs to, with
   refresh + retry, `Empty` vs `Error`.
 - FR-7 **Syndicate detail.** Given a `syndicateId`, expose overview, the
-  treasury summary (balance, currency), and the revenue-split table
-  (per-member share). These are **read-only** in this milestone.
+  treasury summary (`balance_cents`, `currency`), and the revenue-split **config**
+  (mode + `weights_bps` map, `platform_fee_bps`). **CORRECTED:** these come from
+  **three separate** backend GETs (`/ui/syndicates/{id}`,
+  `/ui/syndicates/treasury/{id}`, `/ui/syndicates/revenue-split/{id}/config`),
+  not one call — the ViewModel `combine`s them into one `SyndicateDetailUiState`.
+  Revenue split is a config object, not a per-member share table. All
+  **read-only** in this milestone.
 - FR-8 All ViewModels survive configuration changes (state held in `ViewModel`,
   arguments read once from `SavedStateHandle`).
 
@@ -170,6 +181,8 @@ class OrgMembersViewModel @Inject constructor(
         val snapshot = _state.value.members
         _state.update { it.copy(members = it.members.withRole(memberId, role)) } // optimistic
         viewModelScope.launch {
+            // NOTE: memberId here IS the member's user_sub — the backend keys
+            // role change / removal by member_sub, not an opaque membership id.
             when (val r = orgRepository.changeMemberRole(orgId, memberId, role)) {
                 is ApiResult.Success -> _events.trySend(OrgEvent.RoleChanged(memberId, role))
                 is ApiResult.Failure -> {
@@ -195,9 +208,13 @@ fun sendInvite(email: String, role: OrgRole) {
 ```
 
 Syndicate ViewModels follow the identical shape; `SyndicateDetailViewModel`
-loads overview/treasury/revenue-split via the single
-`syndicateRepository.getSyndicate(id)` call (AND-356) and exposes them as one
-state object. No write actions are defined for syndicates in this milestone.
+loads overview/treasury/revenue-split via **three** AND-356 repository calls —
+`getSyndicate(id)`, `getTreasury(id)`, `getRevenueSplit(id)` — combined
+(`coroutineScope { async … }` / `combine`) into one `SyndicateDetailUiState`
+(see §13 R1, now realized). A partial failure (e.g. treasury 403 for non-admins)
+must degrade gracefully: surface the parts that loaded and mark the missing part,
+rather than failing the whole screen. No write actions are defined for syndicates
+in this milestone.
 
 `OrgRole.canManage` is `this == OrgRole.OWNER || this == OrgRole.ADMIN`.
 
@@ -210,48 +227,90 @@ ticket consumes** (owned upstream) so the state mapping is unambiguous.
 
 ```kotlin
 interface OrgRepository {                                   // AND-353
-    suspend fun listOrgs(): ApiResult<List<Org>>            // GET /ui/orgs
-    suspend fun getOrg(orgId: String): ApiResult<OrgDetail> // GET /ui/orgs/{orgId}
-    suspend fun listMembers(orgId: String): ApiResult<List<OrgMember>>      // GET /ui/orgs/{orgId}/members
-    suspend fun listInvites(orgId: String): ApiResult<List<OrgInvite>>      // GET /ui/orgs/{orgId}/invites
-    suspend fun invite(orgId: String, email: String, role: OrgRole): ApiResult<OrgInvite>    // POST .../invites
-    suspend fun revokeInvite(orgId: String, inviteId: String): ApiResult<Unit>               // DELETE .../invites/{id}
-    suspend fun changeMemberRole(orgId: String, memberId: String, role: OrgRole): ApiResult<OrgMember> // PATCH .../members/{id}
-    suspend fun removeMember(orgId: String, memberId: String): ApiResult<Unit>               // DELETE .../members/{id}
+    suspend fun listOrgs(): ApiResult<List<Org>>            // GET /ui/orgs (resp: OrgOut[])
+    suspend fun getOrg(orgId: String): ApiResult<OrgDetail> // GET /ui/orgs/{org_id} (resp: OrgOut)
+    suspend fun listMembers(orgId: String): ApiResult<List<OrgMember>>      // GET /ui/orgs/{org_id}/members (resp: OrgMemberOut[])
+    // CORRECTED: there is NO org-scoped pending-invites endpoint. Pending invites
+    // are caller-scoped: GET /ui/orgs/invites/pending -> OrgInviteOut[]. The org
+    // detail/members surface therefore shows pending invites filtered by org_id.
+    suspend fun listPendingInvites(): ApiResult<List<OrgInvite>>            // GET /ui/orgs/invites/pending
+    // CORRECTED: invite path is /members/invite, req=OrgMemberInviteReq{email, org_role}.
+    suspend fun invite(orgId: String, email: String, role: OrgRole): ApiResult<OrgInvite>    // POST /ui/orgs/{org_id}/members/invite
+    // CORRECTED: there is NO revoke-invite (DELETE) endpoint in the backend. The
+    // inviter cannot revoke; only the invitee can accept/decline
+    // (POST /ui/orgs/invites/{invite_id}/accept|decline). revokeInvite() must be
+    // dropped from this ticket's surface — see §16 corrections and FR-4.
+    // CORRECTED: role change is keyed by member_sub (user_sub), path ends /role,
+    // req=OrgMemberRoleUpdateReq{org_role}.
+    suspend fun changeMemberRole(orgId: String, memberSub: String, role: OrgRole): ApiResult<OrgMember> // PATCH /ui/orgs/{org_id}/members/{member_sub}/role
+    // CORRECTED: removal is keyed by member_sub (user_sub), not an opaque member id.
+    suspend fun removeMember(orgId: String, memberSub: String): ApiResult<Unit>               // DELETE /ui/orgs/{org_id}/members/{member_sub}
 }
 
 interface SyndicateRepository {                             // AND-356
-    suspend fun listSyndicates(): ApiResult<List<Syndicate>>            // GET /ui/syndicates
-    suspend fun getSyndicate(id: String): ApiResult<SyndicateDetail>    // GET /ui/syndicates/{id}
+    // CORRECTED: list returns SyndicateUserEntry[] (membership entries), not Syndicate[].
+    suspend fun listSyndicates(): ApiResult<List<Syndicate>>            // GET /ui/syndicates (resp: SyndicateUserEntry[])
+    // CORRECTED: GET /ui/syndicates/{syndicate_id} returns SyndicateOut ONLY — it
+    // does NOT include treasury or revenue-split. Those are SEPARATE endpoints:
+    //   GET /ui/syndicates/treasury/{syndicate_id}            -> SyndicateTreasuryBalanceOut
+    //   GET /ui/syndicates/revenue-split/{syndicate_id}/config -> SplitConfigOut
+    // R1 (§13) is therefore REALIZED: SyndicateDetailUiState must be assembled from
+    // three repository calls (combine), not one. See §16.
+    suspend fun getSyndicate(id: String): ApiResult<SyndicateDetail>    // GET /ui/syndicates/{syndicate_id} (resp: SyndicateOut)
+    suspend fun getTreasury(id: String): ApiResult<SyndicateTreasury>   // GET /ui/syndicates/treasury/{syndicate_id}
+    suspend fun getRevenueSplit(id: String): ApiResult<SplitConfig>     // GET /ui/syndicates/revenue-split/{syndicate_id}/config
 }
 ```
 
 Representative `core-model` shapes (mirror `frontend/src/api/types.ts`; backend
 returns snake_case mapped to camelCase via Moshi adapters in `core-network`):
 
+CORRECTED to match `OrgOut`/`OrgMemberOut`/`OrgInviteOut` in
+`src/api/endpoints/orgs.ts` and the OpenAPI schemas. Field key is `org_role`
+(NOT `role`/`my_role`); the org/member identity key is `org_id`/`user_sub` (NOT
+`id`/`user_id`); timestamps are epoch **numbers** (NOT ISO strings); members
+carry no `display_name`/`email` (those live on the invite / a separate profile
+lookup).
+
 ```jsonc
-// Org (list item)
-{ "id": "org_123", "name": "Acme", "slug": "acme", "plan": "pro",
-  "member_count": 12, "my_role": "admin" }
+// OrgOut (list item AND detail — same schema; getOrg returns one OrgOut)
+{ "org_id": "org_123", "name": "Acme", "description": "...", "slug": "acme",
+  "owner_user_sub": "u_1", "status": "active", "plan": "pro",
+  "member_count": 12, "storage_used_bytes": 0, "storage_limit_bytes": 0,
+  "billing_mode": "central", "created_at": 1714560000, "updated_at": 1714560000,
+  "org_role": "admin" }                 // org_role = the CALLER's role (optional)
 
-// OrgMember
-{ "id": "mem_9", "user_id": "u_42", "display_name": "Jo", "email": "jo@x.io",
-  "role": "member", "joined_at": "2026-05-01T10:00:00Z" }
+// OrgMemberOut
+{ "user_sub": "u_42", "org_role": "member", "status": "active",
+  "joined_at": 1714560000, "storage_used_bytes": 0, "last_active_at": 1717200000 }
 
-// OrgInvite
-{ "id": "inv_3", "email": "new@x.io", "role": "member", "status": "pending",
-  "invited_at": "2026-06-01T09:00:00Z" }
+// OrgInviteOut (from GET /ui/orgs/invites/pending; caller-scoped, filter by org_id)
+{ "invite_id": "inv_3", "org_id": "org_123", "org_name": "Acme",
+  "email": "new@x.io", "org_role": "member", "status": "pending",
+  "invited_by": "u_1", "created_at": 1717200000, "expires_at": 1717800000 }
 
-// SyndicateDetail (read-only)
-{ "id": "syn_7", "name": "North Split", "my_role": "member",
-  "treasury": { "balance": 14250, "currency": "USD" },
-  "revenue_split": [ { "user_id": "u_42", "display_name": "Jo", "share_bps": 4000 } ] }
+// Syndicate detail is ASSEMBLED from 3 calls (see §5 repo interface above):
+// SyndicateOut (overview) + SyndicateTreasuryBalanceOut + SplitConfigOut.
+// SyndicateTreasuryBalanceOut:
+{ "syndicate_id": "syn_7", "balance_cents": 1425000, "currency": "USD",
+  "total_deposited_cents": 0, "total_disbursed_cents": 0, "updated_at": 1717200000 }
+// SplitConfigOut (revenue split is a CONFIG, not a per-member table):
+{ "mode": "equal", "weights_bps": { "u_42": 4000 }, "platform_fee_bps": 1500,
+  "performance_metric": "", "performance_window_days": 30,
+  "updated_at": 0, "updated_by": "" }
 ```
 
-`OrgRole` enum: `OWNER, ADMIN, MEMBER, VIEWER` (Moshi `@Json` mapped from
-lower-case strings; unknown values map to `VIEWER`). FastAPI `detail` mapping
-(`string | [{msg}] | {code,...}`) is handled in `core-network` and reaches this
-layer as `ApiResult.Failure(AppError)`.
+`OrgRole` enum: the backend **settable** vocabulary is `admin | member | viewer`
+only (OpenAPI `OrgMemberInviteReq.org_role` / `OrgMemberRoleUpdateReq.org_role`
+pattern `^(admin|member|viewer)$`). `owner` is a real role (an org has exactly
+one `owner_user_sub`) but is **not** a value you can PATCH to — ownership moves
+via `POST /ui/orgs/{org_id}/transfer-ownership`. So model
+`OrgRole { OWNER, ADMIN, MEMBER, VIEWER }` for *reading* the caller's/members'
+role, but constrain *writes* (changeRole/invite) to `ADMIN | MEMBER | VIEWER`.
+Moshi `@Json` maps lower-case strings; unknown values map to `VIEWER`.
+(Confirmed: NO `BILLING`/`MANAGER` role exists — resolves R2.) FastAPI `detail`
+mapping (`string | [{msg}] | {code,...}`) is handled in `core-network` and
+reaches this layer as `ApiResult.Failure(AppError)`.
 
 ## 6. Data & State Management
 
@@ -417,14 +476,18 @@ repository and UI-level tests.
 
 ## 13. Risks & Open Questions
 
-- **R1 — SyndicateRepository shape.** If AND-356 splits treasury/revenue-split
-  into separate endpoints/calls instead of one `getSyndicate`, the
-  `SyndicateDetailUiState` may need a `combine` of multiple flows. Mitigation:
-  keep state mapping in one `private fun load()` so the change is localized.
-- **R2 — Role enum drift.** Backend role vocabulary
-  (`owner/admin/member/viewer`) must match `frontend/src/api/types.ts`. Open
-  question: is there a distinct `BILLING`/`MANAGER` role? Confirm against
-  `/openapi.json` before finalizing `OrgRole`.
+- **R1 — SyndicateRepository shape. [RESOLVED — risk realized.]** Verified against
+  `src/api/endpoints/syndicates.ts` + OpenAPI: treasury and revenue-split ARE
+  separate endpoints (`GET /ui/syndicates/treasury/{id}`,
+  `GET /ui/syndicates/revenue-split/{id}/config`); `getSyndicate` returns
+  `SyndicateOut` only. `SyndicateDetailViewModel` therefore `combine`s three
+  calls. Mitigation applied: keep mapping in one `private fun load()` so the
+  fan-out is localized and partial failures degrade gracefully.
+- **R2 — Role enum drift. [RESOLVED.]** Verified: backend settable vocabulary is
+  `admin|member|viewer` (regex `^(admin|member|viewer)$`); `owner` exists but is
+  not settable (moved via transfer-ownership). There is **no** `BILLING`/`MANAGER`
+  role. `OrgRole { OWNER, ADMIN, MEMBER, VIEWER }` is finalized, with writes
+  constrained to ADMIN/MEMBER/VIEWER.
 - **R3 — Optimistic update correctness for paging.** If members move to Paging 3
   later, optimistic in-list rollback needs revisiting; current scope is a plain
   list (acceptable for typical org sizes).
@@ -466,3 +529,108 @@ repository and UI-level tests.
   State only); those remain owned by AND-354 and AND-353/356 respectively.
 - PR links AND-353/AND-356 as dependencies and notes AND-354/AND-362 as
   downstream consumers; open questions R2/OQ1 recorded in the PR description.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+`OPENAPI` = `reference/openapi.index.txt` + `reference/openapi.pretty.json`
+(`components.schemas.*`); `FE` = `reference/src/...`; `framework ref` =
+Android docs.
+
+1. **`GET /ui/orgs` lists the caller's orgs.** Verified.
+   OPENAPI `GET /ui/orgs` (op `list_orgs_ui_orgs_get`); FE `src/api/endpoints/orgs.ts: listOrgs` → `api.get<OrgOut[]>("/ui/orgs")`.
+2. **`GET /ui/orgs/{org_id}` returns org detail.** Verified — path param is `org_id`.
+   OPENAPI `GET /ui/orgs/{org_id}`; FE `src/api/endpoints/orgs.ts: getOrg`. NOTE the response is the same `OrgOut` schema as the list item (no separate `OrgDetail` schema exists server-side).
+3. **`GET /ui/orgs/{org_id}/members` returns members.** Verified.
+   OPENAPI `GET /ui/orgs/{org_id}/members`; FE `src/api/endpoints/orgs.ts: listMembers` → `OrgMemberOut[]`.
+4. **Org pending invites live at `GET /ui/orgs/{orgId}/invites`.** Corrected → no such endpoint; pending invites are caller-scoped at `GET /ui/orgs/invites/pending`.
+   OPENAPI `GET /ui/orgs/invites/pending` (op `list_pending_invites_...`); FE `src/api/endpoints/orgs.ts: listPendingInvites` → `OrgInviteOut[]`. There is no org-scoped invites GET in the index.
+5. **Send invite is `POST .../invites`.** Corrected → `POST /ui/orgs/{org_id}/members/invite`, body `OrgMemberInviteReq{email, org_role?}`.
+   OPENAPI `POST /ui/orgs/{org_id}/members/invite` + schema `OrgMemberInviteReq`; FE `src/api/endpoints/orgs.ts: inviteMember`.
+6. **Revoke invite is `DELETE .../invites/{id}`.** Corrected → no revoke endpoint exists at all; only invitee-side `POST /ui/orgs/invites/{invite_id}/accept|decline`.
+   OPENAPI has `.../accept` and `.../decline` only (ops `accept_invite_...`, `decline_invite_...`); FE `src/api/endpoints/orgs.ts: acceptInvite/declineInvite` (no revoke export). Action removed from this ticket (see §16 Open assumptions).
+7. **Change member role is `PATCH .../members/{id}`.** Corrected → `PATCH /ui/orgs/{org_id}/members/{member_sub}/role`, body `OrgMemberRoleUpdateReq{org_role}`; keyed by `member_sub` (user_sub).
+   OPENAPI `PATCH /ui/orgs/{org_id}/members/{member_sub}/role` + schema `OrgMemberRoleUpdateReq`; FE `src/api/endpoints/orgs.ts: changeMemberRole(orgId, userSub, {org_role})`.
+8. **Remove member is `DELETE .../members/{id}`.** Corrected → `DELETE /ui/orgs/{org_id}/members/{member_sub}`, keyed by `member_sub` (user_sub).
+   OPENAPI `DELETE /ui/orgs/{org_id}/members/{member_sub}`; FE `src/api/endpoints/orgs.ts: removeMember(orgId, userSub)`.
+9. **Org/member/invite field names & types** (`id`, `my_role`/`role`, `display_name`, `email` on member, ISO timestamps). Corrected → keys are `org_id`/`user_sub`/`invite_id`, role field is `org_role`, timestamps are epoch **numbers**, `OrgMemberOut` has no `display_name`/`email`.
+   FE `src/api/endpoints/orgs.ts: OrgOut / OrgMemberOut / OrgInviteOut`.
+10. **`OrgRole` vocabulary `OWNER, ADMIN, MEMBER, VIEWER`; is there BILLING/MANAGER?** Corrected/clarified → settable roles are `admin|member|viewer` only; `owner` exists but is not settable (transfer-ownership endpoint). No BILLING/MANAGER. Resolves R2.
+   OPENAPI `OrgMemberInviteReq.org_role` & `OrgMemberRoleUpdateReq.org_role` pattern `^(admin|member|viewer)$`; OPENAPI `POST /ui/orgs/{org_id}/transfer-ownership` (`OrgTransferOwnershipReq`); FE `OrgOut.owner_user_sub`.
+11. **`GET /ui/syndicates` lists syndicates the caller belongs to.** Verified — but returns membership entries.
+    OPENAPI `GET /ui/syndicates` (op `list_my_syndicates_...`); FE `src/api/endpoints/syndicates.ts: listMySyndicates` → `SyndicateUserEntry[]`.
+12. **`getSyndicate(id)` returns combined overview + treasury + revenue-split in one call.** Corrected → returns `SyndicateOut` overview ONLY; treasury and split are separate GETs. Realizes R1.
+    OPENAPI `GET /ui/syndicates/{syndicate_id}`, `GET /ui/syndicates/treasury/{syndicate_id}` → `SyndicateTreasuryBalanceOut`, `GET /ui/syndicates/revenue-split/{syndicate_id}/config` → `SplitConfigOut`; FE `src/api/endpoints/syndicates.ts: getSyndicate` (overview only).
+13. **Treasury exposes `balance` + `currency`.** Corrected → `balance_cents` (integer minor units) + `currency`.
+    OPENAPI/FE `SyndicateTreasuryBalanceOut { syndicate_id, balance_cents, total_deposited_cents, total_disbursed_cents, currency, updated_at }` (FE `src/api/types.ts:10335`).
+14. **Revenue split is a per-member `[{user_id, display_name, share_bps}]` table.** Corrected → it is a config object `SplitConfigOut { mode, weights_bps: map<user→bps>, platform_fee_bps, ... }`; no `display_name`.
+    OPENAPI `components.schemas.SplitConfigOut` (`openapi.pretty.json:68803`).
+15. **401 handling: single `POST /ui/session/refresh` then retry.** Verified (web behavior; Android replicates via OkHttp authenticator).
+    FE `src/api/client.ts: refreshSession()` → `POST /ui/session/refresh`, then one retry of the original request; on second 401 it logs out.
+16. **CSRF: token echoed; cookies carry session.** Verified — CSRF cookie `ui_csrf` echoed as header `X-CSRF-Token`; requests use `credentials: "include"`; `Authorization: Bearer` from auth store. (Owned by `core-network`, not this layer.)
+    FE `src/api/client.ts` (`getCookie("ui_csrf")` → `X-CSRF-Token`; `credentials: "include"`).
+17. **FastAPI `detail` shapes: `string | [{msg}] | {code,...}`.** Verified.
+    FE `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError` (handles string, array-of-`{msg}`, and object-with-`code`); OPENAPI `HTTPValidationError` (422 array of `{loc,msg,type}`).
+18. **Server `403` → `NotAuthorized` mapping for role-gated mutations.** Verified plausible — backend returns `403` with `detail.code` like `role_required` for permission failures; `core-network` maps to `AppError`.
+    FE `src/api/client.ts` 403 branch + `mapAuthorizationError` (`role_required`, `role_required_scope`).
+19. **`@HiltViewModel` + `SavedStateHandle` + `viewModelScope` + `StateFlow`.** Verified (framework ref).
+    framework ref: developer.android.com/training/dependency-injection/hilt-jetpack (`@HiltViewModel`); developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate; developer.android.com/kotlin/flow/stateflow-and-sharedflow.
+20. **`ImmutableList`/`persistentListOf` for Compose recomposition stability.** Verified (framework ref).
+    framework ref: developer.android.com/develop/ui/compose/performance/stability (kotlinx.collections.immutable as stable types).
+21. **Dev backend host `http://18.222.237.167:8000` unreliable; ~20s timeout + bounded retry for idempotent GETs in `core-network`.** Unverified-assumption — host/timeout/retry policy are project-internal infra not present in the provided sources.
+
+### Corrections made
+
+- §3 FR-4: removed `revokeInvite` action (no backend endpoint); pending invites are caller-scoped, filtered by org.
+- §3 FR-7 / §4 / §13 R1: syndicate detail is assembled from **three** GETs (overview, treasury, revenue-split config), not one `getSyndicate`.
+- §5 repo interfaces: corrected invite path (`/members/invite`), role-change path (`/members/{member_sub}/role`), removal/role keyed by `member_sub`; replaced org-scoped `listInvites` with caller-scoped `listPendingInvites`; dropped `revokeInvite`; split syndicate detail into `getSyndicate`/`getTreasury`/`getRevenueSplit`.
+- §5 DTO shapes: `id`→`org_id`/`user_sub`/`invite_id`; `role`/`my_role`→`org_role`; ISO strings→epoch numbers; removed member `display_name`/`email`; treasury `balance`→`balance_cents`; revenue split table→`SplitConfigOut` config (`weights_bps` map).
+- §5 `OrgRole`: documented settable set `admin|member|viewer`; `owner` read-only (transfer-ownership); no BILLING/MANAGER.
+- §13: marked R1 RESOLVED (realized) and R2 RESOLVED.
+
+### Open assumptions
+
+- **Dev host / timeout / retry policy** (claim 21): not in the provided sources; inherited from `core-network` (AND-027) and AND-353/356. Unverifiable here.
+- **`OrgDetail` vs `OrgOut`**: spec assumes a richer `OrgDetail`; server returns the same `OrgOut` for list and detail. The Android `OrgDetail` model is an internal mapping convenience, not a distinct server schema.
+- **Revoke-invite product need**: removed because no endpoint exists; if product requires it, a backend endpoint must be added (out of scope for AND-361).
+- **`SyndicateUserEntry` / `SyndicateOut` exact fields**: referenced by `src/api/endpoints/syndicates.ts` (imported from `@/api/types`) but the interface bodies were not located in the provided `types.ts` slice; field mapping for the syndicate **overview** is therefore taken from the endpoint signatures, not field-verified. Treasury and split shapes ARE field-verified (claims 13–14).
+- **`share_bps` summing to 10000** (OQ1): not enforced server-side in `SplitConfigOut` (weights are arbitrary bps with a separate `platform_fee_bps`); ViewModel does not enforce it (read-only).
+
+## 17. Test Plan
+
+All cases target JVM unit/Robolectric unless noted — this is a State-only ticket
+with no UI, networking, or device dependencies, so the **physical Samsung Galaxy
+A15 (SM-A156U)** and the **`test35` emulator** are **not required** for any case
+here; they are reserved for downstream tickets (AND-354 Compose UI, AND-362
+e2e/instrumented). Each case uses `FakeOrgRepository` / `FakeSyndicateRepository`
+with programmable `ApiResult` and call-count recording, `kotlinx-coroutines-test`
+(`StandardTestDispatcher` + `MainDispatcherRule`), and Turbine.
+
+- **TC-AND-361-01 — Org list happy path.** Type: unit. Target: `OrgListViewModel` (JVM). Preconditions: fake `listOrgs()` returns `Success([OrgOut×2])`. Steps: construct VM (init load), collect `state` via Turbine. Expected: emits `isLoading=true` then `Success` with 2 orgs, `isStale=false`, `error=null`, `isEmpty=false`. Traces: AC-1, AC-2, AC-3.
+- **TC-AND-361-02 — Org list empty vs error distinction.** Type: unit. Target: `OrgListViewModel` (JVM). Preconditions: fake returns `Success([])`. Steps: init, read state. Expected: `isEmpty=true`, `error=null`, `isLoading=false` (distinct from error). Traces: AC-3.
+- **TC-AND-361-03 — Initial load failure (no data) + retry recovery.** Type: unit. Target: `OrgListViewModel` (JVM). Preconditions: fake first returns `Failure(AppError.Network)`, then `Success([OrgOut])`. Steps: init (fails), assert `error` set/`isLoading=false`/list empty; dispatch `Retry`; assert recovery. Expected: error state then success after retry; repo called twice. Traces: AC-3, AC-7.
+- **TC-AND-361-04 — Refresh failure with existing data → stale.** Type: unit. Target: `OrgListViewModel` (JVM). Preconditions: first load `Success([orgs])`, then refresh `Failure`. Steps: init success; dispatch `Refresh`; assert. Expected: `isStale=true`, list retained, `error` set as banner, list NOT cleared; repo called exactly twice. Traces: AC-3.
+- **TC-AND-361-05 — changeRole optimistic success.** Type: unit. Target: `OrgMembersViewModel` (JVM). Preconditions: caller `OWNER`/`ADMIN`; members loaded; fake `changeMemberRole` returns `Success` after a delay. Steps: dispatch `ChangeRole(userSub, MEMBER)`; assert optimistic state BEFORE resolution, then `RoleChanged` event. Expected: row shows new role immediately; `RoleChanged(userSub, MEMBER)` emitted; no rollback; repo called once with `member_sub` + `org_role`. Traces: AC-4.
+- **TC-AND-361-06 — changeRole failure → rollback + event.** Type: unit. Target: `OrgMembersViewModel` (JVM). Preconditions: caller ADMIN; fake `changeMemberRole` returns `Failure`. Steps: dispatch `ChangeRole`; await. Expected: state rolled back to snapshot, `ActionFailed(message)` emitted, no `RoleChanged`. Traces: AC-4.
+- **TC-AND-361-07 — removeMember success & failure.** Type: unit. Target: `OrgMembersViewModel` (JVM). Preconditions: caller ADMIN; two fake configs (Success / Failure). Steps: dispatch `Remove(userSub)` in each. Expected: success → member removed optimistically, no rollback; failure → member restored + `ActionFailed`. Traces: AC-4.
+- **TC-AND-361-08 — sendInvite invalid email (no network).** Type: unit. Target: `OrgInviteViewModel` (JVM). Preconditions: caller ADMIN. Steps: `sendInvite("not-an-email", MEMBER)`. Expected: `emailError` (`@StringRes`) set, repo **not** called (call count 0), no `InviteSent`. Traces: AC-4, AC-7.
+- **TC-AND-361-09 — sendInvite valid path.** Type: unit. Target: `OrgInviteViewModel` (JVM). Preconditions: caller ADMIN; fake `invite` returns `Success(OrgInviteOut)`. Steps: `sendInvite("new@x.io", MEMBER)`. Expected: `isSubmitting` toggles, repo called once with `email`+`org_role` (write role ∈ {ADMIN,MEMBER,VIEWER}), `InviteSent("new@x.io")` emitted. Traces: AC-4.
+- **TC-AND-361-10 — Role gating blocks unauthorized mutation (security).** Type: unit. Target: `OrgMembersViewModel`/`OrgInviteViewModel` (JVM). Preconditions: caller `VIEWER` then `MEMBER`. Steps: attempt `ChangeRole`, `Remove`, `sendInvite`. Expected: each emits `NotAuthorized`, repo never called (count 0). Traces: AC-6, AC-8(no payload leak).
+- **TC-AND-361-11 — Double-tap idempotency guard.** Type: unit. Target: `OrgMembersViewModel` (JVM). Preconditions: caller ADMIN; fake delays first `changeMemberRole`. Steps: dispatch `ChangeRole(userSub,…)` twice rapidly while first in-flight (userSub in `pendingMemberIds`). Expected: second dispatch ignored; repo called exactly once. Traces: AC-4.
+- **TC-AND-361-12 — SavedStateHandle key handling.** Type: unit. Target: `OrgMembersViewModel`/`SyndicateDetailViewModel` (JVM, Robolectric for `SavedStateHandle` if needed). Preconditions: handle with/without `orgId`. Steps: construct with key → assert read; construct without key. Expected: present → state seeded with id; missing → `IllegalStateException` (checkNotNull). Traces: AC-1.
+- **TC-AND-361-13 — Syndicate detail combines 3 sources read-only + partial-failure degrade.** Type: unit. Target: `SyndicateDetailViewModel` (JVM). Preconditions: fakes for `getSyndicate`=Success, `getTreasury`=Success(`balance_cents`,`currency`), `getRevenueSplit`=Success(`SplitConfig` with `weights_bps`); plus a variant where `getTreasury`=Failure(403). Steps: init; assert combined state; then variant. Expected: all-success → one `SyndicateDetailUiState` with overview+treasury+split, no write API surface exists; treasury-403 variant → overview+split present, treasury marked missing, screen not failed. Traces: AC-5, AC-7.
+- **TC-AND-361-14 — Telemetry contains no PII (security/privacy).** Type: unit. Target: all VMs via `FakeAnalytics` (JVM). Preconditions: fake analytics capturing payloads. Steps: drive list-load, role-change, invite-send, syndicate-load. Expected: events `org_list_loaded{count}`, `org_member_role_changed{orgId,role}`, `org_invite_sent{role}`, `syndicate_detail_loaded{id}`, `*_failed{errorCode}`; assert NO email/user name/user_sub/response body present in any captured payload. Traces: AC-8.
+- **TC-AND-361-15 — Network/offline failure maps to Error/Stale (flaky-host path).** Type: unit. Target: `OrgListViewModel`/`SyndicateDetailViewModel` (JVM). Preconditions: fake returns `Failure(AppError.Network)` (simulating the unreliable dev host / offline) for initial and for refresh. Steps: init-with-no-data → assert `Error`+`Retry`; load-with-data then refresh-fail → assert `Stale`. Expected: no exception thrown; `AppError.Network` → standard Error/Stale paths; mutations not auto-retried. Traces: AC-3, AC-7. (Real-network behavior belongs to AND-353/356 MockWebServer + AND-362 e2e; not exercised here.)
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (VMs exist, Hilt-injectable) | TC-01, TC-12 |
+| AC-2 (single StateFlow + events, no mutable state) | TC-01 |
+| AC-3 (Loading/Empty/Error/Stale) | TC-01, TC-02, TC-03, TC-04, TC-15 |
+| AC-4 (optimistic role/remove/invite + validation + gating) | TC-05, TC-06, TC-07, TC-08, TC-09, TC-11 |
+| AC-5 (syndicate detail overview+treasury+split read-only) | TC-13 |
+| AC-6 (role gating blocks mutation, no network) | TC-10 |
+| AC-7 (unit tests pass, fakes, no real network) | TC-03, TC-08, TC-13, TC-15 |
+| AC-8 (no PII in logs/telemetry) | TC-10, TC-14 |

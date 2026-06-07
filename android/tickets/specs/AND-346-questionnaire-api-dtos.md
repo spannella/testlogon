@@ -5,7 +5,8 @@ milestone: M7
 epic: E45
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: [AND-347, AND-348, AND-349, AND-350]
 ---
@@ -60,11 +61,17 @@ submit/PDF AND-349, conditional logic AND-350) compile against these types.
   field names are snake_case; mirror the web app's
   `frontend/src/api/endpoints/questionnaires.ts` and `types.ts` — do not invent
   camelCase wire keys.
-- **Endpoint family.** Authenticated reads under `/questionnaires/...`; the
-  public respondent surface under `/questionnaires/published/{slug}/...` and
-  `/questionnaires/published/{slug}/sessions/*`. The published-session DTOs here
-  are exactly what AND-348 (`start/save/validate session`) and AND-349
-  (`submit, PDF export`) consume.
+- **Endpoint family.** Authenticated draft-authoring reads/writes under
+  `/questionnaires/drafts/...`; the public respondent surface under
+  `/questionnaires/published/{published_slug}/...` and
+  `/questionnaires/published/{published_slug}/sessions/*`. The published-session
+  DTOs here are exactly what AND-348 (`start/save/validate session`) and AND-349
+  (`submit, PDF export`) consume. **[Corrected]** The OpenAPI path parameter is
+  `published_slug` (not `slug`) and `response_session_id` (not `session_id`);
+  Retrofit `@Path` keys must match the declared `{published_slug}` /
+  `{response_session_id}` tokens. Source: OpenAPI
+  `GET /questionnaires/published/{published_slug}` and
+  `GET /questionnaires/published/{published_slug}/sessions/{response_session_id}`.
 - **Downstream.** AND-347 renders fields from `QuestionnaireField`; AND-348 owns
   session lifecycle calls; AND-349 owns submit + PDF; AND-350 owns
   conditional/visibility logic that reads the `logic`/`condition` fields modeled
@@ -82,18 +89,56 @@ FR-2. Define the questionnaire schema DTOs: `QuestionnaireDto` (metadata + order
 `pages`/`sections`), `QuestionnaireSection`, and the sealed `QuestionnaireField`
 hierarchy keyed on a string `type` discriminator.
 
-FR-3. Model **every documented field type** as a sealed subtype:
-`text`, `textarea`, `number`, `choice` (single), `multichoice`, `dropdown`,
-`scale`/`rating`, `date`, `datetime`, `boolean`, `upload` (file), and a
-`Unknown` fallback for unrecognized/future types. Each subtype carries only the
-properties relevant to it (e.g. `choice` carries `options`, `scale` carries
-`min`/`max`/`step`/`labels`, `upload` carries `accept`/`maxSizeBytes`).
+FR-3. Model **every documented field/question type** as a sealed subtype, plus a
+`Unknown` fallback for unrecognized/future types.
+**[Corrected]** The authoritative type catalog from the frontend reference
+(`src/api/types.ts: QuestionnaireQuestionType`) is exactly:
+`text`, `select`, `multiselect`, `radio`, `slider`, `date`, `time`, `timezone`,
+`address`. There is **no** `textarea`, `number`, `choice`, `multichoice`,
+`dropdown`, `scale`/`rating`, `datetime`, `boolean`, or `upload` type in the
+contract; the original list in this spec was inferred and is wrong. Note also
+that the per-type configuration is **not** modeled as typed sibling fields on
+the wire — every question carries an opaque `config_json: Record<string,
+unknown>` (`src/api/types.ts: QuestionnaireQuestion`), so subtype-specific
+properties (options, slider min/max, etc.) live inside `config_json` rather than
+as first-class JSON keys. Each Kotlin subtype may surface a typed view of its
+slice of `config_json`, but must tolerate the opaque map. Source:
+`src/api/types.ts: QuestionnaireQuestionType` and `QuestionnaireQuestion`.
 
-FR-4. Model the respondent session DTOs: `RespondentSessionDto`,
-`SessionStartReq`, `SessionStartResp`, `SaveAnswersReq`, `ValidateResp`
-(with a `ValidationError` list), `SubmitReq`, `SubmitResp`, and an `AnswerValue`
-representation that can hold the union of answer shapes (string, number, boolean,
-list of strings, date string, uploaded-file reference).
+FR-4. Model the respondent session DTOs and an `AnswerValue` representation that
+can hold the union of answer shapes (string, number, boolean, list of strings,
+date string). **[Corrected]** The wire schema names and shapes differ from the
+original draft; mirror the backend exactly:
+- Start request `ResponseSessionStartReq` `{ questionnaire_id?: string }` (the
+  frontend posts `{}`); response is the envelope `ResponseSessionEnvelope`
+  `{ session: object }`. There is **no** `resume_token` field and the start
+  response does **not** inline the questionnaire.
+- Session state response is `SessionStateEnvelope`
+  `{ session: object, answers_by_question_id: object }`.
+- Save is `PUT` with `SessionSaveReq`
+  `{ answers_by_question_id: object, current_section_index?: int,
+  current_question_id?: string }` — **not** `PATCH` and **not** a flat
+  `{ answers }` body.
+- Validate request is `QuestionnaireValidationRequest`
+  `{ answers_by_question_id, contract_version="2026-03-validation-v1",
+  final_submit=false, form_rules:[], group_rules:[] }`; response is
+  `QuestionnaireValidationResponse`
+  `{ is_valid, can_submit, has_blocking_form_error,
+  errors: Map<questionId, List<ValidationIssue>>, contract_version }`.
+- `ValidationIssue` is `{ code, message, blocking?: bool, rule_id?: string }` —
+  there is no flat `ValidationError` list and no `field_id` on the issue (the
+  question id is the map key in `errors`).
+- Submit request is `QuestionnaireValidationRequest` (same shape, typically
+  `final_submit=true`); response is `SessionSubmitEnvelope`
+  `{ session: object, result: QuestionnaireValidationResponse }` — **no**
+  `pdf_url`/`submitted_at`.
+- PDF is a **separate** pair of endpoints
+  (`POST .../pdf` → `SessionPdfEnvelope { artifact: object }` to generate,
+  `GET .../pdf` to download) owned by AND-349; it is not a field on submit.
+Sources: OpenAPI schemas `ResponseSessionStartReq`, `ResponseSessionEnvelope`,
+`SessionStateEnvelope`, `SessionSaveReq`, `QuestionnaireValidationRequest`,
+`QuestionnaireValidationResponse`, `ValidationIssue`, `SessionSubmitEnvelope`,
+`SessionPdfEnvelope`; frontend `src/api/endpoints/questionnaires.ts`.
 
 FR-5. Every wire field maps to the backend snake_case name via `@Json(name=…)`.
 Unknown/extra JSON keys must be tolerated (additive backend evolution is safe);
@@ -101,8 +146,18 @@ unknown field `type` values must deserialize to `QuestionnaireField.Unknown`,
 never throw.
 
 FR-6. Nullability matches the contract: optional fields are Kotlin-nullable with
-`null` defaults; required structural fields (`id`, `type`, `slug`,
-`session_id`) are non-null and their absence is a fail-fast `JsonDataException`.
+`null` defaults; required structural fields are non-null and their absence is a
+fail-fast `JsonDataException`. **[Corrected]** The required structural keys per
+the contract are: question `type`, `question_id`, `section_id`, `label`,
+`required` on `QuestionnaireQuestion`; `published_slug`, `questionnaire_id`,
+`version_id`, `schema_json` on `PublishedQuestionnaireVersion`;
+`response_session_id`, `questionnaire_id`, `version_id`, `status` on the session
+state; and `is_valid`, `can_submit`, `has_blocking_form_error`, `errors` on
+`QuestionnaireValidationResponse`. Note the envelope wrappers (`version`,
+`session`, `answers_by_question_id`, `result`, `artifact`) are themselves
+required at the top level. Source: OpenAPI `required` arrays of the named
+schemas; `src/api/types.ts: QuestionnaireQuestion`,
+`PublishedQuestionnaireVersion`, `QuestionnaireSessionState`.
 
 FR-7. All DTOs are immutable `data class`/`sealed` types exposing read-only
 `List<T>`/`Map<…>` collections. Schema `id`/`slug` ordering of pages, sections,
@@ -115,6 +170,18 @@ payload, used by round-trip and MockWebServer tests.
 ## 4. Technical Design
 
 ### 4.1 Field schema (polymorphic)
+
+> **[Corrected — read before the code below]** The Kotlin sketch in this
+> subsection predates verification and uses the wrong `@TypeLabel` tokens and
+> wrong per-type fields (it invents `textarea`/`choice`/`scale`/`upload`/
+> `boolean`/`number` and typed sibling props). The authoritative catalog is
+> `text|select|multiselect|radio|slider|date|time|timezone|address` and per-type
+> config rides in an opaque `config_json` map (see FR-3). Treat the structural
+> spine below (sealed discriminator + `Unknown` fallback + adapter mechanism) as
+> the design; replace the subtype set and field shapes with the corrected
+> catalog when implementing. The discriminator key is `type` and the field id
+> key is `question_id` (not `id`), section key is `section_id`. Source:
+> `src/api/types.ts: QuestionnaireQuestionType`, `QuestionnaireQuestion`.
 
 The schema is a sealed hierarchy. Because Moshi codegen does not handle sealed
 polymorphism by discriminator out of the box, a `PolymorphicJsonAdapterFactory`
@@ -319,6 +386,34 @@ sealed interface AnswerValue {
 
 ### 4.3 Retrofit interface + Hilt wiring
 
+> **[Corrected — the interface below has several contract errors; corrected
+> signatures follow.]** Against OpenAPI the verified surface is:
+> - `GET questionnaires/published/{published_slug}` →
+>   `PublishedQuestionnaireEnvelope` (`{ version: object }`), **not** a bare
+>   `QuestionnaireDto`.
+> - `POST questionnaires/published/{published_slug}/sessions` with body
+>   `ResponseSessionStartReq` → `ResponseSessionEnvelope` (`{ session: object }`).
+> - `GET questionnaires/published/{published_slug}/sessions/{response_session_id}`
+>   → `SessionStateEnvelope`.
+> - **`PUT`** (not `PATCH`)
+>   `questionnaires/published/{published_slug}/sessions/{response_session_id}`
+>   with body `SessionSaveReq` → `SessionStateEnvelope`.
+> - `POST .../{response_session_id}/validate` with body
+>   `QuestionnaireValidationRequest` → `QuestionnaireValidationResponse`.
+> - `POST .../{response_session_id}/submit` with body
+>   `QuestionnaireValidationRequest` → `SessionSubmitEnvelope`.
+> - PDF (owned by AND-349, optional here):
+>   `POST .../{response_session_id}/pdf` → `SessionPdfEnvelope` (generate) and
+>   `GET .../{response_session_id}/pdf` (download bytes).
+>
+> `@Path` keys must be `published_slug` and `responseSessionId` bound to
+> `{response_session_id}`. Source: OpenAPI index lines for
+> `op=get_published_by_slug_*`, `start_response_session_*`,
+> `get_response_session_state_*`, `save_response_session_state_*`,
+> `validate_response_session_state_*`, `submit_response_session_*`,
+> `generate_response_session_pdf_*`, `download_response_session_pdf_*`; frontend
+> `src/api/endpoints/questionnaires.ts`.
+
 ```kotlin
 package com.testlogon.android.core.network.questionnaire
 
@@ -388,12 +483,44 @@ new error model.
 ## 5. API Contract
 
 Base URL is the flavored `BuildConfig` host (AND-006); dev =
-`http://18.222.237.167:8000`. All session-mutating verbs (`POST`/`PATCH`) carry
+`http://18.222.237.167:8000`. All session-mutating verbs (`POST`/`PUT`) carry
 the `X-CSRF-Token` header echoed from the `ui_csrf` cookie via the AND-012
-intercept; cookies ride via the AND-011 jar. Authoritative key names follow
-`/openapi.json` of the running host.
+intercept; cookies ride via the AND-011 jar. **[Verified]** the web client sets
+`X-CSRF-Token` from the `ui_csrf` cookie and sends `credentials: "include"` on
+every request (`src/api/client.ts` lines 167-171, 183). Authoritative key names
+follow `/openapi.json` of the running host.
 
-`GET /questionnaires/published/{slug}` → `QuestionnaireDto`:
+> **[Corrected]** The sample payloads below were written against the wrong shapes
+> (`PATCH` save, bare top-level DTOs, flat `errors` list, `pdf_url` on submit).
+> The verified shapes are: every published read/session response is **enveloped**
+> (`{ "version": {...} }`, `{ "session": {...} }`,
+> `{ "session": {...}, "answers_by_question_id": {...} }`,
+> `{ "session": {...}, "result": {...} }`); save is **`PUT`** with body
+> `{ "answers_by_question_id": {...}, "current_section_index": 0,
+> "current_question_id": "q1" }`; validate/submit bodies are
+> `QuestionnaireValidationRequest`
+> (`{ "answers_by_question_id": {...}, "contract_version":
+> "2026-03-validation-v1", "final_submit": false, "form_rules": [],
+> "group_rules": [] }`); validate/submit `result` is
+> `{ "is_valid": false, "can_submit": false, "has_blocking_form_error": true,
+> "errors": { "q_doc": [ { "code": "required", "message": "Required",
+> "blocking": true, "rule_id": null } ] }, "contract_version":
+> "2026-03-validation-v1" }`. The published `version` / session `session` /
+> `schema_json` objects are opaque `additionalProperties:true` maps in OpenAPI —
+> the questionnaire schema tree is **not** typed in the backend OpenAPI; the
+> typed Kotlin model is reconstructed from the frontend `schema_json` usage and
+> must tolerate unknown keys. Sources: OpenAPI `PublishedQuestionnaireEnvelope`,
+> `SessionStateEnvelope`, `SessionSaveReq`, `QuestionnaireValidationRequest`,
+> `QuestionnaireValidationResponse`, `ValidationIssue`, `SessionSubmitEnvelope`;
+> `src/api/types.ts: PublishedQuestionnaireVersion`,
+> `QuestionnaireSessionStateResp`.
+
+`GET /questionnaires/published/{published_slug}` →
+`PublishedQuestionnaireEnvelope` (corrected — the questionnaire is nested under
+`version.schema_json`, not a bare top-level `QuestionnaireDto`). The schema tree
+below is illustrative of the decoded `schema_json` content; the real wire keys
+inside `schema_json` are opaque per OpenAPI and the `type` tokens shown here
+predate verification (see FR-3 for the real catalog):
 ```json
 { "id": "qn_01", "slug": "intake-2026", "title": "Intake",
   "status": "published", "updated_at": "2026-06-01T10:00:00Z",
@@ -408,41 +535,63 @@ intercept; cookies ride via the AND-011 jar. Authoritative key names follow
       "max_size_bytes": 10485760, "max_files": 1 } ] } ] }
 ```
 
-`POST /questionnaires/published/{slug}/sessions` request / response:
+`POST /questionnaires/published/{published_slug}/sessions` request / response
+(corrected — request is `ResponseSessionStartReq` `{ questionnaire_id? }`, the web
+client posts `{}`; response is `ResponseSessionEnvelope`; no `resume_token`, the
+questionnaire is **not** inlined):
 ```json
-{ "resume_token": null }
+{}
 ```
 ```json
-{ "session_id": "sess_abc", "questionnaire": { "...": "QuestionnaireDto" },
-  "session": null }
-```
-
-`PATCH /questionnaires/published/{slug}/sessions/{session_id}` request / response:
-```json
-{ "answers": { "f_name": "Ada", "f_nps": 9, "f_color": ["b"] } }
-```
-```json
-{ "session_id": "sess_abc", "questionnaire_slug": "intake-2026",
-  "status": "in_progress",
-  "answers": { "f_name": "Ada", "f_nps": 9, "f_color": ["b"] },
-  "updated_at": "2026-06-05T12:00:00Z" }
+{ "session": { "response_session_id": "sess_abc", "questionnaire_id": "qn_01",
+  "version_id": "v1", "status": "in_progress" } }
 ```
 
-`POST .../{session_id}/validate` → `ValidateResp`:
+`PUT /questionnaires/published/{published_slug}/sessions/{response_session_id}`
+request / response (corrected — `PUT`, `answers_by_question_id`, enveloped):
 ```json
-{ "valid": false,
-  "errors": [ { "field_id": "f_doc", "message": "Required", "code": "required" } ] }
+{ "answers_by_question_id": { "q_name": "Ada", "q_nps": 9, "q_color": ["b"] },
+  "current_section_index": 0, "current_question_id": "q_color" }
+```
+```json
+{ "session": { "response_session_id": "sess_abc",
+    "questionnaire_id": "qn_01", "version_id": "v1", "status": "in_progress",
+    "current_section_index": 0 },
+  "answers_by_question_id": { "q_name": "Ada", "q_nps": 9, "q_color": ["b"] } }
 ```
 
-`POST .../{session_id}/submit` request / response:
+`POST .../{response_session_id}/validate` → `QuestionnaireValidationResponse`
+(corrected — request is `QuestionnaireValidationRequest`; `errors` is a map):
 ```json
-{ "answers": null }
+{ "answers_by_question_id": { "q_name": "Ada" },
+  "contract_version": "2026-03-validation-v1", "final_submit": false,
+  "form_rules": [], "group_rules": [] }
 ```
 ```json
-{ "session_id": "sess_abc", "status": "submitted",
-  "pdf_url": "/questionnaires/published/intake-2026/sessions/sess_abc/pdf",
-  "submitted_at": "2026-06-05T12:05:00Z" }
+{ "is_valid": false, "can_submit": false, "has_blocking_form_error": true,
+  "errors": { "q_doc": [ { "code": "required", "message": "Required",
+    "blocking": true, "rule_id": null } ] },
+  "contract_version": "2026-03-validation-v1" }
 ```
+
+`POST .../{response_session_id}/submit` request / response (corrected — request
+is `QuestionnaireValidationRequest` with `final_submit:true`; response is
+`SessionSubmitEnvelope`; no `pdf_url`):
+```json
+{ "answers_by_question_id": { "q_name": "Ada" },
+  "contract_version": "2026-03-validation-v1", "final_submit": true,
+  "form_rules": [], "group_rules": [] }
+```
+```json
+{ "session": { "response_session_id": "sess_abc", "status": "submitted" },
+  "result": { "is_valid": true, "can_submit": true,
+    "has_blocking_form_error": false, "errors": {},
+    "contract_version": "2026-03-validation-v1" } }
+```
+
+PDF is a separate endpoint pair (owned by AND-349):
+`POST .../{response_session_id}/pdf` → `SessionPdfEnvelope` `{ "artifact": {...} }`
+to generate; `GET .../{response_session_id}/pdf` to download.
 
 Ownership note: the *call sites* for `startSession`/`saveAnswers`/`validate` are
 exercised by AND-348 and `submit`/PDF by AND-349. AND-346 freezes the
@@ -478,10 +627,13 @@ Two layers:
 - **Network (owned by AND-015/016/027, constrained here).** `getPublished` and
   `getSession` are idempotent GETs and are eligible for the bounded backoff retry
   (AND-016) under the ~20s timeout budget against the unreliable dev host.
-  `startSession`/`saveAnswers`/`validate`/`submit` are **non-idempotent** and must
+  `startSession`/`saveAnswers`/`validate`/`submit` are **mutating** and must
   **not** be auto-retried by the GET-retry interceptor; resume/save-conflict and
-  offline UX are AND-348's responsibility. On 401 the AND-013 authenticator
-  performs one `POST /ui/session/refresh` then retries (only relevant for the
+  offline UX are AND-348's responsibility. (Note: `saveAnswers` is **`PUT`**, so
+  it is technically idempotent at the HTTP level, but it is still excluded from
+  the GET-only retry path.) On 401 the AND-013 authenticator performs one
+  `POST /ui/session/refresh` then retries (verified: OpenAPI
+  `POST /ui/session/refresh`, `op=ui_session_refresh_*`) (only relevant for the
   authenticated-respondent path; anonymous published sessions may legitimately
   return 200 without a session cookie). FastAPI `detail` union mapping is reused
   unchanged from AND-015 — no questionnaire-specific error model is added.
@@ -539,9 +691,12 @@ contract test (`core-network`); no instrumentation required. Reuse the core-test
   acceptance-defining "schema maps (tested)" test.
 - **Unknown type.** A field with `"type":"signature"` deserializes to
   `QuestionnaireField.Unknown(type="signature")`, never throws.
-- **Field-name mapping.** Serialized output uses snake_case
-  (`max_size_bytes`, `field_id`, `session_id`) — assert keys present, camelCase
-  absent.
+- **Field-name mapping.** Serialized output uses snake_case — assert keys
+  present, camelCase absent. **[Corrected]** Use the verified wire keys for
+  assertions: `answers_by_question_id`, `question_id`, `section_id`,
+  `response_session_id`, `current_section_index`, `published_slug`, `schema_json`,
+  `is_valid`, `can_submit`, `has_blocking_form_error`, `contract_version`,
+  `rule_id` (not the invented `max_size_bytes`/`field_id`/`session_id`).
 - **Required-field failure.** Removing `id`/`type` from a field, or `session_id`
   from a session, throws `JsonDataException`.
 - **Unknown-key tolerance.** Extra `"server_time"` key on `QuestionnaireDto`
@@ -637,3 +792,264 @@ contract test (`core-network`); no instrumentation required. Reuse the core-test
   noted for production HTTPS.
 - Spec reviewed; no UI, ViewModel, repository, or persistence code introduced
   (those are AND-347/348/349/350).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Published read path is `GET /questionnaires/published/{published_slug}`.**
+   VERDICT: Corrected (was `{slug}`). SOURCE: OpenAPI
+   `GET /questionnaires/published/{published_slug}` (op=get_published_by_slug_…);
+   `src/api/endpoints/questionnaires.ts: getPublishedQuestionnaireBySlug`.
+2. **Published read returns an envelope `PublishedQuestionnaireEnvelope`
+   `{ version: object }`, not a bare `QuestionnaireDto`.** VERDICT: Corrected.
+   SOURCE: OpenAPI schema `PublishedQuestionnaireEnvelope`;
+   `src/api/endpoints/questionnaires.ts` (`api.get<{ version: ... }>`).
+3. **The published questionnaire schema is opaque (`version` /
+   `schema_json` are `additionalProperties:true` objects) in the backend
+   OpenAPI.** VERDICT: Verified. SOURCE: OpenAPI `PublishedQuestionnaireEnvelope`;
+   `src/api/types.ts: PublishedQuestionnaireVersion.schema_json:
+   Record<string, unknown>`.
+4. **Question type catalog is
+   `text|select|multiselect|radio|slider|date|time|timezone|address`.**
+   VERDICT: Corrected (spec listed
+   text/textarea/number/choice/multichoice/dropdown/scale/rating/datetime/boolean/upload).
+   SOURCE: `src/api/types.ts: QuestionnaireQuestionType`.
+5. **Per-question config is an opaque `config_json` map, not typed sibling
+   fields; structural keys are `question_id`, `section_id`, `type`, `label`,
+   `required`, `hint`, `position`.** VERDICT: Corrected. SOURCE:
+   `src/api/types.ts: QuestionnaireQuestion`.
+6. **Start session: `POST .../sessions` body `ResponseSessionStartReq`
+   `{ questionnaire_id? }` (web posts `{}`); response `ResponseSessionEnvelope`
+   `{ session: object }`; no `resume_token`; questionnaire not inlined.**
+   VERDICT: Corrected. SOURCE: OpenAPI `ResponseSessionStartReq`,
+   `ResponseSessionEnvelope`; `src/api/endpoints/questionnaires.ts:
+   startPublishedResponseSession` (posts `{}`).
+7. **Get session state: `GET .../sessions/{response_session_id}` →
+   `SessionStateEnvelope { session, answers_by_question_id }`.** VERDICT:
+   Corrected (was `{session_id}` → bare `RespondentSessionDto`). SOURCE: OpenAPI
+   `SessionStateEnvelope`; `src/api/types.ts: QuestionnaireSessionStateResp`.
+8. **Save is `PUT` with `SessionSaveReq`
+   `{ answers_by_question_id, current_section_index?, current_question_id? }`.**
+   VERDICT: Corrected (spec said `PATCH` with flat `{answers}`). SOURCE: OpenAPI
+   `PUT /questionnaires/published/{published_slug}/sessions/{response_session_id}`
+   + schema `SessionSaveReq`; `src/api/endpoints/questionnaires.ts:
+   savePublishedResponseSessionState` (`api.put`, body
+   `answers_by_question_id`).
+9. **Validate: `POST .../validate` body `QuestionnaireValidationRequest`
+   `{ answers_by_question_id, contract_version="2026-03-validation-v1",
+   final_submit, form_rules, group_rules }` → `QuestionnaireValidationResponse`.**
+   VERDICT: Corrected (spec had no request body and wrong response). SOURCE:
+   OpenAPI `validate_response_session_state_…`, schemas
+   `QuestionnaireValidationRequest` / `QuestionnaireValidationResponse`.
+10. **Validation response is
+    `{ is_valid, can_submit, has_blocking_form_error,
+    errors: Map<questionId, List<ValidationIssue>>, contract_version }` — errors
+    keyed by question id, not a flat list.** VERDICT: Corrected (spec had
+    `{ valid, errors:[{field_id,message,code}] }`). SOURCE: OpenAPI
+    `QuestionnaireValidationResponse` (errors `additionalProperties: array of
+    ValidationIssue`).
+11. **`ValidationIssue` is `{ code, message, blocking?, rule_id? }` (no
+    `field_id`).** VERDICT: Corrected. SOURCE: OpenAPI schema `ValidationIssue`.
+12. **Submit: `POST .../submit` body `QuestionnaireValidationRequest` →
+    `SessionSubmitEnvelope { session, result: QuestionnaireValidationResponse }`;
+    no `pdf_url`/`submitted_at`.** VERDICT: Corrected. SOURCE: OpenAPI
+    `submit_response_session_…`, schema `SessionSubmitEnvelope`;
+    `src/api/endpoints/questionnaires.ts: submitPublishedResponseSession`
+    (`{ session, result }`).
+13. **PDF is a separate endpoint pair (POST generate → `SessionPdfEnvelope
+    { artifact }`, GET download); not a field on submit.** VERDICT: Corrected
+    (spec implied `pdf_url` on submit). SOURCE: OpenAPI
+    `generate_response_session_pdf_…` (`SessionPdfEnvelope`) and
+    `download_response_session_pdf_…`.
+14. **Mutating verbs carry `X-CSRF-Token` from the `ui_csrf` cookie;
+    `credentials: include` (cookies) on all requests.** VERDICT: Verified.
+    SOURCE: `src/api/client.ts` lines 167-171 (CSRF) and 183 (`credentials:
+    "include"`).
+15. **401 triggers a single `POST /ui/session/refresh` then retry.** VERDICT:
+    Verified (endpoint exists). SOURCE: OpenAPI `POST /ui/session/refresh`
+    (op=ui_session_refresh_…). The refresh-then-retry orchestration is AND-013's
+    behavior (not re-verified here).
+16. **422 validation errors use FastAPI `HTTPValidationError`.** VERDICT:
+    Verified. SOURCE: OpenAPI — every questionnaire op lists
+    `422:HTTPValidationError`.
+17. **Polymorphic adapter via `PolymorphicJsonAdapterFactory` (moshi-adapters)
+    or moshix sealed-codegen, keyed on `type` with `Unknown` default.** VERDICT:
+    Unverified-assumption (framework choice; not derivable from backend/frontend).
+    SOURCE: framework ref — Moshi
+    `https://github.com/square/moshi#polymorphic-types`; moshix
+    `https://github.com/ZacSweers/MoshiX/tree/main/moshi-sealed`.
+18. **Stack: Kotlin 2.0.21, Retrofit 2.11, OkHttp 4.12, Moshi 1.15 + KSP, Hilt;
+    minSdk 24 / compileSdk 35, JDK 17.** VERDICT: Unverified-assumption (inherited
+    from AND-027/AND-010; not in the reviewed sources). SOURCE: framework refs —
+    Retrofit `https://square.github.io/retrofit/`, Moshi
+    `https://github.com/square/moshi`.
+
+### Corrections made
+
+- Path params: `{slug}`→`{published_slug}`, `{session_id}`→`{response_session_id}`
+  (§2, §4.3, §5).
+- All published/session responses are **enveloped**, not bare DTOs (§4.3, §5):
+  `version` / `session` / `answers_by_question_id` / `result` / `artifact`.
+- Save endpoint: `PATCH {answers}` → `PUT` `SessionSaveReq`
+  `{answers_by_question_id, current_section_index?, current_question_id?}`
+  (§4.3, §5, §7).
+- Start session: removed non-existent `resume_token`; request is
+  `ResponseSessionStartReq` (web posts `{}`); response no longer inlines the
+  questionnaire (§4.4/§5, FR-4).
+- Validate/submit: added the real `QuestionnaireValidationRequest` body and
+  corrected the response to `QuestionnaireValidationResponse` with map-shaped
+  `errors` of `ValidationIssue`; submit returns `SessionSubmitEnvelope`
+  (§4.3, §5, FR-4).
+- Removed `pdf_url`/`submitted_at` from submit; PDF is a separate endpoint pair
+  (§4.3, §5, FR-1).
+- Field/question type catalog corrected to the nine real types; per-type config
+  noted as opaque `config_json` (FR-3, §4.1).
+- Required structural key names corrected (FR-6).
+- §11 snake_case key examples corrected to verified wire keys.
+
+### Open assumptions
+
+- **Polymorphic adapter mechanism (R5).** Whether moshix sealed-codegen or
+  `PolymorphicJsonAdapterFactory` is on the classpath cannot be confirmed from
+  the backend/frontend sources; depends on the AND-010/027 build setup. Pick at
+  implementation time.
+- **Internal shape of `schema_json` / `config_json` / `session` objects.** The
+  backend OpenAPI declares these as opaque `additionalProperties:true`, so the
+  exact nested keys (e.g. how `select` options or `slider` bounds are encoded
+  inside `config_json`) are **not** verifiable from OpenAPI. The typed Kotlin
+  model must be reconstructed from a captured real fixture (R1) and tolerate
+  unknown keys until then.
+- **Answer value union per question type (R4).** Whether single-select answers
+  are scalar or single-element arrays is not pinned by the sources;
+  `answers_by_question_id` is an opaque map. Confirm against a real session
+  capture; the `AnswerValue` union tolerates both.
+- **Anonymous vs authenticated respondent / CSRF on anonymous POST (R3).**
+  `PublishedQuestionnaireVersion.allow_anonymous` exists, but whether anonymous
+  POST/PUT requires `X-CSRF-Token`/a session cookie is not specified in the
+  sources. Confirm against the running backend.
+- **Stack/version pins.** Library versions are inherited assumptions from
+  upstream tickets, not verified here.
+
+## 17. Test Plan
+
+Test target legend (CI/dev): **JVM** = local JVM/Robolectric unit (no device);
+**MWS** = MockWebServer contract test on JVM; **emu test35** = headless AVD
+x86_64 API 35; **A15** = physical Samsung Galaxy A15 5G (SM-A156U, API 34,
+arm64-v8a). This is a transport/DTO-only ticket with **no UI**, so the bulk runs
+on JVM/MWS; the physical device is used only to prove the ABI/API-34 build and
+the real-network/cookie+CSRF path against the live dev host.
+
+- **TC-AND-346-01** — Type: contract/MockWebServer. Target: MWS.
+  Preconditions: `QuestionnaireApi` built on a Retrofit pointed at MWS.
+  Steps: enqueue a `PublishedQuestionnaireEnvelope` body, call `getPublished`.
+  Expected: recorded request is `GET /questionnaires/published/{published_slug}`;
+  response deserializes to the envelope and `version.schema_json` decodes to the
+  questionnaire tree. Traces: AC-4.
+- **TC-AND-346-02** — Type: unit (round-trip). Target: JVM.
+  Preconditions: `all_field_types.json` fixture with one of each of the nine real
+  types (`text, select, multiselect, radio, slider, date, time, timezone,
+  address`), each with a representative `config_json`.
+  Steps: deserialize, assert each maps to the correct `QuestionnaireField`
+  subtype with expected `config_json`; re-serialize and compare parsed trees.
+  Expected: all nine map correctly and round-trip equal. Traces: AC-2.
+- **TC-AND-346-03** — Type: unit. Target: JVM.
+  Preconditions: fixture with `"type":"signature"` (unknown).
+  Steps: deserialize.
+  Expected: yields `QuestionnaireField.Unknown(type="signature")`, no throw.
+  Traces: AC-3.
+- **TC-AND-346-04** — Type: unit. Target: JVM.
+  Preconditions: question JSON with `question_id`/`type`/`section_id` removed
+  (one per case); session JSON with `response_session_id` removed.
+  Steps: deserialize each.
+  Expected: each throws `JsonDataException` (fail-fast on missing required
+  structural key). Traces: AC-3.
+- **TC-AND-346-05** — Type: unit. Target: JVM.
+  Preconditions: `QuestionnaireDto`/session JSON with extra unknown keys
+  (`server_time`, future field).
+  Steps: deserialize.
+  Expected: unknown keys skipped, parse succeeds. Traces: AC-3.
+- **TC-AND-346-06** — Type: unit. Target: JVM.
+  Preconditions: none.
+  Steps: serialize representative DTOs; inspect keys.
+  Expected: output uses verified snake_case (`answers_by_question_id`,
+  `question_id`, `section_id`, `response_session_id`, `current_section_index`,
+  `is_valid`, `can_submit`, `has_blocking_form_error`, `rule_id`); no camelCase
+  wire keys present. Traces: AC-5.
+- **TC-AND-346-07** — Type: unit. Target: JVM.
+  Preconditions: `answers_by_question_id` samples covering string, number,
+  boolean, list-of-strings, date-string, and empty/null.
+  Steps: deserialize to `AnswerValue` then re-serialize.
+  Expected: each maps to the correct `AnswerValue` subtype and round-trips;
+  malformed value → `AnswerValue.Empty` (no throw). Traces: AC-5, AC-3.
+- **TC-AND-346-08** — Type: contract/MockWebServer. Target: MWS.
+  Preconditions: API on MWS.
+  Steps: call `startSession` with `ResponseSessionStartReq()`; assert request is
+  `POST .../sessions` with body `{}` (or `{questionnaire_id:...}`); enqueue
+  `ResponseSessionEnvelope`. Then call `saveAnswers`; assert verb is **`PUT`**,
+  body has `answers_by_question_id`/`current_section_index`/`current_question_id`,
+  response deserializes to `SessionStateEnvelope`.
+  Expected: paths, verbs (incl. PUT not PATCH), bodies, and decoded envelopes all
+  match §5. Traces: AC-4.
+- **TC-AND-346-09** — Type: contract/MockWebServer. Target: MWS.
+  Preconditions: API on MWS.
+  Steps: call `validate` and `submit`; assert each is `POST`, body is
+  `QuestionnaireValidationRequest` (with `contract_version`,
+  `final_submit=false`/`true`, `form_rules`/`group_rules`); enqueue a failing
+  `QuestionnaireValidationResponse` for validate (map-shaped `errors` with a
+  `ValidationIssue`) and a `SessionSubmitEnvelope` for submit.
+  Expected: requests/bodies match; validate decodes `errors` as
+  `Map<String,List<ValidationIssue>>`; submit decodes `{session,result}`.
+  Traces: AC-4.
+- **TC-AND-346-10** — Type: contract/MockWebServer. Target: MWS.
+  Preconditions: API on MWS.
+  Steps: enqueue a `422` with a FastAPI `HTTPValidationError` body for
+  `saveAnswers`.
+  Expected: the call surfaces the error to the AND-015 `detail` mapper unchanged
+  (no questionnaire-specific error model); no crash. Traces: AC-4, AC-7.
+- **TC-AND-346-11** — Type: unit (security). Target: JVM.
+  Preconditions: populated `SaveAnswersReq`/`SubmitReq` equivalents
+  (answer-bearing DTOs).
+  Steps: call `toString()`.
+  Expected: no answer values present (redacted, e.g. `<N redacted>`).
+  Traces: AC-6.
+- **TC-AND-346-12** — Type: unit (security/fixtures). Target: JVM.
+  Preconditions: committed JSON fixtures.
+  Steps: scan fixtures for PII patterns.
+  Expected: only synthetic answers; no real PII. Traces: AC-6.
+- **TC-AND-346-13** — Type: contract/MockWebServer (CSRF/cookie). Target: MWS.
+  Preconditions: OkHttp stack with the AND-011 cookie jar + AND-012 CSRF
+  interceptor; a `ui_csrf` cookie present.
+  Steps: invoke `saveAnswers` (PUT) and `submit` (POST) against MWS.
+  Expected: recorded requests carry `X-CSRF-Token` equal to the `ui_csrf` value
+  and the session cookie; idempotent GETs (`getPublished`/`getSession`) need no
+  CSRF. Traces: AC-4, AC-7.
+- **TC-AND-346-14** — Type: instrumented/e2e (real network). Target: **A15
+  (physical device — required)**. MUST run on the physical device to exercise the
+  arm64-v8a API-34 build and the real flaky plaintext-HTTP dev host
+  (`http://18.222.237.167:8000`); the x86_64 emulator does not represent the
+  shipping ABI/API level.
+  Preconditions: a published questionnaire slug exists on the dev host; debug
+  build installed via adb on serial R5CX821TA9R.
+  Steps: run an instrumented test that calls `getPublished` then `startSession`
+  against the live host, with the GET-retry/backoff (AND-016) active; force one
+  transient failure (toggle airplane mode mid-GET) to hit the offline path.
+  Expected: GET retries within the ~20s budget and ultimately decodes the
+  envelope; `startSession` (mutating) is **not** auto-retried; module loads and
+  Moshi codegen runs correctly on arm64-v8a/API 34. Traces: AC-4, AC-7.
+
+Accessibility: not applicable — this ticket introduces no composables/UI
+(§9); a11y checks are deferred to AND-347. Noted here so reviewers see the
+omission is intentional.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (DTOs exist, factory + AnswerValue adapter registered) | TC-02, TC-07, TC-13 (adapters exercised via parse/serialize through the registered Moshi) |
+| AC-2 (schema maps; round-trip equal) | TC-02 |
+| AC-3 (Unknown type; unknown keys tolerated; missing required throws) | TC-03, TC-04, TC-05, TC-07 |
+| AC-4 (all API methods callable; path/verb/body match §5) | TC-01, TC-08, TC-09, TC-10, TC-13, TC-14 |
+| AC-5 (snake_case keys; AnswerValue union round-trips) | TC-06, TC-07 |
+| AC-6 (toString redaction; no real PII in fixtures) | TC-11, TC-12 |
+| AC-7 (compiles via KSP; retries/CSRF constraints; downstream can reference) | TC-10, TC-13, TC-14 |

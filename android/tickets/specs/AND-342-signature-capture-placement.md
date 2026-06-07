@@ -5,7 +5,8 @@ milestone: M7
 epic: E44
 priority: P1
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-341]
 blocks: [AND-343]
 ---
@@ -26,8 +27,10 @@ Success means a `feature-signing` flow where every required signature/initial/da
 - **Upstream (AND-341, PDF rendering):** provides `PdfDocumentRenderer`, per-page `PageRenderState` (bitmap + page pixel size + display rect), and the scrollable pager host. AND-342 consumes its page geometry to anchor field overlays. This ticket must not re-render PDF pages itself.
 - **Upstream (AND-340):** provides `PacketDetail` including the list of documents and their `fields[]` schema. Field definitions (id, type, page index, normalized rect, required, assigned recipient) originate here.
 - **Downstream (AND-343):** consumes `SignedPacketDraft` and the persisted signature asset; owns the `POST` submit call and `licenseAgreements.ts` parity. Any field that this ticket marks `satisfied = true` must carry enough data for AND-343 to serialize.
-- **Web reference:** `frontend/src/api/endpoints/*.ts` (document + field fetch), `frontend/src/api/types.ts` (`SignatureField`, `FieldType`, `SignaturePlacement` shapes). Mirror field-type enums and normalized-coordinate convention (top-left origin, 0..1 within page).
-- **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable). Field/document metadata is fetched via AND-340/341; OpenAPI at `/openapi.json`. Cookie-based session with `X-CSRF-Token` header applies to any GET this ticket issues for an existing signature asset.
+- **Web reference (CORRECTED):** the real signing client is `src/api/endpoints/signaturePackets.ts` (packet detail, field create/delete, **fill**, send, mark-done, legal-notice, final-pdf) and the screen `src/pages/files/SignaturePacketComposer.tsx`. There is **no** `frontend/src/api/types.ts` `SignatureField`/`SignaturePlacement`/`FieldType` triad as the spec originally claimed; field DTOs live inline in `signaturePackets.ts` as `SignaturePacketField`. Mirror its field-type enum and **normalized x/y/width/height** convention (0..1 within page, top-left origin), **not** a `left/top/right/bottom` rect.
+- **Field shape (CORRECTED):** the backend `SignaturePacketField` uses `field_id`, `page` (**1-based** — web sends `page: 1`), `x`, `y`, `width`, `height`, `field_type`, `required`, `assigned_signer_id` / `is_assigned_to_viewer`, `filled_at`, `value`, `capture_mode`, `render_payload`. There is **no** `recipient_id` and **no** `rect{left,top,right,bottom}`.
+- **Field-type enum (CORRECTED):** server `SignatureFieldType` = `signature | initials | date | text | notary_stamp`. The spec's `DATE_SIGNED` and `CHECKBOX` do **not** exist; `date` is the date type and `notary_stamp` exists. Auto-fillable here: `signature`, `initials`, `date`.
+- **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable). Packet + field metadata is fetched via `GET /v1/signature-packets/{packet_id}` (consumed in this module or upstream); OpenAPI at `/openapi.json`. Cookie-based session with `X-CSRF-Token` header (sourced from the `ui_csrf` cookie — verified in `src/api/client.ts`) applies to every request, including any GET this ticket issues.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Coroutines/Flow, Room 2.6 + DataStore, Coil. minSdk 24, compileSdk/targetSdk 35, JDK 17, AGP 8.7.3.
 
 ## 3. Functional Requirements
@@ -38,9 +41,9 @@ FR-2 **Adopt typed signature.** The user may instead type their name and pick fr
 
 FR-3 **Persist & reuse.** On confirm, the signature PNG and a separate initials PNG are stored locally (file + DataStore pointer) as the user's default signature asset, so re-entry pre-fills "Use saved signature" without redrawing.
 
-FR-4 **Field discovery.** On opening a document, enumerate `SignatureField`s from `PacketDetail`. Group by `page`, classify by `type` (SIGNATURE, INITIALS, DATE_SIGNED, TEXT, CHECKBOX — only the first three are auto-fillable here), and compute per-field "required/optional" and "satisfied" status.
+FR-4 **Field discovery.** On opening a document, enumerate signature fields from the packet detail (`GET /v1/signature-packets/{packet_id}`). Group by `page`, classify by `field_type` (CORRECTED to server enum: `signature`, `initials`, `date`, `text`, `notary_stamp` — only `signature`, `initials`, `date` are auto-fillable here; `notary_stamp`/`text` are out of scope for v1 placement), and compute per-field "required/optional" and "satisfied" status. Treat a field as the viewer's to fill when `is_assigned_to_viewer == true` (CORRECTED — the web client scopes signer fields by `is_assigned_to_viewer`, not by matching a `recipient_id`).
 
-FR-5 **Place signature.** Tapping an unsatisfied SIGNATURE/INITIALS field stamps the captured asset into that field's rect, scaled to fit while preserving aspect ratio, centered. DATE_SIGNED fields auto-fill the current date (`2026-06-05` format per locale). Placed fields render an overlay image on top of the AND-341 page bitmap.
+FR-5 **Place signature.** Tapping an unsatisfied `signature`/`initials` field stamps the captured asset into that field's box (`x,y,width,height`, normalized 0..1), scaled to fit while preserving aspect ratio, centered. `date` fields auto-fill the current date in **`YYYY-MM-DD`** format (CORRECTED — the backend validates `date` values against `^\d{4}-\d{2}-\d{2}$`, e.g. `2026-06-05`; render localized for display but submit `YYYY-MM-DD`). Placed fields render an overlay image on top of the AND-341 page bitmap.
 
 FR-6 **Adjust / remove.** A placed signature can be removed (tap → Clear field) returning it to unsatisfied. No free-form drag/resize is required for v1 (placement snaps to field rect); document this as a deliberate constraint.
 
@@ -52,22 +55,33 @@ FR-8 **Geometry stability.** Placements are stored in **normalized page coordina
 
 New module `feature-signing`. Public entry is a Navigation-Compose destination `signing/{packetId}/{documentId}`.
 
+> **CORRECTED to match backend wire contract.** The server enum is `signature | initials | date | text | notary_stamp` (not `DATE_SIGNED`/`CHECKBOX`), fields are `x/y/width/height` (not a 4-corner rect), `page` is **1-based**, and viewer assignment is `is_assigned_to_viewer` (no `recipient_id`). The Kotlin model below keeps an internal `NormalizedRect` for projection convenience, but the Moshi DTO must serialize/deserialize `x/y/width/height` and `field_type` exactly as the backend expects.
+
 ```kotlin
 // core-model
-enum class FieldType { SIGNATURE, INITIALS, DATE_SIGNED, TEXT, CHECKBOX }
+enum class FieldType { SIGNATURE, INITIALS, DATE, TEXT, NOTARY_STAMP }   // wire: lowercase
 
 data class NormalizedRect(           // top-left origin, 0f..1f within page
     val left: Float, val top: Float, val right: Float, val bottom: Float
-)
+) {
+    // Wire form is x/y/width/height; convert at the DTO boundary.
+    companion object {
+        fun fromXywh(x: Float, y: Float, w: Float, h: Float) =
+            NormalizedRect(x, y, x + w, y + h)
+    }
+    val x get() = left; val y get() = top
+    val width get() = right - left; val height get() = bottom - top
+}
 
 data class SignatureField(
-    val id: String,
-    val documentId: String,
-    val page: Int,                   // 0-based page index
+    val id: String,                  // wire: field_id
+    val documentId: String,          // local join key (packet detail has no per-field documentId)
+    val page: Int,                   // 1-based page index (CORRECTED; web sends page:1)
     val type: FieldType,
-    val rect: NormalizedRect,
+    val rect: NormalizedRect,        // built from wire x/y/width/height
     val required: Boolean,
-    val recipientId: String?
+    val assignedSignerId: String?,   // wire: assigned_signer_id (CORRECTED; was recipientId)
+    val isAssignedToViewer: Boolean  // wire: is_assigned_to_viewer
 )
 
 enum class SignatureSource { DRAWN, TYPED, SAVED }
@@ -142,26 +156,43 @@ fun FieldOverlay(
 ```
 For each field, project `NormalizedRect` to pixels: `x = displayRect.left + rect.left * displayRect.width`, etc. Unsatisfied fields draw a dashed accent border + tap target (>=48dp); satisfied fields draw the asset bitmap via Coil `AsyncImage(model = File(assetPath))` clipped to the projected rect.
 
-**Coordinate convention.** Normalized, top-left origin, identical to web `frontend/src/api/types.ts`. All persistence and the `SignedPacketDraft` use normalized coords; pixel math never leaves the composable layer.
+**Coordinate convention.** Normalized, top-left origin, 0..1 within page — verified against the web client (`src/pages/files/SignaturePacketComposer.tsx` projects `field.x/field.y/field.width/field.height` as CSS `%`, and clamps tap-to-create to `x,y` in 0..0.98). Wire form is `x/y/width/height` (CORRECTED — not `left/top/right/bottom`, and not in `frontend/src/api/types.ts`, which does not define these). All persistence and the internal `SignedPacketDraft` use normalized coords; pixel math never leaves the composable layer.
 
 ## 5. API Contract
 
-This ticket performs **no signing/submit network call** — that is owned by **AND-343**. Field/document metadata is fetched upstream by **AND-340/AND-341**; this module consumes already-fetched `PacketDetail`/`SignatureField`s in memory.
+> **CORRECTED — the originally-cited endpoints do not exist.** The spec claimed `GET /ui/documents/{documentId}/fields` for field hydration and `POST /ui/packets/{packetId}/sign` for downstream submit. **Neither path exists** in the backend. The real, authoritative signing surface is the `/v1/signature-packets/*` family (verified in OpenAPI index lines 2413–2421 and `src/api/endpoints/signaturePackets.ts`). There is also no single "submit the whole signed packet" call: signing is **server-driven, field-by-field**.
 
-One optional GET may be used to hydrate a server-side saved signature if present (otherwise local-only):
-
+**Packet/field hydration (this module or upstream):**
 ```
-GET /ui/documents/{documentId}/fields
-Headers: Cookie: <session>; X-CSRF-Token: <ui_csrf>
-200 -> { "fields": [
-  { "id":"f_92","page":0,"type":"signature",
-    "rect":{"left":0.12,"top":0.78,"right":0.42,"bottom":0.86},
-    "required":true,"recipient_id":"r_1" }, ... ] }
+GET /v1/signature-packets/{packet_id}                      // op=get_signature_packet_detail
+Headers: Cookie: <session>; X-CSRF-Token: <ui_csrf>; Authorization: Bearer <token>
+200 -> SignaturePacketDetailOut {
+  packet_id, status, owner_user_id, source_path, role: "sender"|"signer",
+  signer_status?, created_at?, sent_at?, completed_at?,
+  signers: [...], fields: [ SignaturePacketField ], capabilities: { ... }, legal_notice?
+}
+// SignaturePacketField: { field_id, page, x, y, width, height, field_type,
+//   required, assigned_signer_id?, is_assigned_to_viewer?, filled_at?, value?,
+//   capture_mode?, render_payload? }   (normalized 0..1; page is 1-based)
 ```
+Moshi maps `field_type` (lowercase) -> `FieldType`, `assigned_signer_id` -> `assignedSignerId`, `is_assigned_to_viewer` -> `isAssignedToViewer`, and converts `x/y/width/height` -> internal `NormalizedRect`. Errors map through the shared FastAPI `detail` decoder (`string | [{msg}] | {code,...}`; verified in `src/api/client.ts: normalizeErrorDetail`) into `ApiResult<...>`. 422 returns `HTTPValidationError` (`{detail:[{loc,msg,type}]}`). This GET is idempotent: eligible for bounded backoff (max 2 retries, ~20s timeout). A 401 (only when already authenticated) triggers a single `POST /ui/session/refresh` then one retry — confirmed in `src/api/client.ts` (the web wrapper applies refresh-then-retry to **all** methods, not GET only).
 
-Moshi maps `type` (lowercase server enum) -> `FieldType`, `recipient_id` -> `recipientId`. If the field list is already present from AND-340's `PacketDetail`, skip the call. Errors map through the shared FastAPI `detail` decoder (`string | [{msg}] | {code,...}`) into `ApiResult<List<SignatureField>>`. This GET is idempotent: it is eligible for the bounded backoff retry policy (max 2 retries, ~20s timeout) and a 401 triggers a single `POST /ui/session/refresh` then one retry, per project auth rules.
+**Field fill (CORRECTED — this is how a placement actually persists server-side).** The web client does not upload a rasterized PNG; it posts per-field values:
+```
+POST /v1/signature-packets/{packet_id}/fields/{field_id}/fill   // op=fill_signature_packet_field
+Body (SignaturePacketFieldFillIn): {
+  "input_mode": "typed"|"drawn"|null,
+  "value": "<string>"|null,             // typed signature/initials, date (YYYY-MM-DD), text
+  "drawn_strokes": number[][]|null,     // drawn mode: array of [x,y] points, normalized 0..1
+  "notary_stamp": NotaryStampFieldIn|null
+}
+200 -> SignaturePacketFieldFillOut { packet_id, field_id, value, filled_at, filled_by_signer_id, capture_mode? }
+```
+Web validation (mirror in `SigningViewModel`): typed signature/initials non-empty and <= 64 chars; drawn mode requires 2..20 points, each `[x,y]` within 0..1; `date` must match `YYYY-MM-DD`; `text` <= 500 chars (required only if `field.required`).
 
-No request body is produced by this ticket. The `SignedPacketDraft` it emits is the **input** to AND-343's `POST /ui/packets/{packetId}/sign`.
+**Other packet operations (owned by AND-343 / sender flows, listed for accuracy):** `POST /v1/signature-packets/{packet_id}/fields` (create/update/delete field; `action` enum), `POST .../send`, `POST .../mark-done` (finalize signer — gated by zero remaining required + legal-notice accepted), `POST .../acknowledge-legal-notice`, `GET .../final-pdf` (binary). **AND-343 does NOT own a `POST /ui/packets/{packetId}/sign` — that endpoint is fictional; the real finalize is `POST /v1/signature-packets/{packet_id}/mark-done`.**
+
+**Scope reconciliation (assumption flagged).** This ticket's stated scope is a local, offline editing surface emitting an in-memory `SignedPacketDraft`. The backend has **no** equivalent "draft blob" submit; the contract is incremental `fill` calls. The local `SignedPacketDraft` model is therefore an *internal* representation only; whoever performs server persistence (this module's repo or AND-343) must translate each `FieldPlacement` into a `fill` call. This divergence is an **unverified design assumption** — see §16 Open assumptions.
 
 ## 6. Data & State Management
 
@@ -217,7 +248,7 @@ Logging via Timber at DEBUG for stroke/render counts (never image data); WARN fo
   - `NormalizedRect` <-> pixel projection round-trips within tolerance across display rects and rotations.
   - `SignedPacketDraft.unsatisfiedRequired` / `isComplete` correct for mixed required/optional, multi-page, and date fields.
   - `SigningViewModel` reducer: capture → place → clear transitions; `onContinue` returns null until complete (`StateFlow` asserted via Turbine).
-  - Field-type mapping (lowercase server enum → `FieldType`) and Moshi adapter for `recipient_id`.
+  - Field-type mapping (lowercase server enum `signature|initials|date|text|notary_stamp` → `FieldType`) and Moshi adapter for `assigned_signer_id`/`is_assigned_to_viewer` and `x/y/width/height` → `NormalizedRect` (CORRECTED — no `recipient_id`/`rect` on the wire).
 - **Rasterizer (Robolectric / instrumented):** `fromStrokes` and `fromText` produce non-empty, correctly-bounded PNGs; blank input rejected; max-edge clamp at 1024.
 - **Compose UI tests:** tapping an unsatisfied field stamps the asset (node has placed `contentDescription`); Continue disabled until all required placed; Clear field reverts; overlay re-projects after a simulated rotation (config change) leaving placements visually anchored.
 - **Persistence:** DataStore default-signature reuse; Room draft resume after process death (SavedStateHandle + file reload).
@@ -237,9 +268,9 @@ Logging via Timber at DEBUG for stroke/render counts (never image data); WARN fo
 - **R2:** Plaintext dev HTTP — real signatures must not transit until HTTPS. Tracked for AND-343/infra, but note signatures are captured here.
 - **R3:** Memory on minSdk 24 low-end devices with large multi-page bitmaps + signature overlays. *Mitigation:* 1024px cap, recycle off-screen overlays.
 - **OQ-1:** Should v1 support drag/resize of placements, or snap-to-field only? (Spec assumes snap-to-field; FR-6.)
-- **OQ-2:** Do server field rects use top-left or bottom-left origin? Must confirm against `/openapi.json` + `frontend/src/api/types.ts` before integration. (Spec assumes top-left.)
+- **OQ-2:** ~~Do server field rects use top-left or bottom-left origin?~~ **RESOLVED:** verified top-left origin, normalized 0..1, wire shape `x/y/width/height` (web `SignaturePacketComposer.tsx` renders these directly as CSS top/left %). Also resolved: `page` is **1-based**, not 0-based.
 - **OQ-3:** Is `FLAG_SECURE` required on the signing screen to block screenshots of signatures?
-- **OQ-4:** Multi-recipient packets — does this device's user sign only fields where `recipientId` matches the session user? (Spec scopes to current user; needs confirmation from AND-340 detail.)
+- **OQ-4:** Multi-signer packets — does this device's user sign only their fields? **RESOLVED:** the web client scopes signer-fillable fields by `is_assigned_to_viewer == true` (server-computed), not by client-side matching of `assigned_signer_id` to the session user. Mirror that.
 
 ## 14. Acceptance Criteria
 
@@ -265,3 +296,79 @@ Logging via Timber at DEBUG for stroke/render counts (never image data); WARN fo
 - Lint/ktlint/detekt clean; unit + instrumented tests green in CI on `android-port` branch.
 - Backup exclusions (`dataExtractionRules`, `fullBackupContent`) cover `signatures/` and `signing_prefs`.
 - Code reviewed and merged to `android-port`; downstream AND-343 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: OpenAPI index (`reference/openapi.index.txt`), OpenAPI spec (`reference/openapi.pretty.json`, `components.schemas.<Name>`), or frontend (`reference/src/...`).
+
+1. **Field/document fields fetched via `GET /ui/documents/{documentId}/fields`.** VERDICT: **Corrected.** No such endpoint exists. SOURCE: absent from OpenAPI index; real detail endpoint is `GET /v1/signature-packets/{packet_id}` (op=`get_signature_packet_detail`, index line 2414) returning `SignaturePacketDetailOut` with embedded `fields[]`, and `src/api/endpoints/signaturePackets.ts: getSignaturePacketDetail`.
+2. **Downstream submit is `POST /ui/packets/{packetId}/sign`.** VERDICT: **Corrected.** Fictional path. SOURCE: absent from OpenAPI index. Real finalize is `POST /v1/signature-packets/{packet_id}/mark-done` (op=`mark_signature_packet_done`, index line 2420) and per-field `POST /v1/signature-packets/{packet_id}/fields/{field_id}/fill` (index line 2418); `src/api/endpoints/signaturePackets.ts: markSignaturePacketDone, fillSignaturePacketField`.
+3. **Field coordinate convention is `rect{left,top,right,bottom}`.** VERDICT: **Corrected.** Wire shape is `x, y, width, height` (normalized 0..1). SOURCE: `components.schemas.SignaturePacketFieldMutationIn` (`x,y,width,height` props, openapi.pretty.json L67506–67609); `src/api/endpoints/signaturePackets.ts: SignaturePacketField` (L23–38); `src/pages/files/SignaturePacketComposer.tsx` (L619–624) renders `field.x/y/width/height` as CSS %.
+4. **Coordinate origin is top-left, normalized 0..1.** VERDICT: **Verified.** SOURCE: `SignaturePacketComposer.tsx` L230–231 clamps tap to `(clientX-left)/width` and `(clientY-top)/height` in 0..0.98; overlay L619–624 maps x→left%, y→top%.
+5. **Page index is 0-based.** VERDICT: **Corrected → 1-based.** SOURCE: `SignaturePacketComposer.tsx` L240 sends `page: 1` for the first page; `SignaturePacketFieldMutationIn.page` is an integer with no documented 0-base (openapi.pretty.json L67560).
+6. **Field-type enum = `SIGNATURE, INITIALS, DATE_SIGNED, TEXT, CHECKBOX`.** VERDICT: **Corrected.** Real enum = `signature, initials, date, text, notary_stamp`. SOURCE: `components.schemas.SignatureFieldType` (openapi.pretty.json L67191–67201); `src/api/endpoints/signaturePackets.ts: SignatureFieldType` (L5). No `DATE_SIGNED`/`CHECKBOX`; `date` and `notary_stamp` exist.
+7. **Field carries `recipient_id`; viewer signs fields matching their recipient id.** VERDICT: **Corrected.** Field uses `assigned_signer_id`; viewer scoping is the server-computed `is_assigned_to_viewer`. SOURCE: `src/api/endpoints/signaturePackets.ts: SignaturePacketField` (L32–33) and `SignaturePacketComposer.tsx: isFieldAssignedToSigner` (L86–88) which checks `is_assigned_to_viewer`.
+8. **Date fields format as locale string like `2026-06-05`.** VERDICT: **Corrected/clarified.** Submitted value must match `YYYY-MM-DD`. SOURCE: `SignaturePacketComposer.tsx: validateFieldInput` (L73–77) regex `^\d{4}-\d{2}-\d{2}$`. Display may be localized; wire value is ISO date.
+9. **Auth uses cookie session + `X-CSRF-Token` header.** VERDICT: **Verified.** SOURCE: `src/api/client.ts` L168–171 sets `X-CSRF-Token` from the `ui_csrf` cookie on every request; `credentials: "include"` L183.
+10. **401 triggers one `POST /ui/session/refresh` then a single retry.** VERDICT: **Verified (with nuance).** SOURCE: `src/api/client.ts: refreshSession` (L121–130) posts `/ui/session/refresh`; L194–237 performs refresh-then-single-retry. Nuance: applies to **all** methods (not GET-only as spec implied) and **only when already authenticated** (L196); unauthenticated 401 propagates.
+11. **FastAPI `detail` decoder handles `string | [{msg}] | {code,...}`.** VERDICT: **Verified.** SOURCE: `src/api/client.ts: normalizeErrorDetail` (L66–102); 422 body is `HTTPValidationError {detail:[{loc,msg,type}]}` per OpenAPI 422 responses.
+12. **Drawn signature is a rasterized transparent PNG submitted to the server.** VERDICT: **Corrected (contract mismatch).** The backend `fill` accepts `drawn_strokes: number[][]` (array of `[x,y]` points), not a PNG. SOURCE: `components.schemas.SignaturePacketFieldFillIn` (openapi.pretty.json L67403–67460, `drawn_strokes` = array of array of number); `src/api/endpoints/signaturePackets.ts: fillSignaturePacketField` (L112–120). The PNG is a valid local rendering choice, but server persistence uses strokes/typed value — see Open assumptions.
+13. **Drawn-stroke validation bounds.** VERDICT: **Verified.** SOURCE: `SignaturePacketComposer.tsx: validateFieldInput` (L62–71): 2..20 points, each `[x,y]` in 0..1. Typed signature/initials non-empty and <= 64 chars (L57–60); text <= 500 (L78–82).
+14. **`mark-done` gated until all required fields filled + legal notice accepted.** VERDICT: **Verified.** SOURCE: `SignaturePacketComposer.tsx` L451–457 disables Mark done when `remainingRequiredCount > 0 || legalNoticeRequired`; `remainingRequiredCount` (L133–136) counts `required && !filled_at` over viewer fields.
+15. **A legal-notice acknowledgement step exists before completion.** VERDICT: **Verified.** SOURCE: `POST /v1/signature-packets/{packet_id}/acknowledge-legal-notice` (op=`acknowledge_signature_packet_legal_notice`, index L2415); `acknowledgeSignaturePacketLegalNotice` and `legal_notice` panel (`SignaturePacketComposer.tsx` L461–474). Note: the spec omits the legal-notice gate entirely — flagged in Open assumptions as a scope gap for AND-343.
+16. **Signature PNGs are biometric-adjacent PII → app-private `filesDir` only, excluded from auto-backup.** VERDICT: **Unverified-assumption (Android framework policy).** No backend/frontend source governs on-device storage. Framework ref: app-specific internal storage (developer.android.com/training/data-storage/app-specific#internal) and backup exclusion via `android:dataExtractionRules`/`fullBackupContent` (developer.android.com/guide/topics/data/autobackup#IncludingFiles). Reasonable, kept as assumption.
+17. **`PdfRenderer` / `PageRenderState.displayRect` geometry comes from AND-341.** VERDICT: **Unverified-assumption (cross-ticket).** No source in this repo defines AND-341's contract; depends on AND-341 deliverable. Framework ref: `android.graphics.pdf.PdfRenderer` (developer.android.com/reference/android/graphics/pdf/PdfRenderer).
+18. **Min/compile/target SDK 24/35/35, Kotlin 2.0.21, AGP 8.7.3, Compose/Hilt/Room.** VERDICT: **Unverified-assumption (project stack).** Declared by the Android port program, not derivable from backend/frontend sources. Carried as project-wide given.
+
+### Corrections made
+- §2/§4/§5/§11: Endpoint family corrected from non-existent `/ui/documents/.../fields` + `/ui/packets/.../sign` to the real `/v1/signature-packets/*` set (detail, fields, fill, send, mark-done, acknowledge-legal-notice, final-pdf).
+- §2/§4/§5/§11: Field shape corrected from `rect{left,top,right,bottom}` + `recipient_id` to `x/y/width/height` + `assigned_signer_id`/`is_assigned_to_viewer`.
+- §2/§3/§4: Field-type enum corrected (`DATE_SIGNED`/`CHECKBOX` removed; `date`/`notary_stamp` added; lowercase wire values).
+- §3/§4/§13: Page index corrected to 1-based.
+- §3/§5: Date format corrected to `YYYY-MM-DD` wire value.
+- §5: Documented the real field-fill contract (`SignaturePacketFieldFillIn`: `input_mode`, `value`, `drawn_strokes`) and noted the PNG-vs-strokes divergence.
+- §5: Clarified 401 refresh-retry applies to all methods and only when authenticated.
+- §13: OQ-2 (origin) and OQ-4 (multi-signer scoping) resolved against sources.
+
+### Open assumptions (unverifiable from sources)
+- **Local `SignedPacketDraft` "draft blob" model.** The backend has no whole-packet submit; signing is incremental `fill` calls. The in-memory draft is an internal convenience only; the mapping from `FieldPlacement` → `fill` request (typed `value` vs `drawn_strokes`) must be implemented by this module's repo or AND-343. Cannot verify a "submit unchanged" contract because none exists server-side. (Source: absence of any draft-submit endpoint in OpenAPI index.)
+- **PNG rasterization for drawn signatures.** Server persists `drawn_strokes` (points) and typed `value`, not PNGs. A locally-rendered PNG is fine for on-device preview/overlay but is not the wire format; if server-rendered rendering is required, only strokes/value transit. Whether the Android app should also retain a PNG is a product decision, unverifiable here.
+- **Legal-notice gate not modeled in this spec.** The real flow requires `acknowledge-legal-notice` before `mark-done` when `legal_notice.required`. This ticket scopes to capture/placement and defers finalize to AND-343, so the gate is noted but not implemented; confirm ownership with AND-343.
+- **On-device PII storage / backup exclusion** (claim 16) — Android policy choice, no source authority.
+- **AND-341 geometry contract** (claim 17) and **project SDK/library stack** (claim 18) — external to the verifiable sources.
+- **`FLAG_SECURE` on the signing screen** (OQ-3) — no source mandates it; product/security decision.
+
+## 17. Test Plan
+
+Test target keys: **JVM** (local JVM unit/Robolectric, no device); **EMU** (headless AVD `test35`, x86_64, Android 15/API 35); **DEV** (physical Samsung Galaxy A15 5G `SM-A156U`, serial `R5CX821TA9R`, Android 14/API 34, arm64-v8a). Contract tests use MockWebServer. Error shapes use the real `HTTPValidationError`/FastAPI `detail` forms verified in §16.
+
+- **TC-AND-342-01** — Type: unit (JVM). Target: JVM. Preconditions: `NormalizedRect.fromXywh` + projection helper. Steps: round-trip a set of `(x,y,w,h)` boxes through `NormalizedRect` → pixels (across several `displayRect` sizes and a rotated/landscape rect) → back to normalized. Expected: values equal within float tolerance; `x==left`, `width==right-left`; no drift after rotation. Traces: AC-5.
+- **TC-AND-342-02** — Type: unit (JVM). Target: JVM. Preconditions: `SignedPacketDraft` with mixed required/optional, multi-page, and a `date` field. Steps: assert `unsatisfiedRequired` and `isComplete` before/after placing each required field. Expected: optional fields never block; `isComplete` flips true only when all required satisfied. Traces: AC-6.
+- **TC-AND-342-03** — Type: unit (JVM, Turbine). Target: JVM. Preconditions: `SigningViewModel` with fake repos. Steps: capture → `onPlaceField` (signature) → `onPlaceField` (initials) → `onClearField`; collect `uiState`. Expected: `requiredDone` increments/decrements correctly; `canContinue` false until all required placed; `onContinue()` returns null while incomplete, non-null complete draft when done. Traces: AC-3, AC-6, AC-7.
+- **TC-AND-342-04** — Type: unit (JVM). Target: JVM. Preconditions: Moshi adapters for `SignaturePacketField`. Steps: decode a real `SignaturePacketDetailOut` fixture (lowercase `field_type`, `x/y/width/height`, `assigned_signer_id`, `is_assigned_to_viewer`, `page:1`). Expected: `field_type` → `FieldType` enum; `x/y/width/height` → `NormalizedRect`; `is_assigned_to_viewer` mapped; unknown `field_type` (`notary_stamp`) handled without crash (mapped or skipped). Traces: AC-3, AC-4.
+- **TC-AND-342-05** — Type: unit (JVM). Target: JVM. Preconditions: fill-request builder + validators mirroring web rules. Steps: build fill bodies for typed signature (>64 chars rejected), drawn (1 point rejected, 2..20 accepted, point outside 0..1 rejected), date (`YYYY-MM-DD` accepted, `06/05/2026` rejected), text (>500 rejected). Expected: validators match §16 claim 13; typed→`{input_mode:"typed",value}`, drawn→`{input_mode:"drawn",drawn_strokes:[[x,y]...]}`. Traces: AC-1, AC-2, AC-4, AC-9.
+- **TC-AND-342-06** — Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer returns a valid `SignaturePacketDetailOut`. Steps: call packet-detail GET; assert request path `/v1/signature-packets/{id}`, `X-CSRF-Token` header present, `Cookie`/credentials sent; parse response. Expected: correct path/method/headers; fields hydrated. Traces: AC-3.
+- **TC-AND-342-07** — Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer returns 422 `HTTPValidationError {detail:[{loc,msg,type}]}` then (separate case) 403 with `{detail:{code:"role_required"}}`. Steps: issue detail GET; map error. Expected: 422 surfaces joined `msg` strings; 403 maps via `normalizeErrorDetail`; result is `ApiResult` error, no crash. Traces: AC-9.
+- **TC-AND-342-08** — Type: contract/MockWebServer. Target: JVM. Preconditions: first GET → 401, `/ui/session/refresh` → 200, retried GET → 200. Steps: issue detail GET while "authenticated". Expected: exactly one `POST /ui/session/refresh`, then a single retry that succeeds; only-when-authenticated guard honored (unauthenticated 401 case propagates without refresh). Traces: AC-9.
+- **TC-AND-342-09** — Type: contract/MockWebServer (offline/flaky-host). Target: JVM. Preconditions: MockWebServer set to drop connection / delay beyond ~20s timeout for N attempts. Steps: issue idempotent detail GET. Expected: bounded backoff (max 2 retries), ~20s timeout enforced; on exhaustion → `SigningUiState.Error(retryable=true)`; falls back to in-memory packet fields if available; no crash. Traces: AC-9.
+- **TC-AND-342-10** — Type: Robolectric/instrumented. Target: EMU (Robolectric on JVM acceptable; EMU for true Canvas). Preconditions: `SignatureRasterizer`. Steps: `fromStrokes` with a polyline and `fromText` with a name+font produce PNGs; feed blank strokes and empty name. Expected: non-empty, ink-bounded PNGs; blank input rejected (no asset); max edge clamped at 1024px. Traces: AC-1, AC-2, AC-9.
+- **TC-AND-342-11** — Type: Compose-UI. Target: EMU. Preconditions: fixture packet (2 required signature + 1 initials + 1 date), captured asset. Steps: tap each unsatisfied field → assert overlay placed (node gains "signed" `contentDescription`); assert Continue disabled until all required placed; tap Clear field → reverts to unsatisfied and decrements progress chip. Expected: placement visible (AC-3), date auto-fills `YYYY-MM-DD` (AC-4), Continue gating (AC-6), clear/revert (AC-7). Traces: AC-3, AC-4, AC-6, AC-7.
+- **TC-AND-342-12** — Type: Compose-UI (config change). Target: EMU. Preconditions: placements made on multi-page doc. Steps: trigger rotation/recompose (recreate activity), scroll. Expected: overlays re-project from normalized rect × current `displayRect` and stay anchored to the same field box; no pixel-persisted drift. Traces: AC-5.
+- **TC-AND-342-13** — Type: Compose-UI (accessibility). Target: EMU. Preconditions: TalkBack/semantics assertions. Steps: traverse Type-mode path; assert all controls (Clear, Undo, Use saved, Place, Clear field, Continue) have `contentDescription` and >=48dp targets; field overlay exposes "Signature field, required, not signed" → updates on placement; progress chip `liveRegion = Polite`. Expected: full a11y labels and live announcement; Type mode is a complete non-drawing path. Traces: AC-2, AC-3, AC-7.
+- **TC-AND-342-14** — Type: instrumented (persistence + security). Target: DEV (physical device preferred — validates real app-private storage + auto-backup exclusion on API 34/arm64; EMU acceptable as smoke). Preconditions: capture + save default signature. Steps: confirm PNGs written under `filesDir/signatures/` (not external/MediaStore); kill+relaunch → "Use saved signature" pre-fills without redraw; "Delete saved signature" removes files + clears DataStore pointer; inspect Logcat during capture/place. Expected: assets app-private only; reuse works; delete clears; **no** signature bytes/strokes/names/file contents in logs; `signatures/` + `signing_prefs` excluded from auto-backup. Traces: AC-8, AC-10.
+- **TC-AND-342-15** — Type: integration (acceptance harness). Target: EMU. Preconditions: fixture 3-page packet (2 required signature + 1 initials + 1 date). Steps: capture one signature, auto-satisfy all required fields, build draft, then map placements to per-field `fill` request bodies (typed/drawn/date) and assert each matches `SignaturePacketFieldFillIn`. Expected: a complete, valid internal `SignedPacketDraft`; every required field translates to a valid `fill` body (confirming the §16 draft→fill assumption is implementable). Traces: AC-3, AC-4, AC-6.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (draw → PNG asset) | TC-05, TC-10 |
+| AC-2 (type → PNG asset) | TC-05, TC-10, TC-13 |
+| AC-3 (place signature visibly anchored) | TC-03, TC-04, TC-06, TC-11, TC-13, TC-15 |
+| AC-4 (date auto-fill `YYYY-MM-DD`) | TC-04, TC-05, TC-11, TC-15 |
+| AC-5 (anchored after scroll/rotation/recompose) | TC-01, TC-12 |
+| AC-6 (progress + Continue gate → valid draft) | TC-02, TC-03, TC-11, TC-15 |
+| AC-7 (clear field reverts + decrements) | TC-03, TC-11, TC-13 |
+| AC-8 (saved signature reuse + delete) | TC-14 |
+| AC-9 (blank rejected; errors non-fatal) | TC-05, TC-07, TC-08, TC-09, TC-10 |
+| AC-10 (no PII logged; app-private; backup-excluded) | TC-14 |

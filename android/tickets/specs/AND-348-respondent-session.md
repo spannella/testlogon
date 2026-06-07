@@ -5,9 +5,10 @@ milestone: M7
 epic: E45
 priority: P1
 size: M
-status: draft
 depends_on: [AND-347]
 blocks: [AND-349]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-348 — Respondent session
@@ -89,10 +90,13 @@ server is unreachable, answers are kept in the Room draft with a `dirty` flag
 and a `sync_pending` UI state; sync resumes when connectivity returns or on the
 next user-triggered save.
 
-FR-6. **Schema-version safety.** If the server reports a schema version newer
-than the cached draft's, surface a `SchemaChanged` state and require the user to
-reload the schema (re-fetched by AND-347) before further saves; do not silently
-discard answers.
+FR-6. **Schema-version safety.** CORRECTED: the server has no integer
+`schema_version`; the schema identity is `version_id` (string, from the session
+object and `PublishedQuestionnaireVersion.version_id`; an int `version_number` also
+exists on the published version). If the session's `version_id` differs from the
+cached draft's, surface a `SchemaChanged` state and require the user to reload the
+schema (re-fetched by AND-347) before further saves; do not silently discard
+answers. There is no documented 409 conflict response (see §7 / R5).
 
 FR-7. **Single active session per slug per device.** The draft store keys on
 `slug`; starting a fresh session (user choice "Start over") clears the draft and
@@ -126,17 +130,31 @@ core-data/.../respond/
 
 ```kotlin
 data class RespondentSession(
-    val sessionId: String,
-    val slug: String,
-    val schemaVersion: Int,
-    val answers: Map<String, AnswerValue>,   // fieldId -> value (from AND-347)
-    val status: SessionStatus,               // DRAFT, VALIDATED, EXPIRED
-    val updatedAt: Instant,
+    val sessionId: String,                   // server `response_session_id`
+    val slug: String,                        // nav arg; NOT returned by the server session object
+    val questionnaireId: String,             // server `questionnaire_id`
+    val versionId: String,                   // server `version_id` (string) — the schema identity (CORRECTED: server has no `schema_version` int field)
+    val answers: Map<String, AnswerValue>,   // questionId -> value (from AND-347), wire key `answers_by_question_id`
+    val status: SessionStatus,               // IN_PROGRESS, SUBMITTED, EXPIRED (EXPIRED is a client-only marker; server only emits in_progress|submitted)
+    val currentSectionIndex: Int?,           // server `current_section_index`
+    val currentQuestionId: String?,          // server `current_question_id`
+    val startedAt: Instant,                  // server `started_at` (CORRECTED: server field is `started_at`, not `updated_at`)
 )
 
-enum class SessionStatus { DRAFT, VALIDATED, EXPIRED }
+// CORRECTED: server status enum is `in_progress | submitted`. There is no server-side
+// `validated`/`draft` status; validity is derived from QuestionnaireValidationResponse.can_submit.
+// EXPIRED is a client-only state used when GET returns 404 (see §7).
+enum class SessionStatus { IN_PROGRESS, SUBMITTED, EXPIRED }
 
-data class FieldValidationError(val fieldId: String, val message: String, val code: String?)
+// CORRECTED: server validation issues carry `code` + `message` (+ optional `blocking`, `rule_id`);
+// there is no `field_id`/`msg` on the issue. The field/question id is the MAP KEY (see §5).
+data class FieldValidationError(
+    val questionId: String,   // the map key in QuestionnaireValidationResponse.errors (may be a `group:`/`form:` prefixed key)
+    val message: String,      // ValidationIssue.message
+    val code: String,         // ValidationIssue.code (required by schema)
+    val blocking: Boolean?,   // ValidationIssue.blocking
+    val ruleId: String?,      // ValidationIssue.rule_id
+)
 ```
 
 `AnswerValue` is the sealed type defined by AND-347 (text/choice/scale/date/
@@ -201,8 +219,12 @@ interface RespondentSessionRepository {
 
 `startOrResume` logic: read local draft → if present and `sessionId != null`,
 call `GET .../sessions/{id}`; on 200 reconcile (server wins for
-`schemaVersion`/`status`, local dirty answers win for unsynced fields), on 404/
-410 treat session as `EXPIRED` and create new; if no draft, `POST` to create.
+`versionId`/`status`, local dirty answers win for unsynced fields), on 404 treat
+session as `EXPIRED` and create new; if no draft, `POST` to create. (CORRECTED:
+OpenAPI only declares 200/422 for these paths — 404 is the realistic "missing
+session" code; a literal 410 is an unverified assumption and is handled defensively
+alongside 404. `schemaVersion`→`versionId`, since the server has no integer
+`schema_version`.)
 
 ## 5. API Contract
 
@@ -214,63 +236,103 @@ automatically.
 ### Retrofit interface
 
 ```kotlin
+// CORRECTED: OpenAPI path params are {published_slug} and {response_session_id};
+// start req = ResponseSessionStartReq → ResponseSessionEnvelope; GET/PUT → SessionStateEnvelope;
+// validate req = QuestionnaireValidationRequest → QuestionnaireValidationResponse.
 interface RespondentSessionApi {
-    @POST("questionnaires/published/{slug}/sessions")
-    suspend fun create(@Path("slug") slug: String,
-                       @Body body: CreateSessionRequest): Response<SessionResponse>
+    @POST("questionnaires/published/{published_slug}/sessions")
+    suspend fun create(@Path("published_slug") slug: String,
+                       @Body body: ResponseSessionStartReq): Response<ResponseSessionEnvelope>
 
-    @GET("questionnaires/published/{slug}/sessions/{sessionId}")
-    suspend fun get(@Path("slug") slug: String,
-                    @Path("sessionId") sessionId: String): Response<SessionResponse>
+    @GET("questionnaires/published/{published_slug}/sessions/{response_session_id}")
+    suspend fun get(@Path("published_slug") slug: String,
+                    @Path("response_session_id") sessionId: String): Response<SessionStateEnvelope>
 
-    @PUT("questionnaires/published/{slug}/sessions/{sessionId}")
-    suspend fun save(@Path("slug") slug: String,
-                     @Path("sessionId") sessionId: String,
-                     @Body body: SaveSessionRequest): Response<SessionResponse>
+    @PUT("questionnaires/published/{published_slug}/sessions/{response_session_id}")
+    suspend fun save(@Path("published_slug") slug: String,
+                     @Path("response_session_id") sessionId: String,
+                     @Body body: SessionSaveReq): Response<SessionStateEnvelope>
 
-    @POST("questionnaires/published/{slug}/sessions/{sessionId}/validate")
-    suspend fun validate(@Path("slug") slug: String,
-                         @Path("sessionId") sessionId: String,
-                         @Body body: SaveSessionRequest): Response<ValidateResponse>
+    @POST("questionnaires/published/{published_slug}/sessions/{response_session_id}/validate")
+    suspend fun validate(@Path("published_slug") slug: String,
+                         @Path("response_session_id") sessionId: String,
+                         @Body body: QuestionnaireValidationRequest): Response<QuestionnaireValidationResponse>
 }
 ```
 
 ### Request / response JSON
 
-`POST .../sessions` request:
+`POST .../sessions` request (`ResponseSessionStartReq`). CORRECTED: there is no
+`context`/`locale` field; the only property is an optional `questionnaire_id`. The
+web client posts an empty body `{}` (`startPublishedResponseSession`). Response is
+HTTP **200** (CORRECTED: not 201):
 ```json
-{ "context": { "locale": "en-US" } }
+{}
 ```
-`SessionResponse` (200/201):
+`ResponseSessionEnvelope` (200) — the session is an OPAQUE nested object under
+`session` (CORRECTED: not a flat top-level `session_id`/`slug`/`schema_version`):
 ```json
 {
-  "session_id": "sess_01HZ...",
-  "slug": "customer-survey",
-  "schema_version": 7,
-  "status": "draft",
-  "answers": { "q_name": "Ada", "q_rating": 4 },
-  "updated_at": "2026-06-05T12:00:00Z"
+  "session": {
+    "response_session_id": "...",
+    "questionnaire_id": "...",
+    "version_id": "...",
+    "status": "in_progress",
+    "started_at": "2026-06-05T12:00:00Z",
+    "current_section_index": 0,
+    "current_question_id": null,
+    "respondent_id": null
+  }
 }
 ```
-`PUT .../sessions/{id}` request (partial patch):
+> Note: in OpenAPI both `ResponseSessionEnvelope.session` and `SessionStateEnvelope.session`
+> are typed `object` (additionalProperties). The concrete field names above come from the
+> frontend type `QuestionnaireSessionState` (`src/api/types.ts`); treat the inner field set
+> as frontend-derived, not OpenAPI-guaranteed.
+
+`PUT .../sessions/{response_session_id}` request (`SessionSaveReq`). CORRECTED:
+wire key is `answers_by_question_id` (not `answers`), plus optional
+`current_section_index` and `current_question_id`. Whether it is a partial patch or
+full replace is NOT specified by OpenAPI (free-form `object`); the web client sends
+the full current answer map each save (see R1):
 ```json
-{ "answers": { "q_rating": 5, "q_consent": true } }
+{ "answers_by_question_id": { "q_rating": 5, "q_consent": true },
+  "current_section_index": 1,
+  "current_question_id": "q_consent" }
 ```
-`POST .../validate` → `ValidateResponse`:
+PUT/GET response is `SessionStateEnvelope` (200): `{ "session": {…}, "answers_by_question_id": {…} }`.
+
+`POST .../validate` request (`QuestionnaireValidationRequest`). CORRECTED: body is
+`answers_by_question_id` + `final_submit` (and optional `form_rules`/`group_rules`/
+`contract_version="2026-03-validation-v1"`), NOT a `SaveSessionRequest`. The web
+client sends `{ answers_by_question_id, final_submit: false }`:
+```json
+{ "answers_by_question_id": { "q_email": "bad" }, "final_submit": false }
+```
+`POST .../validate` → `QuestionnaireValidationResponse`. CORRECTED: the response is
+`{ is_valid, can_submit, has_blocking_form_error, errors }` (NOT `{valid, errors:[…]}`),
+where `errors` is a MAP keyed by question id (or a `group:`/`form:`-prefixed key) →
+array of `ValidationIssue { code, message, blocking?, rule_id? }` (NOT objects with
+`field_id`/`msg`):
 ```json
 {
-  "valid": false,
-  "errors": [
-    { "field_id": "q_email", "code": "format", "msg": "Invalid email" },
-    { "field_id": "q_consent", "code": "required", "msg": "This field is required" }
-  ]
+  "is_valid": false,
+  "can_submit": false,
+  "has_blocking_form_error": false,
+  "errors": {
+    "q_email":   [ { "code": "format",   "message": "Invalid email", "blocking": true } ],
+    "q_consent": [ { "code": "required", "message": "This field is required", "blocking": true } ]
+  }
 }
 ```
 
-DTOs are Moshi-annotated and mapped to domain in a `SessionMapper`. The
-top-level FastAPI error `detail` (`string | [{msg}] | {code,...}`) is parsed by
-the existing core-network `ErrorBodyAdapter` into `ApiError`; field-level
-validation errors come from `ValidateResponse.errors`, not from `detail`.
+DTOs are Moshi-annotated and mapped to domain in a `SessionMapper`. CORRECTED: the
+FastAPI error shape for these endpoints is the standard `HTTPValidationError`
+(`{ "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }`, status **422**),
+NOT the `string | [{msg}] | {code,...}` union the draft assumed. The existing
+core-network `ErrorBodyAdapter`/`ApiError` parses `detail`; field-level validation
+errors for inline display come from `QuestionnaireValidationResponse.errors`, not
+from the 422 `detail`.
 
 ## 6. Data & State Management
 
@@ -280,12 +342,12 @@ validation errors come from `ValidateResponse.errors`, not from `detail`.
 @Entity(tableName = "session_drafts")
 data class SessionDraftEntity(
     @PrimaryKey val slug: String,
-    val sessionId: String?,
-    val schemaVersion: Int,
-    val answersJson: String,        // Moshi-serialized Map<String, AnswerValue>
-    val status: String,             // draft | validated | expired
+    val sessionId: String?,         // server `response_session_id`
+    val versionId: String?,         // CORRECTED: server `version_id` (string), not an int `schema_version`
+    val answersJson: String,        // Moshi-serialized Map<String, AnswerValue>; wire key `answers_by_question_id`
+    val status: String,             // CORRECTED: in_progress | submitted (+ client-only `expired`)
     val dirty: Boolean,             // unsynced local edits present
-    val updatedAt: Long,            // epoch millis
+    val updatedAt: Long,            // epoch millis (local write time; server exposes `started_at`)
 )
 
 @Dao
@@ -311,9 +373,9 @@ process death via Room. DataStore is **not** used for answers (drafts are
 relational/per-slug, not user prefs).
 
 State reconciliation: on `syncDraft`, `dirty=false` is set only after a 2xx
-`SaveSessionRequest`; on success the server `answers`/`schema_version`/`status`
-overwrite the row but locally-newer dirty fields (edited during the in-flight
-call) are re-merged before clearing `dirty`.
+`SessionSaveReq`; on success the server `answers_by_question_id`/`version_id`/`status`
+(from `SessionStateEnvelope`) overwrite the row but locally-newer dirty fields
+(edited during the in-flight call) are re-merged before clearing `dirty`.
 
 ## 7. Error Handling & Resilience
 
@@ -325,13 +387,21 @@ call) are re-merged before clearing `dirty`.
   `SyncStatus.SyncPending`. A connectivity callback or the next `saveNow()`
   flushes pending drafts.
 - **401 on mutating call:** delegate to the core-network refresh-once
-  interceptor (`POST /ui/session/refresh` then single retry). For anonymous
-  respondents without a session this should not occur; if it does after retry,
-  surface a non-fatal banner and keep the local draft.
-- **404 / 410 on session:** treat as `EXPIRED`; prompt the user, then
-  auto-create a new session preserving local answers, replaying them via PUT.
-- **409 schema conflict / `schema_version` mismatch:** set
-  `schemaChanged = true`, block sync, require `reloadSchema()`.
+  interceptor (single retry). For anonymous respondents without a session this
+  should not occur; if it does after retry, surface a non-fatal banner and keep
+  the local draft. (UNVERIFIED: the exact refresh endpoint `POST /ui/session/refresh`
+  was not located in the OpenAPI index/frontend during review — treat the path as
+  core-network's existing concern, not asserted here. The respond flow itself sends
+  the cookie jar + `X-CSRF-Token` exactly as the web client does.)
+- **404 on session:** treat as `EXPIRED`; prompt the user, then auto-create a new
+  session preserving local answers, replaying them via PUT. (CORRECTED: OpenAPI
+  declares only 200/422 for the session paths; 404 is the realistic missing-session
+  code. A literal 410 is an unverified assumption — handled defensively but not
+  guaranteed by the contract.)
+- **Schema/`version_id` mismatch:** set `schemaChanged = true`, block sync, require
+  `reloadSchema()`. (CORRECTED: there is no documented 409 response and no integer
+  `schema_version`; the check compares the session's `version_id` string against the
+  cached draft's `version_id`. Detecting it via HTTP 409 is an unverified assumption.)
 - **Malformed body:** Moshi parse failure → `ApiResult.Error` mapped to a
   generic recoverable message; local draft untouched.
 - All errors flow through typed `ApiResult<T>`; no exceptions cross the
@@ -386,8 +456,9 @@ answers.
 **Unit (JUnit + Turbine + MockWebServer, core-testing):**
 - `RespondentSessionRepositoryImpl`: start-vs-resume branch, 404→recreate+replay,
   schema-version conflict, dirty-merge during in-flight save, `clear`.
-- Mapper: DTO↔domain, `ValidateResponse.errors`→`Map<fieldId, error>`,
-  `detail` union parsing.
+- Mapper: DTO↔domain, `QuestionnaireValidationResponse.errors` (map of questionId→
+  `ValidationIssue[]`)→domain `Map<questionId, FieldValidationError>`, and 422
+  `HTTPValidationError.detail` parsing.
 - `RespondentSessionViewModel` with `StandardTestDispatcher`: debounce autosave
   fires once per quiet window, `saveNow` cancels debounce, offline keeps
   `SyncPending`, validation populates `fieldErrors`, `canSubmit` flips only after
@@ -423,17 +494,26 @@ Target: repository/ViewModel line coverage ≥ 85%.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Save payload semantics:** is `PUT .../sessions/{id}` a full replace or a
-  partial patch? Spec assumes partial-merge `{answers:{...}}`. Confirm against
-  `/openapi.json`; if full-replace, repository must send the complete answer map.
-- **R2 — Validate request body:** does `/validate` require the latest answers in
-  body, or validate server-stored state? Spec sends current answers to be safe.
-- **R3 — Session expiry/TTL:** unknown server TTL; resume must handle 404/410
-  gracefully (handled) but exact codes need confirmation.
-- **R4 — Anonymous CSRF:** whether anonymous respondents receive a `ui_csrf`
-  cookie before first POST; if not, create-session may need a priming GET.
-- **R5 — Schema-version field name:** assumed `schema_version`; verify against
-  OpenAPI and AND-347's schema model to keep the conflict check consistent.
+- **R1 — Save payload semantics:** RESOLVED on wire key (`answers_by_question_id`,
+  per `SessionSaveReq`). Full-replace vs partial-merge is still OPEN: OpenAPI types
+  the body as a free-form `object`, so semantics are not declared. The web client
+  (`QuestionnaireRespondentPage.tsx`) sends the FULL current answer map every save,
+  so this spec adopts full-replace to match the reference client.
+- **R2 — Validate request body:** RESOLVED. `/validate` takes
+  `QuestionnaireValidationRequest` (`answers_by_question_id` + `final_submit`); the
+  web client sends the current answers with `final_submit:false`. So validation runs
+  against client-supplied answers, not purely server-stored state.
+- **R3 — Session expiry/TTL:** unknown server TTL; resume handles 404 (and,
+  defensively, 410). OpenAPI declares only 200/422 for these paths, so the exact
+  expiry status code remains OPEN.
+- **R4 — Anonymous CSRF:** `client.ts` sets `X-CSRF-Token` only when the `ui_csrf`
+  cookie is present (`if (csrf)`) and never primes it via a GET. So a priming GET is
+  NOT something the web client does; whether anonymous POST succeeds without a
+  `ui_csrf` cookie is an OPEN server-behavior question.
+- **R5 — Schema-version field name:** RESOLVED/CORRECTED. There is no
+  `schema_version`; schema identity is `version_id` (string) on the session and
+  `PublishedQuestionnaireVersion` (`version_number` int also exists). The conflict
+  check compares `version_id`.
 - **R6 — Concurrent devices:** out of scope (FR-7 scopes one session per slug
   per device); multi-device last-write-wins is server-side and not handled here.
 
@@ -446,15 +526,16 @@ AC-2. Editing a field persists to Room immediately and syncs to the server via
 AC-3. **Resume:** after killing and relaunching the app, returning to the same
 `slug` restores all previously saved answers (from Room, reconciled with
 `GET .../sessions/{id}`). *(Primary acceptance: "Save + resume a session.")*
-AC-4. `validate()` populates `fieldErrors` keyed by `fieldId` from
-`ValidateResponse.errors`; a valid result sets `canSubmit = true`.
+AC-4. `validate()` populates `fieldErrors` keyed by questionId from
+`QuestionnaireValidationResponse.errors`; `canSubmit` is driven by the response's
+`can_submit` flag (CORRECTED: not a derived `valid==true`).
 AC-5. With the network unreachable, local saves succeed and UI shows
 `SyncPending`; sync completes automatically/manually on reconnect with no
 answer loss.
 AC-6. An expired/missing session (404/410) recreates a session and replays local
 answers without data loss.
-AC-7. A newer server `schema_version` sets `schemaChanged = true`, blocks sync,
-and requires `reloadSchema()`.
+AC-7. A differing server `version_id` (CORRECTED: not an int `schema_version`) sets
+`schemaChanged = true`, blocks sync, and requires `reloadSchema()`.
 AC-8. No answer content appears in logcat or telemetry payloads.
 
 ## 15. Definition of Done
@@ -471,3 +552,265 @@ AC-8. No answer content appears in logcat or telemetry payloads.
 - `canSubmit`/`sessionId` hand-off contract documented for AND-349; draft
   `clear()` hook exposed for post-submit cleanup.
 - No regressions in AND-347 renderer integration; PR reviewed and approved.
+
+## 16. Citations & Assumption Audit
+
+Each claim below is tagged Verified / Corrected / Unverified-assumption with the exact source.
+
+1. **Start-session endpoint = `POST /questionnaires/published/{published_slug}/sessions`.**
+   VERDICT: Verified (path) / Corrected (param name). SOURCE: OpenAPI
+   `POST /questionnaires/published/{published_slug}/sessions`
+   (op `start_response_session…`); frontend `src/api/endpoints/questionnaires.ts: startPublishedResponseSession`.
+   The path is correct; the param is `{published_slug}` (draft wrote `{slug}`).
+2. **Start request body.** VERDICT: Corrected. SOURCE: schema `ResponseSessionStartReq`
+   (only optional `questionnaire_id`); frontend `startPublishedResponseSession` posts `{}`.
+   Draft's `{ "context": { "locale": "en-US" } }` does not exist — removed.
+3. **Start response = `ResponseSessionEnvelope` (200), `{ session: {…} }`.**
+   VERDICT: Corrected. SOURCE: OpenAPI `resp=200:ResponseSessionEnvelope`; schema
+   `ResponseSessionEnvelope` (single `session` object). Draft's flat 200/201
+   `SessionResponse` with top-level `session_id`/`slug`/`schema_version` is wrong;
+   response is 200 (not 201) and nested.
+4. **GET state = `GET …/sessions/{response_session_id}` → `SessionStateEnvelope`.**
+   VERDICT: Verified (path) / Corrected (param + resp schema). SOURCE: OpenAPI
+   `GET …/sessions/{response_session_id}` `resp=200:SessionStateEnvelope`; schema
+   `SessionStateEnvelope` = `{ session, answers_by_question_id }`; frontend
+   `src/api/endpoints/questionnaires.ts: getPublishedResponseSessionState` →
+   `src/api/types.ts: QuestionnaireSessionStateResp`.
+5. **Save = `PUT …/sessions/{id}`, body `SessionSaveReq`.** VERDICT: Corrected.
+   SOURCE: OpenAPI `PUT …/sessions/{response_session_id}` `req=SessionSaveReq`;
+   schema `SessionSaveReq` = `answers_by_question_id` (+ `current_section_index`,
+   `current_question_id`); frontend `savePublishedResponseSessionState`. Draft's
+   `{ answers: {…} }` wire key was wrong.
+6. **Save semantics (full replace vs patch).** VERDICT: Unverified-assumption.
+   SOURCE: OpenAPI types body as free-form `object` (no semantics); frontend
+   `src/pages/questionnaires/QuestionnaireRespondentPage.tsx: saveMutation` sends
+   the full current answer map. Spec adopts full-replace to match the web client.
+7. **Validate = `POST …/sessions/{id}/validate`, body `QuestionnaireValidationRequest`.**
+   VERDICT: Verified (path) / Corrected (body schema). SOURCE: OpenAPI
+   `POST …/sessions/{response_session_id}/validate`
+   `req=QuestionnaireValidationRequest;resp=200:QuestionnaireValidationResponse`;
+   schema `QuestionnaireValidationRequest` (`answers_by_question_id`, `final_submit`,
+   `form_rules`, `group_rules`, `contract_version`); frontend `validateMutation`
+   sends `{ answers_by_question_id, final_submit }`. Draft reused `SaveSessionRequest` — wrong.
+8. **Validate response shape.** VERDICT: Corrected. SOURCE: schema
+   `QuestionnaireValidationResponse` = `{ is_valid, can_submit, has_blocking_form_error,
+   errors }` where `errors` is `Map<key, ValidationIssue[]>`; schema `ValidationIssue`
+   = `{ code, message, blocking?, rule_id? }`; frontend `QuestionnaireRespondentPage.tsx`
+   reads `errors[questionId]` and `can_submit`. Draft's `{ valid, errors:[{field_id,code,msg}] }`
+   is wrong: no top-level `valid`, no `field_id`/`msg` on issues, errors is a map keyed
+   by question id (or `group:`/`form:` prefix).
+9. **`canSubmit` source.** VERDICT: Corrected. SOURCE: schema
+   `QuestionnaireValidationResponse.can_submit`; frontend `hasBlocking = !can_submit`.
+   Draft derived `canSubmit` from `valid==true`; corrected to read `can_submit`.
+10. **Field/validation-error keying.** VERDICT: Corrected. SOURCE: schema
+    `QuestionnaireValidationResponse.errors` (map) + `ValidationIssue`; frontend
+    `errorMap[questionId]` and `key.startsWith("group:"|"form:")`. Inline errors key
+    on question id (the map key), and `group:`/`form:` keys carry form-level issues.
+11. **Error/`detail` shape on failure = `HTTPValidationError` (422).** VERDICT: Corrected.
+    SOURCE: OpenAPI `resp=…;422:HTTPValidationError`; schema `HTTPValidationError`
+    = `{ detail: ValidationError[] }`, `ValidationError` = `{ loc, msg, type }`.
+    Draft's union `string | [{msg}] | {code,...}` is not what these endpoints return.
+12. **Session status enum.** VERDICT: Corrected. SOURCE: frontend
+    `src/api/types.ts: QuestionnaireSessionState.status = "in_progress" | "submitted"`.
+    Draft's `DRAFT/VALIDATED/EXPIRED` is wrong; server emits `in_progress|submitted`
+    (EXPIRED retained as a client-only marker for 404 handling).
+13. **Schema identity field = `version_id` (string), not `schema_version` (int).**
+    VERDICT: Corrected. SOURCE: `src/api/types.ts: QuestionnaireSessionState.version_id`
+    and `PublishedQuestionnaireVersion.version_id`/`version_number`. No `schema_version`
+    exists anywhere in OpenAPI or frontend types.
+14. **Inner session fields (`response_session_id`, `questionnaire_id`, `started_at`,
+    `current_section_index`, `current_question_id`, `respondent_id`).** VERDICT:
+    Verified (frontend) / Unverified (OpenAPI). SOURCE: `src/api/types.ts:
+    QuestionnaireSessionState`. OpenAPI types the `session` object as free-form
+    `object`, so these names are frontend-derived, not OpenAPI-guaranteed.
+15. **Auth: cookie jar + `X-CSRF-Token` from `ui_csrf` cookie on mutating calls.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts` — `credentials:"include"`,
+    `const csrf = getCookie("ui_csrf"); if (csrf) headers.set("X-CSRF-Token", csrf)`.
+    The header is sent whenever the cookie exists (all methods), with no priming GET.
+16. **No CSRF priming GET / anonymous CSRF behavior.** VERDICT: Unverified-assumption.
+    SOURCE: `src/api/client.ts` shows no priming GET; whether the server issues a
+    `ui_csrf` cookie to anonymous respondents before first POST is server behavior
+    not observable from these sources.
+17. **401 refresh-once endpoint (`POST /ui/session/refresh`).** VERDICT:
+    Unverified-assumption. SOURCE: not found in `reference/openapi.index.txt` nor in
+    the frontend during this review; delegated to core-network as an existing concern.
+18. **Compose error semantics / accessibility (`Modifier.semantics{ error(...) }`,
+    live regions).** VERDICT: Unverified-assumption (framework ref). SOURCE: Android
+    docs — Compose accessibility semantics
+    (https://developer.android.com/develop/ui/compose/accessibility). Framework choice,
+    not a backend contract.
+19. **Stack baseline (Retrofit/OkHttp/Moshi/Room/Hilt, minSdk 24, target 35).**
+    VERDICT: Unverified-assumption (framework ref). SOURCE: spec-internal stack
+    decision; not derivable from backend/frontend sources.
+
+### Corrections made
+
+- Path params: `{slug}`/`{sessionId}` → `{published_slug}`/`{response_session_id}` (§4/§5).
+- Start request body: removed non-existent `{context:{locale}}`; body is
+  `ResponseSessionStartReq` (optional `questionnaire_id`), web client posts `{}` (§5).
+- Start response: flat `SessionResponse` (201) → `ResponseSessionEnvelope` `{session}` (200) (§5).
+- GET/PUT response: `SessionResponse` → `SessionStateEnvelope` `{session, answers_by_question_id}` (§5).
+- Save body wire key: `answers` → `answers_by_question_id` (+ `current_section_index`,
+  `current_question_id`); `SaveSessionRequest` → `SessionSaveReq` (§5).
+- Validate body: `SaveSessionRequest` → `QuestionnaireValidationRequest`
+  (`answers_by_question_id`, `final_submit`) (§5).
+- Validate response: `{valid, errors:[{field_id,code,msg}]}` →
+  `QuestionnaireValidationResponse {is_valid, can_submit, has_blocking_form_error,
+  errors: Map<questionId|group:|form:, ValidationIssue[]>}`; `ValidationIssue =
+  {code, message, blocking?, rule_id?}` (§4/§5).
+- `canSubmit` source: `valid==true` → `can_submit` (§4 VM intent, AC-4).
+- Error shape: union `string|[{msg}]|{code}` → `HTTPValidationError {detail:[{loc,msg,type}]}` (422) (§5).
+- Domain/Room: `schemaVersion:Int` → `versionId:String`; status enum
+  `DRAFT/VALIDATED/EXPIRED` → `IN_PROGRESS/SUBMITTED(/EXPIRED client-only)`;
+  `updatedAt`(server) → `startedAt` (§4/§6).
+- FR-6, AC-7, R5: `schema_version` mismatch → `version_id` mismatch; no documented 409 (§3/§7/§13/§14).
+- Expiry codes: `404/410` → 404 (410 defensive/unverified; OpenAPI only declares 200/422) (§4/§7/§13).
+
+### Open assumptions
+
+- **Save full-replace vs partial-patch** — OpenAPI body is free-form `object`; adopted
+  full-replace from the web client's observed behavior (item 6). Confirm server merge semantics.
+- **Session expiry HTTP code** — only 200/422 declared; 404 assumed, 410 defensive (items 11, R3).
+- **Schema-change detection mechanism** — no 409 documented; relies on comparing
+  `version_id` strings, not an HTTP status (items 13, R5, §7).
+- **Anonymous CSRF / priming** — server's anonymous `ui_csrf` issuance is unobservable
+  here; no priming GET in the web client (items 15-16, R4).
+- **401 refresh endpoint** — `POST /ui/session/refresh` not located; left to core-network (item 17).
+- **Inner `session` field names** — frontend-derived; OpenAPI declares `session` as
+  opaque `object` (item 14).
+- **Android framework choices** (stack, Compose a11y, debounce window) — design decisions,
+  not backend-verifiable (items 18-19).
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless
+emulator AVD `test35` (x86_64, API 35); **deviceA15** = physical Samsung Galaxy A15 5G
+(SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). MockWebServer cases run on JVM unless
+they exercise real OS/network behavior.
+
+- **TC-AND-348-01 — Start session, no prior draft (happy path).**
+  Type: contract/MockWebServer (JVM). Target: `RespondentSessionRepositoryImpl` + `RespondentSessionApi`.
+  Preconditions: empty Room; MockWebServer enqueues 200 `ResponseSessionEnvelope`
+  `{session:{response_session_id, questionnaire_id, version_id, status:"in_progress", started_at}}`.
+  Steps: call `startOrResume(slug)`. Expected: `POST /questionnaires/published/{slug}/sessions`
+  with body `{}` (and `X-CSRF-Token` when a `ui_csrf` cookie is set); recorded path uses the
+  `{published_slug}` segment; result maps to `RespondentSession(status=IN_PROGRESS)`; a draft
+  row is upserted with `sessionId` + `versionId`. Traces: AC-1.
+
+- **TC-AND-348-02 — Autosave debounce + PUT body shape.**
+  Type: unit (JVM, `StandardTestDispatcher` + Turbine). Target: `RespondentSessionViewModel` + repo.
+  Preconditions: active session in Room; MockWebServer 200 `SessionStateEnvelope`.
+  Steps: emit three `onAnswerChanged` within the 800ms window; advance time past the window.
+  Expected: exactly one `PUT …/sessions/{id}` fires; body is `SessionSaveReq`
+  `{answers_by_question_id:{…}, current_section_index?, current_question_id?}` (NOT `{answers:…}`);
+  Room written synchronously on each change. Traces: AC-2.
+
+- **TC-AND-348-03 — `saveNow()` flushes immediately, cancelling debounce.**
+  Type: unit (JVM). Target: `RespondentSessionViewModel`.
+  Preconditions: one pending change inside the debounce window. Steps: call `saveNow()`.
+  Expected: PUT fires immediately (before window elapses); no second PUT when the window later
+  expires; `syncStatus` transitions Saving→Synced. Traces: AC-2.
+
+- **TC-AND-348-04 — Resume restores answers across process death.**
+  Type: instrumented (emu35; Robolectric variant on JVM acceptable). Target:
+  `SessionDraftDao` + repo + new ViewModel instance, in-memory/real Room.
+  Preconditions: draft row with `sessionId`, `versionId`, answers, `dirty=false`; MockWebServer
+  GET 200 `SessionStateEnvelope` with same `version_id` and a superset of answers.
+  Steps: construct a fresh ViewModel (same Room), call `resume()`; reconcile with
+  `GET …/sessions/{id}`. Expected: prior answers restored from Room and merged with the server
+  snapshot (server wins on `version_id`/`status`, local dirty wins on unsynced fields); no loss.
+  Traces: AC-3 (primary "Save + resume").
+
+- **TC-AND-348-05 — Validation populates field errors + drives canSubmit.**
+  Type: contract/MockWebServer (JVM). Target: repo `validate` + `SessionMapper` + ViewModel.
+  Preconditions: active session. MockWebServer 200 `QuestionnaireValidationResponse`
+  `{is_valid:false, can_submit:false, has_blocking_form_error:false,
+  errors:{"q_email":[{code:"format",message:"Invalid email",blocking:true}]}}`.
+  Steps: call `validate()`. Expected: request body is `QuestionnaireValidationRequest`
+  `{answers_by_question_id, final_submit:false}`; `fieldErrors["q_email"]` populated from the
+  `errors` MAP (mapped via `ValidationIssue.message/code`, NOT `field_id`/`msg`); `canSubmit`
+  follows `can_submit` (false here). Then enqueue `{is_valid:true, can_submit:true,
+  has_blocking_form_error:false, errors:{}}` and re-validate → `canSubmit=true`,
+  `fieldErrors` cleared. Traces: AC-4.
+
+- **TC-AND-348-06 — Group/form-level validation keys handled.**
+  Type: unit (JVM). Target: `SessionMapper`.
+  Preconditions: `QuestionnaireValidationResponse.errors` contains `"form:terms"` and
+  `"group:contact"` keys alongside a question id. Steps: map to domain.
+  Expected: question-id issues map to inline `fieldErrors`; `group:`/`form:`-prefixed keys are
+  retained as form/group-level messages (not dropped, not mis-attached to a field). Traces: AC-4.
+
+- **TC-AND-348-07 — Offline local save never blocks; SyncPending.**
+  Type: integration/MockWebServer (JVM). Target: repo + ViewModel.
+  Preconditions: server unreachable (MockWebServer dispatcher throws / connection refused),
+  simulating the flaky dev host. Steps: `onAnswerChanged` then `saveNow()`.
+  Expected: Room write succeeds; no exception crosses the ViewModel boundary (typed `ApiResult.Error`);
+  `syncStatus = SyncPending` and draft `dirty=true`; answers intact. Traces: AC-5, AC-8 (no crash/leak).
+
+- **TC-AND-348-08 — Reconnect flushes pending dirty draft.**
+  Type: integration/MockWebServer (JVM). Target: repo `syncDraft`.
+  Preconditions: from TC-07 state (`dirty=true`). Steps: server now returns 200
+  `SessionStateEnvelope`; trigger sync (connectivity callback or `saveNow()`).
+  Expected: PUT replays buffered answers; on 2xx `dirty=false`; in-flight edits re-merged
+  before clearing dirty; no answer loss. Traces: AC-5.
+
+- **TC-AND-348-09 — Expired/missing session (404) recreates + replays.**
+  Type: contract/MockWebServer (JVM). Target: repo `startOrResume`.
+  Preconditions: draft row with stale `sessionId`. Steps: GET returns 404; repo recreates via
+  POST (200 envelope) and replays local answers via PUT. Expected: new `response_session_id`
+  stored; local answers preserved and re-sent; status path IN_PROGRESS; a literal 410 is handled
+  the same way defensively. Traces: AC-6.
+
+- **TC-AND-348-10 — version_id change blocks sync (SchemaChanged).**
+  Type: unit (JVM). Target: repo reconciliation.
+  Preconditions: draft `versionId="v1"`; GET returns `SessionStateEnvelope` with session
+  `version_id="v2"`. Steps: `resume()`/`syncDraft`. Expected: `schemaChanged=true`, sync blocked,
+  no PUT issued until `reloadSchema()`; answers not discarded (CORRECTED: compares `version_id`
+  string, not an int `schema_version`, and not via HTTP 409). Traces: AC-7.
+
+- **TC-AND-348-11 — 422 HTTPValidationError parsing.**
+  Type: contract/MockWebServer (JVM). Target: `ErrorBodyAdapter`/`ApiError` mapping.
+  Preconditions: PUT returns 422 `{detail:[{loc:["body","answers_by_question_id"],msg:"…",type:"…"}]}`.
+  Steps: trigger save. Expected: parsed into `ApiResult.Error`/`ApiError` from `detail[].msg`
+  (not the old union shape); local draft untouched; `syncStatus=Failed` with retry affordance.
+  Traces: AC-5 (resilience), AC-2.
+
+- **TC-AND-348-12 — No PII in logs/telemetry.**
+  Type: unit (JVM, capturing Timber tree + fake analytics). Target: repo + ViewModel + logging.
+  Preconditions: answers contain PII-like strings. Steps: run start→save→validate; capture logs
+  and emitted telemetry. Expected: no answer values in logcat at INFO+; telemetry events
+  (`respond_session_*`) carry only `slug`/`sessionId`/counts/flags; CSRF token/cookie never logged.
+  Traces: AC-8.
+
+- **TC-AND-348-13 — Real-network resume + cleartext dev host (physical device).**
+  Type: instrumented/e2e (**deviceA15** — MUST run on the physical device for true
+  arm64-v8a/API-34 behavior and real radio/connectivity transitions). Target: full screen
+  + repo against the live dev host `http://18.222.237.167:8000`.
+  Preconditions: device on network; network-security-config cleartext allowlist includes the dev
+  host. Steps: start a session, answer fields, toggle airplane mode mid-edit, re-enable, then
+  force-stop and relaunch the app and reopen the same slug. Expected: cleartext POST/PUT succeed
+  to the dev host; offline edits buffered (SyncPending) and flushed on reconnect; after relaunch
+  answers are restored. Note: emu35 cannot faithfully reproduce real radio/ABI behavior; use the
+  device. Traces: AC-1, AC-3, AC-5.
+
+- **TC-AND-348-14 — Inline error + sync-status accessibility (Compose-UI).**
+  Type: Compose-UI (emu35; espresso/compose-test). Target: renderer host screen consuming
+  `fieldErrors`/`syncStatus` (a11y contract owned here, rendered by AND-347).
+  Preconditions: a field has a validation error; sync transitions Saving→Failed.
+  Steps: trigger validation and a failed save. Expected: errored field exposes
+  `semantics { error(message) }` and `aria/contentDescription`-equivalent; sync-status changes
+  announced via a polite/assertive live region (TalkBack-observable); error text resolved from
+  `strings.xml` (no hardcoded copy). Traces: AC-4, AC-5.
+
+### Coverage matrix
+
+| AC | Description | Test case(s) |
+| --- | --- | --- |
+| AC-1 | Create session on entry, store `session_id` | TC-01, TC-13 |
+| AC-2 | Edit → Room immediately + debounced PUT; `saveNow()` flushes | TC-02, TC-03, TC-11 |
+| AC-3 | Resume restores answers (primary) | TC-04, TC-13 |
+| AC-4 | `validate()` populates field errors; `can_submit` drives `canSubmit` | TC-05, TC-06, TC-14 |
+| AC-5 | Offline saves succeed (SyncPending); reconnect flush, no loss | TC-07, TC-08, TC-11, TC-13, TC-14 |
+| AC-6 | 404/410 recreates + replays | TC-09 |
+| AC-7 | Differing `version_id` → SchemaChanged, blocks sync | TC-10 |
+| AC-8 | No answer content in logs/telemetry | TC-07, TC-12 |
