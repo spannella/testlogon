@@ -4,3 +4,7 @@ dist
 # Playwright test artifacts
 test-results/
 playwright-report/
+
+# Demo walkthrough video artifacts (large binaries; rebuild via playwright.demo.config + scripts/build_demo_video.sh)
+e2e/demo/.artifacts/
+e2e/demo/out/
