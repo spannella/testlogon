@@ -277,23 +277,28 @@ class KycCaseAssignmentService:
         if not admin_sub:
             return 0
         total = 0
-        ekey: dict[str, Any] | None = None
-        status_placeholders = {f":s{i}": pk for i, pk in enumerate(self._ACTIVE_STATUS_PKS)}
-        while True:
-            kwargs: dict[str, Any] = {
-                "IndexName": S.kyc_cases_assigned_admin_index_name,
-                "KeyConditionExpression": "assigned_admin_sub = :a",
-                "FilterExpression": "gsi_status_pk IN (" + ", ".join(status_placeholders) + ")",
-                "ExpressionAttributeValues": {":a": admin_sub, **status_placeholders},
-                "Select": "COUNT",
-            }
-            if ekey:
-                kwargs["ExclusiveStartKey"] = ekey
-            resp = self._table.query(**kwargs)
-            total += int(resp.get("Count") or 0)
-            ekey = resp.get("LastEvaluatedKey")
-            if not ekey:
-                break
+        # ``gsi_status_pk`` is the SORT key of the assigned-admin GSI
+        # (PK=assigned_admin_sub), so it cannot appear in a FilterExpression
+        # (DynamoDB: "Filter Expression can only contain non-primary key
+        # attributes"). A sort key also cannot use ``IN`` in a KeyCondition, so
+        # we issue one Select=COUNT query per active status value (the set is
+        # tiny and fixed) keyed on ``gsi_status_pk = :s`` and sum the counts.
+        for status_pk in self._ACTIVE_STATUS_PKS:
+            ekey: dict[str, Any] | None = None
+            while True:
+                kwargs: dict[str, Any] = {
+                    "IndexName": S.kyc_cases_assigned_admin_index_name,
+                    "KeyConditionExpression": "assigned_admin_sub = :a AND gsi_status_pk = :s",
+                    "ExpressionAttributeValues": {":a": admin_sub, ":s": status_pk},
+                    "Select": "COUNT",
+                }
+                if ekey:
+                    kwargs["ExclusiveStartKey"] = ekey
+                resp = self._table.query(**kwargs)
+                total += int(resp.get("Count") or 0)
+                ekey = resp.get("LastEvaluatedKey")
+                if not ekey:
+                    break
         return total
 
     def _active_case_counts(self) -> dict[str, int]:
