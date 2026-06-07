@@ -128,6 +128,7 @@ test.describe("Section 220: Payout Methods UI", () => {
     await apiPost(page, ALICE_KEY, "/ui/payouts/methods", {
       method_type: "bank_ach",
       account_last4: "1111",
+      routing_last4: "2222",
       nickname: `Picker ${TS}`,
     });
 
@@ -135,7 +136,7 @@ test.describe("Section 220: Payout Methods UI", () => {
     // My Payouts is default tab; open the destination select
     await page.getByTestId("payout-destination-trigger").click();
     await expect(
-      page.getByRole("option", { name: /Picker/ }),
+      page.getByRole("option", { name: /Picker/ }).first(),
     ).toBeVisible();
   });
 
@@ -144,6 +145,7 @@ test.describe("Section 220: Payout Methods UI", () => {
     const resp = await apiPost(page, ALICE_KEY, "/ui/payouts/methods", {
       method_type: "bank_ach",
       account_last4: "9999",
+      routing_last4: "8888",
       nickname: `Delete ${TS}`,
     });
     expect(resp.ok()).toBeTruthy();

@@ -163,6 +163,7 @@ for item in resp.get('Items', []):
             ExpressionAttributeNames={'#s': 'status'},
             ExpressionAttributeValues={':s': 'cancelled'},
         )
+tbl.delete_item(Key={'payout_id': 'PAYOUT_STATE#${userSub}'})
 print('cleaned')
 "`,
     { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },

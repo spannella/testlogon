@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
 from app.core.settings import S
@@ -52,6 +52,7 @@ admin_router = APIRouter(prefix="/ui/admin/privacy", tags=["admin-privacy"])
 @router.post("/export", status_code=201)
 def request_export(
     body: ExportRequestIn,
+    background_tasks: BackgroundTasks,
     ctx: Dict[str, Any] = Depends(require_ui_session),
 ) -> DataRequestOut:
     if not S.privacy_export_enabled:
@@ -71,25 +72,14 @@ def request_export(
     item = create_export_request(user_sub, categories)
 
     # Run the export in the BACKGROUND (GAP-0338). A large multi-table query +
-    # ZipFile build + S3 upload must not block the HTTP request. Schedule the
-    # work as a fire-and-forget asyncio task and return the pending request
-    # immediately. _run_export_safe flips the request to "failed" on error so
-    # it never sticks at "pending".
-    _schedule_export(user_sub, item["request_id"], categories)
+    # ZipFile build + S3 upload must not block the HTTP request. FastAPI
+    # BackgroundTasks runs after the response is sent and works from this sync
+    # handler (asyncio.create_task would raise "no running event loop" here,
+    # since sync endpoints execute in a threadpool worker). _run_export_safe
+    # flips the request to "failed" on error so it never sticks at "pending".
+    background_tasks.add_task(_run_export_safe, user_sub, item["request_id"], categories)
 
     return DataRequestOut(**_item_to_out(item))
-
-
-# Hold strong references to in-flight background tasks so the event loop does
-# not garbage-collect them mid-run (standard asyncio fire-and-forget idiom).
-_export_tasks: set[asyncio.Task] = set()
-
-
-def _schedule_export(user_sub: str, request_id: str, categories: Dict[str, bool]) -> None:
-    """Schedule the GDPR export to run in the background, returning immediately."""
-    task = asyncio.create_task(_run_export_safe(user_sub, request_id, categories))
-    _export_tasks.add(task)
-    task.add_done_callback(_export_tasks.discard)
 
 
 async def _run_export_safe(user_sub: str, request_id: str, categories: Dict[str, bool]) -> None:
