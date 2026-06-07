@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Window-level XML theme only (splash background, no action bar).
+      Parented to a platform theme so no Material Components XML dependency is needed.
+      Compose-side Material 3 theming is applied in code via TestLogonTheme.
+    -->
+    <style name="Theme.TestLogon" parent="android:Theme.DeviceDefault.Light.NoActionBar" />
+</resources>
