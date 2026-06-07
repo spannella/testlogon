@@ -6,10 +6,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import com.testlogon.android.ui.theme.TestLogonTheme
+import com.testlogon.android.core.ui.theme.TestLogonTheme
+import com.testlogon.android.navigation.AppNavHost
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -21,14 +20,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             TestLogonTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    RootScreen()
+                    AppNavHost()
                 }
             }
         }
     }
-}
-
-@Composable
-private fun RootScreen() {
-    Text(text = "TestLogon")
 }

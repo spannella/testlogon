@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Input composables (AND-020) -->
+    <string name="cd_show_password">Show password</string>
+    <string name="cd_hide_password">Hide password</string>
+
+    <!-- State composables (AND-021) -->
+    <string name="state_loading">Loading</string>
+    <string name="state_error_title">Something went wrong</string>
+    <string name="state_empty_title">Nothing here yet</string>
+    <string name="state_offline_message">You appear to be offline</string>
+    <string name="action_retry">Retry</string>
+</resources>

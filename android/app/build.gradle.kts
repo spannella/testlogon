@@ -65,6 +65,11 @@ dependencies {
     // AndroidX core / lifecycle
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+
+    // Coroutines (StateFlow / Flow operators used by the auth router)
+    implementation(libs.coroutines.android)
 
     // Compose
     implementation(platform(libs.compose.bom))
@@ -75,10 +80,21 @@ dependencies {
     implementation(libs.compose.material3)
     debugImplementation(libs.compose.ui.tooling)
 
+    // Navigation
+    implementation(libs.navigation.compose)
+    implementation(libs.hilt.navigation.compose)
+
     // Hilt
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
     // Test
     testImplementation(libs.junit)
+
+    // UI / navigation tests
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.androidx.test.ext)
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.navigation.testing)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

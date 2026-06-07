@@ -29,10 +29,22 @@ kotlin {
 dependencies {
     implementation(project(":core-model"))
 
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.ui.graphics)
+    // Compose exposed via api(...) so feature modules inherit the design system transitively.
+    val composeBom = platform(libs.compose.bom)
+    api(composeBom)
+    androidTestImplementation(composeBom)
+
+    api(libs.compose.ui)
+    api(libs.compose.ui.graphics)
+    api(libs.compose.material3)
+    api(libs.compose.material.icons.extended)
     implementation(libs.compose.ui.tooling.preview)
-    implementation(libs.compose.material3)
     debugImplementation(libs.compose.ui.tooling)
+    implementation(libs.androidx.core.ktx) // WindowCompat
+
+    testImplementation(libs.junit)
+
+    androidTestImplementation(libs.androidx.test.ext)
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

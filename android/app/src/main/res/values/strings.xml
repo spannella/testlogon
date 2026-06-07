@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TestLogon</string>
+
+    <!-- Authenticated shell bottom-nav tabs (AND-024) -->
+    <string name="tab_home">Home</string>
+    <string name="tab_me">Profile</string>
 </resources>
