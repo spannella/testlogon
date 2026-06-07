@@ -96,6 +96,52 @@ def index_user_for_discovery(user_id: str) -> int:
     return len(tokens)
 
 
+def reindex_all_users() -> Dict[str, int]:
+    """Reindex every user in the platform for discovery.
+
+    Iterates ALL users in the users table (paginating via ``LastEvaluatedKey``
+    so no users are silently truncated) and calls the existing
+    ``index_user_for_discovery(user_sub)`` for each. Best-effort per user: a
+    single user's failure is logged and skipped rather than aborting the whole
+    sweep.
+
+    Returns a summary dict with the number of users seen, the number
+    successfully reindexed (i.e. that produced one or more index tokens), and
+    the number of failures.
+    """
+    seen = 0
+    reindexed = 0
+    failed = 0
+    last_key = None
+    while True:
+        scan_kwargs: Dict[str, Any] = {"ProjectionExpression": "user_sub"}
+        if last_key:
+            scan_kwargs["ExclusiveStartKey"] = last_key
+        try:
+            resp = T.users.scan(**scan_kwargs)
+        except Exception:
+            logger.exception("reindex_all_users: failed to scan users table")
+            break
+        for it in resp.get("Items", []):
+            user_sub = it.get("user_sub")
+            if not user_sub:
+                continue
+            seen += 1
+            try:
+                tokens = index_user_for_discovery(user_sub)
+                if tokens > 0:
+                    reindexed += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "reindex_all_users: failed to index user %s", user_sub
+                )
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return {"seen": seen, "reindexed": reindexed, "failed": failed}
+
+
 def search_users(
     query: str,
     *,

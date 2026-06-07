@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SignatureDrawCanvas } from "@/components/SignatureDrawCanvas";
 import {
   Select,
   SelectContent,
@@ -587,17 +588,14 @@ export function SignaturePacketComposer() {
                             data-testid={`field-input-${field.field_id}`}
                           />
                         ) : (
-                          <Input
-                            value={drawnValues[field.field_id] ?? ""}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              setDrawnValues((prev) => ({ ...prev, [field.field_id]: value }));
+                          <SignatureDrawCanvas
+                            testId={`field-drawn-${field.field_id}`}
+                            onChange={(serialized) => {
+                              setDrawnValues((prev) => ({ ...prev, [field.field_id]: serialized }));
                               const mode = captureModes[field.field_id] ?? defaultCaptureMode;
-                              const err = validateFieldInput(field, currentValue, mode, value);
+                              const err = validateFieldInput(field, currentValue, mode, serialized);
                               setFillErrors((prev) => ({ ...prev, [field.field_id]: err ?? "" }));
                             }}
-                            placeholder="Drawn JSON points, e.g. [[0.1,0.2],[0.2,0.3]]"
-                            data-testid={`field-drawn-${field.field_id}`}
                           />
                         )}
                         {fillErrors[field.field_id] && (

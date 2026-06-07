@@ -33,6 +33,20 @@ PROFILE_FIELDS = (
 )
 
 
+# Profile fields that influence the discovery search index (GAP-0353 / SOC-003).
+# Only these fields are read by app.services.discovery.index_user_for_discovery
+# when (re)building a user's discovery tokens/metadata, so we only need to
+# re-index when one of them actually changed in a given profile update.
+DISCOVERY_FIELDS = frozenset(
+    {
+        "display_name",
+        "description",
+        "title",
+        "profile_photo_url",
+    }
+)
+
+
 # Identity-relevant profile fields whose change must trigger KYC re-screening
 # for users with an approved KYC case (GAP-0259 / KYC-006 continuous monitoring).
 SCREENING_SENSITIVE_PROFILE_FIELDS = frozenset(
@@ -328,6 +342,7 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
     audit_entries: List[Dict[str, Any]] = []
     ts = now_ts()
     address_changed = False
+    discovery_changed = False
     for field in PROFILE_FIELDS:
         if current.get(field) != updated.get(field):
             audit_entries.append({
@@ -338,6 +353,8 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
             })
             if field == "mailing_address":
                 address_changed = True
+            if field in DISCOVERY_FIELDS:
+                discovery_changed = True
 
     save_profile(user_sub, updated, audit_entries)
 
@@ -348,7 +365,41 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
     if address_changed:
         _invalidate_address_verification_for_user(user_sub)
 
+    # GAP-0353 (SOC-003 §4.6): (re)populate the discovery search index after the
+    # profile is saved so updated/new profiles appear and refresh in discovery
+    # search immediately (previously they were only findable by their old name
+    # until the periodic re-index ran, and brand-new users were never indexed).
+    # Guarded on whether a discovery-relevant field actually changed (idempotent
+    # + cheaper). Best-effort: a discovery-index failure must NEVER fail the
+    # profile update, and the import is lazy to avoid any circular-import risk.
+    if discovery_changed:
+        _reindex_user_for_discovery(user_sub)
+
     return updated
+
+
+def _reindex_user_for_discovery(user_sub: str) -> None:
+    """(Re)build the user's discovery search index after a profile save.
+
+    Called only when a discovery-relevant profile field changed. Never raises —
+    failures are logged and suppressed so a legitimate profile update is never
+    blocked by a discovery-index error (the profile write is already committed).
+    The import is lazy to avoid a circular dependency with app.services.discovery.
+
+    Runs identically in dev and prod (SECOPS-007): index_user_for_discovery
+    writes to the same DynamoDB discovery table in either environment.
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    try:
+        from app.services.discovery import index_user_for_discovery
+
+        index_user_for_discovery(user_sub)
+    except Exception:  # pragma: no cover - defensive; must never block profile save
+        _log.exception(
+            "discovery.reindex_on_profile_update_error user_sub=%s", user_sub
+        )
 
 
 def _invalidate_address_verification_for_user(user_sub: str) -> None:
