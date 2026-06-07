@@ -30,6 +30,7 @@ from fastapi import HTTPException
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services import syndicates as syndicate_svc
+from app.services.billing_shared import apply_wallet_delta
 
 logger = logging.getLogger(__name__)
 
@@ -217,12 +218,41 @@ def execute_split(
         distributions = _calculate_equal(net_amount_cents, member_ids)
         effective_mode = "equal"
 
-    # Financial integrity invariant.
+    # Financial integrity invariant — enforced unconditionally (works under
+    # python -O, where bare `assert` statements are stripped). Raising here,
+    # before the per-member loop, guarantees NO DDB writes happen on a bad split.
     distributed = sum(d["amount_cents"] for d in distributions)
-    assert distributed == net_amount_cents, (
-        f"split distribution mismatch: {distributed} != {net_amount_cents}"
-    )
-    assert platform_fee_cents + distributed == gross_amount_cents
+    if distributed != net_amount_cents:
+        logger.error(
+            "syndicate_split_invariant_violated",
+            extra={
+                "syndicate_id": syndicate_id,
+                "distributed": distributed,
+                "net_amount_cents": net_amount_cents,
+                "gross_amount_cents": gross_amount_cents,
+                "platform_fee_cents": platform_fee_cents,
+            },
+        )
+        raise RuntimeError(
+            f"GAP-0362: split distribution mismatch for syndicate {syndicate_id}: "
+            f"distributed={distributed} != net_amount_cents={net_amount_cents} "
+            f"(gross={gross_amount_cents}, fee={platform_fee_cents})"
+        )
+    if platform_fee_cents + distributed != gross_amount_cents:
+        logger.error(
+            "syndicate_split_fee_invariant_violated",
+            extra={
+                "syndicate_id": syndicate_id,
+                "distributed": distributed,
+                "platform_fee_cents": platform_fee_cents,
+                "gross_amount_cents": gross_amount_cents,
+            },
+        )
+        raise RuntimeError(
+            f"GAP-0362: split fee invariant violated for syndicate {syndicate_id}: "
+            f"platform_fee={platform_fee_cents} + distributed={distributed} "
+            f"!= gross={gross_amount_cents}"
+        )
 
     ts = now_ts()
     split_id = f"split_{uuid4().hex}"
@@ -252,6 +282,14 @@ def execute_split(
                     "percentage_bps": int(dist["percentage_bps"]),
                 },
             })
+            # GAP-0363: credit the member's spendable wallet balance atomically
+            # with their ledger entry. Ledger first (recovery record), wallet
+            # second — same PK convention as the ledger row above (USER#{id}).
+            apply_wallet_delta(
+                T.billing,
+                f"USER#{dist['user_id']}",
+                int(dist["amount_cents"]),
+            )
             dist["ledger_entry_id"] = entry_id
         except Exception:
             logger.warning(
