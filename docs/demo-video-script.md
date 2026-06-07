@@ -93,7 +93,28 @@ That's voice and video calls. Next up: the newsfeed.
 ---
 
 ## SEGMENT 04 — Newsfeed
-<!-- TODO -->
+
+Now let's look at the newsfeed — a living timeline of your own posts and updates from the
+creators you follow, all in one place.
+
+Posts aren't just plain text. Compose a quick update, or switch to rich text and markdown —
+headings, bold, lists — with a live preview as you type. One click and it's live in the feed,
+right at the top of the timeline.
+
+Every post is interactive. React with a tap — thumbs up, heart, laughing, fire, or wow — and the
+counts update instantly. Open the threaded comments under any post to reply, react, edit, and
+even tip individual comments.
+
+Creators can monetize directly from the feed. Send a tip straight from any post — micro-payments
+are built right in. Or lock premium content behind a one-time payment: viewers see a pay-to-unlock
+button, choose a card, confirm the total, and the post reveals instantly.
+
+Want to hear from your audience? Run a poll or survey — single or multi-choice — with live
+results. Cast a vote and watch the percentages and totals fill in the moment it lands.
+
+And anything worth keeping, you can bookmark — saved away for whenever you come back.
+
+That's the newsfeed. Next up: social.
 
 ## SEGMENT 05 — Social
 <!-- TODO -->
