@@ -5,7 +5,8 @@ milestone: M8
 epic: E52
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-401]
 blocks: []
 ---
@@ -24,8 +25,10 @@ AND-401) and the analytics dashboards repository/ViewModel (AND-399, AND-401).
 
 The source backlog scope is "Repo + UI tests" with acceptance "Pass." We interpret
 this as: (a) **repository-layer tests** (MockWebServer-backed) pinning the HTTP
-contract — verbs, paths, query params, bodies, the `X-CSRF-Token` header, DTO→domain
-mapping, caching, retry/refresh, FastAPI `detail` error mapping — for both
+contract — verbs, paths, query params, bodies, the `X-CSRF-Token` header (the web
+client sets it from the `ui_csrf` cookie on **every** request, not only unsafe
+methods — see §16), DTO→domain mapping, caching, retry/refresh, FastAPI `detail`
+error mapping — for both
 `WebhooksRepository` and `AnalyticsRepository`; and (b) **UI tests** proving the
 Compose screens and ViewModels render the canonical states
 (loading / content / empty / error+stale) from deterministic fixtures. "Pass" means
@@ -67,18 +70,30 @@ a suite that runs without network access.
 ## 3. Functional Requirements
 
 FR-1 — **Webhooks repository contract tests.** Using `MockWebServer`, assert
-`GET /ui/webhooks`, `GET /ui/webhooks/{id}`, and `POST /ui/webhooks` issue the correct
-method/path; the POST carries the JSON body `{ "url", "events" }` and an
+`GET /ui/webhooks`, `GET /ui/webhooks/{endpoint_id}`, and `POST /ui/webhooks` issue the
+correct method/path; the POST carries the JSON body `{ "url", "event_types" }`
+(CORRECTED — the create request schema `WebhookEndpointCreateReq` uses `event_types`,
+not `events`; `url` + `event_types` are the only required fields) and an
 `X-CSRF-Token` header; responses deserialize per §5; cache-then-network and
 write-through-on-create behaviour holds; GETs retry on transient failure and POST never
-auto-retries.
+auto-retries. (CORRECTED — list path param is `endpoint_id`, not `id`.)
 
-FR-2 — **Analytics repository contract tests.** Assert
-`GET /ui/analytics/dashboard?start&end&granularity=day` and (where used)
-`GET /ui/analytics/breakdown?...dimension&limit` issue correct method/path/query
-params; DTO→domain mapping including seconds→duration and fraction→percent; cache-first
-emits stale-then-fresh; bounded backoff retries 5xx then succeeds; the prior-window
-delta path (embedded `previous` vs fallback second GET) is exercised.
+FR-2 — **Analytics repository contract tests.** Assert the real analytics surface —
+there is **no** `/ui/analytics/dashboard` and **no** `/ui/analytics/breakdown` endpoint
+(CORRECTED, see §16). The web client (`src/api/endpoints/analytics.ts`) composes a
+dashboard from discrete GETs: `GET /ui/analytics/overview`, `/ui/analytics/views`,
+`/ui/analytics/revenue`, `/ui/analytics/subscribers`, `/ui/analytics/top-content`,
+`/ui/analytics/audience`, plus `POST /ui/analytics/refresh`. Each takes
+`?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD` (CORRECTED — params are `from_date`/`to_date`,
+not `start`/`end`; `granularity` is optional on views/revenue/subscribers, not the
+fixed `day` the draft claimed). Tests assert correct method/path/query params from a
+fixed `Clock`; DTO→domain mapping including watch-time seconds→duration and
+cents→currency (revenue/top-content values are integer `*_cents`, not fractions — there
+is no fraction→percent on these tiles); cache-first emits stale-then-fresh; bounded
+backoff retries 5xx then succeeds. There is **no** embedded `previous`/prior-window
+delta block in `AnalyticsOverviewOut` (CORRECTED); any period-over-period comparison the
+ViewModel shows must be derived by a second windowed GET, and the test exercises that
+path only if AND-399 confirms it (otherwise the delta tile is unverified — §16).
 
 FR-3 — **Auth/CSRF/refresh reuse tests.** A `401` response from any GET triggers
 exactly one `POST /ui/session/refresh` then a retry of the original request (the
@@ -185,43 +200,78 @@ list → create → back → refreshed-list round-trip via the fake repository.
 ## 5. API Contract
 
 This ticket defines **no** new endpoints; it pins the contracts owned by AND-398 and
-AND-399 via fixtures and assertions. The shapes the tests assert against:
+AND-399 via fixtures and assertions. The shapes below were **re-verified against the
+backend OpenAPI and the web reference** during this review and several were corrected;
+the audit trail is in §16.
 
-**Webhooks list** — `GET /ui/webhooks` → 200:
-
-```json
-{ "webhooks": [
-  { "id": "wh_01HX...", "url": "https://example.com/hooks/tl",
-    "events": ["session.finalized", "mfa.verified"], "active": true,
-    "secret_set": true, "created_at": "2026-05-12T18:04:11Z" } ] }
-```
-
-**Webhook detail** — `GET /ui/webhooks/{id}` → 200 (single object, list-element shape);
-404 → not-found path.
-
-**Webhook create** — `POST /ui/webhooks`, body `{ "url", "events" }` → 201|200 with the
-created `WebhookDto` (server `id`, `created_at`, `secret_set:true`, optional one-time
-`secret`). Tests assert both 200 and 201 are accepted and that the request carried
-`X-CSRF-Token`.
-
-**Analytics dashboard** —
-`GET /ui/analytics/dashboard?start=YYYY-MM-DD&end=YYYY-MM-DD&granularity=day` → 200:
+**Webhooks list** — `GET /ui/webhooks` → 200. CORRECTED: the response is a **bare JSON
+array** of `WebhookEndpointOut`, not an envelope object with a `webhooks` key
+(`src/api/endpoints/webhooks.ts: listWebhookEndpoints` returns `WebhookEndpointOut[]`):
 
 ```json
-{ "range": { "start": "2026-05-09", "end": "2026-06-05" },
-  "summary": { "views": 184320, "watch_time_seconds": 9421800,
-    "unique_viewers": 51240, "subscribers_net": 1372, "engagement_rate": 0.0613 },
-  "previous": { "views": 161002, "watch_time_seconds": 8730500,
-    "unique_viewers": 49110, "subscribers_net": 980, "engagement_rate": 0.0588 },
-  "timeseries": [ { "date": "2026-05-09", "views": 6210,
-    "watch_time_seconds": 318400, "unique_viewers": 2110 } ] }
+[
+  { "endpoint_id": "wh_01HX...", "url": "https://example.com/hooks/tl",
+    "event_types": ["session.finalized", "mfa.verified"], "enabled": true,
+    "signature_version": "v2", "secret": null,
+    "created_at": 1747073051, "updated_at": 1747073051,
+    "failure_count": 0, "circuit_consecutive_failures": 0 } ]
 ```
 
-**Analytics breakdown** —
-`GET /ui/analytics/breakdown?start&end&dimension={content|source}&limit=10` → 200 with
-an `items` array (`content`: `id,label,views,watch_time_seconds`; `source`:
-`id,label,views,share`). Tests cover both dimensions and the combined-payload variant
-(breakdowns embedded, second call skipped) if that is the confirmed contract.
+Field corrections vs the draft: `endpoint_id` (not `id`), `event_types` (not `events`),
+`enabled` (not `active`); **no** `secret_set` field (the schema exposes a nullable
+`secret`); `created_at`/`updated_at` are **integer epoch seconds**, not ISO-8601 strings,
+so the DTO→domain mapping is epoch-seconds→`Instant` (CORRECTED from the draft's
+`created_at`→`Instant` ISO assumption). Only `endpoint_id` and `url` are required.
+
+**Webhook detail** — `GET /ui/webhooks/{endpoint_id}` → 200 `WebhookEndpointOut` (the
+same element shape). The OpenAPI declares only `200:WebhookEndpointOut` and
+`422:HTTPValidationError` for this op; a **404** is **not** declared in the spec
+(UNVERIFIED — the not-found branch is an assumption; test it defensively but treat the
+exact status as an open item, §16).
+
+**Webhook create** — `POST /ui/webhooks`, body `WebhookEndpointCreateReq`
+`{ "url", "event_types" }` (optional: `description`, `signature_version` (`v1|v2|both`,
+default `v2`), `circuit_failure_threshold` (3–100), `retry_policy`) → **201** with the
+created `WebhookEndpointOut` (server `endpoint_id`, epoch `created_at`, optional one-time
+`secret`). CORRECTED: the OpenAPI declares **201 only** — the draft's "201|200, both
+accepted" is wrong; the test asserts **201** is the success status (a lenient client may
+also accept 200, but 201 is the contract). The request must carry `X-CSRF-Token`.
+
+**Analytics dashboard** — CORRECTED: there is **no single `/ui/analytics/dashboard`
+endpoint** and **no `/ui/analytics/breakdown` endpoint**. The dashboard is assembled
+client-side from discrete GETs, each taking `?from_date&to_date` (and optional
+`granularity` on the time-series ones):
+
+- `GET /ui/analytics/overview` → `AnalyticsOverviewOut`:
+
+```json
+{ "period_views": 184320, "period_revenue_cents": 9421800,
+  "period_new_subscribers": 1372, "total_subscribers": 51240,
+  "top_content": [ { "content_id": "c_01", "content_type": "video",
+    "title": "Sample", "views": 6210, "revenue_cents": 318400,
+    "engagement_rate": 0.0613 } ], "currency": "USD" }
+```
+
+  There is **no** `range`, `summary`, `previous`, or top-level `timeseries` block, and
+  no top-level `engagement_rate` fraction (CORRECTED — the draft's payload was
+  fabricated). `engagement_rate` exists only per `AnalyticsTopContentItem`.
+- `GET /ui/analytics/views` → `AnalyticsViewsOut`: `{ time_series:[{date, views,
+  unique_viewers, watch_time_seconds}], total_views, total_watch_time_seconds }`.
+- `GET /ui/analytics/revenue` → `AnalyticsRevenue`: `{ total_cents, breakdown{...},
+  time_series:[{date, total_cents, tips_cents, ...}], currency }` (all `*_cents`).
+- `GET /ui/analytics/subscribers` → `{ time_series:[{date, new, churned, net, total}],
+  current_total, net_change }`.
+- `GET /ui/analytics/top-content` → `{ items: AnalyticsTopContentItem[], total_items }`.
+- `GET /ui/analytics/audience` → `{ countries:[{code,name,viewers,percentage}],
+  devices:[{type,viewers,percentage}] }`.
+- `POST /ui/analytics/refresh` → `AnalyticsRefreshOut` (the manual-refresh action).
+
+**Analytics breakdown** — CORRECTED: there is no generic `dimension`/`share` breakdown
+endpoint. The equivalent surfaces are **top-content** (revenue/engagement per content
+item, values in `revenue_cents` — not a `share` fraction) and **audience**
+(`countries`/`devices`, each with an integer `viewers` and a `percentage`). Tests cover
+these two real surfaces; the draft's `{content|source}` dimension + `share`/`limit`
+combined-payload variant does **not** exist and is removed.
 
 **Error envelope** — FastAPI `detail`: `string` | `[{ "msg": ... }]` (422) |
 `{ "code": ..., ... }`. Fixtures exist for each shape and for `401/403/404/422/500/503`.
@@ -285,7 +335,10 @@ in-memory persistence, `@After` teardown of MockWebServer/Room/DataStore.
   jar; no real session, account, or PII is embedded in fixtures.
 - **Cleartext.** Tests run against `MockWebServer` (localhost) and never the plaintext
   dev host; the suite adds no cleartext-domain config. A test asserts client-side URL
-  validation rejects non-`https://` webhook target URLs (AND-398 FR-4).
+  validation rejects non-`https://` webhook target URLs (AND-398 FR-4). NOTE: this is a
+  **client-side** rule — `WebhookEndpointCreateReq.url` is an unconstrained string in the
+  OpenAPI (no `format`/pattern), so the https-only requirement is an app/AND-398
+  decision, not a backend-enforced contract (§16).
 - **Logout clear.** A test invokes the session-clear hook and asserts the webhooks and
   analytics Room caches are emptied (AND-399 §8).
 
@@ -324,16 +377,18 @@ Accessibility is **asserted**, not implemented, here:
 This ticket *is* the testing strategy; the matrix below is the deliverable.
 
 **Repository (JVM, MockWebServer + in-memory Room):**
-- `DefaultWebhooksRepositoryTest`: list path/verb; detail; create body + `X-CSRF-Token`;
-  201 and 200 both accepted; DTO→`Webhook` mapping (incl. `created_at`→`Instant`);
+- `DefaultWebhooksRepositoryTest`: list path/verb (bare-array response); detail
+  (`{endpoint_id}`); create body `{url, event_types}` + `X-CSRF-Token`; **201** success
+  status; DTO→`Webhook` mapping (incl. epoch-seconds `created_at`→`Instant`);
   cache-then-network; write-through on create; GET retry (`503,503,200`); POST no-retry;
-  offline-stale fallback; 401→refresh→retry (3 requests); 422 `loc=url`→field error;
-  404 detail.
-- `AnalyticsRepositoryImplTest`: dashboard query params from fixed `Clock`; DTO→domain
-  (seconds→duration, fraction→percent); cache-first stale-then-fresh; TTL staleness;
-  backoff `503→200`; no retry on `400`; embedded `previous` vs fallback second-window
-  GET delta; breakdown content/source mapping; combined-payload variant; partial
-  breakdown failure.
+  offline-stale fallback; 401→refresh→retry (3 requests); 422 `loc=["body","url"]`→field
+  error; detail not-found branch (status defensive — see §16 open item).
+- `AnalyticsRepositoryImplTest`: per-endpoint query params (`from_date`/`to_date`) from
+  fixed `Clock`; DTO→domain (watch-time seconds→duration, cents→currency string);
+  cache-first stale-then-fresh; TTL staleness; backoff `503→200`; no retry on `400`;
+  multi-call dashboard assembly (overview + views + revenue + subscribers + top-content
+  + audience) and partial failure of one sub-call not blocking the rest. (No
+  `dashboard`/`breakdown` endpoints, no embedded `previous` delta — see §5/§16.)
 - `ApiErrorMapperTest`: three `detail` shapes → typed error; unknown shape fallback.
 - `CsrfRefreshInterceptorTest`: CSRF header attached to unsafe methods; single refresh
   on 401; re-auth signal on double 401.
@@ -382,11 +437,15 @@ coverage task gates the merge.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (upstream API shapes).** Field names/paths for webhooks (`url` vs
-  `target_url`, `events` vs `event_types`) and analytics (combined vs split payload,
-  `previous` block presence) are still open in AND-398/AND-399 (their §13). Tests are
-  written against the documented fixtures; when those tickets resolve their OQs, the
-  fixtures (single source) are updated and the suite re-pins the real contract.
+- **OQ-1 (upstream API shapes) — RESOLVED during this review.** The field names/paths
+  are now pinned against the backend OpenAPI and the web client (§5, §16): webhooks use
+  `url` + `event_types` with `endpoint_id`/`enabled` (not `events`/`id`/`active`); the
+  list is a bare array; create returns 201. Analytics is **split** across discrete
+  per-metric endpoints (overview/views/revenue/subscribers/top-content/audience) with
+  `from_date`/`to_date` params — there is **no** combined `dashboard` payload and **no**
+  `previous` delta block. The remaining genuinely-open items are tracked in §16 (Open
+  assumptions): the webhook-detail not-found status, and whether AND-399 derives a
+  period-over-period delta via a second windowed GET.
 - **OQ-2 (Compose test runtime).** Whether screen tests run as Robolectric JVM tests or
   on-device `connectedAndroidTest` affects CI time and `createComposeRule` vs
   `createAndroidComposeRule`. Default: Robolectric for state-render assertions, one
@@ -459,3 +518,325 @@ AC-9 — **No live network.** A suite-wide check (or review) confirms no test co
   minSdk 24.
 - CI invokes the suite (`testDebugUnitTest` + the chosen Compose test path) on
   `android-port`; code reviewed and merged.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: backend
+OpenAPI index (`openapi.index.txt`), full spec (`openapi.pretty.json`,
+`components.schemas.<Name>`), the web reference under `src/`, or an Android docs URL
+(labelled `framework ref`).
+
+1. **Webhooks list endpoint = `GET /ui/webhooks`.** Verified.
+   OpenAPI `GET /ui/webhooks` (op `list_webhook_endpoints_ui_webhooks_get`);
+   `src/api/endpoints/webhooks.ts: listWebhookEndpoints`.
+2. **List response is a bare `WebhookEndpointOut[]` array, not `{ "webhooks": [...] }`.**
+   Corrected (draft claimed an envelope). `src/api/endpoints/webhooks.ts:
+   listWebhookEndpoints` returns `api.get<WebhookEndpointOut[]>("/ui/webhooks")`.
+3. **Create endpoint = `POST /ui/webhooks`, body `WebhookEndpointCreateReq`, → 201.**
+   Corrected (draft said "201|200 both accepted"). OpenAPI
+   `POST /ui/webhooks | req=WebhookEndpointCreateReq | resp=201:;422:HTTPValidationError`;
+   `src/api/endpoints/webhooks.ts: createWebhookEndpoint`.
+4. **Create body field is `event_types` (+ `url`), not `events`.** Corrected.
+   `components.schemas.WebhookEndpointCreateReq` required `["url","event_types"]`
+   (optional `description`, `signature_version` `^(v1|v2|both)$` default `v2`,
+   `circuit_failure_threshold` 3–100, `retry_policy`).
+5. **`WebhookEndpointOut` identifier is `endpoint_id`, not `id`.** Corrected.
+   `components.schemas.WebhookEndpointOut` required `["endpoint_id","url"]`.
+6. **Active flag is `enabled` (boolean, default true), not `active`; no `secret_set`
+   field — `secret` is a nullable string.** Corrected.
+   `components.schemas.WebhookEndpointOut.enabled` / `.secret`.
+7. **`created_at`/`updated_at` are integer epoch seconds, not ISO-8601 strings; mapping
+   is epoch→`Instant`.** Corrected (draft mapped `created_at`(ISO)→`Instant`).
+   `components.schemas.WebhookEndpointOut.created_at` (`type: integer`, default 0).
+8. **Webhook detail = `GET /ui/webhooks/{endpoint_id}` → `WebhookEndpointOut`; path
+   param is `endpoint_id`.** Corrected (draft used `{id}`).
+   OpenAPI `GET /ui/webhooks/{endpoint_id} | resp=200:WebhookEndpointOut;422`;
+   `src/api/endpoints/webhooks.ts: getWebhookEndpoint`.
+9. **Webhook detail 404 not-found path.** Unverified-assumption. The OpenAPI op declares
+   only `200:WebhookEndpointOut` and `422:HTTPValidationError`; no 404 is documented.
+   Treat the not-found status as defensive (see Open assumptions).
+10. **Event types come from `GET /ui/webhooks/event-types` → `{ event_types: [...] }`.**
+    Verified. OpenAPI `GET /ui/webhooks/event-types`;
+    `src/api/endpoints/webhooks.ts: listWebhookEventTypes`.
+11. **No `/ui/analytics/dashboard` endpoint exists.** Corrected (draft's central claim).
+    No such path in `openapi.index.txt`; the web client has no `getAnalyticsDashboard`.
+    Dashboard is composed from discrete GETs in `src/api/endpoints/analytics.ts`.
+12. **No `/ui/analytics/breakdown` endpoint exists.** Corrected.
+    No such path in `openapi.index.txt` under `/ui/analytics/*` (the only `breakdown`
+    is `/ui/ads/analytics/breakdown`, a different ads surface). Equivalent real surfaces
+    are top-content and audience.
+13. **Analytics endpoints used: overview / views / revenue / subscribers / top-content /
+    audience, + `POST /ui/analytics/refresh`.** Verified.
+    OpenAPI `GET /ui/analytics/overview` (`AnalyticsOverviewOut`), `/views`
+    (`AnalyticsViewsOut`), `/revenue` (`AnalyticsRevenueOut`), `/subscribers`
+    (`AnalyticsSubscribersOut`), `/top-content` (`AnalyticsTopContentOut`), `/audience`
+    (`AnalyticsAudienceOut`), `POST /ui/analytics/refresh` (`AnalyticsRefreshOut`);
+    `src/api/endpoints/analytics.ts`.
+14. **Analytics query params are `from_date`/`to_date` (+ optional `granularity`), not
+    `start`/`end`/`granularity=day`.** Corrected.
+    OpenAPI params on each `/ui/analytics/*` op; `src/api/types.ts:
+    AnalyticsDateRangeParams` (`from_date?`, `to_date?`, `granularity?`).
+15. **`AnalyticsOverviewOut` has no `summary`/`previous`/`timeseries`/top-level
+    `engagement_rate` (fraction).** Corrected (draft's payload was fabricated).
+    `components.schemas.AnalyticsOverviewOut` = `{ period_views, period_revenue_cents,
+    period_new_subscribers, total_subscribers, top_content[], currency }`;
+    `src/api/types.ts: AnalyticsOverview`.
+16. **Revenue/top-content monetary values are integer `*_cents`; mapping is
+    cents→currency, not fraction→percent.** Corrected (draft asserted fraction→percent).
+    `src/api/types.ts: AnalyticsRevenue` (`total_cents`, `*_cents`),
+    `AnalyticsTopContentItem.revenue_cents`.
+17. **Watch time is `watch_time_seconds`; seconds→duration mapping is valid.** Verified.
+    `src/api/types.ts: AnalyticsViewsTimeSeriesItem.watch_time_seconds`,
+    `AnalyticsViews.total_watch_time_seconds`.
+18. **`engagement_rate` exists only per top-content item (a fraction).** Verified.
+    `src/api/types.ts: AnalyticsTopContentItem.engagement_rate`; a standalone
+    `GET /ui/analytics/engagement` (`EngagementRateOut`) also exists.
+19. **Period-over-period delta tile.** Unverified-assumption. No `previous` block in any
+    analytics schema; any delta must be a second windowed GET. Whether AND-399 does this
+    is an AND-399 decision, not in the backend contract.
+20. **`X-CSRF-Token` header from the `ui_csrf` cookie.** Verified, with nuance.
+    `src/api/client.ts` sets `X-CSRF-Token` whenever the `ui_csrf` cookie exists — on
+    **every** request including GETs, not only unsafe methods (the draft implied
+    unsafe-only). Tests may still focus assertions on POST but should not assume GETs
+    omit it.
+21. **401 → single `POST /ui/session/refresh` → retry original once; double-401 →
+    logout/re-auth.** Verified. `src/api/client.ts: refreshSession` and the 401 branch
+    (shared in-flight `refreshPromise`; retry once; on retry-401
+    `useAuthStore.logout("session_expired")`).
+22. **FastAPI `detail` has three shapes: string | `[{msg}]` | object with `code`/`msg`;
+    422 maps a `loc`-targeted field error.** Verified. `src/api/client.ts:
+    normalizeErrorDetail` + `mapAuthorizationError` (handles string, array-of-`{msg}`,
+    and object-with-`code`); 422 bodies are `HTTPValidationError` whose items carry
+    `loc`/`msg` (OpenAPI `components.schemas.HTTPValidationError` /
+    `ValidationError.loc`).
+23. **`Authorization: Bearer <accessToken>` + `X-IMPERSONATION-TOKEN` (when
+    impersonating) are the web auth headers; the client does not set `X-SESSION-ID`.**
+    Verified. `src/api/client.ts` header block. NOTE: OpenAPI lists `X-SESSION-ID` /
+    `X-IMPERSONATION-TOKEN` / `user_sub` as op params, but `X-SESSION-ID` is
+    cookie/session-derived server-side, not sent explicitly by the web client — the
+    Android transport should mirror the web client.
+24. **Webhook `url` https-only validation is client-side.** Verified as client-side.
+    `components.schemas.WebhookEndpointCreateReq.url` is an unconstrained `string` (no
+    `format`/pattern), so https-only is an app/AND-398 rule, not backend-enforced.
+25. **Stack/test-tooling choices (Compose UI test, Robolectric, MockWebServer,
+    coroutines-test).** Verified — framework refs:
+    Compose testing `https://developer.android.com/develop/ui/compose/testing`;
+    `kotlinx-coroutines-test`
+    `https://developer.android.com/kotlin/coroutines/test`;
+    Robolectric `https://robolectric.org/`.
+26. **Headless emulator vs physical device targeting.** Verified — framework ref:
+    `adb` device selection `https://developer.android.com/tools/adb`. Physical device on
+    host: Samsung Galaxy A15 5G (SM-A156U, serial `R5CX821TA9R`, Android 14 / API 34,
+    arm64-v8a); CI AVD `test35` (x86_64, API 35).
+
+### Corrections made
+
+- §1, §3 (FR-1): webhook create body `events` → `event_types`; list path param
+  `{id}` → `{endpoint_id}`.
+- §3 (FR-2), §5, §11: removed the non-existent `/ui/analytics/dashboard` and
+  `/ui/analytics/breakdown` endpoints; replaced with the real per-metric endpoints and
+  `from_date`/`to_date` params (was `start`/`end`/`granularity=day`).
+- §5 (webhooks): list response `{ "webhooks": [...] }` → bare array; `id` → `endpoint_id`;
+  `active` → `enabled`; removed `secret_set`; `created_at` ISO string → integer epoch
+  seconds; create "201|200 both accepted" → **201**.
+- §5 (analytics): replaced the fabricated `summary`/`previous`/`timeseries`/
+  `engagement_rate` dashboard payload with the verified `AnalyticsOverviewOut` and
+  sibling schemas; removed the `{content|source}` + `share` breakdown variant.
+- §3/§11: analytics mapping "fraction→percent" → "cents→currency" for monetary tiles
+  (watch-time seconds→duration retained, which is correct).
+- §1, §8: clarified `X-CSRF-Token` is sent on all requests, and that https-only URL
+  validation is client-side.
+- §13: OQ-1 marked resolved with the pinned shapes.
+
+### Open assumptions
+
+- **Webhook-detail not-found status (claim 9).** OpenAPI documents no 404 for
+  `GET /ui/webhooks/{endpoint_id}`; the not-found UI branch is tested defensively but the
+  exact status code is unconfirmed — depends on AND-398's server behaviour.
+- **Period-over-period delta (claim 19).** No backend `previous` block; whether AND-399
+  computes a delta via a second windowed GET is an upstream design decision, not a
+  verifiable contract. The delta test is gated on AND-399 confirming it.
+- **ViewModel state surface (range presets `LAST_7`/`LAST_28`, `UiState` shape, telemetry
+  event names).** Owned by AND-401/AND-398/AND-399; not derivable from the backend or web
+  reference (the web client uses raw `from_date`/`to_date`, not named presets). Tests pin
+  whatever AND-401 ships; these break-first if AND-401 reshapes the state API (§13 R2).
+- **`X-SESSION-ID` transport on Android (claim 23).** The web client relies on cookies;
+  how the Android client supplies session identity (cookie jar vs explicit header) is an
+  AND-027 decision and assumed to mirror the web cookie-based flow.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **AVD test35** =
+headless emulator (x86_64, API 35) on the CI build server; **physical** = Samsung Galaxy
+A15 5G (SM-A156U, serial `R5CX821TA9R`, Android 14 / API 34, arm64-v8a) on the build
+host. This is a test-only ticket with all network mocked, so most cases run on JVM; UI
+cases run on AVD test35 (or Robolectric on JVM). A physical-device case is included only
+where real ABI/API behaviour matters.
+
+- **TC-AND-402-01 — Webhooks list happy path + DTO mapping.**
+  Type: contract/MockWebServer. Target: JVM (`DefaultWebhooksRepositoryTest`).
+  Preconditions: MockBackend started; in-memory Room empty; `WebhookFixtures` list
+  resource loaded.
+  Steps: enqueue 200 with a bare `WebhookEndpointOut[]`; call `repo.list()`.
+  Expected: exactly one `GET /ui/webhooks`; result maps `endpoint_id`, `url`,
+  `event_types`, `enabled`, epoch `created_at`→`Instant`; rows upserted to
+  `WebhooksDao` with a `fetched_at`. No `webhooks` envelope expected.
+  Traces: AC-4, AC-5, AC-6.
+
+- **TC-AND-402-02 — Webhook create: body, CSRF, 201.**
+  Type: contract/MockWebServer. Target: JVM (`DefaultWebhooksRepositoryTest`).
+  Preconditions: synthetic `ui_csrf` cookie in the mock cookie jar.
+  Steps: enqueue **201** with the created `WebhookEndpointOut`; call
+  `repo.create(url, eventTypes)`.
+  Expected: one `POST /ui/webhooks`; recorded body JSON has keys `url` and
+  `event_types` (no `events`); `X-CSRF-Token` header present; 201 treated as success;
+  write-through upsert occurs before the list refresh.
+  Traces: AC-4, AC-6.
+
+- **TC-AND-402-03 — Webhook create 422 maps `loc=["body","url"]` to field error.**
+  Type: contract/MockWebServer. Target: JVM (`DefaultWebhooksRepositoryTest` +
+  `ApiErrorMapperTest`).
+  Preconditions: 422 `HTTPValidationError` fixture with
+  `detail:[{loc:["body","url"], msg:"invalid url"}]`.
+  Steps: enqueue 422; call `repo.create(...)`.
+  Expected: POST issued once (no retry); error maps to a field-level `urlError`, not a
+  generic banner; the `msg` string is surfaced.
+  Traces: AC-5.
+
+- **TC-AND-402-04 — GET retry vs POST no-retry.**
+  Type: contract/MockWebServer. Target: JVM (`DefaultWebhooksRepositoryTest`).
+  Preconditions: shortened test client timeouts.
+  Steps: (a) enqueue `503,503,200` then call `repo.list()`; (b) enqueue `503` then call
+  `repo.create()`.
+  Expected: (a) succeeds; recorded request count = 3 via bounded backoff; (b) exactly
+  **one** `POST` recorded, result is `Error`/`submitError`.
+  Traces: AC-6.
+
+- **TC-AND-402-05 — 401 → single refresh → retry (interceptor).**
+  Type: contract/MockWebServer. Target: JVM (`CsrfRefreshInterceptorTest`).
+  Preconditions: authenticated session state.
+  Steps: enqueue `401` for `GET /ui/webhooks`, then `200` for
+  `POST /ui/session/refresh`, then `200` for the retried GET.
+  Expected: exactly three ordered requests (`GET 401`, `POST /ui/session/refresh`,
+  `GET 200`); final result success. Double-401 variant: second 401 emits the re-auth/
+  logout signal with no infinite loop. CSRF header asserted present on the POST.
+  Traces: AC-4.
+
+- **TC-AND-402-06 — FastAPI `detail` shape mapping (all three).**
+  Type: unit. Target: JVM (`ApiErrorMapperTest`).
+  Preconditions: three fixtures — string detail; `[{msg}]`; `{code, ...}`.
+  Steps: feed each to `ApiErrorMapper`.
+  Expected: each maps to the typed error with the human message; the `{code}` shape
+  honours known codes (e.g. `role_required_scope`); unknown shape → fallback message.
+  Traces: AC-5.
+
+- **TC-AND-402-07 — Analytics multi-endpoint dashboard assembly + params.**
+  Type: contract/MockWebServer. Target: JVM (`AnalyticsRepositoryImplTest`).
+  Preconditions: fixed `Clock` (`2026-06-05T00:00:00Z`); fixtures for overview/views/
+  revenue/subscribers/top-content/audience.
+  Steps: enqueue 200 for each; call `repo.loadDashboard(range)`.
+  Expected: one GET per endpoint to `/ui/analytics/{overview,views,revenue,subscribers,
+  top-content,audience}` each carrying `from_date`/`to_date` derived from the `Clock`
+  (no `start`/`end`); mapping yields watch-time seconds→duration and `*_cents`→currency;
+  no request to a (non-existent) `/ui/analytics/dashboard` or `/ui/analytics/breakdown`.
+  Traces: AC-4, AC-5.
+
+- **TC-AND-402-08 — Analytics partial sub-call failure does not block the page.**
+  Type: contract/MockWebServer. Target: JVM (`AnalyticsRepositoryImplTest`).
+  Preconditions: as TC-07.
+  Steps: enqueue 200 for overview/views/revenue/subscribers/top-content and **500** for
+  audience.
+  Expected: tiles + charts from the successful calls render; audience surfaces an inline
+  section error; the overall load is not failed/blocked.
+  Traces: AC-3, AC-6.
+
+- **TC-AND-402-09 — Cache-first stale-then-fresh + TTL + offline.**
+  Type: contract/MockWebServer + Room. Target: JVM (`AnalyticsRepositoryImplTest`).
+  Preconditions: in-memory Room seeded with a dashboard row whose `fetchedAt` is beyond
+  the 15-min TTL.
+  Steps: (a) call load → assert stale emission then fresh after network 200;
+  (b) simulate offline (`SocketPolicy.NO_RESPONSE` / disconnect) with cache present →
+  assert cached data with `isStale=true`; (c) empty cache + offline → `Error(retryable)`.
+  Expected: emission order via Turbine matches; no hang within the call-timeout bound.
+  Traces: AC-6.
+
+- **TC-AND-402-10 — ViewModel state machines (Turbine).**
+  Type: unit. Target: JVM (`WebhooksListViewModelTest`, `CreateWebhookViewModelTest`,
+  `AnalyticsViewModelTest`) with `MainDispatcherRule` + fakes + fixed `Clock`.
+  Preconditions: `FakeWebhooksRepository`/`FakeAnalyticsRepository` programmable.
+  Steps: drive list `Loading→Content/Empty/Error`; create-form `canSubmit` gating
+  (invalid URL, no event types, valid) and submit-success→list-refresh /
+  submit-failure→`submitError`; analytics `RangeSelected` persists to DataStore +
+  re-queries, `Refresh` toggles `isRefreshing`, empty payload→`isEmpty`, error→`error`.
+  Expected: full emitted sequences match; DataStore round-trip restores the saved range
+  in a fresh ViewModel.
+  Traces: AC-7.
+
+- **TC-AND-402-11 — Webhooks Compose render (primary "webhooks render").**
+  Type: Compose-UI. Target: AVD test35 (or Robolectric on JVM).
+  Preconditions: stateless screens driven with fixture `UiState`.
+  Steps: set content with a non-empty list state; with empty state; with detail state;
+  with create-form state.
+  Expected: a row per webhook showing URL, event-count summary, and enabled/disabled
+  status; empty state shows a working "Create webhook" CTA; detail shows the event list;
+  create submit disabled until URL valid + ≥1 event type.
+  Traces: AC-2.
+
+- **TC-AND-402-12 — Analytics Compose render incl. stale/empty/error (primary
+  "analytics render").**
+  Type: Compose-UI. Target: AVD test35 (or Robolectric on JVM).
+  Preconditions: fixture states for loading/success/empty/error/stale.
+  Steps: render each variant; tap Retry in the error state.
+  Expected: loading shows skeletons; success shows KPI tile labels/values + both
+  time-series chart text-summaries + top-content/audience rows; empty shows empty copy;
+  error shows a Retry that re-queries; stale banner appears when `isStale`.
+  Traces: AC-3.
+
+- **TC-AND-402-13 — Accessibility semantics + touch targets.**
+  Type: Compose-UI (instrumented). Target: AVD test35.
+  Preconditions: real semantics tree (instrumented, not pure JVM).
+  Steps: query merged `contentDescription` on webhook rows and KPI tiles; assert chip
+  roles and heights.
+  Expected: webhook row reads "Webhook to {url}, {n} events, {enabled|disabled}"; KPI
+  tile reads "{metric}, {value}, up/down {n} percent" with a non-color-only up/down
+  affordance; event `FilterChip`s and date chips are individually focusable with the
+  correct role and ≥48dp (`assertHeightIsAtLeast(48.dp)`).
+  Traces: AC-8, AC-3.
+
+- **TC-AND-402-14 — Security guards: no secret/URL in logs, secret not persisted,
+  https-only, logout clears caches.**
+  Type: unit + contract. Target: JVM (repository + logging tests).
+  Preconditions: test logger capture; create response containing a one-time `secret`.
+  Steps: run a list+create flow; inspect captured logs; inspect Room/DataStore;
+  attempt to create with an `http://` URL; invoke the session-clear hook.
+  Expected: logs contain no webhook `url`, no `secret`, no full `endpoint_id`
+  (short prefix only); the `secret` reaches UI state once but is never written to
+  Room/DataStore; `http://` URL is rejected client-side before any request; logout
+  empties both webhooks and analytics caches.
+  Traces: AC-8.
+
+- **TC-AND-402-15 — Determinism / no-live-network + ABI/API parity smoke.**
+  Type: instrumented/e2e. Target: **physical** (Samsung A15 5G, arm64-v8a, API 34) —
+  MUST run on the physical device to confirm the suite behaves identically on real
+  arm64-v8a / API 34 hardware vs the x86_64 / API 35 emulator (no JVM-only assumptions,
+  no x86-specific timing).
+  Preconditions: app test APK installed via `adb -s R5CX821TA9R`.
+  Steps: run the instrumented subset (nav round-trip list→create→back→refreshed via the
+  fake repository) and a network-egress assertion.
+  Expected: no test contacts `18.222.237.167`; suite is order-independent and green;
+  results match the AVD test35 run (no ABI/API divergence).
+  Traces: AC-1, AC-9.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 — Suite passes / green / no flakes | TC-15 (+ all TCs are members of the suite) |
+| AC-2 — Webhooks render (UI) | TC-11 |
+| AC-3 — Analytics render (UI) | TC-08, TC-12, TC-13 |
+| AC-4 — HTTP contract pinned (verbs/paths/params/CSRF/401) | TC-01, TC-02, TC-05, TC-07 |
+| AC-5 — Mapping + errors (DTO→domain, `detail` shapes, 422 field) | TC-01, TC-03, TC-06, TC-07 |
+| AC-6 — Caching + resilience (cache/retry/TTL/offline) | TC-01, TC-02, TC-04, TC-08, TC-09 |
+| AC-7 — ViewModel state machines | TC-10 |
+| AC-8 — Security/a11y/telemetry guards | TC-13, TC-14 |
+| AC-9 — No live network | TC-15 |

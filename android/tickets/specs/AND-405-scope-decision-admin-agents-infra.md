@@ -5,7 +5,8 @@ milestone: M8
 epic: E53
 priority: P1
 size: S
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: []
 blocks: []
 ---
@@ -93,11 +94,17 @@ exceptions are agreed, the section MUST explicitly say "None" — silence is not
 acceptable.
 
 FR-4. The record MUST include a **classification table** mapping the excluded
-categories to their evidence in the codebase/OpenAPI (e.g., route prefixes such as
-`/admin/*`, `/agents/*`, `/infra/*` or the corresponding `frontend/src/api/endpoints/*`
-files), so a future reader can verify the classification rather than trust it.
-Where a category does not exist in the current backend, the row states "no backend
-surface found (as of <date>)".
+categories to their evidence in the codebase/OpenAPI (the *actual* route prefixes —
+see the verified list below, e.g. `/ui/admin/*`, `/ui/agent/*`, `/ui/compute/*`,
+`/api/vnc/*` — or the corresponding `frontend/src/api/endpoints/*` files), so a future
+reader can verify the classification rather than trust it. Where a category does not
+exist in the current backend, the row states "no backend surface found (as of <date>)".
+**Note (review correction):** an earlier draft assumed bare prefixes `/admin/*`,
+`/agents/*`, `/infra/*`, `/compute/*`, `/bastion/*`, `/vnc/*`, `/devtools/*`. These are
+mostly INCORRECT. Verified against `reference/openapi.index.txt`, the real surface is
+under `/ui/...`, `/api/...`, and `/v1/admin/...` prefixes — and `/infra/*` does not
+exist at all (0 routes). All six categories DO have substantial backend surface (see
+§16). The corrected prefixes are reflected in the §4.1 table below.
 
 FR-5. The Android backlog MUST be updated so that it **reflects** the exclusions:
 any open Android tickets that would implement an excluded category are closed or
@@ -138,15 +145,16 @@ related tickets). Skeleton:
 - Backlog: AND-405 (M8 / E53)
 
 ## Decision
-The following are OUT OF SCOPE for com.testlogon.android:
-| # | Category            | Backend surface (evidence)        | Rationale            |
-|---|---------------------|-----------------------------------|----------------------|
-| 1 | Full administration | /admin/* ; frontend .../admin*.ts | desktop-class task   |
-| 2 | Agents/bots fleet   | /agents/*                         | low mobile usage     |
-| 3 | Compute/k8s/EC2     | /infra/* , /compute/*             | ops workflow         |
-| 4 | SSH bastion         | /bastion/* (if present)           | security/form-factor |
-| 5 | VNC                 | n/a or /vnc/*                     | not a mobile UX      |
-| 6 | Devtools            | /devtools/* (if present)          | internal tooling     |
+The following are OUT OF SCOPE for com.testlogon.android. Backend-surface column
+uses the **verified** prefixes from `reference/openapi.index.txt` (review-corrected):
+| # | Category            | Backend surface (verified evidence)                                   | Rationale            |
+|---|---------------------|-----------------------------------------------------------------------|----------------------|
+| 1 | Full administration | `/admin/*` (12) + `/ui/admin/*` (158) + `/v1/admin/*`; FE `adminRoles.ts`, `adminImpersonation.ts`, `adminCompute.ts`, `adminAdPlatform.ts`, etc. | desktop-class task   |
+| 2 | Agents/bots fleet   | `/ui/agent/*`, `/ui/agent/fleet/*`, `/ui/agent/orchestrator/*`; FE `agentFleet.ts`, `agentOrchestrator.ts`, `bots.ts` | low mobile usage     |
+| 3 | Compute/k8s/EC2     | `/ui/compute/*`, `/ui/remote/ec2/*`, `/ui/remote/k8s/*`, `/v1/admin/compute/*`; FE `ec2.ts`, `k8s.ts`, `computeBilling.ts` (NOTE: `/infra/*` does NOT exist) | ops workflow         |
+| 4 | SSH bastion         | `/ui/compute/bastion/paths*`, `/api/browser-ssh/*`, `/browser-ssh`, `/ui/remote/ssh-keys/*`; FE `sshBastion.ts`, `sshKeys.ts` | security/form-factor |
+| 5 | VNC                 | `/api/vnc/session*`; FE `vnc.ts`                                       | not a mobile UX      |
+| 6 | Devtools            | `/broadcast-devtools`; FE `devtools.ts`                               | internal tooling     |
 
 ## Exceptions
 - None.  // OR explicit list per FR-3
@@ -226,8 +234,9 @@ This decision is partly a **security posture** statement and should be framed so
   more easily lost, stolen, or on untrusted networks.
 - No admin/infra credentials, kubeconfig, SSH keys, or session tokens for these
   surfaces are ever stored, requested, or transmitted by `com.testlogon.android`.
-  The cookie-based UI session (`ui_csrf` echoed as `X-CSRF-Token`, refresh on 401)
-  governs only the in-scope user-facing surfaces.
+  The cookie-based UI session (`ui_csrf` cookie echoed as the `X-CSRF-Token` header,
+  single retry via `POST /ui/session/refresh` on 401 — **verified** against
+  `src/api/client.ts`) governs only the in-scope user-facing surfaces.
 - Excluding these surfaces does not weaken backend authorization: the backend
   remains responsible for rejecting any privileged call; mobile simply never makes
   one. The decision record itself contains no PII — the classification table
@@ -309,10 +318,17 @@ There is no executable code, so "tests" are document/backlog review checks:
 - **R4 (Risk):** Decision drift — a future feature request reintroduces an excluded
   surface ad hoc. Mitigation: require a superseding ADR referencing AND-405 to
   reverse any exclusion; the enforcement note makes the bar explicit.
-- **R5 (Open):** Does the backend currently expose all six categories, or only
-  some? Rows for absent categories must say "no backend surface found (as of
-  2026-06-05)" rather than invent paths; dev-host downtime may force reliance on
-  cached/frontend evidence.
+- **R5 (Resolved by review):** Does the backend currently expose all six categories,
+  or only some? **Verified 2026-06-06 against `reference/openapi.index.txt`: ALL SIX
+  categories have real backend surface** (admin ~170 routes across `/admin/*`,
+  `/ui/admin/*`, `/v1/admin/*`; agents/bots/fleet under `/ui/agent/*`; compute/k8s/EC2
+  under `/ui/compute/*`, `/ui/remote/ec2/*`, `/ui/remote/k8s/*`; SSH bastion under
+  `/ui/compute/bastion/*` + `/api/browser-ssh/*` + `/ui/remote/ssh-keys/*`; VNC under
+  `/api/vnc/session*`; devtools at `/broadcast-devtools`). The earlier draft's bare
+  prefixes (`/agents/*`, `/infra/*`, `/bastion/*`, `/vnc/*`, `/devtools/*`) were wrong
+  and `/infra/*` does not exist at all. No category needs a "no backend surface found"
+  row. Dev-host downtime is irrelevant to classification since the checked-in OpenAPI
+  index/spec under `reference/` is authoritative.
 
 ## 14. Acceptance Criteria
 
@@ -362,3 +378,217 @@ module, Retrofit interface, or navigation route for any excluded category.
   confirmed to contain no implementation code for excluded surfaces.
 - A note is added pointing the navigation/deep-link guard ticket at AND-405 as the
   source of the "not available on mobile" requirement.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. Sources rooted
+at `reference/` unless noted: `openapi.index.txt` (endpoint index),
+`openapi.pretty.json` (full schemas), `src/...` (frontend reference app).
+
+1. **Claim:** Full administration surface exists on the backend.
+   **VERDICT: Verified (and quantified).** ~170 routes:
+   `GET/POST /admin/*` (12, e.g. `POST /admin/roles/grant`, `POST /admin/impersonation/start`),
+   `/ui/admin/*` (158, e.g. `GET /ui/admin/ad-platform/accounts`), `/v1/admin/*`.
+   **Source:** `openapi.index.txt` (`/admin/`, `/ui/admin/`, `/v1/admin/`); FE
+   `src/api/endpoints/adminRoles.ts`, `adminImpersonation.ts`, `adminCompute.ts`,
+   `adminAdPlatform.ts`.
+
+2. **Claim (CORRECTED):** Agents/bots fleet is reachable at `/agents/*`.
+   **VERDICT: Corrected.** No `/agents/*` route exists. Real prefix is `/ui/agent/*`
+   (e.g. `GET /ui/agent/fleet/status`, `POST /ui/agent/fleet/start-all`,
+   `POST /ui/agent/orchestrator/create-worker`); bots under separate routes.
+   **Source:** `openapi.index.txt` (`/ui/agent/fleet/`, `/ui/agent/orchestrator/`);
+   FE `src/api/endpoints/agentFleet.ts`, `agentOrchestrator.ts`, `bots.ts`.
+
+3. **Claim (CORRECTED):** Compute/k8s/EC2 lives under `/infra/*` and/or `/compute/*`.
+   **VERDICT: Corrected.** `/infra/*` does NOT exist (0 routes). Bare `/compute/*`
+   does not exist either. Real prefixes: `/ui/compute/*` (security-groups, monitoring,
+   connection-profiles), `/ui/remote/ec2/*` (e.g. `POST /ui/remote/ec2/instances/{id}/terminate`),
+   `/ui/remote/k8s/*` (e.g. `GET /ui/remote/k8s/pods`), `/v1/admin/compute/*`.
+   **Source:** `openapi.index.txt` (`/ui/compute/`, `/ui/remote/ec2/`, `/ui/remote/k8s/`,
+   `/v1/admin/compute/`); FE `src/api/endpoints/ec2.ts`, `k8s.ts`, `computeBilling.ts`.
+
+4. **Claim (CORRECTED):** SSH bastion is at `/bastion/*`.
+   **VERDICT: Corrected.** No `/bastion/*` prefix. Real surface:
+   `/ui/compute/bastion/paths*` (e.g. `POST /ui/compute/bastion/paths/{id}/resolve`),
+   `/api/browser-ssh/{config,health,protocol}`, `/browser-ssh`, plus SSH key mgmt at
+   `/ui/remote/ssh-keys/*` and recordings at `/ui/compute/ssh-recordings/*`.
+   **Source:** `openapi.index.txt` (`/ui/compute/bastion/`, `/api/browser-ssh/`,
+   `/ui/remote/ssh-keys/`); FE `src/api/endpoints/sshBastion.ts`, `sshKeys.ts`,
+   `sshSessionRecording.ts`.
+
+5. **Claim (CORRECTED):** VNC is at `/vnc/*` (or "n/a").
+   **VERDICT: Corrected.** It is NOT "n/a" and not bare `/vnc/*`. Real surface:
+   `/api/vnc/session`, `/api/vnc/session/{id}`, `/api/vnc/session/{id}/transfer-fallback`.
+   **Source:** `openapi.index.txt` (`/api/vnc/session`); FE `src/api/endpoints/vnc.ts`.
+
+6. **Claim (CORRECTED):** Devtools is at `/devtools/*`.
+   **VERDICT: Corrected.** No `/devtools/*` prefix; the matching route is
+   `/broadcast-devtools`. **Source:** `openapi.index.txt` (`/broadcast-devtools`);
+   FE `src/api/endpoints/devtools.ts`.
+
+7. **Claim:** Web auth = `ui_csrf` cookie echoed as `X-CSRF-Token`, refresh on 401.
+   **VERDICT: Verified (refined).** `client.ts` reads cookie `ui_csrf` and sets header
+   `X-CSRF-Token`; on 401 (only if previously authenticated) it calls
+   `POST /ui/session/refresh` once and retries the original request.
+   **Source:** `src/api/client.ts` (lines ~119-224: `getCookie("ui_csrf")`,
+   `headers.set("X-CSRF-Token", csrf)`, `refreshSession()` -> `/ui/session/refresh`).
+
+8. **Claim:** Backend error shape for validation is FastAPI-standard.
+   **VERDICT: Verified.** 422 responses use `HTTPValidationError` =
+   `{ detail: ValidationError[] }`; auth failures return `{ detail: string }`.
+   **Source:** `openapi.pretty.json` components.schemas `HTTPValidationError`
+   (line ~37133) and `ValidationError` (line ~80337); `src/api/client.ts`
+   `normalizeErrorDetail(body.detail, ...)`.
+
+9. **Claim:** The dev backend host is `http://18.222.237.167:8000` (plaintext/unreliable).
+   **VERDICT: Unverified-assumption.** Not derivable from the OpenAPI or frontend
+   sources provided (no base-URL constant matched in `reference/`). Treated as an
+   environment fact carried from the ticket/program context, not verified here.
+
+10. **Claim:** The downstream nav/deep-link guard that renders "not available on mobile"
+    is owned by AND-022 (and telemetry pathway AND-052).
+    **VERDICT: Unverified-assumption.** Cross-ticket ownership; not checkable against
+    OpenAPI/frontend. Cited as a planning reference only.
+
+11. **Claim (framework, scope-prevention):** Excluded categories get no Retrofit
+    interfaces / Hilt-bound clients / Navigation-Compose destinations in the Android app.
+    **VERDICT: Unverified-assumption (forward requirement).** No Android source exists
+    yet to inspect; this is the decision being recorded, enforced by review (AC-7), not
+    a current-state fact. Stack choices (Kotlin/Compose/Hilt/Retrofit) are program
+    conventions — framework ref: https://developer.android.com/jetpack/compose ,
+    https://developer.android.com/training/dependency-injection/hilt-android .
+
+### Corrections made
+
+- **§4.1 classification table & §4 FR-4 example prefixes:** replaced invented bare
+  prefixes (`/admin/*`-only, `/agents/*`, `/infra/*`, `/compute/*`, `/bastion/*`,
+  `/vnc/*`, `/devtools/*`) with the verified real prefixes (`/ui/admin/*`+`/admin/*`+
+  `/v1/admin/*`, `/ui/agent/*`, `/ui/compute/*`+`/ui/remote/ec2/*`+`/ui/remote/k8s/*`,
+  `/ui/compute/bastion/*`+`/api/browser-ssh/*`+`/ui/remote/ssh-keys/*`, `/api/vnc/session*`,
+  `/broadcast-devtools`), each with the corresponding `src/api/endpoints/*.ts` file.
+- **`/infra/*` removed:** it does not exist in the backend; the table now says so.
+- **§13 R5:** changed from "Open — does the backend expose all six?" to "Resolved":
+  all six categories verified present, with route counts/prefixes.
+- **§8 CSRF:** refined "refresh on 401" to name the actual endpoint
+  `POST /ui/session/refresh` and the single-retry behavior, marked Verified.
+- **VNC:** corrected the "n/a or /vnc/*" hedge — VNC surface definitively exists.
+
+### Open assumptions
+
+- **Dev host `18.222.237.167:8000`** (claim 9): environment detail, not present in the
+  provided `reference/` sources; cannot be verified here.
+- **Cross-ticket ownership AND-022 / AND-052** (claim 10): planning references outside
+  the verifiable OpenAPI/frontend scope.
+- **Android-side enforcement** (claim 11): no Android code exists yet; the no-route /
+  no-client guarantee is the decision itself, enforceable only at review time.
+- **Backlog state** (FR-5 / AC-5): the issue tracker is not part of the provided
+  sources, so "no open implementation tickets for excluded categories" is asserted as
+  a to-be-done backlog edit, not verified here.
+
+## 17. Test Plan
+
+This is a documentation/scope chore with no shippable code, so most cases are
+review/verification gates against the authoritative sources and the artifact, plus a
+small set of forward-looking instrumented cases that protect the decision once the
+Android app exists (these run later but are specified here so the enforcement contract
+is testable). Test targets: **JVM** (local JVM/Robolectric), **emulator test35**
+(API 35 x86_64 AVD), **device A15** (Samsung Galaxy A15 5G, SM-A156U, API 34, arm64,
+serial R5CX821TA9R). Doc/review cases are **manual**.
+
+- **TC-AND-405-01** — Type: manual (doc review). Target: artifact + `reference/openapi.index.txt`.
+  Precond: decision record drafted. Steps: confirm all six categories
+  (administration, agents/bots fleet, compute/k8s/EC2, SSH bastion, VNC, devtools) are
+  each listed as "out of scope for mobile" with a 1-2 line rationale. Expected: six
+  rows present, none missing. **Traces: AC-2.**
+
+- **TC-AND-405-02** — Type: contract (manual evidence check vs OpenAPI). Target:
+  `openapi.index.txt` / `openapi.pretty.json`. Precond: §4.1 table populated. Steps:
+  for each of the six rows, grep the cited prefix in the index and confirm >=1 matching
+  route; confirm `/infra/*` is NOT cited (0 routes). Expected: every cited prefix
+  resolves to real endpoints; no invented prefixes (`/agents/*`, `/bastion/*`, `/vnc/*`,
+  `/devtools/*`, `/infra/*`) remain. **Traces: AC-4.**
+
+- **TC-AND-405-03** — Type: contract (manual evidence check vs frontend). Target:
+  `src/api/endpoints/`. Precond: §4.1 table populated. Steps: for each category confirm
+  the named FE file exists (`adminRoles.ts`, `agentFleet.ts`, `ec2.ts`/`k8s.ts`,
+  `sshBastion.ts`, `vnc.ts`, `devtools.ts`). Expected: all referenced files exist.
+  **Traces: AC-4.**
+
+- **TC-AND-405-04** — Type: manual (doc review). Target: artifact. Precond: record
+  drafted. Steps: confirm the Exceptions section is non-empty — an explicit list or the
+  literal "None". Expected: section present and explicit; blank/absent fails.
+  **Traces: AC-3.**
+
+- **TC-AND-405-05** — Type: manual (doc review). Target: artifact. Precond: record
+  drafted. Steps: confirm metadata block has status, decision date, deciders, and an
+  AND-405 reference; post-merge status is `Accepted`. Expected: all metadata present.
+  **Traces: AC-1.**
+
+- **TC-AND-405-06** — Type: manual (doc review). Target: artifact + ADR location.
+  Precond: file committed. Steps: confirm file at
+  `android/docs/decisions/AND-405-scope-admin-agents-infra.md` (or confirmed ADR
+  location, with path aliased). Expected: file exists at the agreed path.
+  **Traces: AC-1.**
+
+- **TC-AND-405-07** — Type: manual (backlog review). Target: issue tracker (E53/M8).
+  Precond: backlog edits applied. Steps: search backlog for
+  admin/agents/compute/k8s/ec2/bastion/vnc/devtools; verify no OPEN implementation
+  ticket remains; any found are closed/`wont-do` with an AND-405 link; E53 epic links
+  the record. Expected: zero open implementation tickets for excluded categories.
+  **Traces: AC-5.**
+
+- **TC-AND-405-08** — Type: manual (doc review). Target: artifact §7. Precond: record
+  drafted. Steps: confirm the enforcement posture is stated (no routes / nav / Hilt API
+  clients; deep-links resolve to a safe "not available on mobile" state) and the
+  downstream owning ticket is named. Expected: enforcement section present and complete.
+  **Traces: AC-6.**
+
+- **TC-AND-405-09** — Type: unit (JVM). Target: JVM (PR-diff lint / module graph
+  assertion). Precond: PR open. Steps: assert the diff introduces no Kotlin module
+  named `feature-admin|feature-agents|feature-infra` and no `*Api` Retrofit interface
+  for an excluded surface (`AdminApi`, `AgentsApi`, `InfraApi`, `BastionApi`, `VncApi`).
+  Expected: assertion passes (diff is docs/backlog only). Runs on JVM, no device.
+  **Traces: AC-7.**
+
+- **TC-AND-405-10** — Type: instrumented/e2e. Target: **device A15** (physical, API 34,
+  arm64). Precond: app installed; deep-link guard (AND-022) implemented. Steps: fire a
+  deep link to an excluded surface verified to exist, e.g.
+  `adb shell am start -W -a android.intent.action.VIEW -d "<scheme>://ui/admin/roles/audit"`
+  and similarly for `ui/compute/bastion/paths`, `api/vnc/session`. Expected: app shows
+  the "Not available on the mobile app" terminal state, makes NO network call to an
+  excluded client, and does NOT crash/ANR/show blank. MUST run on the physical device to
+  exercise real intent dispatch + arm64/API-34 behavior. **Traces: AC-6, AC-7.**
+
+- **TC-AND-405-11** — Type: instrumented (flaky-host/offline). Target: emulator
+  **test35**. Precond: app installed; airplane mode or dev host down. Steps: fire the
+  same excluded deep links offline. Expected: same safe terminal state, no crash, no
+  hung network attempt — the guard does not depend on connectivity. Emulator is
+  sufficient (no real-hardware dependency). **Traces: AC-6.**
+
+- **TC-AND-405-12** — Type: Compose-UI + accessibility. Target: emulator **test35**.
+  Precond: deep-link terminal screen implemented. Steps: render the "Not available on
+  the mobile app" screen; assert via Compose test + TalkBack/accessibility checks that
+  the message has a content description, sufficient contrast, and >=48dp touch target on
+  any action (e.g. "Go back"). Expected: screen is announced by TalkBack and passes
+  touch-target/contrast checks. **Traces: AC-6.** (Forward note: localizable string per
+  §9.)
+
+- **TC-AND-405-13** — Type: contract/MockWebServer. Target: JVM. Precond: none.
+  Steps: stand up MockWebServer returning a 422 `HTTPValidationError`
+  (`{ "detail": [ ... ] }`) and a 401 `{ "detail": "Authentication required" }` for an
+  excluded path; assert the app has NO Retrofit client wired to call it (the request is
+  never issued). Expected: no outbound request to excluded paths; error shapes are
+  modeled only for in-scope surfaces. Validates the negative contract. **Traces: AC-7.**
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+|---|---|
+| AC-1 (record committed, metadata, AND-405 ref) | TC-05, TC-06 |
+| AC-2 (all six categories out of scope + rationale) | TC-01 |
+| AC-3 (explicit Exceptions section) | TC-04 |
+| AC-4 (classification/evidence table verifiable) | TC-02, TC-03 |
+| AC-5 (backlog reflects exclusions; epic links record) | TC-07 |
+| AC-6 (enforcement posture / safe deep-link state) | TC-08, TC-10, TC-11, TC-12 |
+| AC-7 (PR diff: no impl code for excluded surfaces) | TC-09, TC-10, TC-13 |

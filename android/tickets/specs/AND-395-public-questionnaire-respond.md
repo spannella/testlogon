@@ -5,7 +5,8 @@ milestone: M8
 epic: E51
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-349]
 blocks: []
 ---
@@ -93,7 +94,8 @@ FR-1. **Public entry route.** A typed route `PublicRespondRoute(slug)` is reacha
 
 FR-2. **Published-questionnaire load.** On entry, the screen GETs the published
 questionnaire by `slug` to confirm it exists and is published, showing a loading
-state, then an error state for 404 (not found / unpublished) or transport failure.
+state, then a `NotFound` state for 404/422 (not found / unpublished) or an error state
+for transport failure.
 
 FR-3. **Anonymous session bootstrap.** If no persisted session exists for the `slug`,
 the screen starts an anonymous session (AND-348's start call) with **no auth
@@ -196,8 +198,8 @@ class PublicRespondViewModel @Inject constructor(
         when (val meta = repo.loadPublished(slug)) {            // FR-2 (idempotent GET)
             is ApiResult.Success -> resolveSession()
             is ApiResult.HttpError ->
-                _state.value = if (meta.code == 404) PublicEntryState.NotFound
-                               else PublicEntryState.Error(meta.detailMessage())
+                _state.value = if (meta.code == 404 || meta.code == 422) PublicEntryState.NotFound
+                               else PublicEntryState.Error(meta.detailMessage())  // 404 or 422 → not found (see §16)
             is ApiResult.NetworkError, is ApiResult.Timeout ->
                 _state.value = PublicEntryState.Error(/* offline/retryable */)
         }
@@ -211,7 +213,8 @@ class PublicRespondViewModel @Inject constructor(
         }
         when (val started = repo.startAnonymousSession(slug)) { // POST, no auto-retry
             is ApiResult.Success ->
-                _state.value = PublicEntryState.Ready(started.data.sessionId, terminal = false)
+                _state.value = PublicEntryState.Ready(
+                    started.data.session.responseSessionId, terminal = false)   // see §5/§16: response_session_id
             else ->
                 _state.value = PublicEntryState.Error(/* retryable */)
         }
@@ -257,48 +260,91 @@ This ticket adds **no new endpoints**; it consumes AND-346/348/349 contracts in 
 anonymous context. Field names must be reconciled against
 `frontend/src/api/endpoints/*.ts` and `/openapi.json` before freezing DTOs.
 
+> **Reviewer note (AND-395 review 2026-06-06):** the path parameter is
+> `{published_slug}` (not `{slug}`), the published GET and submit responses are
+> **enveloped**, the start-session response carries the id as
+> `session.response_session_id` (NOT a top-level `session_id`), and start returns
+> **HTTP 200** (not 201). Corrected below; see §16 for source pointers.
+
 ### Load published questionnaire (FR-2, idempotent GET)
 
 ```
-GET /questionnaires/published/{slug}
+GET /questionnaires/published/{published_slug}
 Accept: application/json
 
-200 Response (shape owned by AND-346):
-{ "slug": "onboarding-2026", "title": "...", "status": "published", "fields": [ ... ] }
+200 Response (envelope; version owned by AND-346):
+{ "version": {
+    "questionnaire_id": "...", "version_id": "...", "version_number": 1,
+    "published_slug": "onboarding-2026",
+    "visibility": "public" | "unlisted" | "private",
+    "allow_anonymous": true,
+    "schema_json": { ... }, "published_at": "..." } }
 
-404 Response: questionnaire not found or not published.
+422 Response: HTTPValidationError (the only documented non-200; a missing/unpublished
+slug surfaces as 422 or a runtime 404 — see Q-1/§16). "Published & anonymous-allowed"
+is read from version.visibility / version.allow_anonymous, not a top-level `status`.
 ```
+
+The published-load returns `PublishedQuestionnaireEnvelope` = `{ version: ... }`
+(verified against the OpenAPI spec and `frontend/src/api/endpoints/questionnaires.ts:
+getPublishedQuestionnaireBySlug`, which types it as `{ version: PublishedQuestionnaireVersion }`).
+There is **no** top-level `slug`/`title`/`status`/`fields`.
 
 ### Start anonymous session (FR-3, owned by AND-348)
 
 ```
-POST /questionnaires/published/{slug}/sessions
+POST /questionnaires/published/{published_slug}/sessions
 Content-Type: application/json
 (no X-CSRF-Token, no auth cookies required)
+Body: {}    # web posts an empty object; ResponseSessionStartReq.questionnaire_id is optional
 
-201 Response:
-{ "session_id": "sess_b21c...", "status": "in_progress" }
+200 Response (envelope; ResponseSessionEnvelope):
+{ "session": {
+    "response_session_id": "...", "questionnaire_id": "...", "version_id": "...",
+    "status": "in_progress", "started_at": "...",
+    "current_section_index": 0, "respondent_id": null } }
 ```
 
 ```kotlin
+// Envelope: ResponseSessionEnvelope = { "session": { ... } }
 @JsonClass(generateAdapter = true)
-data class RespondSessionResult(
-    @Json(name = "session_id") val sessionId: String,
-    @Json(name = "status") val status: String,
+data class RespondSessionEnvelope(
+    @Json(name = "session") val session: RespondSessionState,
+)
+
+@JsonClass(generateAdapter = true)
+data class RespondSessionState(
+    @Json(name = "response_session_id") val responseSessionId: String,  // NOT "session_id"
+    @Json(name = "questionnaire_id") val questionnaireId: String,
+    @Json(name = "version_id") val versionId: String,
+    @Json(name = "status") val status: String,                          // "in_progress" | "submitted"
+    @Json(name = "started_at") val startedAt: String,
+    @Json(name = "current_section_index") val currentSectionIndex: Int? = null,
+    @Json(name = "current_question_id") val currentQuestionId: String? = null,
+    @Json(name = "respondent_id") val respondentId: String? = null,
 )
 ```
 
 ### Submit (terminal, owned by AND-349) — referenced for the end-to-end AC
 
 ```
-POST /questionnaires/published/{slug}/sessions/{session_id}/submit
-200/201: { "submission_id": "sub_...", "status": "submitted", "submitted_at": "..." }
+POST /questionnaires/published/{published_slug}/sessions/{response_session_id}/submit
+Content-Type: application/json
+Body: the validation request (QuestionnaireValidationRequest; web sends the answer map)
+
+200 Response (envelope; SessionSubmitEnvelope):
+{ "session": { ... "status": "submitted" ... }, "result": QuestionnaireValidationResponse }
 ```
 
+There is **no** `submission_id` or `submitted_at` field; terminality is derived from
+`session.status == "submitted"`. (Verified: OpenAPI `SessionSubmitEnvelope` and
+`frontend/src/api/endpoints/questionnaires.ts: submitPublishedResponseSession` typed
+as `{ session, result }`.)
+
 Errors use the FastAPI `detail` union (string | `[{msg, loc}]` | `{code,...}`) mapped
-per AND-015. The exact `GET /questionnaires/published/{slug}` shape and the session
-start path are owned by AND-346/AND-348 — AND-395 only confirms they are callable
-anonymously (Open Question Q-1).
+per AND-015. AND-395 confirms these endpoints are callable anonymously and freezes the
+field names above against `/openapi.json` and `frontend/src/api` (Open Question Q-1
+narrowed — see §16).
 
 ## 6. Data & State Management
 
@@ -325,8 +371,11 @@ anonymously (Open Question Q-1).
 - **Retry policy:** the published-load **GET is idempotent** → project bounded
   backoff retry (≈2 jittered retries) at the OkHttp interceptor (AND-016). Session
   **start is a POST → no auto-retry**; a user-driven "Retry" re-runs `bootstrap()`.
-- **404 vs 5xx:** 404 → `NotFound` state ("This questionnaire isn't available");
-  5xx/network/timeout → retryable `Error` state.
+- **Not-found vs 5xx:** the OpenAPI declares only `200`/`422` for the published GET, so
+  a missing/unpublished slug arrives as **422** (HTTPValidationError) or a runtime
+  **404** (the dev backend is not fully documented — see §16/Q-1). Treat **both 404 and
+  422** as `NotFound` ("This questionnaire isn't available"); 5xx/network/timeout →
+  retryable `Error` state.
 - **Offline:** `NetworkError` → "You're offline — connect to open this
   questionnaire," with Retry. (Offline *draft* save remains AND-348's; submit is
   online-only per AND-349.)
@@ -340,13 +389,18 @@ anonymously (Open Question Q-1).
 - **Anonymous endpoints:** the published-load and session-start calls require no auth
   session and must **not** attach the authenticated `X-CSRF-Token` header. Implement
   via an opt-out marker so AND-012's CSRF interceptor and AND-013's refresh
-  authenticator skip these requests, e.g. a Retrofit `@Tag`:
+  authenticator skip these requests, e.g. a Retrofit `@Tag`. **Note:** the web
+  reference does not use a per-request tag — `src/api/client.ts` attaches
+  `X-CSRF-Token` only when a `ui_csrf` cookie is present and only fires the
+  `POST /ui/session/refresh` 401-refresh when `isAuthenticated` is true (an
+  unauthenticated 401 propagates directly). The `Anonymous` tag below is the
+  equivalent Android-side mechanism, not a mirror of a web tag (see §16).
 
   ```kotlin
-  object Anonymous                                  // request tag marker
-  @GET("questionnaires/published/{slug}")
-  suspend fun getPublished(@Path("slug") slug: String, @Tag anon: Anonymous = Anonymous):
-      Response<PublishedQuestionnaire>
+  object Anonymous                                  // request tag marker (Android-side; see §16)
+  @GET("questionnaires/published/{published_slug}")
+  suspend fun getPublished(@Path("published_slug") slug: String, @Tag anon: Anonymous = Anonymous):
+      Response<PublishedQuestionnaireEnvelope>
   // CsrfInterceptor / RefreshAuthenticator: if request.tag(Anonymous::class.java) != null -> pass through
   ```
 
@@ -400,8 +454,10 @@ anonymously (Open Question Q-1).
   - **Anonymous guarantee:** MockWebServer asserts the load + start requests carry
     **no `X-CSRF-Token` header** and that a 401 does **not** trigger a
     `POST /ui/session/refresh` (AND-013) nor a login navigation.
-- **Repository:** asserts correct path/verb (`GET .../published/{slug}`,
-  `POST .../sessions`), `detail` parsing, and `RespondSessionResult` mapping.
+- **Repository:** asserts correct path/verb (`GET .../published/{published_slug}`,
+  `POST .../published/{published_slug}/sessions` with empty `{}` body), `detail`
+  parsing, and `RespondSessionEnvelope`/`RespondSessionState` mapping (id read from
+  `session.response_session_id`).
 - **Instrumented / deep link:** an `androidx.test` intent with
   `https://.../questionnaires/published/{slug}/respond` on a **cold-started,
   logged-out** app launches `MainActivity`, hits `PublicRespondScreen`, and forwards
@@ -443,11 +499,14 @@ anonymously (Open Question Q-1).
 - **R-3 (duplicate sessions):** a race between cold-start deep link and a stored
   session could double-start. Mitigation: resume-before-start ordering (FR-8) +
   single-flight in the ViewModel.
-- **Q-1:** Exact published-load path/shape and session-start path — confirm in
-  `/openapi.json` / `frontend/src/api` (owned by AND-346/348; AND-395 only verifies
-  anonymous callability).
-- **Q-2:** Does session-start require a body (e.g. respondent metadata) when
-  anonymous, or is it empty? (Modeled empty; confirm.)
+- **Q-1 (RESOLVED in this review):** Paths/shapes confirmed against `/openapi.json`
+  and `frontend/src/api` — `GET /questionnaires/published/{published_slug}` →
+  `{ version: PublishedQuestionnaireVersion }`; `POST .../sessions` →
+  `{ session: { response_session_id, status, ... } }` at HTTP 200. The one residual
+  unknown is whether a missing/unpublished slug returns 404 or 422 at runtime (OpenAPI
+  only documents 200/422); we handle both as `NotFound`. See §16.
+- **Q-2 (RESOLVED):** Session-start body is **empty** — the web client posts `{}` and
+  `ResponseSessionStartReq` exposes only an optional `questionnaire_id`. Modeled empty.
 - **Q-3:** Should the App Link land on `PublicRespondRoute` (this ticket) or stay on
   `RespondRoute` (AND-349) with entry resolution inline? (Spec routes via
   `PublicRespondRoute`; reconcile with AND-349 owner.)
@@ -493,3 +552,251 @@ anonymously (Open Question Q-1).
   Q-1..Q-3 recorded in the ticket for backend/AND-349-owner follow-up.
 - No PII or `session_id` in logs; public flow verified to work with an empty auth
   cookie jar on a cold start.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+OpenAPI index = `reference/openapi.index.txt`; OpenAPI spec = `reference/openapi.pretty.json`
+(`components.schemas.<Name>`); frontend = `reference/src/...`.
+
+1. **Published-load endpoint is `GET /questionnaires/published/{slug}`.** — **Corrected.**
+   Path param is `{published_slug}`, not `{slug}`.
+   Source: OpenAPI `GET /questionnaires/published/{published_slug}`
+   (op `get_published_by_slug_...`); `frontend/src/api/endpoints/questionnaires.ts:
+   getPublishedQuestionnaireBySlug`.
+2. **Published-load 200 shape is `{ slug, title, status, fields }`.** — **Corrected.**
+   It is an envelope `{ version: PublishedQuestionnaireVersion }`; the version has
+   `questionnaire_id, version_id, version_number, published_slug, visibility,
+   allow_anonymous, schema_json, published_at`. No top-level `slug`/`title`/`status`/`fields`.
+   Source: schema `PublishedQuestionnaireEnvelope`; `frontend/src/api/types.ts:
+   PublishedQuestionnaireVersion`; `getPublishedQuestionnaireBySlug` (`{ version: ... }`).
+3. **"Published" is signaled by a top-level `status: "published"`.** — **Corrected.**
+   Publication/anonymity is read from `version.visibility` (`public|unlisted|private`)
+   and `version.allow_anonymous`. Source: `frontend/src/api/types.ts:
+   PublishedQuestionnaireVersion`.
+4. **Session-start path `POST /questionnaires/published/{slug}/sessions`.** — **Corrected.**
+   Param is `{published_slug}`. Source: OpenAPI
+   `POST /questionnaires/published/{published_slug}/sessions` (op `start_response_session_...`);
+   `frontend/src/api/endpoints/questionnaires.ts: startPublishedResponseSession`.
+5. **Session-start returns HTTP 201.** — **Corrected.** It returns **200** with
+   `ResponseSessionEnvelope`. Source: OpenAPI index line for the endpoint
+   (`resp=200:ResponseSessionEnvelope;422:HTTPValidationError`).
+6. **Session-start response is `{ session_id, status }` (top-level).** — **Corrected.**
+   It is `{ session: { response_session_id, status, ... } }`; the id field is
+   `response_session_id` nested under `session`, NOT a top-level `session_id`. The web
+   client reads `res.session.response_session_id`. Source: schema
+   `ResponseSessionEnvelope` + `QuestionnaireSessionState`; `frontend/src/api/types.ts:
+   QuestionnaireSessionState`; `startPublishedResponseSession` onSuccess in
+   `frontend/src/pages/questionnaires/QuestionnaireRespondentPage.tsx`.
+7. **`RespondSessionResult` with `@Json(name="session_id")`.** — **Corrected** to
+   `RespondSessionEnvelope`/`RespondSessionState` with `@Json(name="response_session_id")`.
+   Source: as #6.
+8. **Session-start requires no body / body shape unknown (Q-2).** — **Verified
+   (resolved).** Web posts an empty `{}`; `ResponseSessionStartReq` has only an optional
+   `questionnaire_id`. Source: schema `ResponseSessionStartReq`;
+   `startPublishedResponseSession` (`api.post(..., {})`).
+9. **Submit path/shape `.../submit` → `{ submission_id, status, submitted_at }`.** —
+   **Corrected.** Param is `{response_session_id}`; response is `SessionSubmitEnvelope`
+   = `{ session, result }` at HTTP 200; there is no `submission_id`/`submitted_at`.
+   Terminality = `session.status == "submitted"`. The submit **body** is the validation
+   request (`QuestionnaireValidationRequest`), not empty. Source: OpenAPI
+   `POST .../sessions/{response_session_id}/submit` (`req=QuestionnaireValidationRequest`,
+   `resp=200:SessionSubmitEnvelope`); schema `SessionSubmitEnvelope`;
+   `frontend/src/api/endpoints/questionnaires.ts: submitPublishedResponseSession`.
+10. **Session status enum is `in_progress`/`submitted`.** — **Verified.** Source:
+    `frontend/src/api/types.ts: QuestionnaireSessionState.status`.
+11. **Get-session-state is `GET .../sessions/{id}` → `{ session, answers_by_question_id }`.**
+    — **Verified** (used for resume/terminal routing, FR-3/FR-8). Source: OpenAPI
+    `GET .../sessions/{response_session_id}` (`resp=200:SessionStateEnvelope`); schema
+    `SessionStateEnvelope`; `frontend/src/api/types.ts: QuestionnaireSessionStateResp`.
+12. **A 404 distinguishes not-found/unpublished.** — **Unverified-assumption (partially
+    corrected).** OpenAPI documents only `200`/`422` for these endpoints; a runtime 404 is
+    plausible but undocumented. Spec now treats **both 404 and 422** as `NotFound`.
+    Source: OpenAPI index resp columns for the published GET/sessions endpoints (no 404 listed).
+13. **CSRF: web attaches `X-CSRF-Token` from a cookie and refreshes on 401.** —
+    **Verified, with mechanism clarified.** `src/api/client.ts` adds `X-CSRF-Token` only
+    when a `ui_csrf` cookie exists, and fires `POST /ui/session/refresh` on 401 **only if
+    `isAuthenticated`**; an unauthenticated 401 propagates directly (no refresh, no login
+    bounce). Source: `frontend/src/api/client.ts` (`getCookie("ui_csrf")`, `refreshSession`,
+    the `if (!useAuthStore.getState().isAuthenticated)` 401 branch).
+14. **A per-request `Anonymous` Retrofit `@Tag` opt-out for CSRF/refresh.** —
+    **Unverified-assumption (Android-side design choice).** The web client has no
+    equivalent per-call tag; it gates on cookie presence + auth state (see #13). The tag
+    is a reasonable Android equivalent but is not mirrored in the reference app.
+    Source: absence in `frontend/src/api/client.ts`; framework ref:
+    https://square.github.io/retrofit/2.x/retrofit/retrofit2/http/Tag.html
+15. **Refresh endpoint is `POST /ui/session/refresh` (AND-013).** — **Verified.**
+    Source: `frontend/src/api/client.ts: refreshSession` (`fetch(withApiBase("/ui/session/refresh"), { method: "POST" })`).
+16. **Public respondent route exists in the web app as
+    `/questionnaires/published/:publishedSlug/respond` and is public/unauth.** —
+    **Verified.** Source: `frontend/src/App.tsx` route definition (in the public route
+    block, alongside `/share/:linkId`, `/donate/:fundraiserId`).
+17. **The web app carries the session id in a `?session_id=` query param, not the path.**
+    — **Verified** (context for the Android route, which uses a typed `sessionId` arg).
+    Source: `frontend/src/pages/questionnaires/QuestionnaireRespondentPage.tsx`
+    (`searchParams.get("session_id")`, `setSearchParams({ session_id: ... })`).
+18. **Errors use the FastAPI `detail` union mapped per AND-015.** — **Verified** (422
+    bodies are `HTTPValidationError` with `detail: [{msg, loc, type}]`). Source: OpenAPI
+    `422:HTTPValidationError` on every questionnaire endpoint; schema `HTTPValidationError`.
+19. **Compose / Navigation / typed routes / `navDeepLink` (framework choices).** —
+    **Verified (framework refs).** Sources: https://developer.android.com/guide/navigation/design/type-safety
+    and https://developer.android.com/guide/navigation/design/deep-link .
+20. **App Link `autoVerify` needs HTTPS + `/.well-known/assetlinks.json` (R-1).** —
+    **Verified (framework ref).** Source:
+    https://developer.android.com/training/app-links/verify-android-applinks .
+
+### Corrections made
+
+- §5 published-load: path `{slug}` → `{published_slug}`; 200 body rewritten as the
+  `{ version: PublishedQuestionnaireVersion }` envelope; "published" derived from
+  `visibility`/`allow_anonymous` rather than a top-level `status`.
+- §5 session-start: status code 201 → 200; response rewritten as
+  `{ session: { response_session_id, status, ... } }`; DTO `RespondSessionResult`
+  (`session_id`) → `RespondSessionEnvelope`/`RespondSessionState` (`response_session_id`);
+  documented the empty `{}` request body (Q-2).
+- §5 submit: path param `{session_id}` → `{response_session_id}`; response
+  `{ submission_id, status, submitted_at }` → `SessionSubmitEnvelope { session, result }`;
+  terminality via `session.status`; noted the validation-request submit body.
+- §4 ViewModel: id read changed to `session.responseSessionId`; not-found branch now
+  treats 404 **or** 422 as `NotFound`.
+- §7 / §3 (FR-2): "404" not-found handling broadened to "404/422".
+- §8: clarified that the `Anonymous` `@Tag` is an Android-side mechanism, not a web
+  mirror; web gates CSRF/refresh on cookie presence + `isAuthenticated`. Retrofit
+  interface example updated to the corrected path and `PublishedQuestionnaireEnvelope`.
+- §13: Q-1 and Q-2 marked resolved with the confirmed shapes.
+
+### Open assumptions
+
+- **Runtime not-found code (404 vs 422):** OpenAPI documents only 200/422 for the
+  published GET and session endpoints, so the exact code for a missing/unpublished slug
+  is unverifiable from the sources. Mitigation: handle both as `NotFound`. (Audit #12)
+- **`Anonymous` request-tag opt-out:** an Android-side design with no web counterpart;
+  its correctness depends on AND-012/AND-013 honoring the tag, which is unverifiable here
+  and must be enforced by the TC-AND-395-04/05 MockWebServer tests. (Audit #14)
+- **Per-session cookie on the anonymous session:** the spec assumes the backend may set a
+  per-session cookie persisted by the AND-011 jar; no `Set-Cookie` contract is visible in
+  the OpenAPI or frontend sources, so this remains an assumption (harmless — the jar
+  persists whatever is or isn't set).
+- **`allow_anonymous == false` handling:** the version exposes `allow_anonymous`, but
+  whether the backend rejects anonymous start for a public-but-non-anonymous slug (and
+  with which code) is not documented. Treated as a backend follow-up.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **Emulator** =
+headless AVD `test35` (x86_64, API 35); **Device** = physical Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a). MockWebServer (MWS) runs in-process on JVM/Emulator.
+
+- **TC-AND-395-01 — Bootstrap happy path (load + start → Ready)**
+  Type: unit (JVM, Turbine + MWS). Target: `PublicRespondViewModel` + `RespondRepository`.
+  Preconditions: empty persisted-session store; MWS enqueues `200 { version: ... }` for the
+  published GET and `200 { session: { response_session_id:"rs1", status:"in_progress" } }`
+  for the start POST. Steps: construct VM with `slug="onboarding-2026"`; collect `state`.
+  Expected: states emit `Loading → Ready(sessionId="rs1", terminal=false)`; the GET hit
+  `/questionnaires/published/onboarding-2026` and the POST hit `.../sessions` with body `{}`.
+  Traces: AC-2.
+
+- **TC-AND-395-02 — Resume in-progress persisted session (no second start)**
+  Type: unit (JVM, MWS). Target: `PublicRespondViewModel`.
+  Preconditions: persisted non-terminal session id `rs1` for the slug; MWS enqueues only the
+  `200 { version }` published GET (no start response). Steps: run `bootstrap()`.
+  Expected: `Ready(sessionId="rs1", terminal=false)`; **no** `POST .../sessions` request is
+  recorded by MWS (assert `takeRequest` count / paths). Traces: AC-4.
+
+- **TC-AND-395-03 — Terminal (submitted) persisted session routes to confirmation**
+  Type: unit (JVM). Target: `PublicRespondViewModel` + `PublicRespondScreen`.
+  Preconditions: persisted session `rs9` with `status == "submitted"`. Steps: run
+  `bootstrap()`; render screen. Expected: `Ready(terminal=true)`; the screen invokes
+  `onSubmittedSession("rs9")`, not `onSessionReady`. Traces: AC-5.
+
+- **TC-AND-395-04 — No `X-CSRF-Token` on anonymous calls**
+  Type: contract/MWS. Target: `RespondRepository` + OkHttp CSRF interceptor (AND-012) with
+  the `Anonymous` tag. Preconditions: empty cookie jar; MWS records request headers.
+  Steps: run the happy-path load + start. Expected: neither the published GET nor the start
+  POST carries an `X-CSRF-Token` header. Traces: AC-3.
+
+- **TC-AND-395-05 — 401 does not trigger refresh or login bounce**
+  Type: contract/MWS. Target: `RespondRepository` + refresh authenticator (AND-013).
+  Preconditions: empty auth state; MWS returns `401` for the published GET, then would
+  return `200` on retry. Steps: run `bootstrap()`. Expected: state becomes retryable
+  `Error` (or `NotFound` if mapped so); MWS records **no** `POST /ui/session/refresh` and
+  no navigation to login is requested. Traces: AC-3, AC-7.
+
+- **TC-AND-395-06 — Not found / unpublished (404 and 422) → NotFound**
+  Type: unit (JVM, MWS). Target: `PublicRespondViewModel`. Preconditions: MWS returns
+  `422 { detail:[{msg,loc,type}] }` for the published GET in one run and `404` in a second
+  run. Steps: run `bootstrap()` for each. Expected: both yield `NotFound` (not `Error`).
+  Traces: AC-2, AC-7.
+
+- **TC-AND-395-07 — Transport failure → retryable Error, then retry() succeeds**
+  Type: unit (JVM, MWS). Target: `PublicRespondViewModel`. Preconditions: MWS first
+  returns a 503/socket-timeout for the published GET, then `200 { version }` + `200 { session }`.
+  Steps: run `bootstrap()`; observe `Error`; call `retry()`. Expected: `Loading → Error →
+  (retry) Loading → Ready`; idempotent GET is retried by the bounded-backoff interceptor;
+  the start POST is **not** auto-retried (assert single POST). Traces: AC-7.
+
+- **TC-AND-395-08 — Offline / flaky dev host path**
+  Type: instrumented (Device preferred; airplane mode toggling needs real radio).
+  Target: `PublicRespondScreen` end-to-end against MWS reachable only intermittently.
+  Preconditions: app logged out, empty jar; toggle device offline before entry.
+  Steps: open `PublicRespondRoute`; observe offline error; re-enable network; tap Retry.
+  Expected: "You're offline…" error with Retry; after reconnect, load+start succeed and the
+  screen forwards to `RespondScreen`. Must run on **Device** (real connectivity transitions).
+  Traces: AC-7, AC-2.
+
+- **TC-AND-395-09 — Cold-start App Link launches public entry (logged out)**
+  Type: instrumented/e2e. Target: `MainActivity` + nav graph + deep link.
+  Preconditions: app freshly installed/cleared, no auth cookies. Steps:
+  `adb shell am start -a android.intent.action.VIEW -d
+  "https://<host>/questionnaires/published/onboarding-2026/respond"`. Expected: app opens to
+  `PublicRespondScreen` (no login gate), resolves the session, and forwards into
+  `RespondScreen("onboarding-2026", sessionId)`. Run on **Emulator** for CI; spot-check on
+  **Device** for API-34 deep-link/verification behavior. Traces: AC-6, AC-1.
+
+- **TC-AND-395-10 — End-to-end public submit reaches Submitted (empty cookie jar)**
+  Type: instrumented/e2e (against MWS fixtures). Target: full entry → AND-349 renderer →
+  submit. Preconditions: logged out, empty jar; MWS serves published GET, start, save,
+  validate, and submit (`200 { session:{status:"submitted"}, result }`). Steps: open via
+  route/App Link; fill required fields; tap Submit. Expected: reaches AND-349 terminal
+  `Submitted` state derived from `session.status == "submitted"`; no login was ever shown.
+  Run on **Emulator** (CI) and confirm on **Device**. Traces: AC-1.
+
+- **TC-AND-395-11 — Re-entry idempotency under cold-start deep-link race**
+  Type: integration (JVM/Robolectric or instrumented). Target: `PublicRespondViewModel`
+  single-flight + resume-before-start. Preconditions: a persisted in-progress session and a
+  simultaneous deep-link entry for the same slug. Steps: trigger two bootstraps concurrently.
+  Expected: at most one `POST .../sessions` is issued; both resolve to the same session id.
+  Traces: AC-4.
+
+- **TC-AND-395-12 — Compose UI states (loading / NotFound / Error+Retry)**
+  Type: Compose-UI. Target: `PublicRespondScreen`. Preconditions: VM stubbed to emit each
+  state. Steps: render `Loading`, `NotFound`, `Error`; tap Retry on `Error`. Expected:
+  loading indicator shown; NotFound copy ("isn't available"); Error shows message + Retry,
+  and Retry re-invokes `vm::retry`. Traces: AC-2, AC-7.
+
+- **TC-AND-395-13 — Accessibility on entry states**
+  Type: Compose-UI (a11y) + manual TalkBack spot-check on **Device**. Target:
+  `PublicRespondScreen`. Preconditions: each state rendered. Steps: assert the Retry button
+  has a non-empty `contentDescription` and ≥48dp touch target; assert the loading/handoff
+  `liveRegion` announcement; verify all strings come from `strings.xml` (no hardcoded text);
+  TalkBack reads the "opening" announcement on Device. Expected: all assertions pass; RTL
+  layout renders. Traces: AC-2 (a11y dimension of the entry states), DoD a11y.
+
+- **TC-AND-395-14 — Security: no auth cookie required & none leaked to logs**
+  Type: contract/MWS + unit. Target: `RespondRepository`, cookie jar (AND-011), logging.
+  Preconditions: empty jar. Steps: run load+start; capture jar contents and Timber output.
+  Expected: flow succeeds with zero auth cookies; any backend `Set-Cookie` is stored by the
+  jar; `response_session_id`, cookies, and answer payloads never appear at `info`+ level.
+  Traces: AC-3, AC-1 (empty-jar guarantee), DoD (no PII/session_id in logs).
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (e2e public submit → Submitted, no login, empty jar) | TC-09, TC-10, TC-14 |
+| AC-2 (resolve slug: 200→start/resume, 404/422→NotFound, transport→Error) | TC-01, TC-06, TC-08, TC-12 |
+| AC-3 (no X-CSRF-Token; 401 no refresh/no login bounce) | TC-04, TC-05, TC-14 |
+| AC-4 (re-entry resumes, no duplicate start) | TC-02, TC-11 |
+| AC-5 (terminal session opens to confirmation) | TC-03 |
+| AC-6 (reachable from unauth graph + App Link, cold/logged-out) | TC-09 |
+| AC-7 (failures retryable, never crash; GET retries, start POST does not) | TC-05, TC-06, TC-07, TC-08, TC-12 |

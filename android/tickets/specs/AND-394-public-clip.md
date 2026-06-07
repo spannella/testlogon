@@ -5,7 +5,8 @@ milestone: M8
 epic: E51
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-196]
 blocks: []
 ---
@@ -26,8 +27,8 @@ This screen is intentionally minimal: a single full-bleed video, clip metadata (
 - **Direct dependency — AND-196 (Clips viewer + public clip), M4/E26:** owns `core-data`/`core-network` `clips.ts`-equivalent (`ClipsApi`, `ClipsRepository`), the `Clip` domain model, the vertical authenticated viewer, and registration of the `/c/:clipId` App Link `<intent-filter>` in the app manifest. AND-394 consumes those artifacts and adds the *public/anonymous* screen + ViewModel + the public API call. Where overlap is ambiguous, AND-394 owns everything keyed off the public entry point; AND-196 owns the authenticated feed.
 - **Transitive — AND-168 (Reusable player UI), M4/E23:** the `VideoPlayer` Compose component (play/seek/scrub/volume/fullscreen, buffering/error states, PiP) built on Media3/ExoPlayer 1.4. AND-394 reuses it as-is for HLS playback. AND-168 → AND-166 supply the underlying ExoPlayer wiring.
 - **Transitive — AND-022 (Navigation host & routes), M1/E03:** the single-Activity `NavHost` and typed route registry into which the `PublicClipRoute` is added.
-- **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (PLAINTEXT HTTP, unreliable). OpenAPI at `/openapi.json`. Public clip data is served by an unauthenticated GET (see §5); HLS variant playlists are served from the media/CDN origin referenced in the clip payload.
-- **Web reference:** `frontend/src/api/endpoints/clips.ts` and shared types in `frontend/src/api/types.ts` (route `/c/:clipId`). These define the canonical request/response shapes mirrored below.
+- **Backend:** FastAPI + DynamoDB. Dev host `http://18.222.237.167:8000` (PLAINTEXT HTTP, unreliable). OpenAPI at `/openapi.json`. Public clip data is served by an unauthenticated GET (see §5). **CORRECTED:** the verified public endpoint is `GET /broadcast/public/clips/{clip_id}` returning `PublicClipOut` (verified in `openapi.index.txt` and `src/api/endpoints/clips.ts: getPublicClip`). **IMPORTANT GAP:** `PublicClipOut` contains **no HLS/playback-manifest URL** — only `thumbnail_url` and `video_id`. There is no `hls_url`/`m3u8` field in the verified schema, and the web reference renders only a thumbnail with a literal "Video player placeholder" (no actual player). The "HLS plays from `hls_url` in the payload" design below is therefore an **unverified assumption** pending a backend playback-URL field or a separate manifest-resolution endpoint (see OQ-1/OQ-4 and §16).
+- **Web reference:** `src/api/endpoints/clips.ts` (`getPublicClip`, `recordPublicClipView`, `recordPublicClipShare`), shared types in `src/api/types.ts` (`PublicBroadcastClip extends BroadcastClip`), screen `src/pages/clips/PublicClipPage.tsx`, route registration `src/App.tsx` (`<Route path="/c/:clipId" element={<PublicClipPage />} />`), transport `src/api/client.ts`. These define the canonical request/response shapes corrected below.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Navigation-Compose, Hilt (KSP), Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15, Media3 1.4, Coil. Module layering `app → feature-clips → core-network/core-model/core-ui/core-data`. minSdk 24 / targetSdk 35, JDK 17, AGP 8.7.3.
 - **Namespace:** `com.testlogon.android` everywhere.
 
@@ -35,17 +36,21 @@ This screen is intentionally minimal: a single full-bleed video, clip metadata (
 
 FR-1. **Deep-link entry.** An Android App Link / web URL of form `https://testlogon.com/c/{clipId}` (and the `http`/custom-scheme fallbacks registered in AND-196) MUST route to `PublicClipScreen` with `clipId` extracted as a typed nav argument. The intent-filter (registered by AND-196) MUST cover both cold start and warm resume.
 
-FR-2. **Anonymous resolution.** The screen MUST resolve the clip through the **public** endpoint `GET /clips/{clipId}/public` (§5) using **no** auth/CSRF requirements. The persistent cookie jar MAY be present (returning user) but MUST NOT be required; a `401`/missing session MUST NOT block playback of a public clip.
+FR-2. **Anonymous resolution.** The screen MUST resolve the clip through the **public** endpoint `GET /broadcast/public/clips/{clip_id}` (§5; CORRECTED from `GET /clips/{clipId}/public` — verified against `openapi.index.txt` line 136 and `src/api/endpoints/clips.ts: getPublicClip`) using **no** auth/CSRF requirements. The endpoint's only parameter is `clip_id` (no `user_sub`/`X-SESSION-ID`/`X-IMPERSONATION-TOKEN`), confirming server-side anonymous access. A `401`/missing session MUST NOT block playback of a public clip.
 
-FR-3. **Playback.** On successful resolution the clip's HLS manifest URL MUST be handed to the AND-168 `VideoPlayer`, which begins buffering immediately and auto-plays once ready (muted-autostart is acceptable; see FR-7). The player surface is full-bleed with the AND-168 control overlay (play/pause, scrub, volume, fullscreen, PiP).
+FR-3. **Playback.** On successful resolution the clip's playback manifest URL MUST be handed to the AND-168 `VideoPlayer`, which begins buffering immediately and auto-plays once ready (muted-autostart is acceptable; see FR-7). The player surface is full-bleed with the AND-168 control overlay (play/pause, scrub, volume, fullscreen, PiP). **UNVERIFIED ASSUMPTION:** `PublicClipOut` exposes no playback-URL field (no `hls_url`/manifest); the verified web reference shows only `thumbnail_url` in a "Video player placeholder". A backend playback URL (or a manifest derived from `video_id`) is required before real HLS playback is possible — see OQ-4 and §16. If unresolved, the achievable MVP is poster/thumbnail rendering, not live HLS.
 
-FR-4. **Metadata.** Title, author handle (`@handle`), and formatted view count MUST render as an overlay/caption. Author avatar loaded via Coil. Missing optional fields degrade silently (no empty rows).
+FR-4. **Metadata.** Title, broadcaster display name (`broadcaster_display_name`), creator display name (`creator_display_name`), formatted view count (`view_count`), and share count (`share_count`) MUST render as an overlay/caption. **CORRECTED:** the verified schema has **no nested `author` object**, **no `@handle`**, and **no `avatar_url`** — attribution is by display-name strings only (mirrors `PublicClipPage.tsx` "Clipped from {broadcaster_display_name} · Created by {creator_display_name}"). Thumbnail loaded via Coil from `thumbnail_url`. Missing optional fields degrade silently (no empty rows).
 
-FR-5. **Visibility gates.** The screen MUST distinguish and surface, as distinct UI states: clip **not found** (`404`), clip **private/forbidden** (`403`), clip **removed/inactive** (`410`/`status != "ready"`), and **geo/region-blocked** (`451`). Each shows a terminal message and an "Open TestLogon" CTA; none crash or hang.
+FR-5. **Visibility gates.** The screen MUST distinguish and surface, as distinct UI states. **CORRECTED / PARTIALLY UNVERIFIED:** the OpenAPI for `GET /broadcast/public/clips/{clip_id}` documents only `200:PublicClipOut` and `422:HTTPValidationError`; **no `403`/`404`/`410`/`451` responses are declared**, and `PublicClipOut` has **no `visibility` field**. Verified, source-backed states:
+  - **Not found / unresolvable** — the web reference (`PublicClipPage.tsx`) treats any non-resolving response as a generic "Clip not found" (it sets `retry:false` and renders the not-found view when `!clip`). FastAPI default for a missing item is `404`, but this is **inferred, not declared** — map `404` → `NOT_FOUND` and keep a generic fallback for any other non-2xx.
+  - **Removed/inactive** — driven by the verified `status` enum `"processing" | "ready" | "failed" | "deleted"`. Map `status == "deleted"` → `REMOVED`, `status == "failed"` → an unavailable/error state, and `status == "processing"` → a "still processing" state (web shows "Clip is processing..."). There is **no `status == "private"`** and no `visibility` gate in the schema.
+  - **Validation error** — `422 HTTPValidationError` (e.g. malformed `clip_id`) → terminal `Unavailable(NOT_FOUND)` or a generic error.
+  - **`403` PRIVATE / `410` REMOVED / `451` REGION_BLOCKED** are **UNVERIFIED assumptions** (not in this endpoint's OpenAPI). The web `client.ts` *does* contain generic `403` handling and a `geo_blocked` detail-code path (`detail.code === "geo_blocked"`) applied to all endpoints, so a `403`/geo-block *could* occur globally; keep defensive mapping but mark as unverified for this route. Each terminal state shows a message and an "Open TestLogon" CTA; none crash or hang.
 
 FR-6. **Anonymous → app bridge.** A persistent CTA ("Sign in" / "Open in app") MUST navigate anonymous users to the auth flow (or the authenticated clips feed if a valid session already exists), passing the current `clipId` so the user lands back on the same clip in the AND-196 viewer.
 
-FR-7. **Share.** A share button invokes the system share sheet (`ACTION_SEND`) with the canonical `https://testlogon.com/c/{clipId}` URL and clip title.
+FR-7. **Share.** A share button invokes the system share sheet (`ACTION_SEND`) with the canonical `https://testlogon.com/c/{clipId}` URL and clip title. **NOTE (verified, additive):** the backend also exposes `POST /broadcast/public/clips/{clip_id}/share` → `{ ok, share_count, share_url }` and `POST /broadcast/public/clips/{clip_id}/view` → `{ ok, view_count }` (verified `openapi.index.txt` lines 137–138; `src/api/endpoints/clips.ts: recordPublicClipShare`/`recordPublicClipView`). The web reference (a) fires `recordPublicClipView` on mount (fire-and-forget) and (b) on Share calls `recordPublicClipShare` and uses the returned `share_url` (prefixed with origin). AND-394 SHOULD mirror this: record a view on entry, and use the server `share_url` when present, falling back to the local canonical URL if the call fails/offline. This resolves OQ-3 (views ARE recorded, via a separate explicit POST — not server-side on the GET).
 
 FR-8. **Lifecycle.** Playback pauses on `ON_PAUSE`, releases the player on `ON_STOP`/dispose, supports PiP via AND-168, and restores position on configuration change. Audio starts muted with an unmute toggle to satisfy autoplay-without-gesture constraints; user unmute is remembered for the session.
 
@@ -84,11 +89,15 @@ sealed interface PublicClipUiState {
         val isMuted: Boolean = true,
         val hasSession: Boolean = false,
     ) : PublicClipUiState
-    data class Unavailable(val reason: ClipUnavailable) : PublicClipUiState   // 403/404/410/451
+    data class Unavailable(val reason: ClipUnavailable) : PublicClipUiState   // see FR-5 (corrected)
     data class Error(val message: String, val retryable: Boolean) : PublicClipUiState
 }
 
-enum class ClipUnavailable { NOT_FOUND, PRIVATE, REMOVED, REGION_BLOCKED }
+// CORRECTED: reasons are driven primarily by the verified `status` enum
+// (processing|ready|failed|deleted) and HTTP outcome, NOT a `visibility` field.
+// PRIVATE/REGION_BLOCKED are retained defensively but are unverified for this
+// route (no 403/451 declared in OpenAPI for GET /broadcast/public/clips/{clip_id}).
+enum class ClipUnavailable { NOT_FOUND, PROCESSING, REMOVED, FAILED, PRIVATE, REGION_BLOCKED }
 ```
 
 **ViewModel.**
@@ -139,59 +148,96 @@ class DefaultPublicClipRepository @Inject constructor(
 
 ## 5. API Contract
 
-**Resolve public clip.**
+**Resolve public clip. (CORRECTED — verified against OpenAPI + frontend.)**
 
 ```
-GET /clips/{clipId}/public
-Headers: (none required — no cookies, no X-CSRF-Token)
+GET /broadcast/public/clips/{clip_id}
+Params: clip_id (path) only — no auth params (verified openapi.index.txt:136)
+op = public_clip_route_broadcast_public_clips__clip_id__get
+resp = 200:PublicClipOut ; 422:HTTPValidationError
 ```
 
-Success `200`:
+Success `200` body is `PublicClipOut` (verified `components.schemas.PublicClipOut`). All listed fields are **required** in the schema; types as noted:
 
 ```json
 {
-  "id": "clp_8f2a91",
+  "clip_id": "clp_8f2a91",
+  "session_id": "sess_123",
+  "broadcaster_user_id": "usr_b",
+  "broadcaster_display_name": "Nature Cam",
+  "profile_id": "prof_1",
+  "creator_user_id": "usr_c",
+  "creator_display_name": "Clip Creator",
+  "video_id": "vid_9",
   "title": "Sunset timelapse",
+  "start_seconds": 12.0,
+  "end_seconds": 30.4,
+  "duration_seconds": 18.4,
   "status": "ready",
-  "visibility": "public",
-  "hls_url": "https://media.testlogon.com/clips/clp_8f2a91/master.m3u8",
-  "poster_url": "https://media.testlogon.com/clips/clp_8f2a91/poster.jpg",
-  "duration_ms": 18400,
   "view_count": 10423,
-  "author": { "handle": "naturecam", "display_name": "Nature Cam", "avatar_url": "https://.../a.jpg" },
-  "created_at": "2026-05-31T11:02:00Z"
+  "share_count": 12,
+  "thumbnail_url": "https://media.testlogon.com/clips/clp_8f2a91/thumb.jpg",
+  "created_at": 1748689320
 }
 ```
 
-Error responses use FastAPI `detail` (string | `[{msg}]` | `{code,...}`), mapped by `ApiErrorMapper`:
-- `403` → `Unavailable(PRIVATE)`  ·  `404` → `Unavailable(NOT_FOUND)`  ·  `410` → `Unavailable(REMOVED)`  ·  `451` → `Unavailable(REGION_BLOCKED)`.
-- A `200` body with `status != "ready"` or `visibility != "public"` is also coerced to the matching `Unavailable`.
+Note the corrected types/shape vs the prior draft: `created_at` is an **integer epoch-seconds** (not ISO string); `duration_seconds` is a **float number** in seconds (not `duration_ms`); `view_count`/`share_count` are integers; attribution is flat `*_display_name` strings (**no nested `author`, no `@handle`, no `avatar_url`**); the playback URL is **absent** (only `thumbnail_url` + `video_id`); there is **no `visibility`** field. `status` is the enum `processing | ready | failed | deleted`.
+
+Error/edge mapping (corrected to the declared responses; speculative codes flagged):
+- `422 HTTPValidationError` (malformed `clip_id`) → `Unavailable(NOT_FOUND)` (or generic terminal error). **Verified declared.**
+- `404` (missing clip) → `Unavailable(NOT_FOUND)`. **Inferred** (FastAPI default; not declared for this op, but the web treats non-resolving as "Clip not found").
+- `200` body with `status == "deleted"` → `Unavailable(REMOVED)`; `status == "failed"` → `Unavailable(FAILED)`; `status == "processing"` → `Unavailable(PROCESSING)` ("Clip is processing…", per web). **Verified via `status` enum.**
+- `403` → `Unavailable(PRIVATE)` and `451` → `Unavailable(REGION_BLOCKED)` are **UNVERIFIED** for this route (no such responses declared). Keep defensive handling only because `client.ts` has a global `403`/`geo_blocked` path.
 - `5xx` / timeout / IO → `Error(message, retryable = true)`.
 
-**Retrofit/Moshi.**
+**Retrofit/Moshi. (CORRECTED path + DTO.)**
 
 ```kotlin
 interface ClipsApi {            // extends the AND-196 interface
-    @GET("clips/{clipId}/public")
+    @GET("broadcast/public/clips/{clipId}")
     suspend fun getPublicClip(@Path("clipId") clipId: String): PublicClipDto
+
+    // Additive, verified (lines 137–138). Mirror web view/share behavior.
+    @POST("broadcast/public/clips/{clipId}/view")
+    suspend fun recordPublicView(@Path("clipId") clipId: String): PublicClipCountDto
+
+    @POST("broadcast/public/clips/{clipId}/share")
+    suspend fun recordPublicShare(@Path("clipId") clipId: String): PublicClipShareDto
 }
 
 @JsonClass(generateAdapter = true)
 data class PublicClipDto(
-    val id: String,
-    val title: String?,
-    val status: String,
-    val visibility: String,
-    @Json(name = "hls_url") val hlsUrl: String?,
-    @Json(name = "poster_url") val posterUrl: String?,
-    @Json(name = "duration_ms") val durationMs: Long?,
-    @Json(name = "view_count") val viewCount: Long?,
-    val author: AuthorDto?,
-    @Json(name = "created_at") val createdAt: String?,
+    @Json(name = "clip_id") val clipId: String,
+    @Json(name = "session_id") val sessionId: String,
+    @Json(name = "broadcaster_user_id") val broadcasterUserId: String,
+    @Json(name = "broadcaster_display_name") val broadcasterDisplayName: String,
+    @Json(name = "profile_id") val profileId: String,
+    @Json(name = "creator_user_id") val creatorUserId: String,
+    @Json(name = "creator_display_name") val creatorDisplayName: String,
+    @Json(name = "video_id") val videoId: String,
+    val title: String,
+    @Json(name = "start_seconds") val startSeconds: Double,
+    @Json(name = "end_seconds") val endSeconds: Double,
+    @Json(name = "duration_seconds") val durationSeconds: Double,
+    val status: String,                                  // processing|ready|failed|deleted
+    @Json(name = "view_count") val viewCount: Long,
+    @Json(name = "share_count") val shareCount: Long,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String,
+    @Json(name = "created_at") val createdAt: Long,      // epoch SECONDS
+)
+
+@JsonClass(generateAdapter = true)
+data class PublicClipCountDto(val ok: Boolean, @Json(name = "view_count") val viewCount: Long)
+
+@JsonClass(generateAdapter = true)
+data class PublicClipShareDto(
+    val ok: Boolean,
+    @Json(name = "share_count") val shareCount: Long,
+    @Json(name = "share_url") val shareUrl: String,
 )
 ```
 
-The exact public path MUST be confirmed against `/openapi.json` and `frontend/src/api/endpoints/clips.ts` during implementation; if the backend exposes the public clip via the same `GET /clips/{clipId}` with anonymous access rather than a `/public` suffix, the interface method swaps to that path with no other architectural change (open question OQ-1).
+**OQ-4 (playback URL):** `PublicClipOut` exposes no manifest/HLS URL. Implementation MUST resolve how the AND-168 player obtains a stream — candidates: a yet-unconfirmed media-origin convention derived from `video_id`/`clip_id`, or a backend change adding `hls_url`. Until resolved, the player can only show `thumbnail_url`. Track as a hard prerequisite (see §13/§16).
 
 ## 6. Data & State Management
 
@@ -207,7 +253,7 @@ The exact public path MUST be confirmed against `/openapi.json` and `frontend/sr
 - **Terminal vs transient:** `403/404/410/451` and non-ready/non-public bodies are terminal `Unavailable` states (no retry button). Timeouts/network/`5xx` are `Error(retryable=true)` with a Retry button calling `vm.retry()`.
 - **Player errors:** `PlaybackException` from Media3 (manifest 404, unsupported codec, network drop mid-stream) surfaces through AND-168's error overlay with its own retry that re-prepares the media source; we do not duplicate that logic.
 - **Offline at entry:** if no connectivity, show `Error("You're offline", retryable=true)`; auto-retry once connectivity returns (observe `ConnectivityManager` if AND-196's connectivity observer is available, otherwise manual retry only).
-- **CSRF/401 not applicable:** the public GET carries no session; the global 401→`/ui/session/refresh`→retry interceptor MUST be a no-op here (the public route should be excluded from CSRF header injection).
+- **CSRF/401 not applicable (native design choice — NOTE web differs):** the public GET requires no session server-side (verified: endpoint params are `clip_id` only). **CORRECTION of an implied claim:** the *web* `client.ts` does NOT special-case this route — it unconditionally attaches `X-CSRF-Token` (from the `ui_csrf` cookie, when present), `credentials: "include"`, and a `Bearer` token if logged in, to *all* requests, and runs the global `401 → POST /ui/session/refresh → retry` flow (verified `src/api/client.ts:140-237`). For the Android client we *choose* to exclude the public route from CSRF/auth injection and make the 401-refresh interceptor a no-op here (safe because the server does not require them); this is a deliberate native deviation from web, not a mirror of it.
 
 ## 8. Security & Privacy
 
@@ -267,19 +313,20 @@ Player playback correctness itself (controls/PiP) is covered by AND-168's suite;
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (path):** Exact public endpoint shape — `GET /clips/{clipId}/public` vs anonymous `GET /clips/{clipId}` — pending `/openapi.json` and `frontend/.../clips.ts`. Low-risk swap; isolate behind `ClipsApi`.
+- **OQ-1 (path): RESOLVED.** The verified public endpoint is `GET /broadcast/public/clips/{clip_id}` → `PublicClipOut` (openapi.index.txt:136; `src/api/endpoints/clips.ts: getPublicClip`). The earlier `GET /clips/{clipId}/public` guess was wrong and is corrected throughout (§2/§5/FR-2).
+- **OQ-4 (playback URL): OPEN / HIGH-RISK.** `PublicClipOut` carries **no HLS/manifest URL** (only `thumbnail_url`, `video_id`); the web reference renders a thumbnail placeholder, not a live player. The ticket's core "clip plays" goal cannot be met until a stream URL is available (backend field or a documented media-origin convention). This is a hard prerequisite, not a cosmetic swap.
 - **OQ-2 (App Link ownership):** AND-196 registers the intent-filter; confirm it routes to the *public* screen for anonymous users rather than forcing the authenticated feed. If AND-196 routes everything to the feed, AND-394 must add a branch (anonymous → `PublicClipScreen`, session → AND-196 viewer).
 - **R-1 (autoplay audio):** Starting muted is the safe default; product may want sound-on for deep-links — confirm desired default with product (FR-7/FR-8).
 - **R-2 (dev host flakiness):** the unreliable backend may make the E2E acceptance test flaky; mitigate with the 20s timeout + bounded retry and a stable seeded clip; consider MockWebServer-backed variant for CI gating.
 - **R-3 (HLS on minSdk 24):** verify Media3 1.4 HLS playback on API 24 emulator; AND-168 should already cover this.
-- **OQ-3 (view-count freshness):** whether opening a public clip should increment views (a POST) is out of scope unless the backend does it server-side on the GET.
+- **OQ-3 (view-count freshness): RESOLVED.** Views are recorded by an explicit `POST /broadcast/public/clips/{clip_id}/view` (not server-side on the GET); the web fires it on mount (fire-and-forget). AND-394 mirrors this (see FR-7).
 
 ## 14. Acceptance Criteria
 
 1. Following `https://testlogon.com/c/{clipId}` for a public, ready clip — from cold start and from a warm app — opens `PublicClipScreen` with the correct `clipId` and **the clip plays** (player reaches playing/first-frame), without any sign-in. (Maps directly to the backlog acceptance "Public clip plays.")
 2. The public clip GET is issued with **no** session cookie requirement and **no** `X-CSRF-Token`; a `401` never blocks public playback.
-3. Title, author handle, view count, and poster/avatar render in `Ready`; missing optional fields degrade silently.
-4. `403/404/410/451` and non-ready/non-public bodies render the correct terminal `Unavailable` state (PRIVATE/NOT_FOUND/REMOVED/REGION_BLOCKED) with an "Open TestLogon" CTA and **no** Retry.
+3. Title, broadcaster/creator display names, view count, share count, and thumbnail render in `Ready` (CORRECTED — no `@handle`/avatar in the verified schema); missing optional fields degrade silently.
+4. Status-driven and not-found bodies render the correct terminal `Unavailable` state — `status == "deleted"` → REMOVED, `"processing"` → PROCESSING, `"failed"` → FAILED, missing/`404`/`422` → NOT_FOUND — each with an "Open TestLogon" CTA and **no** Retry (CORRECTED from the unverified `403/404/410/451`+visibility model; PRIVATE/REGION_BLOCKED retained only defensively, unverified for this route).
 5. Timeout/network/`5xx` render a retryable `Error`; **Retry** re-issues the request and can recover to `Ready`.
 6. Share emits the canonical `https://testlogon.com/c/{clipId}` URL with title via the system share sheet.
 7. CTA shows "Sign in" when anonymous and "Open in app"/feed when a valid session exists, passing `clipId` so the user returns to the same clip in the AND-196 viewer.
@@ -296,3 +343,71 @@ Player playback correctness itself (controls/PiP) is covered by AND-168's suite;
 - Telemetry events (§10) emitted; no tokens/cookies/URLs-with-secrets in release logs.
 - Unit + Compose + instrumentation tests green in CI; lint/detekt clean; no new cleartext domains added to `network_security_config`.
 - Merged to `android-port` after AND-196; OQ-1/OQ-2 resolved or explicitly tracked as follow-ups.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with VERDICT (Verified / Corrected / Unverified-assumption) and exact SOURCE.
+
+1. **Public clip resolution endpoint is `GET /broadcast/public/clips/{clip_id}` → `PublicClipOut`.** VERDICT: Corrected (draft said `GET /clips/{clipId}/public`). SOURCE: OpenAPI `GET /broadcast/public/clips/{clip_id}` (openapi.index.txt:136, op `public_clip_route_broadcast_public_clips__clip_id__get`); `src/api/endpoints/clips.ts: getPublicClip`.
+2. **The endpoint requires no auth params (anonymous).** VERDICT: Verified. SOURCE: openapi.index.txt:136 (`params=clip_id` only — no `user_sub`/`X-SESSION-ID`/`X-IMPERSONATION-TOKEN`), contrast authenticated `GET /broadcast/clips/{clip_id}` (line 130) which lists those params.
+3. **`PublicClipOut` fields & types** (`clip_id, session_id, broadcaster_user_id, broadcaster_display_name, profile_id, creator_user_id, creator_display_name, video_id, title, start_seconds, end_seconds, duration_seconds, status, view_count, share_count, thumbnail_url, created_at` — all required; `created_at` integer epoch-seconds, `duration_seconds` float, counts integers). VERDICT: Corrected (draft invented `id, hls_url, poster_url, duration_ms, visibility, author{handle,display_name,avatar_url}`, ISO `created_at`). SOURCE: `components.schemas.PublicClipOut` (openapi.pretty.json:59937-60035); `src/api/types.ts: PublicBroadcastClip extends BroadcastClip` (lines 4927-4953).
+4. **No HLS/playback-manifest URL in the payload; web renders only a thumbnail "Video player placeholder".** VERDICT: Verified (and corrects the draft's HLS-from-payload premise). SOURCE: `PublicClipOut` schema (no `hls_url`/`m3u8` field); `src/pages/clips/PublicClipPage.tsx:96-110` (thumbnail or "Video player placeholder"). The Android "HLS auto-plays from `hls_url`" design is therefore an Unverified-assumption (OQ-4).
+5. **`status` enum is `processing | ready | failed | deleted`.** VERDICT: Verified. SOURCE: openapi.pretty.json:59987-59996; `src/api/types.ts:4938`.
+6. **There is no `visibility` field; private/public gating by visibility is not in the schema.** VERDICT: Corrected. SOURCE: `PublicClipOut` schema (absent); `PublicBroadcastClip` (absent).
+7. **Declared responses are only `200:PublicClipOut` and `422:HTTPValidationError`; `403/404/410/451` are not declared for this op.** VERDICT: Corrected/Unverified-assumption (draft asserted a `403/404/410/451` mapping). SOURCE: openapi.index.txt:136. `404` is inferred (FastAPI default; web treats non-resolving as "Clip not found", `PublicClipPage.tsx:66-72`).
+8. **Web treats any non-resolving response as a generic "Clip not found" with `retry:false`.** VERDICT: Verified. SOURCE: `src/pages/clips/PublicClipPage.tsx:31-36, 66-72`.
+9. **Views are recorded via `POST /broadcast/public/clips/{clip_id}/view` → `{ok, view_count}`; web fires it on mount.** VERDICT: Verified (resolves OQ-3). SOURCE: openapi.index.txt:138; `src/api/endpoints/clips.ts: recordPublicClipView`; `PublicClipPage.tsx:39-43`.
+10. **Share uses `POST /broadcast/public/clips/{clip_id}/share` → `{ok, share_count, share_url}`; web copies `origin + share_url`.** VERDICT: Verified. SOURCE: openapi.index.txt:137; `src/api/endpoints/clips.ts: recordPublicClipShare`; `PublicClipPage.tsx:45-54`.
+11. **Web route is `/c/:clipId` rendering `PublicClipPage`.** VERDICT: Verified. SOURCE: `src/App.tsx:283` (`<Route path="/c/:clipId" element={<PublicClipPage />} />`), import line 108.
+12. **Web `client.ts` attaches `X-CSRF-Token` (from `ui_csrf` cookie), `credentials:"include"`, and `Authorization: Bearer` to ALL requests, with a global `401 → POST /ui/session/refresh → retry` flow — it does NOT exclude the public route.** VERDICT: Corrected (draft implied the public GET is excluded web-side; the exclusion is an Android-only design choice, safe because the server needs none of these). SOURCE: `src/api/client.ts:154-171, 180-237`; refresh path `client.ts:121-130, 204-221`.
+13. **Web `client.ts` has a global `403` handler incl. a `detail.code === "geo_blocked"` branch.** VERDICT: Verified (basis for retaining defensive PRIVATE/REGION_BLOCKED handling, though unverified for this specific op). SOURCE: `src/api/client.ts:239-255`.
+14. **Attribution is by display-name strings (`broadcaster_display_name`, `creator_display_name`), not handle/avatar.** VERDICT: Corrected. SOURCE: `PublicClipPage.tsx:118-141`; schema fields.
+15. **Dev host `http://18.222.237.167:8000`, plaintext, unreliable.** VERDICT: Unverified-assumption from the spec/ticket context (not checkable from the provided reference files). SOURCE: spec §2 (carried over); no contradicting source found.
+16. **Navigation-Compose 2.8 type-safe routes / `navDeepLink` / `toRoute` (framework APIs) and Media3 1.4 ExoPlayer HLS.** VERDICT: Unverified-assumption (framework ref — versions not checkable here). SOURCE (framework ref): developer.android.com/guide/navigation/design/type-safety and developer.android.com/media/media3/exoplayer/hls.
+
+### Corrections made
+- Endpoint path `GET /clips/{clipId}/public` → **`GET /broadcast/public/clips/{clip_id}`** (§2, FR-2, §5, Retrofit interface).
+- Response schema replaced the fabricated body with the verified **`PublicClipOut`** shape & types; removed `hls_url`, `poster_url`, `duration_ms`, `visibility`, nested `author{handle,avatar_url}`, ISO `created_at`; added `session_id, broadcaster_*, profile_id, creator_*, video_id, start/end_seconds, duration_seconds (float), share_count, created_at (epoch int)` (§5, FR-4, AC-3, DTO).
+- Error model: replaced the unverified `403/404/410/451 + visibility` mapping with the **status-enum-driven** model (`deleted/failed/processing`) plus inferred `404` and verified `422`; flagged `403/451` as unverified-defensive (§5, FR-5, AC-4, state enum).
+- Metadata/attribution corrected to display-name strings (no `@handle`/avatar) (FR-4, AC-3).
+- Added verified **view/share POST endpoints** and mirrored web behavior; resolved OQ-3 (FR-7, §5).
+- CSRF claim corrected: web attaches CSRF/credentials/Bearer globally; Android exclusion is a deliberate native deviation, not a mirror of web (§7).
+- Resolved OQ-1 (path) and added **OQ-4 (no playback URL)** as a hard open prerequisite (§13).
+- Frontmatter `status: reviewed`, `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+- **OQ-4 — playback/manifest URL:** Not present in any provided source. The verified `PublicClipOut` has no stream URL; how AND-168 obtains an HLS manifest (derive from `video_id`/`clip_id` vs a new backend field) is unverifiable here and blocks the literal "clip plays" goal. WHY unverifiable: no media-origin/CDN convention or playback endpoint appears in the OpenAPI index or frontend clips endpoints.
+- **`403` PRIVATE / `451` REGION_BLOCKED for this route:** Not declared in OpenAPI for `GET /broadcast/public/clips/{clip_id}`; retained only because of `client.ts`'s global geo/403 handling. WHY unverifiable: endpoint declares only `200`/`422`.
+- **`404` for missing clip:** Inferred FastAPI default + web "Clip not found"; not explicitly declared. WHY unverifiable: only `200`/`422` declared.
+- **Dev host details, App Link `autoVerify`/intent-filter ownership (AND-196), AND-168 player API, AND-022 NavHost:** cross-ticket artifacts not in the provided reference; carried over as assumptions (OQ-2).
+- **Framework versions** (Navigation-Compose 2.8, Media3 1.4, Kotlin/AGP/JDK): build-config claims not checkable from provided sources (framework refs).
+
+## 17. Test Plan
+
+IDs `TC-AND-394-NN`. "AC-#" traces to §14 acceptance criteria. Target legend per the CI/dev inventory: JVM/Robolectric (local), emulator AVD `test35` (API 35 x86_64), physical device Samsung Galaxy A15 5G `SM-A156U` serial `R5CX821TA9R` (API 34, arm64-v8a).
+
+- **TC-AND-394-01 — Happy path: resolve + render Ready.** Type: unit (JVM + MockWebServer). Target: JVM/Robolectric (local). Preconditions: MockWebServer enqueues `200` with a valid `PublicClipOut` (`status:"ready"`). Steps: construct `PublicClipViewModel`; collect `state` via Turbine. Expected: emits `Loading → Ready(clip)`; `clip.title`, `broadcasterDisplayName`, `viewCount`, `shareCount`, `thumbnailUrl` mapped from snake_case; `createdAt` parsed as epoch-seconds Long; `durationSeconds` is Double. Traces: AC-1, AC-3.
+- **TC-AND-394-02 — Contract: request shape & no auth/CSRF.** Type: contract/MockWebServer. Target: JVM/Robolectric (local). Preconditions: MockWebServer; cookie jar/session deliberately populated. Steps: call `getPublicClip("clp_x")`; inspect `RecordedRequest`. Expected: method `GET`, path `/broadcast/public/clips/clp_x`; **no** `X-CSRF-Token`, **no** `Authorization`, **no** `X-SESSION-ID` headers. Traces: AC-2.
+- **TC-AND-394-03 — Status-driven Unavailable mapping.** Type: unit. Target: JVM/Robolectric (local). Preconditions: MockWebServer returns `200` bodies with `status` ∈ {`deleted`,`processing`,`failed`}. Steps: load for each. Expected: `Unavailable(REMOVED)`, `Unavailable(PROCESSING)`, `Unavailable(FAILED)` respectively; no Retry on terminal states. Traces: AC-4.
+- **TC-AND-394-04 — Not-found / validation mapping.** Type: contract/MockWebServer. Target: JVM/Robolectric (local). Preconditions: enqueue `404` then `422 HTTPValidationError` (real FastAPI shape `{"detail":[{"loc":["path","clip_id"],"msg":"...","type":"..."}]}`). Steps: load for each. Expected: both → `Unavailable(NOT_FOUND)` (or generic terminal), no crash, no Retry; `ApiErrorMapper` parses the `detail` array shape. Traces: AC-4.
+- **TC-AND-394-05 — Transient error is retryable and recovers.** Type: unit/contract. Target: JVM/Robolectric (local). Preconditions: MockWebServer enqueues `503`, then on retry a valid `200 ready`. Steps: load → assert `Error(retryable=true)`; call `vm.retry()`. Expected: re-issues GET, transitions to `Ready`. Traces: AC-5.
+- **TC-AND-394-06 — Offline / flaky-dev-host at entry.** Type: integration. Target: physical device `R5CX821TA9R` (real radio toggle) — MUST run on device for genuine airplane-mode/connectivity-callback behavior; emulator network-off is an acceptable CI fallback. Preconditions: connectivity disabled, then re-enabled. Steps: open screen offline → assert `Error("You're offline", retryable=true)`; re-enable network; trigger retry (or auto-retry if connectivity observer present). Expected: recovers to `Ready` (or `Unavailable` per body); never hangs past the 20s timeout budget. Traces: AC-5.
+- **TC-AND-394-07 — View recorded on entry; share uses server share_url.** Type: contract/MockWebServer. Target: JVM/Robolectric (local). Preconditions: enqueue `200 ready`, then `200` for `POST .../view` and `POST .../share` (`{ok,share_count,share_url}`). Steps: open screen; tap Share. Expected: a `POST /broadcast/public/clips/{id}/view` is issued on entry (fire-and-forget, failure ignored); Share issues `POST .../share` and the `ACTION_SEND` payload uses the canonical `https://testlogon.com/c/{id}` (preferring returned `share_url` when present) + title. Traces: AC-6.
+- **TC-AND-394-08 — toggleMute only in Ready.** Type: unit. Target: JVM/Robolectric (local). Preconditions: VM in `Ready(isMuted=true)`; separately in `Loading`. Steps: call `toggleMute()` in each. Expected: flips `isMuted` only in `Ready`; no-op otherwise. Traces: AC-8.
+- **TC-AND-394-09 — Compose: state rendering & Retry wiring.** Type: Compose-UI. Target: emulator AVD `test35`. Preconditions: fake VM exposing each state. Steps: render `Loading`/`Ready`/`Unavailable`/`Error`. Expected: `Ready` shows player/thumbnail + metadata (display names, counts) + CTA; `Unavailable` shows terminal copy + "Open TestLogon", **no** Retry; `Error` shows Retry that invokes `vm.retry()`. Traces: AC-3, AC-4, AC-5.
+- **TC-AND-394-10 — Compose: CTA label/target by session.** Type: Compose-UI. Target: emulator AVD `test35`. Preconditions: `hasSession=false` then `true`. Steps: render Ready; tap CTA. Expected: label "Sign in" (anonymous) vs "Open in app" (session); tap invokes `onOpenAuth(clipId)` carrying the current `clipId`. Traces: AC-7.
+- **TC-AND-394-11 — Accessibility checks.** Type: Compose-UI (+ instrumented a11y). Target: emulator AVD `test35`. Preconditions: Ready state; font scale 200%; enable accessibility checks (`AccessibilityChecks.enable()`). Steps: assert `contentDescription` on play/pause, mute/unmute, share, fullscreen/PiP, thumbnail; verify ≥48dp touch targets, AA contrast on scrim, no clipping at 200% scale; verify no externalized-string regressions. Expected: all assertions pass; no a11y violations. Traces: AC-3, AC-8.
+- **TC-AND-394-12 — Deep-link routing: cold start & warm resume.** Type: instrumented/e2e. Target: emulator AVD `test35` (routing is ABI-agnostic). Preconditions: app installed; App Link intent-filter from AND-196 present. Steps: `adb shell am start -a android.intent.action.VIEW -d "https://testlogon.com/c/{seedId}"` with app (a) not running and (b) backgrounded. Expected: both land on `PublicClipScreen` with `clipId == seedId` (read via `toRoute<PublicClipRoute>()`). Traces: AC-1.
+- **TC-AND-394-13 — E2E acceptance "Public clip plays" (real HLS).** Type: instrumented/e2e. Target: physical device `R5CX821TA9R` — MUST run on device (real-network HLS streaming, codec/ABI arm64-v8a, API-34 vs emulator API-35 behavior). Preconditions: a seeded **public, ready** clip on the dev backend **with a resolvable playback URL** (BLOCKED on OQ-4 until a stream URL exists; until then assert thumbnail render + non-crash). Steps: launch via the deep link; await `play_start` idling resource. Expected: player reaches `STATE_READY`/playing and first frame renders without sign-in. Traces: AC-1, AC-9.
+- **TC-AND-394-14 — Lifecycle & PiP.** Type: instrumented. Target: physical device `R5CX821TA9R` (PiP/lifecycle fidelity preferred on real hardware; emulator acceptable for rotation-only). Preconditions: Ready + playing. Steps: rotate (config change); background (`ON_PAUSE`/`ON_STOP`); enter PiP; dispose. Expected: pauses on background, position restored on rotation, PiP via AND-168 works, player released on dispose (no leak). Traces: AC-8.
+
+### Coverage matrix (§14 AC → TC)
+- AC-1 (deep-link opens & plays, cold+warm, no sign-in): TC-01, TC-12, TC-13.
+- AC-2 (no cookie/CSRF requirement; 401 never blocks): TC-02.
+- AC-3 (metadata renders; optional degrade): TC-01, TC-09, TC-11.
+- AC-4 (terminal Unavailable, no Retry): TC-03, TC-04, TC-09.
+- AC-5 (retryable Error recovers): TC-05, TC-06, TC-09.
+- AC-6 (share canonical URL + title): TC-07.
+- AC-7 (CTA label/target by session, passes clipId): TC-10.
+- AC-8 (auto-mute/unmute, lifecycle, PiP, rotation): TC-08, TC-11, TC-14.
+- AC-9 (unit/Compose/E2E green in CI): TC-13 (E2E) + all unit/Compose cases TC-01..TC-11.

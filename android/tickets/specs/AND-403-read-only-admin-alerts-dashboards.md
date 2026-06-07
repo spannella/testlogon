@@ -5,7 +5,8 @@ milestone: M8
 epic: E53
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: []
 ---
@@ -52,21 +53,36 @@ ViewModel unit + Compose UI).
   `POST /ui/session/refresh` once and retries (transparent to this ticket). Admin
   reads are idempotent `GET`s and are therefore eligible for the bounded-backoff
   retry policy for idempotent GETs (from the E04 network tickets).
-- Role information comes from the current user profile (`GET /ui/me`). The admin
-  role flag (e.g. `is_admin` / `roles[]` containing `"admin"`) MUST be confirmed
-  against `/openapi.json`; see §13 Q1.
+- Role information does **NOT** come from `GET /ui/me`. **[CORRECTED]** Verified
+  against the frontend (`src/api/types.ts: MeResp = { user_sub, session_id, ip }`)
+  and OpenAPI (`GET /ui/me` 200 response schema is empty/untyped `{}`): the `me`
+  payload carries **no** role/`is_admin`/`roles[]` field. The web client derives
+  the admin role from the **JWT access-token `role` claim** decoded client-side
+  (`src/lib/adminCapabilities.ts: getRoleFromAccessToken` →
+  `claims.role`), where `role ∈ {"admin","root"}`, plus an optional
+  `admin_profile` (`type: "general" | "scoped"`, `scopes[]`). General admin or
+  root is required for full admin reads. The Android role gate MUST bind to the
+  decoded access-token `role` claim (and `admin_profile.type`), not to `/ui/me`.
+  See §13 Q1.
 - Dev backend `http://18.222.237.167:8000` is plaintext HTTP and unreliable:
   ~20s timeouts, offline/stale UI states, bounded retry for GETs only.
-- Web reference: `frontend/src/api/endpoints/*.ts` and `frontend/src/api/types.ts`
-  for the admin alerts/metrics shapes; verify exact field names and the exact
-  admin paths against `/openapi.json` at build time. The shapes below are the
-  contract this ticket implements.
+- Web reference: `src/api/endpoints/*.ts` and `src/api/types.ts`. **[CORRECTED]**
+  There is **no** `admin alerts` or `admin metrics` endpoint/DTO in the web client
+  or OpenAPI. The web admin surface is split across many narrow read endpoints
+  (e.g. `src/api/endpoints/adminRateLimits.ts`, `paymentProviderHealth.ts`,
+  `jobDashboard.ts`). The combined "alerts + metric tiles" model in this ticket is
+  a **client-side aggregation/abstraction**, not a 1:1 backend contract. The
+  generic DTO shapes below (`severity`, `created_at`, `key/label/value`) are
+  **invented placeholders** with no backing schema and MUST be re-grounded on the
+  specific source endpoints chosen during implementation (§5, §13 Q2/Q5).
 
 ## 3. Functional Requirements
 
 FR-1. The Admin entry point (route + any nav affordance) is visible **only** when
-the current authenticated user has the admin role, derived from the auth state
-store / `GET /ui/me`. Non-admins never see the entry.
+the current authenticated user has the admin role. **[CORRECTED]** The role is
+derived from the decoded JWT access-token `role` claim (`"admin"`/`"root"`) held in
+the auth state store — **not** from `GET /ui/me` (which carries no role). Non-admins
+never see the entry.
 
 FR-2. On entering the screen the app fetches alerts and metrics, showing a loading
 state, then a combined dashboard: a metrics section (tiles) followed by an alerts
@@ -134,12 +150,31 @@ data class AdminDashboard(
 Network (`core-network`) — a new read-only interface, distinct from `AuthApi`:
 
 ```kotlin
+// [CORRECTED] The paths "ui/admin/alerts" and "ui/admin/metrics" DO NOT EXIST in
+// the backend (verified against openapi.index.txt — no /ui/admin/alerts and no
+// /ui/admin/metrics). They are placeholders. Bind each method to a REAL admin read
+// endpoint at implementation time. Verified candidates (all GET, role-gated):
+//   GET /ui/admin/rate-limits/live-summary   -> RateLimitLiveSummary
+//   GET /ui/admin/rate-limits/events         -> (events[], count)  params=hours,limit,status
+//   GET /ui/admin/payment-health             -> provider status list  params=hours
+//   GET /ui/admin/payment-health/incidents   -> incidents list
+//   GET /ui/admin/jobs/health                -> JobHealthOut
+//   GET /ui/admin/webhooks/health            -> WebhookHealthSummary
+// "Alerts" map from incident/event endpoints; "metric tiles" map from the *health
+// /summary endpoints. The DTO names below (AdminAlertListDto/AdminMetricsDto) are
+// thus internal client aggregations, not backend schemas.
 interface AdminApi {
-    @GET("ui/admin/alerts")
-    suspend fun getAlerts(): Response<AdminAlertListDto>
+    @GET("ui/admin/rate-limits/live-summary")   // placeholder mapping — confirm per §13 Q2
+    suspend fun getRateLimitSummary(): Response<RateLimitLiveSummaryDto>
 
-    @GET("ui/admin/metrics")
-    suspend fun getMetrics(): Response<AdminMetricsDto>
+    @GET("ui/admin/payment-health/incidents")   // placeholder mapping — confirm per §13 Q2
+    suspend fun getPaymentIncidents(@Query("limit") limit: Int? = null): Response<PaymentIncidentListDto>
+
+    @GET("ui/admin/jobs/health")                 // metric tiles source
+    suspend fun getJobHealth(): Response<JobHealthDto>
+
+    @GET("ui/admin/webhooks/health")             // metric tiles source
+    suspend fun getWebhookHealth(): Response<WebhookHealthSummaryDto>
 }
 ```
 
@@ -226,7 +261,10 @@ fun AdminDashboardScreen(
 
 1. *Navigation layer.* The `adminDashboard` route is registered in the
    authenticated nav graph (AND-024), but the entry affordance and the route's
-   composable are guarded by `authStateStore.isAdmin()`. A non-admin who somehow
+   composable are guarded by `authStateStore.isAdmin()` — where `isAdmin()`
+   resolves the decoded access-token `role` claim (`"admin"`/`"root"`), mirroring
+   the web client's `getRoleFromAccessToken` (`src/lib/adminCapabilities.ts`), not
+   a `/ui/me` field. A non-admin who somehow
    reaches the route (deep link) is redirected back / shown `Forbidden` rather
    than issuing admin requests.
 2. *Data layer.* The ViewModel checks `repo.isAdmin()` before fetching; if false
@@ -241,7 +279,21 @@ strings to `AlertSeverity.UNKNOWN`.
 
 ## 5. API Contract
 
-`GET /ui/admin/alerts` → 200:
+> **[CORRECTED] Authoritative status:** `GET /ui/admin/alerts` and
+> `GET /ui/admin/metrics` **do not exist** (verified: not present in
+> `openapi.index.txt`). The JSON below is **illustrative of the client-side
+> aggregated model only**, not a backend response. Real implementation must read
+> the verified admin endpoints listed in §4 (e.g.
+> `GET /ui/admin/rate-limits/live-summary` → `RateLimitLiveSummary`
+> { `by_group`, `by_source[]`, `time_series[]`, `total_hits`, `window_hours` };
+> `GET /ui/admin/jobs/health` → `JobHealthOut` { `jobs[]`, `timestamp` };
+> `GET /ui/admin/webhooks/health` → `WebhookHealthSummary`
+> { `total_endpoints`, `enabled_endpoints`, `disabled_endpoints`,
+> `success_count_24h`, `failed_count_24h`, `dead_letter_count_24h`,
+> `total_deliveries_24h` }). Field names `severity`/`created_at`/`source` are
+> **invented** and have no backing schema.
+
+`GET /ui/admin/alerts` (**non-existent — illustrative aggregated shape only**) → 200:
 
 ```json
 {
@@ -258,7 +310,7 @@ strings to `AlertSeverity.UNKNOWN`.
 }
 ```
 
-`GET /ui/admin/metrics` → 200:
+`GET /ui/admin/metrics` (**non-existent — illustrative aggregated shape only**) → 200:
 
 ```json
 {
@@ -274,9 +326,18 @@ Error envelope (FastAPI `detail`, mapped per project convention — string |
 
 ```json
 { "detail": "Admin access required" }
-{ "detail": [{ "msg": "Forbidden" }] }
+{ "detail": [{ "msg": "...", "loc": ["..."], "type": "..." }] }
 { "detail": { "code": "forbidden", "message": "..." } }
 ```
+
+> **[VERIFIED/CORRECTED]** The string form (`{"detail": "..."}`) is the standard
+> FastAPI 401/403/404 shape. The **array** form is the `422` `HTTPValidationError`
+> shape — verified `components.schemas.HTTPValidationError = { detail:
+> ValidationError[] }` and each `ValidationError` has `{ loc, msg, type }` (the
+> spec's `[{ msg }]` was an over-simplification; the real items include
+> `loc`/`type` too). The **object** form `{ detail: { code, message } }` is
+> **NOT** in the OpenAPI schema set and is an **unverified assumption** (kept only
+> as a defensive parse branch).
 
 Status handling: `200` success; `401` → authenticator refresh-once-then-retry
 (transparent), persistent 401 → `UiError(type=auth)` "Session expired", delegate
@@ -285,8 +346,10 @@ treat as misconfigured endpoint → `UiError(type=server)` (and §13 Q2); `5xx` 
 timeout → retryable `UiError(type=network|server)`, retain prior data if any.
 All admin paths and field names (`severity` enum string set, role flag) MUST be
 verified against `/openapi.json`; Moshi DTOs use `@Json(name=...)` for snake_case.
-The exact admin paths are **placeholders pending `/openapi.json` confirmation**
-(§13 Q2).
+**[CORRECTED]** The `severity` enum and `alerts`/`metrics` field names have **no**
+backing schema and are not placeholders-to-confirm but **client-side inventions** —
+they must be derived from the chosen real source endpoints (§4). Note also the real
+admin reads accept query params not modeled here (e.g. `hours`, `limit`, `status`).
 
 This ticket adds **no** write/mutation endpoints by design.
 
@@ -373,9 +436,12 @@ This ticket adds **no** write/mutation endpoints by design.
 
 ## 11. Testing Strategy
 
-- **MockWebServer (core-testing, AND-046 harness)**: enqueue
-  `GET /ui/admin/alerts` and `GET /ui/admin/metrics` fixtures (populated, empty,
-  unknown-severity), and error responses (`403`, `404`, `500`, timeout). Assert
+- **MockWebServer (core-testing, AND-046 harness)**: enqueue the configured admin
+  read GETs (**[CORRECTED]** the verified real paths from §4 — e.g.
+  `/ui/admin/rate-limits/live-summary`, `/ui/admin/jobs/health`,
+  `/ui/admin/webhooks/health` — not `/ui/admin/alerts` /`/ui/admin/metrics`)
+  fixtures (populated, empty, unknown-severity), and error responses (`403`, `404`,
+  `500`, timeout). Assert
   verbs/paths and that requests carry the session cookie context. Assert **no**
   admin request is issued in the non-admin path.
 - **ViewModel unit tests** (Turbine + coroutine test rule):
@@ -412,14 +478,22 @@ This ticket adds **no** write/mutation endpoints by design.
 
 ## 13. Risks & Open Questions
 
-- Q1: What is the exact admin role representation in `GET /ui/me` — a boolean
-  `is_admin`, a `roles[]` array containing `"admin"`, or a scope claim? The gate
-  in §4 must bind to the confirmed field. Verify against `/openapi.json` and
-  `frontend/src/api/types.ts`.
-- Q2: Do `GET /ui/admin/alerts` and `GET /ui/admin/metrics` exist, and are the
-  paths as written? Paths are placeholders pending `/openapi.json`. If a single
-  combined dashboard endpoint exists instead, collapse to one GET in the
-  repository (the ViewModel/UI contract is unaffected).
+- Q1: **[RESOLVED — CORRECTED]** Admin role is **not** in `GET /ui/me`. Verified:
+  `src/api/types.ts: MeResp = { user_sub, session_id, ip }` and OpenAPI `GET /ui/me`
+  200 schema is empty `{}`. The role is the **JWT access-token `role` claim**
+  (`"admin"`/`"root"`) decoded client-side
+  (`src/lib/adminCapabilities.ts: getRoleFromAccessToken`), with optional
+  `admin_profile` (`type: general|scoped`, `scopes[]`). Remaining open item: how the
+  Android client obtains/stores that access token (AND-027 territory) and whether a
+  bare `admin` scoped-profile suffices for these reads or `general`/`root` is needed.
+- Q2: **[RESOLVED — CORRECTED]** `GET /ui/admin/alerts` and `GET /ui/admin/metrics`
+  **do not exist** (not in `openapi.index.txt`); there is **no** single combined
+  admin dashboard endpoint either. Verified read-only admin sources to aggregate
+  client-side: `GET /ui/admin/rate-limits/live-summary`,
+  `GET /ui/admin/rate-limits/events`, `GET /ui/admin/payment-health`(+`/incidents`),
+  `GET /ui/admin/jobs/health` (`JobHealthOut`), `GET /ui/admin/webhooks/health`
+  (`WebhookHealthSummary`). Open product decision: exactly which of these feed the
+  first cut of the "alerts" list vs the "metric tiles".
 - Q3: Is pagination needed for alerts? Assumed bounded summary set (no Paging) for
   this ticket; a follow-up ticket owns pagination if the backend returns large
   pages.
@@ -434,10 +508,13 @@ This ticket adds **no** write/mutation endpoints by design.
 
 ## 14. Acceptance Criteria
 
-AC-1. An admin user navigating to the Admin dashboard issues `GET
-/ui/admin/alerts` and `GET /ui/admin/metrics` and renders the alerts list and
-metric tiles. (MockWebServer + Compose UI test — satisfies "Admin sees read-only
-alerts".)
+AC-1. An admin user navigating to the Admin dashboard issues the configured
+admin read GETs and renders the alerts list and metric tiles. **[CORRECTED]** The
+GETs are the verified real endpoints (§4), e.g.
+`GET /ui/admin/rate-limits/live-summary`, `GET /ui/admin/jobs/health`,
+`GET /ui/admin/webhooks/health` — **not** the non-existent `GET /ui/admin/alerts`
+/`GET /ui/admin/metrics`. (MockWebServer + Compose UI test — satisfies "Admin sees
+read-only alerts".)
 
 AC-2. The feature is **role-gated**: a non-admin (or unauthenticated) user cannot
 reach the route/entry, the ViewModel emits `Forbidden` without any admin network
@@ -481,3 +558,274 @@ auth flow. (MockWebServer test.)
 - Admin paths and role flag confirmed against `/openapi.json` (Q1, Q2 resolved)
   before merge.
 - PR on `android-port` references AND-403 and links AND-027.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Claim:** Admin alerts are read at `GET /ui/admin/alerts`.
+   **VERDICT: Corrected (endpoint does not exist).**
+   **Source:** OpenAPI `openapi.index.txt` — no `/ui/admin/alerts` entry; `alert`
+   search returns only `/ui/alerts/*` (user notifications) and
+   `/ui/agents/accountant/costs/alerts`. No admin alerts path exists.
+
+2. **Claim:** Admin metrics are read at `GET /ui/admin/metrics`.
+   **VERDICT: Corrected (endpoint does not exist).**
+   **Source:** OpenAPI `openapi.index.txt` — `/ui/admin/metrics` not present; only
+   scoped admin metrics like `GET /ui/admin/ad-platform/metrics`
+   (`AdminAdPlatformMetricsOut`) exist. No general admin metrics path.
+
+3. **Claim:** Verified read-only admin endpoints to aggregate instead.
+   **VERDICT: Verified.**
+   **Source:** OpenAPI `openapi.index.txt`:
+   `GET /ui/admin/rate-limits/live-summary` (op `live_summary…`, params=hours);
+   `GET /ui/admin/rate-limits/events` (params=hours,limit,status);
+   `GET /ui/admin/payment-health` (params=hours) and
+   `GET /ui/admin/payment-health/incidents`;
+   `GET /ui/admin/jobs/health` → `JobHealthOut`;
+   `GET /ui/admin/webhooks/health` → `WebhookHealthSummary`. Frontend confirms
+   shapes in `src/api/endpoints/adminRateLimits.ts: getRateLimitLiveSummary` /
+   `RateLimitLiveSummary`.
+
+4. **Claim:** The admin role flag lives in `GET /ui/me` (e.g. `is_admin`/`roles[]`).
+   **VERDICT: Corrected (false).**
+   **Source:** `src/api/types.ts: MeResp` = `{ user_sub, session_id, ip }` (no role
+   field); OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`) 200 response schema is empty
+   `{}`. Frontend never reads a role from `me`.
+
+5. **Claim:** Admin role is derived from the JWT access-token `role` claim
+   (`"admin"`/`"root"`) with an `admin_profile` (general/scoped + scopes).
+   **VERDICT: Verified.**
+   **Source:** `src/lib/adminCapabilities.ts: getRoleFromAccessToken` (decodes
+   `claims.role`), `getAdminProfileFromAccessToken`, `canAccessGeneralAdminControls`;
+   usage in `src/pages/tickets/TicketsPage.tsx` (`role === "admin" || role === "root"`).
+   `src/api/endpoints/adminRoles.ts: AdminProfileType = "general"|"scoped"`,
+   `AdminScope`.
+
+6. **Claim:** Auth is cookie-based with `X-CSRF-Token` echoed from the `ui_csrf`
+   cookie; requests include credentials.
+   **VERDICT: Verified.**
+   **Source:** `src/api/client.ts` — `credentials: "include"`, `getCookie("ui_csrf")`
+   → `headers.set("X-CSRF-Token", csrf)`.
+
+7. **Claim:** On 401 the client performs `POST /ui/session/refresh` once and retries.
+   **VERDICT: Verified (endpoint).**
+   **Source:** OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh…`, resp
+   200); `src/api/endpoints/auth.ts: refreshSession` → `api.post("/ui/session/refresh")`.
+   (The single-retry-then-handoff behavior itself is an AND-027 client policy, not a
+   backend contract.)
+
+8. **Claim:** Error envelope is FastAPI `detail` in three forms (string / array of
+   `{msg}` / object `{code,...}`).
+   **VERDICT: Corrected + partially Unverified.**
+   **Source:** OpenAPI `components.schemas.HTTPValidationError` =
+   `{ detail: ValidationError[] }`, `ValidationError = { loc, msg, type }` — so the
+   array items carry `loc`/`type`, not just `msg`. The string form is the standard
+   403/404 `detail`. The object form `{ detail: { code, message } }` is NOT in the
+   schema set → unverified assumption.
+
+9. **Claim:** Response fields `severity`, `created_at`, `source`, and metric
+   `key/label/value/unit/trend`.
+   **VERDICT: Unverified-assumption (invented).**
+   **Source:** No matching schema in OpenAPI; no DTO in `src/api/types.ts`. These are
+   client-side model fields with no backend backing; must be mapped from the real
+   source schemas (`RateLimitLiveSummary`, `JobHealthOut`, `WebhookHealthSummary`).
+
+10. **Claim:** `404` on an admin path means a misconfigured endpoint.
+    **VERDICT: Verified (consistent with sources).**
+    **Source:** Given §16.1/§16.2 the literal `/ui/admin/alerts|metrics` would 404;
+    real endpoints from §16.3 return 200/422. 422 (`HTTPValidationError`) is the
+    documented param-validation failure for these GETs.
+
+11. **Framework choice:** MVVM + Hilt + `StateFlow` + Jetpack Compose Material 3.
+    **VERDICT: Verified (framework ref).**
+    **Source (framework ref):** https://developer.android.com/topic/architecture
+    and https://developer.android.com/jetpack/compose/state (StateFlow/UI state).
+
+12. **Framework choice:** Relative timestamps via `DateUtils.getRelativeTimeSpanString`.
+    **VERDICT: Verified (framework ref).**
+    **Source (framework ref):**
+    https://developer.android.com/reference/android/text/format/DateUtils#getRelativeTimeSpanString(long)
+
+13. **Framework choice:** Accessibility — non-color-only severity, `contentDescription`,
+    ≥48dp targets, TalkBack.
+    **VERDICT: Verified (framework ref).**
+    **Source (framework ref):** https://developer.android.com/guide/topics/ui/accessibility/principles
+    and https://developer.android.com/jetpack/compose/accessibility
+
+### Corrections made
+
+- C1. `GET /ui/admin/alerts` and `GET /ui/admin/metrics` removed as real endpoints
+  (they do not exist). §2, §4 (`AdminApi`), §5, §11, §13 Q2, §14 AC-1 updated to use
+  the verified admin read endpoints and to flag the combined model as a client-side
+  aggregation.
+- C2. Role source corrected from `GET /ui/me` (`is_admin`/`roles[]`) to the decoded
+  JWT access-token `role` claim (`"admin"`/`"root"`) + `admin_profile`. §2, §3 FR-1,
+  §4 role-gating, §13 Q1 updated.
+- C3. `HTTPValidationError` array items corrected to `{ loc, msg, type }` (not just
+  `{ msg }`); object-form `detail` flagged as unverified (§5).
+- C4. DTO field names (`severity`, `created_at`, `key/label/value`) re-labelled as
+  invented placeholders with no backing schema (§2, §5).
+- Verified-and-kept (no change needed): cookie + `ui_csrf` → `X-CSRF-Token`
+  transport; `POST /ui/session/refresh` existence; read-only/no-mutation design;
+  Hilt/Compose/StateFlow framework choices.
+
+### Open assumptions
+
+- A1. The object-form error envelope `{ detail: { code, message } }` — not in
+  OpenAPI; kept only as a defensive parse branch. (Why: no schema to confirm.)
+- A2. Which specific verified endpoints feed the first-cut "alerts" list vs "metric
+  tiles", and the unified client severity taxonomy — product/impl decision; the
+  source schemas have heterogeneous shapes (counts vs incident lists). (Why: no
+  single backend contract dictates the mapping.)
+- A3. How the Android client obtains and stores the JWT access token that carries
+  the `role` claim, and whether a `scoped` admin profile (vs `general`/`root`) is
+  authorized for these reads. (Why: token issuance is AND-027 scope; the backend
+  authorization matrix for each endpoint is not exposed in the OpenAPI doc.)
+- A4. The single-`401`-refresh-then-retry authenticator behavior is an AND-027
+  client policy assumed present; only the refresh endpoint is verified here. (Why:
+  cross-ticket dependency, not a backend contract.)
+- A5. Empty-state semantics ("No active alerts") assume the chosen source endpoints
+  can legitimately return zero items; verified for list endpoints (events/incidents)
+  but `*/health` summaries always return counts. (Why: aggregation rule is undecided.)
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = JVM unit/Robolectric (local, no device);
+**EMU35** = headless emulator AVD `test35` (x86_64, API 35) on the CI build server;
+**DEV-A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android
+14 / API 34, arm64-v8a) on the build host. Endpoints below use the **verified**
+admin reads from §4/§16.3.
+
+- **TC-AND-403-01 — Happy path: admin loads dashboard.**
+  Type: contract/MockWebServer + unit (ViewModel). Target: JVM.
+  Preconditions: auth store holds an access token whose decoded `role` claim is
+  `"admin"` (general profile); MockWebServer enqueues 200 for each configured admin
+  GET (`/ui/admin/rate-limits/live-summary`, `/ui/admin/jobs/health`,
+  `/ui/admin/webhooks/health`) with populated fixtures.
+  Steps: invoke `viewModel.load()`; collect `state` via Turbine.
+  Expected: emissions `Loading → Content`; dashboard has metric tiles (from health
+  summaries) and an alerts list; requests carry session cookie + `X-CSRF-Token`;
+  request paths exactly match the configured real endpoints. Traces: AC-1.
+
+- **TC-AND-403-02 — Alert ordering + unknown severity mapping.**
+  Type: unit (mapper/repository). Target: JVM.
+  Preconditions: fixture mixes critical/warning/info plus an unrecognized severity
+  string and out-of-order timestamps.
+  Steps: map DTO→domain via the repository mapper.
+  Expected: alerts sorted severity-desc then `createdAt`-desc; the unrecognized
+  string maps to `AlertSeverity.UNKNOWN`; metrics preserve server order. Traces: AC-4.
+
+- **TC-AND-403-03 — Non-admin: zero admin network calls, Forbidden.**
+  Type: unit (ViewModel) + contract/MockWebServer. Target: JVM.
+  Preconditions: access-token `role` claim is `"member"`/absent (non-admin);
+  MockWebServer running with a request recorder.
+  Steps: invoke `viewModel.load()`.
+  Expected: state emits `Forbidden`; MockWebServer `takeRequest()` times out — **no**
+  admin request issued. Traces: AC-2.
+
+- **TC-AND-403-04 — Backend 403 maps to Forbidden (defense in depth).**
+  Type: contract/MockWebServer. Target: JVM.
+  Preconditions: client gate passes (role looks admin) but server returns `403`
+  `{"detail":"Admin access required"}` for an admin GET (simulates server-side role
+  revocation).
+  Steps: `viewModel.load()`.
+  Expected: state `Forbidden`; no retry loop; Back offered; no crash. Traces: AC-2.
+
+- **TC-AND-403-05 — Empty alerts, present metrics.**
+  Type: unit (ViewModel) + Compose-UI. Target: JVM (logic) / EMU35 (UI).
+  Preconditions: alert-source fixtures return zero items; health summaries return
+  non-zero counts.
+  Steps: load; render `AdminDashboardScreen` in Compose test.
+  Expected: "No active alerts" shown; metric tiles still render; state is `Content`
+  with empty alert list (not `Empty`). Traces: AC-5.
+
+- **TC-AND-403-06 — Fully empty → Empty state.**
+  Type: unit (ViewModel). Target: JVM.
+  Preconditions: all sources return zero items/empty.
+  Steps: `viewModel.load()`.
+  Expected: state `Empty`. Traces: AC-5.
+
+- **TC-AND-403-07 — First-load error (5xx/timeout) → retryable Error.**
+  Type: contract/MockWebServer. Target: JVM.
+  Preconditions: one configured admin GET returns `500` (and a variant: socket
+  timeout via MockWebServer throttle/no-response, exercising the ~20s budget).
+  Steps: `viewModel.load()`.
+  Expected: state `Error` with retryable `UiError(type=network|server)`; atomic —
+  no partial dashboard rendered. Traces: AC-6.
+
+- **TC-AND-403-08 — Refresh failure retains stale data.**
+  Type: unit (ViewModel). Target: JVM.
+  Preconditions: first load succeeds (`Content`); refresh enqueues a failure on one
+  source.
+  Steps: `load()` then `refresh()`.
+  Expected: previous `Content` retained with `isStale = true` and a transient
+  `error`; data not blanked. Traces: AC-6.
+
+- **TC-AND-403-09 — Persistent 401 after refresh → Session expired handoff.**
+  Type: contract/MockWebServer. Target: JVM.
+  Preconditions: admin GET returns `401`; `POST /ui/session/refresh` also returns
+  `401` (refresh fails).
+  Steps: `viewModel.load()`.
+  Expected: a single `POST /ui/session/refresh` attempt is observed; persistent 401
+  surfaces `UiError(type=auth)` "Session expired" and hands off to the auth flow
+  (no admin-data render). Traces: AC-7.
+
+- **TC-AND-403-10 — Read-only: no mutation affordance anywhere.**
+  Type: Compose-UI. Target: EMU35.
+  Preconditions: admin `Content` state with alerts + metrics.
+  Steps: render screen; assert on the semantics tree.
+  Expected: only Refresh and Back actions exist; assert **absence** of any
+  acknowledge/dismiss/resolve/edit/delete control (by test tag and by
+  contentDescription); confirm `AdminApi` exposes no non-GET method. Traces: AC-3.
+
+- **TC-AND-403-11 — Offline / flaky dev-host path.**
+  Type: instrumented/e2e. Target: **DEV-A15 (must run on physical device)**.
+  Preconditions: app pointed at the unreliable dev host
+  `http://18.222.237.167:8000`; toggle the device to airplane mode (real radio
+  behavior) after a prior successful load.
+  Steps: load once (online) → enable airplane mode → pull-to-refresh → re-enable →
+  retry. Expected: offline banner + Retry; last dashboard retained marked stale (not
+  blanked); on reconnect Retry re-fetches both sources and clears stale. Rationale
+  for device: real airplane-mode/radio transitions and the cleartext-HTTP dev host
+  path differ from emulator network stubbing. Traces: AC-6.
+
+- **TC-AND-403-12 — Accessibility: severity not color-only + TalkBack.**
+  Type: Compose-UI (semantics) + manual (TalkBack). Target: EMU35 (semantics) /
+  **DEV-A15** (TalkBack manual).
+  Preconditions: `Content` with a critical alert.
+  Steps: assert each alert exposes a `contentDescription` containing severity label,
+  title, source, and relative time; assert a severity icon + text label accompany
+  the color; manually verify TalkBack announces severity and Forbidden/Error states;
+  verify dynamic-font scaling and ≥48dp touch targets.
+  Expected: severity conveyed by icon+label (not color alone); all states announced
+  and Dpad/keyboard reachable. Traces: AC-3, AC-4.
+
+- **TC-AND-403-13 — Security: no cookie/CSRF/alert-body leakage in logs.**
+  Type: unit (Robolectric, capturing Timber tree) + manual logcat review.
+  Target: JVM (assertion) / **DEV-A15** (release-build logcat spot check).
+  Preconditions: a populated dashboard load with debug + release logging configs.
+  Steps: capture emitted log/telemetry during load/refresh/error.
+  Expected: no `Cookie`, `X-CSRF-Token`, session id, or alert message body appears in
+  logs, analytics payloads, or crash breadcrumbs; only normalized `UiError.type` is
+  recorded. Traces: AC-2 (security property), AC-3.
+
+- **TC-AND-403-14 — Deep-link role gate (navigation layer).**
+  Type: instrumented (nav). Target: EMU35.
+  Preconditions: non-admin session; attempt to navigate directly to the
+  `adminDashboard` route (deep link).
+  Steps: trigger the deep link.
+  Expected: route guard redirects back / shows `Forbidden` without issuing any admin
+  request (asserted via MockWebServer recorder). Traces: AC-2.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 (admin loads alerts+metrics via real GETs) | TC-01 |
+| AC-2 (role-gated: no call for non-admin, 403→Forbidden, deep-link gate) | TC-03, TC-04, TC-13, TC-14 |
+| AC-3 (read-only: no mutation control) | TC-10, TC-12, TC-13 |
+| AC-4 (severity render + ordering + UNKNOWN) | TC-02, TC-12 |
+| AC-5 (empty alerts / empty dashboard) | TC-05, TC-06 |
+| AC-6 (first-load error retryable; refresh keeps stale; offline) | TC-07, TC-08, TC-11 |
+| AC-7 (401 transparent refresh; persistent 401 handoff) | TC-09 |
