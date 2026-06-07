@@ -69,7 +69,28 @@ That's messaging. Next up: voice and video calls.
 ---
 
 ## SEGMENT 03 — Calls
-<!-- TODO -->
+
+Sometimes a message isn't enough. From any conversation you can start a call — one-to-one audio,
+or flip on the camera for full video, right from the chat header.
+
+These calls can be paid. A creator sets a per-minute rate, and that rate is shown up front, next to
+the call buttons, before you ever dial. No surprises.
+
+Place the call, and it connects to a clean in-call overlay — mute, recording, and hang-up controls,
+all in one place.
+
+Here's the part that matters: live billing. A cost ticker updates in real time, showing the running
+cost, the per-minute rate, and your remaining wallet balance — right there as the call runs. If your
+balance ever runs low, you get a clear warning before it ends.
+
+When you're done, hang up, and you get a clear outcome: the call ended.
+
+Calls can also be recorded. Every recording lands in the conversation menu, listed with its date,
+duration, and size — and a one-click download whenever you need it.
+
+That's voice and video calls. Next up: the newsfeed.
+
+---
 
 ## SEGMENT 04 — Newsfeed
 <!-- TODO -->
