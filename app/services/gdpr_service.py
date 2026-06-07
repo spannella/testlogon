@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import uuid
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -796,6 +797,74 @@ def process_deletion(user_sub: str, request_id: str) -> Dict[str, Any]:
         summary["videos_deleted"] = len(vid_items)
     except Exception as e:
         logger.warning("Delete video_metadata error: %s", e)
+
+    # Step 11: Delete messaging data (GDPR Article 17) — GAP-0339.
+    # The messaging tables are separate string-named tables (not T.* handles),
+    # mirroring the export path (process_export). Find every conversation the
+    # user participates in via the Participants table (PK=user_id), delete the
+    # user's authored Messages (sender_id == user_sub), delete the user's
+    # Participant row, and — for DMs / now-empty conversations — delete the
+    # Conversation record when no participants remain.
+    try:
+        from app.core.aws import ddb as _ddb
+
+        msg_table = _ddb.Table(os.environ.get("DDB_MESSAGES", "Messages"))
+        conv_table = _ddb.Table(os.environ.get("DDB_CONVERSATIONS", "Conversations"))
+        part_table = _ddb.Table(os.environ.get("DDB_PARTICIPANTS", "Participants"))
+
+        part_items = _query_all(part_table, Key("user_id").eq(user_sub))
+        deleted_messages = 0
+        deleted_participants = 0
+        deleted_conversations = 0
+
+        for p in part_items:
+            cid = p.get("conversation_id")
+            if not cid:
+                continue
+
+            # (a) Delete this user's authored messages in the conversation.
+            #     The other party's messages are their own personal data and
+            #     are preserved (GDPR Art.17 erases only the requester's data).
+            try:
+                all_msgs = _query_all(msg_table, Key("conversation_id").eq(cid))
+                for msg in all_msgs:
+                    if msg.get("sender_id") == user_sub:
+                        msg_table.delete_item(
+                            Key={"conversation_id": cid, "message_id": msg["message_id"]}
+                        )
+                        deleted_messages += 1
+            except Exception as e:
+                logger.warning("Deletion message error for conv %s: %s", cid, e)
+
+            # (b) Delete the user's Participant row for this conversation.
+            try:
+                part_table.delete_item(Key={"user_id": user_sub, "conversation_id": cid})
+                deleted_participants += 1
+            except Exception as e:
+                logger.warning("Deletion participant error for conv %s: %s", cid, e)
+
+            # (c) If no participants remain (e.g. a DM where both sides are gone,
+            #     or a solo conversation), delete the Conversation record.
+            #     Best-effort: the Participants table has no by-conversation GSI
+            #     in every environment, so a lookup failure here is non-fatal.
+            try:
+                remaining = part_table.query(
+                    IndexName="ByConversation",
+                    KeyConditionExpression=Key("conversation_id").eq(cid),
+                    Limit=1,
+                )
+                if not remaining.get("Items"):
+                    conv_table.delete_item(Key={"conversation_id": cid})
+                    deleted_conversations += 1
+            except Exception as e:
+                logger.warning("Deletion conversation error for conv %s: %s", cid, e)
+
+        summary["messages_deleted"] = deleted_messages
+        summary["participants_deleted"] = deleted_participants
+        summary["conversations_deleted"] = deleted_conversations
+    except Exception as e:
+        logger.warning("Deletion messaging error: %s", e)
+        summary["messaging_error"] = str(e)
 
     # Finalize: update request to completed
     completed_ts = now_ts()

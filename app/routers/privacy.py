@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -69,15 +70,62 @@ def request_export(
     }
     item = create_export_request(user_sub, categories)
 
-    # Process inline for MVP (no background worker)
-    try:
-        process_export(user_sub, item["request_id"], categories)
-        # Re-read the updated item
-        item = get_request(user_sub, item["request_id"]) or item
-    except Exception as e:
-        logger.error("Export processing failed: %s", e)
+    # Run the export in the BACKGROUND (GAP-0338). A large multi-table query +
+    # ZipFile build + S3 upload must not block the HTTP request. Schedule the
+    # work as a fire-and-forget asyncio task and return the pending request
+    # immediately. _run_export_safe flips the request to "failed" on error so
+    # it never sticks at "pending".
+    _schedule_export(user_sub, item["request_id"], categories)
 
     return DataRequestOut(**_item_to_out(item))
+
+
+# Hold strong references to in-flight background tasks so the event loop does
+# not garbage-collect them mid-run (standard asyncio fire-and-forget idiom).
+_export_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_export(user_sub: str, request_id: str, categories: Dict[str, bool]) -> None:
+    """Schedule the GDPR export to run in the background, returning immediately."""
+    task = asyncio.create_task(_run_export_safe(user_sub, request_id, categories))
+    _export_tasks.add(task)
+    task.add_done_callback(_export_tasks.discard)
+
+
+async def _run_export_safe(user_sub: str, request_id: str, categories: Dict[str, bool]) -> None:
+    """Run process_export off the request path.
+
+    process_export performs blocking I/O (DynamoDB + S3), so it runs in a
+    worker thread. Any exception flips the request status to "failed" so the
+    record never sticks at "pending" (which has no retry path).
+    """
+    try:
+        await asyncio.to_thread(process_export, user_sub, request_id, categories)
+    except Exception as e:  # noqa: BLE001 - background task must never raise
+        logger.error(
+            "Export background task failed for %s/%s: %s",
+            user_sub,
+            request_id,
+            e,
+            exc_info=True,
+        )
+        try:
+            from app.core.tables import T
+            from app.core.time import now_ts
+            from app.services.gdpr_service import _req_sk, _user_pk
+
+            T.data_requests.update_item(
+                Key={"pk": _user_pk(user_sub), "sk": _req_sk(request_id)},
+                UpdateExpression="SET #s = :s, updated_at = :t, error_message = :e",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":s": "failed",
+                    ":t": now_ts(),
+                    ":e": str(e)[:500],
+                },
+            )
+        except Exception:  # noqa: BLE001 - best-effort status update
+            logger.exception("Failed to mark export request %s as failed", request_id)
 
 
 @router.get("/requests")

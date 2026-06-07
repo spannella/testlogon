@@ -43,6 +43,10 @@ from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_
 from app.services.sessions import require_ui_session
 from app.auth.deps import require_kyc_tier
 from app.services import post_interesting as _post_interesting_svc
+from app.services.analytics_events import (
+    record_engagement_event,
+    record_revenue_event,
+)
 from app.services.subscription_access import can_access_creator
 from app.services.usage_metering import (
     build_usage_event,
@@ -3716,6 +3720,18 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
             update_streak(user_id, "posting_streak")
         except Exception:
             logger.debug("achievement hook: post_count/posting_streak", exc_info=True)
+        # GAP-0337: analytics instrumentation (engagement). Best-effort; the
+        # service swallows its own errors but we guard the call site too so an
+        # analytics failure can never break post creation.
+        try:
+            record_engagement_event(
+                creator_id=user_id,
+                content_id=post_id,
+                actor_id=user_id,
+                action="share",
+            )
+        except Exception:
+            logger.debug("analytics hook: create_post engagement", exc_info=True)
     else:
         record_newsfeed_schedule_operation(operation="create", outcome="success")
         _write_scheduled_post_ref(
@@ -4627,6 +4643,18 @@ def like_post(post_id: str, user_id: UserIdDep):
             expr_vals={":one": 1, ":z": 0},
             return_values="NONE",
         )
+        # GAP-0337: analytics instrumentation (engagement: reaction/like).
+        # Only fires on a genuinely new like (the conditional put above succeeded);
+        # best-effort so analytics can never break the like action.
+        try:
+            record_engagement_event(
+                creator_id=post.get("user_id") or "",
+                content_id=post_id,
+                actor_id=user_id,
+                action="reaction",
+            )
+        except Exception:
+            logger.debug("analytics hook: like_post engagement", exc_info=True)
     except ClientError as exc:
         if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
             raise HTTPException(
@@ -4757,6 +4785,19 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
         advance_progress(user_id, "tip_count")
     except Exception:
         logger.debug("achievement hook: tip_count", exc_info=True)
+
+    # GAP-0337: analytics instrumentation (revenue: tip). Creator = post author,
+    # amount = tip amount, subscriber = tipper. Best-effort.
+    try:
+        record_revenue_event(
+            creator_id=post.get("user_id") or "",
+            revenue_type="tip",
+            amount_cents=req.amount_cents,
+            subscriber_id=user_id,
+            content_id=post_id,
+        )
+    except Exception:
+        logger.debug("analytics hook: tip_post revenue", exc_info=True)
 
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
 
@@ -5522,6 +5563,18 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     except Exception:
         logger.debug("achievement hook: comment_count", exc_info=True)
 
+    # GAP-0337: analytics instrumentation (engagement: comment). Creator = post
+    # author, actor = commenter. Best-effort.
+    try:
+        record_engagement_event(
+            creator_id=post_author or "",
+            content_id=post_id,
+            actor_id=user_id,
+            action="comment",
+        )
+    except Exception:
+        logger.debug("analytics hook: create_comment engagement", exc_info=True)
+
     if post_author and post_author != user_id and parent is None:
         put_notification(
             recipient_user_id=post_author,
@@ -6074,6 +6127,19 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depen
         reason_code="payment_confirmed",
         payment_status=str(conf.get("status") or ""),
     )
+
+    # GAP-0337: analytics instrumentation (revenue: unlock). Creator = post
+    # author, amount = unlock price, subscriber = unlocking user. Best-effort.
+    try:
+        record_revenue_event(
+            creator_id=post.get("user_id") or "",
+            revenue_type="unlock",
+            amount_cents=price,
+            subscriber_id=user_id,
+            content_id=req.post_id,
+        )
+    except Exception:
+        logger.debug("analytics hook: unlock_post revenue", exc_info=True)
 
     # Write billing ledger debit entry (best-effort)
     if S.billing_table_name:
