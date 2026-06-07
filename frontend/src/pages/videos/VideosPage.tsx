@@ -11,6 +11,7 @@ import {
   Copy,
   X,
   Film,
+  FolderOpen,
   CloudUpload,
   Layers,
 } from "lucide-react";
@@ -687,6 +688,17 @@ function VideoCard({
           <div className="absolute left-2 top-2">
             {getStatusBadge(video.status)}
           </div>
+          {/* "In Files" badge — video originated from a file-manager node (VOD-014) */}
+          {(video as VideoListItem & { source_file_node_id?: string | null }).source_file_node_id && (
+            <Badge
+              variant="secondary"
+              className="absolute right-2 top-2 gap-1 text-[10px]"
+              data-testid={`in-files-badge-${video.video_id}`}
+            >
+              <FolderOpen className="h-3 w-3" />
+              In Files
+            </Badge>
+          )}
         </div>
 
         {/* Info */}

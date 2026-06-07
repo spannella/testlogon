@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { File, Folder, MoreHorizontal, Download, Share2, Link2, Pencil, Move, Trash2, Eye, Image, Cloud } from "lucide-react";
+import { File, Folder, MoreHorizontal, Download, Share2, Link2, Pencil, Move, Trash2, Eye, Image, Cloud, Video, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,13 @@ function isImage(ct?: string): boolean {
   return !!ct && ct.startsWith("image/");
 }
 
+function isVideoFile(row: FileEntry): boolean {
+  return (
+    row.type === "file" &&
+    (!!row.content_type?.startsWith("video/") || row.preview_kind === "video")
+  );
+}
+
 
 // ─── Thumbnail ──────────────────────────────────────────────────
 
@@ -84,6 +91,8 @@ interface FileTableProps {
   onRename: (file: FileEntry) => void;
   onMove: (file: FileEntry) => void;
   onDelete: (file: FileEntry) => void;
+  onSendToVod?: (file: FileEntry) => void;
+  onWatchVod?: (file: FileEntry) => void;
   hasMore?: boolean;
   onLoadMore?: () => void;
   loadingMore?: boolean;
@@ -109,6 +118,8 @@ export function FileTable({
   onRename,
   onMove,
   onDelete,
+  onSendToVod,
+  onWatchVod,
   hasMore,
   onLoadMore,
   loadingMore,
@@ -267,6 +278,23 @@ export function FileTable({
               <Move className="h-4 w-4" />
               Move
             </DropdownMenuItem>
+            {isVideoFile(row) && (onSendToVod || onWatchVod) && (
+              <>
+                <DropdownMenuSeparator />
+                {row.vod_linked && row.vod_video_id && onWatchVod && (
+                  <DropdownMenuItem onClick={() => onWatchVod(row)}>
+                    <Play className="h-4 w-4" />
+                    Watch
+                  </DropdownMenuItem>
+                )}
+                {onSendToVod && (
+                  <DropdownMenuItem onClick={() => onSendToVod(row)}>
+                    <Video className="h-4 w-4" />
+                    Send to VOD
+                  </DropdownMenuItem>
+                )}
+              </>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => onDelete(row)}

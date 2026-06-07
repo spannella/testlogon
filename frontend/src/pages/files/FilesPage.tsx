@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Upload,
@@ -82,6 +82,14 @@ import {
   completeGoogleDriveConnect,
   disconnectGoogleDrive,
 } from "@/api/endpoints/googleDrive";
+import { importFileToVod } from "@/api/endpoints/vod";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { GoogleDrivePickerDialog } from "@/components/shared/GoogleDrivePickerDialog";
 import { FileTable } from "./FileTable";
 import { ImageEditorDialog } from "./ImageEditorDialog";
@@ -175,6 +183,7 @@ function resolveMountForPath(
 
 export default function FilesPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const zipInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -209,6 +218,10 @@ export default function FilesPage() {
   const [shareTarget, setShareTarget] = React.useState<FileEntry | null>(null);
   const [shareLinkTarget, setShareLinkTarget] = React.useState<FileEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<FileEntry | null>(null);
+  // VOD ↔ File Manager bridge (VOD-014)
+  const [vodImportTarget, setVodImportTarget] = React.useState<FileEntry | null>(null);
+  const [vodImportTitle, setVodImportTitle] = React.useState("");
+  const [vodImportVisibility, setVodImportVisibility] = React.useState<"private" | "unlisted" | "public">("private");
 
   // iCloud onboarding wizard state
   const [icloudWizardOpen, setIcloudWizardOpen] = React.useState(false);
@@ -388,6 +401,31 @@ export default function FilesPage() {
     },
     onError: () => toast.error("Failed to rename"),
   });
+
+  // ── VOD ↔ File Manager bridge (VOD-014) ─────────────────────────
+  const vodImportMut = useMutation({
+    mutationFn: ({ file, title, visibility }: { file: FileEntry; title: string; visibility: "private" | "unlisted" | "public" }) =>
+      importFileToVod({ file_path: file.path, title: title.trim() || undefined, visibility }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
+      queryClient.invalidateQueries({ queryKey: ["vod", "videos"] });
+      setVodImportTarget(null);
+      toast.success(`Importing to VOD — video ${res.video_id}`);
+    },
+    onError: () => toast.error("Failed to import to VOD"),
+  });
+
+  const handleSendToVod = React.useCallback((file: FileEntry) => {
+    setVodImportTarget(file);
+    setVodImportTitle(file.name.replace(/\.[^.]+$/, ""));
+    setVodImportVisibility("private");
+  }, []);
+
+  const handleWatchVod = React.useCallback((file: FileEntry) => {
+    if (file.vod_video_id) {
+      navigate(`/videos/${file.vod_video_id}`);
+    }
+  }, [navigate]);
 
   const [moveLoading, setMoveLoading] = React.useState(false);
 
@@ -1326,6 +1364,8 @@ export default function FilesPage() {
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
                 onMove={handleMoveOpen}
                 onDelete={(f) => setDeleteTarget(f)}
+                onSendToVod={handleSendToVod}
+                onWatchVod={handleWatchVod}
                 pathProvider={providerForPath}
                 onMoveFile={handleDragMoveFile}
                 emptyState={
@@ -1401,6 +1441,71 @@ export default function FilesPage() {
               disabled={!renameName.trim() || renameMut.isPending}
             >
               {renameMut.isPending ? "Renaming..." : "Rename"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send to VOD dialog (VOD-014) */}
+      <Dialog
+        open={!!vodImportTarget}
+        onOpenChange={(open) => { if (!open && !vodImportMut.isPending) setVodImportTarget(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send to VOD</DialogTitle>
+            <DialogDescription>
+              Import this video into the VOD pipeline. It will be transcoded and appear in your Videos library.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="vod-import-title">Title</Label>
+              <Input
+                id="vod-import-title"
+                value={vodImportTitle}
+                onChange={(e) => setVodImportTitle(e.target.value)}
+                placeholder="Video title"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vod-import-visibility">Visibility</Label>
+              <Select
+                value={vodImportVisibility}
+                onValueChange={(v) => setVodImportVisibility(v as "private" | "unlisted" | "public")}
+              >
+                <SelectTrigger id="vod-import-visibility">
+                  <SelectValue placeholder="Select visibility" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="private">Private</SelectItem>
+                  <SelectItem value="unlisted">Unlisted</SelectItem>
+                  <SelectItem value="public">Public</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setVodImportTarget(null)}
+              disabled={vodImportMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                vodImportTarget &&
+                vodImportMut.mutate({
+                  file: vodImportTarget,
+                  title: vodImportTitle,
+                  visibility: vodImportVisibility,
+                })
+              }
+              disabled={vodImportMut.isPending}
+            >
+              {vodImportMut.isPending ? "Importing..." : "Import"}
             </Button>
           </DialogFooter>
         </DialogContent>

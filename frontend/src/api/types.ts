@@ -1577,6 +1577,18 @@ export interface FileEntry {
   waveform_url?: string | null;
   preview_supported?: boolean;
   preview_reason?: string | null;
+  // VOD ↔ File Manager bridge (VOD-014). Populated on file nodes that have been
+  // imported into / linked to the VOD pipeline. All optional + additive.
+  vod_linked?: boolean;
+  vod_video_id?: string | null;
+  vod_status?: string | null;
+  vod_hls_manifest_url?: string | null;
+  vod_thumbnail_url?: string | null;
+  vod_duration_seconds?: number | null;
+  vod_width?: number | null;
+  vod_height?: number | null;
+  vod_imported_at?: number | null;
+  vod_linked_at?: number | null;
 }
 
 export interface FileListResp {
