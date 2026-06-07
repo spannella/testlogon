@@ -359,6 +359,11 @@ class SubscribeIn(BaseModel):
     subscriber_id: Optional[str] = None
     interval: Optional[Literal["month", "year"]] = None
     discount_code: Optional[str] = None
+    # GAP-0342: promo_code is the platform-wide promo/coupon system
+    # (app/services/promo_codes.py), distinct from the legacy per-creator
+    # discount_code lookup. If both are supplied, promo_code takes precedence
+    # and they do NOT stack.
+    promo_code: Optional[str] = None
     trial_days: Optional[conint(ge=1, le=365)] = None
 
 
@@ -952,7 +957,32 @@ async def subscribe(
     period_end = ts + interval_seconds(interval)
     base_price = _select_plan_price(plan, interval)
     applied_discount = None
-    if body.discount_code:
+    # GAP-0342: platform promo-code system (app/services/promo_codes.py).
+    # When a promo_code is supplied it takes precedence over the legacy
+    # creator discount_code (the two do NOT stack). We validate the code
+    # *before* charging (TOCTOU guard) and atomically redeem it *after* the
+    # charge succeeds — promo_codes.redeem_promo_code's conditional
+    # current_uses increment is the real double-use guard.
+    promo_validation = None
+    promo_trial_days = 0
+    if body.promo_code:
+        from app.services import promo_codes as _promo_codes
+
+        promo_validation = _promo_codes.validate_promo_code(
+            code=body.promo_code,
+            user_id=subscriber_id,
+            checkout_type="subscription",
+            item_price_cents=base_price,
+            creator_user_id=plan["creator_id"],
+        )
+        if not promo_validation.get("valid"):
+            raise HTTPException(
+                status_code=400,
+                detail=promo_validation.get("message") or "Invalid or expired promo code",
+            )
+        price_cents = int(promo_validation["final_price_cents"])
+        promo_trial_days = int(promo_validation.get("free_trial_days") or 0)
+    elif body.discount_code:
         discount = _get_discount(plan["creator_id"], body.discount_code)
         if not discount or not _is_discount_active(discount):
             raise HTTPException(status_code=400, detail="Invalid or inactive discount code")
@@ -962,10 +992,19 @@ async def subscribe(
             "duration": discount.get("duration"),
             "duration_months": discount.get("duration_months"),
         }
-    price_cents = _apply_discount(base_price, discount) if applied_discount else base_price
+        price_cents = _apply_discount(base_price, discount)
+    else:
+        price_cents = base_price
     trial_end = None
     trial_start = None
     status = "active"
+    # GAP-0342: a free_trial promo grants trial days when the customer did
+    # not request their own trial.
+    if promo_trial_days and not body.trial_days:
+        trial_start = ts
+        trial_end = ts + promo_trial_days * 86400
+        period_end = trial_end
+        status = "trialing"
     if body.trial_days:
         trial_start = ts
         trial_end = ts + int(body.trial_days) * 86400
@@ -1068,6 +1107,31 @@ async def subscribe(
             subscriber_id=subscriber_id,
             invoice_id=invoice_id,
         )
+
+    # GAP-0342: record the promo redemption AFTER the subscription is
+    # committed (and any charge has settled above). redeem_promo_code does an
+    # atomic conditional current_uses increment — if the code was exhausted
+    # between validate and now (TOCTOU), it fails and we reject the request.
+    if promo_validation is not None:
+        from app.services import promo_codes as _promo_codes
+
+        _redeem_item, _redeem_err = _promo_codes.redeem_promo_code(
+            code_id=promo_validation["code_id"],
+            user_id=subscriber_id,
+            original_price_cents=int(promo_validation["original_price_cents"]),
+            final_price_cents=int(promo_validation["final_price_cents"]),
+            checkout_type="subscription",
+            checkout_item_id=subscription_id,
+        )
+        if _redeem_err:
+            raise HTTPException(status_code=400, detail=_redeem_err)
+        sub["promo_code"] = {
+            "code_id": promo_validation["code_id"],
+            "discount_type": promo_validation.get("discount_type"),
+            "discount_cents": int(promo_validation.get("discount_cents") or 0),
+            "free_trial_days": int(promo_validation.get("free_trial_days") or 0),
+        }
+        save_subscription(sub)
 
     put_notification(
         recipient_user_id=plan["creator_id"],
