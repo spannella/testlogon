@@ -1143,6 +1143,23 @@ async def subscribe(
         notif_type="subscription_started",
         payload={"subscription_id": subscription_id, "plan_id": plan_id, "creator_id": plan["creator_id"]},
     )
+    # GAP-0355: emit a social alert to the creator that a new subscriber joined
+    # (alerts table + bell badge). Best-effort: never break subscription create.
+    try:
+        from app.services.social_alerts import emit_social_alert
+        from app.services.profile import get_profile_identity
+        actor_name = get_profile_identity(subscriber_id).get("display_name") or subscriber_id
+        emit_social_alert(
+            recipient_user_id=plan["creator_id"],
+            alert_type="subscription_started",
+            actor_user_id=subscriber_id,
+            actor_display_name=actor_name,
+            title=f"{actor_name} subscribed to you",
+            details={"plan_id": plan_id, "subscriber_id": subscriber_id, "subscription_id": subscription_id},
+            action_url="/subscriptions",
+        )
+    except Exception:
+        logger.warning("subscription social alert failed creator=%s", plan["creator_id"], exc_info=True)
     audit_event(
         "subscription_started",
         subscriber_id,

@@ -48,6 +48,11 @@ from app.services.analytics_events import (
     record_revenue_event,
 )
 from app.services.subscription_access import can_access_creator
+from app.services.social_alerts import (
+    BATCH_KEY_PATTERNS,
+    emit_mention_alerts,
+    emit_social_alert,
+)
 from app.services.usage_metering import (
     build_usage_event,
     build_usage_source_idempotency_key,
@@ -2168,8 +2173,13 @@ def _poll_fields_for_post(post: Dict[str, Any], locked_body: bool, viewer_id: Op
     return serialize_poll_for_post(post, viewer_id)
 
 
-def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
-    """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
+def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None, bookmarked_ids: Optional[set] = None) -> Dict[str, Any]:
+    """Map a raw DDB post item to the FeedPost shape expected by the frontend.
+
+    GAP-0357 sub-gap 1: callers that have pre-loaded the viewer's bookmarked
+    post IDs may pass ``bookmarked_ids`` so each post carries an ``is_bookmarked``
+    flag. Optional for backward compatibility (defaults to not-bookmarked).
+    """
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
     status, publish_at, published_at, schedule_timezone, scheduled_at_local = _resolve_post_lifecycle_fields(post)
 
@@ -2279,6 +2289,8 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         # SOCIAL-002: repost count
         "repost_count": int(post.get("repost_count", 0)),
         "reposted_by_me": _check_reposted_by_me(viewer_id, post_id) if viewer_id else False,
+        # GAP-0357 sub-gap 1: per-viewer bookmark status
+        "is_bookmarked": post_id in bookmarked_ids if bookmarked_ids else False,
         # FEED-007: per-viewer "interesting" signal + public aggregate
         "interesting_count": int(post.get("interesting_count", 0)),
         "is_interesting": _is_post_interesting(viewer_id, post_id) if viewer_id else False,
@@ -3732,6 +3744,22 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
             )
         except Exception:
             logger.debug("analytics hook: create_post engagement", exc_info=True)
+        # GAP-0356: emit mention alerts for @mentions in the post body.
+        # Skipped for scheduled posts (handled above by the if not is_scheduled
+        # guard) and for empty bodies. Best-effort: a mention-alert failure must
+        # never break post creation.
+        if body_plain_text:
+            try:
+                emit_mention_alerts(
+                    text=body_plain_text,
+                    author_user_id=user_id,
+                    author_display_name=_post_fadt_display_name(user_id),
+                    context_type="post",
+                    context_id=post_id,
+                    post_id=post_id,
+                )
+            except Exception:
+                logger.warning("emit_mention_alerts failed for post %s", post_id, exc_info=True)
     else:
         record_newsfeed_schedule_operation(operation="create", outcome="success")
         _write_scheduled_post_ref(
@@ -4778,6 +4806,26 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
                 "created_at": now_iso(),
             },
         )
+        # GAP-0355: also emit a social alert (alerts table + bell badge).
+        # Best-effort: never break the tip transaction.
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=author,
+                alert_type="post_tip",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                batch_key=BATCH_KEY_PATTERNS["post_tip"].format(post_id=post_id),
+                title=f"{actor_name} sent you a tip",
+                details={
+                    "post_id": post_id,
+                    "amount_cents": req.amount_cents,
+                    "currency": req.currency,
+                },
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("post tip social alert failed post_id=%s", post_id, exc_info=True)
 
     # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
     try:
@@ -4861,6 +4909,24 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
         advance_progress(user_id, "reaction_count")
     except Exception:
         logger.debug("achievement hook: reaction_count", exc_info=True)
+    # GAP-0355: notify the post owner of the new reaction via the social alert
+    # system (alerts table + bell badge). Best-effort: never break the reaction.
+    post_author = post.get("user_id")
+    if post_author and post_author != user_id:
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=post_author,
+                alert_type="post_reaction",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                batch_key=BATCH_KEY_PATTERNS["post_reaction"].format(post_id=post_id),
+                title=f"{actor_name} reacted to your post",
+                details={"post_id": post_id, "emoji": req.emoji},
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("reaction social alert failed post_id=%s", post_id, exc_info=True)
     return {"ok": True}
 
 
@@ -5219,6 +5285,20 @@ def view_feed(
             except ClientError:
                 pass
 
+            # GAP-0357 sub-gap 1: build the viewer's bookmarked-post-id set so each
+            # feed post carries an accurate is_bookmarked flag (survives refresh).
+            bookmarked_post_ids: set = set()
+            try:
+                bk_raw = ddb.batch_get_item(
+                    RequestItems={APP_TABLE: {"Keys": [{"pk": pk_bookmark_lookup(user_id), "sk": f"post#{pid}"} for pid in unique_post_ids]}}
+                )
+                bookmarked_post_ids = {
+                    item.get("content_id", "")
+                    for item in bk_raw.get("Responses", {}).get(APP_TABLE, [])
+                }
+            except (ClientError, Exception):
+                pass
+
             candidates: List[Dict[str, Any]] = []
             for post_id in unique_post_ids:
                 post = post_by_id.get(post_id)
@@ -5256,6 +5336,7 @@ def view_feed(
                     liked_by_me=post_id in liked_post_ids,
                     unlocked=viewer_unlocked,
                     viewer_id=user_id,
+                    bookmarked_ids=bookmarked_post_ids,
                 )
                 # SOCIAL-002: Attach repost attribution if this feed item came from a repost
                 repost_meta = _repost_meta_by_post.get(post_id) if not author_filter else None
@@ -5581,6 +5662,22 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
             notif_type="comment_on_post",
             payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
         )
+        # GAP-0355: also emit a social alert (alerts table + bell badge).
+        # Best-effort: never break comment creation.
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=post_author,
+                alert_type="post_comment",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                batch_key=BATCH_KEY_PATTERNS["post_comment"].format(post_id=post_id),
+                title=f"{actor_name} commented on your post",
+                details={"post_id": post_id, "comment_id": comment_id},
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("comment social alert failed post_id=%s", post_id, exc_info=True)
 
     if parent:
         q = ddb_query(
@@ -5606,6 +5703,40 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
                     "created_at": created_at,
                 },
             )
+            # GAP-0355: also emit a social alert (alerts table + bell badge).
+            # Best-effort: never break comment creation.
+            try:
+                actor_name = _post_fadt_display_name(user_id)
+                emit_social_alert(
+                    recipient_user_id=parent_user,
+                    alert_type="comment_reply",
+                    actor_user_id=user_id,
+                    actor_display_name=actor_name,
+                    title=f"{actor_name} replied to your comment",
+                    details={
+                        "post_id": post_id,
+                        "parent_comment_id": parent,
+                        "comment_id": comment_id,
+                    },
+                    action_url=f"/feed/posts/{post_id}",
+                )
+            except Exception:
+                logger.warning("reply social alert failed post_id=%s", post_id, exc_info=True)
+
+    # GAP-0356: emit mention alerts for @mentions in the comment body.
+    # Media (gif/sticker) comments have body_plain=None; guard avoids the cost.
+    if req.kind == "text" and content.get("body_plain"):
+        try:
+            emit_mention_alerts(
+                text=content["body_plain"],
+                author_user_id=user_id,
+                author_display_name=_post_fadt_display_name(user_id),
+                context_type="comment",
+                context_id=comment_id,
+                post_id=post_id,
+            )
+        except Exception:
+            logger.warning("emit_mention_alerts failed for comment %s", comment_id, exc_info=True)
 
     return CommentResponse(
         comment_id=comment_id,
@@ -6514,6 +6645,10 @@ class RenameCollectionRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
 
 
+class MoveBookmarkRequest(BaseModel):
+    collection_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
+
+
 @router.post("/ui/bookmarks", status_code=201)
 def create_bookmark(req: CreateBookmarkRequest, user_id: UserIdDep):
     content_type = req.content_type
@@ -6584,6 +6719,48 @@ def delete_bookmark(content_type: str, content_id: str, user_id: UserIdDep):
     return {"ok": True}
 
 
+@router.patch("/ui/bookmarks/{content_type}/{content_id}")
+def move_bookmark(content_type: str, content_id: str, req: MoveBookmarkRequest, user_id: UserIdDep):
+    """GAP-0357 sub-gap 2: move an existing bookmark to a different collection.
+
+    Owner-scoped: the bookmark is keyed by the caller's ``user_id`` partition,
+    so a user can only ever move their own bookmarks (a foreign / missing
+    bookmark yields 404).
+    """
+    sk = f"{content_type}#{content_id}"
+    # Owner-scoped existence check (also confirms the caller owns it).
+    existing = ddb_get_item({"pk": pk_bookmark(user_id), "sk": sk})
+    if not existing:
+        raise HTTPException(status_code=404, detail={"code": "bookmark_not_found", "message": "Bookmark not found"})
+
+    new_collection_id = req.collection_id
+
+    # Update the main bookmark item.
+    ddb_update_item(
+        key={"pk": pk_bookmark(user_id), "sk": sk},
+        update_expr="SET collection_id = :c",
+        expr_vals={":c": new_collection_id},
+        return_values="NONE",
+    )
+    # Keep the lookup item in sync (best-effort; it may not exist for legacy rows).
+    try:
+        ddb_update_item(
+            key={"pk": pk_bookmark_lookup(user_id), "sk": sk},
+            update_expr="SET collection_id = :c",
+            expr_vals={":c": new_collection_id},
+            return_values="NONE",
+        )
+    except Exception:
+        logger.warning("bookmark lookup collection sync failed for %s/%s", content_type, content_id, exc_info=True)
+
+    return {
+        "ok": True,
+        "content_type": content_type,
+        "content_id": content_id,
+        "collection_id": new_collection_id,
+    }
+
+
 @router.get("/ui/bookmarks")
 def list_bookmarks(
     user_id: UserIdDep,
@@ -6629,15 +6806,36 @@ def list_bookmarks(
             post = ddb_get_item({"pk": pk_post(cid), "sk": sk_post()})
             if post:
                 post_dict = _post_to_dict(post, viewer_id=user_id)
+                author_id = post_dict.get("author_id", "")
                 preview = {
-                    "author_id": post_dict.get("author_id", ""),
-                    "author_display_name": post_dict.get("author_id", ""),
+                    "author_id": author_id,
+                    # GAP-0357 sub-gap 3: resolve the human-readable display name
+                    # instead of copying the author UUID.
+                    "author_display_name": _post_fadt_display_name(author_id),
                     "body_snippet": (post_dict.get("body", "") or "")[:200],
                     "image_url": (post_dict.get("image_urls") or [None])[0],
                     "like_count": post_dict.get("like_count", 0),
                 }
             else:
                 preview = {"author_id": "", "body_snippet": "[Post removed]"}
+        elif ct == "video":
+            # GAP-0357 sub-gap 3: enrich video bookmarks with video metadata
+            # (mirrors the post branch). Previously these returned an empty
+            # content_preview and rendered as "[No content]" in the UI.
+            try:
+                from app.services.video_metadata_store import get_video as _bk_get_video
+                _vid = _bk_get_video(cid)
+                preview = {
+                    "video_id": cid,
+                    "title": _vid.title,
+                    "thumbnail_url": _vid.thumbnail_url,
+                    "creator_id": _vid.owner_user_id,
+                    "creator_display_name": _post_fadt_display_name(_vid.owner_user_id),
+                    "duration_seconds": _vid.duration_seconds,
+                    "view_count": _vid.view_count,
+                }
+            except Exception:
+                preview = {"video_id": cid, "title": "[Video removed]"}
 
         bookmarks.append({
             "content_type": ct,

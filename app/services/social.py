@@ -90,6 +90,25 @@ def follow_user(follower_id: str, followed_id: str) -> Dict[str, Any]:
     except Exception:
         logger.exception("Feed backfill failed for %s -> %s", follower_id, followed_id)
 
+    # GAP-0355: notify the followed user of the new follower via the social
+    # alert system (alerts table + bell badge). Best-effort: never break follow.
+    try:
+        from app.services.social_alerts import emit_social_alert, BATCH_KEY_PATTERNS
+        from app.services.profile import get_profile_identity
+        actor_name = get_profile_identity(follower_id).get("display_name") or follower_id
+        emit_social_alert(
+            recipient_user_id=followed_id,
+            alert_type="new_follower",
+            actor_user_id=follower_id,
+            actor_display_name=actor_name,
+            batch_key=BATCH_KEY_PATTERNS["new_follower"].format(user_id=follower_id),
+            title=f"{actor_name} followed you",
+            details={"follower_id": follower_id},
+            action_url=f"/discover/profile/{follower_id}",
+        )
+    except Exception:
+        logger.warning("follow social alert failed follower=%s followed=%s", follower_id, followed_id, exc_info=True)
+
     counts = get_follow_counts(followed_id)
     my_counts = get_follow_counts(follower_id)
     return {

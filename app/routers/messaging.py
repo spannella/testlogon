@@ -13949,6 +13949,29 @@ def send_message_tip(
         amount_cents=inp.amount_cents,
         currency=inp.currency,
     )
+    # GAP-0355: emit a social alert to the message author (alerts table + bell
+    # badge). Best-effort: never break the tip transaction.
+    if msg_author and msg_author != user_id:
+        try:
+            from app.services.social_alerts import emit_social_alert
+            from app.services.profile import get_profile_identity
+            actor_name = get_profile_identity(user_id).get("display_name") or user_id
+            emit_social_alert(
+                recipient_user_id=msg_author,
+                alert_type="message_tip",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                title=f"{actor_name} sent you a tip on your message",
+                details={
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "amount_cents": inp.amount_cents,
+                    "currency": inp.currency,
+                },
+                action_url=f"/messages/{conversation_id}",
+            )
+        except Exception:
+            logger.warning("message tip social alert failed msg=%s", message_id, exc_info=True)
     return TipOut(
         ok=True,
         conversation_id=conversation_id,
