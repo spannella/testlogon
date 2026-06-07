@@ -691,6 +691,11 @@ export function ComposeBar({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSubmit();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      // Power-user shortcut: Ctrl+Enter (Win/Linux) / Cmd+Enter (macOS) sends
+      // regardless of shift state.
+      e.preventDefault();
+      void handleSubmit();
     }
   };
 
