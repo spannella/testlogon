@@ -315,10 +315,16 @@ test.describe("673. Preference Learning & Config API", () => {
 test.describe("674. Feature Ideas UI", () => {
   let alicePage: Page;
   let cardId = "";
+  // Use a fresh, block-local agent_id so the per-agent pending-ideas cap
+  // (max_ideas_per_review, default 5) starts from zero here. The shared
+  // module-level AGENT_ID accumulates pending ideas across earlier describe
+  // blocks AND prior runs, which trips the cap → create returns 400 →
+  // idea_id is undefined → the card lookup times out.
+  const UI_AGENT_ID = freshAgentId("ideas_ui");
   test.beforeAll(async ({ browser }) => {
     getSessions();
     alicePage = await newIdentityPage(browser, "alice");
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "integration" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: UI_AGENT_ID, category: "integration" }));
     cardId = ((await r.json()) as Record<string, unknown>).idea_id as string;
   });
   test.afterAll(async () => {
@@ -338,8 +344,10 @@ test.describe("674. Feature Ideas UI", () => {
   });
 
   test("674.3 approve idea via UI", async () => {
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "ux" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: UI_AGENT_ID, category: "ux" }));
+    expect(r.status()).toBe(201);
     const id = ((await r.json()) as Record<string, unknown>).idea_id as string;
+    expect(id, "create idea returned an idea_id").toBeTruthy();
     await alicePage.goto("http://localhost:3000/agents/pm/ideas");
     await alicePage.locator(`[data-testid="idea-card-${id}"]`).click();
     await expect(alicePage.locator('[data-testid="idea-detail-dialog"]')).toBeVisible({ timeout: 10_000 });
@@ -349,8 +357,10 @@ test.describe("674. Feature Ideas UI", () => {
   });
 
   test("674.4 reject idea via UI", async () => {
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "feature" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: UI_AGENT_ID, category: "feature" }));
+    expect(r.status()).toBe(201);
     const id = ((await r.json()) as Record<string, unknown>).idea_id as string;
+    expect(id, "create idea returned an idea_id").toBeTruthy();
     await alicePage.goto("http://localhost:3000/agents/pm/ideas");
     await alicePage.locator(`[data-testid="idea-card-${id}"]`).click();
     await expect(alicePage.locator('[data-testid="idea-detail-dialog"]')).toBeVisible({ timeout: 10_000 });

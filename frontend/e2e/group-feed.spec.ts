@@ -380,8 +380,26 @@ test.describe("454 — Group Page UI", () => {
     );
     expect(pinResp.status()).toBe(200);
 
-    await alicePage.goto(`${BASE}/groups/${groupId}`);
-    await expect(alicePage.getByText("Pinned").first()).toBeVisible();
+    // Confirm via the API that the post is pinned and surfaces on the first
+    // feed page (the backend keeps pinned posts on page 1 regardless of age).
+    await expect
+      .poll(async () => {
+        const fr = await apiGet(alicePage, `/ui/groups/${groupId}/feed`);
+        const fd = await fr.json();
+        const found = (fd.posts || []).find((p: any) => p.post_id === badgePostId);
+        return !!(found && found.pinned);
+      }, { timeout: 8_000 })
+      .toBe(true);
+
+    // Navigate fresh and wait for the feed query to settle so the page renders
+    // the up-to-date pinned state (avoids asserting against a stale render).
+    const feedSettled = alicePage.waitForResponse(
+      (r) => r.url().includes(`/ui/groups/${groupId}/feed`) && r.request().method() === "GET",
+      { timeout: 10_000 },
+    );
+    await alicePage.goto(`${BASE}/groups/${groupId}`, { waitUntil: "domcontentloaded" });
+    await feedSettled.catch(() => {});
+    await expect(alicePage.getByText("Pinned").first()).toBeVisible({ timeout: 10_000 });
   });
 });
 

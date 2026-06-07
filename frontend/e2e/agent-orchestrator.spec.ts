@@ -274,6 +274,20 @@ test.describe("632 — Ticket Claiming API", () => {
   });
 
   test("Agent claims a ticket via claim-ticket endpoint", async () => {
+    // The AGENT-003 autonomous loop (started/stopped in section 631) may have
+    // auto-claimed an eligible ticket and `stop_agent_loop` retains an
+    // in-progress ticket — so WORKER_ID can still be holding a ticket here,
+    // which would make a manual claim 409 with `worker_busy`. Ensure the worker
+    // is idle (release any retained ticket) before the manual claim. Also make
+    // sure its loop is stopped so it can't race-claim the fresh ticket below.
+    await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/stop`);
+    const preStatus = await (
+      await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`)
+    ).json();
+    if (preStatus.current_ticket_id) {
+      await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/release-ticket`);
+    }
+
     // First, create a fresh ticket and mark it eligible
     const ticketResp = await apiPost(rootPage, "root", "tickets", {
       subject: `E2E Claim Test ${TS}`,

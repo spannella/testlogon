@@ -90,10 +90,18 @@ ddb.Table("Conversations").put_item(Item={
     "type": "dm", "created_at": ts, "last_message_at": ts, "updated_at": ts,
 })
 ptable = ddb.Table("Participants")
-for uid in ${JSON.stringify(participantIds)}:
+parts = ${JSON.stringify(participantIds)}
+for uid in parts:
     ptable.put_item(Item={
         "user_id": uid, "conversation_id": ${JSON.stringify(conversationId)},
         "status": "active", "joined_at": ts,
+        "role": "admin" if uid == parts[0] else "member",
+        "muted_until": 0, "last_read_at": 0, "unread_count": 0, "left_at": 0,
+        # The conversation-participants enrichment query reads the GSI1 index
+        # (GSI1PK = conversation_id, GSI1SK = user_id). Without these the
+        # participants list comes back empty, dmPartner never resolves, and the
+        # call/recording UI (callsEnabled) stays disabled.
+        "GSI1PK": ${JSON.stringify(conversationId)}, "GSI1SK": uid,
     })
 print("ok")
 `);

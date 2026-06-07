@@ -606,10 +606,27 @@ test.describe("4. View-once text — 'Already viewed' stub after consuming", () 
   });
 
   test("After tapping, message text becomes visible", async () => {
+    // Consuming a view-once message is client-side instant (text reveals
+    // immediately) PLUS a fire-and-forget POST .../{messageId}/view that the
+    // backend uses to set `view_once_seen`. The "Already viewed" stub asserted
+    // by the NEXT test depends on that POST having landed, so wait for it here
+    // (register the listener BEFORE the click to avoid a race).
+    const viewPosted = page.waitForResponse(
+      (r) =>
+        /\/messages\/[^/]+\/view(\?|$)/.test(r.url()) &&
+        r.request().method() === "POST" &&
+        r.ok(),
+      { timeout: 8000 },
+    );
     await page.getByRole("button", { name: /tap to view once/i }).click();
     await expect(
       page.locator("p").filter({ hasText: VO_TEXT }),
     ).toBeVisible({ timeout: 5000 });
+    // Ensure the backend recorded the view before we navigate away/back, then
+    // give any concurrent ViewTracker POSTs a moment to drain so the
+    // server-side view_once_seen flag is committed.
+    await viewPosted.catch(() => {});
+    await page.waitForTimeout(800);
   });
 
   test("After navigating away and back, shows 'Already viewed' stub", async () => {

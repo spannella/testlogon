@@ -529,7 +529,9 @@ test.describe("8. Capability scopes", () => {
     await page.getByRole("button", { name: "View key details" }).first().click();
     const details = page.getByRole("dialog");
     await expect(details).toBeVisible({ timeout: 3000 });
-    await expect(details.getByText("Scopes")).toBeVisible();
+    // exact match: the LABEL ("E2E Scopes Test") is the dialog heading and would
+    // otherwise also match a substring "Scopes" lookup (strict-mode violation).
+    await expect(details.getByText("Scopes", { exact: true })).toBeVisible();
     await expect(details.getByText("ads:read")).toBeVisible();
     await expect(details.getByText("ads:manage")).not.toBeVisible();
     await details.getByRole("button", { name: "Close" }).click();

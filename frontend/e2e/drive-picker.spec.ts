@@ -30,6 +30,15 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates the SPA on the persisted Zustand auth-store
+  // (useAuthStore.isAuthenticated). Cookies authenticate API calls but the
+  // router would redirect to /login without this, so the Files page (and its
+  // Google Drive panel) would never render. addInitScript runs before every
+  // navigation in this context, so it survives reloads too.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 async function apiGet(page: Page, path: string, params?: Record<string, string>) {

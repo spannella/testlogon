@@ -16,8 +16,18 @@
  * Auth pattern: e2e_session_setup.py sessions injected as cookies (+ CSRF header).
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+
+// A connected paid call requires getUserMedia() to succeed (the caller acquires a
+// local MediaStream before sending the invite, and the callee acquires one before
+// accepting). Headless Chromium has no real media devices, so we launch a
+// dedicated browser with fake media + auto-granted permissions for this spec
+// rather than mutating the shared playwright.config (which the orchestrator owns).
+const FAKE_MEDIA_ARGS = [
+  "--use-fake-ui-for-media-stream",
+  "--use-fake-device-for-media-stream",
+];
 
 const BASE = "http://localhost:3000";
 const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
@@ -94,10 +104,15 @@ async function startConnectedPaidCall(alicePage: Page, bobPage: Page, convoId: s
   await alicePage.goto(`${BASE}/messages/${convoId}`);
   await bobPage.goto(`${BASE}/messages/${convoId}`);
 
-  // Alice initiates an audio call.
-  await alicePage.getByRole("button", { name: /audio call|call/i }).first().click();
+  // Both ConversationViews must be mounted (call-event SSE listeners attached)
+  // before Alice initiates, so the invite reaches Bob and the accept reaches Alice.
+  await expect(alicePage.getByRole("button", { name: "Start audio call" })).toBeVisible({ timeout: 15_000 });
+  await expect(bobPage.getByRole("button", { name: "Start audio call" })).toBeVisible({ timeout: 15_000 });
 
-  // Bob accepts the incoming call.
+  // Alice initiates an audio call.
+  await alicePage.getByRole("button", { name: "Start audio call" }).click();
+
+  // Bob accepts the incoming call (the invite arrives via SSE).
   await bobPage.getByRole("button", { name: /accept/i }).click({ timeout: 30_000 });
 
   // Wait for Alice's overlay to reach the connected (audio call) layout.
@@ -122,13 +137,17 @@ print(items[-1]["call_id"] if items else "")
 }
 
 test.describe.serial("GAP-0016 — paid-call billing heartbeat is sent from the UI", () => {
+  let fakeBrowser: Browser;
   let alicePage: Page;
   let bobPage: Page;
   let convoId: string;
 
-  test.beforeAll(async ({ browser }) => {
-    alicePage = await browser.newPage();
-    bobPage = await browser.newPage();
+  test.beforeAll(async () => {
+    fakeBrowser = await chromium.launch({ headless: true, args: FAKE_MEDIA_ARGS });
+    const aliceCtx = await fakeBrowser.newContext({ permissions: ["microphone", "camera"] });
+    const bobCtx = await fakeBrowser.newContext({ permissions: ["microphone", "camera"] });
+    alicePage = await aliceCtx.newPage();
+    bobPage = await bobCtx.newPage();
     await injectAuth(alicePage, ALICE_ID);
     await injectAuth(bobPage, BOB_ID);
     convoId = await findOrCreateDm(alicePage, ALICE_ID, BOB_ID);
@@ -148,6 +167,7 @@ ddb.Table("billing").put_item(Item={"pk": "USER#${ALICE_ID}", "sk": "WALLET",
   test.afterAll(async () => {
     await alicePage?.close();
     await bobPage?.close();
+    await fakeBrowser?.close();
   });
 
   test("heartbeat PATCH is sent during a connected paid call", async () => {

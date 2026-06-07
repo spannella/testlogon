@@ -219,17 +219,25 @@ test.describe("Section 221: Admin Queue tab", () => {
   });
 
   test("221.3 admin reject dialog enforces a min-length reason", async ({ browser }) => {
-    const page = await newIdentityPage(browser, CHARLIE_KEY);
-
     // Seed a requested payout for Alice so the queue is non-empty. Needs
     // balance + a valid amount (>= $10 minimum); seed a settled credit first.
     seedAliceBalanceForPayout();
-    await apiPost(page, ALICE_KEY, "/ui/payouts/request", {
+
+    // IMPORTANT: the payout request must be issued as ALICE. `page.request`
+    // carries the page's browser-context cookies, so issuing it from the admin
+    // page sends Charlie's session cookies with Alice's CSRF token → CSRF
+    // mismatch (403) and no payout is created. Use a dedicated Alice page so the
+    // request is genuinely authenticated as Alice and lands in the queue.
+    const alicePage = await newIdentityPage(browser, ALICE_KEY);
+    const reqResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
       amount_cents: 2000,
       method: "bank_transfer",
       notes: `admin-test ${TS}`,
     });
+    expect(reqResp.ok()).toBeTruthy();
+    await alicePage.close();
 
+    const page = await newIdentityPage(browser, CHARLIE_KEY);
     await page.goto(`${BASE}/payouts`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Admin Queue" }).click();
 

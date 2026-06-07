@@ -183,6 +183,42 @@ test.afterAll(() => {
   ddbDelete(VIDEO_TABLE, { video_id: ENGAGE_VIDEO_ID });
 });
 
+// ─── HLS stub ──────────────────────────────────────────────────────────────
+//
+// The mock S3 manifest URL (`/mock/s3/.../master.m3u8`) does not serve a real
+// HLS stream, so hls.js raises a fatal `manifestLoadError` and VideoPlayerPage
+// sets `playerError`, which unmounts the `video-player` wrapper (and the
+// underlying <video> element). These tests don't need real playback — they
+// dispatch synthetic `ended` / `timeupdate` events on the <video> — they only
+// need the player wrapper to mount. Serving a minimal, valid VOD manifest makes
+// hls.js fire MANIFEST_PARSED (player ready, no error) so the wrapper renders.
+// Segment loads may 404, but a frag error is recoverable (hls.startLoad), not a
+// `manifestLoadError`, so it never sets playerError.
+async function stubHls(page: Page) {
+  const MASTER =
+    "#EXTM3U\n" +
+    "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n" +
+    "media.m3u8\n";
+  const MEDIA =
+    "#EXTM3U\n" +
+    "#EXT-X-VERSION:3\n" +
+    "#EXT-X-TARGETDURATION:10\n" +
+    "#EXT-X-MEDIA-SEQUENCE:0\n" +
+    "#EXT-X-PLAYLIST-TYPE:VOD\n" +
+    "#EXTINF:10.0,\n" +
+    "seg0.ts\n" +
+    "#EXT-X-ENDLIST\n";
+  await page.route(/master\.m3u8(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", body: MASTER }),
+  );
+  await page.route(/media\.m3u8(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/vnd.apple.mpegurl", body: MEDIA }),
+  );
+  await page.route(/seg\d+\.ts(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "video/mp2t", body: "" }),
+  );
+}
+
 // ─── Section 160 ──────────────────────────────────────────────────────────────
 
 test.describe("Section 160 · GAP-0160 engagement signals", () => {
@@ -190,6 +226,7 @@ test.describe("Section 160 · GAP-0160 engagement signals", () => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
+    await stubHls(page);
     await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
 
     // Player wrapper renders only when a playback URL is available.
@@ -223,6 +260,7 @@ test.describe("Section 160 · GAP-0160 engagement signals", () => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
+    await stubHls(page);
     await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
 
     await expect(page.getByTestId("video-player")).toBeVisible({ timeout: 10_000 });
