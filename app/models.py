@@ -685,6 +685,14 @@ class PushRegisterReq(BaseModel):
 class PushRevokeReq(BaseModel):
     device_id: str
 
+class PushSubscribeReq(BaseModel):
+    endpoint: str
+    keys_p256dh: str
+    keys_auth: str
+
+class PushUnsubscribeReq(BaseModel):
+    endpoint: str
+
 
 class PaymentMethodOut(BaseModel):
     payment_token_id: str

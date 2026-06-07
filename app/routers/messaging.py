@@ -9760,6 +9760,40 @@ def create_countdown_message(
     return _message_out_from_item(item, user_id)
 
 
+def _validate_gif_url(url: str) -> None:
+    """GAP-0316: reject gif_url values whose host is not on the allowlist.
+
+    Allowed:
+      * Relative URLs (no netloc) whose path starts with "/" — covers the dev
+        mock GIF provider's "/mock/gifs/..." paths in any environment.
+      * Absolute http(s) URLs whose hostname exactly matches, or is a subdomain
+        of, an entry in S.gif_allowed_domains.
+
+    Rejected: data:/javascript:/file:/scheme-relative and any non-allowlisted
+    domain. Applied identically in dev and prod (SECOPS-007) — the allowlist is
+    the only knob.
+    """
+    raw = (url or "").strip()
+    parsed = urlparse(raw)
+    # Relative URLs (no scheme + no netloc): allowed when an absolute path.
+    if not parsed.netloc:
+        if not parsed.scheme and raw.startswith("/"):
+            return
+        raise HTTPException(400, "gif_url_not_allowed")
+    # Absolute URLs must use http(s) — blocks data:/javascript:/file:/etc.
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "gif_url_not_allowed")
+    host = (parsed.hostname or "").lower()
+    allowed_raw = getattr(S, "gif_allowed_domains", "") or ""
+    allowed = {d.strip().lower() for d in allowed_raw.split(",") if d.strip()}
+    if not host:
+        raise HTTPException(400, "gif_url_not_allowed")
+    for dom in allowed:
+        if host == dom or host.endswith("." + dom):
+            return
+    raise HTTPException(400, "gif_url_not_allowed")
+
+
 @router.post("/conversations/{conversation_id}/messages/gif", response_model=MessageOut, status_code=201)
 def send_gif_message(
     conversation_id: str,
@@ -9773,6 +9807,7 @@ def send_gif_message(
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
+    _validate_gif_url(inp.gif_url)
     try:
         resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
         participants = resp.get("Items", [])

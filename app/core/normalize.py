@@ -6,16 +6,56 @@ from typing import List
 
 from fastapi import HTTPException
 
+from app.core.settings import S
+
+
+def _trusted_proxy_list() -> List[str]:
+    """Parse S.trusted_proxy_cidrs (comma/space separated) into a list of CIDR strings.
+
+    Mirrors the parsing behaviour of root_network._resolve_client_ip so the two
+    code paths agree on which TCP peers are trusted proxies. Empty/blank entries
+    are dropped; an empty setting yields an empty list (no trusted proxies).
+    """
+    raw = (S.trusted_proxy_cidrs or "").strip()
+    if not raw:
+        return []
+    parts: List[str] = []
+    for chunk in raw.replace(",", " ").split():
+        candidate = chunk.strip()
+        if candidate:
+            parts.append(candidate)
+    return parts
+
+
 def client_ip_from_request(req) -> str:
+    """Return the best-guess real client IP for rate-limiting and audit logging.
+
+    Trusts X-Forwarded-For ONLY when the direct TCP peer (req.client.host) falls
+    within TRUSTED_PROXY_CIDRS. When the list is empty (dev mode / no proxy) the
+    direct host is always returned, preventing XFF injection / IP spoofing.
+
+    SECOPS-007: TRUSTED_PROXY_CIDRS defaults to "" (empty) in dev, so the dev
+    environment uses the direct IP just like the test client; production ops sets
+    the ALB/NLB CIDR. The code path is identical — no dev-only bypass.
+    """
     if req is None:
         return "0.0.0.0"
-    xff = req.headers.get("x-forwarded-for")
-    if xff:
-        for part in xff.split(","):
-            candidate = part.strip()
-            if candidate:
-                return candidate
-    return req.client.host if req.client else "0.0.0.0"
+    direct_host = req.client.host if req.client else "0.0.0.0"
+    xff = (req.headers.get("x-forwarded-for") or "").strip()
+    if not xff:
+        return direct_host
+    # Only honour XFF if the direct TCP peer is a known trusted proxy.
+    try:
+        peer_trusted = ip_in_any_cidr(direct_host, _trusted_proxy_list())
+    except ValueError:
+        # Malformed direct host (non-IP); treat as untrusted and never honour XFF.
+        peer_trusted = False
+    if not peer_trusted:
+        return direct_host
+    # XFF is trusted: the real client IP is the leftmost entry
+    # (matches root_network._resolve_client_ip: xff.split(",", 1)[0]).
+    first = xff.split(",", 1)[0].strip()
+    return first if first else direct_host
 
 def normalize_email(s: str) -> str:
     s = (s or "").strip().lower()

@@ -1147,6 +1147,15 @@ class Settings:
     sticker_messages_enabled: bool = os.environ.get("STICKER_MESSAGES_ENABLED", "true").lower() == "true"
     ddb_sticker_collections_table: str = os.environ.get("DDB_STICKER_COLLECTIONS_TABLE", "sticker_collections")
     gif_provider: str = os.environ.get("GIF_PROVIDER", "mock")
+    # GAP-0316: comma-separated allowlist of GIF CDN hostnames accepted by the
+    # messaging GIF endpoint. Relative dev mock URLs (/mock/gifs/...) are always
+    # allowed in send_gif_message regardless of this list. Empty default keeps
+    # only relative mock URLs valid until prod sets the real CDN domains.
+    gif_allowed_domains: str = os.environ.get(
+        "GIF_ALLOWED_DOMAINS",
+        "media.giphy.com,media0.giphy.com,media1.giphy.com,media2.giphy.com,"
+        "media3.giphy.com,media4.giphy.com,media.tenor.com,media1.tenor.com,c.tenor.com",
+    )
     sticker_max_file_size_bytes: int = int(os.environ.get("STICKER_MAX_FILE_SIZE", "524288"))
     sticker_max_per_collection: int = int(os.environ.get("STICKER_MAX_PER_COLLECTION", "100"))
     # Custom emojis (MSG-007)
