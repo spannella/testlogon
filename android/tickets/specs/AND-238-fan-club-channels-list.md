@@ -5,7 +5,8 @@ milestone: M5
 epic: E32
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-234]
 blocks: [AND-239]
 ---
@@ -60,9 +61,12 @@ handled against the unreliable dev backend.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext HTTP, unreliable; design for ~20s timeouts, bounded backoff on
   idempotent GETs, offline/stale UI). OpenAPI at `/openapi.json`. Web reference:
-  `frontend/src/api/endpoints/subscriptions.ts` (tiers) and the fan-club
-  endpoints file (confirm exact filename during impl); shared types in
-  `frontend/src/api/types.ts`.
+  `src/api/endpoints/fan-club.ts` (`listChannels`, `listTiers`); shared types in
+  `src/api/types.ts` (`ChannelOut`, `TierOut`). NOTE: the web `FanClubPage.tsx`
+  is a **creator-side management** surface (create/delete tiers & channels, flat
+  channel grid with a "Tier N+" badge, inline chat view) — it does **not**
+  implement the consumer tier-grouped/locked view this Android ticket specifies,
+  so that UX is an Android product decision, not a mirror of the web client.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, single-Activity
   Navigation-Compose, Hilt (KSP), Coroutines/Flow, Retrofit 2.11 / OkHttp 4.12 /
   Moshi 1.15, Room 2.6 (cache) + DataStore, Coil (avatars). minSdk 24,
@@ -74,14 +78,19 @@ FR-1. **Load channels.** On entering the screen for a given creator/fan-club
 (`creatorId` route arg), issue `GET /ui/fan-club/channels` (scoped to that
 creator) and render the result.
 
-FR-2. **Group by tier.** Channels are grouped into sections, one per
-`SubscriptionTier`, sorted by the tier's ordinal/rank ascending (lowest tier
-first; a "Free"/no-tier group, if present, sorts first). Within a tier, channels
-are ordered by the backend-provided `position`/`order`, falling back to name.
+FR-2. **Group by tier.** Channels are grouped into sections, one per fan-club
+tier (`TierOut`), matched by the tier's `level` to each channel's
+`min_tier_level`, and sorted by tier `level`/`sort_order` ascending (lowest tier
+first; the `min_tier_level == 0` "free" group sorts first). Within a tier,
+channels are ordered by name (CORRECTED: the backend `ChannelOut` has **no**
+`position`/`order` field; ordering by `last_message_at` desc is an acceptable
+alternative — document the choice).
 
 FR-3. **Section headers.** Each tier section shows a sticky header with the tier
-name and (if the user is not subscribed at that tier) a lock affordance plus the
-tier's price/label sourced from AND-234's `SubscriptionTier`.
+name (from `TierOut.name`, with optional `badge_emoji`/`color`) and, if the user
+is not subscribed at that tier, a lock affordance. Note: the fan-club `TierOut`
+has **no price field** — any price/label must come from the linked subscription
+plan (`plan_id`) or AND-234's plan data, not from `TierOut` directly.
 
 FR-4. **Per-channel access state.** Each channel row reflects whether the current
 user has access (derived from the user's active subscription tier vs the
@@ -108,9 +117,12 @@ FR-9. **Refresh.** A Material 3 `PullToRefreshBox` wraps the list; the gesture
 re-issues the load. Manual retry from the error state calls the same load.
 
 FR-10. **Channel metadata.** Each row renders: channel name, optional
-description/topic (one line, ellipsized), optional unread/last-activity hint if
-provided by the backend, optional channel avatar via Coil, and the access/lock
-badge. Fields absent from the response degrade gracefully.
+description/topic (one line, ellipsized), and the access/lock badge. The backend
+`ChannelOut` also provides `message_count`, `last_message_at`, and
+`last_message_preview`, which may be used as the activity hint (CORRECTED: there
+is **no** `avatar_url` field on `ChannelOut`, so the Coil avatar is not backed by
+this endpoint — drop it or source an avatar elsewhere; treat as an open item).
+Fields absent from the response degrade gracefully.
 
 ## 4. Technical Design
 
@@ -131,38 +143,49 @@ ViewModel) to produce the grouped view model.
 ### 4.2 Models (core-model / feature-fanclub)
 
 ```kotlin
+// CORRECTED to match backend ChannelOut (src/api/types.ts: ChannelOut).
 data class FanClubChannel(
-    val id: String,
+    val id: String,                // <- ChannelOut.channel_id
     val name: String,
     val description: String?,
-    val avatarUrl: String?,
-    val requiredTierId: String?,   // null => free / all-access
-    val position: Int?,            // backend ordering within a tier
-    val lastActivityAt: Instant?,  // optional, may be null
+    val minTierLevel: Int,         // <- ChannelOut.min_tier_level (integer LEVEL, NOT a tier id)
+    val messageCount: Int,         // <- ChannelOut.message_count
+    val lastMessageAt: Long,       // <- ChannelOut.last_message_at (epoch seconds, not ISO)
+    val lastMessagePreview: String?, // <- ChannelOut.last_message_preview
+    val pinnedMessageId: String?,  // <- ChannelOut.pinned_message_id
+    // NOTE: backend ChannelOut has NO avatar_url, NO position, NO required_tier_id,
+    // NO last_activity_at. Ordering within a tier uses name (no `position` field exists).
 )
 
 // Joined result the UI renders, computed from channels + tiers + active sub.
 data class TierSection(
-    val tier: SubscriptionTier?,   // null => "Free"/no-tier group
+    val tier: TierOut?,            // <- fan-club TierOut matched by level; null => "Tier 0"/free group
     val channels: List<ChannelUiItem>,
 )
 
 data class ChannelUiItem(
     val channel: FanClubChannel,
-    val isAccessible: Boolean,      // user's active tier rank >= required tier rank
+    val isAccessible: Boolean,      // user's active tier level >= channel.minTierLevel
 )
 ```
 
-`SubscriptionTier` is imported from AND-234; not redefined here.
+The fan-club tier model is `TierOut` from `GET /ui/fan-club/tiers` (fields:
+`tier_id, name, level, sort_order, color, badge_emoji?, badge_image_url?,
+member_count, plan_id, ...`). It has **no price field**; price lives on the
+linked `plan_id`/subscription plan (or on the admin-side `SubscriptionTierOut`,
+which is a *different* schema with `price_cents`/`display_order`). AND-234 is
+expected to expose this tier/plan data; this ticket does not redefine it.
 
 ### 4.3 API + Repository
 
 ```kotlin
 interface FanClubApi {
+    // CORRECTED: response is a BARE JSON array of ChannelOut, not a {channels:[...]}
+    // wrapper. creator_id is an OPTIONAL query param (omit => caller's own context).
     @GET("ui/fan-club/channels")
     suspend fun getChannels(
-        @Query("creator_id") creatorId: String,
-    ): FanClubChannelsResponseDto
+        @Query("creator_id") creatorId: String?,
+    ): List<ChannelDto>   // ChannelDto mirrors backend ChannelOut
 }
 
 interface FanClubRepository {
@@ -171,12 +194,15 @@ interface FanClubRepository {
 }
 ```
 
-`FanClubRepositoryImpl` calls `FanClubApi.getChannels`, maps the DTO to
-`FanClubChannel`, reads tiers + the active subscription from AND-234's
-`SubscriptionsRepository`, computes `isAccessible` per channel (active tier
-rank >= `requiredTier` rank; null required tier => always accessible), groups by
-tier, and sorts sections by tier ordinal. Network/HTTP failures are surfaced as
-`ApiResult.Failure` using the shared `core-network` `detail` mapper.
+`FanClubRepositoryImpl` calls `FanClubApi.getChannels`, maps each `ChannelDto`
+(backend `ChannelOut`) to `FanClubChannel`, reads tiers (fan-club `TierOut`,
+which carries `level`/`sort_order`) + the active subscription level from AND-234,
+computes `isAccessible` per channel (active tier `level >= channel.minTierLevel`;
+`minTierLevel == 0` => free/all-access), groups channels under the tier whose
+`level` matches `minTierLevel`, and sorts sections by tier `level`/`sort_order`
+ascending. Network/HTTP failures are surfaced as `ApiResult.Failure` using the
+shared `core-network` `detail` mapper. (The web reference's `normalizeErrorDetail`
+handles `detail` as `string | [{msg}] | {code,...}`.)
 
 ### 4.4 ViewModel
 
@@ -254,49 +280,69 @@ A `FanClubModule` (`@Module @InstallIn(SingletonComponent::class)`) provides
 
 ## 5. API Contract
 
-This ticket **defines and consumes** the fan-club channels read endpoint;
-subscription tier shapes are owned by AND-234. Confirm exact path/params against
-`/openapi.json` and the web reference during implementation.
+This ticket **consumes** the existing fan-club channels read endpoint (it does
+not define a new one — the endpoint already exists in the backend). Subscription
+tier shapes are owned by AND-234. Verified against `openapi.index.txt`
+(`GET /ui/fan-club/channels`) and the web reference
+(`src/api/endpoints/fan-club.ts: listChannels`, `src/api/types.ts: ChannelOut`).
 
-**Request** — `GET /ui/fan-club/channels`:
+**Request** — `GET /ui/fan-club/channels` (VERIFIED): `creator_id` is an
+**optional query param**; auth via cookie jar + `X-CSRF-Token` (echoed from the
+`ui_csrf` cookie). The OpenAPI also declares optional `user_sub`, `X-SESSION-ID`,
+and `X-IMPERSONATION-TOKEN` params (impersonation; not used by this ticket).
 
 ```
 GET /ui/fan-club/channels?creator_id=usr_creator_123
-Cookie: <session cookies>
+Cookie: <session cookies, incl. ui_csrf>
 X-CSRF-Token: <ui_csrf value>
 ```
 
-**Response 200** (`FanClubChannelsResponseDto`):
+**Response 200** — a **bare JSON array** of `ChannelOut` (CORRECTED: not a
+`{channels:[...]}` wrapper). OpenAPI declares the 200 body as an untyped schema
+`{}`; the authoritative shape is the web client's `ChannelOut`:
 
 ```json
-{
-  "channels": [
-    {
-      "id": "chan_01HZ...",
-      "name": "general",
-      "description": "Open chat for everyone",
-      "avatar_url": null,
-      "required_tier_id": null,
-      "position": 0,
-      "last_activity_at": "2026-06-05T09:12:00Z"
-    },
-    {
-      "id": "chan_02HZ...",
-      "name": "gold-lounge",
-      "description": "Gold-tier perks & AMAs",
-      "avatar_url": "https://.../g.png",
-      "required_tier_id": "tier_gold",
-      "position": 0,
-      "last_activity_at": "2026-06-05T08:00:00Z"
-    }
-  ]
-}
+[
+  {
+    "channel_id": "chan_01HZ...",
+    "creator_id": "usr_creator_123",
+    "name": "general",
+    "description": "Open chat for everyone",
+    "min_tier_level": 0,
+    "message_count": 42,
+    "last_message_at": 1749114720,
+    "last_message_preview": "see you all tonight",
+    "pinned_message_id": null,
+    "slowmode_seconds": 0,
+    "max_message_length": 2000,
+    "created_at": 1748000000,
+    "updated_at": 1749114720
+  },
+  {
+    "channel_id": "chan_02HZ...",
+    "creator_id": "usr_creator_123",
+    "name": "gold-lounge",
+    "description": "Gold-tier perks & AMAs",
+    "min_tier_level": 3,
+    "message_count": 7,
+    "last_message_at": 1749110400,
+    "last_message_preview": null,
+    "pinned_message_id": null,
+    "slowmode_seconds": 5,
+    "max_message_length": 2000,
+    "created_at": 1748000000,
+    "updated_at": 1749110400
+  }
+]
 ```
 
-DTO mapping: `channels[] -> List<FanClubChannel>`; `required_tier_id ->
-requiredTierId` (null => free group); `position`/`last_activity_at` optional.
-Tier name/rank/price for grouping and headers come from AND-234's
-`SubscriptionTier` joined by `requiredTierId`.
+DTO mapping (CORRECTED): top-level array `-> List<FanClubChannel>`; `channel_id
+-> id`; `min_tier_level -> minTierLevel` (`0` => free/all-access group);
+`last_message_at` is **epoch seconds** (Long), not an ISO `last_activity_at`
+string. There is **no** `avatar_url`, `position`, or `required_tier_id` field —
+grouping keys off `min_tier_level` matched to the tier's `level`. Tier
+name/level/sort order for grouping and headers come from AND-234's fan-club
+`TierOut` (`GET /ui/fan-club/tiers`), matched by `level == min_tier_level`.
 
 **Error responses.** FastAPI `detail` may be `string | [{msg}] | {code,...}`;
 mapping is owned by `core-network`. `401` triggers the single
@@ -318,11 +364,13 @@ creator), or socket/timeout becomes `ApiResult.Failure` mapped to a user-facing
   follows cache-then-network: emit cached (stale) then refresh; on network
   success replace cache. If Room scope proves heavy for M5, a single in-memory
   cache in the repository is the acceptable fallback (document the choice).
-- **Access computation:** `isAccessible = activeTier.rank >= requiredTier.rank`
-  (null `requiredTier` => true; no active subscription => only null-tier channels
-  accessible).
-- **Keys:** `LazyColumn` items keyed by `channel.id`; section headers keyed by
-  `tier?.id ?: "free"`.
+- **Access computation (CORRECTED):** `isAccessible = activeTierLevel >=
+  channel.minTierLevel` (where `activeTierLevel` is the user's active fan-club
+  tier `level`, or `0` when not subscribed). `minTierLevel == 0` => always
+  accessible; no active subscription => only `min_tier_level == 0` channels are
+  accessible. (Levels are integers; there is no `required_tier_id` join.)
+- **Keys:** `LazyColumn` items keyed by `channel.id` (= `channel_id`); section
+  headers keyed by `tier?.tier_id ?: "level0"`.
 - **Saved state:** `creatorId` is read from `SavedStateHandle`; the loaded
   content survives configuration change via the retained ViewModel.
 
@@ -447,18 +495,17 @@ visibly distinguished; tapping an accessible channel proceeds toward messages.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (endpoint shape):** exact path/params for the channels list
-  (`/ui/fan-club/channels` vs a creator-scoped path like
-  `/ui/fan-club/{creatorId}/channels`, and `creator_id` query vs path param) must
-  be confirmed against `/openapi.json` and the web reference. This spec assumes
-  `GET /ui/fan-club/channels?creator_id=`.
-- **OQ-2 (tier on channel):** whether the backend returns `required_tier_id`
-  (assumed) or an embedded tier object. If embedded, drop the join and read tier
-  fields directly; grouping logic is otherwise unchanged.
-- **OQ-3 (access flag source):** whether the backend returns a per-channel
-  `accessible`/`locked` flag (authoritative) or the client must derive it from the
-  active subscription. Prefer the server flag if present; otherwise derive per
-  §6 and treat as advisory only.
+- **OQ-1 (endpoint shape) — RESOLVED.** Verified: `GET /ui/fan-club/channels`
+  with an **optional** `creator_id` **query** param (openapi.index.txt;
+  `src/api/endpoints/fan-club.ts: listChannels`). Not a path-scoped variant.
+- **OQ-2 (tier on channel) — RESOLVED.** The channel carries `min_tier_level`
+  (an integer LEVEL), **not** a `required_tier_id` and **not** an embedded tier
+  object (`src/api/types.ts: ChannelOut`). Grouping joins `min_tier_level` to the
+  fan-club `TierOut.level`.
+- **OQ-3 (access flag source) — RESOLVED (derive).** `ChannelOut` exposes **no**
+  per-channel `accessible`/`locked` flag, so the client must derive access from
+  `min_tier_level` vs the user's active tier level (treated as advisory; server
+  remains authoritative — see §8).
 - **OQ-4 (pagination):** assumes the channel list is small and unpaginated. If the
   backend paginates, this becomes a Paging-3 surface (small contained change,
   mirror AND-098).
@@ -475,8 +522,9 @@ the channel list **render grouped by tier**, with tier sections ordered by tier
 rank and channels ordered within each tier. *(maps to source Acceptance:
 "Channels render by tier".)*
 
-AC-2. Each tier section shows a header with the tier name (and price/lock for
-tiers the user is not subscribed to), sourced from AND-234's `SubscriptionTier`.
+AC-2. Each tier section shows a header with the tier name (and a lock affordance
+for tiers the user is not subscribed to), sourced from the fan-club `TierOut`
+(`name`/`level`); any price shown derives from the linked plan, not `TierOut`.
 
 AC-3. Locked vs accessible channels are visually distinguished; tapping an
 accessible channel invokes `onChannelClick(channelId)` (routing toward AND-239),
@@ -517,3 +565,177 @@ Compose tests (grouped render, locked tap, empty/error/retry) all pass.
   (KDoc + `// TODO(AND-239)`).
 - Lint/detekt clean; merged to `android-port` with a passing review against this
   spec.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **Endpoint is `GET /ui/fan-club/channels`.** VERIFIED.
+   Source: openapi.index.txt `GET /ui/fan-club/channels`
+   (op=`api_list_channels_ui_fan_club_channels_get`); `src/api/endpoints/fan-club.ts: listChannels`.
+2. **`creator_id` is an optional query param (not a path segment).** VERIFIED.
+   Source: openapi.pretty.json (op `api_list_channels_...`, `in: query`,
+   `required: false`); `src/api/endpoints/fan-club.ts: listChannels` (`params = creatorId ? { creator_id } : undefined`).
+3. **Response 200 is a bare JSON array of channels, not a `{channels:[...]}` wrapper (`FanClubChannelsResponseDto`).** CORRECTED.
+   Source: `src/api/endpoints/fan-club.ts: listChannels` returns `Promise<ChannelOut[]>`. (OpenAPI declares the 200 body as untyped `{}`, so the frontend is authoritative.)
+4. **Channel DTO is `ChannelOut`: `channel_id, creator_id, name, description?, min_tier_level, message_count, last_message_at, last_message_preview?, pinned_message_id?, slowmode_seconds, max_message_length, created_at, updated_at`.** VERIFIED.
+   Source: `src/api/types.ts: ChannelOut`.
+5. **Per-channel access is keyed by integer `min_tier_level`, NOT a `required_tier_id` string.** CORRECTED (spec said `required_tier_id`).
+   Source: `src/api/types.ts: ChannelOut.min_tier_level: number`; web UI renders `Tier {min_tier_level}+` (`src/pages/fan-club/FanClubPage.tsx` line 146).
+6. **`ChannelOut` has no `avatar_url`, no `position`, no `last_activity_at` (ISO).** CORRECTED.
+   Source: `src/api/types.ts: ChannelOut` (no such fields; activity is `last_message_at`, an epoch-seconds number).
+7. **Fan-club tier model is `TierOut` from `GET /ui/fan-club/tiers`: `tier_id, creator_id, plan_id, name, level, color, badge_emoji?, badge_image_url?, description?, benefits, member_count, sort_order, active, ...`.** VERIFIED.
+   Source: `src/api/types.ts: TierOut`; openapi.index.txt `GET /ui/fan-club/tiers`; `src/api/endpoints/fan-club.ts: listTiers`.
+8. **Fan-club `TierOut` has no price field; price lives on the linked plan / a different `SubscriptionTierOut` schema (`price_cents`).** CORRECTED (spec sourced "price" from the tier).
+   Source: `src/api/types.ts: TierOut` (no price); `src/api/types.ts: SubscriptionTierOut` (has `price_cents`, `display_order` — a distinct admin schema).
+9. **Tier grouping/order is by `level`/`sort_order`, joined to channel `min_tier_level`.** CORRECTED (spec said "ordinal/rank" + `requiredTierId` join).
+   Source: `src/api/types.ts: TierOut.level` / `TierOut.sort_order`, `ChannelOut.min_tier_level`.
+10. **Auth: CSRF token read from the `ui_csrf` cookie and sent as the `X-CSRF-Token` header.** VERIFIED.
+    Source: `src/api/client.ts` lines 168-171 (`getCookie("ui_csrf")` -> `headers.set("X-CSRF-Token", csrf)`).
+11. **On 401, a single `POST /ui/session/refresh` is issued, then the request is retried once; a persisting 401 logs out.** VERIFIED.
+    Source: `src/api/client.ts: refreshSession()` (line 121-130, path `/ui/session/refresh`) and the 401 handler (lines 194-237, single `refreshPromise`, one retry, `logout("session_expired")` on repeat 401).
+12. **Error `detail` may be `string | [{msg}] | {code,...}`.** VERIFIED.
+    Source: `src/api/client.ts: normalizeErrorDetail` (lines 66-102) and `mapAuthorizationError` (structured `code` handling, e.g. `role_required`, `geo_blocked`).
+13. **Offline/network error surfaces distinctly (status 0).** VERIFIED.
+    Source: `src/api/client.ts` lines 185-189 (`catch` -> `new ApiError(0, "Network error", err)`).
+14. **404 = unknown creator -> non-retryable error.** UNVERIFIED-ASSUMPTION.
+    The endpoint declares only 200 and 422 in OpenAPI; `creator_id` is optional so an unknown creator may return 200 with `[]` rather than 404. Treat the 404 mapping as defensive, not contract-guaranteed.
+15. **Validation failures return HTTP 422 (`HTTPValidationError`).** VERIFIED.
+    Source: openapi.index.txt `GET /ui/fan-club/channels | ... resp=200:;422:HTTPValidationError`.
+16. **AND-239 messages path is `GET /ui/fan-club/channels/{channel_id}/messages` (params `limit`, `before`).** VERIFIED (integration seam).
+    Source: openapi.index.txt line for `api_get_channel_messages_...`; `src/api/endpoints/fan-club.ts: getChannelMessages`.
+17. **Consumer-facing tier-grouped sections + locked/upgrade affordance + per-user access derivation.** UNVERIFIED-ASSUMPTION (Android product decision).
+    The web reference (`src/pages/fan-club/FanClubPage.tsx`) is a creator-side management screen: a flat channel grid (no tier sections), a "Tier N+" badge, no per-user lock/upgrade gating, and an inline chat view (no separate messages route). The grouped/locked consumer UX is not mirrored by the web client.
+18. **`creator_id` route arg + per-creator scoping.** UNVERIFIED-ASSUMPTION.
+    The query param exists, but the web client calls `listChannels()` with no `creator_id` (own-context). Scoping a fan view to another creator's `creator_id` is plausible from the param but not demonstrated by the reference.
+19. **Caching via Room table `fan_club_channels` keyed by `creatorId`; cache-then-network/stale UI.** UNVERIFIED-ASSUMPTION (Android-local design; no backend/web contract governs it).
+20. **Framework choices: Compose Material 3 `PullToRefreshBox`, `stickyHeader`, `collectAsStateWithLifecycle`, Hilt, Retrofit/Moshi.** Framework refs (not backend contract):
+    `PullToRefreshBox` — https://developer.android.com/reference/kotlin/androidx/compose/material3/pulltorefresh/package-summary ;
+    `LazyColumn`/`stickyHeader` — https://developer.android.com/develop/ui/compose/lists ;
+    `collectAsStateWithLifecycle` — https://developer.android.com/topic/libraries/architecture/coroutines#lifecycle-aware .
+
+### Corrections made
+
+- §4.2 model: replaced `id/avatarUrl/requiredTierId/position/lastActivityAt(Instant)` with the real `ChannelOut` fields (`channel_id`, `min_tier_level: Int`, `last_message_at: Long` epoch, `message_count`, `last_message_preview`, `pinned_message_id`); `TierSection.tier` retyped to fan-club `TierOut`. (Claims 4,5,6,7)
+- §4.3 + §5: response type changed from `FanClubChannelsResponseDto` `{channels:[...]}` to a bare `List<ChannelOut>`; `creator_id` marked optional; response example rewritten to real `ChannelOut` JSON; mapping notes corrected. (Claims 2,3,4,5,6)
+- FR-2 / §6: grouping/ordering rewritten to join `min_tier_level` to tier `level`/`sort_order` (no `position` field; no `required_tier_id`). Access formula corrected to `activeTierLevel >= min_tier_level`. (Claims 5,9)
+- FR-3 / AC-2: tier "price" no longer sourced from `TierOut` (it has none). (Claim 8)
+- FR-10: removed `avatar_url` reliance (not on `ChannelOut`). (Claim 6)
+- §2: web-reference filename corrected to `src/api/endpoints/fan-club.ts`/`types.ts` and the creator-vs-consumer distinction documented. (Claim 17)
+- §13: OQ-1/OQ-2/OQ-3 marked RESOLVED with verified outcomes.
+
+### Open assumptions
+
+- **Consumer UX (tier sections, locked rows, upgrade CTA, navigation to a messages route)** is an Android product decision not present in the web client (creator-side, flat grid, inline chat). (Claim 17)
+- **404-on-unknown-creator** is not contract-guaranteed; the endpoint may instead return `200 []`. (Claim 14)
+- **Per-creator scoping via `creator_id`** is supported by the param but unexercised by the reference (which omits it). (Claim 18)
+- **Room caching / stale-then-network** is local design with no governing backend/web contract. (Claim 19)
+- **Channel avatars** have no backing field on `ChannelOut`; if shown, the source is undefined and must be resolved before relying on FR-10's avatar. (Claim 6)
+- **Active subscription / tier-level lookup** comes from AND-234, which is not yet landed; the exact "active tier level" accessor is assumed and must be reconciled with AND-234's API.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = local JVM/Robolectric unit (no device); **MWS** =
+contract test against MockWebServer; **emu test35** = headless x86_64 AVD,
+API 35 (fast CI UI/instrumented); **A15** = physical Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a) over adb. Most cases here are device-agnostic UI/logic,
+so the emulator is sufficient; the physical device is only mandatory for the
+ABI/API-parity smoke (TC-13).
+
+- **TC-AND-238-01** — Repository grouping & tier ordering.
+  Type: unit (JVM). Target: `FanClubRepositoryImpl`.
+  Preconditions: fake `FanClubApi` returns channels with `min_tier_level` 0/1/3; fake tiers `TierOut` levels 0,1,3 with `sort_order`.
+  Steps: call `getChannelsByTier("creator_1")`.
+  Expected: one `TierSection` per tier, ordered ascending by `level`/`sort_order` (level-0/free section first); channels filed under the tier whose `level == min_tier_level`. Traces: AC-1.
+
+- **TC-AND-238-02** — Within-tier channel ordering.
+  Type: unit (JVM). Target: `FanClubRepositoryImpl`.
+  Preconditions: multiple channels share one `min_tier_level`, unsorted names.
+  Steps: invoke the join.
+  Expected: channels within the section are ordered by name (or the documented `last_message_at` desc) deterministically; no `position` field is referenced. Traces: AC-1.
+
+- **TC-AND-238-03** — Access derivation by tier level.
+  Type: unit (JVM). Target: `FanClubRepositoryImpl` / access mapper.
+  Preconditions: active tier level = 1; channels at `min_tier_level` 0,1,3; also a no-subscription case (level 0).
+  Steps: compute `isAccessible`.
+  Expected: level 0 -> accessible always; level 1 -> accessible when active>=1; level 3 -> locked at active=1; with no subscription only level-0 channels accessible. Traces: AC-3.
+
+- **TC-AND-238-04** — Contract: 200 returns a bare array of `ChannelOut`.
+  Type: contract/MockWebServer (MWS). Target: `FanClubApi.getChannels` + Moshi adapter.
+  Preconditions: MWS enqueues `200` with a top-level JSON array body matching §5 (no `{channels:...}` wrapper).
+  Steps: call `getChannels("creator_1")`; assert the request line is `GET /ui/fan-club/channels?creator_id=creator_1` and carries `X-CSRF-Token`.
+  Expected: deserializes to `List<ChannelDto>`; `channel_id`,`min_tier_level`,`last_message_at` map correctly; absent optional fields (`description`,`last_message_preview`,`pinned_message_id`) are null. Traces: AC-1, AC-7.
+
+- **TC-AND-238-05** — ViewModel happy path -> Content.
+  Type: unit (JVM, coroutines-test + Turbine). Target: `ChannelsViewModel`.
+  Preconditions: repo returns non-empty sections.
+  Steps: construct VM (init load), collect `uiState`.
+  Expected: `Loading` then `Content(sections=…, isRefreshing=false, isStale=false)`. Traces: AC-1, AC-7.
+
+- **TC-AND-238-06** — ViewModel empty vs error distinction.
+  Type: unit (JVM). Target: `ChannelsViewModel`.
+  Preconditions: (a) repo returns zero channels; (b) repo returns `ApiResult.Failure` with empty cache.
+  Steps: run each.
+  Expected: (a) `Empty` (never `Error`); (b) `Error(retryable=true)`. Traces: AC-4, AC-5, AC-7.
+
+- **TC-AND-238-07** — Failure with cached content keeps list + stale.
+  Type: unit (JVM). Target: `ChannelsViewModel` + repo cache.
+  Preconditions: prior successful `Content`; refresh then fails.
+  Steps: `refresh()` with network failure.
+  Expected: state stays `Content` with `isStale=true` and a transient error event; cached channels remain visible. Traces: AC-5, AC-6.
+
+- **TC-AND-238-08** — 401 -> refresh -> retry success; persistent 401 terminal.
+  Type: contract/MockWebServer (MWS). Target: `FanClubApi` through the shared OkHttp 401-refresh interceptor.
+  Preconditions: MWS enqueues `401`, then `POST /ui/session/refresh` -> `200`, then channels `200`; a second scenario enqueues `401`, refresh `200`, channels `401` again.
+  Steps: trigger the load in each scenario.
+  Expected: scenario 1 succeeds with exactly one refresh + one retry; scenario 2 surfaces a terminal auth error (no re-loop), matching client.ts contract. Traces: AC-5, AC-7.
+
+- **TC-AND-238-09** — Timeout/503 retryable; offline (status 0) handling.
+  Type: contract/MockWebServer (MWS). Target: repo + `core-network` mapping.
+  Preconditions: MWS returns `503` / no-response (socket timeout); plus a simulated network failure (no connectivity).
+  Steps: load on an empty screen, then with cached content.
+  Expected: empty screen -> retryable `Error`; with cache -> stale banner + transient error; offline maps to the network/offline error, not a generic 500. (Mirrors the dev-host flakiness path.) Traces: AC-5.
+
+- **TC-AND-238-10** — 422 / malformed response surfaces a mapped error.
+  Type: contract/MockWebServer (MWS). Target: repo error mapping.
+  Preconditions: MWS returns `422` with `HTTPValidationError` (`detail: [{msg}]`), and separately a `404`.
+  Steps: load.
+  Expected: `detail` normalized per the `string|[{msg}]|{code}` rule into a user-facing message; 422/404 are non-retryable. (404-as-unknown-creator is treated defensively per §16 open assumption.) Traces: AC-5, AC-7.
+
+- **TC-AND-238-11** — Compose: grouped render, loading/empty/error/retry.
+  Type: Compose-UI (emu test35). Target: `FanClubChannelsScreen` / `ChannelsList`.
+  Preconditions: fake VM emitting each state.
+  Steps: assert `Loading` shows progress; `Content` shows sticky tier headers in order with `ChannelRow`s; `Empty` shows empty (not error) copy; `Error` shows Retry and tapping it calls `load()`; `isStale` shows the stale banner.
+  Expected: all assertions pass; locked rows show a lock badge, accessible rows do not. Traces: AC-1, AC-2, AC-4, AC-5, AC-6.
+
+- **TC-AND-238-12** — Compose: locked tap vs accessible tap (navigation/security).
+  Type: Compose-UI (emu test35). Target: `ChannelRow` + event flow.
+  Preconditions: one accessible and one locked channel.
+  Steps: tap each.
+  Expected: accessible -> `onChannelClick(channelId)` invoked with the correct `channel_id`; locked -> `ShowUpgrade` affordance shown and **no** navigation and **no** messages request (client never fetches locked content — server remains authoritative). Traces: AC-3.
+
+- **TC-AND-238-13** — Compose: accessibility checks.
+  Type: Compose-UI (emu test35). Target: headers + rows.
+  Preconditions: a locked tier section.
+  Steps: assert TalkBack semantics.
+  Expected: tier header exposes a merged node ("Gold tier, locked"); locked row announces locked state + upgrade action; tap targets >= 48dp; decorative images have null `contentDescription`. Traces: AC-2, AC-3.
+
+- **TC-AND-238-14** — ABI/API parity smoke on physical device.
+  Type: instrumented/e2e (A15 — physical device REQUIRED).
+  Target: `FanClubChannelsScreen` end-to-end against MWS or the dev host.
+  Preconditions: app installed on SM-A156U (arm64-v8a, API 34).
+  Rationale: emulator is x86_64/API 35; this confirms no arm64-vs-x86 / API-34-vs-35 regressions in Compose rendering, Moshi codegen, and the OkHttp stack for this screen.
+  Steps: launch the screen, load channels, scroll sticky sections, tap an accessible channel.
+  Expected: identical grouped render and behavior as on emu test35; no ABI/codegen crashes. Traces: AC-1, AC-7.
+
+### Coverage matrix
+
+| AC  | Covered by |
+| --- | --- |
+| AC-1 (render grouped by tier, ordered) | TC-01, TC-02, TC-04, TC-05, TC-11, TC-14 |
+| AC-2 (tier header / lock) | TC-11, TC-13 |
+| AC-3 (locked vs accessible; nav vs upgrade) | TC-03, TC-12, TC-13 |
+| AC-4 (empty state distinct from error) | TC-06, TC-11 |
+| AC-5 (error on empty; stale on cached failure) | TC-06, TC-07, TC-08, TC-09, TC-10, TC-11 |
+| AC-6 (pull-to-refresh + refreshing state) | TC-07, TC-11 |
+| AC-7 (unit + MWS + Compose suites green) | TC-04, TC-05, TC-06, TC-08, TC-10, TC-14 |

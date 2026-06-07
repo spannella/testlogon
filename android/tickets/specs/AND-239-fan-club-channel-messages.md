@@ -5,7 +5,8 @@ milestone: M5
 epic: E32
 priority: P1
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-238, AND-126]
 blocks: []
 ---
@@ -50,6 +51,13 @@ of scope (polling/pull-to-refresh only).
   unreliable). OpenAPI at `/openapi.json`. Cookie-based session with `ui_csrf`
   echoed as `X-CSRF-Token`; on 401 call `POST /ui/session/refresh` once then
   retry (handled by the shared OkHttp `Authenticator`/interceptor from core auth).
+  **Verified note:** the web client (`src/api/client.ts`) sends `X-CSRF-Token`
+  from the `ui_csrf` cookie on **every** request (not just mutations) and *also*
+  sends an `Authorization: Bearer <accessToken>` header from its auth store plus
+  optional `X-IMPERSONATION-TOKEN`. The OpenAPI params for these endpoints also
+  expose `user_sub`, `X-SESSION-ID`, `X-IMPERSONATION-TOKEN`. The Android stack
+  should mirror whatever the shared core-auth client already does; sending CSRF
+  only on mutations is acceptable but is a divergence from the web reference.
 - Web reference: `frontend/src/api/endpoints/*.ts` (fan-club message endpoints)
   and `frontend/src/api/types.ts` (message/reaction shapes). Mirror field names
   and the `detail` error union there.
@@ -211,9 +219,25 @@ class ChannelMessagesPagingSource(
 ```
 
 Pager config: `PagingConfig(pageSize = 30, prefetchDistance = 10,
-enablePlaceholders = false, initialLoadSize = 30)`. Cursor (`before`) returned in
-the response `next_cursor` field is used as `nextKey`/`prevKey` for older pages;
-`load` for the newest anchor passes `before = null`.
+enablePlaceholders = false, initialLoadSize = 30)`.
+
+**CORRECTED — pagination contract.** The earlier draft assumed the GET response
+is a paged envelope exposing a `next_cursor` field. That is wrong. Verified
+against OpenAPI (`GET /ui/fan-club/channels/{channel_id}/messages`, params
+`limit, before`) and the web reference (`src/api/endpoints/fan-club.ts:
+getChannelMessages` returns `ChannelMessageOut[]`, and `FanClubPage.tsx` sorts
+client-side and never paginates): the response body is a **bare JSON array of
+`ChannelMessageOut`**, with **no `next_cursor` and no `has_more` field**.
+Server-side cursoring *is* supported via the `before` query param (a message id /
+opaque cursor) plus `limit` (server default 50, max 200). Therefore the
+`PagingSource` must derive the next key itself — use the **oldest item's
+`message_id`** in the current page as the `before` for the next (older) page, and
+treat `endOfPaginationReached = (page.size < limit)` since there is no server
+`has_more` flag. `load` for the newest anchor passes `before = null`.
+
+Because the response is a bare array (`{}`/unschematized in OpenAPI), the
+`MessagePageDto { items, next_cursor, has_more }` shape described in §5 must be
+replaced with a `List<ChannelMessageOut>` deserialization; see §5 corrections.
 
 ## 5. API Contract
 
@@ -221,80 +245,123 @@ Base path `/ui/fan-club/channels/{id}/messages`. All requests carry session
 cookies and the `X-CSRF-Token` header (mutations only) via the shared OkHttp
 stack. Retries with bounded backoff apply **only** to the idempotent GET.
 
+**CORRECTED service interface** (paths, methods, bodies and return types now match
+OpenAPI + the web reference; corrections detailed in §16):
+
 ```kotlin
 interface FanClubMessageService {
-    @GET("ui/fan-club/channels/{id}/messages")
+    // GET returns a BARE ARRAY (no envelope). server default limit=50, max=200.
+    @GET("ui/fan-club/channels/{channelId}/messages")
     suspend fun list(
-        @Path("id") channelId: String,
+        @Path("channelId") channelId: String,
         @Query("before") before: String?,
         @Query("limit") limit: Int = 30,
-    ): MessagePageDto
+    ): List<ChannelMessageDto>
 
-    @POST("ui/fan-club/channels/{id}/messages")
+    // POST body is ChannelMessageIn { text (required, 1..2000), reply_to_message_id? }
+    // NO "type", NO "body", NO "client_token" fields exist server-side.
+    @POST("ui/fan-club/channels/{channelId}/messages")
     suspend fun post(
-        @Path("id") channelId: String,
-        @Body body: PostMessageRequest,
-    ): MessageDto
+        @Path("channelId") channelId: String,
+        @Body body: ChannelMessageIn,            // { text, reply_to_message_id? }
+    ): ChannelMessageDto                          // 201 -> single ChannelMessageDto
 
-    @PUT("ui/fan-club/channels/{id}/messages/{messageId}/reactions")
+    // Reaction endpoint is POST .../react (NOT PUT .../reactions).
+    // Request body is a free-form object in OpenAPI (additionalProperties:true);
+    // exact field names are UNVERIFIED (no web-client usage). See §16 open assumptions.
+    @POST("ui/fan-club/channels/{channelId}/messages/{messageId}/react")
     suspend fun react(
-        @Path("id") channelId: String,
+        @Path("channelId") channelId: String,
         @Path("messageId") messageId: String,
-        @Body body: ReactionRequest,    // {"emoji": "...", "action": "add"|"remove"}
-    ): ReactionDto
+        @Body body: ReactionRequest,             // ASSUMED {"emoji": "..."} toggle; verify at impl
+    ): Response<Unit>                             // response body is unschematized ({})
 
-    @DELETE("ui/fan-club/channels/{id}/messages/{messageId}")
+    // DELETE returns 200 (per OpenAPI), NOT 204. Treat 200/204 + empty body as success.
+    @DELETE("ui/fan-club/channels/{channelId}/messages/{messageId}")
     suspend fun delete(
-        @Path("id") channelId: String,
+        @Path("channelId") channelId: String,
         @Path("messageId") messageId: String,
     ): Response<Unit>
 }
 ```
 
-GET response (`MessagePageDto`):
+**CORRECTED GET response** — a bare array of `ChannelMessageOut` (verified against
+`src/api/types.ts: ChannelMessageOut` and `getChannelMessages`). The real DTO
+fields differ substantially from the earlier draft (see §16 for the field-by-field
+diff):
 
 ```json
-{
-  "items": [
-    {
-      "id": "msg_01HZ...",
-      "channel_id": "chan_abc",
-      "type": "text",
-      "author": { "id": "usr_9", "display_name": "Ada", "avatar_url": null },
-      "body": "hello channel",
-      "attachments": [],
-      "reactions": [ { "emoji": "🔥", "count": 3, "reacted": true } ],
-      "is_mine": false,
-      "created_at": "2026-06-05T12:00:00Z",
-      "edited_at": null,
-      "deleted": false
-    }
-  ],
-  "next_cursor": "eyJiZWZvcmUiOiJtc2dfMDFIWiJ9",
-  "has_more": true
-}
+[
+  {
+    "message_id": "msg_01HZ...",
+    "channel_id": "chan_abc",
+    "sender_id": "usr_9",
+    "sender_display_name": "Ada",
+    "sender_badge": { "tier_name": "Gold", "tier_level": 3, "badge_emoji": "⭐" },
+    "text": "hello channel",
+    "kind": "text",
+    "reply_to_message_id": null,
+    "reactions": { "🔥": { "usr_1": true, "usr_2": true } },
+    "created_at": 1749124800,
+    "deleted": false
+  }
+]
 ```
 
-POST request/response:
+Field notes (all verified against `ChannelMessageOut`):
+- `message_id` (NOT `id`); `channel_id`.
+- Author is **flat**: `sender_id`, `sender_display_name`, optional
+  `sender_badge` (a `MemberBadgeData`). There is **no `author` object** and **no
+  `avatar_url`**.
+- Message text is `text` (NOT `body`); the type discriminator is `kind` (NOT
+  `type`). AND-126's mapper must key its polymorphic factory on **`kind`**.
+- `reactions` is `Record<emoji, Record<userId, bool>>` — i.e. a map of emoji →
+  map of userId → true. It is **NOT** an array of `{emoji,count,reacted}`. The
+  client derives `count = reactions[emoji].size` and `reacted =
+  reactions[emoji].containsKey(currentUserSub)`.
+- `created_at` is an **epoch integer in seconds** (web does
+  `new Date(created_at * 1000)`), NOT an ISO-8601 string.
+- `deleted: boolean` exists; there is **no `edited_at`** and **no `attachments`**
+  field on this DTO.
+- `reply_to_message_id?` is present (reply threading; not composed in this ticket
+  but should be carried through the domain model).
+- **`is_mine` does not exist server-side.** Derive ownership client-side as
+  `sender_id == currentUserSub` to gate the Delete affordance (§8 already says the
+  server is authoritative).
+
+**CORRECTED POST request** (`ChannelMessageIn`, verified):
 
 ```json
-// PostMessageRequest
-{ "type": "text", "body": "hello", "client_token": "uuid-v4" }
-// 201 -> single MessageDto (same shape as items[])
+{ "text": "hello", "reply_to_message_id": null }
+// 201 -> single ChannelMessageOut (same shape as array items)
 ```
 
-`client_token` is a client-generated UUID for idempotency/de-dup so a retried
-POST does not create duplicates. React request body:
-`{"emoji":"🔥","action":"add"}` → returns the updated
-`{"emoji","count","reacted"}`. DELETE → `204 No Content` (or `200` with empty
-body; both treated as success).
+`text` is required, length 1..2000 (server-enforced `minLength:1, maxLength:2000`
+on `ChannelMessageIn.text`). **There is no `type` field and no `client_token`
+idempotency token** in the backend schema or the web client — the earlier
+`PostMessageRequest { type, body, client_token }` was fabricated. Optimistic
+post + manual retry must therefore guard against duplicates **client-side**
+(de-dup window on `(sender_id, text, created_at)`, or disable retry after success
+confirmation) since the server offers no idempotency key. This is now reflected in
+§7 and §13.
 
-DTO→domain mapping reuses AND-126's `MessageMapper` for the polymorphic `type`
-discriminator (Moshi `PolymorphicJsonAdapterFactory` keyed on `"type"`); this
-ticket adds only `MessagePageDto`, `PostMessageRequest`, `ReactionRequest`, and
-`ReactionDto`. Error bodies follow the FastAPI `detail` union
-(`string | [{msg}] | {code,...}`) decoded by the shared
-`ApiResult`/error-mapping layer.
+**Reaction request** — UNVERIFIED. Endpoint is `POST .../react` and OpenAPI
+declares its request body only as a free-form object (`type:object,
+additionalProperties:true`) with an unschematized (`{}`) response; the web
+reference does **not** call it, so the exact field names and the add/remove toggle
+semantics cannot be confirmed from the sources. Assume a single-emoji toggle body
+(`{"emoji":"🔥"}`) where one call toggles on/off, and re-verify against a live
+`/openapi.json` or backend owner before implementation. DELETE → **200** (per
+OpenAPI; treat 200 and 204 with empty body as success).
+
+DTO→domain mapping reuses AND-126's `MessageMapper`, but its polymorphic
+discriminator must be keyed on **`kind`** (not `type`). This ticket adds only
+`ChannelMessageDto` (the wire form of `ChannelMessageOut`), `ChannelMessageIn`,
+and `ReactionRequest`. Error bodies follow the FastAPI `detail` union, decoded by
+the shared `ApiResult`/error-mapping layer; verified shapes are
+`string | [{ "msg": ... }] | { "code": ..., "required_scope"?: ... }`
+(see `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError` and the
+`HTTPValidationError` schema in OpenAPI).
 
 ## 6. Data & State Management
 
@@ -319,9 +386,13 @@ ticket adds only `MessagePageDto`, `PostMessageRequest`, `ReactionRequest`, and
 
 - All network calls return `ApiResult<T>`; mapping via the shared error mapper.
 - GET timeouts ~20s; bounded exponential backoff (e.g. 3 attempts, 0.5s→2s,
-  jitter) on `IOException`/timeout/5xx for the **GET only**. POST/PUT/DELETE are
-  surfaced to the user with a manual retry; the `client_token` makes a manual
-  POST retry safe.
+  jitter) on `IOException`/timeout/5xx for the **GET only**. POST/react/DELETE
+  are surfaced to the user with a manual retry. **Corrected:** there is no
+  server-side `client_token` idempotency key (the earlier draft assumed one), so a
+  retried POST that actually reached the server can duplicate. Make manual POST
+  retry safe client-side: only offer Retry when the request demonstrably failed
+  (network/timeout/5xx with no response), and de-dup on pager refresh by
+  `(sender_id, text, created_at)` window. See §13.
 - 401 on any call → shared OkHttp `Authenticator` performs `POST
   /ui/session/refresh` once then retries the original; a second 401 propagates as
   an auth error that routes to re-login (handled by core auth, not here).
@@ -342,8 +413,9 @@ ticket adds only `MessagePageDto`, `PostMessageRequest`, `ReactionRequest`, and
   `ui_csrf` cookie.
 - Authorization is server-enforced (tier/membership). The client must not
   assume post/delete rights; it reacts to 403 rather than gating purely on
-  client state. Delete is offered only when `is_mine == true`, but the server
-  remains authoritative.
+  client state. Delete is offered only when the message is the current user's
+  (derived `sender_id == currentUserSub`, since the DTO has no `is_mine` field),
+  but the server remains authoritative.
 - No message content or PII written to logs (see §10). Attachment URLs loaded
   via Coil/Media3 inherit the authenticated OkHttp client; no caching of media
   to external storage.
@@ -386,8 +458,8 @@ ticket adds only `MessagePageDto`, `PostMessageRequest`, `ReactionRequest`, and
   `has_more=false`, and `LoadResult.Error` on `IOException`.
 - **ViewModel (Turbine + coroutine test, `:core-testing`):**
   - `onSend` emits a `Pending`/`Sending` overlay, then invalidates on success.
-  - failed post → `SendState.Failed`; `onRetryPending` re-issues with the same
-    `client_token`.
+  - failed post → `SendState.Failed`; `onRetryPending` re-issues the same `text`
+    (no `client_token` exists; retry only fires for no-response failures).
   - `onToggleReaction` applies and reconciles the overlay; failure reverts and
     emits `transientError`.
   - `onDelete` removes optimistically; failure restores; success persists.
@@ -397,8 +469,9 @@ ticket adds only `MessagePageDto`, `PostMessageRequest`, `ReactionRequest`, and
 - **Compose UI tests:** list renders content/empty/error states; composer send
   flow; reaction chip toggle; long-press → delete confirm; TalkBack content
   descriptions present (semantics assertions).
-- **MockWebServer integration:** end-to-end GET pagination, POST with
-  `client_token`, PUT react, DELETE, and the 401→refresh→retry path.
+- **MockWebServer integration:** end-to-end GET pagination (bare-array response,
+  `before` threading), POST `ChannelMessageIn`, `POST .../react`, DELETE (200),
+  and the 401→refresh→retry path.
 - Coverage gate per repo standard; new code paths must be exercised.
 
 ## 12. Dependencies & Sequencing
@@ -418,14 +491,24 @@ ticket adds only `MessagePageDto`, `PostMessageRequest`, `ReactionRequest`, and
 
 ## 13. Risks & Open Questions
 
-- **Reaction API shape unverified:** PUT-with-`action` vs separate POST/DELETE
-  endpoints — confirm against `/openapi.json` and `frontend/src/api/endpoints`
-  before implementation; service signature may need to split into add/remove.
-- **Cursor field name:** `before` / `next_cursor` assumed; verify exact query
-  param + response key names from OpenAPI (web reference may use `cursor`).
-- **Idempotency token support:** confirm the backend honors `client_token`; if
-  not, a retried POST can duplicate — fall back to client-side de-dup by
-  `(author,body,created_at)` window.
+- **Reaction API shape (PARTIALLY RESOLVED):** verified the endpoint is
+  `POST /ui/fan-club/channels/{channel_id}/messages/{message_id}/react` (not a
+  PUT `.../reactions`). However its request body is declared in OpenAPI only as a
+  free-form object (`additionalProperties:true`) with an unschematized response,
+  and the web reference never calls it, so the exact body field names and the
+  add/remove toggle semantics remain UNVERIFIED. Confirm with the backend owner
+  or a live server before implementation; the single-emoji toggle assumption may
+  be wrong.
+- **Cursor contract (RESOLVED):** query param is `before` (+ `limit`); the GET
+  response is a **bare array with no `next_cursor`/`has_more`**. The PagingSource
+  derives the next `before` from the oldest item's `message_id` and ends
+  pagination when a page is shorter than `limit`. (Earlier `next_cursor` assumption
+  was wrong.)
+- **Idempotency token (RESOLVED — none exists):** the backend `ChannelMessageIn`
+  has only `text` + `reply_to_message_id`; there is **no `client_token`**. A
+  retried POST that reached the server can duplicate, so de-dup is handled
+  client-side per §5/§7 (`(sender_id, text, created_at)` window; retry only on
+  no-response failures).
 - **No realtime:** without WebSocket/push, new messages appear only on
   refresh/pagination; product to confirm pull-only is acceptable for M5.
 - **Pending message loss on process death** is accepted for v1.
@@ -445,16 +528,23 @@ AC-3 Every AND-126 message type renders without crashing; unknown types show the
 unsupported placeholder.
 
 AC-4 Composing and sending text posts via
-`POST /ui/fan-club/channels/{id}/messages`; the message appears optimistically
-(`Sending`), resolves to `Sent` on 201, or `Failed` with a working Retry that
-reuses the same `client_token`. *(Acceptance: "post".)*
+`POST /ui/fan-club/channels/{channel_id}/messages` with body
+`{ text, reply_to_message_id? }` (`ChannelMessageIn`); the message appears
+optimistically (`Sending`), resolves to `Sent` on 201, or `Failed` with a working
+Retry. (Corrected: there is **no `client_token`** — retry safety is handled
+client-side per §5/§7.) *(Acceptance: "post".)*
 
-AC-5 Tapping a reaction toggles it optimistically; count and `reacted` flag
-update immediately and reconcile with the server (`PUT .../reactions`), reverting
-on failure. *(Acceptance: "react".)*
+AC-5 Tapping a reaction toggles it optimistically; the derived count and
+`reacted` flag update immediately and reconcile with the server
+(`POST .../messages/{message_id}/react`), reverting on failure. (Corrected from
+`PUT .../reactions`. `count`/`reacted` are derived from the
+`reactions: Map<emoji, Map<userId, bool>>` shape, not server-supplied scalars.)
+*(Acceptance: "react".)*
 
-AC-6 Long-pressing an own message (`is_mine`) offers Delete with confirm;
-on confirm the message is removed and `DELETE .../{messageId}` succeeds (204),
+AC-6 Long-pressing an own message (ownership derived as
+`sender_id == currentUserSub`, since there is no server `is_mine`) offers Delete
+with confirm; on confirm the message is removed and
+`DELETE .../messages/{message_id}` succeeds (**200**, treat 200/204 as success),
 reverting on failure.
 
 AC-7 403 on send disables the composer with a hint; 401 triggers a single
@@ -482,3 +572,280 @@ in CI.
 - Code reviewed and merged to `android-port`; spec status moved `draft → done`.
 - Open questions in §13 either resolved against `/openapi.json` or explicitly
   ticketed for follow-up before merge.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Source kinds:
+OpenAPI = `reference/openapi.index.txt` / `reference/openapi.pretty.json`
+(`components.schemas.*`); FE = `reference/src/...`; "framework ref" = Android docs.
+
+1. **GET messages endpoint is `GET /ui/fan-club/channels/{channel_id}/messages`
+   with query params `before` + `limit`.** VERIFIED.
+   Source: OpenAPI `GET /ui/fan-club/channels/{channel_id}/messages`
+   (op `api_get_channel_messages_...`, params `channel_id, limit, before`);
+   FE `src/api/endpoints/fan-club.ts: getChannelMessages`.
+
+2. **GET response is a paged envelope `{ items, next_cursor, has_more }`.**
+   CORRECTED → it is a **bare array** of `ChannelMessageOut` with no cursor/flag
+   fields. Source: FE `src/api/types.ts: ChannelMessageOut` + `fan-club.ts:
+   getChannelMessages` (returns `ChannelMessageOut[]`); OpenAPI 200 schema is `{}`
+   (unschematized). Pagination key derived client-side from oldest `message_id`.
+
+3. **GET default `limit`.** CORRECTED context: server default is **50** (max 200),
+   not 30; the Android client may still request `limit=30`. Source: OpenAPI GET
+   `limit` schema `default:50, maximum:200, minimum:1`.
+
+4. **Message DTO field names** (`id`, `type`, nested `author{id,display_name,
+   avatar_url}`, `body`, `attachments[]`, `reactions:[{emoji,count,reacted}]`,
+   `is_mine`, `created_at` ISO string, `edited_at`). CORRECTED → actual fields are
+   `message_id`, `channel_id`, `sender_id`, `sender_display_name`,
+   `sender_badge?`, `text`, `kind`, `reply_to_message_id?`,
+   `reactions: Map<emoji, Map<userId, bool>>`, `created_at` (epoch **seconds**
+   integer), `deleted`. No `author` object, no `avatar_url`, no `attachments`, no
+   `is_mine`, no `edited_at`. Source: FE `src/api/types.ts: ChannelMessageOut`;
+   epoch-seconds confirmed by `src/pages/fan-club/FanClubPage.tsx`
+   (`new Date(m.created_at * 1000)`).
+
+5. **Type discriminator is `type`.** CORRECTED → it is `kind`. AND-126's Moshi
+   polymorphic factory must key on `kind`. Source: FE `ChannelMessageOut.kind`.
+
+6. **`reactions` is an array of `{emoji,count,reacted}`.** CORRECTED → it is
+   `Record<emoji, Record<userId, bool>>`; client derives `count` =
+   `reactions[emoji].size`, `reacted` = membership of `currentUserSub`. Source:
+   FE `src/api/types.ts: ChannelMessageOut.reactions`.
+
+7. **POST send endpoint `POST /ui/fan-club/channels/{channel_id}/messages`,
+   201 → single message.** VERIFIED. Source: OpenAPI POST (op
+   `api_send_channel_message_...`, `resp=201`, `req=ChannelMessageIn`);
+   FE `fan-club.ts: sendChannelMessage`.
+
+8. **POST request body `{ type, body, client_token }`.** CORRECTED → body is
+   `ChannelMessageIn { text (required, 1..2000), reply_to_message_id? }`. No
+   `type`, no `body`, **no `client_token`**. Source: OpenAPI
+   `components.schemas.ChannelMessageIn` (`text` `minLength:1 maxLength:2000`,
+   `required:[text]`); FE `fan-club.ts: sendChannelMessage` posts
+   `{ text, reply_to_message_id }`.
+
+9. **Idempotency via `client_token`.** CORRECTED → none exists; retried POST can
+   duplicate. De-dup handled client-side. Source: absence in `ChannelMessageIn`
+   and in FE send call (citations 7-8).
+
+10. **Reaction endpoint is `PUT .../messages/{messageId}/reactions` with body
+    `{emoji, action}` returning `{emoji,count,reacted}`.** CORRECTED (method/path)
+    + UNVERIFIED (body/response). Real endpoint:
+    `POST /ui/fan-club/channels/{channel_id}/messages/{message_id}/react`.
+    Source: OpenAPI POST (op `api_add_reaction_...`). Request body is declared
+    only as `type:object, additionalProperties:true` and the 200 response schema
+    is `{}`; the web client never calls react, so field names + toggle semantics
+    are an unverified assumption (see Open assumptions).
+
+11. **DELETE endpoint `DELETE /ui/fan-club/channels/{channel_id}/messages/{message_id}`,
+    success status 204.** PARTIALLY CORRECTED → endpoint VERIFIED; success status
+    is **200** per OpenAPI (treat 200/204 as success). Source: OpenAPI DELETE
+    (op `api_delete_channel_message_...`, `resp=200`). The web client never calls
+    delete, so behavior beyond the status code is unverified.
+
+12. **Auth/CSRF: cookie session, `ui_csrf` echoed as `X-CSRF-Token`, single
+    `POST /ui/session/refresh` on 401 then retry.** VERIFIED (with nuance). The
+    web client sends `X-CSRF-Token` on **every** request (not mutations-only),
+    plus `Authorization: Bearer` and optional `X-IMPERSONATION-TOKEN`; refresh
+    failure logs out. Source: FE `src/api/client.ts` (`getCookie("ui_csrf")` →
+    `X-CSRF-Token`; `refreshSession()` POSTs `/ui/session/refresh`; 401 retry
+    block). OpenAPI also lists `user_sub, X-SESSION-ID, X-IMPERSONATION-TOKEN`
+    params on these endpoints.
+
+13. **Error `detail` union `string | [{msg}] | {code,...}`.** VERIFIED. Source:
+    FE `src/api/client.ts: normalizeErrorDetail` (handles string / array-of-`{msg}`
+    / object) and `mapAuthorizationError` (reads `detail.code`,
+    `detail.required_scope`); OpenAPI `HTTPValidationError` / `ValidationError`
+    (422 on all four endpoints).
+
+14. **Web behavior: list sorted client-side ascending by `created_at`, polled
+    every 5s, no pagination, empty state "No messages yet…".** VERIFIED.
+    Source: FE `src/pages/fan-club/FanClubPage.tsx` (`sort((a,b)=>a.created_at -
+    b.created_at)`, `refetchInterval: 5000`, empty copy). Confirms §1 non-goal
+    "polling/pull-only" is consistent with the reference (no realtime/WebSocket).
+
+15. **Channel header metadata available from AND-238 / `ChannelOut`.** VERIFIED.
+    Source: FE `src/api/types.ts: ChannelOut` (`channel_id, name,
+    min_tier_level, slowmode_seconds, max_message_length, pinned_message_id,
+    last_message_preview, ...`). Note `slowmode_seconds`/`max_message_length`
+    exist server-side and may justify client-side composer hints (open assumption).
+
+16. **There is a `PUT /ui/fan-club/channels/{channel_id}/pin/{message_id}` (pin)
+    endpoint.** VERIFIED to exist but OUT OF SCOPE for AND-239. Source: OpenAPI
+    `op api_pin_message_...`. Noted so it is not confused with the react endpoint.
+
+17. **Paging 3 / `LazyColumn(reverseLayout=true)` / cursor PagingSource choice.**
+    Framework choice — reasonable. framework ref:
+    https://developer.android.com/topic/libraries/architecture/paging/v3-overview
+    and https://developer.android.com/develop/ui/compose/lists . Not contract-bound.
+
+18. **OkHttp `Authenticator` for 401 refresh.** Framework choice consistent with
+    the web refresh-once behavior (citation 12). framework ref:
+    https://square.github.io/okhttp/recipes/#handling-authentication-kt-java .
+
+### Corrections made
+
+- §4: removed the false `next_cursor`/`has_more` envelope assumption; documented
+  bare-array response and client-derived `before` paging + `endOfPagination` rule.
+- §5: rewrote the service interface (paths now `{channelId}`/`{messageId}`; GET
+  returns `List<ChannelMessageDto>`; POST body `ChannelMessageIn`; react is
+  `POST .../react` not `PUT .../reactions`; DELETE success 200 not 204).
+- §5: replaced the fabricated GET JSON and `MessageDto` shape with the real
+  `ChannelMessageOut` fields (`message_id`, `sender_*`, `text`, `kind`,
+  `reactions` map, epoch-seconds `created_at`, `deleted`); removed `author`
+  object, `avatar_url`, `attachments`, `is_mine`, `edited_at`.
+- §5/§7/§11/§13: removed `client_token` (no backend support); added client-side
+  de-dup + retry-only-on-no-response guidance.
+- §2: clarified CSRF is sent on all requests by the web client and that Bearer/
+  impersonation headers also exist.
+- §8: `is_mine` ownership replaced with derived `sender_id == currentUserSub`.
+- AC-4/AC-5/AC-6: corrected method/path/status/idempotency claims inline.
+- §13: marked the cursor and idempotency open questions resolved; narrowed the
+  reaction open question to body/semantics only.
+
+### Open assumptions
+
+- **Reaction request/response contract** — OpenAPI declares the `react` body as a
+  free-form object and the response as `{}`; the web client never calls it. The
+  `{"emoji": "..."}` single-toggle assumption (and whether one endpoint toggles
+  both add+remove, or whether remove needs a separate call/param) is **unverified**.
+  Must confirm against a live `/openapi.json` or the backend owner before coding.
+- **Delete response body / partial-failure behavior** — only the 200 status is
+  known from OpenAPI; the web client never deletes, so any response payload is
+  unverified. Treat empty body as success.
+- **`current user sub` source** — deriving `reacted`/ownership requires the
+  signed-in user's `sub`; assumed available from core-auth session state. The web
+  client uses an auth store; the exact Android accessor is unverified here.
+- **Slowmode / max-message-length enforcement** — `ChannelOut.slowmode_seconds`
+  and `max_message_length` exist; whether the client should pre-enforce them vs.
+  rely on server 4xx is a product/UX decision, unverified.
+- **403 copy / `canPost` trigger** — server returning 403 on send is assumed
+  (standard FastAPI authz); the web client has no fan-club post-permission path to
+  confirm the exact status/detail. Reacting to 403 generically is safe.
+- **401 silent refresh applies to these endpoints** — verified at the shared
+  client level (citation 12); not independently exercised against fan-club routes.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** =
+headless AVD `test35` (x86_64, API 35) in CI; **A15** = physical Samsung Galaxy
+A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a) on the build host.
+Most cases here are non-hardware and run on JVM or emu35; cases requiring real
+TalkBack speech / true offline radio behavior / arm64 deserialization sanity are
+flagged for **A15**.
+
+- **TC-AND-239-01** — Type: contract/MockWebServer. Target: emu35 (or JVM with
+  Robolectric OkHttp). Preconditions: MockWebServer enqueues a JSON **array** of
+  3 `ChannelMessageOut` objects (epoch-seconds `created_at`, `kind:"text"`).
+  Steps: open channel; let initial `load` run. Expected: 3 messages rendered
+  newest-at-bottom; `created_at` parsed from epoch **seconds**; `message_id` used
+  as list key; no envelope/`items` field expected. Traces: AC-1, AC-3.
+
+- **TC-AND-239-02** — Type: unit (PagingSource). Target: JVM. Preconditions: fake
+  `FanClubMessageService` returns page1 (30 items) then page2 (12 items, < limit).
+  Steps: load refresh, then prepend (older) with `before` = oldest `message_id`
+  of page1. Expected: `before` threaded from oldest item; second page returns 12;
+  `endOfPaginationReached = true` because `size < limit` (no `has_more` field
+  exists). Traces: AC-2.
+
+- **TC-AND-239-03** — Type: unit (mapper). Target: JVM. Preconditions: fixtures
+  for each AND-126 `kind` plus one unknown `kind:"hologram"`. Steps: map
+  `ChannelMessageDto` → domain via `MessageMapper` keyed on **`kind`**; derive
+  `reactions` count/`reacted` from the `Map<emoji,Map<userId,bool>>`. Expected:
+  every known kind maps; unknown kind → "Unsupported message" placeholder, no
+  exception; `count`/`reacted` derived correctly for `currentUserSub`.
+  Traces: AC-3, AC-5.
+
+- **TC-AND-239-04** — Type: contract/MockWebServer. Target: emu35. Preconditions:
+  POST endpoint returns 201 with a single `ChannelMessageOut`. Steps: type text,
+  tap send. Expected: request body is exactly `{ "text": "...",
+  "reply_to_message_id": null }` (ChannelMessageIn) — **no** `type`/`body`/
+  `client_token`; optimistic `Sending` bubble appears, resolves to `Sent`; pager
+  invalidated. Traces: AC-4.
+
+- **TC-AND-239-05** — Type: ViewModel unit (Turbine). Target: JVM.
+  Preconditions: service POST throws `IOException` (no response). Steps: `onSend`,
+  observe state; then `onRetryPending`. Expected: bubble → `SendState.Failed` with
+  Retry; retry re-issues same `text`; no duplicate is created because retry only
+  fires on no-response failures (no `client_token` available). Traces: AC-4, AC-7.
+
+- **TC-AND-239-06** — Type: contract/MockWebServer. Target: emu35.
+  Preconditions: react endpoint `POST .../messages/{id}/react` returns 200 empty
+  body. Steps: tap a reaction chip. Expected: request hits **POST .../react**
+  (not PUT .../reactions); optimistic count/`reacted` toggle immediately;
+  reconciles on success. (Note: request body asserted loosely — exact field names
+  are an open assumption per §16; assert path/method strictly, body leniently.)
+  Traces: AC-5.
+
+- **TC-AND-239-07** — Type: ViewModel unit (Turbine). Target: JVM.
+  Preconditions: react service returns error. Steps: `onToggleReaction`. Expected:
+  optimistic overlay applied then reverted on failure; one-shot `transientError`
+  emitted; underlying server `reactions` map unchanged. Traces: AC-5, AC-7.
+
+- **TC-AND-239-08** — Type: Compose-UI. Target: emu35. Preconditions: one message
+  with `sender_id == currentUserSub` and one without. Steps: long-press own
+  message → context menu → Delete → confirm; service DELETE returns **200**.
+  Expected: Delete offered only on the owned message (derived ownership, no
+  `is_mine`); on confirm message removed optimistically; 200 treated as success.
+  Then long-press the other message → no Delete option. Traces: AC-6, AC-8(authz).
+
+- **TC-AND-239-09** — Type: ViewModel/Repository unit. Target: JVM.
+  Preconditions: DELETE returns 500. Steps: `onDelete`. Expected: message removed
+  optimistically then **restored**; `transientError` snackbar. Traces: AC-6, AC-7.
+
+- **TC-AND-239-10** — Type: contract/MockWebServer. Target: emu35.
+  Preconditions: first send returns 403 with `detail:"You can't post here"`.
+  Steps: send. Expected: `canPost=false`; composer disabled with hint; no crash;
+  error `detail` decoded via the string-union path. Traces: AC-7.
+
+- **TC-AND-239-11** — Type: integration/MockWebServer. Target: emu35.
+  Preconditions: GET returns 401 once, then `POST /ui/session/refresh` returns
+  200, then GET retried returns the array. Steps: open channel. Expected: a single
+  silent refresh, original request retried once, messages render; a second
+  consecutive 401 propagates to re-login (no infinite loop). Traces: AC-7, AC-8.
+
+- **TC-AND-239-12** — Type: instrumented/e2e (true offline). Target: **A15**
+  (physical). Rationale: real radio/airplane-mode connectivity transitions behave
+  differently from emulator network toggling. Preconditions: messages already
+  loaded; enable airplane mode. Steps: observe banner; attempt send + react.
+  Expected: offline banner shown; composer + reactions disabled; cached pages stay
+  visible; on reconnect, pull-to-refresh re-fetches newest. Traces: AC-1, AC-7.
+
+- **TC-AND-239-13** — Type: contract/MockWebServer. Target: emu35.
+  Preconditions: error responses for each `detail` form — `"flat string"`,
+  `[{"msg":"too long"}]`, and `{"code":"forbidden","required_scope":"..."}`.
+  Steps: trigger send failures. Expected: each maps to a human-readable snackbar
+  via the shared error mapper (matches `normalizeErrorDetail`/`mapAuthorizationError`
+  behavior); no unhandled JSON-shape crash. Traces: AC-7.
+
+- **TC-AND-239-14** — Type: Compose-UI accessibility + instrumented TalkBack.
+  Target: emu35 for semantics assertions; **A15** for one real TalkBack speech
+  pass. Preconditions: list with reactions, an owned message, composer.
+  Steps: assert `contentDescription` on send button, reaction chips
+  ("<emoji>, <count> reactions, tap to toggle"), avatar/attachment; verify the
+  "Message actions" custom a11y action exposes Delete without long-press; check
+  touch targets ≥48dp and dynamic-type scaling. On A15, run TalkBack and confirm
+  Delete is reachable and announced. Traces: AC-6, AC-8(a11y semantics).
+
+- **TC-AND-239-15** — Type: unit (JSON/ABI sanity). Target: **A15** (arm64-v8a,
+  API 34) vs emu35 (x86_64, API 35). Preconditions: same `ChannelMessageOut`
+  fixture with large epoch-seconds `created_at` and unicode-emoji reaction keys.
+  Steps: deserialize + render on both targets. Expected: identical parsing of
+  epoch-seconds and emoji `reactions` keys across ABI/API levels; no
+  locale/`java.time` divergence. Traces: AC-1, AC-3.
+
+### Coverage matrix
+
+| AC | Description | Covering test cases |
+|----|-------------|---------------------|
+| AC-1 | Open channel loads messages, newest at bottom, loading contract | TC-01, TC-12, TC-15 |
+| AC-2 | Scroll-up paginates older via `before`; stops correctly | TC-02 |
+| AC-3 | All `kind`s render; unknown → placeholder, no crash | TC-01, TC-03, TC-15 |
+| AC-4 | Send text via correct POST body; optimistic Sending→Sent/Failed+retry | TC-04, TC-05 |
+| AC-5 | Reaction toggles via `POST .../react`; derived count/reacted; revert | TC-03, TC-06, TC-07 |
+| AC-6 | Long-press own message → Delete confirm (200); revert on failure | TC-08, TC-09, TC-14 |
+| AC-7 | 403 disables composer; 401 silent refresh; full-screen vs snackbar | TC-05, TC-07, TC-10, TC-11, TC-12, TC-13 |
+| AC-8 | No sensitive data in logs; CSRF on mutations; authz behavior | TC-08, TC-11, TC-14 |
+| AC-9 | All unit/Paging/ViewModel/Compose/MockWebServer tests pass in CI | TC-01..TC-15 |

@@ -5,7 +5,8 @@ milestone: M5
 epic: E32
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-238, AND-234, AND-027]
 blocks: []
 ---
@@ -14,7 +15,7 @@ blocks: []
 
 ## 1. Overview & Goal
 
-This ticket delivers the **Fan-club tier members** screen for the native Android port of TestLogon. Within a fan club, content is organized into **tiers** (subscription levels). Each tier has an associated set of **members** — the users who are currently subscribed at that tier. This screen renders the member roster for a single tier, identified by tier `id`, backed by the endpoint `GET /ui/fan-club/tiers/{id}/members`.
+This ticket delivers the **Fan-club tier members** screen for the native Android port of TestLogon. Within a fan club, content is organized into **tiers** (subscription levels). Each tier has an associated set of **members** — the users who are currently subscribed at that tier. This screen renders the member roster for a single tier, identified by tier `id`, backed by the endpoint `GET /ui/fan-club/tiers/{tier_id}/members` (verified: OpenAPI `GET /ui/fan-club/tiers/{tier_id}/members`, op `api_tier_members_ui_fan_club_tiers__tier_id__members_get`; the path parameter is named `tier_id`, not `id`).
 
 The goal is a paginated, scrollable list of tier members with avatar, display name, tier badge, and join/subscription metadata, with correct loading / empty / error / offline states. The list must render correctly against the live dev backend, including its unreliable-host characteristics (slow responses, transient 5xx, plaintext HTTP). This is a **read-only** feature in this ticket: no member management (kick/promote/invite) is in scope; those are deferred (see §3, §13).
 
@@ -40,7 +41,7 @@ Success is defined narrowly by the backlog acceptance: **the members list render
 
 **FR-3 — Pagination.** The list is paginated via Paging 3 using the backend's cursor/offset scheme (confirmed against OpenAPI). Scrolling near the end loads the next page; a footer shows an inline progress indicator while appending and an inline retry control on append failure.
 
-**FR-4 — Member count.** If the response (or AND-234 tier metadata) exposes a total member count, render it in the screen header (e.g., "128 members"). If unavailable, omit the count rather than showing a placeholder number.
+**FR-4 — Member count.** If the response (or tier metadata) exposes a total member count, render it in the screen header (e.g., "128 members"). A reliable source exists: `TierOut.member_count` (non-optional `number`) — **VERIFIED** in `src/api/types.ts: TierOut` and rendered by the web app as "{n} member(s)" in `src/pages/fan-club/FanClubPage.tsx`. The screen may pass `member_count` via the route (alongside `tierName`) and/or read `total` from the members response if present. If unavailable, omit the count rather than showing a placeholder number.
 
 **FR-5 — Loading state.** Initial load shows a skeleton/placeholder list or centered progress indicator.
 
@@ -150,7 +151,8 @@ Repository exposes:
 
 ```kotlin
 fun tierMembersPager(tierId: String): Pager<String, TierMember> =
-    Pager(PagingConfig(pageSize = 30, prefetchDistance = 10, enablePlaceholders = false)) {
+    // pageSize = 50 matches the server's documented `limit` default (max 200).
+    Pager(PagingConfig(pageSize = 50, prefetchDistance = 10, enablePlaceholders = false)) {
         TierMembersPagingSource(api, tierId)
     }
 ```
@@ -181,15 +183,16 @@ fun TierMemberRow(member: TierMember, onClick: () -> Unit)
 
 ## 5. API Contract
 
-**Endpoint:** `GET /ui/fan-club/tiers/{id}/members`
+**Endpoint:** `GET /ui/fan-club/tiers/{tier_id}/members` — **VERIFIED** against OpenAPI (`GET /ui/fan-club/tiers/{tier_id}/members`, op `api_tier_members_ui_fan_club_tiers__tier_id__members_get`).
 
-Path param: `id` = tier id (string). Query params (confirm exact names against `/openapi.json` and `frontend/src/api/endpoints`):
-- `cursor` (string, optional) — opaque pagination cursor; omitted for first page.
-- `limit` (int, optional) — page size (default 30).
+Path param: `tier_id` = tier id (string). **VERIFIED** query params (OpenAPI `params=tier_id,limit,cursor,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`):
+- `cursor` (string, optional, nullable) — opaque pagination cursor; omitted for first page. **VERIFIED** (param `cursor`).
+- `limit` (int, optional) — page size. **VERIFIED** param `limit`; OpenAPI schema: `default: 50, minimum: 1, maximum: 200`. (Corrected: the original draft said default 30; the *server* default is 50. We intentionally send an explicit `limit` from the client, so the Paging config below pins `pageSize = 50` to match the server default and stay ≤ 200.)
+- Server also accepts `user_sub` (query) and `X-SESSION-ID` / `X-IMPERSONATION-TOKEN` (headers) — all optional; the mobile client does not set `user_sub`/`X-SESSION-ID` directly (see auth note).
 
-Headers: cookie session + `X-CSRF-Token` (from `ui_csrf` cookie) applied by the shared OkHttp interceptor (AND-027). This is an idempotent GET → eligible for bounded backoff retry.
+Headers / auth: the web reference client (`src/api/client.ts`) sends `Authorization: Bearer <accessToken>`, the `X-CSRF-Token` header (value from the `ui_csrf` cookie), and `credentials: "include"` (cookie jar), plus `X-IMPERSONATION-TOKEN` when impersonating. **Correction:** the original draft listed only "cookie session + `X-CSRF-Token`" and omitted the `Authorization: Bearer` token; the Android client must replicate the *full* set (Bearer + cookie jar + `X-CSRF-Token`) via the shared OkHttp interceptor (AND-027). This is an idempotent GET → eligible for bounded backoff retry.
 
-**Expected 200 response** (cursor-paginated; adapt field names to actual schema):
+**Expected 200 response** — **UNVERIFIED ASSUMPTION.** The OpenAPI 200 response schema for this operation is empty (`"schema": {}`, i.e. untyped `Successful Response`), and there is **no** frontend caller for this endpoint (`src/api/endpoints/fan-club.ts` has no `getTierMembers`; the web app only renders `TierOut.member_count` on `FanClubPage.tsx`, never a roster). The shape below (envelope with `items` / `next_cursor` / `total`, and the per-member field names) is therefore a *proposed* contract that MUST be confirmed against a captured live response before finalizing DTOs (see §13 R1, §16 Open assumptions). Field names are illustrative:
 
 ```json
 {
@@ -237,16 +240,17 @@ data class TierMemberDto(
 
 ```kotlin
 interface FanClubApi {
-    @GET("ui/fan-club/tiers/{id}/members")
+    // Path placeholder name must be {tier_id} to match the OpenAPI path param.
+    @GET("ui/fan-club/tiers/{tier_id}/members")
     suspend fun getTierMembersResult(
-        @Path("id") tierId: String,
+        @Path("tier_id") tierId: String,
         @Query("cursor") cursor: String?,
-        @Query("limit") limit: Int,
+        @Query("limit") limit: Int,   // send explicit page size (≤ 200; default 50)
     ): ApiResult<TierMembersPageDto>
 }
 ```
 
-**Error mapping:** FastAPI `detail` may be `string | [{msg}] | {code,...}` → mapped via the shared error mapper (AND-027) to a user-facing message. `401` triggers the single `POST /ui/session/refresh` + retry handled by the auth interceptor; `404` (tier not found) maps to a dedicated "Tier not found" error state; `403` (not entitled to view members) maps to a permission error message.
+**Error mapping:** FastAPI `detail` may be `string | [{msg}] | {code,...}` → mapped via the shared error mapper (AND-027) to a user-facing message. **VERIFIED** against `src/api/client.ts: normalizeErrorDetail` (handles string detail, array-of-`{msg}`, and object detail with a `code` field via `mapAuthorizationError`). `401` triggers the single `POST /ui/session/refresh` + retry — **VERIFIED** in `client.ts` (single in-flight `refreshPromise`, then one retry; on retry-401 it logs out). **Caveat (unverified for this endpoint):** the OpenAPI declares only `200` and `422:HTTPValidationError` for this operation — `404` and `403` are **not** documented here. We still defensively map `404`→"Tier not found" and `403`→permission message (403 handling is generic in the web client, `client.ts`), but these specific codes for this path are an assumption, not a documented contract. `422` (validation, e.g. bad `cursor`) maps to a generic error via the `detail` array shape.
 
 ## 6. Data & State Management
 
@@ -326,7 +330,7 @@ data class TierMember(
 - Footer error/retry on append failure.
 - Pull-to-refresh triggers reload.
 
-**Test data:** MockWebServer fixture JSON mirroring §5; one multi-page fixture to exercise cursor pagination. Validate field names against a captured live `/ui/fan-club/tiers/{id}/members` response before finalizing.
+**Test data:** MockWebServer fixture JSON mirroring §5; one multi-page fixture to exercise cursor pagination. Validate field names against a captured live `/ui/fan-club/tiers/{tier_id}/members` response before finalizing (the 200 body shape is an unverified assumption — see §16).
 
 ## 12. Dependencies & Sequencing
 
@@ -346,7 +350,7 @@ data class TierMember(
 
 ## 14. Acceptance Criteria
 
-1. Navigating to `TierMembersRoute(tierId)` issues `GET /ui/fan-club/tiers/{id}/members` with the correct id and renders a scrollable list of member rows (avatar, display name, tier label). **(Backlog: "Members list renders.")**
+1. Navigating to `TierMembersRoute(tierId)` issues `GET /ui/fan-club/tiers/{tier_id}/members` with the correct id and renders a scrollable list of member rows (avatar, display name, tier label). **(Backlog: "Members list renders.")**
 2. Each row shows the resolved display name (fallback chain) and tier label; join date shown when parseable, omitted otherwise.
 3. Initial load shows a loading state; populated list replaces it on success.
 4. Empty tier shows the explicit empty state, not a blank screen.
@@ -369,3 +373,81 @@ data class TierMember(
 - Lint passes; no hardcoded strings; a11y checks satisfied; no new cleartext exemptions; no PII logging.
 - Verified rendering against the live dev backend (or captured fixture) including loading/empty/error/offline states.
 - Spec acceptance criteria (§14) demonstrably met; PR description links AND-240 and notes resolution of open questions R1–R2.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict (Verified / Corrected / Unverified-assumption), and the exact source pointer.
+
+1. **Endpoint path is `GET /ui/fan-club/tiers/{tier_id}/members`.** — **Corrected** (draft said `{id}`; param is `tier_id`). Source: OpenAPI `GET /ui/fan-club/tiers/{tier_id}/members`, op `api_tier_members_ui_fan_club_tiers__tier_id__members_get`.
+2. **HTTP method is GET, idempotent.** — **Verified.** Source: OpenAPI `GET /ui/fan-club/tiers/{tier_id}/members`.
+3. **Query param `cursor` (string, nullable, optional).** — **Verified.** Source: OpenAPI op params `...,cursor,...`; full spec param `cursor` `anyOf:[string,null]`.
+4. **Query param `limit` (int).** — **Verified (name)**; **Corrected (default).** Draft said default 30; OpenAPI schema is `default: 50, minimum: 1, maximum: 200`. Source: OpenAPI full spec, `limit` schema for this op.
+5. **Server also accepts `user_sub` (query), `X-SESSION-ID`, `X-IMPERSONATION-TOKEN` (headers), all optional.** — **Verified.** Source: OpenAPI op `params=tier_id,limit,cursor,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`.
+6. **Auth/transport: Bearer token + cookie jar + `X-CSRF-Token` (from `ui_csrf` cookie), `credentials: include`; impersonation via `X-IMPERSONATION-TOKEN`.** — **Corrected** (draft omitted the `Authorization: Bearer` token, listing only "cookie session + X-CSRF-Token"). Source: `src/api/client.ts` (`api()` sets `Authorization: Bearer <accessToken>`, `X-CSRF-Token` from `getCookie("ui_csrf")`, `credentials:"include"`, and `X-IMPERSONATION-TOKEN`).
+7. **401 → single in-flight `POST /ui/session/refresh`, then one retry; persistent 401 logs out.** — **Verified.** Source: `src/api/client.ts` (`refreshPromise` single-flight, `refreshSession()` → `POST /ui/session/refresh`, retry once, logout on retry-401).
+8. **FastAPI `detail` may be `string | [{msg}] | {code,...}`; mapped to a user-facing message.** — **Verified.** Source: `src/api/client.ts: normalizeErrorDetail` and `mapAuthorizationError`.
+9. **403 produces a permission/denied message (generic handling).** — **Verified (generic), Unverified for this path.** 403 handling is generic in `src/api/client.ts` (403 branch, incl. `geo_blocked`), but the OpenAPI for this op declares only `200` and `422`, so a 403 specifically from this endpoint is not a documented contract.
+10. **404 → "Tier not found" error state.** — **Unverified-assumption.** OpenAPI declares only `200`/`422` for this op; no `404` documented. Defensive mapping only.
+11. **422 validation error shape is `HTTPValidationError`.** — **Verified.** Source: OpenAPI op `resp=...;422:HTTPValidationError`.
+12. **200 response body shape (envelope `{items, next_cursor, total}` and per-member fields `user_id`/`username`/`display_name`/`avatar_url`/`tier_id`/`tier_name`/`subscribed_since`).** — **Unverified-assumption.** OpenAPI 200 schema is empty (`"schema": {}`); no frontend caller exists (`src/api/endpoints/fan-club.ts` has no members function). Must be confirmed against a captured live response. Source: OpenAPI full spec (empty 200 schema); `src/api/endpoints/fan-club.ts` (absence).
+13. **Tier identity/name/badge come from `TierOut` (`tier_id`, `name`, `level`, `color`, `badge_emoji`, `badge_image_url`).** — **Verified.** Source: `src/api/types.ts: TierOut`; badge presentation `src/api/types.ts: MemberBadgeData` and `src/pages/fan-club/FanClubPage.tsx` (`MemberBadge`).
+14. **A reliable total member count exists as `TierOut.member_count` (non-optional).** — **Verified.** Source: `src/api/types.ts: TierOut.member_count`; rendered "{n} member(s)" in `src/pages/fan-club/FanClubPage.tsx`.
+15. **No web member-roster screen / no member-profile navigation target (FR-9 conditional).** — **Verified (absence).** Source: `src/api/endpoints/fan-club.ts` (no members call) and `src/pages/fan-club/FanClubPage.tsx` (renders count only, no roster/route).
+16. **Sibling fan-club endpoints used by deps AND-238/AND-239 exist (`GET /ui/fan-club/channels`, `GET /ui/fan-club/channels/{channel_id}/messages`).** — **Verified.** Source: OpenAPI `GET /ui/fan-club/channels`, `GET /ui/fan-club/channels/{channel_id}/messages` (params `channel_id,limit,before,...`); `src/api/endpoints/fan-club.ts: listChannels/getChannelMessages`.
+17. **Plurals for member count are appropriate (locale-aware `R.plurals.fanclub_member_count`).** — **Verified (behavioral parity).** Web uses singular/plural switch on `member_count` in `src/pages/fan-club/FanClubPage.tsx`; Android plurals resource is the framework-correct equivalent. (framework ref: https://developer.android.com/guide/topics/resources/string-resource#Plurals)
+18. **Paging 3 with `PagingSource`/`Pager`/`cachedIn`/`collectAsLazyPagingItems` and `LoadState`-driven refresh/append states.** — **Verified (framework choice).** (framework ref: https://developer.android.com/topic/libraries/architecture/paging/v3-overview and https://developer.android.com/topic/libraries/architecture/paging/load-state)
+19. **Type-safe Navigation-Compose routes via `@Serializable` data class + `composable<Route>` + `savedStateHandle.toRoute()`.** — **Verified (framework choice).** (framework ref: https://developer.android.com/guide/navigation/design/type-safety)
+20. **Cleartext HTTP to the dev host requires a network-security-config exemption; release must not allow cleartext.** — **Verified (framework behavior).** Android blocks cleartext by default since API 28. (framework ref: https://developer.android.com/privacy-and-security/security-config)
+
+### Corrections made
+
+- **§1, §5, §4 (Retrofit):** path param `{id}` → `{tier_id}`; `@Path("id")` → `@Path("tier_id")`; URL template updated. (Audit #1)
+- **§5, §4.4:** `limit`/`pageSize` server default corrected from 30 to **50** (max 200); Paging `pageSize` set to 50. (Audit #4)
+- **§5 auth note:** added the missing `Authorization: Bearer <accessToken>` token to the documented header/auth set (draft listed only cookie + CSRF). (Audit #6)
+- **§5 response:** the 200 envelope is now explicitly labeled an **unverified, proposed contract** (empty OpenAPI schema + no frontend caller), not a confirmed shape. (Audit #12)
+- **§5 error mapping:** added caveat that `404`/`403` are **not** documented for this op (only `200`/`422`); these mappings are defensive assumptions. (Audit #9, #10)
+- **§3 FR-4:** cited `TierOut.member_count` as the verified count source. (Audit #14)
+
+### Open assumptions
+
+- **Members response body shape** (envelope vs bare list; `items`/`next_cursor`/`total`; member field names and date format of `subscribed_since`). *Why:* OpenAPI 200 schema is empty and no web client calls this endpoint, so no authoritative shape exists. Resolve by capturing a live `/ui/fan-club/tiers/{tier_id}/members` response before locking DTOs. The repository already normalizes envelope-vs-bare-list (§5) to limit blast radius.
+- **Pagination scheme** (cursor vs offset/page). *Why:* the `cursor` query param is documented, but whether the *response* carries a `next_cursor` is unverified (same root cause as above). If the server instead paginates by offset, `TierMembersPagingSource` key type/derivation must change.
+- **404/403 emission by this endpoint.** *Why:* undocumented for this op; behavior (e.g., 404 for unknown tier, 403 for non-entitled viewer) must be confirmed empirically.
+- **Whether a member-profile detail route exists (FR-9).** *Why:* no such route/screen exists in the web reference; row-tap remains a no-op until a detail ticket is created.
+- **Whether AND-238 actually built a fan-club Room cache** (drives offline render / `isStale`). *Why:* depends on the as-merged AND-238 implementation, not inspectable from these sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless emulator AVD `test35` (x86_64, API 35); **A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). MockWebServer/contract and Compose-UI cases run on emu35 (fast, KVM) or Robolectric; cases needing real arm64/API-34 behavior or real-network/offline radios run on **A15**.
+
+- **TC-AND-240-01 — Happy path: list renders.** Type: Compose-UI (Robolectric or emu35). Target: JVM/emu35. Preconditions: `FanClubApi` faked / MockWebServer serves a one-page fixture (envelope with 3 `items`, `next_cursor=null`, `total=3`) mirroring §5. Steps: navigate to `TierMembersRoute(tierId="tier_gold", tierName="Gold")`; let refresh complete. Expected: 3 member rows render with resolved display name + tier label nodes; no loading/empty/error UI. Traces: AC-1, AC-2, AC-3.
+- **TC-AND-240-02 — DTO→UI mapping (display-name fallback, date parsing, handle).** Type: unit. Target: JVM. Preconditions: none. Steps: map DTOs covering (a) full `display_name`, (b) only `username`, (c) only `user_id`; (d) valid ISO `subscribed_since`, (e) null, (f) garbage string. Expected: display name = display_name→username→user_id; `handle="@username"` only when username present; `subscribedSince` parsed for (d), `null` for (e)/(f) and the join label omitted; a row missing `user_id` is dropped, not crashing. Traces: AC-2.
+- **TC-AND-240-03 — PagingSource cursor paging.** Type: unit. Target: JVM. Preconditions: fake `FanClubApi` returns page1 (`next_cursor="c2"`) then page2 (`next_cursor=null`). Steps: call `load()` with `key=null`, then `key="c2"`. Expected: page1 → `LoadResult.Page(nextKey="c2", prevKey=null)`; page2 → `nextKey=null`; the second request sent `cursor=c2` and an explicit `limit` (≤200). Traces: AC-6.
+- **TC-AND-240-04 — PagingSource error path.** Type: unit. Target: JVM. Preconditions: fake api returns `ApiResult.Error`. Steps: call `load()`. Expected: returns `LoadResult.Error` carrying the mapped throwable (does not throw). Traces: AC-5, AC-6.
+- **TC-AND-240-05 — Contract: request line + headers (MockWebServer).** Type: contract/MockWebServer. Target: JVM/emu35. Preconditions: MockWebServer enqueues a 200 page. Steps: trigger first load via the repository. Expected: recorded request path is `/ui/fan-club/tiers/tier_gold/members?...`, method GET, `limit` present (1..200), no `cursor` on first page; headers include `Authorization: Bearer ...`, `X-CSRF-Token`, and the session cookie (per §5 auth correction). Traces: AC-1, AC-8.
+- **TC-AND-240-06 — Empty state.** Type: Compose-UI. Target: JVM/emu35. Preconditions: fixture returns `items=[]`, `next_cursor=null`. Steps: open screen. Expected: explicit "No members yet" empty state shown (not a blank list, not an error). Traces: AC-4.
+- **TC-AND-240-07 — Refresh error + Retry.** Type: Compose-UI/contract. Target: emu35. Preconditions: MockWebServer returns 503 for the first request, then a valid page on the next. Steps: open screen (see full-screen error), tap **Retry**. Expected: full-screen error with Retry on first failure; Retry issues a new request and the list populates. Traces: AC-5.
+- **TC-AND-240-08 — Append error + footer retry preserves rows.** Type: Compose-UI/contract. Target: emu35. Preconditions: MockWebServer returns page1 (`next_cursor="c2"`) then 503 for the page2 request, then a valid page2. Steps: scroll to end (triggers append → footer error), tap footer retry. Expected: page1 rows remain visible throughout; footer shows error then progress then page2 rows append. Traces: AC-5, AC-6.
+- **TC-AND-240-09 — Pull-to-refresh reloads page 1.** Type: Compose-UI. Target: emu35. Preconditions: page fixture; refresh count observable on the fake api/MockWebServer. Steps: perform pull-to-refresh gesture. Expected: paging source invalidated; a fresh first-page request (no `cursor`) is issued and list re-renders. Traces: AC-7.
+- **TC-AND-240-10 — 401 single refresh + retry.** Type: contract/MockWebServer. Target: JVM/emu35. Preconditions: MockWebServer returns 401 once, expects exactly one `POST /ui/session/refresh`, then 200 on the retried members request. Steps: trigger load. Expected: exactly one refresh call and one retry of the members GET; final 200 renders; no duplicate refreshes (single-flight). Traces: AC-8.
+- **TC-AND-240-11 — Member count header (plurals) & omission.** Type: Compose-UI (with locale variants). Target: JVM/emu35. Preconditions: (a) total/`member_count`=128, (b) =1, (c) absent. Steps: render header for each. Expected: (a) "128 members", (b) "1 member" via `R.plurals.fanclub_member_count`, (c) count omitted (no placeholder); correct under at least one non-English locale. Traces: AC-9.
+- **TC-AND-240-12 — Accessibility: content descriptions, merged semantics, touch targets, font scale.** Type: Compose-UI (a11y assertions). Target: emu35. Preconditions: page fixture. Steps: assert semantics tree; render at large font scale. Expected: avatar has `contentDescription` derived from display name; each row is one merged semantics node reading name/handle/tier/since; touch targets ≥ 48dp; rows reflow without loss at large font scale. Traces: AC-11.
+- **TC-AND-240-13 — No PII / no BODY logging in release.** Type: unit + build-config inspection. Target: JVM. Preconditions: release build config. Steps: assert `HttpLoggingInterceptor` level is not `BODY` in release; assert telemetry events (`fanclub_tier_members_viewed`, load outcomes) carry only `tier_id`/counts/`error_kind`/`http_status` and never member payloads. Expected: no PII fields and no `BODY`-level logging in shipped builds. Traces: AC-10.
+- **TC-AND-240-14 — Offline / flaky dev-host behavior (real radios).** Type: instrumented/e2e (manual toggle of connectivity). Target: **A15 (physical device — MUST)**. Rationale: exercises the real arm64-v8a/API-34 networking stack and airplane-mode radio transitions that the x86 emulator does not faithfully reproduce, and validates the plaintext-HTTP dev-host path end-to-end. Preconditions: dev/debug build with the cleartext network-security-config; device reachable via adb. Steps: load the screen once online (cache populated if AND-238 cache exists); enable airplane mode; re-open / pull-to-refresh; re-enable connectivity and retry. Expected: with cache → stale rows shown with a non-blocking "offline / showing cached" indicator; without cache → full-screen error + working Retry; on reconnect, Retry/refresh repopulates. No ANR/crash; cleartext call succeeds only in the dev build. Traces: AC-5, AC-7.
+
+### Coverage matrix (AC § → TC)
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 list renders + correct GET | TC-01, TC-05 |
+| AC-2 display-name fallback + tier label + join date | TC-01, TC-02 |
+| AC-3 loading→populated | TC-01 |
+| AC-4 empty state | TC-06 |
+| AC-5 refresh error+Retry / append error+retry preserving rows | TC-04, TC-07, TC-08, TC-14 |
+| AC-6 cursor pagination terminates on null | TC-03, TC-04, TC-08 |
+| AC-7 pull-to-refresh reloads page 1 | TC-09, TC-14 |
+| AC-8 401 single refresh + retry | TC-05, TC-10 |
+| AC-9 member count header / plurals / omission | TC-11 |
+| AC-10 no PII / no BODY logging | TC-13 |
+| AC-11 accessibility | TC-12 |
+| AC-12 all unit/Paging/repo/Compose tests pass | TC-01–TC-13 (suite) |

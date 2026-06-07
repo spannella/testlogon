@@ -5,7 +5,8 @@ milestone: M5
 epic: E31
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-022]
 blocks: [AND-228, AND-229]
 ---
@@ -51,7 +52,13 @@ ticket owns *return ingestion and routing only*.
 - Backend: FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext,
   unreliable; ~20s timeouts, bounded backoff for idempotent GETs only). Cookie +
   `ui_csrf`/`X-CSRF-Token` auth; persistent cookie jar (AND-011/012/013). Web
-  reference: `frontend/src/api/endpoints/*.ts`.
+  reference: `frontend/src/api/endpoints/*.ts` (verified: `src/api/client.ts` reads
+  the `ui_csrf` cookie into `X-CSRF-Token`, sends `credentials: "include"`, and does a
+  single 401 refresh-and-retry). NOTE: the web app does **not** implement a
+  redirect/return deep-link handler (no checkout/return route exists in
+  `src/pages/*` or `src/api/endpoints/*`); return-URL ingestion is a mobile-only
+  concern, so the inbound return-URI shape (§5) is an app-defined assumption, not a
+  web contract.
 
 ## 3. Functional Requirements
 
@@ -233,17 +240,56 @@ testlogon://billing/<provider>/success?intent=ck_9f3...   (dev mock fallback)
 
 **Downstream verification (owned by AND-227)**, invoked by the `Verify` route after
 a `SUCCESS`. Documented here only to fix the boundary; this ticket calls it but
-does not implement it:
+does not implement it.
+
+> CORRECTION (review 2026-06-06): the previously documented endpoint
+> `POST /ui/billing/checkout_session/{intent_id}/confirm` returning
+> `{intent_id, status:"paid", order_id, entitlement_granted}` **does not exist** in
+> the backend OpenAPI. There is no `{...}/confirm` sub-route under
+> `/ui/billing/checkout_session`, and no `intent_id`/`entitlement_granted` fields
+> anywhere in the checkout schemas. The real backend surface is:
+>
+> - `POST /ui/billing/checkout_session` — op `create_checkout_session_ui_billing_checkout_session_post`,
+>   req `BillingCheckoutReq`, resp `200` (web client types it `{ session_id, url }`).
+>   **Create only — there is no confirm verb on this path.**
+> - `POST /ui/checkout/session` — op `ui_create_checkout_session_ui_checkout_session_post`,
+>   req `UnifiedCheckoutSessionIn`, resp `200: UnifiedCheckoutSessionOut`. The session
+>   object is keyed by **`checkout_session_id`** and **`order_id`** (not `intent_id`),
+>   with `status` (default `"pending_payment"`), `source` (`cart|direct|subscription_action`),
+>   and `line_items`. There is **no** `entitlement_granted` boolean and **no** `"paid"`
+>   literal in the schema.
+> - `POST /api/billing/paypal/capture-order` — op `capture_order_api_billing_paypal_capture_order_post`,
+>   req `CaptureOrderIn { order_id (required), idempotency_key? }`. This is the actual
+>   server-side proof-of-payment step for PayPal; it is keyed on PayPal **`order_id`**.
+>
+> The exact confirm/verify wiring is AND-227's to finalize; AND-231 only defines a
+> thin `CheckoutConfirmClient` interface and must key it on the
+> server-issued **`checkout_session_id` / `order_id`**, not a fabricated `intent_id`.
+> Treat the prior endpoint as removed.
+
+Illustrative (post-correction) verify call and the real error envelope:
 
 ```
-POST /ui/billing/checkout_session/{intent_id}/confirm
-X-CSRF-Token: <ui_csrf cookie value>
-200 -> { "intent_id": "...", "status": "paid", "order_id": "...", "entitlement_granted": true }
-402 -> { "detail": { "code": "payment_failed", "message": "..." } }
-404 -> { "detail": "unknown checkout session" }
+POST /api/billing/paypal/capture-order        # PayPal; CCBill uses its own backend step
+X-CSRF-Token: <ui_csrf cookie value>          # verified: client sets X-CSRF-Token from ui_csrf cookie
+Body: { "order_id": "<paypal order id>", "idempotency_key": "<dedupe key>" }
+200 -> capture result (provider-shaped; AND-227 maps to entitlement)
+4xx -> { "detail": <string | [{ "msg": "..." }] | { "code": "...", ... }> }
+422 -> HTTPValidationError  { "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }
 ```
 
-Error `detail` mapping follows AND-015 (string | `[{msg}]` | `{code,...}`).
+Error `detail` mapping follows AND-015 (string | `[{msg}]` | `{code,...}`) — VERIFIED
+against `src/api/client.ts: normalizeErrorDetail` (handles all three shapes) and the
+`HTTPValidationError` schema. 422 is the only documented error code on these ops in
+the OpenAPI index; the prior `402 payment_failed` / `404 "unknown checkout session"`
+literals were unverified and are not in the spec.
+
+> NOTE on terminology: this spec's internal `intentId` (the `PaymentReturn.intentId`
+> / `InFlightPayment.intentId` field, and the `?intent=` query param) is a
+> **client-side correlation token chosen by this app**, not a backend field. It must
+> be populated from the backend's `checkout_session_id`/`order_id` when the Custom
+> Tab is launched (writer in AND-228/229). The name is retained for internal models
+> but does NOT correspond to any backend `intent_id`.
 
 ## 6. Data & State Management
 
@@ -438,3 +484,235 @@ carry only provider, outcome, and boolean correlation flags.
 - ktlint/detekt (AND-005) clean; no new lint baseline suppressions.
 - PR description records open questions from §13 and links AND-228/AND-229 as the
   consuming tickets.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Downstream verification endpoint is `POST /ui/billing/checkout_session/{intent_id}/confirm`.**
+   VERDICT: **Corrected** — endpoint does not exist. SOURCE: OpenAPI index has only
+   `POST /ui/billing/checkout_session` (op `create_checkout_session_ui_billing_checkout_session_post`,
+   req `BillingCheckoutReq`) with no `{id}/confirm` sub-route; no path matching
+   `checkout_session/.../confirm` exists. Replaced in §5.
+
+2. **Confirm response shape `{intent_id, status:"paid", order_id, entitlement_granted:true}`.**
+   VERDICT: **Corrected** — no such schema. SOURCE: `components.schemas.UnifiedCheckoutSessionOut`
+   (openapi.pretty.json) has `checkout_session_id`, `order_id`, `source`
+   (`cart|direct|subscription_action`), `status` (default `"pending_payment"`),
+   `line_items`; required = `[order_id, checkout_session_id, source]`. No
+   `intent_id`, no `entitlement_granted`, no `"paid"` literal.
+
+3. **Real server-side proof-of-payment / verify surface.** VERDICT: **Verified**
+   (replacement). SOURCE: OpenAPI `POST /ui/checkout/session` (req `UnifiedCheckoutSessionIn`,
+   resp `200:UnifiedCheckoutSessionOut`) and `POST /api/billing/paypal/capture-order`
+   (op `capture_order_api_billing_paypal_capture_order_post`, req `CaptureOrderIn`).
+   `components.schemas.CaptureOrderIn` = `{ order_id (required, string), idempotency_key? }`.
+
+4. **CCBill begin flow `POST /api/billing/ccbill/frontend-oauth`.** VERDICT: **Verified.**
+   SOURCE: OpenAPI index `POST /api/billing/ccbill/frontend-oauth`
+   (op `get_frontend_oauth_api_billing_ccbill_frontend_oauth_post`).
+
+5. **PayPal dev mock endpoint exists (`/mock/paypal`).** VERDICT: **Verified.**
+   SOURCE: OpenAPI index `POST /mock/paypal/v2/checkout/orders` and
+   `POST /mock/paypal/v2/checkout/orders/{order_id}/capture`; CCBill mock
+   `POST /mock/ccbill/transactions/payment-tokens/{payment_token_id}`.
+
+6. **Auth is cookie + `ui_csrf` cookie copied to `X-CSRF-Token` header; persistent
+   cookie jar.** VERDICT: **Verified.** SOURCE: `src/api/client.ts` lines 167-171
+   (`getCookie("ui_csrf")` -> `headers.set("X-CSRF-Token", csrf)`) and `credentials: "include"`
+   (lines 124, 183, 220).
+
+7. **401 single-refresh-and-retry authenticator (AND-013).** VERDICT: **Verified.**
+   SOURCE: `src/api/client.ts` lines 194-237 (single shared `refreshPromise`, one
+   retry, `logout("session_expired")` on second 401).
+
+8. **Error `detail` mapping is string | `[{msg}]` | `{code,...}` (AND-015).**
+   VERDICT: **Verified.** SOURCE: `src/api/client.ts: normalizeErrorDetail`
+   (lines 66-96 handle string, array-of-`{msg}`, and `{msg}`/`{code}` object) and
+   `components.schemas.HTTPValidationError` (`detail: [{loc,msg,type}]`).
+
+9. **`402 payment_failed` and `404 "unknown checkout session"` confirm errors.**
+   VERDICT: **Corrected / Unverified-assumption (removed).** SOURCE: the billing/checkout
+   ops in the OpenAPI index declare only `200` and `422:HTTPValidationError`; no
+   `402`/`404` documented. Literal error bodies were invented; removed from §5.
+
+10. **The web app implements a redirect/return deep-link handler we can mirror.**
+    VERDICT: **Unverified-assumption (corrected to "no web reference").** SOURCE:
+    no checkout/return route in `src/pages/*`, no return endpoint in
+    `src/api/endpoints/*` (grep for `return_url`/`redirect`/`capture` finds only KYC,
+    SSO/ACS, Google Drive, and Jira OAuth flows). Return ingestion is mobile-only.
+
+11. **Inbound return URI shape `…/app/billing/return/<provider>/{success|cancel|failure}`
+    with `intent`/`token`/`status`/`error`/`error_description` params.** VERDICT:
+    **Unverified-assumption.** SOURCE: none — not a backend or web contract; defined
+    by this app and to be finalized by AND-228/229 (already flagged in §13). Parser
+    is param-tolerant by design.
+
+12. **`PaymentReturn.intentId` / `?intent=` correlates a backend payment `intent_id`.**
+    VERDICT: **Corrected (terminology).** SOURCE: backend keys sessions by
+    `checkout_session_id`/`order_id` (`UnifiedCheckoutSessionOut`, `CaptureOrderIn`);
+    there is no backend `intent_id`. The field is an app-local correlation token that
+    must be seeded from `checkout_session_id`/`order_id`. Noted in §5 and §2.
+
+13. **Android: single-Activity `singleTop` receives warm deep links via `onNewIntent`;
+    cold start via `intent.data`; App Links use `autoVerify` + `assetlinks.json`.**
+    VERDICT: **Verified (framework ref).** SOURCE:
+    https://developer.android.com/training/app-links (Android App Links / Digital
+    Asset Links) and https://developer.android.com/guide/components/activities/tasks-and-back-stack
+    (`singleTop` / `onNewIntent`).
+
+14. **Hilt `@IntoSet` multibinding for data-driven provider registration.** VERDICT:
+    **Verified (framework ref).** SOURCE:
+    https://dagger.dev/dev-guide/multibindings (`@IntoSet`).
+
+15. **DataStore survives process death for cold-start correlation.** VERDICT:
+    **Verified (framework ref).** SOURCE: https://developer.android.com/topic/libraries/architecture/datastore.
+
+### Corrections made
+
+- **§5**: removed the non-existent `POST /ui/billing/checkout_session/{intent_id}/confirm`
+  endpoint and its fabricated `{status:"paid", entitlement_granted}` 200 body and
+  `402`/`404` error literals. Replaced with the real backend surface
+  (`POST /ui/billing/checkout_session` create-only; `POST /ui/checkout/session` ->
+  `UnifiedCheckoutSessionOut`; `POST /api/billing/paypal/capture-order` ->
+  `CaptureOrderIn`) and the real 422/`detail` error envelope.
+- **§5 / §2**: clarified that the app's `intentId` correlation token is client-defined
+  and must be seeded from `checkout_session_id`/`order_id`; there is no backend
+  `intent_id`.
+- **§2**: noted the web app has no redirect/return handler, so the inbound return-URI
+  shape is an app-defined assumption rather than a mirrored web contract.
+
+### Open assumptions
+
+- **Inbound return-URI path/param scheme** (claims 11): unverifiable — defined by
+  this app + AND-228/229; no backend/web source. Already an §13 open question.
+- **Production return host name** (`@string/payment_return_host`): unverifiable from
+  sources; §13 open question.
+- **Provider-specific query param names** (PayPal `token`/`PayerID`, CCBill
+  `transactionId`): unknown until AND-228/229; parser is param-tolerant. §13.
+- **Exact AND-227 confirm/verify call** keyed on `checkout_session_id` vs PayPal
+  `order_id`: boundary owned by AND-227; this ticket defines only the
+  `CheckoutConfirmClient` interface.
+- **Custom Tab cancel-without-redirect detection**: belongs to AND-228/229 lifecycle;
+  §13 open question.
+
+## 17. Test Plan
+
+IDs `TC-AND-231-NN`. "Traces" links to §14 acceptance criteria. Targets per the
+CI/dev matrix: JVM/Robolectric (local), emulator AVD `test35` (API 35 x86_64), or
+the physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Deep-link/Custom-Tab
+round-trip cases that exercise the real browser handoff are noted as physical-device.
+
+- **TC-AND-231-01** — Type: unit (JVM, `PaymentReturnParserTest`). Target: JVM/Robolectric.
+  Preconditions: two test `PaymentProvider` descriptors registered. Steps: parse
+  success/cancel/failure return URIs for each provider (path-driven outcome) plus the
+  `testlogon://billing/...` dev-scheme variant. Expected: `PaymentReturn` with correct
+  `provider`, `outcome`, `intentId` (from `?intent=`), `providerRef` (`token`/`tx`).
+  Traces: AC-1, AC-5.
+
+- **TC-AND-231-02** — Type: unit (JVM). Target: JVM/Robolectric. Preconditions: provider
+  registered. Steps: parse URI where path says `/success` but `?status=FAILED`/`?error=`
+  present (path-vs-param precedence); parse unrecognized trailing segment with no
+  decisive params. Expected: path wins -> `SUCCESS`; undecidable -> `UNKNOWN`.
+  Traces: AC-1.
+
+- **TC-AND-231-03** — Type: unit (JVM). Target: JVM/Robolectric. Preconditions: provider
+  registered. Steps: parse a foreign/non-billing URI (e.g. magic-link host) and a
+  malformed URI. Expected: `parse` returns `null`; `handle` returns `null`; connector
+  returns `false` (not consumed); no throw. Traces: AC-6.
+
+- **TC-AND-231-04** — Type: unit (JVM, `PaymentReturnHandlerTest`, fake `PaymentIntentStore`
+  + fixed `Clock`). Target: JVM/Robolectric. Preconditions: in-flight intent stored,
+  matching `intentId`, within TTL. Steps: `handle(successUri)`. Expected:
+  `PaymentReturnRoute.Verify(intentId)`; `markConsumed` returns true once. Traces: AC-1.
+
+- **TC-AND-231-05** — Type: unit (JVM). Target: JVM/Robolectric. Preconditions: matching
+  in-flight intent. Steps: `handle(cancelUri)` then `handle(failureUri)` and
+  `handle(unknownUri)`. Expected: `Cancelled(intentId)`; `Failed(...)` for failure and
+  unknown (UNKNOWN treated as Failed with generic message). Traces: AC-1.
+
+- **TC-AND-231-06** — Type: unit (JVM). Target: JVM/Robolectric. Preconditions: vary store
+  state. Steps: `handle(successUri)` with (a) no in-flight intent, (b) mismatched
+  `intentId`, (c) intent older than 15-min TTL (advance fake `Clock`). Expected: every
+  case routes `Stale`; never `Verify`; entitlement never inferred client-side.
+  Traces: AC-2.
+
+- **TC-AND-231-07** — Type: unit (JVM, idempotency). Target: JVM/Robolectric.
+  Preconditions: matching in-flight intent. Steps: call `handle(successUri)` twice with
+  the same `intentId`. Expected: first -> `Verify`; second -> `null` (already consumed),
+  no re-navigation; `markConsumed` returns false on the second call. Traces: AC-3.
+
+- **TC-AND-231-08** — Type: contract/MockWebServer. Target: JVM/Robolectric (no live host).
+  Preconditions: MockWebServer stubs the AND-227 confirm/capture call; CSRF cookie
+  present. Steps: drive the `Verify` route's `CheckoutConfirmClient` against a 200
+  capture response keyed on `order_id`/`checkout_session_id`; then against a 422
+  `HTTPValidationError` (`detail:[{loc,msg,type}]`); then a `{detail:{code,...}}` body.
+  Expected: request carries `X-CSRF-Token` and cookies; 200 -> confirmation state; error
+  bodies map via the AND-015 string|`[{msg}]`|`{code}` normalizer to a user message; no
+  fabricated `entitlement_granted`/`"paid"` assumptions. Traces: AC-1, AC-2.
+
+- **TC-AND-231-09** — Type: instrumented/e2e (deep-link resolution). Target: emulator
+  `test35`. Preconditions: app installed; intent filters from §4.1 present. Steps: fire a
+  VIEW `Intent` for each return URI (success/cancel/failure/unknown) and assert the
+  `NavController` current destination is `Verify`/`Cancelled`/`Failed`/`Failed`
+  respectively. Expected: each resolves to the correct route. Traces: AC-1, AC-4.
+
+- **TC-AND-231-10** — Type: instrumented/e2e (lifecycle). Target: emulator `test35`.
+  Preconditions: in-flight intent persisted in DataStore. Steps: (a) cold start launching
+  `MainActivity` with `intent.data` set to a success return; (b) warm `onNewIntent` after
+  the task is already running; (c) kill+restart the process (`am kill`) then deliver the
+  return. Expected: all three route correctly using the persisted intent; process-death
+  case still correlates. Traces: AC-3, AC-4.
+
+- **TC-AND-231-11** — Type: instrumented/e2e (provider extensibility). Target: emulator
+  `test35`. Preconditions: a test-only `PaymentProvider` `@IntoSet` binding added via a
+  test Hilt module, no parser source edits. Steps: fire that provider's return URIs.
+  Expected: routed correctly purely from the descriptor. Traces: AC-5.
+
+- **TC-AND-231-12** — Type: instrumented/e2e (real Custom Tab round-trip + flaky/offline
+  host). Target: **physical device (SM-A156U)** — MUST run on hardware because it
+  exercises the real browser Custom Tab handoff and `onNewIntent` re-entry; also toggle
+  airplane mode for the offline leg. Preconditions: dev flavor pointing at the dev mock;
+  in-flight intent stored. Steps: launch Custom Tab to the dev mock, complete to a success
+  return, land back in app; repeat with the device offline at return time and the dev host
+  unreachable/slow (~20s). Expected: success returns route to `Verify`; while offline the
+  `Verify` destination shows "confirming when reconnected" (bounded backoff, no error
+  crash), then reconciles on reconnect. Traces: AC-1, AC-4.
+
+- **TC-AND-231-13** — Type: instrumented/manual (security/spoof + flavor gating). Target:
+  **physical device (SM-A156U)** for the App Links autoVerify check (real Digital Asset
+  Links verification needs a device + network); flavor-gating assertion can also run on
+  emulator. Steps: (a) attempt to "confirm" by hand-crafting a success return URI with no
+  matching in-flight intent -> assert `Stale`, no entitlement; (b) build the release
+  variant and assert the `testlogon://billing` custom-scheme intent filter is absent from
+  the merged release manifest while verified App Links remain; (c) verify the prod host
+  filter has `autoVerify="true"`. Expected: spoofed success cannot grant entitlement; dev
+  scheme absent in release. Traces: AC-2, AC-7.
+
+- **TC-AND-231-14** — Type: Compose-UI + accessibility. Target: emulator `test35` (TalkBack
+  assertions via Espresso/Compose a11y; spot-check on physical device). Preconditions:
+  navigate to each terminal state (`Cancelled`/`Failed`/`Stale`) and the `Verify` loading
+  state. Steps: assert each result screen fires a focus/announcement on arrival, exposes
+  `contentDescription`s, meets Material 3 touch-target/contrast, and uses externalized
+  strings (no hardcoded literals; provider `error_description` shown verbatim, labelled as
+  a provider message). Expected: screen-reader announces the outcome on return; a11y checks
+  pass. Traces: AC-1.
+
+- **TC-AND-231-15** — Type: unit (telemetry redaction). Target: JVM/Robolectric.
+  Preconditions: fake telemetry sink + log capture. Steps: run `handle` across
+  success/stale paths and inspect emitted events and logs. Expected:
+  `payment_return_received`/`_routed`/`_stale` carry only provider, outcome enum, and
+  boolean correlation flags; no full return URI, no `intentId`/`token`/`error_description`
+  in clear (intent may appear hashed/truncated only). Traces: AC-7.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 (each outcome routes correctly, tested) | TC-01, TC-02, TC-04, TC-05, TC-08, TC-09, TC-12, TC-14 |
+| AC-2 (no/mismatched/expired intent -> Stale, no client-side entitlement) | TC-06, TC-08, TC-13 |
+| AC-3 (duplicate delivery navigates exactly once) | TC-07, TC-10 |
+| AC-4 (cold / warm / process-death deep links) | TC-09, TC-10, TC-12 |
+| AC-5 (provider add = `@IntoSet` binding, no parser edits) | TC-01, TC-11 |
+| AC-6 (non-billing deep link not consumed) | TC-03 |
+| AC-7 (no PII/secret in logs; redacted telemetry) | TC-13, TC-15 |

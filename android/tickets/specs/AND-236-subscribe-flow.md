@@ -5,7 +5,8 @@ milestone: M5
 epic: E32
 priority: P0
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-235, AND-227]
 blocks: []
 ---
@@ -21,7 +22,10 @@ gated content and the creator profile immediately show the subscribed status.
 
 The flow spans three backend interactions: (1) creating a checkout session for the selected tier,
 (2) returning from the Stripe-hosted payment surface, and (3) reconciling entitlement by polling
-`/ui/billing/subscriptions` and refreshing `/ui/me`. The acceptance bar is concrete and testable:
+`GET /ui/billing/subscriptions`. (Correction: `GET /ui/me` does **not** carry entitlement flags —
+verified `MeResp` is `{ user_sub, session_id, ip }` only; entitlement is derived solely from the
+subscriptions list. The optional `/ui/me` call serves only as an authenticated-session liveness
+check, not as the entitlement source.) The acceptance bar is concrete and testable:
 **a subscription activates in the Stripe test environment and the app transitions to a confirmed,
 entitled state.**
 
@@ -48,9 +52,17 @@ CRUD, and the tier-browse list itself.
   - `GET /ui/fan-club/tiers` — tier source (AND-235); a tier id/price drives this flow.
   - `POST /ui/syndicates/{syndicate_id}/plans/{plan_id}/subscribe` — in-app bundle subscribe
     variant (used when the tier maps to a syndicate plan rather than a one-off checkout).
-  - `GET /ui/me` — post-activation identity/entitlement refresh.
-- Auth is cookie-based with `X-CSRF-Token` echo and a one-shot `POST /ui/session/refresh` on 401;
-  the persistent cookie jar and `ApiResult<T>` wrapper come from `core-network`.
+  - `GET /ui/me` — post-activation **identity/session** liveness check only (returns
+    `{ user_sub, session_id, ip }`; **no** entitlement flags — corrected, see §1/§16).
+- Auth (verified against `frontend/src/api/client.ts`): requests send **both** an
+  `Authorization: Bearer <accessToken>` header (from the auth store) **and** session cookies
+  (`credentials: "include"`), plus an `X-CSRF-Token` header echoed from the `ui_csrf` cookie on every
+  request. (Correction: the spec previously described auth as "cookie-based" only; a Bearer access
+  token is also sent.) A one-shot `POST /ui/session/refresh` runs on 401, then the original request
+  is retried once. The persistent cookie jar / Bearer-token store and `ApiResult<T>` wrapper come
+  from `core-network`. Note: the OpenAPI also declares optional `X-SESSION-ID`, `X-IMPERSONATION-TOKEN`
+  headers and a `user_sub` query param on these ops; the web client does not set `X-SESSION-ID`/`user_sub`
+  and only sets `X-IMPERSONATION-TOKEN` during impersonation (not relevant to the fan subscribe flow).
 - Dev backend is **plaintext HTTP and unreliable**: 20s timeouts, bounded backoff retry for
   idempotent GETs only, explicit offline/stale UI states.
 
@@ -70,15 +82,19 @@ FR-2. Confirming creates a checkout session via AND-227's repository for the sel
 yielding a Stripe-hosted payment URL. The app hands off to that URL (Custom Tab) for card entry.
 
 FR-3. On return from the payment surface, the app enters a **reconciling** state and polls
-`GET /ui/billing/subscriptions` (bounded) until the target subscription appears `active`, then
-refreshes `/ui/me`.
+`GET /ui/billing/subscriptions` (bounded) until the target subscription appears `active` (matched
+by `plan_id`, not `tier_id` — see §5 correction). An optional `GET /ui/me` afterward is a
+session-liveness check only; it is **not** the entitlement source.
 
 FR-4. On confirmed activation the flow shows a terminal **success** state, emits a result so the
 originating screen (creator profile / tier list) updates entitlement, and unlocks gated content.
 
 FR-5. If the tier maps to a syndicate plan, confirming instead calls
-`POST /ui/syndicates/{syndicate_id}/plans/{plan_id}/subscribe` (server-side immediate activation),
-skipping the Stripe Custom Tab hand-off but using the same reconcile + success path.
+`POST /ui/syndicates/{syndicate_id}/plans/{plan_id}/subscribe` with an (optional) JSON body
+`BundleSubscribeIn` = `{ payment_method_id?: string }` (server-side immediate activation; the web
+client posts `{}` when no saved method is selected). This skips the Stripe Custom Tab hand-off but
+uses the same reconcile + success path. (Correction: the spec previously said "body none"; the
+endpoint accepts an optional `BundleSubscribeIn` object.)
 
 FR-6. If payment is cancelled, fails, or reconciliation times out, show a recoverable error state
 with **Retry** (re-creates the checkout session) and **Cancel**.
@@ -177,32 +193,55 @@ Client reads `url` (payment surface) and `session_id` (`sessionRef`).
 
 **Syndicate-plan subscribe** (FR-5 variant):
 
-`POST /ui/syndicates/{syndicate_id}/plans/{plan_id}/subscribe` — body none; cookies + CSRF.
-Response `200`: object; success implies server-side activation, then reconcile confirms.
+`POST /ui/syndicates/{syndicate_id}/plans/{plan_id}/subscribe` — optional JSON body
+`BundleSubscribeIn` = `{ "payment_method_id": "pm_..." }` (the field is nullable/optional; the web
+client posts `{}` by default); auth headers + CSRF as in §2. Response `200` is `BundleSubscriptionOut`;
+success implies server-side activation, then reconcile confirms. (Correction: spec previously said
+"body none"; verified `req=BundleSubscribeIn` and `frontend/src/api/endpoints/syndicates.ts: subscribeToBundlePlan`.)
 
 **List subscriptions** (reconcile, idempotent GET):
 
 `GET /ui/billing/subscriptions?limit=50`
 
-Response `200` is an open object; the client maps to:
+Response `200` is an open object **keyed `items`** (corrected from `subscriptions`); the web client
+types it as `{ items: Subscription[] }`. The verified `Subscription` shape is:
 ```json
-{ "subscriptions": [
-  { "id": "sub_...", "tier_id": "tier_gold", "status": "active",
-    "current_period_end": 1717545600, "creator_id": "creator_123" }
+{ "items": [
+  { "subscription_id": "sub_...", "plan_id": "plan_gold", "status": "active",
+    "billing_cycle": "monthly", "next_billing_date": "2026-07-06" }
 ] }
 ```
-Activation predicate: any entry where `tier_id == targetTierId && status == "active"`.
+`Subscription` is open (`[key: string]: unknown`) and has **no** `tier_id`, `id`, `creator_id`, or
+`current_period_end` fields (those were spec errors). The link from a tier to a subscription is via
+`plan_id`: `TierOut` carries `plan_id` (and `tier_id`, `creator_id`), so the flow must resolve the
+selected tier's `plan_id` and match on that.
+**Activation predicate (corrected):** any entry where `plan_id == targetTier.plan_id && status == "active"`.
+`status` is a free-form string in the schema; treat `"active"` as the activation value (web client
+does not constrain it to an enum — confirm exact casing against a live dev response, see §16 open
+assumptions).
 
-**Identity refresh:** `GET /ui/me` → `UiMe` (entitlement flags) after activation.
+**Identity refresh:** `GET /ui/me` → `MeResp` = `{ user_sub, session_id, ip }` — **identity/session
+only, no entitlement flags** (corrected: spec previously claimed `UiMe` "entitlement flags").
+Entitlement is derived entirely from the subscriptions list above; the `/ui/me` call is an optional
+post-activation session-liveness check.
 
 Error envelope (FastAPI `detail`): handled by `core-network`'s mapper supporting
 `string | [{msg}] | {code,...}`.
 
 ## 6. Data & State Management
 
-- `SubscriptionTier` (id, label, priceCents, currency, creatorId, optional syndicatePlanId)
-  lives in `core-model`, shared with AND-235.
-- `Subscription` (id, tierId, status, currentPeriodEnd, creatorId) added to `core-model`.
+- `SubscriptionTier` (id, label, priceCents, currency, creatorId, **planId**, optional
+  syndicatePlanId) lives in `core-model`, shared with AND-235. Note: the backend `TierOut`
+  (verified `src/api/types.ts: TierOut`) exposes `tier_id`, `creator_id`, `plan_id`, `name`,
+  `level`, `benefits`, etc. but **does not carry a price on the tier itself** — the recurring price
+  (`price_cents`) lives on the associated plan (`SubscriptionPlan`/`BundlePlanOut`). AND-235 is
+  responsible for resolving and supplying `priceCents`/`currency` and `planId`; this flow consumes
+  them. (Unverified-assumption: exact `SubscriptionTier` Kotlin field set is owned by AND-235.)
+- `Subscription` added to `core-model` mapping the verified backend shape:
+  `subscriptionId` (`subscription_id`), `planId` (`plan_id`), `status`, optional `billingCycle`
+  (`billing_cycle`), optional `nextBillingDate` (`next_billing_date`). (Corrected: there is no
+  `tier_id`/`creator_id`/`current_period_end` on the subscription; entitlement is matched by
+  `plan_id`. The model should retain the tier→plan link by carrying `SubscriptionTier.planId`.)
 - StateFlow-only UI state per the layering rule; no mutable state escapes the ViewModel.
 - DataStore (prefs) records `last_pending_checkout` = `{tierId, sessionRef, ts}` so an interrupted
   flow (process death during Custom Tab) resumes into `Reconciling` on relaunch (FR-7). Cleared on
@@ -301,9 +340,12 @@ reconcile and assert the subscription reaches `active` and the flow lands on Suc
 - **Custom Tab return is unreliable** (no result code): mitigated by treating reconcile as source of
   truth + DataStore resume. Risk that a slow Stripe webhook delays `active` beyond the poll window →
   surface RECONCILE_TIMEOUT with continue-checking, do not declare failure.
-- **`/ui/billing/subscriptions` response is an open object** in OpenAPI (additionalProperties:true);
-  exact field names (`tier_id` vs `tier`, `status` enum values) need confirmation against a live dev
-  response or `frontend/src/api/types.ts`. *Open question.*
+- **`/ui/billing/subscriptions` response** — *Resolved during review.* Verified against
+  `frontend/src/api/endpoints/billing.ts: getSubscriptions` and `src/api/types.ts: Subscription`:
+  the response is keyed `items` (`{ items: Subscription[] }`) and each entry uses `subscription_id`,
+  `plan_id`, `status` (+ open extra keys). There is **no** `tier_id`; match by `plan_id`. The only
+  residual unknown is the exact `status` string casing/enum values, which the schema leaves
+  free-form — confirm against a live dev response (carried to §16 open assumptions).
 - Tier→checkout mapping: does every tier go through `checkout_session`, or do creator tiers use the
   syndicate-plan subscribe path? Source scope says "Subscribe + payment + entitlement"; design
   supports both and selects on `tier.syndicatePlanId` presence. *Confirm with AND-235 output.*
@@ -339,3 +381,216 @@ reconcile and assert the subscription reaches `active` and the flow lands on Suc
 - Telemetry events emitted with redaction; no secrets logged.
 - Lint/detekt/ktlint clean; builds against compileSdk/targetSdk 35, JDK 17, AGP 8.7.3, Gradle 8.9.
 - Open questions in section 13 resolved or explicitly deferred with a tracked follow-up.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **`POST /ui/billing/checkout_session` exists, takes `BillingCheckoutReq`.** Verified.
+   Source: OpenAPI `POST /ui/billing/checkout_session` (op `create_checkout_session_ui_billing_checkout_session_post`,
+   `req=BillingCheckoutReq`); `frontend/src/api/endpoints/billing.ts: createCheckoutSession`.
+2. **`BillingCheckoutReq` = `{ amount_cents (required int), currency? (string|null), description? (string|null) }`.**
+   Verified. Source: OpenAPI `components.schemas.BillingCheckoutReq`; `src/api/types.ts: BillingCheckoutReq`.
+3. **checkout_session 200 response is a string→string map exposing `url` + `session_id`.** Verified.
+   Source: OpenAPI 200 schema `additionalProperties: {type: string}`; `frontend/src/api/endpoints/billing.ts`
+   types it `{ session_id: string; url: string }`.
+4. **`GET /ui/billing/subscriptions` exists with `limit` query param.** Verified.
+   Source: OpenAPI `GET /ui/billing/subscriptions` (`params=limit,...`); `billing.ts: getSubscriptions` posts `{ limit }`.
+5. **List-subscriptions response key is `items` (NOT `subscriptions`).** Corrected.
+   Source: `frontend/src/api/endpoints/billing.ts: getSubscriptions` → `{ items: Subscription[] }`.
+6. **`Subscription` fields are `subscription_id`, `plan_id`, `status`, `billing_cycle?`, `next_billing_date?`
+   (open object); no `tier_id`/`id`/`creator_id`/`current_period_end`.** Corrected (spec claimed
+   `id/tier_id/current_period_end/creator_id`). Source: `src/api/types.ts: Subscription`.
+7. **Activation predicate must match on `plan_id` (resolved from the tier), not `tier_id`.** Corrected.
+   Source: `src/api/types.ts: Subscription` (no `tier_id`) + `src/api/types.ts: TierOut` (carries `plan_id`).
+8. **`GET /ui/me` → `MeResp` = `{ user_sub, session_id, ip }`; no entitlement flags.** Corrected
+   (spec claimed `UiMe` with "entitlement flags"). Source: OpenAPI `GET /ui/me`; `src/api/types.ts: MeResp`;
+   `frontend/src/api/endpoints/auth.ts: getMe`.
+9. **`POST /ui/syndicates/{syndicate_id}/plans/{plan_id}/subscribe` exists; takes optional
+   `BundleSubscribeIn` body `{ payment_method_id?: string|null }` (NOT "body none").** Corrected.
+   Source: OpenAPI op `subscribe_to_bundle_...` (`req=BundleSubscribeIn`); `components.schemas.BundleSubscribeIn`;
+   `frontend/src/api/endpoints/syndicates.ts: subscribeToBundlePlan` (posts `{}` by default) → `BundleSubscriptionOut`.
+10. **`GET /ui/fan-club/tiers` is the tier source; `TierOut` carries `tier_id`, `creator_id`,
+    `plan_id`, `name`, `benefits`, etc. but no price on the tier (price lives on the plan).** Verified.
+    Source: OpenAPI `GET /ui/fan-club/tiers`; `src/api/types.ts: TierOut`; `frontend/src/api/endpoints/fan-club.ts: listTiers`.
+11. **Auth: `Authorization: Bearer <accessToken>` header AND cookies (`credentials: include`) AND
+    `X-CSRF-Token` from the `ui_csrf` cookie.** Corrected (spec said "cookie-based" only; omitted the
+    Bearer token). Source: `frontend/src/api/client.ts` (lines ~157–171).
+12. **401 handling: one-shot `POST /ui/session/refresh`, then retry the original request once; second
+    401 → logout/re-auth.** Verified. Source: `frontend/src/api/client.ts: refreshSession` + 401 branch.
+13. **Error envelope is FastAPI `detail` supporting `string | [{msg}] | {code,...}`.** Verified.
+    Source: `frontend/src/api/client.ts: normalizeErrorDetail`; validation errors are `HTTPValidationError`
+    (422) per OpenAPI on all four ops.
+14. **Validation failures return HTTP 422 `HTTPValidationError`.** Verified.
+    Source: OpenAPI `resp=...;422:HTTPValidationError` on checkout_session, subscriptions, syndicate subscribe, /ui/me.
+15. **Custom Tabs gives no reliable result code; reconcile (not the return signal) is the source of truth.**
+    Unverified-assumption (framework behavior, not in the backend/frontend sources).
+    Framework ref: https://developer.chrome.com/docs/android/custom-tabs/ (no Activity result is returned).
+16. **AndroidX Browser Custom Tabs / `CustomTabsIntent` for the Stripe hand-off.** Framework ref:
+    https://developer.android.com/develop/ui/views/layout/web/loading-pages-in-app (Custom Tabs guidance).
+17. **DataStore Preferences for `last_pending_checkout` resume state.** Unverified-assumption (Android
+    impl choice). Framework ref: https://developer.android.com/topic/libraries/architecture/datastore.
+18. **Price formatting via `java.text.NumberFormat.getCurrencyInstance(locale)` from minor units.**
+    Unverified-assumption (impl choice, locale-correct). Framework ref:
+    https://developer.android.com/reference/java/text/NumberFormat#getCurrencyInstance(java.util.Locale).
+19. **`POST /ui/session/refresh` endpoint exists and is the refresh mechanism.** Verified.
+    Source: `frontend/src/api/client.ts: refreshSession` calls `POST /ui/session/refresh`.
+
+### Corrections made
+
+- §1, §2, §3 (FR-3), §5, §16: `GET /ui/me` does **not** return entitlement flags; `MeResp` is
+  `{ user_sub, session_id, ip }`. Entitlement is derived from the subscriptions list only.
+- §2, §16: Auth is Bearer token **plus** cookies **plus** `X-CSRF-Token`, not "cookie-based" alone.
+- §3 (FR-5), §5: Syndicate subscribe takes an optional `BundleSubscribeIn` `{ payment_method_id? }`
+  body, not "body none".
+- §5: List-subscriptions response is keyed `items` (was `subscriptions`); `Subscription` fields
+  corrected to `subscription_id/plan_id/status/billing_cycle?/next_billing_date?` (removed the
+  fictional `id/tier_id/creator_id/current_period_end`).
+- §3 (FR-3), §5, §6, §13: Activation predicate matches on `plan_id` (resolved from the tier), not
+  `tier_id`, since `Subscription` has no `tier_id`.
+- §6: Clarified that `TierOut` carries no price; the recurring price lives on the plan.
+- §13: Marked the subscriptions-response open question as resolved.
+
+### Open assumptions
+
+- **`status` value casing/enum for an active subscription.** The OpenAPI/`Subscription` type leave
+  `status` a free-form string; `"active"` is assumed but unconfirmed because the schema is open and
+  no enum is published. Confirm against a live dev response before pinning the predicate.
+- **Custom Tabs return semantics / deep-link `com.testlogon.android://billing/return`.** The deep-link
+  scheme and the "no result code" behavior are Android-side assumptions; not derivable from the
+  backend/frontend sources (the web client uses an in-page redirect, not an Android Custom Tab).
+- **Process-death resume via DataStore, Room cache of active subscriptions, telemetry event names,
+  and the `SubscriptionTier`/`PaymentLauncher` Kotlin shapes.** All Android implementation choices
+  with no authoritative backend/frontend counterpart; owned by this ticket / AND-235.
+- **`SubscriptionTier.priceCents`/`currency`/`planId` resolution.** Owned by AND-235; the price is
+  not on `TierOut` and must be sourced from the plan. Confirm exact mapping with AND-235 output.
+
+## 17. Test Plan
+
+Test targets: **JVM** = local JVM unit/Robolectric; **MWS** = JVM + MockWebServer (contract);
+**emu35** = headless emulator AVD `test35` (x86_64, API 35); **A15** = physical Samsung Galaxy A15 5G
+(SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). Compose-UI cases run on emu35 unless they need
+real hardware. Traces link to §14 acceptance criteria.
+
+- **TC-AND-236-01 — Happy path: confirm → checkout → reconcile → success.**
+  Type: unit (JVM + Turbine + MockWebServer). Target: MWS.
+  Preconditions: MWS stubs `POST /ui/billing/checkout_session` → 200 `{ "url":"https://checkout.stripe.com/...","session_id":"cs_test_1" }`;
+  `GET /ui/billing/subscriptions` → first empty `{ "items":[] }`, then `{ "items":[{ "subscription_id":"sub_1","plan_id":"plan_gold","status":"active" }] }`.
+  Steps: load tier (planId=`plan_gold`); call `confirmSubscribe()`; simulate `onReturnFromPayment(success)`; advance poll scheduler.
+  Expected: emitted state sequence `Confirm → AwaitingPayment → Reconciling → Success(subscriptionId="sub_1", tierId)`;
+  checkout POST body has `amount_cents` matching tier and a `currency`; activation matched on `plan_id`.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-236-02 — Checkout request contract: body + CSRF + Bearer headers.**
+  Type: contract/MockWebServer. Target: MWS.
+  Preconditions: auth store seeded with access token + `ui_csrf` cookie; tier priceCents=999, currency=usd.
+  Steps: `confirmSubscribe()`; inspect the recorded `checkout_session` request.
+  Expected: `POST /ui/billing/checkout_session`; JSON body `{ "amount_cents":999, "currency":"usd", ... }`;
+  headers include `X-CSRF-Token` and `Authorization: Bearer ...`; client reads `url` + `session_id` from the string-map response.
+  Traces: AC-1, AC-7.
+
+- **TC-AND-236-03 — Reconcile backoff: active on 3rd poll.**
+  Type: unit. Target: JVM (virtual time / TestScheduler).
+  Preconditions: MWS returns inactive/empty for polls 1–2, active (matching `plan_id`) on poll 3.
+  Steps: enter `Reconciling`; advance virtual clock through backoff `1s,2s,4s`.
+  Expected: success at attempt 3; no further polls issued after the match; backoff schedule honored.
+  Traces: AC-2.
+
+- **TC-AND-236-04 — Reconcile timeout after 6 attempts.**
+  Type: unit. Target: JVM.
+  Preconditions: subscriptions never returns an active matching entry.
+  Steps: enter `Reconciling`; exhaust all 6 attempts (cap 8s).
+  Expected: `Error(RECONCILE_TIMEOUT, retryable=true)` with continue-checking affordance; exactly 6 polls.
+  Traces: AC-5.
+
+- **TC-AND-236-05 — Idempotency: pre-existing active subscription short-circuits, no checkout POST.**
+  Type: contract/MockWebServer. Target: MWS.
+  Preconditions: `GET /ui/billing/subscriptions` already returns `{ "items":[{ "plan_id":"plan_gold","status":"active","subscription_id":"sub_x" }] }`.
+  Steps: `confirmSubscribe()`.
+  Expected: routes straight to `Success`; **zero** `POST /ui/billing/checkout_session` requests recorded by MWS (no double charge).
+  Traces: AC-4.
+
+- **TC-AND-236-06 — Syndicate-plan variant uses subscribe endpoint, not checkout_session.**
+  Type: contract/MockWebServer. Target: MWS.
+  Preconditions: tier has `syndicatePlanId`; MWS stubs `POST /ui/syndicates/{sid}/plans/{pid}/subscribe` → 200 `BundleSubscriptionOut`; subscriptions then returns active.
+  Steps: `confirmSubscribe()`.
+  Expected: a `POST .../subscribe` is issued with optional body `{}` (or `{ payment_method_id }`); **no** `checkout_session` POST; no Custom Tab launch; reconcile → `Success`.
+  Traces: AC-8.
+
+- **TC-AND-236-07 — Cancelled payment yields retryable error; retry re-creates session.**
+  Type: unit. Target: JVM/MWS.
+  Preconditions: return-from-payment signals cancel (cancel deep link or resume with no new subscription after one poll).
+  Steps: `onReturnFromPayment(cancel)`; then `retry()`.
+  Expected: `Error(PAYMENT_CANCELLED, retryable=true)` (no charge implied); `retry()` issues a fresh `checkout_session` POST and re-enters the flow.
+  Traces: AC-5.
+
+- **TC-AND-236-08 — 401 mid-flow triggers one session refresh then retry.**
+  Type: contract/MockWebServer. Target: MWS.
+  Preconditions: first `checkout_session` (or reconcile GET) → 401; `POST /ui/session/refresh` → 200; retry → 200.
+  Steps: drive the call that 401s.
+  Expected: exactly one `POST /ui/session/refresh`, original request retried once and succeeds; a *second* 401 surfaces `Error(NETWORK)` and routes to re-auth.
+  Traces: AC-5.
+
+- **TC-AND-236-09 — Validation error (422 HTTPValidationError) surfaces a readable error.**
+  Type: contract/MockWebServer. Target: MWS.
+  Preconditions: `checkout_session` → 422 `{ "detail":[{ "loc":["body","amount_cents"], "msg":"field required", "type":"value_error" }] }`.
+  Steps: `confirmSubscribe()`.
+  Expected: error mapper extracts `msg` ("field required"); state `Error(CHECKOUT_FAILED, retryable=true)`; no crash on the array-of-objects detail shape.
+  Traces: AC-5.
+
+- **TC-AND-236-10 — Offline: confirm disabled + banner; reconcile shows stale and auto-resumes.**
+  Type: instrumented/integration. Target: emu35 (toggle connectivity via emulator).
+  Preconditions: connectivity off at Confirm; turn on after entering reconcile.
+  Steps: open ConfirmSheet offline; observe disabled confirm + banner; go online during reconcile.
+  Expected: confirm disabled with offline banner (no hard failure); reconcile renders stale/offline state and auto-resumes polling on connectivity regain.
+  Traces: AC-6.
+
+- **TC-AND-236-11 — Process-death resume into Reconciling.**
+  Type: instrumented/e2e. Target: A15 (real Custom Tab + process death; arm64/API-34 behavior).
+  Preconditions: `last_pending_checkout` persisted in DataStore; kill the app while the Stripe Custom Tab is foreground.
+  Steps: relaunch the app.
+  Expected: app restores into `Reconciling` (not a fresh confirm), polls subscriptions, and reaches `Success`/error; DataStore entry cleared on terminal state.
+  *Must run on physical device* (real Custom Tab hand-off + process death are unreliable on headless emulator).
+  Traces: AC-4, AC-2.
+
+- **TC-AND-236-12 — Stripe-test acceptance: real payment activates subscription.**
+  Type: instrumented/e2e (gating). Target: A15 (real Custom Tab, real network to Stripe test mode).
+  Preconditions: Stripe test mode; dev backend reachable; generous reconcile budget.
+  Steps: confirm → enter Stripe **test** card in the Custom Tab → return → reconcile.
+  Expected: subscription reaches `status=="active"` (matched by `plan_id`); flow lands on `Success` with a `subscriptionId`; satisfies "Subscription activates (test)".
+  *Must run on physical device* (real HTTPS Custom Tab + real Stripe interaction).
+  Traces: AC-2, AC-3.
+
+- **TC-AND-236-13 — Entitlement result propagates; gated content unlocks.**
+  Type: integration. Target: emu35.
+  Preconditions: reconcile returns active; originating screen registered for the `"subscribe_result"` SavedStateHandle key.
+  Steps: complete flow; return to creator profile / tier list.
+  Expected: originating screen receives the subscribe result and re-renders entitled state; gated content for that tier is unlocked (Room cache upserted, confirmed by reconcile). Entitlement is taken from the subscriptions list, not `/ui/me`.
+  Traces: AC-3.
+
+- **TC-AND-236-14 — No card PII stored/logged; only opaque ids; cleared on terminal state.**
+  Type: unit + manual log inspection. Target: JVM (asserts) + A15 (logcat scan).
+  Preconditions: run a full happy-path flow.
+  Steps: inspect DataStore/Room contents and logcat output.
+  Expected: only `session_id`/`subscription_id`/`tier_id`/`plan_id` persisted; `session_id`/`subscription_id` redacted to last 6 chars in logs; no cookies/CSRF/Bearer token logged; pending-checkout cleared on terminal success/cancel.
+  Traces: AC-7.
+
+- **TC-AND-236-15 — Accessibility: ConfirmSheet/Reconciling/Success semantics.**
+  Type: Compose-UI. Target: emu35 (TalkBack/semantics assertions).
+  Preconditions: launch each surface with sample data; large font scale.
+  Steps: assert price string is locale-formatted (NumberFormat, not concatenated); confirm/retry/cancel are ≥48dp with contentDescription; reconciling spinner is a `liveRegion`; ConfirmSheet scrolls at large font scale.
+  Expected: all semantics present; success terminal state announced to TalkBack.
+  Traces: AC-1, AC-2, AC-6.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+| --- | --- |
+| AC-1 | TC-AND-236-01, -02, -15 |
+| AC-2 | TC-AND-236-01, -03, -11, -12, -15 |
+| AC-3 | TC-AND-236-12, -13 |
+| AC-4 | TC-AND-236-05, -11 |
+| AC-5 | TC-AND-236-04, -07, -08, -09 |
+| AC-6 | TC-AND-236-10, -15 |
+| AC-7 | TC-AND-236-02, -14 |
+| AC-8 | TC-AND-236-06 |

@@ -5,9 +5,10 @@ milestone: M5
 epic: E30
 priority: P2
 size: M
-status: draft
 depends_on: [AND-221]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-222 — Purchases tests
@@ -64,20 +65,39 @@ code except for adding test-only seams (fakes, test tags) where they are missing
 
 ## 3. Functional Requirements
 
-FR-1. **Repository success mapping.** Given a recorded `GET /ui/purchases` 200 body,
+FR-1. **Repository success mapping.** Given a recorded `GET /ui/purchase-history/transactions`
+200 body (a **bare JSON array** of `PurchaseTransactionSummary`, not a paged envelope),
 the repository returns `ApiResult.Success<List<Purchase>>` whose fields match the DTO
-(id, merchant, total, currency, status, orderedAt, itemCount).
+(`txn_id`, `created_at`, `updated_at`, `status`, `amount`, `currency`, optional
+`merchant_id`, `external_ref`, `description`).
+**[CORRECTED]** The earlier draft named the endpoint `GET /ui/purchases` and fields
+`id/merchant/total/orderedAt/itemCount`; the real contract is
+`GET /ui/purchase-history/transactions` returning `PurchaseTransactionSummary[]` with the
+fields listed above. `amount` is a JSON `number` (decimal major units, e.g. `42.99`) — **not**
+integer minor units — and `created_at`/`updated_at` are Unix epoch **seconds** integers.
+There is no `item_count` field on the summary.
 
 FR-2. **Repository error mapping.** For 400/401/422/500 responses and for
 non-`200` FastAPI `detail` shapes (`string`, `[{msg}]`, `{code,...}`), the repository
 returns `ApiResult.Error` with a normalized message/code (asserted per shape).
 
-FR-3. **Detail mapping (AND-220).** `GET /ui/purchases/{id}` maps items array and the
-optional `tracking` object (carrier, trackingNumber, trackingUrl); a null tracking
-object yields `tracking == null` (no crash).
+FR-3. **Detail mapping (AND-220).** `GET /ui/purchase-history/transactions/{txn_id}` maps
+`PurchaseTransactionInfo` including the optional `shipping` object
+(`carrier`, `tracking_number`, `tracking_url`, `status`, `shipped_at`, `delivered_at`,
+`carrier_events[]`); a null/absent `shipping` yields `shipping == null` (no crash).
+**[CORRECTED]** The earlier draft assumed `GET /ui/purchases/{id}` with an inline `items`
+array and a `tracking` object. The real detail DTO is `PurchaseTransactionInfo` (extends
+`PurchaseTransactionSummary`) and carries **no line-items array**; tracking lives under the
+`shipping` field (carrier_tracking fields), and order line items are fetched separately via
+the cart endpoint when `metadata.cart_id` is present (see §5). A dedicated
+`GET /ui/purchase-history/transactions/{txn_id}/tracking` (`CarrierTrackingView`) also exists.
 
-FR-4. **Search passthrough (AND-219).** A non-blank query reaches the API as the `q`
-query parameter, URL-encoded; blank/whitespace queries do not issue a search request.
+FR-4. **Search passthrough (AND-219).** A non-blank query reaches the **dedicated search
+endpoint** `GET /ui/purchase-history/transactions/search` as the `q` query parameter,
+URL-encoded; blank/whitespace queries do not issue a search request (the screen falls back to
+the plain list endpoint). **[CORRECTED]** Search is its own endpoint, not a `q` param on the
+list endpoint. The `status` filter is applied **client-side** to search results (server-side
+`status` param is only honored by the list endpoint).
 
 FR-5. **ViewModel state machine (AND-221).** Assert the ordered `UiState` emissions
 for: initial load success (Loading → Content), empty result (Loading → Empty), error
@@ -87,6 +107,14 @@ cache (Stale shown when cached data exists but refresh fails).
 FR-6. **Paging.** The ViewModel exposes `Flow<PagingData<PurchaseUi>>`; tests assert
 the materialized first page contents, refresh, and append using
 `AsyncPagingDataDiffer` / `PagingData` test helpers.
+**[CORRECTED — contract caveat]** The backend list endpoint is **not paginated**: it returns
+a bare array and accepts only `limit` (default 50 in the web client) and `status`. There is no
+`page`/`page_size`/`total` envelope server-side. Any Paging 3 wiring in AND-221 is therefore a
+client-only construct over a single bounded fetch (`limit`), so paging tests assert in-memory
+list materialization over the fixture; **append/next-page tests against a server cursor are not
+applicable** unless AND-221 introduces a synthetic `limit`-window pager. If AND-221 does not use
+Paging 3, the paging tests are `@Ignore`d with that note rather than asserting a non-existent
+server contract.
 
 FR-7. **Search debounce.** Rapid query changes collapse to a single repository call
 after the debounce window (e.g., 300 ms) on a controlled test dispatcher.
@@ -187,29 +215,52 @@ This is a test ticket; it defines **no new endpoints**. It pins the existing
 contract owned by AND-218/AND-220 via recorded fixtures, asserting the client matches
 the server shape. Reference paths and shapes exercised:
 
-- **List / history:** `GET /ui/purchases?page={n}&page_size={s}&q={query}` →
+> **[CORRECTED]** The paths, the response envelope, and the field names below were all wrong
+> in the draft. Verified shapes (OpenAPI `components.schemas` + `src/api/endpoints/purchases.ts`
+> + `src/api/types.ts`) follow.
+
+- **List / history:** `GET /ui/purchase-history/transactions?limit={n}&status={STATUS}` →
+  a **bare array** of `PurchaseTransactionSummary` (no `items`/`page`/`total` wrapper):
   ```json
-  { "items": [
-      { "id": "ord_123", "merchant": "Acme", "total": 4299, "currency": "USD",
-        "status": "shipped", "ordered_at": "2026-05-01T12:00:00Z", "item_count": 3 }
-    ],
-    "page": 1, "page_size": 20, "total": 57 }
+  [
+    { "txn_id": "txn_123", "created_at": 1746100800, "updated_at": 1746187200,
+      "status": "COMPLETED", "amount": 42.99, "currency": "USD",
+      "merchant_id": "merch_acme", "external_ref": "PO-7781", "description": "Acme order" }
+  ]
   ```
-- **Detail (AND-220):** `GET /ui/purchases/{id}` →
+  `limit` defaults to 50 in the web client; `status` is an uppercase enum
+  (`PENDING`, `COMPLETED`, `CANCELLED`, `REVERTED`, `CANCEL_REQUESTED`, `CANCEL_DENIED`).
+- **Search:** `GET /ui/purchase-history/transactions/search?q={query}&limit={n}` →
+  same `PurchaseTransactionSummary[]` array. `status` filtering of search results is
+  **client-side**.
+- **Detail (AND-220):** `GET /ui/purchase-history/transactions/{txn_id}` →
+  `PurchaseTransactionInfo` (extends the summary; **no inline line-items array**):
   ```json
-  { "id": "ord_123", "merchant": "Acme", "total": 4299, "currency": "USD",
-    "status": "shipped", "ordered_at": "2026-05-01T12:00:00Z",
-    "items": [ { "sku": "SKU1", "name": "Widget", "qty": 2, "unit_price": 1500 } ],
-    "tracking": { "carrier": "UPS", "tracking_number": "1Z999",
-                  "tracking_url": "https://track/1Z999" } }
+  { "txn_id": "txn_123", "created_at": 1746100800, "updated_at": 1746187200,
+    "status": "COMPLETED", "amount": 42.99, "currency": "USD",
+    "buyer_id": "user_9", "version": 3,
+    "shipping": { "carrier": "ups", "tracking_number": "1Z999",
+                  "tracking_url": "https://track/1Z999", "status": "in_transit",
+                  "shipped_at": 1746100900, "carrier_events": [] },
+    "completed_at": 1746187200, "metadata": { "cart_id": "cart_55" } }
   ```
+  Order line items are fetched **separately** via `GET /ui/shoppingcart/carts/{cart_id}`
+  (`getCartItems`) only when `metadata.cart_id` is a string; item prices there are in
+  **cents** (`unit_price_cents`, `line_total_cents`). The tracking affordance is shown when
+  `shipping.tracking_number` is present and links to `shipping.tracking_url`; it is absent when
+  `shipping`/`tracking_number` is null.
 - **Error envelope:** any non-2xx returns FastAPI `{"detail": ...}` in one of three
   shapes (`string`, `[{ "msg": "..." }]`, `{ "code": "...", ... }`); tests assert all
-  three normalize through the shared error mapper.
-- **Auth/CSRF:** purchases endpoints require the cookie session + `X-CSRF-Token`
-  header. The 401→`POST /ui/session/refresh`→retry behavior is owned by `core-network`
-  and tested in its own suite; here it is **out of scope** except one ViewModel test
-  asserting a 401 surfaces as a recoverable error (not a crash).
+  three normalize through the shared error mapper. **[VERIFIED]** — matches
+  `normalizeErrorDetail` in `src/api/client.ts` (handles string, array-of-`{msg}`, and
+  object-with-`code`). Observed error statuses on these endpoints: `400/401/403/422/429`
+  (note **429** and **403**, in addition to those the draft listed).
+- **Auth/CSRF:** purchases endpoints require the cookie session (`credentials: include`) plus a
+  bearer `Authorization` header and the `X-CSRF-Token` header sourced from the `ui_csrf` cookie.
+  The 401→`POST /ui/session/refresh`→retry-once behavior is owned by `core-network` and tested
+  in its own suite; here it is **out of scope** except one ViewModel test asserting a 401
+  surfaces as a recoverable error (not a crash). **[VERIFIED]** against `src/api/client.ts`
+  (`X-CSRF-Token` from `ui_csrf`, single refresh via `POST /ui/session/refresh`, one retry).
 
 Fixtures stored at
 `feature-purchases/src/test/resources/fixtures/purchases_*.json`.
@@ -338,14 +389,22 @@ This **is** the testing ticket; the strategy is the deliverable.
 - **R3 — Contract drift.** Recorded fixtures can diverge from the live FastAPI schema.
   Mitigation: a `@Ignore`-able contract test that, when run with a flag, validates a
   fixture against `/openapi.json` (manual, not in PR CI given the unreliable host).
-- **OQ1 — Field for `total`:** is monetary `total` an integer in minor units (cents)
-  or a decimal string? Spec assumes minor-units integer per the JSON above; confirm
-  against AND-218 mapping.
-- **OQ2 — Search semantics:** does AND-219 search call `GET /ui/purchases?q=` server
-  side, or filter cached client side? Tests target the server `q` param per AND-218;
-  adjust if AND-219 is client-side only.
+- **OQ1 — Field for amount:** ~~is monetary `total` an integer in minor units (cents)?~~
+  **RESOLVED (corrected):** the field is `amount`, a JSON `number` in **decimal major units**
+  (the web client passes it straight into `Intl.NumberFormat` currency, e.g. `42.99`). It is
+  **not** an integer/cents value. (Note: the separate cart line-items DTO *does* use cents —
+  `unit_price_cents`/`line_total_cents` — so the mapper must not conflate the two.)
+  Source: OpenAPI `PurchaseTransactionSummary.amount: number`; `src/pages/purchases/
+  PurchaseHistory.tsx: formatCurrency(txn.amount, txn.currency)`.
+- **OQ2 — Search semantics:** **RESOLVED (corrected):** search is **server-side via a dedicated
+  endpoint** `GET /ui/purchase-history/transactions/search?q=` (not a `q` param on the list
+  endpoint). The web client additionally applies the `status` chip **client-side** to search
+  results. Source: `src/api/endpoints/purchases.ts: searchTransactions`;
+  `src/pages/purchases/PurchaseHistory.tsx`.
 - **OQ3 — Stale vs Empty precedence** when cache is empty and refresh succeeds with
-  zero items — assumed `Empty`; confirm with AND-221.
+  zero items — assumed `Empty`; confirm with AND-221. **STILL OPEN** — `PurchasesUiState` is
+  defined by AND-221, which is not in the verifiable sources here; this is a ViewModel-internal
+  contract, not a backend/web one.
 
 ## 14. Acceptance Criteria
 
@@ -392,3 +451,280 @@ AC-9. Suite is deterministic: 10 consecutive local runs pass with zero flakes; n
 - Open questions OQ1–OQ3 resolved or recorded as follow-up against AND-218/AND-221.
 - No production behavior changed beyond additive test seams (test tags, fakes); diff
   reviewed and approved; CI green on PR to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verification verdict, and an exact source pointer.
+
+1. **List/history endpoint is `GET /ui/purchase-history/transactions`.**
+   VERDICT: **Corrected** (draft said `GET /ui/purchases`).
+   SOURCE: OpenAPI `GET /ui/purchase-history/transactions`
+   (`op=ui_list_transactions_...`); `src/api/endpoints/purchases.ts: listTransactions`.
+
+2. **List response is a bare `PurchaseTransactionSummary[]` array (no `items`/`page`/`page_size`/`total` envelope).**
+   VERDICT: **Corrected**.
+   SOURCE: `src/api/endpoints/purchases.ts: listTransactions` (`api.get<PurchaseTransactionSummary[]>`);
+   `src/api/types.ts: PurchaseTransactionSummary`.
+
+3. **List query params are `limit` (web default 50) and `status` (uppercase enum); no `page`/`page_size`/`q`.**
+   VERDICT: **Corrected**.
+   SOURCE: OpenAPI `GET /ui/purchase-history/transactions | params=limit,status,...`;
+   `src/pages/purchases/PurchaseHistory.tsx` (`listTransactions({ limit: 50, status: ...toUpperCase() })`).
+
+4. **Summary DTO fields: `txn_id`, `created_at`, `updated_at`, `status`, `amount`, `currency`, `merchant_id?`, `external_ref?`, `description?`.**
+   VERDICT: **Corrected** (draft said `id/merchant/total/orderedAt/itemCount`; there is no `item_count`).
+   SOURCE: `src/api/types.ts: PurchaseTransactionSummary`; OpenAPI schema `PurchaseTransactionSummary`.
+
+5. **`amount` is a decimal `number` in major units (e.g. 42.99), NOT integer minor units.**
+   VERDICT: **Corrected** (resolves OQ1).
+   SOURCE: OpenAPI `PurchaseTransactionSummary.amount: {type: number}`;
+   `src/pages/purchases/PurchaseHistory.tsx: formatCurrency` passes `txn.amount` directly to `Intl.NumberFormat({style:"currency"})`.
+
+6. **`created_at`/`updated_at` are Unix epoch SECONDS integers.**
+   VERDICT: **Corrected** (draft used ISO-8601 `ordered_at`).
+   SOURCE: OpenAPI `created_at: {type: integer}`; `src/pages/purchases/*.tsx: formatDate(ts) => new Date(ts * 1000)`.
+
+7. **Search is a dedicated server endpoint `GET /ui/purchase-history/transactions/search?q=&limit=`, not a `q` param on list.**
+   VERDICT: **Corrected** (resolves OQ2).
+   SOURCE: OpenAPI `GET /ui/purchase-history/transactions/search | params=q,limit,...`;
+   `src/api/endpoints/purchases.ts: searchTransactions`.
+
+8. **Search `status` chip is applied client-side to search results.**
+   VERDICT: **Verified**.
+   SOURCE: `src/pages/purchases/PurchaseHistory.tsx` (`isSearchMode && statusFilter !== "all" ? transactions.filter(...) : transactions`).
+
+9. **Search debounce window is ~300 ms.**
+   VERDICT: **Verified** (web reference uses 300 ms).
+   SOURCE: `src/pages/purchases/PurchaseHistory.tsx` (`setTimeout(() => setDebouncedQuery(value), 300)`).
+
+10. **Detail endpoint is `GET /ui/purchase-history/transactions/{txn_id}` returning `PurchaseTransactionInfo`.**
+    VERDICT: **Corrected** (draft said `GET /ui/purchases/{id}`).
+    SOURCE: OpenAPI `GET /ui/purchase-history/transactions/{txn_id} | resp=200:PurchaseTransactionInfo`;
+    `src/api/endpoints/purchases.ts: getTransaction`.
+
+11. **Detail has NO inline line-items array; tracking is under the `shipping` object (`carrier`, `tracking_number`, `tracking_url`, ...).**
+    VERDICT: **Corrected** (draft had `items[]` and a top-level `tracking` object).
+    SOURCE: `src/api/types.ts: PurchaseTransactionInfo` (extends summary, adds `shipping?: PurchaseShipping`, `metadata`, etc.) and `PurchaseShipping`.
+
+12. **Order line items are fetched separately via the cart endpoint `GET /ui/shoppingcart/carts/{cart_id}` when `metadata.cart_id` is present; item prices there are in cents.**
+    VERDICT: **Verified**.
+    SOURCE: `src/pages/purchases/TransactionDetail.tsx` (`CartItemsCard`, `getCartItems`, `unit_price_cents/100`, gated on `metadata.cart_id`).
+
+13. **Tracking affordance shows when `shipping.tracking_number` present and links to `shipping.tracking_url`; absent when null.**
+    VERDICT: **Corrected** (draft keyed visibility off a null `tracking` object).
+    SOURCE: `src/pages/purchases/TransactionDetail.tsx` (anchor on `shipping.tracking_url`, `data-testid="tracking-link"`, guarded by `txn.shipping.tracking_number`).
+
+14. **A separate `GET /ui/purchase-history/transactions/{txn_id}/tracking` (`CarrierTrackingView`) exists.**
+    VERDICT: **Verified** (informational; not the primary path the detail screen reads).
+    SOURCE: OpenAPI `GET /ui/purchase-history/transactions/{txn_id}/tracking`; `src/api/types.ts: CarrierTrackingView`.
+
+15. **FastAPI error `detail` normalizes from three shapes: `string`, `[{msg}]`, `{code,...}`.**
+    VERDICT: **Verified**.
+    SOURCE: `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError` (handles string, array-of-`{msg}`, object-with-`code`).
+
+16. **Observed error statuses on purchases endpoints include 400/401/403/422/429.**
+    VERDICT: **Corrected** (draft listed only 400/401/422/500; real index shows 403 and 429, and 500 is not enumerated).
+    SOURCE: OpenAPI `GET /ui/purchase-history/transactions | resp=200:;422:HTTPValidationError;400;401;403;429`.
+
+17. **Auth: cookie session (`credentials: include`) + bearer `Authorization` + `X-CSRF-Token` header sourced from the `ui_csrf` cookie.**
+    VERDICT: **Verified**.
+    SOURCE: `src/api/client.ts` (sets `Authorization: Bearer`, reads `getCookie("ui_csrf")`, sets `X-CSRF-Token`, `credentials: "include"`).
+
+18. **401 triggers a single `POST /ui/session/refresh` then one retry of the original request.**
+    VERDICT: **Verified**.
+    SOURCE: `src/api/client.ts: refreshSession` (`POST /ui/session/refresh`) and the single-retry block in `api<T>`.
+
+19. **All transaction-state actions (complete/revert/cancel request/respond, shipping) return `PurchaseTransactionInfo`; statuses are uppercase (`PENDING`, `COMPLETED`, `CANCELLED`, `REVERTED`, `CANCEL_REQUESTED`, `CANCEL_DENIED`).**
+    VERDICT: **Verified** (out of test scope but corrects the draft's lowercase `shipped` example).
+    SOURCE: OpenAPI `.../complete|/revert|/cancel/request|/cancel/respond|/shipping` (`resp=200:PurchaseTransactionInfo`); `src/pages/purchases/TransactionDetail.tsx: statusVariant` (uppercase cases).
+
+20. **Android test stack/frameworks (JUnit4, kotlinx-coroutines-test, Turbine, MockK, Truth, `androidx.paging:paging-testing`, OkHttp MockWebServer, Compose UI test, Hilt testing, Robolectric).**
+    VERDICT: **Unverified-assumption** (no Android sources in the reference tree; these are standard, framework ref).
+    SOURCE: framework ref — Android testing docs (developer.android.com/training/testing), Turbine (cashapp.github.io/turbine), Paging test (developer.android.com/topic/libraries/architecture/paging/test).
+
+21. **Dev host `http://18.222.237.167:8000`.**
+    VERDICT: **Unverified-assumption** — not present in OpenAPI or frontend sources (the web client uses `VITE_API_BASE_URL`, `src/api/client.ts`); treat the literal IP as a deployment detail to confirm with infra.
+
+22. **`PurchasesUiState` machine (Loading/Content/Empty/Stale/Error), Paging 3 usage, `SavedStateHandle` query persistence, stale-vs-empty rule.**
+    VERDICT: **Unverified-assumption** — owned by AND-221, which is not in the verifiable sources. Tests assert against AND-221's public API as documented in §6; flag for confirmation against the merged ViewModel.
+
+### Corrections made
+
+- C-1 List endpoint: `GET /ui/purchases` → `GET /ui/purchase-history/transactions` (#1).
+- C-2 List response shape: paged `{items,page,page_size,total}` envelope → **bare array** (#2).
+- C-3 List query params: `page/page_size/q` → `limit/status` (#3).
+- C-4 Summary DTO field names: `id/merchant/total/ordered_at/item_count` → `txn_id/.../amount/created_at` (no item count) (#4, #6).
+- C-5 Money units: integer minor-units (cents) → decimal `number` major units (OQ1) (#5).
+- C-6 Search: `q` param on list → dedicated `/search` endpoint; status filter is client-side (OQ2) (#7, #8).
+- C-7 Detail endpoint: `GET /ui/purchases/{id}` → `GET /ui/purchase-history/transactions/{txn_id}` (#10).
+- C-8 Detail shape: inline `items[]` + `tracking` object → no items array; tracking under `shipping`; items via separate cart fetch on `metadata.cart_id` (#11, #12).
+- C-9 Tracking link visibility keyed on `shipping.tracking_number`/`tracking_url`, not a null `tracking` object (#13).
+- C-10 Error statuses: added 403/429, removed unverified 500 (#16).
+- C-11 Status enum casing corrected to uppercase; example `"shipped"` was not a valid txn status (#19).
+- C-12 Paging caveat: backend is non-paginated; paging tests reframed as client-side over a `limit` window (FR-6).
+
+### Open assumptions
+
+- OA-1 (#20): Android test-stack library versions/availability — no Android module in the reference tree; standard framework choices, confirm against the repo's `gradle/libs.versions.toml`.
+- OA-2 (#21): the literal dev-host IP `18.222.237.167:8000` is not in any provided source; the web client only references `VITE_API_BASE_URL`. Confirm with infra/CI config.
+- OA-3 (#22): the entire `PurchasesUiState` contract, Paging 3 usage, and stale-vs-empty precedence (OQ3) are owned by AND-221 and unverifiable here; tests pin AND-221's public API and must be revalidated when it merges.
+
+## 17. Test Plan
+
+IDs `TC-AND-222-NN`. "Traces" links to §14 acceptance criteria. Targets: JVM = JVM
+unit/Robolectric (local, no device); emulator = headless AVD `test35` (x86_64, API 35);
+physical = Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Repository/ViewModel/mapping
+cases are pure JVM and never need a device; instrumented intent/browser-launch and ABI/API-skew
+cases prefer the physical device.
+
+- **TC-AND-222-01 — List success mapping (happy path).**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `MockWebServer` wired to the real Retrofit/Moshi purchases service; fixture
+  `purchases_list_ok.json` is a **bare array** of `PurchaseTransactionSummary`.
+  Steps: enqueue 200 with the fixture; call `repo.listTransactions(limit=50)`.
+  Expected: `ApiResult.Success<List<Purchase>>`; first item maps `txn_id`, `amount` (42.99 as
+  decimal — not /100), `currency`, `status`, `created_at` (epoch seconds), optional
+  `merchant_id`/`external_ref`/`description`; recorded request path is
+  `/ui/purchase-history/transactions?limit=50`.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-222-02 — Error `detail` shape normalization (3 shapes + status codes).**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: service as above.
+  Steps: parameterized — enqueue (400, `{"detail":"bad"}`), (422, `{"detail":[{"msg":"x"}]}`),
+  (403, `{"detail":{"code":"role_required"}}`), (429, `{"detail":"slow down"}`), (401 body),
+  malformed JSON, and an empty body.
+  Expected: each yields `ApiResult.Error` (never a crash) with a stable normalized message
+  matching the `normalizeErrorDetail` rules; the `{code}` case maps to a human message.
+  Traces: AC-2.
+
+- **TC-AND-222-03 — Search passthrough to the dedicated endpoint.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: service as above.
+  Steps: call `repo.searchTransactions("ac me & co")`; inspect recorded request.
+  Expected: request hits `/ui/purchase-history/transactions/search` with URL-encoded
+  `q=ac+me+%26+co` (or `%20`); blank/whitespace query issues **no** request.
+  Traces: AC-2, AC-4.
+
+- **TC-AND-222-04 — Detail mapping incl. `shipping` present and null.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: fixtures `purchase_detail_with_shipping.json` and `purchase_detail_no_shipping.json`.
+  Steps: enqueue each 200; call `repo.getTransaction("txn_123")`.
+  Expected: maps `PurchaseTransactionInfo`; with shipping present, `shipping.carrier/tracking_number/tracking_url`
+  populated; with shipping absent, `shipping == null` and **no crash**; no `items[]` expected on
+  the DTO.
+  Traces: AC-3.
+
+- **TC-AND-222-05 — Timeout / offline surfaces a retryable error.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `MockWebServer` with `SocketPolicy.NO_RESPONSE`; short client timeout override.
+  Steps: call `repo.listTransactions()`.
+  Expected: `ApiResult.Error` (timeout/IO) within the test timeout, no hang; ViewModel maps to
+  `Error(retryable=true)` or `Stale` per the cache rule.
+  Traces: AC-2, AC-7 (no live host).
+
+- **TC-AND-222-06 — ViewModel state ordering: load/empty/error/retry.**
+  Type: unit (JVM, Turbine + `StandardTestDispatcher`). Target: JVM.
+  Preconditions: `FakePurchasesRepository`; `MainDispatcherRule`.
+  Steps: drive success → assert `Loading→Content`; empty array → `Loading→Empty`;
+  error result → `Loading→Error(retryable)`; then `retry()` with success → `Error→Loading→Content`,
+  asserting exactly one extra repo call.
+  Expected: emissions match the ordered `PurchasesUiState` sequence.
+  Traces: AC-4.
+
+- **TC-AND-222-07 — ViewModel stale-vs-empty and savedState survival.**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: fake with seeded cache; `SavedStateHandle`.
+  Steps: (a) cache present + refresh failure → assert `Stale`; cache absent + failure → assert
+  `Error`. (b) Set a search query, rebuild the ViewModel from the same `SavedStateHandle`
+  (simulated process death), assert query restored.
+  Expected: stale/empty branches and query persistence hold.
+  Note: OQ3 (zero-item success precedence) is asserted as `Empty` per §6 assumption; revisit if
+  AND-221 differs.
+  Traces: AC-4.
+
+- **TC-AND-222-08 — Search debounce collapses rapid input to one call.**
+  Type: unit (JVM, virtual time). Target: JVM.
+  Preconditions: fake recording `searchQueries`; controlled dispatcher.
+  Steps: emit 3 query changes within <300 ms, then `advanceTimeBy(300)`.
+  Expected: exactly one `searchTransactions` call with the final query string; no `Thread.sleep`.
+  Traces: AC-4, AC-9.
+
+- **TC-AND-222-09 — Paging / list materialization.**
+  Type: unit (JVM, `paging-testing`). Target: JVM.
+  Preconditions: fake `PagingData.from(fixtureList)` (or `asSnapshot`); list sized to `limit`.
+  Steps: collect `pagingFlow.asSnapshot { }`.
+  Expected: snapshot equals the fixture order/contents/size. Because the backend is
+  **non-paginated** (bare array bounded by `limit`), there is no server cursor; a server-driven
+  append assertion is N/A and, if AND-221 lacks Paging 3, this case is `@Ignore`d with that note.
+  Traces: AC-5.
+
+- **TC-AND-222-10 — History UI: rows, loading footer, empty state, search filter.**
+  Type: Compose-UI (Robolectric where feasible, else emulator). Target: emulator (or JVM/Robolectric).
+  Preconditions: fake-backed ViewModel; `PurchasesTestTags`.
+  Steps: render with fixture list → assert a node per item under `HISTORY_LIST`; drive append/fetching
+  → assert loading footer; render empty result → assert `EMPTY_STATE` with readable text;
+  type a query → assert filtered visible rows.
+  Expected: all states render with the expected tags/content.
+  Traces: AC-6.
+
+- **TC-AND-222-11 — Detail UI: render + tracking link present/absent.**
+  Type: Compose-UI rendering (Robolectric/emulator). Target: emulator (or JVM/Robolectric).
+  Preconditions: detail fixtures with and without `shipping.tracking_number`.
+  Steps: render detail; assert merchant/amount/status/created render; with tracking present assert
+  `TRACKING_LINK` exists and `assertHasClickAction()`; with tracking absent assert `TRACKING_LINK`
+  does not exist.
+  Expected: tracking affordance visibility keyed on `shipping.tracking_number`.
+  Traces: AC-6.
+
+- **TC-AND-222-12 — Tracking link opens the exact server URL (real intent dispatch).**
+  Type: instrumented/e2e (intent capture). Target: **physical device (SM-A156U)** — real
+  `ACTION_VIEW` browser launch behavior; fall back to emulator only if no device.
+  Preconditions: Espresso-Intents (`Intents.init()`) or fake URL handler; detail with
+  `tracking_url="https://track/1Z999"`.
+  Steps: tap `TRACKING_LINK`.
+  Expected: an `ACTION_VIEW` intent with `data == tracking_url` exactly (no appended session
+  cookies/tokens, no host rewrite). MUST run on the physical device when validating the real
+  chooser/Custom-Tabs path.
+  Traces: AC-6, plus security (no cookie leak in URL).
+
+- **TC-AND-222-13 — Resilience UI: offline/error renders Retry that invokes ViewModel retry.**
+  Type: Compose-UI (Robolectric/emulator). Target: emulator (or JVM/Robolectric).
+  Preconditions: fake forced to error; spy/record retry invocation.
+  Steps: render → assert `ERROR_STATE` + `RETRY_BUTTON` (readable text, not icon-only);
+  click `RETRY_BUTTON`.
+  Expected: ViewModel retry path invoked once; on subsequent success state transitions to content.
+  Traces: AC-6.
+
+- **TC-AND-222-14 — Accessibility: content descriptions, readable states, pseudo-locale.**
+  Type: Compose-UI a11y (Robolectric/emulator). Target: emulator (or JVM/Robolectric).
+  Preconditions: a11y assertions enabled; strings resolved via `context.getString(...)`.
+  Steps: assert content descriptions on search field, retry button, tracking link
+  (`onNodeWithContentDescription` / `assertHasClickAction`); assert empty/error expose text nodes;
+  set a pseudo-locale and assert the list still renders with tags intact.
+  Expected: no icon-only controls; no hardcoded English; no layout crash under pseudo-locale.
+  Traces: AC-6, AC-9.
+
+- **TC-AND-222-15 — No live-host network + ABI/API-skew smoke.**
+  Type: instrumented/e2e. Target: **physical device (SM-A156U, arm64-v8a, API 34)** AND emulator
+  (`test35`, x86_64, API 35) to catch ABI/API-34-vs-35 differences.
+  Preconditions: network monitoring/strict-mode or a guard that fails on any connection to
+  `18.222.237.167:8000`.
+  Steps: run the instrumented purchases suite on both targets.
+  Expected: zero connections to the dev host (all served by `MockWebServer`/fakes); suite passes
+  identically on arm64/API-34 and x86_64/API-35.
+  Traces: AC-7, AC-9.
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+| --- | --- |
+| AC-1 (core-data + feature unit tests green) | TC-01, TC-06..TC-09 |
+| AC-2 (success + 3 detail error shapes + status codes via MockWebServer) | TC-01, TC-02, TC-03, TC-05 |
+| AC-3 (detail items/tracking present+null, no crash) | TC-04, TC-11 |
+| AC-4 (UiState ordering + debounce via Turbine) | TC-06, TC-07, TC-08, TC-03 |
+| AC-5 (paging first page contents/size, refresh/append) | TC-09 |
+| AC-6 (Compose history/empty/error+retry/search/detail+tracking) | TC-10, TC-11, TC-12, TC-13 |
+| AC-7 (no live-host network) | TC-05, TC-15 |
+| AC-8 (JaCoCo ≥80% for the two packages) | Enforced by Gradle gate; exercised by TC-01..TC-14 |
+| AC-9 (deterministic, no sleep/clock/locale) | TC-08, TC-14, TC-15 |

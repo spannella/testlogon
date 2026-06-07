@@ -5,9 +5,10 @@ milestone: M5
 epic: E31
 priority: P2
 size: M
-status: draft
 depends_on: [AND-223]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-230 — US bank + microdeposits
@@ -16,10 +17,22 @@ blocks: []
 
 Deliver the native Android flow for paying with a **US bank account (ACH)** verified
 by **microdeposits**. The web reference exposes a single confirmation endpoint,
-`/ui/billing/us-bank/verify-microdeposits`, that takes the two small deposit
-amounts (or a Stripe-issued descriptor code) the customer received in their bank
-statement and verifies the previously-created bank payment method so it becomes
-chargeable.
+`POST /ui/billing/us-bank/verify-microdeposits`, that takes a Stripe
+`setup_intent_id` plus the two small deposit amounts (in cents) the customer
+received in their bank statement and verifies the previously-created bank setup so
+the resulting payment method becomes chargeable.
+
+> **[CORRECTED — verified against sources]** The endpoint identifies the pending
+> bank by the **Stripe `setup_intent_id`**, *not* by a `payment_method_id`
+> (confirmed: OpenAPI `VerifyMicrodepositsReq.setup_intent_id` is the only required
+> field; `src/api/endpoints/billing.ts: verifyMicrodeposits` posts
+> `{ setup_intent_id, amounts: [number, number] }`). The request schema also accepts
+> an optional `descriptor_code`, but the **web client never sends it** — the only
+> verified UI mode is the two-amounts mode. The 200 response is an open string map
+> (`object` with `additionalProperties: string`, i.e. `{ "status": "..." }`), *not*
+> a structured `{ state, is_default, attempts_remaining }` object. The Android
+> identifier model, response model, and descriptor-code/attempts-remaining behavior
+> in the sections below are amended accordingly; see §16 for the full audit.
 
 This ticket covers the **second, asynchronous half** of the US-bank lifecycle: a
 user has already initiated a bank-account add (which puts the payment method into a
@@ -63,18 +76,29 @@ Out of scope: initiating the bank-account add / collecting routing+account numbe
   domain models in `core-model` (`com.testlogon.android.core.model.billing`).
 - **Namespace / applicationId base:** `com.testlogon.android` — used for all
   packages and for the verification deep-link host (see §4.5).
-- **Auth:** cookie-based session; `ui_csrf` echoed as `X-CSRF-Token` on the
-  mutating verify POST; persistent cookie jar; single `POST /ui/session/refresh`
-  retry on 401 handled by the inherited OkHttp authenticator. This ticket adds no
-  auth logic.
+- **Auth:** cookie-based session; `ui_csrf` echoed as `X-CSRF-Token`; persistent
+  cookie jar; single `POST /ui/session/refresh` retry on 401 handled by the
+  inherited OkHttp authenticator. This ticket adds no auth logic. *(Verified
+  against `src/api/client.ts`: the web client sets `X-CSRF-Token` from the
+  `ui_csrf` cookie on **every** request — not only mutating ones — and also adds an
+  `Authorization: Bearer <accessToken>` header from its auth store. The Android
+  app's cookie-session-only model is a deliberate port choice inherited from
+  AND-223; the verify call MUST still carry `X-CSRF-Token`.)*
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext HTTP, unreliable — ~20s timeouts; the verify POST is **not**
   auto-retried; offline/stale UI states). OpenAPI at `/openapi.json`. Error
   `detail` is `string | [{msg}] | {code,...}`.
-- **Authoritative endpoint:** `POST /ui/billing/us-bank/verify-microdeposits`
-  (scope per backlog). Verify exact `operationId`, request schema, and response
-  schema against `/openapi.json` and `frontend/src/api/endpoints/billing.ts`
-  during implementation; §5 shapes are provisional until reconciled.
+- **Authoritative endpoint (verified):** `POST /ui/billing/us-bank/verify-microdeposits`,
+  `operationId = verify_microdeposits_ui_billing_us_bank_verify_microdeposits_post`,
+  `req = VerifyMicrodepositsReq`, `resp = 200: object{additionalProperties:string};
+  422: HTTPValidationError` (OpenAPI index line 1200 / pretty.json
+  `/ui/billing/us-bank/verify-microdeposits`). An identical `/api/...` twin exists
+  (index line 49); the **`/ui/...`** path is the one the web client uses
+  (`src/api/endpoints/billing.ts`). Request schema: `setup_intent_id` (string,
+  **required**), `amounts` (`int[] | null`), `descriptor_code` (`string | null`).
+  The only documented error is `422 HTTPValidationError`; no bank-specific error
+  schema exists. §5 has been reconciled to these shapes; remaining unknowns are
+  flagged as assumptions in §16.
 - **Upstream dependency — AND-223 (Billing API + DTOs):** provides the
   authenticated `Retrofit` singleton, `BillingApi` interface, `ApiResult<T>`,
   the shared FastAPI error mapper, Moshi codegen conventions, the `Money` value
@@ -86,45 +110,109 @@ Out of scope: initiating the bank-account add / collecting routing+account numbe
 
 ## 3. Functional Requirements
 
-FR-1. From the payment-methods list (AND-224), a US-bank method in a pending /
-`requires_verification` state shows a "Verify" affordance that navigates to
-`VerifyMicrodepositsScreen`, passing the payment-method id.
+FR-1. A pending US-bank verification is keyed by the Stripe **`setup_intent_id`**
+returned from the bank setup-intent step (AND-224/AND-225), not by a server
+`payment_method_id`. The entry point (a "Verify bank account" affordance on the
+payment-methods screen and/or a deep link) navigates to `VerifyMicrodepositsScreen`,
+passing the `setup_intent_id`.
 
-FR-2. The screen supports the two backend-supported verification modes, branched
-on what the pending method advertises (a `verificationMethod` field):
-  - **amounts** — two numeric amount fields (USD cents, 0–99 each), e.g. `32` and
-    `45` for $0.32 and $0.45.
-  - **descriptor_code** — a single 6-character code field (Stripe `SM####`-style
-    statement descriptor). If the backend exposes only one mode, render only that.
+> **[CORRECTED]** The web reference does NOT surface the pending bank as a row in
+> the payment-methods list keyed by `payment_method_id`. The `PaymentMethod` DTO
+> (`src/api/types.ts: PaymentMethod`) has no verification/pending fields. Instead
+> the web stores a `PendingBank { setup_intent_id, account_last4, routing_last4 }`
+> record in `localStorage` (`src/pages/billing/PaymentMethods.tsx`) and re-opens the
+> verify step from it. The Android port should mirror this: persist the pending
+> `setup_intent_id` (see §6) and route the verify screen by `setup_intent_id`.
+
+FR-2. **Only the amounts mode is verified as in-use.** The screen renders two
+numeric amount fields (USD **cents, 1–99 each**, i.e. $0.01–$0.99), e.g. `32` and
+`45` for $0.32 and $0.45.
+
+> **[CORRECTED]** There is no `verificationMethod`/`verification_method` field on any
+> DTO to branch on (not in `PaymentMethod`, not in any OpenAPI schema). The backend
+> `VerifyMicrodepositsReq` accepts an optional `descriptor_code`, but the web client
+> **never sends it** (`src/api/endpoints/billing.ts` posts only
+> `{ setup_intent_id, amounts }`). Treat amounts mode as the sole supported mode;
+> descriptor-code support is an **unverified backend capability** — do not build the
+> UI for it without a confirmed contract (see §16 Open assumptions). Also note the
+> valid cent range is **1–99** (web `parseDollarsToCents` rejects 0 and >0.99), not
+> 0–99.
 
 FR-3. The Verify button is enabled only when input is structurally valid (two
-amounts in `0..99`, or a non-blank descriptor code of expected length). Submitting
-calls the endpoint with the payment-method id and the entered values.
+amounts in `1..99`). Submitting calls the endpoint with the `setup_intent_id` and
+`amounts: [first, second]`.
 
 FR-4. On `200`/success the screen shows a success state ("Bank account verified"),
-emits a one-shot result event so the caller (AND-224 list / deep-link entry) can
-refresh, and offers navigation back. If the response indicates the method became
-the default or is now chargeable, surface that.
+clears the persisted pending record, emits a one-shot result event so the caller
+(payment-methods screen / deep-link entry) can refresh the payment-methods list,
+and offers navigation back.
 
-FR-5. On a wrong-amounts failure the screen stays on the form, shows an inline
-error, and — when the backend returns it — shows the **remaining attempts** count.
-When attempts are exhausted (terminal), the form is disabled and the user is told
-to re-add the bank account.
+> **[CORRECTED]** The success response is `{ "status": "..." }` (a string map) and
+> does **not** report `is_default` or chargeability (OpenAPI 200 =
+> `object{additionalProperties:string}`; web treats any 200 as success and just
+> toasts "Bank account verified and added"). Do not promise the user a
+> default/chargeable signal from this response; the payment-methods refresh after
+> success is the source of truth for default status.
 
-FR-6. Handle the non-happy lifecycle states: already-verified (treat as success /
-idempotent), verification expired (terminal, prompt re-add), and microdeposits not
-yet arrived (informational — "deposits can take 1–2 business days").
+FR-5. On a failure the screen stays on the form and shows an inline, retryable
+error mapped from the response `detail` (string / `[{msg}]` / `{code,message}`).
 
-FR-7. A verification deep link (`com.testlogon.android://billing/us-bank/verify?pm={id}`)
-opens the screen directly for the given payment method, so a "verify your bank
-account" email/notification can route users in. Deep-link routing is delegated to
-the navigation graph; resolution against the redirect handler (AND-231) is reused
-only for parsing if already present, otherwise a local deep-link route is declared.
+> **[CORRECTED — unverified attempts/lifecycle behavior]** The backend exposes
+> **no** documented "wrong amounts" status, no `attempts_remaining`, and no terminal
+> "attempts exhausted" code — the only declared error response is
+> `422 HTTPValidationError` (`detail: ValidationError[]`). The web client surfaces
+> failures generically (`toast.error(err.message)`) with no remaining-attempts
+> count. Therefore: render a generic retryable error for non-2xx; treat any
+> "remaining attempts", `409`/`410`/`429` lifecycle handling, and form-disable-on-
+> exhaustion as **speculative** until the backend contract is confirmed (OQ-1, §16).
+
+FR-6. Show an informational hint that "deposits can take 1–2 business days." Any
+richer lifecycle handling (already-verified-idempotent, verification-expired) is
+**best-effort only** and gated on the response/error actually carrying such a
+signal.
+
+> **[CORRECTED — unverified]** None of `already_verified`, `verification_expired`,
+> or a "deposits not yet arrived" state appears in OpenAPI or the frontend. The
+> 1–2-business-days copy is a safe static UI hint (the web add-bank dialog uses
+> similar wording). Do not build branch logic keyed on lifecycle codes that the
+> contract does not define.
+
+FR-7. A verification deep link
+(`com.testlogon.android://billing/us-bank/verify?sid={setup_intent_id}`) opens the
+screen directly for the given pending setup intent, so a "verify your bank account"
+email/notification can route users in. Deep-link routing is delegated to the
+navigation graph; resolution against the redirect handler (AND-231) is reused only
+for parsing if already present, otherwise a local deep-link route is declared.
+
+> **[CORRECTED]** The deep-link parameter is the `setup_intent_id` (renamed from the
+> earlier `pm={id}`), consistent with FR-1 and the verify request body. There is no
+> verified server `payment_method_id` to deep-link by at verification time.
 
 FR-8. The screen is fully usable offline-aware: if the device is offline or the
 host times out, show a retryable error rather than a spinner that never resolves.
 
 ## 4. Technical Design
+
+> **[CORRECTION BANNER — applies to all of §4]** The code sketches below were
+> written against an assumed `payment_method_id` + rich-response contract. Per the
+> verified sources, apply these overrides everywhere in §4:
+> 1. The request/identifier key is **`setup_intent_id`** (string, required), not
+>    `payment_method_id`. Rename `paymentMethodId`/`pmId`/`pm` → `setupIntentId`/`sid`
+>    in the DTO, repository, ViewModel, and nav args.
+> 2. `VerifyMicrodepositsRequestDto` has fields `setup_intent_id` (required),
+>    `amounts: List<Int>?`, `descriptor_code: String?` (optional, **not used by the
+>    verified UI**). For amounts mode send `{ setup_intent_id, amounts:[a,b] }`.
+> 3. The 200 body is a `Map<String, String>` (e.g. `{ "status": "verified" }`).
+>    Model the response as `Map<String,String>` (or a tiny
+>    `VerifyMicrodepositsResponseDto(status: String?)`) — there is **no** `state`,
+>    `is_default`, or `attempts_remaining` field. `isDefault` must come from a
+>    subsequent payment-methods fetch, not this response. `UsBankVerificationResult`
+>    should carry only what is real: `setupIntentId` and a derived success flag;
+>    keep `attemptsRemaining`/`state` only as nullable "unverified extension" fields
+>    that default to null/UNKNOWN.
+> 4. The success/error reduction is: HTTP 200 → success; any non-2xx → generic
+>    retryable error from mapped `detail`. Lifecycle/attempts branching is
+>    speculative (see §16).
 
 ### 4.1 Domain models (`core-model`)
 
@@ -149,10 +237,10 @@ sealed interface MicrodepositInput {
 }
 
 data class UsBankVerificationResult(
-    val paymentMethodId: String,
+    val setupIntentId: String,     // CORRECTED: keyed by setup_intent_id, not pm id
     val state: UsBankVerificationState,
-    val isDefault: Boolean,
-    val attemptsRemaining: Int?,   // null when backend does not report
+    val isDefault: Boolean,        // NOT from verify response; from later pm fetch
+    val attemptsRemaining: Int?,   // unverified extension; null in practice
 )
 ```
 
@@ -163,21 +251,21 @@ Extends the AND-223 `BillingApi` (same authenticated Retrofit, same Moshi codege
 ```kotlin
 package com.testlogon.android.core.network.billing
 
+// CORRECTED to match OpenAPI VerifyMicrodepositsReq.
 @JsonClass(generateAdapter = true)
 data class VerifyMicrodepositsRequestDto(
-    @Json(name = "payment_method_id") val paymentMethodId: String,
-    // Exactly one of the following groups is non-null, matching verification_method:
-    @Json(name = "amounts") val amounts: List<Int>? = null,        // [32, 45] = $0.32,$0.45 (cents)
-    @Json(name = "descriptor_code") val descriptorCode: String? = null, // "SM12AB"
+    @Json(name = "setup_intent_id") val setupIntentId: String,      // REQUIRED
+    @Json(name = "amounts") val amounts: List<Int>? = null,         // [32, 45] = $0.32,$0.45 (cents)
+    @Json(name = "descriptor_code") val descriptorCode: String? = null, // optional; UNUSED by verified UI
 )
 
+// CORRECTED: OpenAPI 200 = object{additionalProperties:string} (web: { status }).
+// There is NO state / is_default / attempts_remaining in the response.
 @JsonClass(generateAdapter = true)
 data class VerifyMicrodepositsResponseDto(
-    @Json(name = "payment_method_id") val paymentMethodId: String,
-    @Json(name = "state") val state: String,                  // verified|requires_verification|...
-    @Json(name = "is_default") val isDefault: Boolean = false,
-    @Json(name = "attempts_remaining") val attemptsRemaining: Int? = null,
+    @Json(name = "status") val status: String? = null,   // e.g. "verified"; treat any 200 as success
 )
+// (Equivalently the call may be typed `Map<String, String>` and read `["status"]`.)
 
 // added to the existing BillingApi interface:
 @POST("ui/billing/us-bank/verify-microdeposits")
@@ -186,15 +274,19 @@ suspend fun verifyMicrodeposits(
 ): VerifyMicrodepositsResponseDto
 ```
 
-Mapper (total, never throws; unknown `state` → `UNKNOWN`):
+Mapper (total, never throws; unknown/absent `status` → `UNKNOWN`):
 
 ```kotlin
-internal fun VerifyMicrodepositsResponseDto.toDomain() = UsBankVerificationResult(
-    paymentMethodId = paymentMethodId,
-    state = state.toUsBankVerificationState(),
-    isDefault = isDefault,
-    attemptsRemaining = attemptsRemaining,
-)
+// CORRECTED: the response carries only an optional status string. setupIntentId is
+// carried through from the request; isDefault/attemptsRemaining are NOT in the
+// response (left null/false here, resolved by a later payment-methods fetch).
+internal fun VerifyMicrodepositsResponseDto.toDomain(setupIntentId: String) =
+    UsBankVerificationResult(
+        setupIntentId = setupIntentId,
+        state = status.toUsBankVerificationState(),  // "verified" → VERIFIED, else UNKNOWN
+        isDefault = false,
+        attemptsRemaining = null,
+    )
 ```
 
 ### 4.3 Repository (`core-data`)
@@ -279,8 +371,10 @@ informational notice.
 stateless composable driven by `uiState`. Two route entries in the billing nav
 graph:
 
-- In-app: `route = "billing/us-bank/verify/{pm}"`, arg `pm: String`.
-- Deep link: `deepLink = "com.testlogon.android://billing/us-bank/verify?pm={pm}"`.
+- In-app: `route = "billing/us-bank/verify/{sid}"`, arg `sid: String` (the
+  `setup_intent_id`). *(CORRECTED from `{pm}`.)*
+- Deep link: `deepLink = "com.testlogon.android://billing/us-bank/verify?sid={sid}"`.
+  *(CORRECTED from `?pm={pm}`.)*
 
 The amounts mode renders two `OutlinedTextField`s with a leading `$0.` prefix and a
 `KeyboardType.NumberPassword` (digits only); the descriptor mode renders a single
@@ -295,50 +389,62 @@ carries the `X-CSRF-Token` header injected by the shared interceptor.
 |------|------|------|----------|
 | POST | `/ui/billing/us-bank/verify-microdeposits` | `VerifyMicrodepositsRequestDto` | `VerifyMicrodepositsResponseDto` |
 
-Request (amounts mode):
+Request (verified amounts mode — `VerifyMicrodepositsReq`):
 
 ```json
-{ "payment_method_id": "pm_usbank_7a3", "amounts": [32, 45] }
+{ "setup_intent_id": "seti_1ABCdef", "amounts": [32, 45] }
 ```
 
-Request (descriptor-code mode):
+Request (descriptor-code mode — schema-permitted but **unused by the web client**,
+unverified):
 
 ```json
-{ "payment_method_id": "pm_usbank_7a3", "descriptor_code": "SM12AB" }
+{ "setup_intent_id": "seti_1ABCdef", "descriptor_code": "SM12AB" }
 ```
 
-Success `200`:
+Success `200` — `object` with `additionalProperties: string` (verified):
 
 ```json
-{
-  "payment_method_id": "pm_usbank_7a3",
-  "state": "verified",
-  "is_default": true,
-  "attempts_remaining": null
-}
+{ "status": "verified" }
 ```
 
-Wrong-amounts failure — backend may return `400`/`402`/`422` with the FastAPI
-`detail` envelope (reconcile actual status against `/openapi.json`):
+Failure — the **only documented** error response is `422 HTTPValidationError`
+(verified: OpenAPI `responses.422 = HTTPValidationError`):
 
 ```json
-{ "detail": { "code": "microdeposits_amounts_incorrect", "message": "Amounts do not match", "attempts_remaining": 2 } }
+{ "detail": [ { "loc": ["body", "amounts"], "msg": "field required", "type": "value_error.missing" } ] }
 ```
 
-Other relevant statuses (handled, tested): `409` already verified (treat as
-idempotent success — re-fetch state), `410`/`code:"verification_expired"`
-(terminal, prompt re-add), `429`/`code:"too_many_attempts"` (terminal),
-`404` unknown payment method, `401` (handled by the inherited refresh-and-retry
-authenticator). The string and list `detail` shapes are also accepted by the
-shared mapper. **All field names, the wrong-amounts HTTP status, and whether
-`attempts_remaining` arrives inside `detail` vs. the top-level body are provisional
-and MUST be confirmed against `/openapi.json` and `billing.ts`** (OQ-1).
+> **[CORRECTED — the earlier rich error taxonomy is unverified]** The OpenAPI spec
+> declares no `400`/`402`/`409`/`410`/`429` responses for this operation, no
+> `code:"microdeposits_amounts_incorrect"` / `verification_expired` /
+> `too_many_attempts` / `already_verified`, and no `attempts_remaining` field
+> anywhere (grepped across `openapi.pretty.json` and `reference/src/` — zero hits).
+> The web client (`src/pages/billing/PaymentMethods.tsx: handleVerify`) treats any
+> thrown `ApiError` generically via `toast.error(err.message)`. The shared mapper
+> still accepts the `detail` shapes `string | [{msg}] | {code,message}`
+> (`src/api/client.ts: normalizeErrorDetail`), so the Android error mapper should
+> map a wrong-amounts rejection to a **generic retryable** error from `detail`,
+> NOT to fabricated bank-specific codes. `401` is handled by the inherited
+> refresh-and-retry authenticator (verified: `src/api/client.ts` refresh path).
+> Any attempts-count / lifecycle behavior remains an **open backend question**
+> (OQ-1) and must not be assumed implemented.
 
 ## 6. Data & State Management
 
-- **Transient by design.** No new Room entity or DataStore key is introduced. The
-  ViewModel holds `VerifyMicrodepositsUiState` in a `StateFlow`; entered amounts /
-  code live only in `SavedStateHandle`-backed UI state and are never persisted.
+- **Transient by design.** No new Room entity or DataStore key is introduced for
+  the entered amounts. The ViewModel holds `VerifyMicrodepositsUiState` in a
+  `StateFlow`; entered amounts live only in `SavedStateHandle`-backed UI state and
+  are never persisted.
+
+> **[CORRECTED / NOTE]** The web reference DOES persist the *pending* state across
+> sessions: a `PendingBank { setup_intent_id, account_last4, routing_last4 }` is
+> stored in `localStorage` (`src/pages/billing/PaymentMethods.tsx`) so the user can
+> close the dialog and return days later to verify. The Android equivalent (a small
+> DataStore/Prefs `pending-bank` record holding the `setup_intent_id`, NOT the
+> amounts) is the natural home for this and is owned by the bank-add flow
+> (AND-224/AND-225); this verify screen consumes the `setup_intent_id` from that
+> record or the deep link. Only the **amounts** are transient and unpersisted.
 - **Source of truth** for the payment method's verification state is the server;
   this screen does not cache it. On success it emits `VerifyEvent.Verified` and the
   payment-methods list (AND-224) re-fetches `/ui/billing/payment-methods` so the
@@ -356,14 +462,18 @@ and MUST be confirmed against `/openapi.json` and `billing.ts`** (OQ-1).
 - **~20s timeout** per attempt given the unreliable host; on `IOException` /
   timeout show a generic retryable "Couldn't reach the server" error, not a stuck
   spinner (`isSubmitting` always resets in a `finally`).
-- **Typed mapping** via the shared `ApiErrorMapper`: the bank-specific `code`
-  values are mapped to a `UsBankError` enum
-  (`AMOUNTS_INCORRECT`, `TOO_MANY_ATTEMPTS`, `EXPIRED`, `ALREADY_VERIFIED`,
-  `NOT_FOUND`, `GENERIC`) so the ViewModel can choose retryable vs. terminal UI and
-  read `attempts_remaining`.
-- **Idempotency:** `409 already_verified` is reduced to the success path (the goal
-  state is reached), preventing a confusing error if the user double-submits or
-  returns after a prior success.
+- **Typed mapping** via the shared `ApiErrorMapper`. **[CORRECTED]** Because none of
+  the bank-specific codes (`microdeposits_amounts_incorrect`, `too_many_attempts`,
+  `verification_expired`, `already_verified`) nor `attempts_remaining` exist in the
+  verified contract (only `422 HTTPValidationError`), the `UsBankError` enum should
+  start minimal — e.g. `VALIDATION` (422), `NOT_FOUND` (404, if returned),
+  `NETWORK`, `GENERIC` — and the mapper falls back to a generic retryable error
+  built from `detail`. The richer enum values may be added later **iff** a backend
+  contract surfaces them; until then they are dead branches and must not gate UI.
+- **Idempotency:** *(unverified)* re-submitting after a prior success may simply
+  re-return `200`; the contract defines no `409 already_verified`. Treat a 200 as
+  success regardless. Do not implement a `409`→success special case absent a
+  confirmed contract.
 - **Mapper resilience:** unknown `state` → `UNKNOWN` (rendered as a safe generic
   error prompting refresh), never a crash.
 
@@ -462,15 +572,19 @@ Fixtures under `core-network/src/test/resources/billing/usbank/*.json`.
 
 ## 13. Risks & Open Questions
 
-- **OQ-1 (response shape):** Confirm against `/openapi.json` + `billing.ts`: the
-  exact request schema (is it `amounts: [int,int]` in cents, or `amounts: [str]`,
-  or separate `first_amount`/`second_amount`?), whether `descriptor_code` mode
-  exists, the HTTP status for wrong amounts, and whether `attempts_remaining`
-  arrives top-level or inside `detail`. The §5 shapes are provisional.
-- **OQ-2 (verification method discovery):** How does the pending payment method
-  advertise which mode (`amounts` vs `descriptor_code`) to render? Expected via a
-  `verification_method` field on the payment-method DTO (AND-224). If absent,
-  default to amounts mode and file a backend request.
+- **OQ-1 (response/request shape) — PARTIALLY RESOLVED.** Verified against
+  `openapi.pretty.json` + `src/api/endpoints/billing.ts`: request is
+  `{ setup_intent_id (required), amounts: int[] (cents), descriptor_code: string? }`;
+  success 200 is `object{additionalProperties:string}` (`{ "status": ... }`).
+  **Still open:** the actual HTTP status/`detail` shape returned for *incorrect*
+  amounts (only `422 HTTPValidationError` is documented; Stripe-driven mismatches
+  likely surface as a different runtime status not captured in OpenAPI), and
+  whether any `attempts_remaining` is ever returned (no evidence it is). Treat as a
+  generic retryable error until confirmed against the live dev backend.
+- **OQ-2 (verification method discovery) — RESOLVED (negative).** There is **no**
+  `verification_method` field on the `PaymentMethod` DTO or any schema, and the web
+  client only ever uses amounts mode. Render amounts mode only; do not build
+  descriptor-code UI without a confirmed backend contract.
 - **OQ-3 (initiation ownership):** Confirm that adding the bank account +
   triggering microdeposits is fully owned by AND-224/AND-225 and that this endpoint
   is verify-only. If initiation also lives behind a `/ui/billing/us-bank/*` route,
@@ -485,21 +599,29 @@ Fixtures under `core-network/src/test/resources/billing/usbank/*.json`.
 ## 14. Acceptance Criteria
 
 1. `BillingApi.verifyMicrodeposits` exists, POSTs to
-   `/ui/billing/us-bank/verify-microdeposits` with the correct body for both input
-   modes, and carries `X-CSRF-Token` — proven by MockWebServer tests.
+   `/ui/billing/us-bank/verify-microdeposits` with the verified body
+   `{ setup_intent_id, amounts:[a,b] }`, and carries `X-CSRF-Token` — proven by
+   MockWebServer tests. *(CORRECTED: `setup_intent_id` body; amounts mode only —
+   descriptor-code is not a required mode.)*
 2. `VerifyMicrodepositsRequestDto` / `VerifyMicrodepositsResponseDto` and the
-   `UsBankVerificationResult` domain model + total `toDomain()` mapper exist;
-   unknown `state` → `UNKNOWN`; fixtures deserialize with all fields asserted.
+   `UsBankVerificationResult` domain model + total `toDomain()` mapper exist; the
+   200 string-map response (`{ "status": ... }`) deserializes, a `"verified"`
+   status maps to success, and an absent/unknown status → `UNKNOWN` without
+   crashing. *(CORRECTED: response is a string map, not a structured object.)*
 3. `UsBankRepository.verifyMicrodeposits` returns
    `ApiResult<UsBankVerificationResult>` and maps bank-specific error codes to the
    `UsBankError` enum, including `attempts_remaining`.
 4. `VerifyMicrodepositsViewModel` exposes `StateFlow<VerifyMicrodepositsUiState>`:
-   correct amounts → success state + `VerifyEvent.Verified`; wrong amounts → inline
-   error with remaining attempts and a still-usable form; exhausted/expired →
-   disabled form with terminal copy; `409 already_verified` → success.
-5. `VerifyMicrodepositsScreen` renders the correct mode, gates Verify on valid
-   input, and shows success/error/info states; reachable in-app and via the
-   `com.testlogon.android://billing/us-bank/verify?pm={id}` deep link.
+   correct amounts (HTTP 200) → success state + `VerifyEvent.Verified`; a non-2xx
+   rejection → inline retryable error mapped from `detail`, with the form still
+   usable. *(CORRECTED: remaining-attempts / exhausted-terminal / `409
+   already_verified` branches are unverified and not required by this AC; implement
+   them only if a confirmed contract surfaces them.)*
+5. `VerifyMicrodepositsScreen` renders the amounts mode, gates Verify on valid
+   input (two cents in 1–99), and shows success/error/info states; reachable in-app
+   and via the
+   `com.testlogon.android://billing/us-bank/verify?sid={setup_intent_id}` deep
+   link. *(CORRECTED deep-link param: `sid`.)*
 6. Timeout/offline yields a retryable error and never a stuck spinner.
 7. No amounts or descriptor code are logged or sent to analytics; events carry only
    ids/codes.
@@ -524,3 +646,256 @@ Fixtures under `core-network/src/test/resources/billing/usbank/*.json`.
   new `BillingApi` method, repository, and ViewModel describes the flow for AND-224
   to wire without re-reading the backend.
 - Reviewed and merged to branch `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its VERDICT and exact SOURCE pointer.
+
+1. **Endpoint path & method:** `POST /ui/billing/us-bank/verify-microdeposits`.
+   **Verified.** OpenAPI index line 1200 `POST /ui/billing/us-bank/verify-microdeposits`
+   (op `verify_microdeposits_ui_billing_us_bank_verify_microdeposits_post`);
+   `src/api/endpoints/billing.ts: verifyMicrodeposits`. (An `/api/...` twin also
+   exists: index line 49.)
+2. **Request body identifier is `setup_intent_id` (required), NOT
+   `payment_method_id`.** **Corrected.** OpenAPI
+   `components.schemas.VerifyMicrodepositsReq` (`required: [setup_intent_id]`);
+   `src/api/endpoints/billing.ts: verifyMicrodeposits` posts
+   `{ setup_intent_id, amounts: [number, number] }`;
+   `src/pages/billing/PaymentMethods.tsx` derives `setup_intent_id` from the
+   setup-intent `client_secret`.
+3. **Request `amounts` is `int[]` (cents).** **Verified.**
+   `VerifyMicrodepositsReq.amounts = (array<integer> | null)`; web sends
+   `[cents1, cents2]`.
+4. **Request `descriptor_code` exists but is unused by the web UI.** **Corrected**
+   (spec treated it as a first-class branchable mode). OpenAPI
+   `VerifyMicrodepositsReq.descriptor_code = (string | null)`, optional; no
+   reference in `src/` posts it (grep `descriptor_code` → only the spec/Android side).
+5. **Success 200 response is a string map (`{ "status": ... }`), NOT
+   `{ payment_method_id, state, is_default, attempts_remaining }`.** **Corrected.**
+   OpenAPI `responses.200.schema = object{ additionalProperties: { type: string } }`;
+   `src/api/endpoints/billing.ts` types it `{ status: string }`.
+6. **`verification_method` field used to choose amounts vs descriptor mode.**
+   **Corrected (does not exist).** `src/api/types.ts: PaymentMethod` has only
+   `{ payment_method_id, method_type, label?, brand?, last4?, exp_month?, exp_year?,
+   priority, provider?, provider_method_id?, is_default }`; no verification field in
+   any OpenAPI schema.
+7. **Valid amount range is cents 1–99 ($0.01–$0.99).** **Corrected** (spec said
+   0–99). `src/pages/billing/PaymentMethods.tsx: parseDollarsToCents` rejects `<0`,
+   `>0.99`, and `0`.
+8. **CSRF: `X-CSRF-Token` from the `ui_csrf` cookie on the verify POST.**
+   **Verified** (with nuance). `src/api/client.ts` sets `X-CSRF-Token` from the
+   `ui_csrf` cookie on **every** request (not only mutating ones) and also adds
+   `Authorization: Bearer <accessToken>`; the Android cookie-session port omits the
+   bearer header (inherited AND-223 choice) but keeps CSRF.
+9. **401 → single `POST /ui/session/refresh` retry.** **Verified.**
+   `src/api/client.ts: refreshSession` / the 401 branch (single in-flight
+   `refreshPromise`, one retry, then `logout("session_expired")`).
+10. **Only documented error response is `422 HTTPValidationError`.** **Verified.**
+    OpenAPI `.../verify-microdeposits.post.responses = { 200, 422 }`;
+    `HTTPValidationError.detail = ValidationError[]`.
+11. **Bank-specific error codes `microdeposits_amounts_incorrect`,
+    `too_many_attempts`, `verification_expired`, `already_verified` and an
+    `attempts_remaining` field.** **Unverified-assumption (no evidence; likely
+    fabricated).** Grep of `openapi.pretty.json` and `reference/src/` for each token
+    → zero matches. Web error handling is generic
+    (`src/pages/billing/PaymentMethods.tsx: handleVerify` → `toast.error`).
+12. **`409 already_verified` → idempotent success; `410`/`429` terminal lifecycle.**
+    **Unverified-assumption.** No such statuses declared for this operation in
+    OpenAPI.
+13. **`detail` envelope shape `string | [{msg}] | {code,...}` is parsed by the
+    shared mapper.** **Verified.** `src/api/client.ts: normalizeErrorDetail` handles
+    string, `[{msg}]`, and object-with-`code`/`msg`.
+14. **Pending bank is persisted client-side for return-later verification.**
+    **Verified (web model).** `src/pages/billing/PaymentMethods.tsx`:
+    `localStorage` key `billing-pending-bank` holding
+    `{ setup_intent_id, account_last4, routing_last4 }`. (Android: persist
+    `setup_intent_id`, not amounts.)
+15. **Stripe test bank values (`account 000123456789`, `routing 110000000`).**
+    **Verified (as web placeholders).** `src/pages/billing/PaymentMethods.tsx`
+    input placeholders. The deterministic test *microdeposit amounts* (e.g. 32/45)
+    are **Unverified-assumption** — not present in sources; confirm against the dev
+    backend/Stripe test mode.
+16. **Android framework choices** (Compose/Material 3 screen, `@HiltViewModel`,
+    `StateFlow`, `Channel` one-shot events, `SavedStateHandle`, Nav-Compose route +
+    `navDeepLink`). **Verified — framework ref:**
+    https://developer.android.com/jetpack/compose ,
+    https://developer.android.com/training/dependency-injection/hilt-android ,
+    https://developer.android.com/kotlin/flow/stateflow-and-sharedflow ,
+    https://developer.android.com/guide/navigation/navigation-deep-link . These are
+    standard port choices, not backend claims.
+
+### Corrections made
+
+- §1, §2, §5, §14: identifier corrected from `payment_method_id` →
+  **`setup_intent_id`** (required field of `VerifyMicrodepositsReq`).
+- §1, §4, §5, §14: success response corrected from a structured object to a
+  **string map `{ "status": ... }`**; removed reliance on `state`/`is_default`/
+  `attempts_remaining` from the verify response.
+- §3 FR-2 / §13 OQ-2: removed the non-existent `verification_method`-based mode
+  branching; **amounts mode is the only verified mode**; descriptor-code demoted to
+  an unverified backend capability.
+- §3 FR-3 / FR-5: amount range corrected `0..99` → **`1..99`**; wrong-amounts
+  handling changed from a fabricated typed error w/ remaining-attempts to a
+  **generic retryable error from `detail`**.
+- §3 FR-7, §4.5: deep-link/nav param corrected `pm`/`{pm}` → **`sid`/{setup_intent_id}`**.
+- §6: noted the web's **persisted pending-bank record** (the spec wrongly implied
+  nothing is persisted).
+- §7: `UsBankError` enum trimmed to verifiable values; removed the `409→success`
+  special case.
+- Frontmatter: `status: reviewed`, added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Wrong/incorrect-amounts runtime status & body.** OpenAPI documents only
+  `422 HTTPValidationError`; a Stripe-side amount mismatch almost certainly returns
+  *something* at runtime, but its status/shape is not captured in any source. Why
+  unverifiable: not in OpenAPI, and the web client only logs `err.message`
+  generically. **Action:** probe the live dev backend (manual test) and record the
+  real shape before finalizing the error mapper.
+- **`attempts_remaining` / attempt-limit semantics.** No evidence anywhere.
+  Treated as non-existent; UI must not depend on it.
+- **Deterministic Stripe test microdeposit amounts.** Not in sources; must be
+  confirmed against the dev/Stripe test configuration.
+- **`is_default` / chargeability after verification.** Not in the verify response;
+  must be read from a subsequent `GET /ui/billing/payment-methods` fetch.
+- **Whether the backend ever supports `descriptor_code` end-to-end.** Schema-present
+  but unused by web; no confirmation it is wired. Do not build the UI for it.
+
+## 17. Test Plan
+
+IDs `TC-AND-230-NN`. Test targets per the CI/dev matrix: **JVM/Robolectric**
+(local, no device), **emulator AVD `test35`** (x86_64, API 35), **physical device**
+Samsung Galaxy A15 5G (SM-A156U, serial `R5CX821TA9R`, API 34, arm64-v8a). This
+ticket is a Compose form + Retrofit call with no camera/biometric/WebRTC/FCM
+surface, so most cases run JVM or emulator; the physical device is used only where
+real-network/ABI behavior matters.
+
+- **TC-AND-230-01 — Request serialization (amounts mode).**
+  Type: contract/MockWebServer. Target: JVM/Robolectric (MockWebServer).
+  Preconditions: `BillingApi` wired to a MockWebServer base URL; auth interceptor
+  injects `X-CSRF-Token`. Steps: call
+  `verifyMicrodeposits(setupIntentId="seti_1ABCdef", Amounts(32,45))`; enqueue a 200
+  `{ "status": "verified" }`. Expected: recorded request is `POST
+  /ui/billing/us-bank/verify-microdeposits`, JSON body
+  `{"setup_intent_id":"seti_1ABCdef","amounts":[32,45]}` (no `descriptor_code` /
+  no `payment_method_id`), header `X-CSRF-Token` present. Traces: AC-1.
+
+- **TC-AND-230-02 — Success response deserialization & mapping.**
+  Type: unit. Target: JVM. Preconditions: Moshi adapters generated. Steps:
+  deserialize `{ "status": "verified" }`; run `toDomain("seti_1ABCdef")`. Expected:
+  `UsBankVerificationResult(setupIntentId="seti_1ABCdef", state=VERIFIED,
+  isDefault=false, attemptsRemaining=null)`. Traces: AC-2.
+
+- **TC-AND-230-03 — Unknown/absent status maps to UNKNOWN (mapper totality).**
+  Type: unit. Target: JVM. Preconditions: none. Steps: deserialize `{}` and
+  `{ "status": "weird" }`; map each. Expected: no throw; `state == UNKNOWN`. Traces:
+  AC-2.
+
+- **TC-AND-230-04 — Repository wraps 200 into `ApiResult.Success`.**
+  Type: contract/MockWebServer. Target: JVM/Robolectric. Preconditions: MockWebServer.
+  Steps: enqueue 200 `{ "status": "verified" }`; call
+  `UsBankRepository.verifyMicrodeposits`. Expected:
+  `ApiResult.Success(UsBankVerificationResult(state=VERIFIED))`. Traces: AC-3, AC-2.
+
+- **TC-AND-230-05 — 422 validation error maps to a generic retryable error.**
+  Type: contract/MockWebServer. Target: JVM/Robolectric. Preconditions: MockWebServer.
+  Steps: enqueue `422 {"detail":[{"loc":["body","amounts"],"msg":"field
+  required","type":"value_error.missing"}]}`; call the repository. Expected:
+  `ApiResult.Error` whose message derives from `detail[].msg` ("field required");
+  mapped `UsBankError == VALIDATION` (or `GENERIC`); error is retryable. Traces:
+  AC-3, AC-4.
+
+- **TC-AND-230-06 — ViewModel happy path emits `Verified` and clears pending.**
+  Type: unit (Turbine on `uiState`/`events`). Target: JVM. Preconditions: repo
+  faked to return success. Steps: set fields `32`/`45`, assert `canSubmit==true`,
+  call `submit()`. Expected: `isSubmitting` toggles true→false; success UI state;
+  one `VerifyEvent.Verified(setupIntentId, isDefault=false)` emitted; persisted
+  pending-bank record cleared. Traces: AC-4, AC-1.
+
+- **TC-AND-230-07 — Input validation gates Verify (range 1–99, digit-only).**
+  Type: unit. Target: JVM. Preconditions: fresh VM. Steps: try `""`, `0`, `100`,
+  `1a` in each amount field; then `1`/`99`. Expected: `canSubmit==false` for
+  empty/`0`/`>99`/non-digit and for a single filled field; `true` only when both are
+  in `1..99`; non-digit/over-length input is rejected at `onChange`. Traces: AC-4,
+  AC-5.
+
+- **TC-AND-230-08 — Wrong-amounts rejection keeps the form usable.**
+  Type: unit (Turbine). Target: JVM. Preconditions: repo faked to return
+  `ApiResult.Error` (simulating the live mismatch response; see Open assumptions).
+  Steps: submit `11`/`22`. Expected: inline retryable error shown; `isSubmitting`
+  reset to false; form still enabled (`isFormDisabled==false`); NO fabricated
+  attempts-remaining value asserted. Traces: AC-4.
+
+- **TC-AND-230-09 — Offline / host timeout yields retryable error, not a stuck
+  spinner.** Type: integration/MockWebServer. Target: JVM/Robolectric.
+  Preconditions: MockWebServer set to no-response / socket policy
+  `NO_RESPONSE`, OkHttp read timeout ~20s (shortened in test). Steps: `submit()`;
+  await timeout. Expected: `ApiResult.Error` (IOException) → "Couldn't reach the
+  server" retryable error; `isSubmitting` reset in `finally`; re-tapping Verify
+  re-issues the request. Traces: AC-6.
+
+- **TC-AND-230-10 — Verify-only POST is not auto-retried.**
+  Type: contract/MockWebServer. Target: JVM/Robolectric. Preconditions: MockWebServer
+  enqueues a single 503 then a 200. Steps: `submit()` once. Expected: exactly **one**
+  request hits the server (mutating POST excluded from the idempotent-GET retry
+  policy); the 503 surfaces as an error, not silently retried. Traces: AC-6, AC-1.
+
+- **TC-AND-230-11 — Compose: end-to-end success against MockWebServer.**
+  Type: Compose-UI. Target: emulator AVD `test35` (API 35). Preconditions:
+  `createAndroidComposeRule`, MockWebServer enqueues 200 `{ "status": "verified" }`.
+  Steps: enter `32` and `45`, tap "Verify". Expected: success node ("Bank account
+  verified") shown; Verify button disabled during submit; recorded request body
+  `{"setup_intent_id":...,"amounts":[32,45]}`. Traces: AC-5, AC-4, AC-1.
+
+- **TC-AND-230-12 — Compose: deep link resolves the `sid` arg.**
+  Type: instrumented/e2e. Target: emulator AVD `test35`. Preconditions: nav graph
+  with the `navDeepLink`. Steps:
+  `adb shell am start -a android.intent.action.VIEW -d
+  "com.testlogon.android://billing/us-bank/verify?sid=seti_1ABCdef"`. Expected:
+  `VerifyMicrodepositsScreen` opens with `setupIntentId == "seti_1ABCdef"`; a
+  malformed/missing `sid` routes to a safe error/empty state, not a crash. Traces:
+  AC-5.
+
+- **TC-AND-230-13 — Accessibility (TalkBack semantics & touch targets).**
+  Type: Compose-UI (a11y assertions). Target: emulator AVD `test35`. Preconditions:
+  screen rendered. Steps: assert content descriptions ("first deposit amount,
+  dollars and cents" / "second deposit amount"), Verify button has a click action
+  and ≥48dp target; trigger an error and assert the inline error node is a
+  `liveRegion`; assert IME "Done" on the last field invokes submit when valid.
+  Expected: all semantics present; error announced. Traces: AC-5, AC-4.
+
+- **TC-AND-230-14 — No-leak logging/analytics (security/privacy).**
+  Type: unit. Target: JVM. Preconditions: in-memory log + fake analytics sink;
+  `HttpLoggingInterceptor` at `BASIC`. Steps: run a submit through the stack.
+  Expected: neither captured logs nor analytics events
+  (`usbank_verify_submitted`/`_failed`) contain the entered amounts or any
+  `descriptor_code`; events carry only `setup_intent_id` / error code. Traces: AC-7.
+
+- **TC-AND-230-15 — Live verification on the physical device (manual, non-CI).**
+  Type: manual / instrumented-e2e. Target: **physical device** Galaxy A15 5G
+  (SM-A156U, `R5CX821TA9R`) — uses the real flaky plaintext-HTTP dev host
+  (`http://18.222.237.167:8000`) over real Wi-Fi/cellular, exercising the real ~20s
+  timeout and arm64/API-34 path that the x86/API-35 emulator does not. Preconditions:
+  a Stripe test US bank (`account 000123456789`, routing `110000000`) put into
+  pending state via the add-bank flow, yielding a real `setup_intent_id`; airplane-
+  mode toggle available to exercise the offline path on real radios. Steps: open the
+  verify screen via deep link with that `setup_intent_id`; (a) submit the known test
+  microdeposit amounts → confirm 200 success and the payment-methods list refreshes
+  to show the verified bank; (b) submit wrong amounts → confirm a retryable error;
+  (c) enable airplane mode, submit → confirm the retryable "couldn't reach server"
+  state and no stuck spinner. Capture and sanitize the real success/error JSON as
+  fixtures and **record the real wrong-amounts HTTP status/shape** to resolve the
+  Open assumption in §16. Traces: AC-8, AC-6, AC-4.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|----------|-----------|
+| AC-1 (API method/body/CSRF) | TC-01, TC-06, TC-10, TC-11 |
+| AC-2 (DTOs + total mapper, UNKNOWN) | TC-02, TC-03, TC-04 |
+| AC-3 (repository → `ApiResult` + error mapping) | TC-04, TC-05 |
+| AC-4 (ViewModel state/events; success & error) | TC-05, TC-06, TC-07, TC-08, TC-11, TC-13, TC-15 |
+| AC-5 (screen renders/gates; in-app + deep link) | TC-07, TC-11, TC-12, TC-13 |
+| AC-6 (timeout/offline retryable, no stuck spinner) | TC-09, TC-10, TC-15 |
+| AC-7 (no amounts/code in logs or analytics) | TC-14 |
+| AC-8 (full suite green + live run verifies real bank) | TC-01…TC-14 (suite), TC-15 (live) |

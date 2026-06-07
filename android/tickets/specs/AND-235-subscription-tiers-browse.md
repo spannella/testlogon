@@ -5,9 +5,10 @@ milestone: M5
 epic: E32
 priority: P0
 size: M
-status: draft
 depends_on: [AND-234]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-235 — Subscription tiers browse
@@ -49,11 +50,21 @@ tier, and degrades gracefully to loading/empty/error and offline/stale states.
   HTTP, unreliable). OpenAPI at `/openapi.json`. Web reference:
   `frontend/src/api/endpoints/subscriptions.ts` and shared types in
   `frontend/src/api/types.ts` — these are the source of truth for endpoint paths and
-  JSON shapes; AND-234's DTOs mirror them.
-- **Auth:** cookie-based session (see project context). All subscription reads require
-  an authenticated session; the cookie jar + `X-CSRF-Token` echo + single 401
-  `POST /ui/session/refresh` retry are handled in the shared OkHttp interceptor from
-  AND-027 and are transparent to this screen.
+  JSON shapes; AND-234's DTOs mirror them. **CORRECTED:** the feature is modelled
+  server-side as subscription **plans**, not "tiers"; the web client lists a creator's
+  plans via `GET /api/creators/{creatorId}/plans` (returns `SubscriptionPlan[]`) and the
+  viewer's subscriptions via `GET /api/subscriptions`. The `/ui/...subscription-tiers`
+  paths used in earlier drafts of this spec do not exist for this flow (see §5 and §16).
+- **Auth:** the shared transport (web `src/api/client.ts`) attaches, on **every** call:
+  `Authorization: Bearer <accessToken>` (from the auth store), the `X-CSRF-Token` header
+  echoed from the `ui_csrf` cookie, and session cookies (`credentials: "include"`). The
+  subscription endpoints additionally send an `X-User-Id` header for the *authenticated*
+  reads (`GET /api/subscriptions`); the **public** plans list
+  (`GET /api/creators/{creatorId}/plans`) does not require `X-User-Id`. A single 401 ->
+  `POST /ui/session/refresh` -> retry is handled centrally and is transparent to this
+  screen; on the Android side AND-027 owns the cookie jar / token / CSRF / refresh
+  interceptor. **CORRECTED:** prior draft described this as purely cookie-based; the web
+  reference also sends a Bearer token and (for `me` reads) `X-User-Id`.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Navigation-Compose, Hilt (KSP),
   Coroutines/Flow, Retrofit 2.11/OkHttp 4.12/Moshi 1.15, Room 2.6, Coil. minSdk 24,
   compileSdk/targetSdk 35, JDK 17.
@@ -66,19 +77,30 @@ FR-1. The screen accepts a required `creatorId: String` nav argument and an opti
 FR-2. On entry the screen requests the creator's tiers and the viewer's current
 subscription state for that creator in a single combined load.
 
-FR-3. Each tier renders as a card showing: tier name, formatted price + currency,
-billing interval (e.g. "/month"), an optional short description, and a list of perks
-(benefits). Tiers are ordered by ascending price (ties broken by `sortOrder`, then
-name).
+FR-3. Each tier (plan) renders as a card showing: plan name, formatted price + currency,
+billing interval (e.g. "/month"), an optional short description, and a list of perks.
+**CORRECTED:** the backend `SubscriptionPlan` has no `perks`/`benefits` array; the web
+client (`PlanBrowser.tsx`) renders the plan's `assets[].name` list as the feature
+bullets. Android maps perks from `assets[].name` (AND-234 mapper); if AND-234 instead
+surfaces a dedicated benefits field, the mapper is the single point of change. Ordering:
+the web client does **not** sort and there is no `sort_order` field on the plan — it
+preserves server order and marks the middle plan "popular". Android's ascending-price
+sort is a deliberate product choice (see §16 open assumptions), with ties broken by name
+(no `sortOrder` field exists).
 
-FR-4. Only tiers with `isActive == true` are shown. Inactive/archived tiers are
-filtered out client-side as a defensive measure even if the backend already filters.
+FR-4. Only active plans are shown. **CORRECTED:** activeness is `status == "active"` (a
+string field on `SubscriptionPlan`), not an `isActive`/`is_active` boolean. The web
+client filters `plans.filter(p => p.status === "active")`; Android filters the same way
+client-side as a defensive measure even if the backend already filters.
 
-FR-5. Price formatting: prices arrive as integer minor units (cents) plus an ISO-4217
-`currency` code. They MUST be rendered using `java.text.NumberFormat.getCurrencyInstance`
+FR-5. Price formatting: prices arrive as integer cents (`price_cents`) plus an ISO-4217
+`currency` code. **CORRECTED:** the field is `price_cents`, not `price_minor`. They MUST
+be rendered using `java.text.NumberFormat.getCurrencyInstance`
 with the device locale, with the currency forced to the tier's `currency` code (do not
-trust the locale's default currency). Free tiers (`priceMinor == 0`) render the
-localized string "Free".
+trust the locale's default currency). Free tiers (`priceCents == 0`) render the
+localized string "Free". **NOTE:** the web client has no "Free" special-case (it always
+formats `cents/100` as currency) — the "Free" rendering is an Android product choice
+(see §16 open assumptions).
 
 FR-6. If the viewer is currently subscribed to one of the listed tiers, that card is
 visually distinguished ("Current plan" badge + selected styling) and its CTA reads
@@ -202,7 +224,7 @@ testable:
 
 ```kotlin
 class PriceFormatter @Inject constructor(@ApplicationContext ctx: Context) {
-    fun format(priceMinor: Long, currency: String, locale: Locale = Locale.getDefault()): String
+    fun format(priceCents: Long, currency: String, locale: Locale = Locale.getDefault()): String
     fun intervalLabel(interval: BillingInterval): String
 }
 ```
@@ -218,55 +240,88 @@ via Material 3 `PullToRefreshBox`.
 ## 5. API Contract
 
 This screen issues no new endpoints; it consumes the typed `SubscriptionsApi` from
-**AND-234**. Paths/shapes mirror `frontend/src/api/endpoints/subscriptions.ts` and are
-restated here for implementation reference. Confirm exact field names against
-`/openapi.json` during AND-234.
+**AND-234**. Paths/shapes mirror `frontend/src/api/endpoints/subscriptions.ts` and
+`frontend/src/api/types.ts` and are restated here, **verified against the web reference
+and `/openapi.json`** (see §16). The paths below replace the non-existent
+`/ui/...subscription-tiers` and `/ui/me/subscriptions` paths from earlier drafts.
 
-`GET /ui/creators/{creator_id}/subscription-tiers` — list a creator's tiers.
+`GET /api/creators/{creatorId}/plans` — list a creator's subscription plans (this is the
+"tiers" browse source). Query params: `include_profile` (optional). **Public** — does not
+require `X-User-Id` (still carries the standard Bearer/CSRF/cookies). Returns a **bare
+JSON array** of `SubscriptionPlan` (NOT an object wrapped in `{"tiers": [...]}`).
+Verified: OpenAPI `GET /api/creators/{creator_id}/plans` (op `list_plans_...`); web
+`src/api/endpoints/subscriptions.ts: listPlans`; type `src/api/types.ts: SubscriptionPlan`.
 
-```json
-{
-  "tiers": [
-    {
-      "id": "tier_01H...",
-      "creator_id": "usr_01H...",
-      "name": "Supporter",
-      "description": "Early access posts",
-      "price_minor": 499,
-      "currency": "USD",
-      "billing_interval": "month",
-      "perks": ["Early access", "Supporter badge"],
-      "is_active": true,
-      "sort_order": 0
-    }
-  ]
-}
+```jsonc
+// SubscriptionPlan[]  — bare array
+[
+  {
+    "plan_id": "plan_01H...",
+    "creator_id": "usr_01H...",
+    "name": "Supporter",
+    "description": "Early access posts",
+    "price_cents": 499,
+    "currency": "USD",
+    "interval": "month",
+    "annual_price_cents": 4999,
+    "status": "active",
+    "metadata": {},
+    "assets": [
+      { "path": "...", "name": "Early access", "type": "...", "size": 0, "content_type": "..." }
+    ],
+    "created_at": 1730000000,
+    "updated_at": 1730000000
+  }
+]
 ```
 
-`GET /ui/me/subscriptions?creator_id={creator_id}` — viewer's subscription(s) for this
-creator (used to derive `currentTierId`). Returns an array; the active, non-expired entry
-matching `creator_id` selects the current tier.
+Field corrections vs earlier draft: `id` -> `plan_id`; `price_minor` -> `price_cents`;
+`billing_interval` -> `interval`; `is_active` (bool) -> `status` (string, e.g.
+`"active"`); there is **no** `perks` field (perks come from `assets[].name`) and **no**
+`sort_order` field.
 
-```json
-{
-  "subscriptions": [
-    {
-      "id": "sub_01H...",
-      "tier_id": "tier_01H...",
-      "creator_id": "usr_01H...",
-      "status": "active",
-      "current_period_end": "2026-07-01T00:00:00Z"
-    }
-  ]
-}
+`GET /api/subscriptions` — viewer's own subscriptions, used to derive `currentTierId`.
+**CORRECTED:** there is no `?creator_id=` filter on this endpoint — the web client calls
+it with only an optional `include_summary=true` (and `include_profile`/`subscriber_id`
+exist per OpenAPI but are not used by the browse flow); filter to the current creator
+client-side by matching `creator_id` on each returned `SubscriptionOut`. Sends `X-User-Id`
+(authenticated). Returns a **bare JSON array** of `SubscriptionOut` (NOT
+`{"subscriptions": [...]}`). The active entry (`status == "active"`, not past
+`current_period_end`) whose `creator_id` matches selects the current plan; its `plan_id`
+becomes `currentTierId`. Verified: OpenAPI `GET /api/subscriptions` (op
+`list_subscriptions_api_subscriptions_get`); web `subscriptions.ts: listSubscriptions`;
+type `src/api/types.ts: SubscriptionOut`.
+
+```jsonc
+// SubscriptionOut[]  — bare array
+[
+  {
+    "subscription_id": "sub_01H...",
+    "plan_id": "plan_01H...",
+    "creator_id": "usr_01H...",
+    "subscriber_id": "usr_me...",
+    "interval": "month",
+    "status": "active",
+    "current_period_end": 1751328000,
+    "cancel_at_period_end": false,
+    "price_cents": 499,
+    "currency": "USD",
+    "auto_renew": true
+  }
+]
 ```
 
-Mapping notes (owned by AND-234, asserted by this ticket's integration tests): `price_minor`
-(int, minor units) -> `priceMinor: Long`; `billing_interval` string -> `BillingInterval`
-enum (`MONTH`/`YEAR`/`WEEK`, unknown -> `MONTH` with logged warning); `is_active` ->
-`isActive`. Both calls are idempotent GETs and eligible for bounded backoff retry.
-FastAPI error bodies follow the shared `detail` mapping (string | `[{msg}]` |
-`{code,...}`) handled by AND-027's error mapper into `UiError`.
+Field corrections vs earlier draft: `id` -> `subscription_id`; `tier_id` -> `plan_id`;
+`current_period_end` is a **Unix epoch number** (seconds), not an ISO-8601 string.
+
+Mapping notes (owned by AND-234, asserted by this ticket's integration tests):
+`price_cents` (int cents) -> `priceCents: Long`; `interval` string -> `BillingInterval`
+enum (`MONTH`/`YEAR`/`WEEK`, unknown -> `MONTH` with logged warning); `status == "active"`
+-> active filter; `assets[].name` -> `perks`. Both calls are idempotent GETs and eligible
+for bounded backoff retry. FastAPI error bodies use the shared `detail` mapping (string |
+array of `{loc,msg,type}` from `HTTPValidationError` on 422 | object `{code,...}` for
+authz errors) handled by AND-027's error mapper into `UiError` — verified against
+`src/api/client.ts: normalizeErrorDetail` and OpenAPI `HTTPValidationError`.
 
 ## 6. Data & State Management
 
@@ -318,8 +373,8 @@ FastAPI error bodies follow the shared `detail` mapping (string | `[{msg}]` |
   `network_security_config`. Production builds disallow cleartext. No change owned here
   beyond confirming the dev base URL is flavor-scoped.
 - No deep-link exposure of another user's subscription state: the `currentTierId`
-  derivation uses `GET /ui/me/subscriptions`, which is always scoped to the session
-  owner server-side.
+  derivation uses `GET /api/subscriptions` (CORRECTED path), which is scoped to the
+  session owner server-side (via session cookie + `X-User-Id`).
 
 ## 9. Accessibility & i18n
 
@@ -348,7 +403,7 @@ FastAPI error bodies follow the shared `detail` mapping (string | `[{msg}]` |
   `subs_tiers_load_failed { creator_id, error_type }`,
   `subs_tiers_refreshed { creator_id, from_cache }`.
 - Logging: structured `Timber` logs at `d` for state transitions and `w` for unknown
-  `billing_interval` enum fallback and parse warnings. Never log cookies, CSRF tokens,
+  unknown `interval` enum fallback and parse warnings. Never log cookies, CSRF tokens,
   or full response bodies. Network-layer logging uses the shared OkHttp logging
   interceptor (BODY level only in debug builds).
 - The stale-banner display and retry taps are logged at `d` to aid diagnosing the
@@ -377,8 +432,8 @@ UI (Compose, `createComposeRule`):
   `contentDescription`s for TalkBack.
 
 Instrumentation (optional, MockWebServer): full screen against canned
-`/ui/creators/{id}/subscription-tiers` + `/ui/me/subscriptions` responses, including a
-timeout scenario to assert the stale/error path.
+`/api/creators/{creatorId}/plans` + `/api/subscriptions` responses (CORRECTED paths),
+including a timeout scenario to assert the stale/error path.
 
 Coverage target: ViewModel and PriceFormatter branch coverage >= 85%.
 
@@ -398,10 +453,14 @@ Coverage target: ViewModel and PriceFormatter branch coverage >= 85%.
 
 ## 13. Risks & Open Questions
 
-- **R1 (API shape drift):** §5 field names are inferred from the web reference; exact
-  names (`price_minor` vs `amount_cents`, `subscription-tiers` path segment) must be
-  verified against `/openapi.json` during AND-234. Mitigation: mappers and tests centralize
-  the contract in AND-234; this screen only touches domain models.
+- **R1 (API shape drift):** RESOLVED for the read paths — §5 field names are now verified
+  against the web reference and `/openapi.json` (see §16): the path is
+  `GET /api/creators/{creatorId}/plans` (not `subscription-tiers`), the price field is
+  `price_cents`, the interval field is `interval`, activeness is `status`, and both
+  responses are bare arrays. Residual risk: the OpenAPI response schema for `/plans` and
+  `/api/subscriptions` is untyped (`{}`) server-side, so the field set is taken from the
+  web `types.ts`; mappers and tests centralize the contract in AND-234 and this screen
+  only touches domain models.
 - **R2 (current-sub join):** if the backend has no single endpoint returning both tiers
   and the viewer's sub, two GETs are combined in the repository; partial failure (tiers
   succeed, subs fail) should still render tiers without a current-tier badge. Decision:
@@ -420,7 +479,7 @@ AC-1. Navigating to `subscriptions/tiers/{creatorId}` loads and renders the crea
 active tiers; each tier card displays name, formatted price with correct currency,
 billing interval, and perks. (Maps to backlog "Tiers render with pricing.")
 AC-2. Tiers are sorted ascending by price; inactive tiers are not shown.
-AC-3. A `priceMinor == 0` tier renders "Free" with no interval suffix.
+AC-3. A `priceCents == 0` tier renders "Free" with no interval suffix.
 AC-4. When the viewer has an active subscription to a listed tier, that card shows a
 "Current plan" badge and a "Manage" (disabled) CTA; all other cards show "Subscribe".
 AC-5. With the checkout flag off, tapping Subscribe shows a "Coming soon" snackbar and
@@ -453,3 +512,345 @@ CI; branch coverage >= 85% for those classes.
   offline/stale paths.
 - Spec reviewers (Android lead + product owner for E32) sign off; open questions R3 and
   the free-tier CTA question recorded as follow-ups if unresolved.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. OpenAPI references
+are to `reference/openapi.index.txt` / `reference/openapi.pretty.json`; frontend
+references are paths under `reference/src/`.
+
+1. **Claim:** Tiers are listed at `GET /ui/creators/{creator_id}/subscription-tiers`.
+   **VERDICT: Corrected.** No such path exists. The web client lists a creator's
+   subscription plans (the "tiers") at `GET /api/creators/{creatorId}/plans`.
+   **Source:** OpenAPI `GET /api/creators/{creator_id}/plans` (op
+   `list_plans_api_creators__creator_id__plans_get`, params `creator_id,include_profile`);
+   `src/api/endpoints/subscriptions.ts: listPlans`.
+
+2. **Claim:** The plans-list response is an object `{"tiers": [...]}`.
+   **VERDICT: Corrected.** It is a bare JSON array `SubscriptionPlan[]`.
+   **Source:** `src/api/endpoints/subscriptions.ts: listPlans` (`api.get<SubscriptionPlan[]>`);
+   `src/pages/subscriptions/PlanBrowser.tsx` (`(plans ?? []).filter(...)`).
+
+3. **Claim:** Price field is `price_minor` (minor units).
+   **VERDICT: Corrected.** Field is `price_cents` (integer cents).
+   **Source:** `src/api/types.ts: SubscriptionPlan.price_cents`; `PlanBrowser.tsx`
+   `formatPrice(plan.price_cents, plan.currency)` with `cents / 100`.
+
+4. **Claim:** Interval field is `billing_interval`.
+   **VERDICT: Corrected.** Field is `interval` (string, e.g. `"month"`/`"year"`).
+   **Source:** `src/api/types.ts: SubscriptionPlan.interval`; `PlanCreateReq.interval:
+   "month" | "year"`.
+
+5. **Claim:** Active filter uses an `is_active` boolean.
+   **VERDICT: Corrected.** Active is `status == "active"` (string field).
+   **Source:** `src/api/types.ts: SubscriptionPlan.status`; `PlanBrowser.tsx`
+   `(plans ?? []).filter((p) => p.status === "active")`.
+
+6. **Claim:** Each tier has a `perks: string[]` array (and a `sort_order` field).
+   **VERDICT: Corrected.** `SubscriptionPlan` has neither. The web client renders the
+   feature list from `assets[].name`; there is no `sort_order`.
+   **Source:** `src/api/types.ts: SubscriptionPlan` (fields: plan_id, creator_id, name,
+   description?, price_cents, currency, interval, annual_price_cents?, status, metadata?,
+   assets?, created_at, updated_at, creator_profile?); `PlanBrowser.tsx` renders
+   `plan.assets.map(... asset.name ...)`.
+
+7. **Claim:** Plan identifier is `id` (e.g. `tier_01H...`).
+   **VERDICT: Corrected.** Identifier is `plan_id`.
+   **Source:** `src/api/types.ts: SubscriptionPlan.plan_id`; `PlanBrowser.tsx`
+   `key={plan.plan_id}`.
+
+8. **Claim:** Viewer subscriptions are at `GET /ui/me/subscriptions?creator_id={id}`
+   returning `{"subscriptions": [...]}`.
+   **VERDICT: Corrected.** Path is `GET /api/subscriptions` (no `creator_id` query
+   param), returning a bare `SubscriptionOut[]`; filter by `creator_id` client-side.
+   **Source:** OpenAPI `GET /api/subscriptions` (op
+   `list_subscriptions_api_subscriptions_get`, params
+   `subscriber_id,include_profile,include_summary,x-user-id`);
+   `src/api/endpoints/subscriptions.ts: listSubscriptions` (`subGet<SubscriptionOut[]>("/api/subscriptions", ...)`,
+   only `include_summary` query param).
+
+9. **Claim:** Subscription entry uses `id` and `tier_id`; `current_period_end` is an
+   ISO-8601 string.
+   **VERDICT: Corrected.** Fields are `subscription_id` and `plan_id`;
+   `current_period_end` is a Unix epoch number (seconds).
+   **Source:** `src/api/types.ts: SubscriptionOut` (`subscription_id`, `plan_id`,
+   `creator_id`, `status`, `current_period_end: number`, ...).
+
+10. **Claim:** "Free" (`price == 0`) renders the localized string "Free".
+    **VERDICT: Unverified-assumption (Android product choice).** The web client has no
+    "Free" branch — it always formats `cents/100` as currency (so $0.00).
+    **Source:** `src/pages/subscriptions/PlanBrowser.tsx: formatPrice` (no zero special
+    case). Acceptable as an Android UX decision; flagged below.
+
+11. **Claim:** Tiers are sorted ascending by price (ties by name).
+    **VERDICT: Unverified-assumption (Android product choice).** The web client does not
+    sort; it preserves server order and marks the middle plan "popular". No `sort_order`
+    field exists to break ties.
+    **Source:** `src/pages/subscriptions/PlanBrowser.tsx` (`activePlans` keeps order;
+    `popularIdx = Math.floor(activePlans.length / 2)`). Acceptable as an Android UX
+    decision; flagged below.
+
+12. **Claim:** Auth is purely cookie-based session + `X-CSRF-Token`.
+    **VERDICT: Corrected (incomplete).** The shared transport sends, on every call:
+    `Authorization: Bearer <accessToken>`, `X-CSRF-Token` (from the `ui_csrf` cookie), and
+    session cookies (`credentials: "include"`). The authenticated subscription read
+    (`GET /api/subscriptions`) additionally sends `X-User-Id`; the public `/plans` list
+    does not require it.
+    **Source:** `src/api/client.ts` (sets `Authorization` Bearer, `X-CSRF-Token` from
+    `getCookie("ui_csrf")`, `credentials: "include"`); `src/api/endpoints/subscriptions.ts:
+    userIdHeader` / `subGet` (adds `X-User-Id`); `listPlans` uses plain `api.get` (no
+    `X-User-Id`).
+
+13. **Claim:** Single 401 -> `POST /ui/session/refresh` -> retry, handled centrally.
+    **VERDICT: Verified.** The web client refreshes once via `POST /ui/session/refresh`
+    and retries; on the Android side AND-027 owns the equivalent interceptor.
+    **Source:** `src/api/client.ts: refreshSession` (`fetch("/ui/session/refresh", {method:
+    "POST", credentials: "include"})`) and the 401 retry block.
+
+14. **Claim:** FastAPI error bodies follow a `detail` mapping (string | array of
+    `{msg}` | object `{code,...}`); 422 is `HTTPValidationError`.
+    **VERDICT: Verified.** **Source:** `src/api/client.ts: normalizeErrorDetail` (handles
+    string, array of `{msg}`, and object `{code,...}` via `mapAuthorizationError`); OpenAPI
+    `422:HTTPValidationError` on both endpoints; schema `components.schemas.HTTPValidationError`
+    (array of `{loc,msg,type}`).
+
+15. **Claim:** Dev backend is plaintext HTTP at `http://18.222.237.167:8000`, cleartext
+    only in dev flavor.
+    **VERDICT: Unverified-assumption.** The dev host/URL is project context, not present
+    in the OpenAPI or frontend sources reviewed. Cleartext-config policy is an Android
+    build concern. **Source:** none in `reference/`; carried from project context (AND-027).
+
+16. **Claim:** Price rendering via `NumberFormat.getCurrencyInstance` with device locale,
+    currency forced to the tier's ISO-4217 code.
+    **VERDICT: Verified (parity with web).** The web client uses
+    `Intl.NumberFormat(undefined, {style:"currency", currency: currency || "USD",
+    minimumFractionDigits: 2}).format(cents/100)` — locale-default formatting with the
+    tier's currency. The Android `NumberFormat` approach is the JVM equivalent.
+    **Source:** `src/pages/subscriptions/PlanBrowser.tsx: formatPrice`. (Framework ref:
+    `java.text.NumberFormat.getCurrencyInstance` —
+    https://developer.android.com/reference/java/text/NumberFormat#getCurrencyInstance().)
+
+17. **Claim:** Empty state copy "This creator has no subscription tiers yet."
+    **VERDICT: Unverified-assumption (Android string choice).** The web client shows title
+    "No plans available" / "Check back later for subscription plans." Android wording is a
+    local string decision (must live in `strings.xml`, §9).
+    **Source:** `src/pages/subscriptions/PlanBrowser.tsx` `EmptyState` props.
+
+18. **Claim (framework choices):** Compose Material 3 `PullToRefreshBox`,
+    `collectAsStateWithLifecycle`, Hilt `@HiltViewModel`, `SavedStateHandle` for nav args,
+    one-shot events via `Channel`/`receiveAsFlow`.
+    **VERDICT: Unverified-assumption (framework refs, not in `reference/`).** These are
+    standard Android Jetpack patterns, appropriate for the stack in §2.
+    **Source:** framework ref —
+    https://developer.android.com/jetpack/compose/components/pull-to-refresh ;
+    https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate ;
+    https://developer.android.com/training/dependency-injection/hilt-android .
+
+### Corrections made
+
+- Endpoint path for listing tiers: `GET /ui/creators/{creator_id}/subscription-tiers` ->
+  `GET /api/creators/{creatorId}/plans` (§2, §5, §11, §13).
+- Endpoint for viewer subscriptions: `GET /ui/me/subscriptions?creator_id=` ->
+  `GET /api/subscriptions` (filter by `creator_id` client-side) (§2, §5, §8, §11).
+- Response shapes: both responses are bare JSON arrays, not `{"tiers": [...]}` /
+  `{"subscriptions": [...]}` (§5).
+- Field renames: `id` -> `plan_id` / `subscription_id`; `tier_id` -> `plan_id`;
+  `price_minor` -> `price_cents`; `billing_interval` -> `interval`; `is_active` (bool) ->
+  `status` (string); removed non-existent `perks` and `sort_order` (perks sourced from
+  `assets[].name`); `current_period_end` is epoch number, not ISO string (§3, §4, §5).
+- `PriceFormatter.format` signature `priceMinor` -> `priceCents` (§4); AC-3 `priceMinor`
+  -> `priceCents` (§14).
+- Auth description corrected from "purely cookie-based" to Bearer + CSRF + cookies, plus
+  `X-User-Id` on the authenticated read (§2, §8).
+- Telemetry log note `billing_interval` -> unknown `interval` (§10).
+
+### Open assumptions
+
+- **"Free" rendering for `price_cents == 0`** — not in the web client; Android product
+  choice. Why unverifiable: no source shows zero-price handling; needs product sign-off.
+- **Ascending-price sort with name tie-break** — web preserves server order and has no
+  `sort_order` field. Why unverifiable: no ordering contract in the sources; Android UX
+  decision (R3/ordering is an open product question).
+- **Perks source** — assumed `assets[].name`; if AND-234 exposes a dedicated benefits
+  field, the mapper changes. Why unverifiable: the `/plans` OpenAPI response schema is
+  untyped (`{}`); only the web `types.ts` shape is authoritative, and it has no `perks`.
+- **Empty/error/"Coming soon"/"Current plan"/"Manage" copy** — Android-local strings; web
+  equivalents differ ("No plans available"). Why unverifiable: copy is a UX decision.
+- **Dev host / cleartext policy** — from project context (AND-027), not in `reference/`.
+- **Current-plan badge + "Manage"/"Subscribe" CTA logic and checkout flag gating** — no
+  web equivalent (web's `PlanBrowser` always shows "Subscribe" and performs the subscribe
+  inline). The current-plan distinction and the stubbed checkout flag are Android-only
+  product behavior. Why unverifiable: no web reference for this affordance.
+- **OpenAPI response schemas for `/plans` and `/api/subscriptions` are untyped (`{}`)** —
+  field set is taken from the web `types.ts`; server may carry additional/renamed fields
+  not visible here. Mitigation: AND-234 mappers + contract tests are the single source of
+  truth.
+
+## 17. Test Plan
+
+Test targets per case: **JVM** = local JVM unit/Robolectric (no device); **emulator** =
+headless AVD `test35` (x86_64, API 35) on the CI build server; **device** = physical
+Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a) on the build
+host. This ticket is a read-only Compose screen with no camera/biometrics/WebRTC/push, so
+most cases run on JVM or the emulator; the few that touch real rendering/a11y/locale or
+ABI/API-level differences are noted. Hardware-specific targets are called out where they
+genuinely matter.
+
+- **TC-AND-235-01 — Happy path: plans render with pricing.**
+  Type: unit (ViewModel, Turbine). Target: JVM.
+  Preconditions: fake `SubscriptionsRepository` emits `Resource.Success(CreatorTiers(tiers=[Supporter $4.99/mo USD, Premium $9.99/mo USD], currentSubscription=null))`; checkout flag off.
+  Steps: construct VM with `creatorId`; collect `uiState`.
+  Expected: terminal state has `isLoading=false`, `error=null`, two `TierUiModel`s with
+  `formattedPrice` "$4.99"/"$9.99" (en-US), `intervalLabel` "/month", `isCurrent=false`,
+  perks populated from mapped `assets[].name`.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-235-02 — Price formatting & "Free".**
+  Type: unit (`PriceFormatterTest`). Target: JVM.
+  Preconditions: none.
+  Steps: format(499,"USD",en-US); format(0,"USD",en-US); format(1000,"EUR",de-DE);
+  format(499,"ZZZ" invalid code).
+  Expected: "$4.99"; "Free" (Android choice, see §16 #10); "10,00 €" (locale-correct EUR
+  position); invalid currency does not throw (falls back gracefully).
+  Traces: AC-1, AC-3, AC-9.
+
+- **TC-AND-235-03 — Sorting and inactive filtering.**
+  Type: unit (ViewModel). Target: JVM.
+  Preconditions: repo emits plans `[B $9.99 status=active, A $4.99 status=active,
+  C $4.99 status=archived, D $4.99 status=active]`.
+  Steps: collect `uiState.tiers`.
+  Expected: order is `A, D` then `B` (ascending `price_cents`, name tie-break A before D);
+  archived `C` (`status != "active"`) excluded.
+  Traces: AC-2.
+
+- **TC-AND-235-04 — Current-plan derivation & CTA labels.**
+  Type: unit (ViewModel). Target: JVM.
+  Preconditions: tiers include `plan_id=plan_X`; viewer `SubscriptionOut[status="active",
+  plan_id="plan_X", creator_id=this, current_period_end=future]`.
+  Steps: collect `uiState`.
+  Expected: the `plan_X` `TierUiModel.isCurrent=true` (badge "Current plan", CTA "Manage"
+  disabled); all other cards CTA "Subscribe". An expired (`current_period_end` past) or
+  non-active sub yields no current plan.
+  Traces: AC-4.
+
+- **TC-AND-235-05 — Subscribe CTA flag gating.**
+  Type: unit (ViewModel, Turbine on `events`). Target: JVM.
+  Preconditions: two scenarios via `FeatureFlags.subscriptionCheckoutEnabled` false/true.
+  Steps: call `onSubscribeClick("plan_Y")` in each.
+  Expected: flag off -> emits `ShowSnackbar("Coming soon")`, no `NavigateToCheckout`; flag
+  on -> emits `NavigateToCheckout("plan_Y")`.
+  Traces: AC-5.
+
+- **TC-AND-235-06 — Contract: list plans (MockWebServer, real shapes).**
+  Type: contract/MockWebServer. Target: emulator (or JVM via Robolectric+OkHttp).
+  Preconditions: MockWebServer returns a **bare array** `SubscriptionPlan[]` for
+  `GET /api/creators/{creatorId}/plans` with fields `plan_id, price_cents, currency,
+  interval, status, assets`.
+  Steps: drive repository/API; assert the dispatched request path and method, and that the
+  parsed domain models match.
+  Expected: request is `GET /api/creators/{creatorId}/plans` (NOT
+  `/ui/.../subscription-tiers`); parser handles the bare array; `price_cents`/`interval`/
+  `status`/`assets` map correctly; no crash on the unwrapped array.
+  Traces: AC-1, AC-2.
+
+- **TC-AND-235-07 — Contract: viewer subscriptions path & filtering.**
+  Type: contract/MockWebServer. Target: emulator.
+  Preconditions: MockWebServer returns bare `SubscriptionOut[]` (one matching this
+  `creator_id`, one for a different creator) for `GET /api/subscriptions`.
+  Steps: invoke the combined load; inspect the recorded request.
+  Expected: request is `GET /api/subscriptions` carrying the `X-User-Id` header and no
+  `creator_id` query param; only the matching-`creator_id` active sub drives
+  `currentTierId`; the other-creator entry is ignored client-side.
+  Traces: AC-4.
+
+- **TC-AND-235-08 — Validation/error response (422 / HTTPValidationError).**
+  Type: contract/MockWebServer. Target: emulator.
+  Preconditions: `/plans` returns 422 with body
+  `{"detail":[{"loc":["query","x"],"msg":"bad","type":"value_error"}]}`; no cache present.
+  Steps: load; collect `uiState`.
+  Expected: maps via the shared `detail` parser to a generic Error state with Retry
+  (no crash on the array-shaped `detail`); Retry re-issues the GET.
+  Traces: AC-6.
+
+- **TC-AND-235-09 — 404 creator-not-found vs empty.**
+  Type: unit/contract. Target: JVM/emulator.
+  Preconditions: scenario A `/plans` 200 with `[]`; scenario B `/plans` 404.
+  Steps: load each.
+  Expected: A -> Empty state ("no tiers" copy); B -> Empty state with the distinct
+  not-found message (per §7), not a generic error.
+  Traces: AC-6.
+
+- **TC-AND-235-10 — Flaky dev host / offline: stale cache path.**
+  Type: integration (MockWebServer + Room). Target: emulator.
+  Preconditions: Room has cached plans for `creatorId`; network call times out / returns
+  connection reset after the bounded backoff exhausts.
+  Steps: cold-start the screen; observe states.
+  Expected: cached tiers render immediately with `stale=true` (non-blocking banner); no
+  Error state shown; bounded backoff attempted (<=3 tries) then gives up keeping content.
+  Traces: AC-7.
+
+- **TC-AND-235-11 — Pull-to-refresh failure keeps content.**
+  Type: integration (MockWebServer). Target: emulator.
+  Preconditions: content loaded; refresh call fails (5xx/timeout).
+  Steps: trigger pull-to-refresh; collect `uiState` + `events`.
+  Expected: existing tiers remain; `isRefreshing` toggles true->false; `ShowSnackbar`
+  emitted; `stale=true`; list not cleared.
+  Traces: AC-8.
+
+- **TC-AND-235-12 — Compose UI states & accessibility semantics.**
+  Type: Compose-UI (`createComposeRule`). Target: emulator.
+  Preconditions: render `SubscriptionTiersContent` with stateful fixtures (content list,
+  current-plan card, empty, error).
+  Steps: assert N price texts; click Retry -> callback; click Subscribe -> callback;
+  assert current card shows "Current plan"+"Manage"; assert each card's merged
+  `contentDescription` reads "<name>, <price> <interval>, current plan"; assert CTA touch
+  targets >= 48dp and distinct content descriptions.
+  Expected: all assertions pass; no hardcoded strings (resolved from `strings.xml`).
+  Traces: AC-1, AC-4, AC-6, AC-10.
+
+- **TC-AND-235-13 — Rotation/config-change preserves state without re-fetch.**
+  Type: instrumented/e2e. Target: emulator (also spot-check on device, see note).
+  Preconditions: screen loaded with content from a single network call (MockWebServer
+  request counter at 1).
+  Steps: rotate the device/emulator; recompose.
+  Expected: same `UiState` restored from the retained ViewModel; MockWebServer request
+  count stays 1 (no re-fetch). Note: rotation behavior is identical on emulator; run once
+  on **device** to confirm OEM (Samsung One UI) does not force an extra Activity
+  re-creation/fetch.
+  Traces: AC-9.
+
+- **TC-AND-235-14 — Locale-aware currency on real device (API 34, arm64).**
+  Type: instrumented. Target: **device** (must run on the physical A15).
+  Preconditions: app installed on SM-A156U; switch device locale en-US -> de-DE -> ja-JP.
+  Steps: open the screen for a creator with USD and EUR plans under each locale.
+  Expected: `NumberFormat` renders symbol/grouping/position per device locale while
+  honoring each plan's ISO-4217 currency (e.g. "$4.99", "4,99 $" style differences),
+  matching JVM expectations from TC-02. **Why device:** validates real on-device ICU/locale
+  data and the API-34/arm64-v8a target (vs the emulator's API-35/x86_64), catching
+  ABI/API-level locale or rounding differences.
+  Traces: AC-9.
+
+- **TC-AND-235-15 — Security: no secrets logged; subscription cache is app-private.**
+  Type: instrumented + manual log inspection. Target: device (or emulator).
+  Preconditions: debug build with BODY-level OkHttp logging on; sign in; load the screen.
+  Steps: capture logcat during load; sign out; inspect Room DB file location/permissions.
+  Steps cont.: confirm `subscription_tiers`/`subscriptions` tables are wiped on sign-out.
+  Expected: no cookies, `X-CSRF-Token`, Bearer token, or full response bodies leaked at
+  non-debug levels; DB resides in the app-private sandbox; sign-out clears cached
+  subscription rows (session-clear hook).
+  Traces: AC-7 (cache), and Definition-of-Done security items.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (render name/price/interval/perks) | TC-01, TC-02, TC-06, TC-12 |
+| AC-2 (ascending sort; inactive hidden) | TC-01, TC-03, TC-06 |
+| AC-3 ("Free" for price 0) | TC-02 |
+| AC-4 (current-plan badge + Manage/Subscribe) | TC-04, TC-07, TC-12 |
+| AC-5 (checkout flag gating of Subscribe) | TC-05 |
+| AC-6 (empty / error+retry; retry re-fetches) | TC-08, TC-09, TC-12 |
+| AC-7 (cache + stale banner on slow/failed net) | TC-10, TC-15 |
+| AC-8 (pull-to-refresh failure keeps content) | TC-11 |
+| AC-9 (rotation no re-fetch; locale + currency) | TC-02, TC-13, TC-14 |
+| AC-10 (VM/formatter/UI tests pass; coverage) | TC-01..TC-05, TC-12 |

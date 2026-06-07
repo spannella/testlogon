@@ -5,9 +5,10 @@ milestone: M5
 epic: E32
 priority: P1
 size: M
-status: draft
 depends_on: [AND-234]
 blocks: [AND-242]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-241 — Subscriptions/fan-club ViewModels
@@ -44,17 +45,28 @@ tests with a fake repository and `TestDispatcher`.
   `com.testlogon.android.feature.subscriptions.entitlement`.
 - **Dependency AND-234** supplies `core-network`/`core-model` artifacts:
   `SubscriptionsApi` (Retrofit), the DTOs, and a `SubscriptionsRepository` that maps the
-  web reference `subscriptions.ts` endpoints and the tiers/subs domain model. This
-  ticket consumes those types and must not redefine them.
-- **Web reference:** `frontend/src/api/endpoints/subscriptions.ts` and shared types in
-  `frontend/src/api/types.ts` are the source of truth for the tier/subscription/
+  web reference `subscriptions.ts` + `fan-club.ts` endpoints and the plans/subs/fan-club
+  domain model. This ticket consumes those types and must not redefine them.
+- **Web reference:** `frontend/src/api/endpoints/subscriptions.ts`,
+  `frontend/src/api/endpoints/fan-club.ts`, and shared types in
+  `frontend/src/api/types.ts` are the source of truth for the plan/subscription/fan-club-tier/
   entitlement shapes; mirror their field names where DTOs from AND-234 expose them.
+  NOTE (review correction): the catalog the user "subscribes to" is a **subscription
+  plan** (`SubscriptionPlan`, web `listPlans`), not a "subscription tier". Fan-club
+  "tiers" (`TierOut`, web `listTiers`/`getPublicTiers`) are a **separate** concept with a
+  `level`/`sort_order` rank and `benefits[]`. The two must not be conflated.
 - **Backend:** FastAPI + DynamoDB; dev host `http://18.222.237.167:8000` (plaintext,
   unreliable). All network is via AND-234's repository; this ticket inherits its
   ~20s timeout, bounded-backoff-for-idempotent-GET, and cookie/CSRF behavior.
-- **Auth:** cookie-based session (`/ui/session/start` → MFA → `/ui/session/finalize` →
-  `GET /ui/me`); `ui_csrf` echoed as `X-CSRF-Token`; on 401 refresh once then retry. All
-  handled inside `core-network`; entitlement here keys off the authenticated `me` state.
+- **Auth:** cookie-based session (`POST /ui/session/start` → MFA → `POST
+  /ui/session/finalize` → `GET /ui/me`); `ui_csrf` cookie echoed as the `X-CSRF-Token`
+  header; on 401 the client refreshes once via `POST /ui/session/refresh` then retries.
+  All handled inside `core-network`; entitlement here keys off the authenticated `me`
+  state. CAVEAT (review correction): only the `/ui/*` endpoints (fan-club tiers) use this
+  session-cookie path. The subscription **plan/subscription** endpoints under `/api/*`
+  authenticate with an `X-User-Id` header (see `subscriptions.ts`), not the session
+  cookie; AND-234's repository is responsible for attaching it. This layer is unaffected
+  either way (no transport here).
 - **State contract:** ViewModels expose `StateFlow<UiState>`; typed `ApiResult<T>`;
   FastAPI `detail` mapping (`string | [{msg}] | {code,...}`) is already normalized by
   AND-234's repository into domain errors.
@@ -66,8 +78,13 @@ given creator/plan context and expose them as a list with price, period, perks, 
 per-tier `entitled`/`owned` flag derived from the user's active subscriptions.
 
 FR-2 **My subscriptions.** A ViewModel shall load the current user's active and lapsed
-subscriptions, exposing renewal date, status (`ACTIVE`, `PAST_DUE`, `CANCELED`,
-`EXPIRED`), and the tier each maps to.
+subscriptions, exposing the end-of-period renewal date (`current_period_end`), status,
+and the **plan** each maps to (subscriptions reference `plan_id`/`creator_id`, not a
+fan-club `tier_id`). Review correction: the real status values are lowercase strings
+observed in the web client — `active`, `trialing`, `canceling`, `canceled`, `past_due`
+(no `EXPIRED`). The backend schema types `status` as a free `string`, so the domain layer
+should map known values and treat unknown values defensively rather than assume a closed
+uppercase enum.
 
 FR-3 **Fan-club tiers.** A ViewModel shall load a creator's fan-club tiers (and, when
 AND-240 lands, hold the slot for members), exposing the viewer's current membership tier
@@ -164,8 +181,15 @@ class SubscriptionTiersViewModel @Inject constructor(
 `MySubscriptionsViewModel` and `FanClubViewModel` mirror this. `FanClubViewModel` reads
 `creatorId` from `SavedStateHandle`, calls `repository.getFanClubTiers(creatorId)`, and
 keeps a nullable `members` slot wired to AND-240's endpoint once available
-(`/ui/fan-club/tiers/{id}/members`); until then `members` is `null` and the UI hides that
-section.
+(`GET /ui/fan-club/tiers/{tier_id}/members`, paginated by `limit`/`cursor`); until then
+`members` is `null` and the UI hides that section.
+
+> Review note (endpoint mapping for AND-234): the public fan-club tier catalog for a given
+> creator is `GET /api/creators/{creator_id}/tiers` (web `getPublicTiers`), while the
+> caller's own/managed tiers come from `GET /ui/fan-club/tiers` (web `listTiers`, session
+> auth, **no** `creator_id` path/query param). `repository.getFanClubTiers(creatorId)`
+> should map to the public-by-creator endpoint. The members endpoint path above is correct
+> (verified). There is no `/ui/fan-club/{creatorId}/tiers` route (see §5 correction).
 
 Concurrency: all repository calls run on `viewModelScope` with the injected
 `@IoDispatcher` already applied inside the repository (AND-234). The two parallel calls in
@@ -193,33 +217,57 @@ interface SubscriptionsRepository {              // defined in AND-234
 }
 ```
 
-Upstream endpoints (wrapped by the repository; cookie session + `X-CSRF-Token`):
+Upstream endpoints (wrapped by the repository). **Review correction:** the paths/methods
+and auth below were verified against the OpenAPI index and the web client; the original
+draft's `/ui/subscriptions/tiers`, `/ui/subscriptions/me`, and `/ui/fan-club/{creatorId}/tiers`
+paths **do not exist** and have been replaced:
 
-- `GET /ui/subscriptions/tiers?creator_id={id}` → `200` list of tiers.
-- `GET /ui/subscriptions/me` → `200` list of the caller's subscriptions.
-- `GET /ui/fan-club/{creatorId}/tiers` → `200` list of fan-club tiers.
-- `GET /ui/fan-club/tiers/{id}/members` → owned by AND-240 (not consumed here yet).
+- `GET /api/creators/{creator_id}/plans` → `200` `SubscriptionPlan[]` — the creator's
+  subscription **plan** catalog (web `listPlans`; public, no `X-User-Id` required).
+- `GET /api/subscriptions?include_summary=true` → `200` `SubscriptionOut[]` — the caller's
+  subscriptions (web `listSubscriptions`; `X-User-Id` header auth, **not** cookie session).
+- `GET /api/creators/{creator_id}/tiers` → `200` `TierOut[]` — public fan-club tier catalog
+  for a creator (web `getPublicTiers`). (Caller-owned tiers: `GET /ui/fan-club/tiers`,
+  session auth.)
+- `GET /ui/fan-club/tiers/{tier_id}/members?limit=&cursor=` → owned by AND-240 (not
+  consumed here yet; session + `X-CSRF-Token`).
 
-Representative success shape (mirrors `frontend/src/api/types.ts`; final field names per
-AND-234 DTOs):
+Representative success shapes — **bare JSON arrays** (verified; the original `{ "tiers": [] }` /
+`{ "subscriptions": [] }` envelopes were wrong), field names per `frontend/src/api/types.ts`:
 
 ```json
-{
-  "tiers": [
-    { "id": "tier_gold", "name": "Gold", "price_cents": 999,
-      "currency": "USD", "period": "MONTH", "perks": ["hd","chat"] }
-  ]
-}
+// SubscriptionPlan[]  (GET /api/creators/{creator_id}/plans)
+[
+  { "plan_id": "plan_gold", "creator_id": "cr_1", "name": "Gold",
+    "price_cents": 999, "currency": "USD", "interval": "month",
+    "annual_price_cents": 9999, "status": "active",
+    "created_at": 1719792000, "updated_at": 1719792000 }
+]
 ```
 
 ```json
-{
-  "subscriptions": [
-    { "id": "sub_123", "tier_id": "tier_gold", "status": "ACTIVE",
-      "renews_at": "2026-07-01T00:00:00Z", "auto_renew": true }
-  ]
-}
+// SubscriptionOut[]  (GET /api/subscriptions)
+[
+  { "subscription_id": "sub_123", "plan_id": "plan_gold", "creator_id": "cr_1",
+    "subscriber_id": "u_1", "interval": "month", "provider": "ccbill",
+    "status": "active", "start_at": 1717200000, "current_period_end": 1751328000,
+    "cancel_at_period_end": false, "price_cents": 999, "currency": "USD",
+    "auto_renew": true, "created_at": 1717200000, "updated_at": 1717200000 }
+]
 ```
+
+```json
+// TierOut[]  (GET /api/creators/{creator_id}/tiers)
+[
+  { "tier_id": "tier_gold", "creator_id": "cr_1", "plan_id": "plan_gold",
+    "name": "Gold", "level": 2, "color": "#FFD700", "benefits": [{ "type": "early_access" }],
+    "member_count": 42, "sort_order": 1, "active": true,
+    "created_at": 1719792000, "updated_at": 1719792000 }
+]
+```
+
+Note: epoch fields (`current_period_end`, `start_at`, `created_at`) are Unix seconds
+(numbers), not ISO-8601 strings; AND-234's DTO/domain mapping converts them to `Instant`.
 
 Error responses surface to this layer only as the normalized `ApiResult.Failure`
 (AND-234 maps FastAPI `detail: string | [{msg}] | {code,...}` to a domain
@@ -324,7 +372,9 @@ fun interface StringProvider { fun get(@StringRes id: Int, vararg args: Any): St
 
 - Currency/price formatting is deferred to the screen using `NumberFormat`/locale; the
   ViewModel exposes raw `price_cents` + `currency` so formatting respects device locale.
-- Dates (`renews_at`) are exposed as `Instant`; locale-aware formatting happens at render.
+- Dates (renewal/period end = `current_period_end`, a Unix-seconds epoch upstream) are
+  exposed as `Instant`; locale-aware formatting happens at render. (Corrected: the field is
+  `current_period_end`, not `renews_at`.)
 
 ## 10. Telemetry & Logging
 
@@ -378,15 +428,19 @@ tests are AND-242.
 
 ## 13. Risks & Open Questions
 
-- **R1 — DTO field names:** exact field names (`price_cents` vs `priceCents`,
-  `renews_at`) depend on AND-234's Moshi mapping. Mitigation: depend only on the
-  `core-model` domain types AND-234 exposes, not raw DTOs.
+- **R1 — DTO field names:** exact field names depend on AND-234's Moshi mapping. Verified
+  upstream names (§5): plans use `plan_id`/`price_cents`/`interval`; subscriptions use
+  `subscription_id`/`plan_id`/`current_period_end`/`auto_renew`; fan-club tiers use
+  `tier_id`/`level`/`sort_order`/`benefits`. Mitigation: depend only on the `core-model`
+  domain types AND-234 exposes, not raw DTOs.
 - **R2 — Entitlement source of truth:** does the backend expose a dedicated entitlement
   endpoint, or must the client derive it from subscriptions? Current assumption: derive
   client-side, fail closed. **Open question for AND-234/backend owner.**
-- **R3 — Tier ordering for upgrade/downgrade:** comparing tiers requires a total order
-  (by `price_cents`? by an explicit `rank`?). Assumption: `price_cents` ascending. Confirm
-  whether tiers can be incomparable (e.g., add-ons).
+- **R3 — Tier/plan ordering for upgrade/downgrade:** Resolved by the sources. Fan-club
+  tiers expose an explicit rank (`level` and `sort_order` on `TierOut`) — use `level` for
+  comparison, not price. Subscription **plans** have no rank field, so order plans by
+  `price_cents` ascending. The two domains must be compared independently. Remaining open
+  point: whether plan add-ons can be incomparable (no signal in the sources).
 - **R4 — Unreliable dev host** makes manual verification flaky; mitigated by the fake
   repository for all unit tests.
 - **R5 — Fan-club vs subscription overlap:** whether a fan-club membership counts as a
@@ -425,3 +479,220 @@ tests are AND-242.
   the chosen default (derive client-side, order by `price_cents`).
 - PR description links AND-234 (dependency) and AND-242 (blocked) and notes the AND-240
   soft coupling.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer. Sources: the backend
+OpenAPI (`reference/openapi.index.txt` / `reference/openapi.pretty.json`,
+`components.schemas.<Name>`) and the frontend reference app (`reference/src/...`).
+
+1. **Catalog the user subscribes to is a "subscription tier" fetched at
+   `GET /ui/subscriptions/tiers?creator_id={id}`.** VERDICT: Corrected. No such route
+   exists. The catalog is a **subscription plan** list: `GET /api/creators/{creator_id}/plans`
+   → `SubscriptionPlan[]`. SOURCE: `src/api/endpoints/subscriptions.ts: listPlans`;
+   OpenAPI `GET /api/creators/{creator_id}/plans` is the wrapped concept (index also shows
+   the public tier route `GET /api/creators/{creator_id}/tiers`).
+2. **Caller's subscriptions at `GET /ui/subscriptions/me`.** VERDICT: Corrected. Real
+   route is `GET /api/subscriptions` (optional `?include_summary=true`) → `SubscriptionOut[]`.
+   SOURCE: `src/api/endpoints/subscriptions.ts: listSubscriptions`; OpenAPI
+   `GET /api/subscriptions | op=list_subscriptions_api_subscriptions_get | params=subscriber_id,include_profile,include_summary,x-user-id`.
+3. **Fan-club tiers at `GET /ui/fan-club/{creatorId}/tiers`.** VERDICT: Corrected. No such
+   route. Public per-creator tiers: `GET /api/creators/{creator_id}/tiers` → `TierOut[]`
+   (web `getPublicTiers`). Caller-owned/managed tiers: `GET /ui/fan-club/tiers` (web
+   `listTiers`, session auth, no `creator_id`). SOURCE: `src/api/endpoints/fan-club.ts:
+   getPublicTiers` and `listTiers`; OpenAPI `GET /api/creators/{creator_id}/tiers` and
+   `GET /ui/fan-club/tiers | op=api_list_tiers_ui_fan_club_tiers_get`.
+4. **Fan-club members endpoint `/ui/fan-club/tiers/{id}/members` (AND-240).** VERDICT:
+   Verified (path correct; paginated by `limit`/`cursor`). SOURCE: OpenAPI
+   `GET /ui/fan-club/tiers/{tier_id}/members | op=api_tier_members_... | params=tier_id,limit,cursor,...`.
+5. **Response envelopes `{ "tiers": [...] }` and `{ "subscriptions": [...] }`.** VERDICT:
+   Corrected. All three list endpoints return **bare JSON arrays** (`SubscriptionPlan[]`,
+   `SubscriptionOut[]`, `TierOut[]`), not wrapper objects. SOURCE: `src/api/endpoints/subscriptions.ts`
+   (`listPlans` returns `SubscriptionPlan[]`, `listSubscriptions` returns `SubscriptionOut[]`),
+   `src/api/endpoints/fan-club.ts: getPublicTiers` returns `TierOut[]`.
+6. **Subscription has `id` and `tier_id`, renewal date `renews_at` (ISO string).**
+   VERDICT: Corrected. `SubscriptionOut` uses `subscription_id`, references `plan_id` +
+   `creator_id` (no `tier_id`), and the period-end date is `current_period_end` as a
+   **Unix-seconds number** (not ISO). `auto_renew` is present and correct. SOURCE:
+   `src/api/types.ts: SubscriptionOut` (lines ~2713-2737).
+7. **Tier/plan fields `id`, `price_cents`, `currency`, `period: "MONTH"`, `perks[]`.**
+   VERDICT: Corrected. `SubscriptionPlan` uses `plan_id`, `price_cents`, `currency`, and
+   `interval` (lowercase string e.g. `"month"`) — there is no `period`/`perks`. Fan-club
+   `TierOut` uses `tier_id`, `level`, `color`, `sort_order`, `benefits: TierBenefit[]`,
+   `member_count`, `active` — no `price_cents`/`perks`. SOURCE: `src/api/types.ts:
+   SubscriptionPlan` (~2696), `TierOut` (~4658), `TierBenefit` (~4635).
+8. **Subscription `status` is the enum `ACTIVE | PAST_DUE | CANCELED | EXPIRED`.** VERDICT:
+   Corrected. Backend types `status` as a free `string`; the web client branches on
+   lowercase values `active | trialing | canceling | canceled | past_due` (no `EXPIRED`).
+   SOURCE: `src/api/types.ts: SubscriptionOut.status: string`; `src/pages/subscriptions/MySubscriptions.tsx`
+   (status switch cases `active`/`trialing`/`canceled`/`past_due`; `canCancel`/`canResume`).
+9. **Auth flow: `POST /ui/session/start` → MFA → `POST /ui/session/finalize` →
+   `GET /ui/me`.** VERDICT: Verified. SOURCE: OpenAPI `POST /ui/session/start`
+   (`req=UiSessionStartReq resp=200:UiSessionStartResp`), `POST /ui/session/finalize`
+   (`req=UiSessionFinalizeReq`), `GET /ui/me | op=ui_me_ui_me_get`.
+10. **`ui_csrf` cookie echoed as `X-CSRF-Token`; on 401 refresh once then retry.** VERDICT:
+    Verified. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`;
+    `refreshSession()` posts `/ui/session/refresh`, single-flight `refreshPromise`, retries once).
+11. **All subscription network uses the cookie session + CSRF.** VERDICT: Corrected
+    (partial). The `/ui/*` fan-club endpoints use the session cookie + CSRF, but the
+    `/api/*` subscription plan/subscription endpoints authenticate via an `X-User-Id`
+    header. SOURCE: `src/api/endpoints/subscriptions.ts` (`userIdHeader()` → `X-User-Id`;
+    explicit comment "authenticates via X-User-Id header (not Bearer token)"); OpenAPI
+    `/api/subscriptions` lists `x-user-id` param.
+12. **FastAPI `detail` normalized as `string | [{msg}] | {code,...}`.** VERDICT: Verified.
+    SOURCE: `src/api/client.ts: normalizeErrorDetail` (string passthrough; array of `{msg}`
+    joined; object with `code` mapped via `mapAuthorizationError`; OpenAPI error responses
+    are `422:HTTPValidationError`).
+13. **Tier ordering by `price_cents` ascending (R3).** VERDICT: Corrected. Fan-club tiers
+    carry an explicit `level`/`sort_order` rank; order by `level`. Plans have no rank, so
+    order plans by `price_cents`. SOURCE: `src/api/types.ts: TierOut.level`/`sort_order`,
+    `SubscriptionPlan.price_cents`.
+14. **Network error / offline surfaces as a retryable failure (the flaky dev host path).**
+    VERDICT: Verified at the web layer. SOURCE: `src/api/client.ts` catch block → throws
+    `ApiError(0, "Network error", err)` ("offline, DNS failure, etc."); AND-234 maps this
+    to `ApiResult.Failure(Network)`.
+15. **Framework choices: Hilt `@HiltViewModel`, `StateFlow`, `SavedStateHandle`,
+    `viewModelScope`, `collectAsStateWithLifecycle`, `StandardTestDispatcher`/`runTest`,
+    Turbine.** VERDICT: Unverified-assumption (project convention; not derivable from the
+    backend/frontend sources). These are standard AndroidX/Compose/coroutines-test
+    primitives (framework ref: developer.android.com guides for ViewModel, Kotlin flows in
+    UI, and `kotlinx-coroutines-test`). Accepted as the established Android-port MVVM
+    contract inherited from AND-234/AND-027.
+
+### Corrections made
+
+- §2 (References): clarified plan-vs-fan-club-tier distinction; corrected the auth note to
+  reflect `/ui/*` session-cookie auth vs `/api/*` `X-User-Id` header auth; named the
+  `/ui/session/refresh` single-flight refresh.
+- §2 (FR-2): replaced the invented uppercase status enum with the real lowercase values and
+  noted `status` is a free string; corrected the subscription→plan mapping (no `tier_id`).
+- §4: corrected the fan-club members endpoint to `GET /ui/fan-club/tiers/{tier_id}/members`
+  with `limit`/`cursor`, and added the public-vs-owned tier endpoint mapping for AND-234.
+- §5: replaced the three non-existent `/ui/...` paths with the verified
+  `/api/creators/{creator_id}/plans`, `/api/subscriptions`, `/api/creators/{creator_id}/tiers`
+  (and `/ui/fan-club/tiers` for owned); replaced the wrapper-object JSON with bare-array
+  examples carrying the real field names; noted epoch-seconds date fields.
+- §9: corrected `renews_at` → `current_period_end` (epoch seconds).
+- §13: R1 updated with verified field names; R3 resolved (fan-club by `level`, plans by
+  `price_cents`).
+
+### Open assumptions
+
+- **A1 — Dedicated entitlement endpoint (R2).** No client-facing entitlement endpoint
+  appears in the sources for this surface; the web client derives access from
+  subscriptions/memberships. Deriving client-side and failing closed remains an assumption
+  pending the backend owner. (Why unverifiable: absence of a route is not proof one will
+  not be added in AND-234.)
+- **A2 — Repository method names/shapes** (`getTiers`, `getMySubscriptions`,
+  `getFanClubTiers`, `ApiResult<T>`, domain `Tier`/`Subscription`/`FanClubTier`/
+  `FanClubMembership` types). Owned by AND-234; not present in the reference sources. The
+  upstream endpoints they wrap are verified (citations 1-4), but the Kotlin signatures are
+  an inter-ticket contract assumption.
+- **A3 — Fan-club membership counts as a subscription for `EntitlementKey.Content` (R5).**
+  No source signal on cross-domain entitlement. Assumption: both lists feed `resolve`.
+- **A4 — `level` semantics (higher number = higher tier).** `TierOut.level` exists and is
+  numeric, but the sources do not state the ordering direction; assumed ascending (higher
+  `level` is the more-privileged tier). Confirm with backend/AND-234.
+- **A5 — Android MVVM/test framework stack** (citation 15) is a project convention, not
+  verifiable from backend/frontend sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM/Robolectric unit (local, no device); **emu35** = headless AVD
+`test35` (x86_64, API 35) for instrumented/Compose suites in CI; **deviceA15** = physical
+Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). This
+ticket is a pure state/entitlement layer (no Composables, no I/O, no hardware), so the bulk
+runs on **JVM**. A few cases exercise process-death restore and ABI parity; those that
+genuinely need on-device behavior are flagged, with the rest noted as emulator-sufficient.
+
+- **TC-AND-241-01 — Initial load happy path.** Type: unit (JVM). Target:
+  `SubscriptionTiersViewModel`. Preconditions: `FakeSubscriptionsRepository` scripted so
+  `getTiers`/`listPlans` and `getMySubscriptions` both return `Success` (3 plans; user owns
+  one). Steps: construct VM with `SavedStateHandle{creatorId}` under `StandardTestDispatcher`;
+  collect `uiState` via Turbine; advance dispatcher. Expected: first emission `isLoading=true`
+  (Content empty), then a Content emission with 3 `TierRow`s, `error=null`,
+  `isLoading=isRefreshing=isStale=false`, and the owned plan's CTA = `CURRENT`. Traces: AC-1,
+  AC-2, AC-4.
+- **TC-AND-241-02 — Empty catalog.** Type: unit (JVM). Target: `SubscriptionTiersViewModel`.
+  Preconditions: repo returns `Success(emptyList())` for plans, `Success` for subs. Steps:
+  construct; advance. Expected: terminal state has `isEmpty=true`, `tiers` empty, `error=null`,
+  `isLoading=false`. Traces: AC-4.
+- **TC-AND-241-03 — EntitlementResolver verdict matrix.** Type: unit (JVM), pure. Target:
+  `EntitlementResolver`. Preconditions: none (no I/O). Steps: table-driven over {no subs;
+  active sub at required tier; higher tier owned; lower tier owned; lapsed/`canceled` sub;
+  multiple subs} × {`Tier`, `Content(minTier)`, `FanClub(minTier)`}. Expected: exact verdicts
+  — `Granted` when owned/at-or-above required `level`; `RequiresUpgrade(minTier)` when below;
+  `Denied(reason)` for lapsed-only; and `ownsTier` true only for an active sub at the tier.
+  100% branch coverage. Traces: AC-3.
+- **TC-AND-241-04 — Fail-closed on Unknown.** Type: unit (JVM), pure. Target:
+  `EntitlementResolver`. Preconditions: subscriptions list is null/absent (data unavailable).
+  Steps: call `resolve(...)` for a premium `Content` key with empty/absent data. Expected:
+  returns `Unknown`, and the gate treats `Unknown` as not-entitled (no `Granted`). Traces:
+  AC-3, AC-7.
+- **TC-AND-241-05 — Status-value mapping (contract).** Type: unit (JVM). Target:
+  `MySubscriptionsViewModel` + domain status mapping. Preconditions: repo returns subs with
+  the real lowercase statuses `active`, `trialing`, `canceling`, `canceled`, `past_due`, plus
+  one unknown value `"foo"`. Steps: load; inspect mapped state. Expected: each known value
+  maps to its domain status; unknown is handled defensively (treated as inactive/unknown, not
+  a crash). Confirms §5/FR-2 correction. Traces: AC-3, AC-4.
+- **TC-AND-241-06 — Partial failure degradation (tiers ok, subs fail).** Type: unit (JVM).
+  Target: `SubscriptionTiersViewModel`. Preconditions: `getTiers`=`Success(3)`,
+  `getMySubscriptions`=`Failure(Network)`. Steps: load; advance. Expected: tiers render with
+  `owned=false`/CTA `SUBSCRIBE`, `isStale=true`, no blocking `error`. Verifies independent
+  `async` legs. Traces: AC-4.
+- **TC-AND-241-07 — Stale-while-revalidate on refresh failure (flaky dev host path).** Type:
+  unit (JVM). Target: `SubscriptionTiersViewModel`. Preconditions: first load `Success`; then
+  `refresh()` returns `Failure(Timeout)`. Steps: load → assert Content; call `refresh()` →
+  during fetch assert `isRefreshing=true`; on failure assert prior `tiers` retained,
+  `isStale=true`, no destructive `error`. Expected: last-good data preserved; matches the
+  unreliable dev host. Traces: AC-2, AC-4.
+- **TC-AND-241-08 — Full failure then retry() recovers.** Type: unit (JVM). Target:
+  `MySubscriptionsViewModel`. Preconditions: first load `Failure(Server 5xx)` with no cached
+  data; second call `Success`. Steps: construct → assert `Error(message, retryable=true)`,
+  empty tiers; call `retry()` → assert Content. Expected: error→recovery transition; error
+  message resolved via `StringProvider` (R.string), not a literal. Traces: AC-2, AC-4, AC-5.
+- **TC-AND-241-09 — Auth failure maps to non-retryable sign-in error.** Type: unit (JVM).
+  Target: any ViewModel. Preconditions: repo returns `Failure(Auth)` (401 after the single
+  refresh-retry already exhausted in `core-network`). Steps: load. Expected: `error` with
+  `retryable=false` and the "please sign in again" string id; no credentials/cookies touched
+  in this layer. Traces: AC-4, AC-7.
+- **TC-AND-241-10 — No hardcoded user-facing strings.** Type: unit (JVM). Target: all three
+  ViewModels. Preconditions: fake `StringProvider` records requested `@StringRes` ids. Steps:
+  drive each error/CTA path. Expected: every user-facing message/label is produced via
+  `StringProvider.get(id, ...)`; assert no raw literals leak into state. Traces: AC-5.
+- **TC-AND-241-11 — Single init load; cancellation on onCleared.** Type: unit (JVM). Target:
+  `SubscriptionTiersViewModel`. Preconditions: repo counts invocations; one call is slow.
+  Steps: construct (assert exactly one initial load); trigger `onCleared()` mid-flight via the
+  ViewModel test harness. Expected: construction triggers exactly one repository load (FR-7);
+  in-flight coroutine is cancelled, no state emitted post-clear. Traces: AC-2.
+- **TC-AND-241-12 — Fan-club tiers load with hidden members slot.** Type: unit (JVM). Target:
+  `FanClubViewModel`. Preconditions: `getFanClubTiers(creatorId)` `Success(TierOut list with
+  level/sort_order)`; `getFanClubMembers` not wired (AND-240 absent). Steps: load. Expected:
+  tiers ordered by `level`; viewer membership/upgrade flags computed via the same
+  `EntitlementResolver`; `members=null` and members section hidden. Confirms tiers ordered by
+  `level` not price. Traces: AC-1, AC-3, AC-4.
+- **TC-AND-241-13 — SavedStateHandle process-death restore (instrumented).** Type:
+  instrumented. Target: `FanClubViewModel` with real `SavedStateHandle`. Run on: **emu35**
+  (emulator-sufficient; not hardware-dependent). Preconditions: `creatorId` saved in handle.
+  Steps: simulate process death by recreating the VM from a restored `SavedStateHandle`;
+  observe re-load. Expected: `creatorId` survives; `init` re-runs the single load; only nav
+  args (not subscription data) are restored. Traces: AC-2, AC-7.
+- **TC-AND-241-14 — ABI/API parity smoke (arm64/API34 vs x86_64/API35).** Type:
+  instrumented/e2e. Target: `:feature-subscriptions:testDebugUnitTest` + the resolver matrix.
+  Run on: **deviceA15** (physical, arm64-v8a / API 34) AND **emu35** (x86_64 / API 35).
+  Preconditions: built feature module. Steps: run the resolver + ViewModel suite on both
+  targets. Expected: identical verdicts/state sequences on both — no ABI- or API-level-driven
+  divergence in the pure entitlement math. MUST run on the physical device for the arm64/API-34
+  half (emulator cannot represent arm64). Traces: AC-3, AC-6.
+
+Coverage matrix (section-14 AC → covering TCs):
+
+| AC   | Covered by |
+|------|------------|
+| AC-1 | TC-01, TC-12 |
+| AC-2 | TC-01, TC-07, TC-08, TC-09(impl.), TC-11, TC-13 |
+| AC-3 | TC-03, TC-04, TC-05, TC-12, TC-14 |
+| AC-4 | TC-01, TC-02, TC-05, TC-06, TC-07, TC-08, TC-09, TC-12 |
+| AC-5 | TC-08, TC-10 |
+| AC-6 | TC-03 (100% resolver branches), TC-14 (suite green on both targets) |
+| AC-7 | TC-04, TC-09, TC-13 |

@@ -5,9 +5,10 @@ milestone: M5
 epic: E31
 priority: P0
 size: M
-status: draft
 depends_on: [AND-223]
 blocks: [AND-226, AND-227, AND-236]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-225 — Stripe Android SDK integration
@@ -42,16 +43,29 @@ with a publishable key sourced from config, and (2) a backend-issued test Paymen
   the launcher contract is surfaced for feature modules and wired in the single Activity.
 - **Namespace / applicationId base:** `com.testlogon.android` (used for all packages, the Stripe
   return-URL scheme, and the `PaymentConfiguration` caller context).
-- **Auth:** cookie-based session with `ui_csrf` echoed as `X-CSRF-Token`; persistent cookie jar;
-  single `POST /ui/session/refresh` retry on 401. All `/ui/billing/*` calls ride this session.
+- **Auth:** session-based with `ui_csrf` echoed as `X-CSRF-Token`; persistent cookie jar; single
+  `POST /ui/session/refresh` retry on 401. All `/ui/billing/*` calls ride this session. **[CORRECTED]**
+  Verified in `src/api/client.ts`: the web client sends `X-CSRF-Token` (from the `ui_csrf` cookie) on
+  **every** request, not only mutating ones, and also attaches `Authorization: Bearer <accessToken>` plus
+  (when active) `X-IMPERSONATION-TOKEN`; on a 401 for an authenticated user it calls `POST /ui/session/refresh`
+  exactly once and retries. The OpenAPI index additionally lists `user_sub`, `X-SESSION-ID`, and
+  `X-IMPERSONATION-TOKEN` as params on `/ui/billing/*`. The exact Android header/cookie strategy is owned by
+  AND-223; AND-225 only requires that the CSRF header + 401-refresh-retry behavior is applied to the two
+  billing calls it makes.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP,
   unreliable). OpenAPI at `/openapi.json`. Error `detail` is `string | [{msg}] | {code,...}`.
 - **Upstream dependency — AND-223 (Billing API + DTOs):** provides `BillingApi` (Retrofit),
   `core-model` billing DTOs, and `ApiResult<T>` mapping. AND-225 **consumes** these; it adds only the
   PaymentIntent-specific request/response DTOs if AND-223 has not already defined them (see §5).
 - **Web reference:** `frontend/src/api/endpoints/billing.ts` and `frontend/src/api/types.ts` for the
-  canonical `/ui/billing/*` payload shapes and Stripe field names (`client_secret`,
-  `publishable_key`, `payment_intent_id`, `status`).
+  canonical `/ui/billing/*` payload shapes and Stripe field names. **[CORRECTED]** Verified against the
+  reference app: the publishable key is delivered by `GET /ui/billing/config` (`BillingConfig.publishable_key`,
+  see `src/api/types.ts` and `src/pages/billing/BillingOverview.tsx`); a Stripe `client_secret` is returned
+  only by the SetupIntent endpoints (`POST /ui/billing/setup-intent/card` / `.../us-bank`,
+  `{ client_secret }`); and the charge endpoints (`POST /ui/billing/charge-once`, `pay-balance`,
+  `wallet/deposit`) return `{ status, payment_intent_id }` server-side **without** a `client_secret`.
+  There is **no** `/ui/billing/payment_intents` resource (see §5). The Stripe field names used by the
+  contract are `client_secret`, `publishable_key`, `payment_intent_id`, `status`.
 - **Stripe SDK docs:** PaymentSheet integration (`com.stripe:stripe-android`), `PaymentConfiguration`,
   `PaymentSheetResultCallback`.
 
@@ -88,6 +102,15 @@ FR-8. Be safe to call before initialization completes: triggering payment withou
 `PaymentConfiguration` must fail with a typed error, not crash.
 
 ## 4. Technical Design
+
+> **[CORRECTION — read with §5]** The code sketches below name a `createPaymentIntent` /
+> `fetchPaymentIntent` / `PaymentIntentDto` / `getPaymentIntent` API and call
+> `sheet.presentWithPaymentIntent(clientSecret, ...)`. Those endpoints/DTOs **do not exist** in the
+> verified backend contract (see §5). For the buildable round-trip, substitute the verified surface:
+> `getBillingConfig()` (publishable key), `createCardSetupIntent()` -> `client_secret`, and
+> `sheet.presentWithSetupIntent(clientSecret, config)` (SetupIntent flow). The service/launcher shapes,
+> Hilt wiring, initializer, and `PaymentResult` mapping below remain valid as written; only the endpoint
+> names and the `presentWith…` call must follow §5. The illustrative code is retained for structure.
 
 **Module placement.** Service, Hilt module, and DTOs live in `core-data` /`core-model`. The
 PaymentSheet launcher is UI-adjacent (needs an `ActivityResultRegistry` owner), so the launcher
@@ -216,71 +239,126 @@ redirect.
 
 ## 5. API Contract
 
-PaymentIntents are created **server-side** (the publishable key alone cannot create them; the secret
-key lives on the backend). The app calls the backend, which calls Stripe. Endpoints below align with
-`frontend/src/api/endpoints/billing.ts`; verify exact paths against `/openapi.json` at implementation
-time and defer canonical DTO ownership to AND-223 where overlap exists.
+PaymentIntents/SetupIntents are created **server-side** (the publishable key alone cannot create them;
+the secret key lives on the backend). The app calls the backend, which calls Stripe.
 
-**Create PaymentIntent — `POST /ui/billing/payment_intents`**
+**[MAJOR CORRECTION]** The endpoints `POST /ui/billing/payment_intents` and
+`GET /ui/billing/payment_intents/{id}` asserted by the original draft **do not exist** in the backend
+OpenAPI (`reference/openapi.index.txt`) nor in the web reference (`src/api/endpoints/billing.ts`). There
+is no `payment_intents` resource and no `PaymentIntentDto` schema (`components.schemas` has no such name).
+The real contract is:
 
-Request:
+| Purpose | Endpoint | Request | Response (documented) |
+| --- | --- | --- | --- |
+| Publishable key + currency | `GET /ui/billing/config` | — | `BillingConfig { publishable_key?: string, currency: string }` |
+| Card SetupIntent (returns a usable `client_secret`) | `POST /ui/billing/setup-intent/card` | — (empty body) | `{ client_secret: string }` |
+| One-off charge of a saved method | `POST /ui/billing/charge-once` | `StripeChargeReq` | `{ status: string, payment_intent_id: string }` |
+| Pay outstanding balance | `POST /ui/billing/pay-balance` | `PayBalanceReq` | `{ status: string, payment_intent_id?: string }` |
+| Wallet top-up | `POST /ui/billing/wallet/deposit` | `WalletDepositReq` | `{ status, payment_intent_id, wallet_balance_cents }` |
+
+Consequences for this ticket: (a) the publishable key comes from `GET /ui/billing/config`, **not** from a
+per-intent response field; (b) the **only** documented endpoint that returns a Stripe `client_secret` is
+`POST /ui/billing/setup-intent/card` — which yields a **SetupIntent** (`seti_..._secret_...`), not a
+PaymentIntent. The charge endpoints confirm a PaymentIntent **server-side** and return only its
+`payment_intent_id` + `status`; they do **not** hand a PaymentIntent `client_secret` to the client.
+
+**Implication for the provable round-trip.** PaymentSheet's `presentWithPaymentIntent(...)` requires a
+PaymentIntent `client_secret`, which **no current backend endpoint exposes**. Two options, both must be
+flagged as gaps rather than treated as settled (see §13 R2 and §16 Open assumptions):
+
+1. **Use `presentWithSetupIntent(...)` against `POST /ui/billing/setup-intent/card`** to prove the SDK
+   round-trip end-to-end today (this is the verified, existing client-secret path). This shifts the
+   "confirm" semantics from "payment succeeded" to "setup succeeded"; AC-4/AC-5 must be reworded
+   accordingly, or
+2. **Require a backend addition** (a `POST /ui/billing/payment_intents`-style endpoint, or extend
+   `charge-once` to return a `client_secret`) before a true PaymentIntent confirmation is testable on
+   device. This is a backend dependency that is **not** part of AND-223 as scoped.
+
+This review recommends option (1) for AND-225's "infrastructure + one provable round-trip" and treating
+the PaymentIntent variant as deferred to whichever ticket lands the backend endpoint (coordinate with
+AND-227 checkout, which uses `POST /ui/billing/checkout_session` returning `{ session_id, url }` — a
+redirect/Checkout flow, not in-app PaymentSheet).
+
+**Setup-intent (card) — `POST /ui/billing/setup-intent/card`** (empty body)
+
+Response `200`:
 ```json
-{ "amount": 500, "currency": "usd", "intent_context": { "kind": "test", "description": "AND-225 smoke" } }
+{ "client_secret": "seti_1Q..._secret_abc" }
+```
+
+**Charge once — `POST /ui/billing/charge-once`** (req `StripeChargeReq`)
+
+Request (verified field names — note `amount_cents`, not `amount`; **no** `currency` or `intent_context`):
+```json
+{ "amount_cents": 500, "payment_method_id": "pm_123", "description": "AND-225 smoke", "idempotency_key": "..." }
 ```
 Response `200`:
 ```json
-{
-  "payment_intent_id": "pi_3Q...",
-  "client_secret": "pi_3Q..._secret_abc",
-  "publishable_key": "pk_test_...",
-  "status": "requires_payment_method",
-  "amount": 500,
-  "currency": "usd"
-}
+{ "status": "succeeded", "payment_intent_id": "pi_3Q..." }
 ```
 
-**Fetch PaymentIntent — `GET /ui/billing/payment_intents/{payment_intent_id}`**
+**Config — `GET /ui/billing/config`**
 
 Response `200`:
 ```json
-{ "payment_intent_id": "pi_3Q...", "status": "succeeded", "amount": 500, "currency": "usd" }
+{ "publishable_key": "pk_test_...", "currency": "usd" }
 ```
 
-Headers: session cookies + `X-CSRF-Token: <ui_csrf>` on the POST (mutating). On `401`, the OkHttp
-authenticator (from auth foundation) performs one `POST /ui/session/refresh` and retries.
+Headers: session + `X-CSRF-Token: <ui_csrf>` on every request (see §2 correction). On `401`, the OkHttp
+authenticator performs one `POST /ui/session/refresh` and retries. Validation errors return `422` with a
+FastAPI `HTTPValidationError` body (`{ "detail": [{ "loc", "msg", "type" }] }`).
 
-**DTOs (Moshi):**
+**DTOs (Moshi) — corrected to verified shapes:**
 ```kotlin
+// GET /ui/billing/config
 @JsonClass(generateAdapter = true)
-data class CreatePaymentIntentRequest(
-    val amount: Long,
-    val currency: String,
-    @Json(name = "intent_context") val intentContext: Map<String, Any?>? = null,
-)
-
-@JsonClass(generateAdapter = true)
-data class PaymentIntentDto(
-    @Json(name = "payment_intent_id") val paymentIntentId: String,
-    @Json(name = "client_secret") val clientSecret: String? = null,
+data class BillingConfigDto(
     @Json(name = "publishable_key") val publishableKey: String? = null,
+    val currency: String,
+)
+
+// POST /ui/billing/setup-intent/card  (and .../us-bank)
+@JsonClass(generateAdapter = true)
+data class SetupIntentDto(
+    @Json(name = "client_secret") val clientSecret: String,
+)
+
+// POST /ui/billing/charge-once  — request body is StripeChargeReq
+@JsonClass(generateAdapter = true)
+data class StripeChargeRequest(
+    @Json(name = "amount_cents") val amountCents: Long,       // required, >= 1
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+    val description: String? = null,
+    @Json(name = "idempotency_key") val idempotencyKey: String? = null,
+)
+
+// POST /ui/billing/charge-once / pay-balance / wallet/deposit responses
+@JsonClass(generateAdapter = true)
+data class ChargeResultDto(
     val status: String,
-    val amount: Long? = null,
-    val currency: String? = null,
+    @Json(name = "payment_intent_id") val paymentIntentId: String? = null,
 )
 ```
 
-**Retrofit (extends AND-223 `BillingApi`):**
+**Retrofit (extends AND-223 `BillingApi`) — corrected paths:**
 ```kotlin
-@POST("ui/billing/payment_intents")
-suspend fun createPaymentIntent(@Body body: CreatePaymentIntentRequest): Response<PaymentIntentDto>
+@GET("ui/billing/config")
+suspend fun getBillingConfig(): Response<BillingConfigDto>
 
-@GET("ui/billing/payment_intents/{id}")
-suspend fun getPaymentIntent(@Path("id") id: String): Response<PaymentIntentDto>
+@POST("ui/billing/setup-intent/card")
+suspend fun createCardSetupIntent(): Response<SetupIntentDto>
+
+@POST("ui/billing/charge-once")
+suspend fun chargeOnce(@Body body: StripeChargeRequest): Response<ChargeResultDto>
 ```
 
-`status` values follow Stripe: `requires_payment_method`, `requires_confirmation`, `requires_action`,
-`processing`, `succeeded`, `canceled`. Treat `succeeded` as terminal-paid; `requires_action` means
-PaymentSheet must finish 3DS (handled in-sheet).
+> There is **no** `GET .../payment_intents/{id}` to "fetch and confirm status"; server-authoritative
+> status for a charge is the `status` field already returned by `charge-once` (Stripe values:
+> `requires_payment_method`, `requires_confirmation`, `requires_action`, `processing`, `succeeded`,
+> `canceled`). Treat `succeeded` as terminal-paid; `requires_action` means an SCA/3DS step is needed
+> (handled in-sheet for PaymentSheet, or via the SetupIntent confirmation flow). Reconciliation by ledger
+> (`GET /ui/billing/payments` / `GET /ui/billing/ledger`) is available if a stronger after-the-fact check
+> is wanted, but is out of scope for AND-225.
 
 ## 6. Data & State Management
 
@@ -288,10 +366,13 @@ PaymentSheet must finish 3DS (handled in-sheet).
   caching a `client_secret` is a security anti-pattern. The Room cache layer is N/A here.
 - **Initialization flag:** `StripeInitializer.initialized` is in-memory only (`@Volatile`),
   re-established each process start. Idempotent and thread-safe via double-checked locking.
-- **Publishable key:** read from `BuildConfig.STRIPE_PUBLISHABLE_KEY` (default provider). A
-  DataStore-backed override may supply a backend-issued `publishable_key` later; for AND-225 the
-  BuildConfig value is sufficient and the `publishable_key` returned by the create endpoint is the
-  authoritative source if present.
+- **Publishable key:** **[CORRECTED]** the verified backend source is `GET /ui/billing/config`
+  (`BillingConfig.publishable_key`), which is how the web client obtains it
+  (`src/pages/billing/BillingOverview.tsx`). The create/charge endpoints do **not** echo a per-intent
+  `publishable_key`. For AND-225, `PaymentConfigProvider.publishableKey()` should prefer the value from
+  `GET /ui/billing/config` (cached in-memory for the process) and may fall back to a
+  `BuildConfig.STRIPE_PUBLISHABLE_KEY` debug default when config is unavailable; a DataStore-backed
+  override remains a later option. The `config` field is the authoritative source.
 - **Launcher state:** PaymentSheet result is delivered via the ActivityResult callback. The consuming
   ViewModel (AND-232) holds the payment state machine; this ticket only emits a one-shot
   `PaymentResult`. No `StateFlow` is owned here beyond what callers wrap.
@@ -359,6 +440,12 @@ PaymentSheet must finish 3DS (handled in-sheet).
 
 ## 11. Testing Strategy
 
+> **[CORRECTION]** Where this section says `createPaymentIntent` / `fetchPaymentIntent` / `status ==
+> "succeeded"`, read the verified surface from §5: `createCardSetupIntent()` for the client-secret +
+> `presentWithSetupIntent`, `getBillingConfig()` for the publishable key, and `chargeOnce()` (which
+> returns `{ status, payment_intent_id }`) where a real charge is exercised. There is no
+> `fetchPaymentIntent` GET. The detailed, corrected case list is in §17.
+
 **Unit (core-testing, JVM):**
 - `StripeInitializerTest`: `ensureInitialized()` calls `PaymentConfiguration.init` exactly once across
   concurrent callers (verify with a mocked static / wrapper + threads).
@@ -400,9 +487,14 @@ host unreliability and Stripe network dependency.
 
 - **R1 — Cleartext dev transport:** `client_secret` over HTTP in dev. Mitigation: test-mode keys only;
   ensure prod network-security-config blocks cleartext. Open: confirm prod base URL/HTTPS timeline.
-- **R2 — Backend PaymentIntent endpoint shape:** exact path/field names may differ from web reference.
-  Mitigation: verify against `/openapi.json`; keep DTOs tolerant (nullable fields). Open: does the
-  backend echo `publishable_key` per-intent or is BuildConfig authoritative?
+- **R2 — Backend PaymentIntent endpoint shape:** **[RESOLVED BY REVIEW]** verified against
+  `reference/openapi.index.txt` and `src/api/endpoints/billing.ts`: there is **no** `payment_intents`
+  endpoint and **no** endpoint that returns a PaymentIntent `client_secret`. The only client-secret source
+  is `POST /ui/billing/setup-intent/card` (a SetupIntent). The publishable key comes from
+  `GET /ui/billing/config` (it is **not** echoed per-intent and BuildConfig is only a fallback). Open
+  follow-up (now a real dependency, not a guess): a true in-app PaymentIntent confirmation requires a new
+  backend endpoint that returns a PaymentIntent `client_secret`; until then AND-225 proves the SDK
+  round-trip via SetupIntent (see §5).
 - **R3 — Stripe SDK version vs minSdk 24 / AGP 8.7.3:** confirm chosen `stripe-android` line supports
   minSdk 24 and Kotlin 2.0.21 / KSP. Mitigation: pin a tested version in the catalog.
 - **R4 — PaymentSheet lifecycle:** `rememberPaymentSheet` must be registered before
@@ -422,14 +514,20 @@ on `compileSdk 35` / JDK 17 / AGP 8.7.3.
 AC-2. `PaymentConfiguration.init(...)` executes exactly once at app start with a publishable key
 sourced from config (verified by `StripeInitializerTest` and by a logged init marker, key redacted).
 
-AC-3. `StripePaymentService.createPaymentIntent(...)` returns an `ApiResult.Success<PaymentIntentDto>`
-containing a non-blank `client_secret` for a valid request against the dev backend (test mode).
+AC-3. **[CORRECTED to verified contract]** The payment service obtains a non-blank Stripe `client_secret`
+for a valid request against the dev backend (test mode) via `POST /ui/billing/setup-intent/card`
+(`{ client_secret }`), mapped to `ApiResult.Success`. (The original `createPaymentIntent` PaymentIntent
+endpoint does not exist; see §5.) The publishable key is obtained via `GET /ui/billing/config`.
 
-AC-4. Presenting `PaymentSheet` with that `client_secret` and entering Stripe test card
-`4242 4242 4242 4242` yields `PaymentResult.Completed`.
+AC-4. **[CORRECTED]** Presenting `PaymentSheet` with that `client_secret` and entering Stripe test card
+`4242 4242 4242 4242` yields `PaymentResult.Completed`. For the SetupIntent path this is
+`presentWithSetupIntent`; if/when a backend PaymentIntent client-secret endpoint exists, the identical
+launcher with `presentWithPaymentIntent` must produce the same `Completed` mapping.
 
-AC-5. `fetchPaymentIntent(id)` after completion returns `status == "succeeded"` (server-authoritative
-confirmation of the test PaymentIntent).
+AC-5. **[CORRECTED]** Server-authoritative confirmation: for the SetupIntent round-trip, the saved method
+appears in `GET /ui/billing/payment-methods` after completion; for a charge path,
+`POST /ui/billing/charge-once` returns `status == "succeeded"`. (There is no `fetchPaymentIntent` GET;
+status is carried in the charge response — see §5.)
 
 AC-6. `PaymentSheetResult.Canceled` and `…Failed` map to `PaymentResult.Canceled` / `Failed` with no
 crash; not-initialized state maps to `PaymentResult.Failed`, not a crash.
@@ -452,3 +550,214 @@ AC-8. Unit tests for initializer, service mapping, result mapping, and DTO round
 - Unit tests green in CI; gated integration smoke documented and runnable.
 - Security review notes the cleartext-dev caveat and confirms prod cleartext is blocked.
 - No new lint/detekt regressions; PR description links AND-223 and lists AND-226/227 follow-ups.
+
+## 16. Citations & Assumption Audit
+
+Each claim below is stated, given a VERDICT (Verified / Corrected / Unverified-assumption), and tied to
+an exact source pointer.
+
+1. **Claim:** Create PaymentIntent at `POST /ui/billing/payment_intents`. — **VERDICT: Corrected (endpoint
+   does not exist).** No such path in `reference/openapi.index.txt` (the `/ui/billing/*` block, lines
+   ~1171–1203, has no `payment_intents`) and none in `src/api/endpoints/billing.ts`. No `PaymentIntentDto`
+   in `openapi.pretty.json` `components.schemas`.
+2. **Claim:** Fetch PaymentIntent at `GET /ui/billing/payment_intents/{id}`. — **VERDICT: Corrected (does
+   not exist).** Same sources as #1; there is no per-intent GET. Status reconciliation, if needed, uses
+   `GET /ui/billing/payments` (`list_payments_ui_billing_payments_get`) or `GET /ui/billing/ledger`.
+3. **Claim:** A backend endpoint returns a Stripe `client_secret`. — **VERDICT: Corrected/clarified.** The
+   only documented client-secret source is `POST /ui/billing/setup-intent/card` (a **SetupIntent**) ->
+   `{ client_secret }`. Source: OpenAPI `create_card_setup_intent_ui_billing_setup_intent_card_post`;
+   `src/api/endpoints/billing.ts: createCardSetupIntent` (`api.post<{ client_secret: string }>`).
+4. **Claim:** The publishable key is delivered per-intent in the create response. — **VERDICT: Corrected.**
+   The publishable key comes from `GET /ui/billing/config` -> `BillingConfig.publishable_key`. Source:
+   `src/api/types.ts: BillingConfig` (`publishable_key?: string; currency: string`);
+   `src/pages/billing/BillingOverview.tsx` (renders `config.publishable_key`); OpenAPI
+   `billing_config_ui_billing_config_get` (`GET /ui/billing/config`).
+5. **Claim:** Create request body is `{ amount, currency, intent_context }`. — **VERDICT: Corrected.** The
+   real charge request is `StripeChargeReq { amount_cents (required, >=1), payment_method_id?, description?,
+   idempotency_key? }` — field is `amount_cents` not `amount`, and there is no `currency` or
+   `intent_context`. Source: `openapi.pretty.json: components.schemas.StripeChargeReq` (lines ~70328–70373);
+   `src/api/types.ts: StripeChargeReq`.
+6. **Claim:** Charge/create response is `{ payment_intent_id, client_secret, publishable_key, status,
+   amount, currency }`. — **VERDICT: Corrected.** `chargeOnce` returns `{ status, payment_intent_id }`
+   (no client_secret/publishable_key). Source: `src/api/endpoints/billing.ts: chargeOnce`
+   (`api.post<{ status: string; payment_intent_id: string }>`).
+7. **Claim:** Stripe PaymentIntent `status` enum (`requires_payment_method` … `succeeded` … `canceled`).
+   — **VERDICT: Verified (framework ref).** These are canonical Stripe PaymentIntent statuses; framework ref:
+   https://docs.stripe.com/payments/paymentintents/lifecycle . The backend echoes a `status` string in
+   charge responses (`src/api/endpoints/billing.ts`).
+8. **Claim:** Auth is session-based with `ui_csrf` echoed as `X-CSRF-Token`; single
+   `POST /ui/session/refresh` on 401 then retry. — **VERDICT: Verified, with correction.** Source:
+   `src/api/client.ts` (`getCookie("ui_csrf")` -> `headers.set("X-CSRF-Token", csrf)` on every request;
+   `refreshSession()` calls `POST /ui/session/refresh`; 401 path refreshes once and retries). Correction:
+   the header is sent on all requests (not only mutating), and the web client also sends `Authorization:
+   Bearer` and `X-IMPERSONATION-TOKEN`; OpenAPI lists `user_sub, X-SESSION-ID, X-IMPERSONATION-TOKEN` params
+   on `/ui/billing/*`.
+9. **Claim:** FastAPI error `detail` shape is `string | [{msg}] | {code,...}`. — **VERDICT: Verified.**
+   Source: `src/api/client.ts: normalizeErrorDetail` (handles `string`, `Array<{msg}>`, and `object`);
+   `422` responses use `HTTPValidationError` (`{ detail: [{ loc, msg, type }] }`) per `openapi.index.txt`.
+10. **Claim:** Checkout is `POST /ui/billing/checkout_session` returning `{ session_id, url }` (relevant to
+    AND-227, not in-app PaymentSheet). — **VERDICT: Verified.** Source: OpenAPI
+    `create_checkout_session_ui_billing_checkout_session_post` (req `BillingCheckoutReq`);
+    `src/api/endpoints/billing.ts: createCheckoutSession` (`{ session_id: string; url: string }`);
+    `src/api/types.ts: BillingCheckoutReq { amount_cents, currency?, description? }`.
+11. **Claim:** Web reference paths `frontend/src/api/endpoints/billing.ts` and `.../types.ts` exist and own
+    the billing shapes. — **VERDICT: Verified.** Files present and read; billing DTOs at `src/api/types.ts`
+    lines ~608–771, endpoints at `src/api/endpoints/billing.ts`.
+12. **Claim:** Stripe Android SDK `com.stripe:stripe-android` with `PaymentConfiguration.init`,
+    `rememberPaymentSheet`, `PaymentSheetResult { Completed | Canceled | Failed }`, and
+    `presentWithSetupIntent` / `presentWithPaymentIntent`. — **VERDICT: Verified (framework ref).** Not
+    checkable from backend sources; framework refs: https://docs.stripe.com/payments/accept-a-payment?platform=android
+    and https://github.com/stripe/stripe-android (PaymentSheet API). The `20.x` version line and minSdk-24
+    compatibility (R3) are unverified-assumptions (see below) — pin a tested version at implementation time.
+13. **Claim:** Dev backend `http://18.222.237.167:8000`, plaintext HTTP, OpenAPI at `/openapi.json`. —
+    **VERDICT: Unverified-assumption.** Host/port not derivable from the provided reference files; carried
+    from the draft. Cleartext-in-dev security caveat (§8/R1) is sound regardless.
+14. **Claim:** AND-223 provides `BillingApi`, `ApiResult<T>`, billing DTOs that AND-225 extends. — **VERDICT:
+    Unverified-assumption (cross-ticket).** Not present in this repo snapshot; an inter-ticket contract.
+
+### Corrections made
+
+- **C1 (frontmatter):** `status: draft` -> `status: reviewed`; added `reviewed_on: 2026-06-06`.
+- **C2 (§2 web reference):** documented that the publishable key comes from `GET /ui/billing/config` and
+  that `client_secret` only comes from the SetupIntent endpoint; charge endpoints return only
+  `{ status, payment_intent_id }`.
+- **C3 (§2 auth):** corrected CSRF to apply on every request; noted Bearer/impersonation headers and the
+  `user_sub`/`X-SESSION-ID` params.
+- **C4 (§5):** removed the non-existent `POST/GET /ui/billing/payment_intents`; replaced with the verified
+  endpoint table, the SetupIntent-vs-PaymentIntent gap, corrected request (`amount_cents`) and response
+  (`{ status, payment_intent_id }`) shapes, and corrected Moshi DTOs + Retrofit signatures.
+- **C5 (§4):** added a banner mapping the illustrative `createPaymentIntent`/`presentWithPaymentIntent`
+  code to the verified `createCardSetupIntent`/`presentWithSetupIntent` surface.
+- **C6 (§6):** corrected publishable-key source from BuildConfig-authoritative to
+  `GET /ui/billing/config`-authoritative (BuildConfig is fallback only).
+- **C7 (§11):** added correction banner aligning the testing surface with §5.
+- **C8 (§13 R2):** marked resolved — endpoints verified absent; documented the backend dependency for a true
+  PaymentIntent client-secret.
+- **C9 (§14):** reworded AC-3/AC-4/AC-5 to the verified SetupIntent/charge contract while preserving IDs.
+
+### Open assumptions
+
+- **OA1 — True PaymentIntent round-trip:** no backend endpoint currently returns a PaymentIntent
+  `client_secret`, so `presentWithPaymentIntent` cannot be exercised end-to-end today. AND-225's provable
+  round-trip uses the SetupIntent path; the PaymentIntent variant depends on a not-yet-existing backend
+  endpoint. (Source of gap: #1, #2, #3 above.)
+- **OA2 — Stripe SDK version vs minSdk 24 / Kotlin 2.0.21 / KSP / AGP 8.7.3 (R3):** the `20.x` line claim
+  is unverified against the toolchain; pin a tested version. Framework-only, not in sources.
+- **OA3 — Dev host / base URL / HTTPS prod timeline (R1):** not derivable from sources (#13); confirm
+  externally.
+- **OA4 — AND-223 deliverables (`BillingApi`, `ApiResult`):** cross-ticket assumption not present in this
+  snapshot (#14).
+- **OA5 — Merchant display name `"TestLogon"` and analytics event schema (§10):** app-side conventions, not
+  verifiable from backend/web sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **emu35** = headless emulator AVD `test35`
+(x86_64, Android 15 / API 35); **A15** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a, serial
+R5CX821TA9R). Cases that drive PaymentSheet's real card UI, SCA/3DS, or that must validate arm64/API-34
+behavior are marked **MUST run on A15**.
+
+- **TC-AND-225-01 — PaymentConfiguration initialized exactly once (concurrent).**
+  Type: unit. Target: JVM. Preconditions: `PaymentConfigProvider.publishableKey()` returns a non-blank
+  `pk_test_...`; `PaymentConfiguration.init` is wrapped/mockable. Steps: invoke
+  `StripeInitializer.ensureInitialized()` from N concurrent threads. Expected: `PaymentConfiguration.init`
+  invoked exactly once; `isInitialized()` true; no exception. Traces: AC-2.
+
+- **TC-AND-225-02 — Publishable key sourced from `GET /ui/billing/config`.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer enqueues
+  `200 {"publishable_key":"pk_test_x","currency":"usd"}`. Steps: call `getBillingConfig()` via the Retrofit
+  `BillingApi`; resolve `PaymentConfigProvider.publishableKey()`. Expected: request hits
+  `GET /ui/billing/config`; provider returns `pk_test_x`; no BuildConfig fallback used. Traces: AC-2, AC-3.
+
+- **TC-AND-225-03 — SetupIntent client_secret happy path (service mapping).**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer enqueues
+  `200 {"client_secret":"seti_1Q_secret_abc"}` for `POST /ui/billing/setup-intent/card`. Steps: call the
+  service method that brokers `createCardSetupIntent()`. Expected: `ApiResult.Success` with non-blank
+  `client_secret`; request path/method correct; `X-CSRF-Token` header present. Traces: AC-3.
+
+- **TC-AND-225-04 — Charge-once request/response shape (verified fields).**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: enqueue `200 {"status":"succeeded",
+  "payment_intent_id":"pi_3Q"}`. Steps: call `chargeOnce(StripeChargeRequest(amountCents=500,
+  paymentMethodId="pm_1"))`. Expected: serialized body uses `amount_cents` (not `amount`), contains no
+  `currency`/`intent_context`; response maps to `status="succeeded"`, `paymentIntentId="pi_3Q"`. Traces:
+  AC-3, AC-5.
+
+- **TC-AND-225-05 — DTO Moshi round-trip for billing shapes.**
+  Type: unit. Target: JVM. Preconditions: fixture JSON copied from web reference shapes. Steps: serialize
+  `StripeChargeRequest` and parse `BillingConfigDto` / `SetupIntentDto` / `ChargeResultDto`. Expected:
+  field-name mapping (`amount_cents`, `payment_intent_id`, `client_secret`, `publishable_key`) round-trips;
+  nullable fields tolerate absence. Traces: AC-3, AC-8.
+
+- **TC-AND-225-06 — PaymentSheetResult mapping.**
+  Type: unit. Target: JVM. Preconditions: none. Steps: map
+  `PaymentSheetResult.{Completed, Canceled, Failed(error)}` via `toPaymentResult()`. Expected: ->
+  `PaymentResult.{Completed, Canceled, Failed(message, error)}`; no crash on `Failed`. Traces: AC-4, AC-6.
+
+- **TC-AND-225-07 — Not-initialized guard does not crash.**
+  Type: unit. Target: JVM. Preconditions: `publishableKey()` returns blank/invalid so
+  `PaymentConfiguration.init` throws. Steps: call `paymentSheetConfig()` (which calls
+  `ensureInitialized()`). Expected: `IllegalStateException` is caught and converted to
+  `PaymentResult.Failed("Payment is not available")`; process does not crash. Traces: AC-6.
+
+- **TC-AND-225-08 — Create failure on flaky dev host (5xx/timeout) is typed, POST not retried.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer returns `503` then a delayed
+  body to simulate timeout for `POST /ui/billing/setup-intent/card`. Steps: invoke the create flow.
+  Expected: result is `ApiResult.Failure` (typed, non-fatal); the POST is **not** auto-retried (single
+  request observed); no `PaymentResult` emitted. Traces: AC-6.
+
+- **TC-AND-225-09 — 422 validation error mapped via FastAPI detail shapes.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: enqueue `422 {"detail":[{"loc":["body",
+  "amount_cents"],"msg":"ensure this value is greater than or equal to 1","type":"value_error"}]}`. Steps:
+  call `chargeOnce(amountCents=0)`. Expected: typed failure with a user-facing message derived from
+  `detail[].msg`; raw JSON never surfaced. Traces: AC-6.
+
+- **TC-AND-225-10 — 401 triggers single session refresh then retry.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: enqueue `401`, then `200` for
+  `POST /ui/session/refresh`, then `200` for the original call. Steps: invoke a billing call. Expected:
+  exactly one `POST /ui/session/refresh`; original request retried once and succeeds; no infinite loop.
+  Traces: AC-3.
+
+- **TC-AND-225-11 — No client_secret / card data / publishable key in logs.**
+  Type: unit. Target: JVM. Preconditions: capture logger output; run create + present + result flow with a
+  fake `seti_..._secret_...`. Steps: assert captured logs. Expected: logs contain at most
+  `payment_intent_id`/`status`; never `client_secret`, publishable key, PAN/CVV. Traces: AC-7.
+
+- **TC-AND-225-12 — Launcher registered at screen root presents and returns a result (Compose-UI).**
+  Type: Compose-UI. Target: emu35 (CI). Preconditions: test host with
+  `rememberStripePaymentLauncher`; Stripe SDK in a stubbed/test mode so PaymentSheet can be dismissed.
+  Steps: compose the host, trigger `present(clientSecret, config)`, dismiss the sheet. Expected: sheet
+  registers before STARTED (no lifecycle/registry crash), and a dismissal maps to
+  `PaymentResult.Canceled`. Traces: AC-4, AC-6.
+
+- **TC-AND-225-13 — End-to-end SetupIntent round-trip with test card `4242 4242 4242 4242`.**
+  Type: instrumented/e2e. Target: **A15 (MUST run on physical device).** Preconditions: dev backend
+  reachable; valid `pk_test_...` from `GET /ui/billing/config`; debug smoke screen. Steps: create SetupIntent
+  via `POST /ui/billing/setup-intent/card`; present PaymentSheet (`presentWithSetupIntent`); enter
+  `4242 4242 4242 4242`, exp future, any CVC/ZIP; confirm. Expected: `PaymentResult.Completed`; the saved
+  method appears in `GET /ui/billing/payment-methods` (server-authoritative). Rationale for A15: drives the
+  real PaymentSheet card UI/IME on arm64/API-34. Traces: AC-3, AC-4, AC-5. (Gated: manual/nightly per §11
+  due to dev-host/Stripe-network reliability.)
+
+- **TC-AND-225-14 — Offline/no-network during create surfaces typed failure.**
+  Type: instrumented. Target: A15 (airplane mode) or emu35 (disabled radio). Preconditions: network off.
+  Steps: trigger create flow. Expected: `ApiResult.Failure` (network), PaymentSheet never presented, caller
+  can re-try; no crash. A15 preferred to validate real radio-off behavior. Traces: AC-6.
+
+- **TC-AND-225-15 — PaymentSheet accessibility (TalkBack) and dark-theme handoff.**
+  Type: manual + Compose-UI assertions. Target: **A15 (MUST run on physical device for TalkBack).**
+  Preconditions: TalkBack enabled; system dark theme on. Steps: open PaymentSheet, traverse fields with
+  TalkBack; toggle dark mode. Expected: Stripe-provided labels/focus order are announced; sheet honors the
+  Material 3 dark theme; app-side strings (merchant name, error copy) come from `strings.xml`. Traces: AC-4.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (SDK added, builds on compileSdk 35 / JDK 17 / AGP 8.7.3) | Build/CI (TC-AND-225-13 exercises the assembled APK on device); no isolated TC — verified by green CI build |
+| AC-2 (init exactly once, key from config) | TC-AND-225-01, TC-AND-225-02 |
+| AC-3 (service yields non-blank client_secret) | TC-AND-225-02, TC-AND-225-03, TC-AND-225-04, TC-AND-225-05, TC-AND-225-10, TC-AND-225-13 |
+| AC-4 (PaymentSheet + `4242` -> Completed) | TC-AND-225-06, TC-AND-225-12, TC-AND-225-13, TC-AND-225-15 |
+| AC-5 (server-authoritative confirmation) | TC-AND-225-04, TC-AND-225-13 |
+| AC-6 (Canceled/Failed/not-initialized map, no crash) | TC-AND-225-06, TC-AND-225-07, TC-AND-225-08, TC-AND-225-09, TC-AND-225-12, TC-AND-225-14 |
+| AC-7 (no card data / client_secret in logs) | TC-AND-225-11 |
+| AC-8 (unit tests pass in CI) | TC-AND-225-01, TC-AND-225-04, TC-AND-225-05, TC-AND-225-06, TC-AND-225-07 |

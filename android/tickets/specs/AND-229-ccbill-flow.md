@@ -5,7 +5,8 @@ milestone: M5
 epic: E31
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-231]
 blocks: []
 ---
@@ -56,9 +57,17 @@ into a CCBill result.
 - **Related (not hard deps):** AND-223 (billing DTOs), AND-227 (checkout session) — a
   CCBill purchase typically follows a checkout-session create; this ticket accepts an
   optional `checkoutSessionId` but does not create one.
-- **Backend reference:** FastAPI route `GET/POST /api/billing/ccbill/frontend-oauth`
-  (see `/openapi.json`). Web reference: `frontend/src/api/endpoints/billing.ts` (CCBill
-  helpers) and shared types in `frontend/src/api/types.ts`. Dev backend
+- **Backend reference:** FastAPI route `POST /api/billing/ccbill/frontend-oauth`
+  (op `get_frontend_oauth_api_billing_ccbill_frontend_oauth_post`; OpenAPI declares it
+  POST-only, NOT `GET/POST` — corrected). Per OpenAPI it takes **no request body**
+  (`requestBody` absent) and only the standard params `user_sub` (query, optional),
+  `X-SESSION-ID` (header), `X-IMPERSONATION-TOKEN` (header); its 200 response schema is
+  **untyped/empty** (`{}`) — see §5 and §16. **There is no web reference for this exact
+  endpoint:** `src/api/endpoints/billing.ts` does NOT call `frontend-oauth` (it only does
+  `createCheckoutSession` → `POST /ui/billing/checkout_session` → `{ session_id, url }`),
+  so the request/response field names below are **unverified assumptions** to confirm with
+  the backend team. Shared types in `src/api/types.ts` reference CCBill only as a provider
+  enum value (`provider: "stripe" | "ccbill" | "paypal" | "unknown"`). Dev backend
   `http://18.222.237.167:8000` (plaintext, flaky — design for ~20 s timeouts).
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Hilt (KSP), Retrofit 2.11 / OkHttp 4.12 /
   Moshi 1.15, AndroidX Browser (`androidx.browser:browser`, Custom Tabs), Coroutines/Flow,
@@ -70,8 +79,15 @@ FR-1. Provide a "Pay with CCBill" entry action that, given an optional `checkout
 and a `flowType` (`ADD_PAYMENT_METHOD` | `PURCHASE`), fetches a CCBill authorization URL
 from the backend.
 
-FR-2. The fetch must send the authenticated cookie session **and** the `X-CSRF-Token`
-header (state-changing call). It must generate a cryptographically random opaque `state`
+FR-2. The fetch must send the authenticated session. **Verification note:** the web client
+(`src/api/client.ts`) attaches, on every request, an `Authorization: Bearer <accessToken>`
+header (from the auth store), the cookie session (`credentials: "include"`), and an
+`X-CSRF-Token` header read from the `ui_csrf` cookie when present; the OpenAPI for this
+endpoint additionally documents an optional `X-SESSION-ID` header and `user_sub` query param.
+The Android client must replicate whichever of these the dev backend actually enforces —
+treat `X-SESSION-ID` (documented) and `X-CSRF-Token` (sent by web on all mutations) as the
+authoritative pair and confirm with backend (see §16, Open assumptions). It must generate a
+cryptographically random opaque `state`
 value, persist it (DataStore), and pass it to the backend so it round-trips back on return —
 this binds the return to the originating request (CSRF/replay protection on the redirect).
 
@@ -204,12 +220,24 @@ app to background and the OS may reclaim it before return.
 
 ## 5. API Contract
 
-Endpoint: `POST /api/billing/ccbill/frontend-oauth` (idempotent fetch is a POST because it
-creates a server-side authorization session; not retried as a blind GET).
+Endpoint: `POST /api/billing/ccbill/frontend-oauth` (verified POST-only in OpenAPI index,
+line 21). Idempotent fetch as a POST because it creates a server-side authorization session;
+not retried as a blind GET.
 
-Request headers: cookie session + `X-CSRF-Token: <ui_csrf>`; `Content-Type: application/json`.
+> **VERIFICATION (critical):** The OpenAPI spec for this operation declares **no request
+> body** and an **empty/untyped 200 response schema** (`schema: {}`). The request and response
+> shapes documented below are therefore **unverified assumptions** inferred from CCBill's
+> hosted-flow conventions — they are NOT confirmed by OpenAPI or the web client (which does not
+> call this endpoint at all). The only params OpenAPI documents are `user_sub` (query),
+> `X-SESSION-ID` and `X-IMPERSONATION-TOKEN` (headers). **Confirm the real contract with the
+> backend team before implementing the Retrofit DTOs** (see §16, Open assumptions OA-1/OA-2).
+> If the backend in fact generates `state`/`return_url` server-side and ignores a client body,
+> drop the client `state` generation and validate the server's echoed value instead (see R1).
 
-Request body:
+Request headers (assumed): `X-SESSION-ID` (session) + `X-CSRF-Token: <ui_csrf>` (web sends
+this on all mutations) + `Content-Type: application/json`; optional `user_sub` query param.
+
+Request body (ASSUMED — not in OpenAPI):
 
 ```json
 {
@@ -223,7 +251,8 @@ Request body:
 `checkout_session_id` is nullable (omitted for `add_payment_method`). `return_url` is the
 deep link registered by AND-231/AND-022.
 
-Success `200`:
+Success `200` (ASSUMED body — OpenAPI 200 schema is empty `{}`, so these field names are
+unverified):
 
 ```json
 {
@@ -265,10 +294,13 @@ Return deep link (produced by CCBill → our backend → AND-231 handler), e.g.
 AND-231 parses this into `PaymentReturn`; AND-229 only reads `provider == "ccbill"`,
 `status`, `state`, `correlation_id`.
 
-Optional confirmation (on `Success`) reuses AND-227/AND-223 status endpoints (e.g.
-`GET /ui/billing/checkout_session/{id}` or `GET /api/billing/payment-methods`) — not
-redefined here; owned by those tickets. Error `detail` follows the standard FastAPI mapping
-(string | `[{msg}]` | `{code,...}`).
+Optional confirmation (on `Success`) reuses AND-227/AND-223 status endpoints — not redefined
+here; owned by those tickets. **Correction:** there is no `GET /ui/billing/checkout_session/{id}`
+in the OpenAPI index (only `POST /ui/billing/checkout_session`). The verified confirmation
+read is `GET /ui/billing/payment-methods` (op `list_payment_methods_ui_billing_payment_methods_get`,
+index line 1185). Error responses are `422 HTTPValidationError`; the `detail` field follows the
+standard FastAPI mapping (string | `[{msg, loc, type}]` | `{code, ...}`), which the web client's
+`normalizeErrorDetail` (`src/api/client.ts`) handles for all three shapes — verified.
 
 ## 6. Data & State Management
 
@@ -419,3 +451,226 @@ DEBUG. Mock provider tags events with `mock: true`.
 - Consumes AND-231's `PaymentReturn` without reimplementing deep-link parsing.
 - Lint/ktlint/detekt clean; builds on the `android-port` branch (`android/` module);
   reviewed and merged; telemetry events emitting as specified.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Endpoint is `POST /api/billing/ccbill/frontend-oauth`.** VERDICT: **Verified.**
+   SOURCE: OpenAPI `POST /api/billing/ccbill/frontend-oauth`
+   (op `get_frontend_oauth_api_billing_ccbill_frontend_oauth_post`), index line 21.
+2. **Method is POST (not `GET/POST`).** VERDICT: **Corrected** (§2 said "GET/POST").
+   SOURCE: OpenAPI defines only a `post` operation for this path; `openapi.pretty.json`
+   line 87826.
+3. **Request body shape `{flow_type, checkout_session_id, state, return_url}`.**
+   VERDICT: **Unverified-assumption** (likely wrong). SOURCE: OpenAPI declares the
+   operation with **no `requestBody`** (index `req=` empty; `openapi.pretty.json`
+   lines 87825–87902 contain only `parameters` + `responses`, no `requestBody`). No web
+   caller exists to confirm field names.
+4. **Response 200 `{authorization_url, correlation_id, expires_at}`.**
+   VERDICT: **Unverified-assumption.** SOURCE: OpenAPI 200 content schema is empty
+   (`"schema": {}`), `openapi.pretty.json` line 87882. Field names are inferred, not defined.
+5. **Auth: cookie session + `X-CSRF-Token` header.** VERDICT: **Corrected / partially
+   verified.** The web client sends `Authorization: Bearer`, cookie (`credentials:"include"`)
+   AND `X-CSRF-Token` (from the `ui_csrf` cookie) on every request. SOURCE:
+   `src/api/client.ts` lines 156–171 (`Authorization` 156–160, `ui_csrf`→`X-CSRF-Token`
+   168–171, `credentials:"include"` 183). However this *endpoint's* OpenAPI documents
+   `X-SESSION-ID`/`X-IMPERSONATION-TOKEN` headers + `user_sub` query, NOT `X-CSRF-Token`
+   (index line 21). Corrected §2/§5 to list `X-SESSION-ID` as the documented auth header.
+6. **"Web reference: `billing.ts` (CCBill helpers)".** VERDICT: **Corrected.** SOURCE:
+   `src/api/endpoints/billing.ts` — no `ccbill`/`frontend-oauth` symbol exists; the nearest
+   redirect-style flow is `createCheckoutSession` → `api.post("/ui/billing/checkout_session")`
+   returning `{ session_id, url }` (line 76–77). There is NO web client for the CCBill
+   frontend-oauth endpoint.
+7. **CCBill is a known provider value.** VERDICT: **Verified.** SOURCE: `src/api/types.ts`
+   line 3163 `provider: "stripe" | "ccbill" | "paypal" | "unknown"`.
+8. **Confirmation read `GET /ui/billing/checkout_session/{id}`.** VERDICT: **Corrected.**
+   SOURCE: no such path in OpenAPI; only `POST /ui/billing/checkout_session` (index line
+   1175). Verified confirmation read is `GET /ui/billing/payment-methods` (index line 1185).
+9. **Error shape: `detail` = string | `[{msg}]` | `{code,...}`; 422 = HTTPValidationError.**
+   VERDICT: **Verified.** SOURCE: OpenAPI `resp=...;422:HTTPValidationError` (index line 21);
+   `src/api/client.ts` `normalizeErrorDetail` lines 66–102 handles all three shapes.
+10. **401 → single transparent refresh via `POST /ui/session/refresh` then retry.**
+    VERDICT: **Verified.** SOURCE: `src/api/client.ts` `refreshSession` lines 121–130 and
+    401 handler lines 194–237; OpenAPI `POST /ui/session/refresh` (index line 1847).
+11. **A backend CCBill mock exists.** VERDICT: **Verified** (server-side, distinct from the
+    in-app dev mock this ticket ships). SOURCE: OpenAPI `POST /mock/ccbill/ccbill-auth/oauth/token`
+    (index line 423) and `/mock/ccbill/*` family (index lines 423–426); also
+    `POST /api/billing/payment-methods/ccbill-token` (`SavePaymentTokenIn`, index line 32) for
+    persisting the resulting token.
+12. **`SavePaymentTokenIn` = `{payment_token_id (req), label?, make_default=true}`.**
+    VERDICT: **Verified** (relevant to the optional post-success token save).
+    SOURCE: `openapi.pretty.json` lines 64612–64640.
+13. **Use Chrome Custom Tabs (AndroidX Browser), not WebView, to share the system browser
+    session.** VERDICT: **Verified (framework ref).** SOURCE: framework ref —
+    https://developer.android.com/develop/ui/views/layout/webapps/customtabs and
+    `androidx.browser.customtabs.CustomTabsIntent`.
+14. **`Intent.ACTION_VIEW` fallback when no Custom Tabs provider exists.**
+    VERDICT: **Verified (framework ref).** SOURCE: framework ref —
+    https://developer.android.com/reference/android/content/Intent#ACTION_VIEW
+    (and `ActivityNotFoundException` on `startActivity`).
+15. **`SecureRandom` for the opaque `state`.** VERDICT: **Verified (framework ref).**
+    SOURCE: framework ref — https://developer.android.com/reference/java/security/SecureRandom.
+16. **DataStore Preferences for pending-state persistence across process death.**
+    VERDICT: **Verified (framework ref).** SOURCE: framework ref —
+    https://developer.android.com/topic/libraries/architecture/datastore.
+
+### Corrections made
+
+- **§2 Backend reference:** "GET/POST" → POST-only; flagged that the endpoint has no request
+  body and an untyped 200 schema; corrected the false "web reference in billing.ts (CCBill
+  helpers)" claim (no such web caller); noted the documented auth header is `X-SESSION-ID`.
+- **§2 / FR-2:** rewrote the auth description to match `client.ts` (Bearer + cookie +
+  `X-CSRF-Token` from `ui_csrf`) plus the OpenAPI-documented `X-SESSION-ID`.
+- **§5 API Contract:** added a verification banner that the request body and response field
+  names are unverified assumptions (not present in OpenAPI); marked the JSON blocks "ASSUMED".
+- **§5:** removed the non-existent `GET /ui/billing/checkout_session/{id}` confirmation path;
+  pointed confirmation at the verified `GET /ui/billing/payment-methods`; confirmed the error
+  `detail`/422 shape against `client.ts` and OpenAPI.
+
+### Open assumptions
+
+- **OA-1 (request body).** Whether `/api/billing/ccbill/frontend-oauth` accepts a JSON body at
+  all, and if so its fields, is **unverifiable** from the sources: OpenAPI declares no
+  `requestBody` and no web client calls it. Must be confirmed with backend before coding the
+  Retrofit DTO. Ties to R1.
+- **OA-2 (response fields).** The 200 schema is empty (`{}`); `authorization_url`,
+  `correlation_id`, `expires_at` names are inferred. Unverifiable from sources; confirm with
+  backend. Ties to R1.
+- **OA-3 (client vs server `state`/`return_url`).** Because there is no documented body, it is
+  unknown whether `state`/`return_url` are client-supplied or server-generated; if
+  server-generated, drop client `state` gen (R1).
+- **OA-4 (return-URL scheme/transport).** Whether CCBill 302s directly to the app-private
+  scheme or via an HTTPS backend return is owned by AND-231 and not determinable here (R2).
+- **OA-5 (CSRF enforcement).** OpenAPI does not list `X-CSRF-Token` as a parameter for this
+  endpoint though the web client always sends it; whether the dev backend enforces it for
+  this route is unverifiable from the index/spec.
+- **OA-6 (Custom Tab cookie sharing).** Whether the backend redirect chain re-establishes the
+  session via the system-browser cookie jar (vs the app's OkHttp jar) is a runtime/backend
+  behavior not determinable from these sources (R4).
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = local JVM/Robolectric (no device); **EMU** = headless AVD
+`test35` (x86_64, API 35) on the CI build server; **DEVICE** = physical Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a) on the build host via adb.
+
+- **TC-AND-229-01 — Authorize request shape (happy path).**
+  Type: contract/MockWebServer (JVM). Target: `RealCcbillProvider.authorize`.
+  Preconditions: MockWebServer enqueues `200` with the assumed body
+  (`authorization_url`, `correlation_id`, `expires_at`); valid session + CSRF stubbed.
+  Steps: call `authorize(PURCHASE, checkoutSessionId="cs_…")`; capture the recorded request.
+  Expected: `POST /api/billing/ccbill/frontend-oauth`; `X-CSRF-Token` and session header
+  present; body (per the assumed contract) carries `flow_type=purchase`, the
+  `checkout_session_id`, a 64-hex `state`, and the AND-231 `return_url`; the same `state` is
+  written to `CcbillStateStore` before returning `ApiResult.Success`.
+  NOTE: assertions on body fields are gated on OA-1/OA-2; if backend confirms no body, this TC
+  asserts the documented `user_sub`/`X-SESSION-ID` params instead. Traces: AC-1.
+
+- **TC-AND-229-02 — `add_payment_method` omits checkout_session_id.**
+  Type: contract/MockWebServer (JVM). Target: `RealCcbillProvider.authorize`.
+  Preconditions: MockWebServer `200`. Steps: `authorize(ADD_PAYMENT_METHOD, null)`.
+  Expected: `flow_type=add_payment_method`; `checkout_session_id` omitted/null; persisted
+  `state` set. Traces: AC-1.
+
+- **TC-AND-229-03 — Fetch error maps to Failure(NETWORK)/Failure(BACKEND).**
+  Type: contract/MockWebServer (JVM). Target: `RealCcbillProvider.authorize`.
+  Preconditions: MockWebServer enqueues `422 HTTPValidationError` (`detail:[{msg,loc,type}]`),
+  then a `500`, then a socket-timeout. Steps: call authorize for each.
+  Expected: `422`/`500` → `ApiResult` error surfaced as `Failure(BACKEND)`; timeout →
+  `Failure(NETWORK)`; **no automatic retry** of the POST; persisted `state` cleared/unused on
+  failure; `detail` parsed via the FastAPI shapes. Traces: AC-1, and §7 resilience.
+
+- **TC-AND-229-04 — Custom Tab launch on success.**
+  Type: instrumented/Compose-UI (EMU). Target: `CustomTabLauncher.launch` + entry CTA.
+  Preconditions: a Custom Tabs-capable browser installed (default on AVD); mock provider
+  returns a synthetic `authorization_url`. Steps: tap "Pay with CCBill"; intercept the
+  launched intent (Espresso-Intents). Expected: a `CustomTabsIntent` `ACTION_VIEW` to the
+  authorization URL is launched; controller transitions `FetchingUrl→Launching→AwaitingReturn`;
+  `launch` returns true. Traces: AC-2.
+
+- **TC-AND-229-05 — No browser → ACTION_VIEW fallback, then Failure(BROWSER_UNAVAILABLE).**
+  Type: unit (JVM, Robolectric). Target: `CustomTabLauncher.launch`.
+  Preconditions: stub `launchUrl` to throw `ActivityNotFoundException`; (a) `ACTION_VIEW`
+  succeeds; (b) `ACTION_VIEW` also throws. Steps: call `launch`.
+  Expected: (a) falls back to `Intent.ACTION_VIEW`, returns true; (b) returns false →
+  controller emits `Failure(BROWSER_UNAVAILABLE)`. Traces: AC-2.
+
+- **TC-AND-229-06 — Return with matching state + status routes correctly.**
+  Type: integration with AND-231 (JVM). Target: `CcbillProvider.resolve`.
+  Preconditions: persisted `state=S`, `correlation_id=C`. Steps: feed AND-231 `PaymentReturn`
+  built from `testlogon://billing/return?provider=ccbill&status=success&state=S&correlation_id=C`
+  (then `status=cancel`, then `status=failure`). Expected: success→`CcbillResult.Success(C,…)`;
+  cancel→`Cancelled`; failure→`Failure(BACKEND,…)`; pending record cleared each time.
+  Traces: AC-3.
+
+- **TC-AND-229-07 — State mismatch/missing never succeeds.**
+  Type: unit (JVM). Target: `CcbillProvider.resolve`.
+  Preconditions: persisted `state=S`. Steps: feed returns with `status=success` and (a)
+  `state=WRONG`, (b) no `state`. Expected: both → `Failure(STATE_MISMATCH)`; never `Success`;
+  comparison is constant-time. Traces: AC-4.
+
+- **TC-AND-229-08 — Dev-mock full round-trip (Success/Cancel/Failure).**
+  Type: instrumented/e2e (EMU). Target: mock provider + `CcbillFlowController` + UI.
+  Preconditions: `FeatureFlags.ccbillDevMock=true` (forced in instrumented tests); offline /
+  no CCBill reachability. Steps: tap CTA → in-app mock screen → choose each of
+  Success/Cancel/Failure. Expected: same `PaymentReturn` deep link emitted as real provider;
+  controller resolves to `Success` / `Cancelled` / `Failure`; final UI state matches; events
+  tagged `mock:true`. Satisfies "completes + returns" without a live sandbox. Traces: AC-5, AC-8.
+
+- **TC-AND-229-09 — Process-death rehydration.**
+  Type: instrumented (EMU). Target: `CcbillFlowController` + `CcbillStateStore`.
+  Preconditions: in `AwaitingReturn` with a non-expired pending record in DataStore. Steps:
+  simulate process death (kill + recreate the controller); deliver the matching return deep
+  link. Expected: controller rehydrates to `AwaitingReturn` and resolves to `Success`; pending
+  record cleared. Traces: AC-6.
+
+- **TC-AND-229-10 — Expired pending record.**
+  Type: unit (JVM). Target: `CcbillFlowController`/`resolve`.
+  Preconditions: pending record with `started_at_epoch_ms` > 15 min ago. Steps: deliver a
+  late matching return. Expected: `Failure(UNKNOWN)` ("session expired"); record discarded;
+  not treated as success. Traces: AC-4 (security), §7.
+
+- **TC-AND-229-11 — Double-tap idempotency.**
+  Type: unit/state-machine (JVM). Target: `CcbillFlowController`.
+  Preconditions: controller in `Launching`/`AwaitingReturn`. Steps: invoke `start()` again.
+  Expected: second invocation ignored (no second authorize call, no second Custom Tab launch).
+  Traces: AC-7.
+
+- **TC-AND-229-12 — User-dismissed tab inferred as Cancel.**
+  Type: instrumented (EMU). Target: `CcbillFlowController` lifecycle handling.
+  Preconditions: in `AwaitingReturn`. Steps: return to the app (Activity `onResume`) with no
+  return deep link; wait past the ~1.5 s grace window. Expected: result resolves to
+  `Cancelled`; entry CTA re-enabled. Traces: AC-3 (cancel), §7. NOTE: if AND-231 emits an
+  explicit cancel deep link (R3), prefer TC-06's cancel path and downgrade this heuristic test.
+
+- **TC-AND-229-13 — Security: no secrets logged; CSRF/session attached.**
+  Type: contract/MockWebServer + log capture (JVM). Target: `RealCcbillProvider` + logger.
+  Preconditions: logger at INFO. Steps: run authorize + resolve; inspect captured logs and the
+  recorded request. Expected: `state`, full `authorization_url`, query params NOT logged above
+  DEBUG; `X-CSRF-Token` / `X-SESSION-ID` present on the request; WebView is never instantiated
+  (Custom Tabs only). Traces: AC-1, §8.
+
+- **TC-AND-229-14 — Real-provider sandbox + accessibility (physical device).**
+  Type: manual/instrumented (**DEVICE — required**). Target: end-to-end on real hardware.
+  Preconditions: a real CCBill sandbox URL reachable; Custom Tabs browser on the A15;
+  TalkBack available. MUST run on the **physical Samsung A15 (API 34, arm64-v8a)** to exercise
+  the real system-browser Custom Tab + cookie/redirect chain and the arm64/API-34-vs-AVD-API-35
+  path (emulator x86 cannot validate real browser cookie sharing / OA-6). Steps: tap CTA →
+  complete payment in the real Custom Tab → return; with TalkBack on, traverse the entry CTA,
+  progress, and result banner. Expected: flow completes and routes to `Success`; the result
+  banner announces as a live region; CTA/mock controls have `contentDescription`, ≥48 dp
+  targets, 4.5:1 contrast. Traces: AC-2, AC-8, §9.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (request shape: path, CSRF/session, flow_type, return_url, persisted state) | TC-01, TC-02, TC-03, TC-13 |
+| AC-2 (200 → Custom Tab; fallback to ACTION_VIEW) | TC-04, TC-05, TC-14 |
+| AC-3 (matching state: success/cancel/failure routing) | TC-06, TC-12 |
+| AC-4 (missing/mismatched state → Failure(STATE_MISMATCH); never success) | TC-07, TC-10 |
+| AC-5 (dev-mock full flow in-app, all branches) | TC-08 |
+| AC-6 (state/correlation survive process death) | TC-09 |
+| AC-7 (double-tap does not start a second flow) | TC-11 |
+| AC-8 (overall: completes + returns; real where sandbox available) | TC-08, TC-14 |

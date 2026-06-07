@@ -5,7 +5,8 @@ milestone: M5
 epic: E31
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-231]
 blocks: []
 ---
@@ -45,9 +46,20 @@ order, and the user lands back in the app in an **authenticated + paid** termina
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Navigation-Compose, Hilt (KSP), Coroutines/Flow,
   Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15, DataStore. Custom Tabs via `androidx.browser:browser`.
 - **Backend:** FastAPI + DynamoDB. Dev backend `http://18.222.237.167:8000` (PLAINTEXT HTTP,
-  unreliable). Cookie + `ui_csrf`/`X-CSRF-Token` auth, 401→`/ui/session/refresh` once. OpenAPI at
+  unreliable). Auth (verified against `src/api/client.ts`): cookie session (`credentials: include`)
+  **plus** an `Authorization: Bearer <accessToken>` header, with CSRF via `X-CSRF-Token` read from
+  the `ui_csrf` cookie; 401 triggers a single `POST /ui/session/refresh` then one retry. OpenAPI at
   `/openapi.json`; confirm exact PayPal route shapes there before implementation.
-- **Web reference:** `frontend/src/api/endpoints/*.ts` (PayPal create/capture calls), `types.ts`.
+  > CORRECTION: the original draft described auth as "cookie + ui_csrf" only; the web client also
+  > attaches a Bearer token (and `X-IMPERSONATION-TOKEN` for admin impersonation). The Android stack
+  > already injects these via its OkHttp interceptors, so no behavior change — but the spec text now
+  > matches the real client.
+- **Web reference:** `frontend/src/api/endpoints/billing.ts` and `types.ts`. NOTE (verified): the
+  web client does **not** implement a consumer PayPal *redirect/approval-URL checkout*. Its only
+  PayPal usage is payment-method vaulting (`POST /api/billing/payment-methods/paypal/setup-token`
+  + `.../exchange-token`) and `POST /api/billing/subscribe-monthly`. There is no web "create order"
+  → `approval_url` → "capture" flow to mirror; AND-228's redirect UX is therefore an
+  **Android-specific design**, not a port of existing web behavior. See §16.
 
 ## 3. Functional Requirements
 
@@ -55,7 +67,10 @@ FR-1. From a payment context (cart checkout, tip, paywall unlock, subscription) 
 **PayPal** as the method and tap **Pay with PayPal**.
 
 FR-2. Tapping it calls the backend to create a PayPal order/approval intent, returning an
-`approval_url` (PayPal-hosted, or `/mock/paypal` in dev) and an `order_id`.
+`approval_url` (PayPal-hosted, or a dev mock approval page) and an `order_id`.
+> CORRECTION/BLOCKER: no such create-order endpoint exists today (see §5 BACKEND GAP). FR-2 is
+> blocked on the backend adding a create-order route; the `approval_url`/`order_id` fields are an
+> unverified assumption until then.
 
 FR-3. The app opens `approval_url` in a **Custom Tab** using the system default browser that
 supports the Custom Tabs service; if none is available, fall back to a plain
@@ -168,41 +183,74 @@ interface PayPalRepository {
 }
 ```
 
-Network goes through the shared OkHttp stack (cookie jar, CSRF interceptor, 401-refresh
-authenticator). `createOrder`/`captureOrder` are **POST (non-idempotent)** → no auto-retry.
-`getOrder` is a GET → eligible for the bounded backoff (AND-016).
+Network goes through the shared OkHttp stack (cookie jar + `Authorization: Bearer` + CSRF
+interceptor + 401-refresh authenticator; see §2 corrected auth model). `captureOrder` maps to the
+**verified** `POST /api/billing/paypal/capture-order` with body `{order_id, idempotency_key}`.
+`createOrder`/`getOrder` map to **endpoints that do not yet exist** (§5 BACKEND GAP) and are
+provisional. `createOrder`/`captureOrder` are **POST** → no client auto-retry; capture safety comes
+from the verified `idempotency_key`, not from a GET. `getOrder` (if added) would be a GET → eligible
+for bounded backoff (AND-016); if it is not added, reconciliation falls back to a re-`captureOrder`
+with the same `idempotency_key`.
 
 ## 5. API Contract
 
-Confirm exact paths/field names against `/openapi.json` and `frontend/src/api/endpoints` before
-coding; shapes below are the working contract.
+> **MAJOR CORRECTION (verified against `openapi.index.txt` / `openapi.pretty.json` and
+> `src/api/endpoints/billing.ts`).** The endpoint paths/shapes in the original draft were invented
+> and do **not** exist on the backend. There is **no** `/api/payments/paypal/*` namespace (0
+> matches), no backend "create order" endpoint that returns an `approval_url`, no "get order"
+> endpoint, and no browser-facing `/mock/paypal` approve page. The only PayPal order-capture endpoint
+> that exists is `POST /api/billing/paypal/capture-order`. The `/mock/paypal/*` routes that DO exist
+> are server-side mocks of *PayPal's own REST API* (`/mock/paypal/v2/checkout/orders[/{id}/capture]`,
+> oauth2, vault) consumed by the FastAPI backend — they are NOT an in-browser approval page that
+> redirects to a deep link. The corrected contract below reflects the real backend; gaps that the
+> backend must still provide are called out as **BACKEND GAP** and tracked in §13 / §16.
 
-**Create order** — `POST /api/payments/paypal/orders` (cookie auth + `X-CSRF-Token`)
+**Capture order — VERIFIED.** `POST /api/billing/paypal/capture-order`
+(op `capture_order_api_billing_paypal_capture_order_post`). Auth: shared OkHttp stack (cookie +
+`Authorization: Bearer` + `X-CSRF-Token`; optional `x-user-id` header). Request schema
+`CaptureOrderIn` — note `order_id` is in the **body**, not the path:
 ```json
-// request
-{ "context": "cart", "context_id": "cart_123", "amount": 1999, "currency": "USD" }
-// response 200
-{ "order_id": "PP-ORDER-abc", "status": "CREATED",
-  "approval_url": "https://www.paypal.com/checkoutnow?token=...",
-  "expires_at": "2026-06-05T18:00:00Z" }
-// dev response: "approval_url": "http://18.222.237.167:8000/mock/paypal?order_id=PP-ORDER-abc"
+// request  (schema: CaptureOrderIn — required: order_id; optional: idempotency_key)
+{ "order_id": "PP-ORDER-abc", "idempotency_key": "and228-<uuid>" }
+// response 200: UNTYPED in OpenAPI (schema: {}) — exact fields (capture_id / status /
+// entitlement) are NOT specified by the contract. Treat the field names below as an UNVERIFIED
+// assumption and confirm with backend before binding the Moshi DTO.
+{ "order_id": "PP-ORDER-abc", "capture_id": "PP-CAP-xyz", "status": "COMPLETED" }
 ```
+The `idempotency_key` field (verified present on `CaptureOrderIn`) is the supported idempotency
+mechanism; send a stable key per order so a retried capture POST is safe even though POSTs are not
+auto-retried client-side.
 
-**Capture order** — `POST /api/payments/paypal/orders/{order_id}/capture`
-```json
-// response 200
-{ "order_id": "PP-ORDER-abc", "capture_id": "PP-CAP-xyz", "status": "COMPLETED",
-  "entitlement": { "kind": "cart_paid", "ref_id": "order_789" } }
-// 409 if already captured -> treat as success (idempotent), parse existing capture_id
-```
+**Create order / approval URL — BACKEND GAP (does not exist yet).** No backend endpoint returns a
+PayPal `approval_url` + `order_id`. FR-2 cannot be satisfied against the current API. Options to
+resolve in §13/OQ: (a) backend adds a create-order endpoint (e.g. under `/api/billing/paypal/...`)
+returning `{ order_id, approval_url }`, mirroring the PayPal Orders v2 `create` + the `payer-action`
+HATEOAS link; or (b) reuse the existing PayPal-API mock router behind a thin app endpoint. Until one
+exists, the create-order path/fields in this spec are an **unverified assumption** and MUST be
+confirmed before implementation.
 
-**Get order** — `GET /api/payments/paypal/orders/{order_id}` → same shape as create, `status` ∈
-`CREATED|APPROVED|COMPLETED|VOIDED`.
+**Get order (reconcile) — BACKEND GAP (does not exist yet).** No `GET .../paypal/orders/{id}` route
+exists. The `onResumedWithoutReturn`/process-death reconciliation in §4.2/§7 depends on an
+idempotent order-status GET; it must be added backend-side or reconciliation must instead rely on a
+safe re-`capture-order` using the `idempotency_key` (capture is the only verified PayPal order
+endpoint). The repository's `getOrder` is therefore provisional pending OQ-2.
 
-**Dev mock** — `GET /mock/paypal?order_id=...` serves Approve/Cancel buttons that 302 to
-`testlogon://payments/return?provider=paypal&order_id=...&status=success|cancel`.
+**Dev mock approval page — BACKEND GAP.** A browser-facing `GET /mock/paypal` page that renders
+Approve/Cancel and 302-redirects to
+`testlogon://payments/return?provider=paypal&order_id=...&status=success|cancel` does **not** exist
+(the existing `/mock/paypal/*` routes are JSON PayPal-API mocks). FR-9 requires the backend to add
+this dev-only HTML page, or the app's instrumented tests must stub the redirect themselves. Tracked
+as OQ-2.
 
-**Errors:** FastAPI `detail` mapped via AND-015 (`string | [{msg}] | {code,...}`) into `UiError`.
+**Subscription context (verified, for completeness).** `POST /api/billing/subscribe-monthly`
+(schema `app__routers__paypal__SubscribeMonthlyIn` = `{ plan_id="monthly", paypal_plan_id?,
+idempotency_key? }`) exists for the subscription paywall context; its 200 response is also untyped
+(`schema: {}`).
+
+**Errors — VERIFIED.** FastAPI returns `{ "detail": ... }` where `detail` is
+`string | [{msg,...}] | {code,...}` (confirmed by `normalizeErrorDetail` in `src/api/client.ts`,
+incl. `code`-keyed authorization errors like `role_required_scope` and `geo_blocked`). Validation
+(422) uses `HTTPValidationError` (`{ detail: [{loc, msg, type}] }`). Map via AND-015 into `UiError`.
 
 ## 6. Data & State Management
 
@@ -311,10 +359,17 @@ Logs at DEBUG only in dev builds; production logs omit URLs and IDs except trunc
 
 ## 13. Risks & Open Questions
 
-- **OQ-1:** Exact backend PayPal routes/field names — confirm `POST /api/payments/paypal/orders`,
-  capture path, and `approval_url`/`order_id` keys against `/openapi.json` and the web client.
-- **OQ-2:** Does the backend already implement `/mock/paypal`, or must it be added server-side as
-  part of this ticket's dev support? Confirm with backend; if missing, file/own a small backend PR.
+- **OQ-1 (RESOLVED by review — now a blocker):** Backend PayPal routes were verified. Only
+  `POST /api/billing/paypal/capture-order` (body `CaptureOrderIn = {order_id, idempotency_key?}`)
+  exists. `POST /api/payments/paypal/orders` and `GET .../orders/{id}` do **not** exist (0 matches),
+  and no endpoint returns an `approval_url`. Backend must add a create-order (and ideally
+  get-order) endpoint before AND-228 can ship FR-2/FR-5 end-to-end. Capture response is untyped in
+  OpenAPI — confirm `capture_id`/`status` field names with backend.
+- **OQ-2 (RESOLVED by review — now a blocker):** The backend does **not** implement a browser-facing
+  `/mock/paypal` approval page. The existing `/mock/paypal/v2/checkout/orders[...]`, `/v1/oauth2`,
+  `/v3/vault` routes mock PayPal's *own REST API* (JSON) for backend integration tests — not an
+  Approve/Cancel HTML page that 302s to the deep link. This dev page must be added server-side
+  (own a small backend PR), or instrumented tests must stub the redirect locally.
 - **OQ-3:** Return URL scheme/host — assumed `testlogon://payments/return` owned by AND-231; align
   on `provider`/`order_id`/`status` query param names.
 - **Risk:** Custom Tab return can land in `onNewIntent` *or* trigger Activity recreation depending
@@ -366,3 +421,174 @@ AC-8. Unit + instrumented tests (including the full `/mock/paypal` round trip) p
 - [ ] Telemetry events emitted with redaction; no sensitive data in logs.
 - [ ] Unit + Compose/instrumented tests added and green in CI (AND-050/051).
 - [ ] Lint/detekt/ktlint clean (AND-005); code reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its VERDICT, and the exact source pointer.
+
+1. **Capture endpoint is `POST /api/billing/paypal/capture-order`.** — **Corrected** (draft said
+   `POST /api/payments/paypal/orders/{order_id}/capture`). Source: OpenAPI
+   `POST /api/billing/paypal/capture-order` (op `capture_order_api_billing_paypal_capture_order_post`).
+2. **Capture request body = `CaptureOrderIn` with required `order_id` (in body) + optional
+   `idempotency_key`.** — **Corrected** (draft put `order_id` in the path and had no idempotency
+   key). Source: `components.schemas.CaptureOrderIn` (`openapi.pretty.json` ~L14546).
+3. **Capture 200 response shape (`capture_id`, `status`, `entitlement`).** — **Unverified-assumption.**
+   Source: OpenAPI 200 for `/api/billing/paypal/capture-order` has `schema: {}` (untyped); no response
+   model published. Field names must be confirmed with backend.
+4. **`POST /api/payments/paypal/orders` create-order endpoint returning `approval_url` + `order_id`.**
+   — **Corrected (does not exist / BACKEND GAP).** Source: `grep '/api/payments/paypal'` over
+   `openapi.index.txt` = 0 matches; no schema contains `approval_url`. FR-2 is blocked on this.
+5. **`GET /api/payments/paypal/orders/{order_id}` get-order/reconcile endpoint.** — **Corrected (does
+   not exist / BACKEND GAP).** Source: `openapi.index.txt` (no such route). Reconciliation must use
+   re-capture with `idempotency_key` unless backend adds a status GET.
+6. **Browser-facing dev `GET /mock/paypal` Approve/Cancel page that 302s to the return deep link.** —
+   **Corrected (does not exist / BACKEND GAP).** Source: OpenAPI `/mock/paypal/*` routes are JSON
+   mocks of PayPal's REST API (`POST /mock/paypal/v2/checkout/orders`,
+   `.../orders/{order_id}/capture`, `/v1/oauth2/token`, `/v3/vault/*`), not an HTML approval page.
+7. **Auth = cookie session + `Authorization: Bearer` + CSRF header `X-CSRF-Token` read from the
+   `ui_csrf` cookie.** — **Corrected** (draft omitted the Bearer token; CSRF detail itself was
+   correct). Source: `src/api/client.ts` (`api()` sets `Authorization: Bearer ${accessToken}` L158-160,
+   `X-CSRF-Token` from `getCookie("ui_csrf")` L168-171, `credentials: "include"` L183).
+8. **401 → single `POST /ui/session/refresh` then one retry.** — **Verified.** Source:
+   `src/api/client.ts` `refreshSession()` L121-130 (`POST /ui/session/refresh`) + single-flight retry
+   L194-237; OpenAPI `POST /ui/session/refresh`.
+9. **Error `detail` shape = `string | [{msg,...}] | {code,...}` mapped to `UiError` (AND-015).** —
+   **Verified.** Source: `src/api/client.ts: normalizeErrorDetail` L66-102 (string / array-of-`{msg}` /
+   object-with-`code` incl. `geo_blocked`); 422 uses `components.schemas.HTTPValidationError`.
+10. **Web client has no consumer PayPal redirect/approval checkout to port.** — **Verified.** Source:
+    `src/api/endpoints/billing.ts` (no PayPal order/approval/capture calls); web PayPal usage is only
+    vaulting (`POST /api/billing/payment-methods/paypal/setup-token` + `.../exchange-token`, schemas
+    `SetupTokenIn`/`ExchangeTokenIn`) and `POST /api/billing/subscribe-monthly`
+    (`app__routers__paypal__SubscribeMonthlyIn`).
+11. **Return deep link `testlogon://payments/return?provider=paypal&order_id=...&status=...` and
+    `PaymentReturnDispatcher`.** — **Unverified-assumption** (owned by AND-231, not in these sources).
+    No source available here; depends on AND-231's contract.
+12. **Custom Tabs via `androidx.browser` (`CustomTabsIntent`), with `ACTION_VIEW` fallback; no
+    WebView for credentials.** — **Verified (framework ref).** Android Custom Tabs guide:
+    https://developer.chrome.com/docs/android/custom-tabs and
+    https://developer.android.com/develop/ui/views/layout/webapps/overview-of-android-custom-tabs.
+13. **`FLAG_ACTIVITY_SINGLE_TOP` / single-Activity `onNewIntent` re-entry for the return.** —
+    **Verified (framework ref).** https://developer.android.com/reference/android/app/Activity#onNewIntent(android.content.Intent)
+    and `Intent.FLAG_ACTIVITY_SINGLE_TOP`.
+14. **Dev backend is plaintext HTTP at `http://18.222.237.167:8000` and unreliable.** —
+    **Unverified-assumption** (environment fact, not in OpenAPI/frontend sources). Carried from the
+    program's shared infra notes.
+
+### Corrections made
+- §2: Auth model expanded to include `Authorization: Bearer` + impersonation header (was "cookie +
+  ui_csrf" only). [#7]
+- §2: Added verified note that the web client has no consumer PayPal redirect checkout to mirror;
+  AND-228's redirect UX is Android-specific design. [#10]
+- §5: Replaced the entire invented `/api/payments/paypal/*` contract. Capture corrected to
+  `POST /api/billing/paypal/capture-order` with body `{order_id, idempotency_key?}`; create-order,
+  get-order, and the `/mock/paypal` approval page flagged as BACKEND GAPs; capture response marked
+  untyped/unverified; idempotency moved from "GET before re-capture" to the verified
+  `idempotency_key`. [#1-#6]
+- §4.4: Repository corrected — only `captureOrder` maps to a real endpoint; `createOrder`/`getOrder`
+  are provisional pending backend work; capture safety via `idempotency_key`. [#1-#5]
+- FR-2: Marked blocked pending the create-order backend endpoint. [#4]
+- §13 OQ-1 / OQ-2: Reframed from open questions to resolved findings + blockers. [#4-#6]
+- §5 errors: Pinned to the verified `normalizeErrorDetail` shape and `HTTPValidationError`. [#9]
+
+### Open assumptions
+- **Capture 200 fields** (`capture_id`, `status`, `entitlement`) — unverifiable: OpenAPI response is
+  untyped (`schema: {}`). [#3]
+- **`409 already-captured` behavior** (AC-4) — unverifiable: not declared in OpenAPI (only 200/422
+  documented for capture); the idempotent-409 handling is an assumption to confirm with backend.
+- **Create-order / get-order endpoints and `approval_url`** — do not exist; the entire redirect
+  contract is an assumption pending a backend PR (OQ-1/OQ-2). [#4][#5][#6]
+- **AND-231 deep-link/dispatcher contract** — owned elsewhere; not verifiable from provided sources.
+  [#11]
+- **Dev host plaintext/unreliability** — environment fact, not in sources. [#14]
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM/Robolectric unit (no device); **MWS** =
+contract test with MockWebServer on the JVM; **emu(test35)** = headless emulator AVD `test35`
+(x86_64, Android 15 / API 35); **device(A15)** = physical Samsung Galaxy A15 5G (SM-A156U, serial
+`R5CX821TA9R`, Android 14 / API 34, arm64-v8a). Custom Tabs hand-off + real-browser redirect behavior
+is hardware/OEM-browser dependent, so the true end-to-end redirect case **must** run on device(A15);
+emu(test35) covers fast UI/intent assertions where the redirect is injected.
+
+- **TC-AND-228-01** — Type: contract/MockWebServer (MWS). Target: `PayPalRepository.captureOrder`.
+  Preconditions: MWS returns 200 for `POST /api/billing/paypal/capture-order`. Steps: call
+  `captureOrder("PP-ORDER-abc")`; capture the recorded request. Expected: request method=POST, path
+  `/api/billing/paypal/capture-order`, JSON body contains `order_id` **and** a stable
+  `idempotency_key`; `Authorization: Bearer`, `X-CSRF-Token`, and cookie headers present; result is
+  `ApiResult.Success`. Traces: AC-4, AC-7.
+- **TC-AND-228-02** — Type: unit (JVM). Target: `PayPalViewModel.startCheckout` happy path.
+  Preconditions: fake repo returns a `createOrder` success with `order_id` + `approval_url`. Steps:
+  call `startCheckout(req)`. Expected: state transitions `CreatingOrder → ReadyToApprove(orderId,
+  approvalUrl)`. (Depends on the create-order BACKEND GAP, §5 #4 — until that lands, run against the
+  fake.) Traces: AC-1.
+- **TC-AND-228-03** — Type: unit (JVM). Target: `PayPalViewModel.onReturn(success)`. Preconditions:
+  state `AwaitingApproval`, fake repo capture→`COMPLETED`. Steps: emit
+  `PaymentReturn(provider="paypal", orderId, status="success")`. Expected: `Capturing → Paid(orderId,
+  captureId)`; capture called exactly once. Traces: AC-2, AC-4.
+- **TC-AND-228-04** — Type: unit (JVM). Target: `PayPalViewModel.onReturn(cancel)` and tab-dismiss.
+  Preconditions: state `AwaitingApproval`. Steps: (a) emit `status="cancel"`; (b) separately, trigger
+  `onResumedWithoutReturn` with a fake reconcile result of not-completed. Expected: both resolve to
+  `Cancelled` (not `Failed`), retry affordance available; no false capture. Traces: AC-3.
+- **TC-AND-228-05** — Type: contract/MockWebServer (MWS). Target: capture `409 already-captured`
+  handling. Preconditions: MWS returns 409 with a body carrying the existing capture. Steps: call
+  `captureOrder`. Expected: repo/VM resolve to `Paid` (idempotent), not error. NOTE: 409 shape is an
+  open assumption (§16) — assert against the agreed contract once confirmed. Traces: AC-4, AC-5.
+- **TC-AND-228-06** — Type: unit (JVM). Target: idempotent re-entry. Preconditions:
+  `SavedStateHandle` holds an already-captured `orderId`; fake reconcile returns `COMPLETED`. Steps:
+  recreate the screen/VM. Expected: shows existing `Paid` result without issuing a new capture.
+  Traces: AC-5.
+- **TC-AND-228-07** — Type: contract/MockWebServer (MWS). Target: error mapping + 401 refresh.
+  Preconditions: MWS first returns 401, then 200 after a `POST /ui/session/refresh`; a separate case
+  returns 422 `HTTPValidationError` and a `{detail:{code:"..."}}` 403. Steps: call `captureOrder`.
+  Expected: exactly one `/ui/session/refresh` then one retried capture (single-flight); 422/403 map
+  through AND-015 into a `UiError` matching `normalizeErrorDetail` semantics. Traces: AC-6, AC-7.
+- **TC-AND-228-08** — Type: unit (JVM). Target: timeout / unreliable-dev-host capture path.
+  Preconditions: fake repo throws timeout (~20s) on capture. Steps: call capture; then `retry()`.
+  Expected: `Failed(retryable=true)`; POST not auto-retried; `retry()` re-captures with the **same**
+  `idempotency_key` (verified mechanism; get-order does not exist). Traces: AC-6.
+- **TC-AND-228-09** — Type: unit (JVM). Target: malformed/forged return query. Preconditions: state
+  `AwaitingApproval` with known `orderId` in `SavedStateHandle`. Steps: feed returns with missing
+  `status`, missing `order_id`, and an `order_id` that mismatches the saved one. Expected: each →
+  `Failed` (or ignored for mismatch); never captures on an unmatched/forged `order_id`; event logged
+  redacted. Traces: AC-4, AC-7 (security).
+- **TC-AND-228-10** — Type: instrumented (emu(test35)). Target: `PayPalLauncher` Custom Tab intent +
+  fallback. Preconditions: (a) a Custom-Tabs-capable browser present; (b) test variant with no
+  handling browser. Steps: call `launch(context, url)`; inspect the launched `Intent`/shadow.
+  Expected: (a) `CustomTabsIntent` with `SHARE_STATE_OFF`, title shown, URL-bar-hiding disabled,
+  `FLAG_ACTIVITY_SINGLE_TOP`; (b) falls back to `ACTION_VIEW`; if both fail →
+  `Failed(retryable=true)`. Traces: AC-1.
+- **TC-AND-228-11** — Type: instrumented/e2e — **MUST run on device(A15)**. Target: full redirect
+  round trip. Preconditions: device(A15) has Chrome (Custom Tabs); backend create-order + dev mock
+  approval page available (BACKEND GAP — otherwise stub the 302 with a local intent on device). Steps:
+  tap **Pay with PayPal** → Custom Tab opens approval URL → tap Approve in-browser → browser 302s to
+  `testlogon://payments/return?...status=success` → app `onNewIntent` → capture. Expected: app lands
+  in `Paid` and the user is still **authenticated**; back-press/dismiss before approval lands in
+  `Cancelled`. Rationale for device: real OEM browser + cross-app deep-link return + task re-entry
+  cannot be faithfully reproduced on the emulator. Traces: AC-2, AC-3, AC-8.
+- **TC-AND-228-12** — Type: Compose-UI (emu(test35)). Target: payment screen states. Preconditions:
+  VM driven through `CreatingOrder/Capturing/Paid/Cancelled/Failed` via fake. Steps: render each.
+  Expected: progress shown for loading states; `Paid`/`Cancelled`/`Failed` each use icon **plus**
+  text (color not sole signal); retry visible for `Cancelled`/`Failed`. Traces: AC-3, AC-6.
+- **TC-AND-228-13** — Type: Compose-UI accessibility (emu(test35)). Target: a11y of the PayPal
+  button + status. Preconditions: payment screen rendered. Steps: assert semantics. Expected:
+  "Pay with PayPal" has a meaningful `contentDescription`, touch target ≥48dp, loading states expose
+  `stateDescription` live-region text for TalkBack; all strings come from resources (no hardcoded
+  literals); layout is RTL-safe. Traces: AC-1, AC-2, AC-3.
+- **TC-AND-228-14** — Type: unit + instrumented log-capture (JVM, spot-check on device(A15)). Target:
+  redaction + HTTPS enforcement. Preconditions: telemetry/log facade captured; a non-dev flavor.
+  Steps: run create→launch→capture; in non-dev, attempt to launch a non-HTTPS `approval_url`.
+  Expected: no full `approval_url`, no `capture_id`, no PayPal credentials in logs (only
+  `provider`/`status` + hashed/truncated `order_id`); non-HTTPS approval URL rejected in non-dev
+  flavor; dev plaintext `/mock/paypal` permitted only on the dev host. Traces: AC-7.
+
+### Coverage matrix
+| AC | Covered by |
+| --- | --- |
+| AC-1 (Custom Tab open + ACTION_VIEW fallback) | TC-02, TC-10, TC-13 |
+| AC-2 (dev mock → Paid, still authenticated) | TC-03, TC-11, TC-13 |
+| AC-3 (cancel/dismiss → Cancelled w/ retry) | TC-04, TC-11, TC-12, TC-13 |
+| AC-4 (capture from return; never paid from query; 409→Paid) | TC-01, TC-03, TC-05, TC-09 |
+| AC-5 (idempotent re-entry of captured order) | TC-05, TC-06 |
+| AC-6 (failures/timeout retryable; POST not auto-retried; reconcile) | TC-07, TC-08, TC-12 |
+| AC-7 (no secrets in logs; HTTPS live URLs) | TC-01, TC-07, TC-09, TC-14 |
+| AC-8 (unit + instrumented incl. round trip pass in CI) | TC-10, TC-11 (+ all JVM/MWS cases run in CI) |

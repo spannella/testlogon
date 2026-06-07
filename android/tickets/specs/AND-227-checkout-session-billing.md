@@ -5,9 +5,10 @@ milestone: M5
 epic: E31
 priority: P0
 size: L
-status: draft
 depends_on: [AND-225]
 blocks: [AND-236]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-227 — Checkout session billing
@@ -19,11 +20,18 @@ server-created checkout session, driving an on-device Stripe payment to a termin
 reconciling the resulting order to a confirmed paid status the app can trust. This is the capstone of
 the M5 commerce / E31 billing epic — the first ticket that makes money actually move.
 
-AND-227 wires `POST /ui/billing/checkout_session` (the backend `UnifiedCheckoutSession` endpoint) to
-the Stripe `PaymentSheet` launcher from **AND-225**. The endpoint creates `order_id` +
-`checkout_session_id` in `pending_payment` status; the app obtains the PaymentIntent `client_secret`,
-presents `PaymentSheet`, and on a `Completed` result reconciles the order to paid via the
-server-authoritative payment record. The deliverable is a `feature-billing` checkout screen +
+AND-227 wires `POST /ui/billing/checkout_session` to a Stripe payment flow completed on-device.
+**[CORRECTED — see §5 and §16]** The verified contract for `POST /ui/billing/checkout_session` is
+request `BillingCheckoutReq` `{amount_cents (required), currency?, description?}` → response
+`{session_id, url}` — i.e. a **hosted Stripe Checkout URL**, NOT an in-app PaymentSheet
+`client_secret`. The `UnifiedCheckoutSessionIn/Out` shapes (with `order_id`/`checkout_session_id`/
+`line_items`/`status`) belong to a *different* endpoint, `POST /ui/checkout/session`, and there is
+**no `payment_intents` endpoint anywhere in the backend OpenAPI**. The original PaymentSheet +
+`client_secret` + `payment_intents` reconciliation design below was written against the wrong
+endpoint; until the backend owner resolves which endpoint AND-227 must target (see §13 R1, §16 Open
+assumptions), treat the hosted-Checkout redirect (Custom Tabs + return-URL deep link, AND-231) as the
+verified path and the PaymentSheet path as a contingent design requiring `/ui/checkout/session` plus a
+not-yet-existing intent mechanism. The deliverable is a `feature-billing` checkout screen +
 `CheckoutViewModel` exposing `StateFlow<CheckoutUiState>`, a `core-data` `CheckoutRepository`, and the
 DTOs/state machine modeling the session → pay → confirm flow.
 
@@ -53,31 +61,48 @@ Out of scope: the cart screen (AND-211), address/shipping (AND-214), payment-met
   unreliable — design for ~20s timeouts, bounded backoff for idempotent GETs only, offline/stale UI).
   OpenAPI at `/openapi.json`. Error `detail` is `string | [{msg}] | {code,...}`.
 - **Authoritative endpoint:** `POST /ui/billing/checkout_session`
-  (`operationId: create_checkout_session_ui_billing_checkout_session_post`,
-  schemas `UnifiedCheckoutSessionIn` → `UnifiedCheckoutSessionOut`). See §5 for verified shapes pulled
-  from the dev `/openapi.json`.
+  (`operationId: create_checkout_session_ui_billing_checkout_session_post`). **[CORRECTED]** Per the
+  OpenAPI index (line 1175) its request schema is `BillingCheckoutReq` and it declares **no response
+  schema** (`resp=200:`); per the frontend (`src/api/endpoints/billing.ts: createCheckoutSession`) the
+  response is `{ session_id, url }`. The `UnifiedCheckoutSessionIn` → `UnifiedCheckoutSessionOut`
+  schemas referenced throughout this spec actually belong to `POST /ui/checkout/session`
+  (`operationId: ui_create_checkout_session_ui_checkout_session_post`, index line 1327). See §5 and
+  §16 for the corrected shapes pulled from the dev `/openapi.json`.
 - **Upstream dependency — AND-225 (Stripe Android SDK integration):** provides
   `StripePaymentService`, `StripePaymentLauncher` / `rememberStripePaymentLauncher`,
   `PaymentResult` sealed type, `PaymentConfiguration` bootstrap, and the
   `GET /ui/billing/payment_intents/{id}` reconciliation call. AND-227 **consumes** all of these.
-- **Web reference:** `frontend/src/api/endpoints/billing.ts` (`createCheckoutSession`) and
-  `frontend/src/api/types.ts` for the canonical `UnifiedCheckoutSession*` field names and the
-  `source`/`billing_model`/`product_type` enums.
+- **Web reference:** `src/api/endpoints/billing.ts` (`createCheckoutSession` → posts `BillingCheckoutReq`
+  to `/ui/billing/checkout_session`, returns `{session_id, url}`) and `src/api/types.ts`
+  (`BillingCheckoutReq`). **[CORRECTED]** The web client does NOT call `/ui/checkout/session` or use
+  `UnifiedCheckoutSession*` anywhere; the `source`/`billing_model`/`product_type` enums are only
+  defined on the unrelated `UnifiedCheckoutSessionIn` schema. `createCheckoutSession` is not invoked
+  from any `*.tsx` page in the reference, so there is no web precedent for an in-app PaymentSheet
+  consumer — the `{url}` is a hosted-Checkout redirect target.
 
 ## 3. Functional Requirements
 
-FR-1. From an entry point (a "Buy" / "Checkout" CTA with a SKU or `cart_id`), the app creates a
-checkout session via `POST /ui/billing/checkout_session` and receives `{order_id, checkout_session_id,
-status: "pending_payment", source, line_items[]}`.
+FR-1. From an entry point (a "Buy" / "Checkout" CTA with an amount, and a SKU or `cart_id` for
+context), the app creates a checkout session via `POST /ui/billing/checkout_session`. **[CORRECTED]**
+The verified response is `{session_id, url}` (frontend `createCheckoutSession`), NOT `{order_id,
+checkout_session_id, status, source, line_items[]}`. The `{order_id, ...}` shape (`UnifiedCheckoutSessionOut`)
+is only returned by `POST /ui/checkout/session`. The app must use whichever endpoint the backend owner
+confirms (see §13 R1); for the verified `/ui/billing/checkout_session` path the deliverable is the
+`{session_id, url}` hosted-Checkout response.
 
-FR-2. The app obtains the PaymentIntent `client_secret` for the session and presents Stripe
-`PaymentSheet` (AND-225 launcher). The session ↔ PaymentIntent linkage is resolved either from the
-checkout response (if it carries a `client_secret`/`payment_intent_id` in `line_items`/scope) or via a
-follow-up `POST /ui/billing/payment_intents` keyed by `order_id` (see §5, R2).
+FR-2. **[CORRECTED — contingent]** There is **no `payment_intents` endpoint in the backend OpenAPI**
+(verified: `payment_intent` matches 0 entries in the index), so "obtain the PaymentIntent
+`client_secret` for the session" is not supported by `/ui/billing/checkout_session`, whose `{url}` is a
+hosted Stripe Checkout page. To complete payment on-device against the verified contract, open `url` in
+a Chrome Custom Tab and detect completion via the Stripe return URL deep link (AND-231). The Stripe
+`PaymentSheet` + `client_secret` design is only viable if AND-225 actually exposes a PaymentIntent
+creation/fetch mechanism and the backend exposes a `client_secret`-bearing endpoint — neither is
+verifiable here (see §16 Open assumptions).
 
-FR-3. On `PaymentResult.Completed`, the app reconciles the order with the server (poll
-`GET /ui/billing/payment_intents/{id}` until `succeeded`, and/or `GET /ui/billing/payments` for the
-matching `order_id`) and only then shows a success screen reporting a confirmed purchase.
+FR-3. On payment completion, the app reconciles the order with the server. **[CORRECTED]** Reconcile
+via `GET /ui/billing/payments` (the only verified read; response `{items: LedgerEntry[]}`) and/or the
+purchases history (AND-218); there is **no `GET /ui/billing/payment_intents/{id}`** to poll. Only after
+a matching paid record is found does the app show a confirmed-purchase success screen.
 
 FR-4. The flow is modeled as an explicit state machine surfaced through `StateFlow<CheckoutUiState>`:
 `Idle → CreatingSession → AwaitingPayment → ConfirmingPayment → Succeeded | Failed | Canceled`.
@@ -157,8 +182,12 @@ sealed interface CheckoutEvent {
 }
 ```
 
-**Repository.** `CheckoutRepository` in `core-data` orchestrates the three backend calls and exposes
-typed `ApiResult<T>`:
+**Repository.** `CheckoutRepository` in `core-data` orchestrates the backend calls and exposes typed
+`ApiResult<T>`. **[CORRECTED]** The code block below is the *original* design against the
+non-existent `payment_intents` endpoints and the wrong `{payments:[...]}` shape; it is retained for
+context but must be reworked once §13 R1 is resolved: `resolveClientSecret`/`fetchPaymentIntent` have
+no backend to call, `listPayments()` returns `{items: LedgerEntry[]}` (use `it.items`, not
+`it.payments`), and `LedgerEntry` has no declared `orderId`/`status` to match/branch on.
 
 ```kotlin
 // core-data/.../billing/CheckoutRepository.kt
@@ -228,69 +257,107 @@ data class CheckoutRequest(
 
 ## 5. API Contract
 
-All shapes below are verified against the dev `/openapi.json`.
+**[SECTION CORRECTED]** Shapes below are verified against the dev `/openapi.json`
+(`reference/openapi.index.txt`, `reference/openapi.pretty.json`) and the web client
+(`reference/src/api/endpoints/billing.ts`, `reference/src/api/types.ts`). The original §5 conflated two
+distinct endpoints; both are documented here so the team can choose.
 
-**Create checkout session — `POST /ui/billing/checkout_session`** (`UnifiedCheckoutSessionIn` →
-`UnifiedCheckoutSessionOut`). Session cookies + `X-CSRF-Token: <ui_csrf>` required (mutating POST).
+**(A) Verified contract — `POST /ui/billing/checkout_session`** (the ticket-scoped path). Request
+schema `BillingCheckoutReq`; **no declared response schema** in OpenAPI (`resp=200:`). The web client
+types the response as `{ session_id, url }` (a hosted Stripe Checkout URL). Session cookies +
+`X-CSRF-Token: <ui_csrf>` required (mutating POST).
+
+Request (`BillingCheckoutReq`):
+```json
+{ "amount_cents": 500, "currency": "usd", "description": "bundle_demo_001 x1" }
+```
+`amount_cents` is the only required field; `currency` and `description` are `string | null`.
+
+Response `200` (web-client-typed; not declared in OpenAPI):
+```json
+{ "session_id": "cs_test_...", "url": "https://checkout.stripe.com/c/pay/cs_test_..." }
+```
+On-device completion: open `url` in a Chrome Custom Tab; observe the Stripe return-URL deep link
+(`com.testlogon.android.stripe://payment_return`, AND-225/AND-231) to detect success/cancel; then
+reconcile via the payments read (below). There is **no `client_secret` and no PaymentSheet path** for
+this endpoint.
+
+**(B) Alternate endpoint (NOT what the ticket path resolves to) — `POST /ui/checkout/session`**
+(`UnifiedCheckoutSessionIn` → `UnifiedCheckoutSessionOut`, index line 1327). If the backend owner
+confirms AND-227 should target this richer endpoint instead, the shapes are:
 
 Request (`source: "direct"` example):
 ```json
-{
-  "source": "direct",
-  "sku": "bundle_demo_001",
-  "product_type": "file_bundle",
-  "billing_model": "one_time",
-  "quantity": 1,
-  "scope": {},
-  "pricing_ref": {}
-}
+{ "source": "direct", "sku": "bundle_demo_001", "product_type": "file_bundle",
+  "billing_model": "one_time", "quantity": 1, "scope": {}, "pricing_ref": {} }
 ```
 Request (`source: "cart"` example): `{ "source": "cart", "cart_id": "cart_abc", "quantity": 1 }`
 
 Response `200` (`UnifiedCheckoutSessionOut`):
 ```json
-{
-  "order_id": "ord_123",
-  "checkout_session_id": "cs_456",
-  "source": "direct",
-  "line_items": [ { "sku": "bundle_demo_001", "amount_cents": 500, "currency": "usd", "qty": 1 } ],
-  "status": "pending_payment"
-}
+{ "order_id": "ord_123", "checkout_session_id": "cs_456", "source": "direct",
+  "line_items": [ { } ], "status": "pending_payment" }
 ```
-`UnifiedCheckoutSessionIn` enums (from schema): `source ∈ {cart, direct, subscription_action}` (required);
-`product_type ∈ {file_bundle, api_package, internal_api_package}`;
-`billing_model ∈ {one_time, rental, subscription, credit_pack}`; `quantity` 1..1000.
-`UnifiedCheckoutSessionOut` required keys: `order_id`, `checkout_session_id`, `source`;
-`status` defaults to `"pending_payment"`; `line_items` is `array<object>` (shape is per-product —
+`UnifiedCheckoutSessionIn` (verified from schema): `source ∈ {cart, direct, subscription_action}`
+(**only required field**); `product_type ∈ {file_bundle, api_package, internal_api_package}`;
+`billing_model ∈ {one_time, rental, subscription, credit_pack}`; `quantity` default 1, range 1..1000;
+plus `cart_id`, `sku`, `scope` (object), `pricing_ref` (object), and **`subscription_plan`** (object,
+omitted by the original DTO). `UnifiedCheckoutSessionOut` required keys: `order_id`,
+`checkout_session_id`, `source`; `status` defaults to `"pending_payment"`; `line_items` is
+`array<object>` with `additionalProperties: true` (no `amount_cents`/`currency`/`sku`/`qty` declared —
 parse defensively, see R2). Optional query/header params (`user_sub`, `X-SESSION-ID`,
 `X-IMPERSONATION-TOKEN`) are **not** sent by the app; the cookie session is authoritative.
 
-**Resolve PaymentIntent — `POST /ui/billing/payment_intents`** (from AND-225). Sent only if the
-checkout response did not already carry a `client_secret`. Body keyed by order:
-```json
-{ "amount": 500, "currency": "usd", "intent_context": { "order_id": "ord_123" } }
-```
-Response carries `payment_intent_id`, `client_secret`, `status` (see AND-225 §5).
+**Resolve PaymentIntent / `POST /ui/billing/payment_intents` — [DOES NOT EXIST].** Verified: zero
+`payment_intent` path entries in the OpenAPI index. This block from the original spec is removed; do
+not implement it. (AND-225 must be re-verified — there is no backend endpoint to back it.)
 
-**Reconcile — `GET /ui/billing/payment_intents/{payment_intent_id}`** (idempotent; bounded backoff):
-```json
-{ "payment_intent_id": "pi_3Q...", "status": "succeeded", "amount": 500, "currency": "usd" }
-```
+**Reconcile / `GET /ui/billing/payment_intents/{id}` — [DOES NOT EXIST].** Removed for the same
+reason. Reconcile via the payments read below (or AND-218 purchases history).
 
-**Receipt lookup — `GET /ui/billing/payments?limit=50`** (idempotent). Returns the user's recent
-payments; the client filters for the one whose order matches `order_id` to build the receipt.
+**Receipt / reconcile lookup — `GET /ui/billing/payments?limit=50`** (idempotent; index line 1191).
+**[CORRECTED]** Web client (`getPayments`) types the response as `{ items: LedgerEntry[] }`, NOT
+`{ payments: [...] }`. `LedgerEntry` declares `{ sk, type, amount_cents, state, reason?, ts }` plus an
+open `[key: string]: unknown` — there is **no declared `order_id`, `status`, or `payment_intent_id`**
+field. Filtering a payment by `order_id` and reading a `succeeded` `status` is therefore an unverified
+assumption (see §16); the declared terminal field is `state`, not `status`.
 
 **Retrofit (extends `BillingApi`):**
 ```kotlin
+// Verified ticket-scoped endpoint:
 @POST("ui/billing/checkout_session")
-suspend fun createCheckoutSession(@Body body: UnifiedCheckoutSessionIn): Response<UnifiedCheckoutSessionOut>
+suspend fun createCheckoutSession(@Body body: BillingCheckoutReq): Response<CheckoutSessionDto>
 
 @GET("ui/billing/payments")
 suspend fun listPayments(@Query("limit") limit: Int = 50): Response<PaymentsListDto>
+
+// Alternate endpoint, only if backend owner redirects the ticket here:
+// @POST("ui/checkout/session")
+// suspend fun createUnifiedSession(@Body body: UnifiedCheckoutSessionIn): Response<UnifiedCheckoutSessionOut>
 ```
 
 **DTOs (Moshi):**
 ```kotlin
+@JsonClass(generateAdapter = true)
+data class BillingCheckoutReq(
+    @Json(name = "amount_cents") val amountCents: Long,
+    val currency: String? = null,
+    val description: String? = null,
+)
+
+// Web-client-typed response of /ui/billing/checkout_session (no OpenAPI schema declared):
+@JsonClass(generateAdapter = true)
+data class CheckoutSessionDto(
+    @Json(name = "session_id") val sessionId: String,
+    val url: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class PaymentsListDto(
+    val items: List<Map<String, Any?>> = emptyList(), // LedgerEntry: sk,type,amount_cents,state,reason?,ts,+open
+)
+
+// Alternate-endpoint DTOs (use only if targeting /ui/checkout/session):
 @JsonClass(generateAdapter = true)
 data class UnifiedCheckoutSessionIn(
     val source: String,
@@ -301,6 +368,7 @@ data class UnifiedCheckoutSessionIn(
     val quantity: Int = 1,
     val scope: Map<String, Any?> = emptyMap(),
     @Json(name = "pricing_ref") val pricingRef: Map<String, Any?> = emptyMap(),
+    @Json(name = "subscription_plan") val subscriptionPlan: Map<String, Any?>? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -448,13 +516,17 @@ to dev-host unreliability and the Stripe network dependency.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Session→PaymentIntent linkage:** `UnifiedCheckoutSessionOut` does **not** declare a
-  `client_secret`/`payment_intent_id` field in the schema (only `order_id`, `checkout_session_id`,
-  `source`, `line_items`, `status`). It is unclear whether the secret is embedded in a `line_items`
-  entry, returned by a separate call, or created by the app via `payment_intents` keyed on `order_id`.
-  **Mitigation:** `resolveClientSecret` tries the embedded value first, then falls back to
-  `createPaymentIntent(intent_context={order_id})`; verify the real linkage against a live response and
-  with the backend owner before finalizing. **Open question — owner: backend.**
+- **R1 — [ELEVATED/CORRECTED] Wrong endpoint + no PaymentIntent path:** Verified against OpenAPI +
+  frontend: `POST /ui/billing/checkout_session` takes `BillingCheckoutReq` and returns `{session_id,
+  url}` (hosted Stripe Checkout), and **no `payment_intents` endpoint exists** in the backend. The
+  `UnifiedCheckoutSessionIn/Out` schemas this spec was built on belong to a different endpoint,
+  `POST /ui/checkout/session`. There is therefore no `client_secret` to drive PaymentSheet on the
+  ticket-scoped path. **Mitigation / decision needed (BLOCKER, owner: backend):** (a) confirm whether
+  AND-227 targets `/ui/billing/checkout_session` (hosted-Checkout redirect via Custom Tabs + return-URL
+  deep link, no PaymentSheet) or `/ui/checkout/session` (richer order/session object, but still no
+  documented `client_secret` source); and (b) re-verify AND-225 — if it truly created/fetched
+  PaymentIntents, identify which backend endpoint backed it, because none is in the current OpenAPI.
+  Until resolved, the verified hosted-Checkout flow is the only implementable path.
 - **R2 — `line_items` is untyped (`array<object>`):** amount/currency live inside it but the per-item
   shape is product-dependent. **Mitigation:** parse defensively into `Map<String,Any?>`, derive
   `amountCents`/`currency` with null-safe fallbacks (and a fallback `GET` if absent). Open: is there a
@@ -518,3 +590,235 @@ tests pass in CI; the gated live integration test is documented and runnable.
 - Double-charge guards (button disable + reconcile-not-recreate) verified by test.
 - Unit + Compose tests green in CI; gated live integration smoke documented. No new lint/detekt
   regressions. PR links AND-225/AND-223 and lists AND-236 as the downstream follow-up.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **`POST /ui/billing/checkout_session` exists and is the ticket-scoped path.** VERIFIED.
+   Source: OpenAPI `POST /ui/billing/checkout_session` (index line 1175, op
+   `create_checkout_session_ui_billing_checkout_session_post`); `src/api/endpoints/billing.ts:
+   createCheckoutSession`.
+2. **Its request schema is `BillingCheckoutReq` = `{amount_cents (required int), currency?, description?}`.**
+   CORRECTED (spec said `UnifiedCheckoutSessionIn`). Source: OpenAPI `req=BillingCheckoutReq` (index
+   line 1175); `components.schemas.BillingCheckoutReq` (pretty.json — required `["amount_cents"]`);
+   `src/api/types.ts: BillingCheckoutReq`.
+3. **Its response is `{session_id, url}` (hosted Stripe Checkout URL), not `{order_id,
+   checkout_session_id, line_items, status}`.** CORRECTED. Source: OpenAPI declares no response schema
+   (`resp=200:`, index line 1175); `src/api/endpoints/billing.ts: createCheckoutSession` →
+   `api.post<{ session_id: string; url: string }>(...)`.
+4. **`UnifiedCheckoutSessionIn`/`UnifiedCheckoutSessionOut` belong to `POST /ui/checkout/session`, a
+   different endpoint.** CORRECTED (spec attributed them to `/ui/billing/checkout_session`). Source:
+   OpenAPI `POST /ui/checkout/session | req=UnifiedCheckoutSessionIn | resp=200:UnifiedCheckoutSessionOut`
+   (index line 1327, op `ui_create_checkout_session_ui_checkout_session_post`).
+5. **`UnifiedCheckoutSessionIn` enums/fields:** `source ∈ {cart,direct,subscription_action}` (only
+   required); `product_type ∈ {file_bundle,api_package,internal_api_package}`; `billing_model ∈
+   {one_time,rental,subscription,credit_pack}`; `quantity` default 1, 1..1000; also `cart_id`, `sku`,
+   `scope`, `pricing_ref`, **`subscription_plan`**. VERIFIED (enums correct; spec's DTO omitted
+   `subscription_plan` — corrected). Source: `components.schemas.UnifiedCheckoutSessionIn` (pretty.json
+   lines 76999–77099).
+6. **`UnifiedCheckoutSessionOut` required keys `order_id`, `checkout_session_id`, `source`; `status`
+   default `pending_payment`; `line_items` is `array<object>` with `additionalProperties: true` (no
+   declared per-item fields).** VERIFIED. Source: `components.schemas.UnifiedCheckoutSessionOut`
+   (pretty.json lines 77101–77140).
+7. **`UnifiedCheckoutSessionOut` declares no `client_secret`/`payment_intent_id`.** VERIFIED (spec R1).
+   Source: same schema as #6.
+8. **A `POST /ui/billing/payment_intents` (create) and `GET /ui/billing/payment_intents/{id}`
+   (reconcile) endpoint exist (claimed from AND-225).** CORRECTED — they do **not** exist anywhere in
+   the backend. Source: `payment_intent` matches 0 entries in `openapi.index.txt` (the only
+   `payment_intent_id` usages are response *fields* of `charge-once`/`pay-balance`/`wallet/deposit`, not
+   a PaymentIntent CRUD endpoint — `src/api/endpoints/billing.ts:68,71,92`).
+9. **`GET /ui/billing/payments` exists, idempotent, `limit` query param.** VERIFIED. Source: OpenAPI
+   `GET /ui/billing/payments | params=limit,...` (index line 1191); `src/api/endpoints/billing.ts:
+   getPayments`.
+10. **`GET /ui/billing/payments` returns `{items: LedgerEntry[]}`, not `{payments:[...]}`.** CORRECTED.
+    Source: `src/api/endpoints/billing.ts: getPayments` → `api.get<{ items: LedgerEntry[] }>(...)`.
+11. **`LedgerEntry` shape = `{sk, type, amount_cents, state, reason?, ts}` + open map; no declared
+    `order_id`/`status`/`payment_intent_id`.** VERIFIED. Source: `src/api/types.ts: LedgerEntry`
+    (lines 648–656).
+12. **Auth: cookie session + `ui_csrf` echoed as `X-CSRF-Token` on mutating calls.** VERIFIED. Source:
+    `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`, lines 168–170;
+    `credentials: "include"`, lines 124/183/220).
+13. **401 → single `POST /ui/session/refresh` retry by the transport.** VERIFIED. Source:
+    `src/api/client.ts: refreshSession` (`/ui/session/refresh`, line 122) + single-flight retry on
+    401 (lines 191–224).
+14. **Optional `user_sub`/`X-SESSION-ID`/`X-IMPERSONATION-TOKEN` params are not needed (cookie session
+    authoritative).** VERIFIED as optional. Source: OpenAPI `params=` column on the billing endpoints
+    (index lines 1175, 1191) lists them as optional; web client sends none of them.
+15. **No web `*.tsx` page consumes `createCheckoutSession`; the `{url}` is a redirect target.**
+    VERIFIED. Source: 0 `.tsx` matches for `createCheckoutSession`/`checkout_session` in `src/pages/`
+    (grep). No in-app PaymentSheet precedent in the reference.
+16. **Stripe PaymentSheet / `rememberStripePaymentLauncher` / `PaymentResult` API.** UNVERIFIED-ASSUMPTION
+    (out of repo). Stripe Android `PaymentSheet` requires a PaymentIntent/SetupIntent `client_secret`
+    (framework ref: https://docs.stripe.com/payments/accept-a-payment?platform=android) — but no
+    backend endpoint supplies one (see #8), so the launcher cannot be driven on the verified path.
+17. **Chrome Custom Tabs for hosted-Checkout redirect + return-URL deep link.** UNVERIFIED-ASSUMPTION
+    (proposed mitigation; depends on AND-231 owning the intent-filter). Framework ref:
+    https://developer.chrome.com/docs/android/custom-tabs.
+18. **`NumberFormat.getCurrencyInstance` for locale-aware amount formatting; TalkBack/`liveRegion`
+    semantics.** VERIFIED as framework guidance. Framework ref:
+    https://developer.android.com/reference/java/text/NumberFormat#getCurrencyInstance() and
+    https://developer.android.com/develop/ui/compose/accessibility.
+
+### Corrections made
+- §1, §2, §3 (FR-1/2/3), §5, §4 (repository note), §13 R1: request schema `UnifiedCheckoutSessionIn` →
+  `BillingCheckoutReq` for `/ui/billing/checkout_session` (claim #2).
+- Response shape for `/ui/billing/checkout_session`: `{order_id,checkout_session_id,line_items,status}`
+  → `{session_id, url}` hosted-Checkout URL (claim #3).
+- Clarified `UnifiedCheckoutSessionIn/Out` belong to the separate `POST /ui/checkout/session` (claim #4);
+  documented both endpoints in §5 (A)/(B) so the team can choose.
+- Removed the non-existent `payment_intents` create/reconcile endpoints from FR-2/FR-3 and §5; flagged
+  AND-225 for re-verification (claim #8).
+- `GET /ui/billing/payments` response `{payments:[...]}` → `{items: LedgerEntry[]}`; corrected the repo
+  filter (`it.items` not `it.payments`) and removed reliance on a payment `order_id`/`status`
+  (claims #10/#11).
+- Added missing `subscription_plan` field to the `UnifiedCheckoutSessionIn` DTO (claim #5).
+- Frontmatter: `status: draft` → `reviewed`; added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+- **Which endpoint AND-227 must use** (`/ui/billing/checkout_session` hosted redirect vs
+  `/ui/checkout/session` unified session). Unresolvable from the sources — both exist; the ticket scope
+  names the former but the original design assumed the latter's shape. Owner: backend.
+- **How a Stripe `client_secret` is obtained on-device.** No backend endpoint returns one for these
+  flows (claim #8), so the entire PaymentSheet design (FR-2, FR-4 `AwaitingPayment`, §4 ViewModel/repo)
+  is contingent. If AND-225's `payment_intents` calls were real, the backing endpoint is missing from
+  the current OpenAPI snapshot and must be re-located.
+- **Reconciling a payment to an `order_id`.** `LedgerEntry` declares no `order_id`/`status`; the
+  hosted-Checkout `{session_id}` is the only correlation key, and whether `payments` rows carry it is
+  unverifiable (open `[key: string]: unknown`). Owner: backend / AND-218.
+- **Whether the dev Stripe account is in test mode and round-trips decline/3DS cards** (spec R5).
+  Cannot be verified from static sources — requires the live dev backend.
+- **Session-level total / amount for display.** Neither endpoint returns a typed total; `BillingCheckoutReq`
+  is amount-in (caller supplies it). The amount shown must come from the cart/SKU upstream (AND-211/AND-218).
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **EMU** = headless emulator AVD
+`test35` (x86_64, API 35); **DEV** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R,
+Android 14 / API 34, arm64-v8a) on the build host via adb. Cases needing real Custom Tabs / Stripe
+return-URL deep-link handling, real network round-trips, and the arm64/API-34 reality are marked
+**MUST run on DEV**. Several cases trace to *contingent* ACs (the AC presumes the corrected-away
+PaymentSheet/`payment_intents` design); those are written against the **verified** hosted-Checkout
+contract and the AC is annotated "(contingent — see §16)".
+
+- **TC-AND-227-01 — Create-session request/response contract (happy path).**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer returns `200
+  {"session_id":"cs_test_1","url":"https://checkout.stripe.com/c/pay/cs_test_1"}` for
+  `POST /ui/billing/checkout_session`. Steps: call `createCheckoutSession(BillingCheckoutReq(500,"usd",
+  "demo"))`; capture the recorded request. Expected: request body is `{"amount_cents":500,
+  "currency":"usd","description":"demo"}` (snake_case), `X-CSRF-Token` header present; response parses
+  to `CheckoutSessionDto(sessionId="cs_test_1", url=...)`. Traces: AC-1.
+
+- **TC-AND-227-02 — `BillingCheckoutReq`/`CheckoutSessionDto`/`PaymentsListDto` Moshi round-trip.**
+  Type: unit. Target: JVM. Preconditions: fixtures copied from §5(A) and the `LedgerEntry` shape.
+  Steps: serialize/deserialize each DTO; deserialize a `payments` fixture `{"items":[{"sk":"...",
+  "type":"charge","amount_cents":500,"state":"paid","ts":1}]}`. Expected: `amount_cents` ↔ `amountCents`
+  mapping holds; `PaymentsListDto.items` is populated; unknown/extra keys do not throw (defensive map).
+  Traces: AC-1, AC-3, AC-9.
+
+- **TC-AND-227-03 — CSRF + no-auto-retry on mutating POST.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: MockWebServer first responds `500`/timeout
+  to the create POST. Steps: invoke create; inspect dispatched requests. Expected: exactly **one**
+  `POST /ui/billing/checkout_session` (no automatic retry of the non-idempotent POST); the request
+  carried `X-CSRF-Token: <ui_csrf>`; result maps to `Failed(retryable=true)`. Traces: AC-8.
+
+- **TC-AND-227-04 — 401 triggers a single session refresh then replays.**
+  Type: contract/MockWebServer. Target: JVM. Preconditions: create POST returns `401` once, refresh
+  endpoint returns `200`, replayed create returns `200`. Steps: invoke create. Expected: one
+  `POST /ui/session/refresh`, then the create succeeds; no infinite refresh loop. Traces: AC-8.
+
+- **TC-AND-227-05 — ViewModel state machine, verified hosted-Checkout happy path.**
+  Type: unit. Target: JVM (TestDispatcher + Turbine). Preconditions: fake repo returns a
+  `CheckoutSessionDto` then a matching paid `payments` record. Steps: `startCheckout(req)`; simulate the
+  return-URL success callback; let reconcile resolve. Expected: `uiState` emits
+  `Idle → CreatingSession → AwaitingPayment → ConfirmingPayment → Succeeded`; a `PresentSheet`/open-URL
+  event is emitted exactly once. Traces: AC-2 (contingent — see §16), AC-3 (contingent), AC-9.
+
+- **TC-AND-227-06 — Double-submit guard + reconcile-not-recreate on restore.**
+  Type: unit. Target: JVM. Preconditions: ViewModel in `CreatingSession`/`AwaitingPayment`/
+  `ConfirmingPayment`; `SavedStateHandle` seeded with the prior `session_id`. Steps: call
+  `startCheckout` again while in-flight; then recreate the ViewModel from `SavedStateHandle`. Expected:
+  the second `startCheckout` is a no-op (no duplicate create POST); on restore the VM reconciles by the
+  persisted `session_id` and never re-creates a session (no double charge); `client_secret`/URL not
+  restored. Traces: AC-7.
+
+- **TC-AND-227-07 — Cancel and decline mapping.**
+  Type: unit. Target: JVM. Preconditions: fake payment result source. Steps: feed a Canceled outcome,
+  then a declined/failed outcome. Expected: Canceled → `Canceled(...)`, no error toast, retry
+  affordance, no duplicate session; decline → `Failed(retryable=true)` with a user-facing (non-raw)
+  message. Traces: AC-6.
+
+- **TC-AND-227-08 — FastAPI `detail` error-shape mapping.**
+  Type: unit. Target: JVM. Preconditions: create POST returns `409`/`422` with `detail` as each of
+  `string`, `[{msg}]`, `{code,...}`. Steps: invoke create; inspect mapped message. Expected: each
+  variant yields a clean user-facing string (never raw JSON); `409`/`410` → non-retryable `Failed`
+  routing back to cart. Traces: AC-6, AC-8.
+
+- **TC-AND-227-09 — Paid-but-confirm-failed recoverable state.**
+  Type: unit. Target: JVM. Preconditions: return-URL reports success but the `payments` reconcile read
+  keeps failing on transport. Steps: drive completion then fail reconcile past the backoff cap.
+  Expected: terminal *paid-pending-confirm* recoverable state with a "Refresh" re-poll action; never
+  silently `Failed` (user may be charged); GET reconcile used bounded jittered backoff (POSTs did not).
+  Traces: AC-3 (contingent), AC-7.
+
+- **TC-AND-227-10 — No secrets in logs.**
+  Type: unit. Target: JVM (capture logger). Preconditions: run the full flow with a stub `url`/
+  `session_id`. Steps: assert captured log output. Expected: logs contain only `session_id`/`state`/
+  `order` identifiers; no `url` query secret, no `client_secret`, no publishable key, no card data at
+  any level. Traces: AC-8.
+
+- **TC-AND-227-11 — Checkout screen renders each state + Pay button gating (Compose).**
+  Type: Compose-UI. Target: EMU (fast, headless API 35). Preconditions: VM driven through each
+  `CheckoutUiState`. Steps: set each state; assert the surface and the Pay/Checkout button. Expected:
+  correct surface per state; the action is **disabled** in `CreatingSession`/`AwaitingPayment`/
+  `ConfirmingPayment` and enabled only in terminal/idle states. Traces: AC-7, AC-9.
+
+- **TC-AND-227-12 — Accessibility: TalkBack labels, amount label, liveRegion, dark/large-font.**
+  Type: instrumented (accessibility). Target: DEV (MUST run on DEV — real TalkBack + display scaling).
+  Preconditions: success and confirming states populated. Steps: enable TalkBack; traverse; set largest
+  font + dark theme. Expected: Pay button announces the formatted amount (e.g. "Pay $5.00" via
+  `NumberFormat.getCurrencyInstance`); loading/confirming announced via `liveRegion`; line items grouped
+  with content descriptions; totals not truncated under large font; honors dark theme. Traces: AC-9.
+
+- **TC-AND-227-13 — End-to-end test-mode purchase over the live dev backend (verified hosted-Checkout).**
+  Type: instrumented/e2e (gated, manual/nightly). Target: DEV (MUST run on DEV — real plaintext-HTTP
+  dev host `http://18.222.237.167:8000`, real Custom Tab, real Stripe return-URL deep link, arm64/API
+  34). Preconditions: dev Stripe in test mode; valid session cookie + `ui_csrf`. Steps:
+  `startCheckout` → `POST /ui/billing/checkout_session` → open `url` in a Custom Tab → pay with
+  `4242 4242 4242 4242` → return via `com.testlogon.android.stripe://payment_return` → reconcile via
+  `GET /ui/billing/payments`. Expected: `CheckoutUiState.Succeeded`, a matching paid record in
+  `payments.items`; screenshot captured. **Proves "a purchase completes via Stripe (test)".** Traces:
+  AC-1, AC-3, AC-9.
+
+- **TC-AND-227-14 — 3DS/SCA card e2e (live).**
+  Type: instrumented/e2e (gated). Target: DEV (MUST run on DEV — in-page 3DS challenge in the Custom
+  Tab requires a real browser/WebView). Preconditions: as TC-13. Steps: same flow with
+  `4000 0025 0000 3155`; complete the 3DS challenge in the Custom Tab. Expected: post-authentication
+  the flow reconciles to `Succeeded` identically to the non-3DS path. Traces: AC-5 (contingent on
+  in-app PaymentSheet; on the verified hosted path 3DS is handled by the Stripe Checkout page).
+
+- **TC-AND-227-15 — Cart-source session e2e (live).**
+  Type: instrumented/e2e (gated). Target: DEV. Preconditions: a seeded cart; backend confirmed to
+  accept the cart source on whichever endpoint §16 resolves to. Steps: create a cart-context session →
+  pay `4242…` → reconcile. Expected: `Succeeded`. Note: on the verified `/ui/billing/checkout_session`
+  contract there is no `cart_id` field (it is amount-in); a true cart source requires
+  `/ui/checkout/session` (`source:"cart"`), so this case is **blocked on the §16 endpoint decision**.
+  Traces: AC-4 (contingent — see §16).
+
+- **TC-AND-227-16 — Offline / flaky-dev-host create failure.**
+  Type: instrumented. Target: DEV (MUST run on DEV — toggle real airplane mode / radio; exercises the
+  ~20s timeout against the unreliable plaintext host). Preconditions: device offline (or host
+  unreachable). Steps: invoke `startCheckout`. Expected: bounded ~20s timeout → offline `Failed` state
+  with retry; **no** auto-retry of the POST; nothing charged; recovery on reconnect via the retry
+  affordance. Traces: AC-6, AC-8.
+
+### Coverage matrix
+- **AC-1** (create session → parsed): TC-01, TC-02, TC-13.
+- **AC-2** (pay → `ConfirmingPayment`; contingent): TC-05.
+- **AC-3** (reconcile succeeded → `Succeeded`; contingent reconcile shape): TC-02, TC-05, TC-09, TC-13.
+- **AC-4** (cart source → `Succeeded`; blocked on §16): TC-15.
+- **AC-5** (3DS card → `Succeeded`): TC-14.
+- **AC-6** (cancel / decline mapping): TC-07, TC-08, TC-16.
+- **AC-7** (button gating + reconcile-not-recreate): TC-06, TC-09, TC-11.
+- **AC-8** (no secrets in logs; CSRF; no POST auto-retry): TC-03, TC-04, TC-08, TC-10, TC-16.
+- **AC-9** (unit + Compose green; gated live documented): TC-02, TC-05, TC-09, TC-11, TC-12, TC-13.
