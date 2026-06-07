@@ -5,12 +5,28 @@ milestone: M6
 epic: E35
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-258]
 blocks: [AND-263]
 ---
 
 # AND-262 — Payouts ViewModel
+
+> **Reviewer correction banner (2026-06-06):** The original draft was written against
+> an assumed `PayoutAccount` model (`payoutsEnabled`, `kycTier`, `defaultMethodId`,
+> `methods`) reached via `GET /ui/payouts/account`, plus a `getPayout(id)` detail
+> endpoint. **None of these exist** in the authoritative sources. The real contract
+> (verified against `openapi.index.txt`, `PayoutBalanceOut`/`PayoutListOut`/`PayoutOut`
+> schemas, and `frontend/src/api/endpoints/payouts.ts` + `pages/payouts/PayoutDashboard.tsx`)
+> is: `GET /ui/payouts/balance` → `PayoutBalanceOut`, `GET /ui/payouts` → `PayoutListOut`,
+> `POST /ui/payouts/request`, `POST /ui/payouts/{payout_id}/cancel`. The web app's
+> "gating" is **client-side amount validation** against `minimum_payout_cents` /
+> `available_cents` from the balance — there is no `payoutsEnabled`/`kycTier` gate.
+> Sections below have been corrected in place; the gate has been re-scoped to a
+> balance-derived `PayoutGate`. See §16 for the full audit. Where the old gate
+> vocabulary (KYC tiers / restricted accounts) is retained as a *future* design, it is
+> flagged as an unverified assumption, not current contract.
 
 ## 1. Overview & Goal
 
@@ -18,10 +34,13 @@ This ticket delivers the presentation-layer state holder for the Payouts domain 
 the TestLogon native Android app: a Hilt-injected `PayoutsViewModel` that exposes a
 single `StateFlow<PayoutsUiState>`, owns the load/refresh/paging orchestration over
 `PayoutsRepository` (AND-258), and centralizes the **gating logic** that decides
-what the user is allowed to do with payouts based on their payout-account state
-(`payoutsEnabled`, `kycTier`, presence of a default method). It is the Android port
-of the state/selector logic that the web reference app keeps in its payouts hooks
-and store slices on top of `frontend/src/api/endpoints/payouts.ts`.
+what the user is allowed to do with payouts. **[Corrected]** Gating is derived from
+the user's **payout balance** (`available_cents`, `pending_cents`, `hold_cents`,
+`minimum_payout_cents`) returned by `GET /ui/payouts/balance` (`PayoutBalanceOut`),
+not from a non-existent `PayoutAccount`/`payoutsEnabled`/`kycTier` model. It is the
+Android port of the eligibility logic the web reference app implements inline in
+`frontend/src/pages/payouts/PayoutDashboard.tsx` (the `amountError` / `canSubmit`
+computation) on top of `frontend/src/api/endpoints/payouts.ts`.
 
 Scope is strictly **state + gating logic**, as the backlog says. This ticket does
 **not** render Compose UI (the setup screen is AND-259, history is AND-260, bulk
@@ -48,17 +67,24 @@ about Retrofit, cursors, or gate thresholds.
   `android-port`.
 - **Namespace:** all code lands under `com.testlogon.android` — specifically
   `com.testlogon.android.feature.payouts` for the ViewModel, `UiState`, and gate
-  types. Domain models (`Payout`, `PayoutPage`, `PayoutAccount`, `Money`,
-  `PayoutStatus`, `PayoutMethod`) are reused from `com.testlogon.android.core.model.payout`
-  (AND-258); they are **not** redeclared here.
+  types. **[Corrected]** Domain models reused from
+  `com.testlogon.android.core.model.payout` (AND-258) are `Payout`, `PayoutPage`
+  (cursor-paged list), and `PayoutBalance` — **not** `PayoutAccount` (does not exist).
+  Per the verified wire shapes, `Payout.status` and `Payout.method` are plain
+  **strings** (`PayoutOut.status`/`method`), not a `PayoutStatus` enum or
+  `PayoutMethod` object; if AND-258 introduces a `PayoutStatus` enum it is a
+  client-side convenience, not a server type. These are **not** redeclared here.
 - **Module placement:** `feature-payouts`. Layering rule
   `feature-payouts -> core-data -> core-model` is respected. The ViewModel injects
   the `PayoutsRepository` interface from `core-data`; it never touches
   `core-network`/Retrofit directly.
-- **Web reference:** `frontend/src/api/endpoints/payouts.ts` and the payout-related
-  shapes/selectors in `frontend/src/api/types.ts`. Where the web app derives a
-  "can configure payouts" / "needs verification" boolean from account state, this
-  ViewModel reproduces that logic as `PayoutGate`.
+- **Web reference:** `frontend/src/api/endpoints/payouts.ts`, the payout shapes in
+  `frontend/src/api/types.ts` (`PayoutBalance`, `Payout`, `PayoutListResp`), and the
+  page logic in `frontend/src/pages/payouts/PayoutDashboard.tsx`. **[Corrected]** The
+  web app does **not** derive a "can configure payouts" / "needs verification" boolean
+  from any account state — there is no such state. It computes a per-request
+  eligibility (`canSubmit`) from `minimum_payout_cents` ≤ amount ≤ `available_cents`.
+  This ViewModel reproduces that as `PayoutGate` (see corrected §3).
 - **Dependencies:** AND-258 (`PayoutsApi` + `PayoutsRepository` + domain models +
   `ApiResult`/`apiCall`) is the prerequisite and supplies every type this ticket
   consumes. The shared `ApiResult<T>` envelope and FastAPI `detail` error mapping
@@ -74,23 +100,32 @@ about Retrofit, cursors, or gate thresholds.
 FR-1. Expose exactly one observable state: `val uiState: StateFlow<PayoutsUiState>`,
 created with `stateIn(viewModelScope, WhileSubscribed(5_000), PayoutsUiState.Loading)`.
 
-FR-2. On first active subscription (and on `onRetry()`), load the payout account
-(`getPayoutAccount()`) and the first page of history (`getPayouts(cursor = null)`)
-concurrently, combine them into a single `PayoutsUiState.Content`, and surface a
-single combined loading state until both complete.
+FR-2. **[Corrected]** On first active subscription (and on `onRetry()`), load the
+payout **balance** (`getPayoutBalance()` → `GET /ui/payouts/balance`) and the first
+page of history (`getPayouts(cursor = null)` → `GET /ui/payouts`) concurrently,
+combine them into a single `PayoutsUiState.Content`, and surface a single combined
+loading state until both complete. (There is no `getPayoutAccount()` endpoint.)
 
-FR-3. Derive a **gate decision** (`PayoutGate`) purely from `PayoutAccount`:
-- `Ready` — `payoutsEnabled == true` and a default method exists.
-- `NeedsMethod` — `payoutsEnabled == true` but no default method
-  (`defaultMethodId == null` and `methods` empty or none default).
-- `NeedsVerification` — `payoutsEnabled == false` and `kycTier` indicates the user
-  has not reached the payout-required tier (insufficient KYC).
-- `Disabled` — `payoutsEnabled == false` for a non-KYC reason (e.g., account
-  `status` is `"restricted"`/`"closed"`), carrying the server `status` for display.
-- `Unknown` — account state is indeterminate (e.g., account load failed but history
-  loaded); treated as not-ready and surfaced with a retry affordance.
-The gate is a **pure function** `gateOf(account: PayoutAccount?): PayoutGate` so it
-is independently unit-testable and reused by AND-259's KYC-gate panel.
+FR-3. **[Corrected]** Derive a **gate decision** (`PayoutGate`) purely from
+`PayoutBalance` (fields verified in `PayoutBalanceOut`: `available_cents`,
+`pending_cents`, `hold_cents`, `total_earned_cents`, `currency`,
+`minimum_payout_cents`). The web app (`PayoutDashboard.tsx`) has only two gate-like
+outcomes; we model them plus indeterminate/empty:
+- `Ready` — `available_cents >= minimum_payout_cents` (a payout of at least the
+  minimum can be requested). Mirrors the web `canSubmit` lower bound.
+- `BelowMinimum` — `0 < available_cents < minimum_payout_cents` (funds exist but not
+  enough to withdraw yet). Carries `available_cents`/`minimum_payout_cents` for the
+  "Minimum payout is $X" message the web shows.
+- `NoFunds` — `available_cents == 0` (nothing withdrawable).
+- `Unknown` — balance is indeterminate (e.g., balance load failed but history
+  loaded); treated as not-`Ready` and surfaced with a retry affordance.
+The gate is a **pure function** `gateOf(balance: PayoutBalance?): PayoutGate` so it
+is independently unit-testable.
+> **Unverified-assumption (future):** a KYC/verification gate
+> (`NeedsVerification`/`Disabled` from `payoutsEnabled`+`kycTier`) is **not** part of
+> the current `/ui/payouts` contract. KYC tier lives on a separate surface
+> (`GET /v1/kyc/tiers/me`, AND-320). If a verification gate is wanted, it must compose
+> this balance gate with that endpoint in AND-259/AND-320 — out of scope here.
 
 FR-4. Support cursor pagination via `onLoadMore()`: when `nextCursor != null` and no
 load is in flight, fetch the next page, append items, and update `nextCursor`. A
@@ -149,7 +184,7 @@ Internal working state (never exposed directly):
 
 ```kotlin
 internal data class PayoutsState(
-    val account: PayoutAccount? = null,
+    val balance: PayoutBalance? = null,   // [Corrected] was PayoutAccount? account
     val items: List<Payout> = emptyList(),
     val nextCursor: String? = null,
     val initialLoaded: Boolean = false,
@@ -169,7 +204,7 @@ sealed interface PayoutsUiState {
     data class Error(val error: PayoutsError) : PayoutsUiState   // initial load failed
     data class Content(
         val gate: PayoutGate,
-        val account: PayoutAccount?,
+        val balance: PayoutBalance?,          // [Corrected] was account: PayoutAccount?
         val payouts: List<Payout>,
         val canLoadMore: Boolean,
         val isRefreshing: Boolean,
@@ -179,12 +214,15 @@ sealed interface PayoutsUiState {
     ) : PayoutsUiState
 }
 
+// [Corrected] Balance-derived gate (was a non-existent account/KYC gate).
 sealed interface PayoutGate {
-    data object Ready : PayoutGate
-    data object NeedsMethod : PayoutGate
-    data class NeedsVerification(val currentTier: String?) : PayoutGate
-    data class Disabled(val reason: String?) : PayoutGate
-    data object Unknown : PayoutGate
+    data object Ready : PayoutGate                                   // available >= minimum
+    data class BelowMinimum(                                          // 0 < available < minimum
+        val availableCents: Long,
+        val minimumCents: Long,
+    ) : PayoutGate
+    data object NoFunds : PayoutGate                                  // available == 0
+    data object Unknown : PayoutGate                                  // balance load failed
 }
 
 data class PayoutsError(val category: ErrorCategory, val message: String)
@@ -194,20 +232,25 @@ enum class ErrorCategory { NETWORK, AUTH, NOT_FOUND, VALIDATION, SERVER, UNKNOWN
 Pure gating selector (the testable heart of "gating logic"):
 
 ```kotlin
-internal fun gateOf(account: PayoutAccount?): PayoutGate = when {
-    account == null -> PayoutGate.Unknown
-    account.payoutsEnabled && account.hasDefaultMethod() -> PayoutGate.Ready
-    account.payoutsEnabled -> PayoutGate.NeedsMethod
-    account.status.isRestricted() -> PayoutGate.Disabled(account.status)
-    else -> PayoutGate.NeedsVerification(account.kycTier)
+// [Corrected] Pure balance-derived gate. Mirrors PayoutDashboard.tsx canSubmit/amountError.
+internal fun gateOf(balance: PayoutBalance?): PayoutGate = when {
+    balance == null -> PayoutGate.Unknown
+    balance.availableCents >= balance.minimumPayoutCents -> PayoutGate.Ready
+    balance.availableCents > 0 -> PayoutGate.BelowMinimum(
+        availableCents = balance.availableCents,
+        minimumCents = balance.minimumPayoutCents,
+    )
+    else -> PayoutGate.NoFunds
 }
 
-private fun PayoutAccount.hasDefaultMethod(): Boolean =
-    defaultMethodId != null || methods.any { it.isDefault }
-
-private fun String?.isRestricted(): Boolean =
-    this?.lowercase() in setOf("restricted", "closed", "disabled", "rejected")
+// Per-request validation helper (mirrors web canSubmit), reused by AND-259's form:
+internal fun PayoutBalance.canRequest(amountCents: Long): Boolean =
+    amountCents in minimumPayoutCents..availableCents
 ```
+> Field names above use the AND-258 domain model. The wire shape is snake_case
+> (`available_cents`, `minimum_payout_cents`) per `PayoutBalanceOut`; AND-258 owns the
+> JSON↔Kotlin mapping. `*_cents` are integers (use `Long` to be safe; web treats them
+> as `number`).
 
 Initial load (concurrent, de-duplicated):
 
@@ -218,20 +261,21 @@ private fun loadInitial(force: Boolean = false) {
     if (loadJob?.isActive == true && !force) return
     loadJob = viewModelScope.launch(io) {
         internal.update { it.copy(fatalError = null) }
-        val accountDeferred = async { repository.getPayoutAccount() }
+        // [Corrected] getPayoutBalance() (GET /ui/payouts/balance), not getPayoutAccount()
+        val balanceDeferred = async { repository.getPayoutBalance() }
         val pageDeferred = async { repository.getPayouts(cursor = null) }
-        val account = accountDeferred.await()
+        val balance = balanceDeferred.await()
         val page = pageDeferred.await()
-        reduce(account, page, isInitial = !internal.value.initialLoaded)
+        reduce(balance, page, isInitial = !internal.value.initialLoaded)
     }
 }
 ```
 
-Reduction rules:
+Reduction rules **[Corrected: "account" → "balance"]**:
 - Both succeed → `Content` with combined data, `initialLoaded = true`,
-  `gate = gateOf(account)`.
-- History succeeds, account fails → `Content` with `gate = Unknown` and a
-  `transientError` (content is still usable; gate cannot be trusted).
+  `gate = gateOf(balance)`.
+- History succeeds, balance fails → `Content` with `gate = Unknown` and a
+  `transientError` (history is still usable; gate cannot be trusted).
 - History fails on **initial** load → `fatalError` → `PayoutsUiState.Error`.
 - History fails on **refresh / load-more** (content already present) →
   `transientError`, items unchanged.
@@ -249,25 +293,39 @@ AND-258 / core). `selected` in `Content` is resolved by `items.find { it.id == s
 ## 5. API Contract
 
 This ticket defines **no new HTTP endpoints**. It consumes the repository contract
-established by AND-258:
+established by AND-258. **[Corrected]** The verified consumed surface is:
 
 ```kotlin
-suspend fun getPayoutAccount(): ApiResult<PayoutAccount>
+// [Corrected] getPayoutBalance() replaces the non-existent getPayoutAccount().
+suspend fun getPayoutBalance(): ApiResult<PayoutBalance>
 suspend fun getPayouts(cursor: String? = null, limit: Int = 20): ApiResult<PayoutPage>
-suspend fun getPayout(payoutId: String): ApiResult<Payout>
+// NOTE: there is NO GET /ui/payouts/{id} detail endpoint — getPayout(id) removed.
 ```
 
-The backing endpoints (`GET /ui/payouts/account`, `GET /ui/payouts?cursor=&limit=`,
-`GET /ui/payouts/{payoutId}`), their JSON shapes, cookie/CSRF auth, and FastAPI
-error bodies are owned and documented by **AND-258 §5**. The only contract this
-ticket adds is the **internal mapping** from `PayoutAccount` → `PayoutGate`
-(see §4), which is a pure in-process function with no wire representation.
+The backing endpoints — **verified** against `openapi.index.txt` and the web client
+(`frontend/src/api/endpoints/payouts.ts`) — are:
+- `GET /ui/payouts/balance` → `200: PayoutBalanceOut` (op `payout_balance_ui_payouts_balance_get`).
+- `GET /ui/payouts` with query `limit`, `cursor` → `200: PayoutListOut` (op `list_payouts_ui_payouts_get`).
+  `PayoutListOut = { items: PayoutOut[], next_cursor: string|null }`.
 
-`getPayout(id)` is available but not required by the default flow: selection is
-satisfied from already-loaded `items`. If a future deep-link enters with an id not
-in `items`, `onSelectPayout` may trigger a single `getPayout(id)` fetch; that path
-is specified but gated behind an `items.none { it.id == id }` check to avoid
-redundant calls.
+**Corrections to the original draft:**
+- `GET /ui/payouts/account` **does not exist**. Balance comes from `/ui/payouts/balance`.
+- `GET /ui/payouts/{payoutId}` (single-payout detail) **does not exist** in the
+  contract. Selection MUST be satisfied from already-loaded `items`; there is no
+  fallback `getPayout(id)` fetch. The deep-link-to-uncached-id path (old §5/R5) is
+  removed — if a detail id is not in `items`, the screen must re-list or show
+  not-found, not call a non-existent endpoint.
+
+Related write endpoints exist but are **out of scope** for this state/gating ticket
+(they belong to AND-259's request/cancel actions): `POST /ui/payouts/request`
+(`req=PayoutRequestIn`, `201: PayoutCreateOut`) and
+`POST /ui/payouts/{payout_id}/cancel` (`200: PayoutActionOut`). All `/ui/payouts/*`
+endpoints additionally accept `user_sub`, `X-SESSION-ID`, `X-IMPERSONATION-TOKEN`
+params per the index; auth/CSRF transport is owned by AND-027/AND-258 (see §8).
+
+The only contract this ticket adds is the **internal mapping** `PayoutBalance` →
+`PayoutGate` and the `canRequest(amountCents)` helper (see §4), pure in-process
+functions with no wire representation.
 
 ## 6. Data & State Management
 
@@ -311,12 +369,18 @@ redundant calls.
 
 ## 8. Security & Privacy
 
-- Payout data is financial PII (amounts, method `last4`, bank labels). The
-  ViewModel must **never** log `Payout`, `PayoutAccount`, `Money`, amounts, ids of
-  financial methods, or `last4`. Any breadcrumb is limited to non-PII (action name,
-  `ErrorCategory`, HTTP status if available).
-- No tokens or cookies are handled here; auth remains cookie-based and owned by
-  AND-027/AND-258.
+- Payout data is financial PII (amounts, `notes`, `reject_reason`, `user_id`). The
+  ViewModel must **never** log `Payout`, `PayoutBalance`, amounts/`*_cents`, or any
+  free-text (`notes`/`reject_reason`). Any breadcrumb is limited to non-PII (action
+  name, `ErrorCategory`, HTTP status if available). **[Corrected]** There is no
+  `method.last4`/bank-label field in the contract (`PayoutOut.method` is a plain
+  string like `bank_transfer`/`paypal`); the prior "`last4`/bank labels" wording was
+  an unverified assumption — removed.
+- No tokens or cookies are handled here; auth is owned by AND-027/AND-258.
+  **[Clarified]** The web transport (`src/api/client.ts`) is cookie-session **plus**
+  a `Bearer` access token header **plus** a CSRF token (`ui_csrf` cookie → `X-CSRF-Token`
+  header), with `credentials: include`; not cookie-only as the draft implied. This
+  ViewModel still touches none of it.
 - `PayoutsState` and `PayoutsUiState` are in-memory only and are **not** written to
   `SavedStateHandle` (which can persist to disk); selection is the only thing that
   could be persisted and it is just an opaque id, but to avoid any at-rest PII this
@@ -331,8 +395,10 @@ redundant calls.
   descriptions, touch targets) is **N/A here and owned by AND-259/260/261**.
 - i18n contract: the ViewModel emits **no user-facing display strings of its own**
   for gate states — `PayoutGate` is a typed enum/sealed type, and the consuming
-  screens map each case to string resources. `PayoutStatus` (from AND-258) is
-  likewise passed through as an enum, not a localized string.
+  screens map each case to string resources. **[Corrected]** `Payout.status` is a
+  raw server string (e.g. `requested`, `approved`, `processing`, `completed`,
+  `rejected`, `cancelled` — the values the web `STATUS_BADGE_VARIANT` map handles),
+  passed through verbatim; the screen maps it to a localized label, not the ViewModel.
 - The only strings the ViewModel surfaces are `PayoutsError.message` (already
   human-readable from the FastAPI `detail` mapper) and server-provided values
   (`Disabled.reason`, `NeedsVerification.currentTier`); these are passed verbatim
@@ -348,9 +414,10 @@ redundant calls.
   `payouts_refresh`, `payouts_load_more`, `payouts_retry`, each tagged with
   outcome (`success`/`error`) and, on error, `ErrorCategory` — never amounts, ids,
   or method details.
-- A single gate-outcome breadcrumb (`payout_gate=ready|needs_method|needs_verification|disabled|unknown`)
-  may be emitted on initial load to aid funnel analysis; the tier string in
-  `NeedsVerification` is **not** included if it could be considered sensitive.
+- **[Corrected]** A single gate-outcome breadcrumb
+  (`payout_gate=ready|below_minimum|no_funds|unknown`) may be emitted on initial load
+  to aid funnel analysis. It carries only the enum label — **never** the actual
+  `available_cents`/`minimum_payout_cents` values from `BelowMinimum` (those are PII).
 - All logging routes through the shared logger with the PII redactor; no
   `Log.d`/`println` of state objects.
 
@@ -361,23 +428,25 @@ using a fake `PayoutsRepository`, `kotlinx-coroutines-test` (`StandardTestDispat
 + `runTest`), Turbine for `StateFlow` assertions, and the `MainDispatcherRule` /
 fake `@IoDispatcher` from `core-testing`. No Android instrumentation.
 
-Gating logic — pure `gateOf(...)`:
-1. `payoutsEnabled=true` + `defaultMethodId` set → `Ready`.
-2. `payoutsEnabled=true` + a method with `isDefault=true` (no `defaultMethodId`) → `Ready`.
-3. `payoutsEnabled=true` + no default method → `NeedsMethod`.
-4. `payoutsEnabled=false` + status `active` → `NeedsVerification(kycTier)`.
-5. `payoutsEnabled=false` + status `restricted`/`closed`/`rejected` → `Disabled(status)`.
-6. `account == null` → `Unknown`.
-7. Fail-closed: an unexpected combination never yields `Ready`.
+Gating logic — pure `gateOf(...)` **[Corrected to balance-derived gate]**:
+1. `available_cents >= minimum_payout_cents` (e.g. 5000 ≥ 1000) → `Ready`.
+2. `available_cents == minimum_payout_cents` (boundary, e.g. 1000 == 1000) → `Ready`.
+3. `0 < available_cents < minimum_payout_cents` (e.g. 500 < 1000) →
+   `BelowMinimum(available=500, minimum=1000)`.
+4. `available_cents == 0` → `NoFunds` (regardless of `pending`/`hold`).
+5. `balance == null` → `Unknown`.
+6. `canRequest(amount)` true only for `minimum <= amount <= available`; false below
+   minimum and false above available (mirrors web `amountError`).
+7. Fail-closed: an indeterminate/null balance never yields `Ready`.
 
 State machine — ViewModel:
 8. Initial subscription emits `Loading` then `Content` once both calls succeed, with
    correct `gate`, merged `items`, and `canLoadMore`.
-9. Account + history fetched **concurrently** (assert both repo methods invoked
+9. Balance + history fetched **concurrently** (assert both repo methods invoked
    before either result is consumed; fake records call order/overlap).
 10. Initial history failure → `PayoutsUiState.Error`; `onRetry()` re-loads and
     transitions to `Content`.
-11. Account failure + history success → `Content` with `gate=Unknown` and a
+11. Balance failure + history success → `Content` with `gate=Unknown` and a
     `transientError`; items present.
 12. `onRefresh()` sets `isRefreshing=true` over existing `Content`, then clears it;
     selection is preserved across refresh.
@@ -400,34 +469,38 @@ builds on this suite and adds UI tests against the screens.
 ## 12. Dependencies & Sequencing
 
 - **Depends on AND-258** (Payouts API): supplies `PayoutsRepository`, the domain
-  models (`Payout`, `PayoutPage`, `PayoutAccount`, `PayoutMethod`, `Money`,
-  `PayoutStatus`), `ApiResult`/`apiCall`, and the `nextCursor` pagination seam. This
-  ticket must not reimplement any of those.
+  models (`Payout`, `PayoutPage`, `PayoutBalance`), `ApiResult`/`apiCall`, and the
+  `nextCursor` pagination seam. **[Corrected]** It does **not** supply `PayoutAccount`,
+  `PayoutMethod`, or a `PayoutStatus`/`Money` server type — those are not in the
+  contract (`status`/`method` are strings, `*_cents` integers). This ticket must not
+  reimplement any AND-258 type. AND-258 must expose `getPayoutBalance()`.
 - **Depends transitively** on AND-027 (cookie/CSRF/refresh stack, FastAPI `detail`
   error mapper) and on the `core-testing` coroutine test utilities and
   `@IoDispatcher` qualifier from M1.
 - **Blocks AND-263** (Payouts tests), which extends this unit suite and adds UI
-  tests; **enables** AND-259 (consumes `PayoutGate` for the KYC-gate panel),
-  AND-260 (consumes `items`/`nextCursor`/selection for history + detail), and
+  tests; **enables** AND-259 (consumes `PayoutGate` + `canRequest()` for the request
+  form), AND-260 (consumes `items`/`nextCursor`/selection for history), and
   AND-261 (reuses load/state patterns for bulk read views).
-- **Note on AND-320:** the deeper KYC tier model (`TierStatus`,
-  `requiredTierForPayouts`, `evaluate()`) belongs to AND-259/AND-320. This ticket's
-  gate intentionally derives `NeedsVerification` from `PayoutAccount.payoutsEnabled`
-  + `kycTier` only; AND-259 may layer the full tier comparison on top of this gate.
+- **[Corrected] Note on AND-320:** the deeper KYC tier model
+  (`GET /v1/kyc/tiers/me`, evaluate/requirements) belongs to AND-259/AND-320 and is a
+  **separate endpoint**, not part of `/ui/payouts`. This ticket's gate derives purely
+  from `PayoutBalance`; any verification gate is composed on top by AND-259/AND-320.
 - Sequencing within the ticket: define `PayoutsUiState`/`PayoutGate`/`PayoutsError`
   → write `gateOf` + its unit tests → implement the reducer + load/refresh/loadMore
   → wire intents + `stateIn` projection → complete the state-machine unit tests.
 
 ## 13. Risks & Open Questions
 
-- **R1 — Gate vocabulary.** The exact `PayoutAccount.status` values and the precise
-  meaning of `payoutsEnabled=false` (KYC vs. restriction vs. onboarding incomplete)
-  are unconfirmed against the live backend. Mitigation: `isRestricted()` set is
-  centralized and the gate fails closed; **open:** confirm the authoritative status
-  vocabulary and whether a distinct `requirements`/`disabled_reason` field exists.
-- **R2 — KYC ownership overlap with AND-259/AND-320.** Risk of duplicating gate
-  logic. Decision: this ticket owns the *account-derived* gate; AND-259 composes it
-  with full tier requirements. The `gateOf` function is the single shared primitive.
+- **R1 — Gate vocabulary [Corrected/Resolved].** The original `PayoutAccount.status`
+  / `payoutsEnabled` gate does not exist. Resolved: the gate is balance-derived
+  (`available_cents` vs `minimum_payout_cents`, both verified in `PayoutBalanceOut`).
+  Remaining open: the `Payout.status` vocabulary is a free-form server string; the
+  values web handles are `requested/approved/processing/completed/rejected/cancelled`
+  but the backend does not enumerate them in the schema — treat as open-ended.
+- **R2 — KYC ownership overlap with AND-259/AND-320 [Corrected].** This ticket owns
+  the *balance-derived* gate only. Any KYC/verification gate is a separate concern
+  built on `GET /v1/kyc/tiers/me` by AND-259/AND-320. The `gateOf(balance)` function
+  is the single shared balance primitive.
 - **R3 — Pagination correctness on the flaky dev host.** Overlapping or repeated
   pages could duplicate items. Mitigation: de-dup by `id` on append plus
   `isLoadingMore` guard; **open:** confirm whether the backend cursor is stable.
@@ -435,9 +508,12 @@ builds on this suite and adds UI tests against the screens.
   `transientError` on next action or requires an explicit `onTransientErrorShown()`.
   Current design provides the explicit hook and also clears on next success; the
   consuming screens (AND-259/260) finalize the snackbar contract.
-- **R5 — Deep-link selection.** Selecting an id not in `items` triggering
-  `getPayout(id)` is specified but unexercised until AND-260 adds detail
-  navigation; kept behind a guard to avoid premature network calls.
+- **R5 — Deep-link selection [Corrected].** There is **no** `GET /ui/payouts/{id}`
+  detail endpoint, so a deep-link to an id not in `items` **cannot** be satisfied by a
+  `getPayout(id)` fetch. Selection is resolved only from loaded `items`
+  (`items.find { it.id == selectedId }`); an unknown id yields `selected == null` and
+  the screen must re-list or show not-found. The prior `getPayout(id)` fallback is
+  removed entirely.
 
 ## 14. Acceptance Criteria
 
@@ -448,10 +524,11 @@ builds on this suite and adds UI tests against the screens.
 2. The ViewModel exposes exactly one `StateFlow<PayoutsUiState>` plus the intent
    functions `onRefresh()`, `onLoadMore()`, `onRetry()`, `onSelectPayout(id)`; no
    mutable state, `LiveData`, or suspend functions are public.
-3. Initial load fetches account + first history page **concurrently** and combines
-   them into a single `Content`, with a single combined loading state.
-4. `gateOf` returns `Ready`/`NeedsMethod`/`NeedsVerification`/`Disabled`/`Unknown`
-   per §3, is a pure function, and **fails closed** (indeterminate ≠ `Ready`).
+3. **[Corrected]** Initial load fetches **balance** (`GET /ui/payouts/balance`) +
+   first history page (`GET /ui/payouts`) **concurrently** and combines them into a
+   single `Content`, with a single combined loading state.
+4. **[Corrected]** `gateOf(balance)` returns `Ready`/`BelowMinimum`/`NoFunds`/`Unknown`
+   per §3, is a pure function, and **fails closed** (null/indeterminate ≠ `Ready`).
 5. Pagination works: `onLoadMore()` appends pages using `nextCursor`, exposes
    `canLoadMore`, de-dups by id, and is a no-op when `nextCursor == null`.
 6. The two-tier error model is implemented: initial failure → `Error`;
@@ -481,3 +558,222 @@ builds on this suite and adds UI tests against the screens.
   AND-259/260/261 can collect `uiState` with no further state-logic changes.
 - Open questions R1–R5 either resolved against `/openapi.json` + a captured live
   response or recorded as follow-up notes on AND-259/AND-320.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+OpenAPI index (`reference/openapi.index.txt`), OpenAPI schemas
+(`reference/openapi.pretty.json` → `components.schemas.<Name>`), and frontend
+(`reference/src/...`).
+
+1. **History list endpoint is `GET /ui/payouts` with `limit`/`cursor`, returns a
+   cursor-paged list.** — **Verified.** OpenAPI `GET /ui/payouts | op=list_payouts_ui_payouts_get | resp=200:PayoutListOut | params=limit,cursor,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`; `src/api/endpoints/payouts.ts: listPayouts`. `PayoutListOut = { items: PayoutOut[], next_cursor: string|null }` (`components.schemas.PayoutListOut`; `src/api/types.ts: PayoutListResp`).
+2. **Balance endpoint is `GET /ui/payouts/balance` → `PayoutBalanceOut`.** —
+   **Verified.** OpenAPI `GET /ui/payouts/balance | op=payout_balance_ui_payouts_balance_get | resp=200:PayoutBalanceOut`; `src/api/endpoints/payouts.ts: getPayoutBalance`.
+3. **`PayoutBalanceOut` fields: `available_cents`, `pending_cents`, `hold_cents`,
+   `total_earned_cents`, `currency`, `minimum_payout_cents` (all integers, currency
+   default "USD", minimum default 1000).** — **Verified.**
+   `components.schemas.PayoutBalanceOut`; mirrored in `src/api/types.ts: PayoutBalance`.
+4. **`GET /ui/payouts/account` exists and returns a `PayoutAccount`.** — **Corrected
+   (does not exist).** No `*/payouts/account` row in `openapi.index.txt`; no
+   `getPayoutAccount` in `src/api/endpoints/payouts.ts`. Replaced with `/ui/payouts/balance`.
+5. **`PayoutAccount` has `payoutsEnabled`, `kycTier`, `defaultMethodId`, `methods`.**
+   — **Corrected (no such schema/fields).** Grep for `payouts_enabled|defaultMethod|kyc_tier|payout_methods` across `reference/` returns no payout-account hits (only unrelated MFA `defaultMethod` in `src/pages/Login.tsx` and the separate KYC-tiers API). No `PayoutAccount` schema in `openapi.pretty.json`.
+6. **`GET /ui/payouts/{payoutId}` single-payout detail endpoint exists.** —
+   **Corrected (does not exist).** `openapi.index.txt` payout rows are only
+   `/ui/payouts`, `/ui/payouts/balance`, `/ui/payouts/request`,
+   `/ui/payouts/{payout_id}/cancel`. No GET-by-id. `getPayout(id)` removed.
+7. **`Payout`/`PayoutOut` fields are `payout_id, user_id, amount_cents, method,
+   status, created_at, updated_at, notes, reject_reason, approved_by, completed_at`;
+   `status` and `method` are plain strings.** — **Verified.**
+   `components.schemas.PayoutOut`; `src/api/types.ts: Payout`.
+8. **Pagination cursor field is `next_cursor` (string|null), list field is `items`.**
+   — **Verified.** `components.schemas.PayoutListOut`; used in `PayoutDashboard.tsx`
+   (`payoutsQ.data.next_cursor`, `payoutsQ.data.items`).
+9. **The web app derives a payout "gate" from account/KYC state.** — **Corrected.**
+   `src/pages/payouts/PayoutDashboard.tsx` has no account/KYC gate; eligibility is the
+   inline `amountError`/`canSubmit` check: `minCents = minimum_payout_cents`,
+   `availCents = available_cents`, valid when `minCents <= amountCents <= availCents`.
+   Re-modeled as balance-derived `PayoutGate` (`Ready`/`BelowMinimum`/`NoFunds`/`Unknown`).
+10. **Auth is cookie-based.** — **Corrected/Clarified.** `src/api/client.ts` uses
+    `credentials: "include"` (cookies) **plus** `Authorization: Bearer <accessToken>`
+    from the auth store **plus** CSRF: `getCookie("ui_csrf")` → header `X-CSRF-Token`.
+    So it is cookie+bearer+CSRF, not cookie-only. (This ticket handles none of it.)
+11. **401 handling: single session refresh then retry.** — **Verified.**
+    `src/api/client.ts`: on 401, `POST /ui/session/refresh` once (deduped via
+    `refreshPromise`), retry original request; on repeated 401 → `logout("session_expired")`.
+12. **Network/offline error surfaces as a distinct error.** — **Verified.**
+    `src/api/client.ts` catch block throws `new ApiError(0, "Network error", err)`
+    on fetch failure (offline/DNS) — supports the flaky-dev-host/offline test path.
+13. **Server validation errors use FastAPI `detail` / `HTTPValidationError`.** —
+    **Verified.** All payout ops list `422:HTTPValidationError` in the index;
+    `components.schemas.HTTPValidationError`/`ValidationError`. `client.ts` normalizes
+    `body.detail` into `ApiError.detail`.
+14. **`requestPayout` 409 means "already have a pending payout request".** —
+    **Verified (web behavior).** `src/pages/payouts/PayoutDashboard.tsx`
+    `requestMut.onError`: `if (err.status === 409) toast.error("You already have a
+    pending payout request")`. (Request/cancel are out of scope here but inform AND-259.)
+15. **`POST /ui/payouts/request` (`PayoutRequestIn` → 201 `PayoutCreateOut`) and
+    `POST /ui/payouts/{payout_id}/cancel` (→ `PayoutActionOut`) exist; cancel offered
+    only for `requested`/`approved`.** — **Verified.** OpenAPI index rows;
+    `PayoutDashboard.tsx` shows Cancel only when `status === "requested" || "approved"`.
+16. **Observed `Payout.status` values: requested/approved/processing/completed/
+    rejected/cancelled.** — **Verified (web), Unverified (server enum).** Values come
+    from `STATUS_BADGE_VARIANT` in `PayoutDashboard.tsx`; `PayoutOut.status` is an
+    unconstrained string in the schema, so the set is not server-enforced.
+17. **AND-258 supplies the repository + domain models (`PayoutsRepository`,
+    `getPayoutBalance`, `getPayouts`, `Payout`, `PayoutPage`, `PayoutBalance`).** —
+    **Unverified-assumption (cross-ticket).** AND-258 is a sibling spec, not in the
+    authoritative sources here; its exact Kotlin surface cannot be confirmed. This
+    ticket asserts the names it needs (notably `getPayoutBalance()` must exist).
+18. **`@HiltViewModel` + `StateFlow` + `stateIn(WhileSubscribed)` is the idiomatic
+    Android pattern for a UI state holder.** — **framework ref.**
+    https://developer.android.com/topic/architecture/ui-layer/stateholders and
+    https://developer.android.com/kotlin/flow/stateflow-and-sharedflow .
+19. **Dev host `http://18.222.237.167:8000` (plaintext, unreliable).** —
+    **Unverified-assumption.** Not present in the authoritative sources provided;
+    carried over from AND-258 context and unconfirmable here.
+
+### Corrections made
+
+- **§1/§2/§3/§4/§5/§11/§12/§13/§14:** replaced the non-existent `PayoutAccount` model
+  and `getPayoutAccount()`/`GET /ui/payouts/account` with `PayoutBalance` /
+  `getPayoutBalance()` / `GET /ui/payouts/balance` (claims 4, 5, 2, 3).
+- **§3/§4/§11/§14:** re-modeled `PayoutGate` from
+  `Ready/NeedsMethod/NeedsVerification/Disabled/Unknown` (account/KYC-based, invented)
+  to balance-derived `Ready/BelowMinimum/NoFunds/Unknown`, plus a `canRequest(amount)`
+  helper mirroring the web `canSubmit` (claim 9).
+- **§5/§13-R5:** removed the `GET /ui/payouts/{payoutId}` detail endpoint and the
+  `getPayout(id)` deep-link fallback — no such endpoint exists (claim 6).
+- **§2/§9/§12:** corrected the model list — `Payout.status`/`method` are strings, not
+  `PayoutStatus`/`PayoutMethod` types; removed `Money`/`PayoutAccount` as server types
+  (claim 7).
+- **§8:** removed the invented `method.last4`/bank-label PII fields (no such fields);
+  clarified auth is cookie+bearer+CSRF (claims 7, 10).
+- **§10:** corrected the gate-outcome breadcrumb enum to the new gate vocabulary.
+- **§13-R1/R2:** rewrote to reflect the real (balance) gate and the separate KYC API.
+
+### Open assumptions
+
+- **AND-258 Kotlin surface (claim 17):** the repository method names/types
+  (`getPayoutBalance`, `PayoutPage`, `ApiResult`) are assumed from a sibling spec not
+  in the provided sources; if AND-258 names them differently, align on integration.
+- **`Payout.status` vocabulary (claim 16):** server schema leaves `status` an open
+  string; the six observed values are web-side conventions, not contract-guaranteed.
+- **Dev host / transport reliability (claim 19):** host address and "~20s timeout /
+  idempotent-GET retry" behavior are inherited from AND-258/AND-027, unverifiable here.
+- **`pending_cents`/`hold_cents` semantics:** present in the schema and shown in the UI
+  ("In transit" / "Within hold period") but not used by the gate; their precise
+  business meaning is not documented in the sources.
+
+## 17. Test Plan
+
+All tests are JVM/Robolectric unless noted. IDs trace to §14 Acceptance Criteria
+(AC-1..AC-9). Targets: **JVM** (local unit/Robolectric, no device); **emulator**
+(headless AVD `test35`, API 35 x86_64) for instrumented/UI; **physical** (Samsung
+Galaxy A15 5G, SM-A156U, serial R5CX821TA9R, API 34 arm64-v8a) only where real
+hardware/ABI matters. This ticket is pure state/gating logic with **no UI and no
+hardware**, so the suite is JVM-first; a couple of optional ABI/integration cases are
+included for completeness and noted as such.
+
+- **TC-AND-262-01 — Gate: Ready at/above minimum** · Type: unit · Target: JVM ·
+  Pre: fake `PayoutBalance(available_cents=5000, minimum_payout_cents=1000)`.
+  Steps: call `gateOf(balance)`; also `gateOf` with `available==minimum==1000`.
+  Expected: both → `PayoutGate.Ready`. Traces: AC-4.
+- **TC-AND-262-02 — Gate: BelowMinimum** · Type: unit · Target: JVM ·
+  Pre: `available_cents=500, minimum_payout_cents=1000`. Steps: `gateOf(balance)`.
+  Expected: `BelowMinimum(availableCents=500, minimumCents=1000)`. Traces: AC-4.
+- **TC-AND-262-03 — Gate: NoFunds and Unknown (fail-closed)** · Type: unit ·
+  Target: JVM · Pre: (a) `available_cents=0`; (b) `balance=null`. Steps: `gateOf`
+  for each; assert no input ever returns `Ready` except when `available>=minimum`.
+  Expected: (a) `NoFunds`, (b) `Unknown`; never `Ready`. Traces: AC-4.
+- **TC-AND-262-04 — `canRequest()` boundaries** · Type: unit · Target: JVM ·
+  Pre: `available_cents=5000, minimum_payout_cents=1000`. Steps: `canRequest` for
+  999, 1000, 5000, 5001. Expected: false, true, true, false (mirrors web `amountError`).
+  Traces: AC-4.
+- **TC-AND-262-05 — Happy path: initial load combines balance + first page** ·
+  Type: unit (Turbine) · Target: JVM · Pre: fake repo returns
+  `ApiResult.Success(balance)` and `Success(PayoutPage(items=[p1,p2], next_cursor="c2"))`.
+  Steps: subscribe to `uiState`; advance dispatcher. Expected: emits `Loading` then
+  `Content` with `gate=gateOf(balance)`, `payouts=[p1,p2]`, `canLoadMore=true`,
+  single combined loading state. Traces: AC-3, AC-1.
+- **TC-AND-262-06 — Concurrency: balance + history fetched in parallel** ·
+  Type: unit · Target: JVM · Pre: fake repo records invocation timestamps/overlap.
+  Steps: trigger initial load. Expected: both `getPayoutBalance` and `getPayouts`
+  invoked before either result is consumed (overlapping). Traces: AC-3.
+- **TC-AND-262-07 — Initial history failure → full-screen Error, then retry** ·
+  Type: unit (Turbine) · Target: JVM · Pre: first `getPayouts` →
+  `ApiResult.Error`; on retry returns `Success`. Steps: subscribe; observe `Error`;
+  call `onRetry()`. Expected: `Loading`→`Error(error)`→(retry)→`Content`. Traces:
+  AC-6, AC-2.
+- **TC-AND-262-08 — Partial success: balance fails, history succeeds** ·
+  Type: unit · Target: JVM · Pre: `getPayoutBalance` → Error, `getPayouts` → Success.
+  Steps: initial load. Expected: `Content` with `gate=Unknown`, `transientError` set,
+  `payouts` present. Traces: AC-6, AC-4.
+- **TC-AND-262-09 — Pagination: load more appends; null cursor is no-op; de-dup by
+  id** · Type: unit · Target: JVM · Pre: page1 `items=[p1,p2] next="c2"`, page2
+  `items=[p2,p3] next=null` (overlap p2). Steps: `onLoadMore()` then `onLoadMore()`
+  again. Expected: after first → `[p1,p2,p3]` (p2 de-duped), `canLoadMore=false`;
+  second call makes no repo call. Traces: AC-5.
+- **TC-AND-262-10 — Refresh preserves selection; isRefreshing toggles** ·
+  Type: unit (Turbine) · Target: JVM · Pre: loaded `Content`, `onSelectPayout(p1.id)`.
+  Steps: `onRefresh()`. Expected: `isRefreshing=true` over existing content then
+  `false`; initial `Loading` state not re-emitted; `selected` still p1. Traces:
+  AC-6, AC-2.
+- **TC-AND-262-11 — Load-more failure keeps items, sets transientError** ·
+  Type: unit · Target: JVM · Pre: loaded `Content` with `next!=null`; next page →
+  Error. Steps: `onLoadMore()`. Expected: items unchanged, `transientError` set,
+  no `Error` state. Traces: AC-6.
+- **TC-AND-262-12 — De-duplication of overlapping loads** · Type: unit ·
+  Target: JVM · Pre: fake repo counts calls; slow suspend. Steps: trigger
+  initial load + `onRefresh()` + `onLoadMore()` rapidly. Expected: only one in-flight
+  request per kind (`loadJob`/`isRefreshing`/`isLoadingMore` guards); assert call
+  counts. Traces: AC-7.
+- **TC-AND-262-13 — Re-subscription does not re-fetch (one-time init)** ·
+  Type: unit · Target: JVM · Pre: `WhileSubscribed(5_000)`; `initialLoaded` guard.
+  Steps: collect, cancel within 5s, re-collect. Expected: no second initial fetch;
+  state retained. Traces: AC-7.
+- **TC-AND-262-14 — Selection without network; clear selection** · Type: unit ·
+  Target: JVM · Pre: loaded `Content` with p1 in items. Steps: `onSelectPayout(p1.id)`
+  then `onSelectPayout(null)`; also select an id NOT in items. Expected: in-list id →
+  `selected=p1`, **zero** repo calls (no `getPayout` endpoint exists); null → cleared;
+  unknown id → `selected=null` (no fetch attempted). Traces: AC-2, AC-5.
+- **TC-AND-262-15 — Empty history is valid Content, not Error** · Type: unit ·
+  Target: JVM · Pre: `getPayouts` → `PayoutPage(items=[], next_cursor=null)`,
+  balance Success. Steps: initial load. Expected: `Content`, `payouts=[]`,
+  `canLoadMore=false`, no `Error`. Traces: AC-6.
+- **TC-AND-262-16 — Error mapping incl. offline/flaky-host & auth** · Type:
+  contract/MockWebServer · Target: JVM (Robolectric/OkHttp MockWebServer) · Pre: fake
+  repo / MockWebServer returns: network failure (`ApiError(0)`), 401, 404, 422
+  (`HTTPValidationError` body with `detail`), 500. Steps: map each via the
+  `ApiResult.Error → PayoutsError` helper. Expected: `ErrorCategory` =
+  NETWORK/AUTH/NOT_FOUND/VALIDATION/SERVER respectively; offline → NETWORK surfaces a
+  transient (content present) or fatal (initial) error per the two-tier model; AUTH is
+  surfaced (not silently retried by the ViewModel). Traces: AC-6.
+- **TC-AND-262-17 — Security: no PII in logs** · Type: unit · Target: JVM ·
+  Pre: capture log/breadcrumb sink; loaded `Content` with amounts and `notes`.
+  Steps: run load/refresh/error flows. Expected: breadcrumbs contain only action
+  name + `ErrorCategory` + gate enum label; **no** `*_cents`, `notes`,
+  `reject_reason`, `user_id`, or `payout_id`. Traces: AC-9.
+- **TC-AND-262-18 — (Optional) ABI / API-level sanity on physical device** ·
+  Type: instrumented/e2e · Target: **physical** (SM-A156U, arm64-v8a, API 34) —
+  MUST run on the physical device (arm64 vs the emulator's x86_64; API 34 vs 35).
+  Pre: app built with `feature-payouts`. Steps: instantiate `PayoutsViewModel` via a
+  minimal host, drive a load with a fake repo, assert `Content`/gate on-device.
+  Expected: identical state results to JVM; no arm64/API-34-specific coroutine or
+  `stateIn` behavior differences. Note: not strictly required for a pure-logic ticket;
+  run only if AND-263 needs an on-device baseline. Traces: AC-1, AC-3.
+
+### Coverage matrix
+
+| AC (§14) | Covered by |
+|---|---|
+| AC-1 (types exist, layering, no Retrofit dep) | TC-05, TC-18 |
+| AC-2 (single StateFlow + intents, no mutable/LiveData/suspend public) | TC-07, TC-10, TC-14 |
+| AC-3 (concurrent balance+history → single Content) | TC-05, TC-06, TC-18 |
+| AC-4 (gateOf branches + fail-closed) | TC-01, TC-02, TC-03, TC-04, TC-08 |
+| AC-5 (pagination append/de-dup/no-op; selection from items) | TC-09, TC-14 |
+| AC-6 (two-tier error model; empty = Content) | TC-07, TC-08, TC-10, TC-11, TC-15, TC-16 |
+| AC-7 (config-change survival, no re-fetch, de-dup) | TC-12, TC-13 |
+| AC-8 (full suite green, 100% gateOf/reducer/mapper/intents) | TC-01..TC-17 (whole suite) |
+| AC-9 (no payout PII logged) | TC-17 |

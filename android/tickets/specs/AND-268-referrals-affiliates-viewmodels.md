@@ -5,9 +5,10 @@ milestone: M6
 epic: E36
 priority: P2
 size: M
-status: draft
 depends_on: [AND-264]
 blocks: [AND-269]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-268 — Referrals/affiliates ViewModels
@@ -41,10 +42,15 @@ deterministic JVM unit tests using `core-testing` (fake repository +
 
 - **Module:** `feature-referrals` (layer: `app -> feature-referrals -> core-*`).
 - **Depends on AND-264 — Referrals:** provides `ReferralRepository`,
-  `core-model` DTO/domain types (`ReferralOverview`, `ReferralStats`,
-  `AffiliateSummary`, `AffiliateConversion`), Moshi adapters, and the
-  FastAPI error `detail` mapping into `ApiResult.Error`. AND-268 must not
-  redefine these; it consumes them.
+  `core-model` DTO/domain types mirroring the web reference DTOs
+  (`ReferralDashboardStats`, `ReferralCode`, `AffiliateCommission`,
+  `AffiliateLinkOut`), Moshi adapters, and the FastAPI error `detail`
+  mapping into `ApiResult.Error`. AND-268 must not redefine these; it
+  consumes them. (CORRECTED: earlier draft cited `ReferralOverview`,
+  `ReferralStats`, `AffiliateSummary`, `AffiliateConversion`, which do
+  not exist in the web reference `src/api/types.ts`; the canonical names
+  are as listed here. Kotlin domain names may differ but must map to
+  these wire shapes.)
 - **Blocks AND-269 — Referrals/affiliates tests:** AND-269 adds repository and
   Compose UI tests. The ViewModel-level unit tests required by *this* ticket's
   acceptance criteria are written here; AND-269 builds on top, it does not
@@ -139,11 +145,16 @@ class ReferralViewModel @Inject constructor(
             _uiState.value = ReferralUiState.Loading
         }
         loadJob = viewModelScope.launch {
-            when (val r = repository.getReferralOverview()) {
+            // GET /ui/referrals/dashboard -> ReferralDashboardStats
+            // (includes referral_codes[]). There is NO /ui/referrals/overview
+            // endpoint and no single referral_url field; the share/copy link is
+            // derived per code as "<origin>/?ref=<code>" (see web reference).
+            when (val r = repository.getReferralDashboard()) {
                 is ApiResult.Success -> _uiState.value =
                     ReferralUiState.Content(
-                        overview = r.data,
-                        isEmpty = r.data.stats.totalReferrals == 0,
+                        dashboard = r.data,
+                        isEmpty = r.data.referralCodes.isEmpty() &&
+                            r.data.totalReferrals == 0,
                         isRefreshing = false,
                     )
                 is ApiResult.Error -> _uiState.value = current.toErrorOrReplace(r.error)
@@ -158,7 +169,7 @@ class ReferralViewModel @Inject constructor(
 sealed interface ReferralUiState {
     data object Loading : ReferralUiState
     data class Content(
-        val overview: ReferralOverview,
+        val dashboard: ReferralDashboardStats, // maps GET /ui/referrals/dashboard
         val isEmpty: Boolean = false,
         val isRefreshing: Boolean = false,
     ) : ReferralUiState
@@ -179,7 +190,20 @@ sealed interface ReferralEffect {
 }
 ```
 
-`AffiliateViewModel` follows the same shape and adds Paging 3:
+`AffiliateViewModel` follows the same shape.
+
+> CORRECTED: The earlier draft modeled affiliates as an aggregate
+> `AffiliateSummary` plus a paged `Flow<PagingData<AffiliateConversion>>`
+> from `affiliateConversionsPager()`. Neither exists in the backend nor the
+> web reference. The affiliate surface (`src/pages/affiliates/AffiliateDashboard.tsx`)
+> is a **list of affiliate links** fetched via `GET /ui/affiliates/links`
+> (`AffiliateLinkListOut { links: AffiliateLinkOut[] }`); each link embeds its
+> own counters (`click_count`, `conversion_count`, `commission_earned_cents`,
+> `conversion_rate_pct`, …). The only **cursor-paged** list in this feature is
+> referral **commission** history: `GET /ui/referrals/commissions?limit&cursor`
+> → `CommissionListResp { commissions: AffiliateCommission[], next_cursor }`.
+> The Paging 3 flow below therefore drives referral commissions, and the
+> affiliate dashboard holds a plain list of links (small, not paged).
 
 ```kotlin
 @HiltViewModel
@@ -190,11 +214,6 @@ class AffiliateViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<AffiliateUiState>(AffiliateUiState.Loading)
     val uiState: StateFlow<AffiliateUiState> = _uiState.asStateFlow()
-
-    val conversions: Flow<PagingData<AffiliateConversion>> =
-        repository.affiliateConversionsPager()
-            .flow
-            .cachedIn(viewModelScope)
 
     val selectedTab: StateFlow<AffiliateTab> =
         savedState.getStateFlow(KEY_TAB, AffiliateTab.Overview)
@@ -209,11 +228,22 @@ class AffiliateViewModel @Inject constructor(
 sealed interface AffiliateUiState {
     data object Loading : AffiliateUiState
     data class Content(
-        val summary: AffiliateSummary,
+        val links: List<AffiliateLinkOut>, // GET /ui/affiliates/links -> AffiliateLinkListOut.links
+        val isEmpty: Boolean = false,       // links.isEmpty()
         val isRefreshing: Boolean = false,
     ) : AffiliateUiState
     data class Error(val message: UiText, val retryable: Boolean) : AffiliateUiState
 }
+```
+
+The cursor-paged commission history lives on `ReferralViewModel` (or a
+dedicated holder) since it is a **referral** endpoint:
+
+```kotlin
+val commissions: Flow<PagingData<AffiliateCommission>> =
+    repository.referralCommissionsPager()   // GET /ui/referrals/commissions
+        .flow
+        .cachedIn(viewModelScope)
 ```
 
 Design notes:
@@ -238,45 +268,85 @@ this ViewModel depends on (consumed, not declared here):
 
 ```kotlin
 interface ReferralRepository {
-    suspend fun getReferralOverview(): ApiResult<ReferralOverview>
-    suspend fun getAffiliateSummary(): ApiResult<AffiliateSummary>
-    fun affiliateConversionsPager(): Pager<Int, AffiliateConversion>
+    suspend fun getReferralDashboard(): ApiResult<ReferralDashboardStats>
+    suspend fun createReferralCode(): ApiResult<ReferralCodeCreateResp>
+    suspend fun deactivateReferralCode(code: String): ApiResult<Unit>
+    fun referralCommissionsPager(): Pager<String, AffiliateCommission> // cursor-keyed
+    suspend fun listAffiliateLinks(): ApiResult<List<AffiliateLinkOut>>
 }
 ```
 
-For traceability, the backend endpoints behind that repository (canonical shapes
-owned by AND-264, mirroring `frontend/src/api/endpoints/referrals.ts`) are:
+For traceability, the **actual** backend endpoints behind that repository
+(verified against `openapi.index.txt` and `src/api/endpoints/referrals.ts` /
+`affiliates.ts`) are below. CORRECTED: the earlier draft listed
+`GET /ui/referrals/overview`, `GET /ui/affiliates/summary`, and
+`GET /ui/affiliates/conversions` — none of these paths exist in the OpenAPI
+index. The real endpoints are:
 
-- `GET /ui/referrals/overview` →
+- `GET /ui/referrals/dashboard` → `ReferralDashboardStats`:
   ```json
   {
-    "referral_url": "https://testlogon.com/r/AB12CD",
-    "code": "AB12CD",
-    "stats": { "total_referrals": 7, "pending": 2, "rewarded": 5,
-               "reward_currency": "USD", "reward_total_cents": 2500 }
+    "total_referrals": 7,
+    "confirmed_referrals": 5,
+    "pending_referrals": 2,
+    "total_earned_cents": 2500,
+    "pending_commission_cents": 800,
+    "paid_commission_cents": 1700,
+    "available_for_withdrawal_cents": 1700,
+    "referral_codes": [
+      { "code": "AB12CD", "active": true, "commission_tier": "standard",
+        "referral_count": 3, "created_at": "2026-01-02T10:00:00Z" }
+    ]
   }
   ```
-- `GET /ui/affiliates/summary` →
+  There is **no** `referral_url` field; the web client derives the share link
+  per code as `"<origin>/?ref=<code>"` (`ReferralDashboard.tsx: copyLink`).
+- `GET /ui/referrals/commissions?limit=<n>&cursor=<c>` → `CommissionListResp`:
   ```json
   {
-    "clicks": 184, "signups": 23, "conversions": 9,
-    "earnings_pending_cents": 4500, "earnings_paid_cents": 12000,
-    "currency": "USD"
+    "commissions": [
+      { "source_type": "purchase", "referred_user_id": "u_123",
+        "gross_amount_cents": 5000, "net_amount_cents": 4500,
+        "commission_cents": 250, "commission_rate_bps": 500,
+        "status": "confirmed", "created_at": "2026-02-01T12:00:00Z" }
+    ],
+    "next_cursor": null
   }
   ```
-- `GET /ui/affiliates/conversions?cursor=<c>&limit=20` → page object with
-  `items[]` and `next_cursor` (drives the Paging 3 `PagingSource` in AND-264).
+  This `cursor`/`next_cursor` pair is the cursor key for the Paging 3
+  `PagingSource` (AND-264).
+- `POST /ui/referrals/code` (201) → `ReferralCodeCreateResp {code, link,
+  commission_tier, created_at}`; `DELETE /ui/referrals/codes/{code}` →
+  `{ok: boolean}`; `GET /ui/referrals/codes` → `ReferralCode[]`;
+  `GET /ui/referrals/referrals` → `ReferralItem[]`;
+  `GET /ui/referrals/attribution` → `ReferralAttribution`.
+- `GET /ui/affiliates/links` → `AffiliateLinkListOut {links: AffiliateLinkOut[]}`
+  (each link embeds `tracking_code`, `short_url`, `click_count`,
+  `conversion_count`, `commission_earned_cents`, `conversion_rate_pct`, …).
+  Related: `POST /ui/affiliates/links` (201), `GET/DELETE
+  /ui/affiliates/links/{link_id}`, `GET /ui/affiliates/links/{link_id}/stats`
+  → `AffiliateLinkStatsOut`.
 
-All requests ride the cookie session + `X-CSRF-Token` header; on 401 the
-network layer performs a single `POST /ui/session/refresh` and retries. These
+Auth/transport (verified against `src/api/client.ts`): every request is sent
+with `credentials: "include"` (cookie session) AND, when present, an
+`Authorization: Bearer <accessToken>` header and an optional
+`X-IMPERSONATION-TOKEN`; the CSRF token is read from the `ui_csrf` cookie and
+sent as the `X-CSRF-Token` header. On a 401 *for an already-authenticated
+user*, the client performs a single `POST /ui/session/refresh` and retries the
+original request once; a second 401 logs out. (CORRECTED: the earlier draft
+described only "cookie session + X-CSRF-Token" and omitted the Bearer token /
+impersonation header and the "only-if-authenticated" refresh guard.) These
 concerns live in `core-network`/AND-264 and are transparent to the ViewModel,
 which only sees `ApiResult.Success`/`ApiResult.Error`.
 
 ## 6. Data & State Management
 
-- **Domain models** (`core-model`, from AND-264): `ReferralOverview`,
-  `ReferralStats`, `AffiliateSummary`, `AffiliateConversion`. ViewModels hold
-  these directly inside `Content` states; no UI-only duplication.
+- **Domain models** (`core-model`, from AND-264, mirroring web `types.ts`):
+  `ReferralDashboardStats`, `ReferralCode`, `AffiliateCommission` (commission
+  history rows), `AffiliateLinkOut` (affiliate link rows). ViewModels hold
+  these directly inside `Content` states; no UI-only duplication. (CORRECTED:
+  earlier `ReferralOverview`/`ReferralStats`/`AffiliateSummary`/
+  `AffiliateConversion` names do not exist in the reference contract.)
 - **`UiText`** (`core-ui`): error and label strings are `UiText` (resource id or
   literal) so the ViewModel stays free of `Context`/localized strings —
   formatting happens at render time.
@@ -288,9 +358,12 @@ which only sees `ApiResult.Success`/`ApiResult.Error`.
   cache per AND-264). The ViewModel treats a `Success` carrying stale data the
   same as fresh; if AND-264 exposes a `stale: Boolean`, it is mapped to
   `Content.isStale` (additive field) for a UI banner.
-- **Paging:** `conversions` is `cachedIn(viewModelScope)` so scroll position and
-  loaded pages survive recomposition and config changes; `LoadState` is owned by
-  the Compose `LazyPagingItems` collector (UI), not duplicated in `UiState`.
+- **Paging:** the cursor-keyed `commissions` flow (referral commission history,
+  `GET /ui/referrals/commissions`) is `cachedIn(viewModelScope)` so scroll
+  position and loaded pages survive recomposition and config changes;
+  `LoadState` is owned by the Compose `LazyPagingItems` collector (UI), not
+  duplicated in `UiState`. The affiliate links list is not paged (single
+  `GET /ui/affiliates/links` response).
 - **Threading:** every suspend call runs in `viewModelScope` on the default
   dispatcher provided by the repository; the ViewModel itself does no blocking
   work. Tests override `Dispatchers.Main` via `MainDispatcherRule`.
@@ -316,9 +389,11 @@ which only sees `ApiResult.Success`/`ApiResult.Error`.
 
 ## 8. Security & Privacy
 
-- The ViewModel never logs the full `referral_url`, referral `code`, or any
-  earnings amounts; the referral code is treated as user-identifying and excluded
-  from telemetry payloads (only event names/counts are logged).
+- The ViewModel never logs the derived referral share link (`<origin>/?ref=<code>`),
+  the referral `code`, the affiliate `tracking_code`/`short_url`, or any earnings
+  amounts; the referral code is treated as user-identifying and excluded from
+  telemetry payloads (only event names/counts are logged). (Note: there is no
+  server-supplied `referral_url`; the link is built client-side from `code`.)
 - No tokens, cookies, or CSRF values are visible to or stored by the ViewModel —
   session/cookie handling is entirely in `core-network`'s persistent cookie jar.
 - Clipboard/share effects carry only the user's own referral URL and an
@@ -359,8 +434,10 @@ Tooling: JUnit4, `kotlinx-coroutines-test` (`runTest`, `StandardTestDispatcher`)
 for `StateFlow`/effect assertions, Paging 3 `AsyncPagingDataDiffer`/`asSnapshot`.
 
 Required `ReferralViewModel` cases:
-1. init → emits `Loading` then `Content` on repo success.
-2. success with `total_referrals == 0` → `Content(isEmpty = true)`.
+1. init → emits `Loading` then `Content` on repo success
+   (`getReferralDashboard()` → `ReferralDashboardStats`).
+2. success with `total_referrals == 0` and empty `referral_codes` →
+   `Content(isEmpty = true)`.
 3. repo error (retryable) from cold start → `Error(retryable = true)`.
 4. `Refresh` from `Content` → `isRefreshing = true` then back to `Content`
    (content preserved throughout).
@@ -373,8 +450,11 @@ Required `ReferralViewModel` cases:
    (FR-10 guard), verified via fake call count.
 
 Required `AffiliateViewModel` cases:
-10. summary success/error/empty mirror cases 1-3.
-11. `conversions` paging emits expected items snapshot from the fake pager.
+10. affiliate links list success/error/empty mirror cases 1-3
+    (`listAffiliateLinks()` → `Content(links)`, empty list → `isEmpty = true`).
+11. referral commission paging (`referralCommissionsPager()`,
+    `Flow<PagingData<AffiliateCommission>>`) emits expected items snapshot from
+    the fake cursor-keyed pager.
 12. `selectTab` updates `selectedTab` and survives a new ViewModel built from the
     same `SavedStateHandle` (restoration) → emits persisted tab.
 13. `affiliate_tab_selected` analytics event fired on `selectTab`.
@@ -386,7 +466,8 @@ responses driven by the fake. Target ViewModel line coverage ≥ 90%.
 
 - **Hard dependency — AND-264 (Referrals):** must land first; provides
   `ReferralRepository`, `core-model` domain types, error mapping, and the
-  `affiliateConversionsPager()` `PagingSource`. AND-268 cannot compile without it.
+  `referralCommissionsPager()` cursor-keyed `PagingSource`
+  (`GET /ui/referrals/commissions`). AND-268 cannot compile without it.
 - **Transitively — AND-027** (auth/session, via AND-264): a valid cookie session
   is required for the underlying GETs; not directly touched here.
 - **Blocks — AND-269 (Referrals/affiliates tests):** repo + Compose UI tests
@@ -424,8 +505,9 @@ responses driven by the fake. Target ViewModel line coverage ≥ 90%.
   flashes a full-screen spinner; refresh failure keeps `Content`.
 - AC-4 `CopyLink`/`ShareLink` emit the correct one-shot effects carrying the
   referral URL / share text.
-- AC-5 Affiliate summary load + `conversions` Paging flow emit expected data from
-  the fake repository; empty data yields `Content(isEmpty = true)`, not `Error`.
+- AC-5 Affiliate links load (`GET /ui/affiliates/links`) + referral commission
+  Paging flow (`GET /ui/referrals/commissions`) emit expected data from the fake
+  repository; empty data yields `Content(isEmpty = true)`, not `Error`.
 - AC-6 Selected affiliate tab is persisted/restored via `SavedStateHandle`.
 - AC-7 Duplicate in-flight load/refresh calls the repository exactly once.
 - AC-8 All unit tests in §11 pass deterministically (no real dispatchers/network);
@@ -446,3 +528,234 @@ responses driven by the fake. Target ViewModel line coverage ≥ 90%.
 - No new direct Retrofit/OkHttp usage in `feature-referrals` (all I/O via the
   AND-264 repository); Hilt graph compiles via KSP.
 - AND-269 can consume these ViewModels without contract changes.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Referral overview/stats endpoint.** Claim (original draft):
+   `GET /ui/referrals/overview`. VERDICT: **Corrected** → the real endpoint is
+   `GET /ui/referrals/dashboard`. SOURCE: OpenAPI `GET /ui/referrals/dashboard`
+   (op `dashboard_ui_referrals_dashboard_get`); `src/api/endpoints/referrals.ts:
+   getReferralDashboard`.
+2. **Referral dashboard response shape.** Claim: fields
+   `total_referrals, confirmed_referrals, pending_referrals, total_earned_cents,
+   pending_commission_cents, paid_commission_cents,
+   available_for_withdrawal_cents, referral_codes[]`. VERDICT: **Verified /
+   Corrected** (original `referral_url`+`stats{pending,rewarded,reward_currency,
+   reward_total_cents}` was wrong). SOURCE: `src/api/types.ts:
+   ReferralDashboardStats` and `ReferralCode`.
+3. **No server `referral_url`; link derived client-side.** Claim: share link is
+   `<origin>/?ref=<code>`. VERDICT: **Verified**. SOURCE:
+   `src/pages/referrals/ReferralDashboard.tsx: copyLink` (`const link =
+   \`${window.location.origin}/?ref=${code}\``).
+4. **Affiliate "summary" aggregate endpoint.** Claim (original):
+   `GET /ui/affiliates/summary` with `clicks/signups/conversions/earnings_*`.
+   VERDICT: **Corrected** → no such endpoint/schema exists; the affiliate surface
+   is a list of links. SOURCE: OpenAPI has `GET /ui/affiliates/links` (op
+   `list_links_ui_affiliates_links_get`) but no `/ui/affiliates/summary`;
+   `src/api/endpoints/affiliates.ts: listAffiliateLinks`.
+5. **Affiliate links response shape.** Claim: `AffiliateLinkListOut {links:
+   AffiliateLinkOut[]}`, each link with `tracking_code, short_url, click_count,
+   unique_click_count, conversion_count, revenue_cents,
+   commission_earned_cents, conversion_rate_pct, status, …`. VERDICT:
+   **Verified**. SOURCE: `src/api/endpoints/affiliates.ts: AffiliateLinkOut /
+   AffiliateLinkListOut`.
+6. **Affiliate paged "conversions" endpoint.** Claim (original):
+   `GET /ui/affiliates/conversions?cursor&limit` → `items[]`+`next_cursor`.
+   VERDICT: **Corrected** → no such endpoint. The only cursor-paged list is
+   referral commission history `GET /ui/referrals/commissions?limit&cursor` →
+   `CommissionListResp {commissions[], next_cursor}`. SOURCE: OpenAPI
+   `GET /ui/referrals/commissions` (params `limit,cursor`);
+   `src/api/endpoints/referrals.ts: getReferralCommissions`;
+   `src/api/types.ts: CommissionListResp / AffiliateCommission`.
+7. **Commission row shape.** Claim: `AffiliateCommission {source_type,
+   referred_user_id, gross_amount_cents, net_amount_cents, commission_cents,
+   commission_rate_bps, status, created_at}`. VERDICT: **Verified**. SOURCE:
+   `src/api/types.ts: AffiliateCommission`.
+8. **Create/deactivate referral code.** Claim: `POST /ui/referrals/code` (201)
+   → `ReferralCodeCreateResp`; `DELETE /ui/referrals/codes/{code}` → `{ok}`.
+   VERDICT: **Verified**. SOURCE: OpenAPI `POST /ui/referrals/code`
+   (`create_code_..._post`, resp 201), `DELETE /ui/referrals/codes/{code}`
+   (`deactivate_code_...`); `src/api/endpoints/referrals.ts: createReferralCode,
+   deactivateReferralCode`.
+9. **CSRF transport.** Claim: requests send `X-CSRF-Token` from the `ui_csrf`
+   cookie. VERDICT: **Verified**. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")`
+   → `headers.set("X-CSRF-Token", csrf)`).
+10. **Additional auth headers.** Claim (original omitted): besides the cookie
+    session (`credentials: "include"`), the client also sends
+    `Authorization: Bearer <accessToken>` and optional `X-IMPERSONATION-TOKEN`.
+    VERDICT: **Corrected** (added). SOURCE: `src/api/client.ts` (Authorization /
+    X-IMPERSONATION-TOKEN header logic); OpenAPI params on `/ui/...` ops list
+    `X-SESSION-ID, X-IMPERSONATION-TOKEN`.
+11. **401 refresh-and-retry.** Claim: on 401 the layer does a single
+    `POST /ui/session/refresh` then retries. VERDICT: **Verified** with nuance:
+    refresh only runs if the user was already authenticated; a second 401 logs
+    out. SOURCE: `src/api/client.ts: refreshSession` + 401 branch.
+12. **FastAPI error `detail` shapes.** Claim: `detail` is `string | [{msg}] |
+    {code,...}`. VERDICT: **Verified**. SOURCE: `src/api/client.ts:
+    normalizeErrorDetail / mapAuthorizationError`; OpenAPI `HTTPValidationError`
+    (`detail: ValidationError[]`, each with `loc, msg, type`) returned as 422 on
+    every referral/affiliate op.
+13. **Network-error / offline handling.** Claim: offline surfaces a network
+    error (mapped to retryable `ApiResult.Error`). VERDICT: **Verified** at the
+    web layer. SOURCE: `src/api/client.ts` catch block → `ApiError(0, "Network
+    error")` + toast. (Android mapping to `ApiResult.Error(retryable=true)` is
+    AND-264/core-network's job — see Open assumptions.)
+14. **ViewModel / StateFlow / SavedStateHandle / Paging-3 framework choices.**
+    VERDICT: **Verified (framework ref)**. SOURCES:
+    `https://developer.android.com/topic/libraries/architecture/viewmodel`,
+    `https://developer.android.com/kotlin/flow/stateflow-and-sharedflow`,
+    `https://developer.android.com/topic/libraries/architecture/saving-states`,
+    `https://developer.android.com/topic/libraries/architecture/paging/v3-overview`,
+    Hilt `@HiltViewModel`:
+    `https://developer.android.com/training/dependency-injection/hilt-jetpack`.
+
+### Corrections made
+
+- §2, §5, §6: replaced non-existent DTO names (`ReferralOverview`,
+  `ReferralStats`, `AffiliateSummary`, `AffiliateConversion`) with the real
+  reference types (`ReferralDashboardStats`, `ReferralCode`,
+  `AffiliateCommission`, `AffiliateLinkOut`).
+- §4, §5: replaced fictitious endpoints `GET /ui/referrals/overview`,
+  `GET /ui/affiliates/summary`, `GET /ui/affiliates/conversions` with the real
+  `GET /ui/referrals/dashboard`, `GET /ui/affiliates/links`, and the
+  cursor-paged `GET /ui/referrals/commissions`.
+- §4: `ReferralUiState.Content` now holds `ReferralDashboardStats`; `isEmpty`
+  computed from `referralCodes.isEmpty() && totalReferrals == 0`.
+  `AffiliateUiState.Content` now holds `List<AffiliateLinkOut>`; the paged flow
+  is referral commissions (`AffiliateCommission`), not affiliate "conversions".
+- §5: documented the full auth/transport (cookie + Bearer + impersonation +
+  CSRF) and the "only-if-authenticated" 401 refresh guard.
+- §5: clarified there is no server `referral_url`; the link is derived
+  client-side as `<origin>/?ref=<code>`. §8 logging note updated accordingly.
+- §11, §12, AC-5: test/AC wording updated to the corrected shapes.
+
+### Open assumptions
+
+- **Kotlin domain/field naming.** The exact Kotlin domain class and property
+  names (e.g. `dashboard.referralCodes`, `totalReferrals`) are owned by AND-264
+  and could not be verified from the sources (no Android code exists yet). Marked
+  as **Unverified-assumption**; this spec depends on the interface, not names.
+- **Repository surface (`getReferralDashboard`, `referralCommissionsPager`,
+  `listAffiliateLinks`).** These method signatures are this spec's proposed
+  contract for AND-264; not yet present in any source. **Unverified-assumption.**
+- **`ApiResult.Error` retryability mapping** (network/5xx → retryable; 4xx → not)
+  is a core-network/AND-264 convention; not directly observable in the web client
+  beyond network-vs-HTTP error separation. **Unverified-assumption.**
+- **Affiliate entitlement gating (Q1).** Whether affiliate features are gated by
+  an entitlement flag on `/ui/me` could not be confirmed; no such gate is visible
+  in `AffiliateDashboard.tsx`. **Unverified-assumption** (pending product).
+- **Stale/offline `stale` flag (R3).** No `stale` field exists in the verified
+  response schemas; the `isStale` banner remains conditional on AND-264.
+  **Unverified-assumption.**
+
+## 17. Test Plan
+
+JVM unit tests are the primary deliverable (acceptance: *Unit-tested*). A few
+contract/instrumented cases are included to pin the wire shapes and
+process-death behavior that the ViewModel contracts depend on. IDs trace to the
+§14 Acceptance Criteria.
+
+- **TC-AND-268-01** — Type: unit (Robolectric not required; JVM + Turbine).
+  Target: JVM unit/Robolectric. Preconditions: `FakeReferralRepository`
+  returns `ApiResult.Success(ReferralDashboardStats(totalReferrals=7,
+  referralCodes=[1]))`; `MainDispatcherRule` installed.
+  Steps: construct `ReferralViewModel`; collect `uiState` with Turbine.
+  Expected: emits `Loading` then `Content(dashboard=…, isEmpty=false,
+  isRefreshing=false)`. Traces: AC-1, AC-2.
+- **TC-AND-268-02** — Type: unit. Target: JVM. Preconditions: fake returns
+  `Success` with `totalReferrals=0` and empty `referralCodes`.
+  Steps: construct VM; collect `uiState`. Expected: `Loading → Content(isEmpty =
+  true)` (NOT `Error`). Traces: AC-5 (empty-not-error), AC-2.
+- **TC-AND-268-03** — Type: unit. Target: JVM. Preconditions: fake returns
+  `ApiResult.Error` mapped from a network/timeout failure (retryable).
+  Steps: construct VM; collect `uiState`. Expected: `Loading →
+  Error(retryable = true)`. Traces: AC-2.
+- **TC-AND-268-04** — Type: unit. Target: JVM. Preconditions: VM already in
+  `Content`; fake set to succeed on refresh. Steps: send `ReferralIntent.Refresh`;
+  collect `uiState`. Expected: `Content(isRefreshing=true)` (same dashboard data
+  retained) then `Content(isRefreshing=false)`; no `Loading` re-emitted. Traces:
+  AC-3.
+- **TC-AND-268-05** — Type: unit. Target: JVM. Preconditions: VM in `Content`;
+  fake set to fail on the refresh call (retryable error). Steps: send `Refresh`;
+  collect `uiState` and `effects`. Expected: state stays `Content(isRefreshing=
+  false)` (last good data preserved); an error effect/message is emitted; no
+  transition to `Error`. Traces: AC-3.
+- **TC-AND-268-06** — Type: unit. Target: JVM. Preconditions: VM in
+  `Error(retryable=true)`; fake flipped to succeed. Steps: send
+  `ReferralIntent.Retry`; collect `uiState`. Expected: `Error → Loading →
+  Content`. Traces: AC-2.
+- **TC-AND-268-07** — Type: unit. Target: JVM. Preconditions: VM in `Content`
+  with a code `AB12CD`. Steps: send `ReferralIntent.CopyLink` (for that code);
+  collect `effects`. Expected: exactly one `ReferralEffect.CopyToClipboard(url)`
+  where `url` == derived `"<origin>/?ref=AB12CD"`; no PII beyond the code.
+  Traces: AC-4, AC-9.
+- **TC-AND-268-08** — Type: unit. Target: JVM. Preconditions: VM in `Content`.
+  Steps: send `ReferralIntent.ShareLink`; collect `effects`. Expected: one
+  `ReferralEffect.ShowShareSheet(shareText)` containing the derived link + the
+  app marketing sentence; effect fires once (not re-emitted on re-collection).
+  Traces: AC-4.
+- **TC-AND-268-09** — Type: unit. Target: JVM. Preconditions: fake with a
+  call-count spy and a suspended (in-flight) `getReferralDashboard`. Steps: send
+  `Load`, then a second `Load`/`Refresh` while the first is in flight; advance
+  the dispatcher. Expected: repository `getReferralDashboard` invoked exactly
+  once (FR-10 guard). Traces: AC-7.
+- **TC-AND-268-10** — Type: unit. Target: JVM. Preconditions:
+  `FakeReferralRepository.listAffiliateLinks()` returns
+  `Success([AffiliateLinkOut…])` / `Error` / empty list across sub-cases.
+  Steps: construct `AffiliateViewModel`; collect `uiState`. Expected: success →
+  `Content(links=…, isEmpty=false)`; error → `Error`; empty list →
+  `Content(isEmpty=true)`. Traces: AC-1, AC-5.
+- **TC-AND-268-11** — Type: unit (Paging 3). Target: JVM. Preconditions: fake
+  cursor-keyed `referralCommissionsPager()` backed by two pages
+  (`next_cursor` then `null`). Steps: collect the `commissions`
+  `Flow<PagingData<AffiliateCommission>>` via `asSnapshot()`/
+  `AsyncPagingDataDiffer`. Expected: snapshot equals the concatenated fake items
+  in order; `cachedIn(viewModelScope)` survives a re-collection without
+  re-fetching. Traces: AC-5.
+- **TC-AND-268-12** — Type: unit. Target: JVM. Preconditions: `SavedStateHandle`
+  seeded empty. Steps: call `selectTab(AffiliateTab.Links)`; build a NEW
+  `AffiliateViewModel` from the SAME `SavedStateHandle`; collect `selectedTab`.
+  Expected: second VM emits `AffiliateTab.Links` (restoration). Traces: AC-6.
+- **TC-AND-268-13** — Type: unit. Target: JVM. Preconditions: fake `Analytics`
+  spy injected. Steps: call `selectTab(...)`; trigger a load failure.
+  Expected: `affiliate_tab_selected` (param: tab name) and
+  `referral_load_failed` (param: error category, retryable) events fired; assert
+  NO event payload contains a referral code, share link, `tracking_code`,
+  `short_url`, or earnings amount. Traces: AC-9.
+- **TC-AND-268-14** — Type: contract/MockWebServer. Target: JVM (OkHttp
+  MockWebServer; pins the wire contract this VM depends on). Preconditions:
+  MockWebServer enqueues a `200` with the §5 `dashboard` JSON and a `422`
+  `HTTPValidationError` body (`{"detail":[{"loc":["query","limit"],"msg":"...",
+  "type":"..."}]}`). Steps: drive the AND-264 repo (or a thin test repo) against
+  the mock for `GET /ui/referrals/dashboard` and `GET /ui/referrals/commissions`;
+  assert request method/path/headers (`X-CSRF-Token` present) and that the 422 is
+  mapped to a non-retryable `ApiResult.Error` carrying the `msg`. Expected:
+  paths/methods/fields match §5; 422 → non-retryable error; happy path →
+  populated domain models. Traces: AC-2, AC-5. (Note: this is technically
+  AND-264's transport but is included to lock the contract the ViewModel asserts
+  against; if AND-264 owns it, treat as a shared regression gate.)
+- **TC-AND-268-15** — Type: instrumented/e2e (process-death restoration).
+  Target: **Headless emulator AVD `test35` (API 35)** — process death /
+  `SavedStateHandle` restore is reliably reproducible via `adb` and does not need
+  real hardware. Preconditions: a minimal host Activity/Compose harness collecting
+  `AffiliateViewModel.selectedTab`. Steps: select a non-default tab; trigger
+  process death (`adb shell am kill` / "Don't keep activities"); relaunch.
+  Expected: restored tab matches the pre-death selection; overview re-issues
+  `Load` (not persisted). Traces: AC-6. (May also run on the physical Galaxy A15
+  to confirm API-34/arm64 parity, but the emulator is the primary target.)
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 | TC-AND-268-01, TC-AND-268-10 |
+| AC-2 | TC-AND-268-01, -02, -03, -06, -14 |
+| AC-3 | TC-AND-268-04, TC-AND-268-05 |
+| AC-4 | TC-AND-268-07, TC-AND-268-08 |
+| AC-5 | TC-AND-268-02, -10, -11, -14 |
+| AC-6 | TC-AND-268-12, TC-AND-268-15 |
+| AC-7 | TC-AND-268-09 |
+| AC-8 | TC-AND-268-01 … -13 (all run deterministically, no real dispatchers/network) |
+| AC-9 | TC-AND-268-07, TC-AND-268-13 |

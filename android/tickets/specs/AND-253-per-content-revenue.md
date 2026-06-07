@@ -5,7 +5,8 @@ milestone: M6
 epic: E34
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-251, AND-255, AND-256, AND-016, AND-018, AND-021]
 blocks: []
 ---
@@ -70,6 +71,13 @@ FR-4. Sort controls let the user pick `sort_by` ∈ {`total_cents`, `tips_cents`
 `unlocks_cents`, `subscriptions_cents`, `ads_cents`, `vod_cents`, `published_at`} and
 `sort_order` ∈ {`asc`, `desc`}. Default is `total_cents` / `desc`. Changing sort
 re-queries from the first page (cursor reset).
+  - Verified: the backend `sort_by` is a free-form string (default `total_cents`)
+    and `sort_order` default `desc` per `GET /ui/analytics/content-revenue`. NOTE
+    (divergence from web reference): the web `ContentRevenuePage.tsx` exposes only a
+    4-key subset (`total_cents`, `tips_cents`, `unlocks_cents`, `published_at`). The
+    Android client deliberately offers the full 7-key set; this is a valid superset
+    because the server accepts any column name, but it is NOT mirrored 1:1 from the
+    web app. See §16.
 
 FR-5. Filter controls: optional date range (`from_date`, `to_date` as ISO `YYYY-MM-DD`
 strings) and optional `content_type`. The date range defaults to the range selected
@@ -469,3 +477,238 @@ AC-8. Unit, repository (MockWebServer), and Compose UI tests in §11 pass in CI.
   simulated network failure on the unreliable dev host.
 - Spec deviations (e.g. detail sparkline deferred if AND-255 slips) noted in the PR
   description.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. **List endpoint is `GET /ui/analytics/content-revenue` → `ContentRevenueListOut`.**
+   VERDICT: Verified. SOURCE: OpenAPI `GET /ui/analytics/content-revenue`
+   (op `list_content_revenue_ui_analytics_content_revenue_get`, resp
+   `200:ContentRevenueListOut`); frontend `src/api/endpoints/perContentRevenue.ts:
+   getContentRevenueList` (`BASE = "/ui/analytics/content-revenue"`).
+2. **A trailing-slash variant `GET /ui/analytics/content-revenue/` exists with the
+   identical schema (R1).** VERDICT: Verified. SOURCE: OpenAPI
+   `GET /ui/analytics/content-revenue/` (op
+   `list_content_revenue_ui_analytics_content_revenue__get`, resp
+   `200:ContentRevenueListOut`). The non-slash path is the one the web client uses.
+3. **Detail endpoint `GET /ui/analytics/content-revenue/{content_id}` →
+   `ContentRevenueDetailOut`.** VERDICT: Verified. SOURCE: OpenAPI
+   `GET /ui/analytics/content-revenue/{content_id}`; frontend
+   `src/api/endpoints/perContentRevenue.ts: getContentRevenueDetail`.
+4. **Export endpoint `GET /ui/analytics/content-revenue/export` returns JSON (no typed
+   schema); UI deferred.** VERDICT: Verified (UI-deferred is a scoping decision).
+   SOURCE: OpenAPI `GET /ui/analytics/content-revenue/export`
+   (resp `200:` — empty schema, i.e. untyped body; params `from_date,to_date,user_sub`);
+   frontend `src/api/endpoints/perContentRevenue.ts: contentRevenueExportUrl`.
+5. **List query params: `from_date`, `to_date`, `sort_by` (default `total_cents`),
+   `sort_order` (default `desc`), `content_type`, `limit` (1–200, default 50),
+   `cursor`, `user_sub`.** VERDICT: Verified. SOURCE: OpenAPI
+   `GET /ui/analytics/content-revenue` params block — `limit` schema has
+   `minimum:1, maximum:200, default:50`; `sort_by` default `total_cents`; `sort_order`
+   default `desc`.
+6. **`sort_by` is a free-form string server-side (no enum) (R3); we constrain to a
+   known set client-side.** VERDICT: Verified. SOURCE: OpenAPI `sort_by` schema is
+   `{type: string, default: total_cents}` with no `enum`.
+7. **`ContentRevenueListOut` fields: `items[]`, `total_items`, `total_revenue_cents`,
+   `next_cursor` (nullable string), `currency` (default `USD`).** VERDICT: Verified.
+   SOURCE: `components.schemas.ContentRevenueListOut`; frontend
+   `src/api/types.ts: ContentRevenueListResponse`. Note: the list item schema is named
+   `ContentRevenueItem` (not `...Out`); the Android `ContentRevenueItemDto` maps it.
+8. **List item fields: `content_id` (required), `content_type` (default `post`),
+   `title` (default ``), `published_at` (integer, default 0), `tips_cents`,
+   `unlocks_cents`, `subscriptions_cents`, `ads_cents`, `vod_cents`, `total_cents`
+   (all integer, default 0).** VERDICT: Verified. SOURCE:
+   `components.schemas.ContentRevenueItem`; frontend `src/api/types.ts:
+   ContentRevenueItem`.
+9. **`published_at` is an epoch integer in seconds defaulting to 0 (R2).** VERDICT:
+   Verified for type/default; **seconds granularity is an assumption.** SOURCE: schema
+   says `integer, default 0` (no unit). The spec's example `1717200000` is plausibly
+   seconds (≈2024-06-01) rather than ms; frontend `fmtDate(item.published_at)` formats
+   it but does not disambiguate the unit in the inspected region. Treated as seconds;
+   see Open assumptions.
+10. **Detail response = list-item fields + `time_series:
+    ContentRevenueTimeSeriesPoint[]` + `currency`; time-series point =
+    `{date, tips_cents, unlocks_cents, subscriptions_cents, ads_cents, vod_cents,
+    total_cents}`.** VERDICT: Verified. SOURCE:
+    `components.schemas.ContentRevenueDetailOut` and
+    `components.schemas.ContentRevenueTimeSeriesPoint` (point requires `date`, a
+    string); frontend `src/api/types.ts: ContentRevenueDetailResponse`,
+    `ContentRevenueTimeSeriesPoint`.
+11. **`422` returns `HTTPValidationError` (`detail: [{msg, ...}]`).** VERDICT:
+    Verified. SOURCE: OpenAPI all four content-revenue ops list
+    `422:HTTPValidationError`; `components.schemas.HTTPValidationError`.
+12. **Auth rides on cookies + `X-CSRF-Token`.** VERDICT: Verified.
+    SOURCE: frontend `src/api/client.ts` — `credentials: "include"` and
+    `headers.set("X-CSRF-Token", csrf)` where `csrf = getCookie("ui_csrf")`.
+    (Correction: CSRF cookie name is specifically `ui_csrf`.)
+13. **`401` triggers a single refresh-and-retry via `POST /ui/session/refresh`.**
+    VERDICT: Verified. SOURCE: frontend `src/api/client.ts: refreshSession` →
+    `fetch(withApiBase("/ui/session/refresh"))`, single-flight `refreshPromise`, one
+    retry then propagate; a second `401` throws "Authentication required".
+14. **`user_sub` query param is NOT sent by the client (server scopes to session;
+    admin/impersonation only).** VERDICT: Verified. SOURCE: frontend
+    `src/api/endpoints/perContentRevenue.ts: toQuery` builds no `user_sub` key; OpenAPI
+    marks `user_sub` `required:false`.
+15. **`X-SESSION-ID` / `X-IMPERSONATION-TOKEN` headers are optional and not sent.**
+    VERDICT: Verified (optional in schema); not-sent is the client's choice. SOURCE:
+    OpenAPI params for the list op include both as optional headers; frontend client
+    sets neither.
+16. **Web reference exposes only a 4-key sort subset; Android offers all 7.** VERDICT:
+    Corrected/clarified (was implied as a straight web port). SOURCE: frontend
+    `src/pages/analytics/ContentRevenuePage.tsx` `SORT_OPTIONS` =
+    `total_cents, tips_cents, unlocks_cents, published_at`. The Android superset is
+    valid because `sort_by` is free-form server-side (claim 6).
+17. **`next_cursor` is opaque and nullable; null ends paging (R4).** VERDICT: Verified.
+    SOURCE: `ContentRevenueListOut.next_cursor` `anyOf: [string, null]`; frontend
+    `src/api/types.ts: ContentRevenueListResponse.next_cursor: string | null`. Cursor
+    stability across sort changes is unspecified — see Open assumptions.
+18. **Currency formatting via `NumberFormat.getCurrencyInstance` seeded by response
+    `currency`.** VERDICT: Verified as a reasonable Android equivalent (framework ref:
+    https://developer.android.com/reference/java/text/NumberFormat#getCurrencyInstance()).
+    Web parallel: `Intl.NumberFormat(..., {style:"currency"})` in
+    `src/pages/analytics/ContentRevenuePage.tsx: fmtMoney`.
+19. **Paging 3 / Hilt / Compose / Room / DataStore framework choices.** VERDICT:
+    Unverified-assumption (not derivable from backend/frontend sources). Framework
+    refs: Paging 3 https://developer.android.com/topic/libraries/architecture/paging/v3-overview ;
+    Hilt https://developer.android.com/training/dependency-injection/hilt-android ;
+    Compose Lazy lists https://developer.android.com/develop/ui/compose/lists ;
+    Room https://developer.android.com/training/data-storage/room .
+20. **OkHttp `followRedirects(false)` prevents a 307 from dropping cookie/CSRF (R1).**
+    VERDICT: Unverified-assumption (AND-009 internal default; not in the provided
+    sources). Framework ref:
+    https://square.github.io/okhttp/3.x/okhttp/okhttp3/OkHttpClient.Builder.html#followRedirects-boolean- .
+
+### Corrections made
+
+- FR-4 / AC-2: noted the Android 7-key sort set is a deliberate superset of the web
+  app's 4-key set (web exposes only `total_cents`, `tips_cents`, `unlocks_cents`,
+  `published_at`). Valid because backend `sort_by` is a free-form string. (Claim 16.)
+- §8 / §5: clarified the CSRF cookie name is specifically `ui_csrf` (the header
+  remains `X-CSRF-Token`). (Claim 12.)
+- §5: clarified that the list item schema is named `ContentRevenueItem` in OpenAPI
+  (the list wrapper is `ContentRevenueListOut`); the Android `ContentRevenueItemDto`
+  is the local mapping. No field-shape change required. (Claim 7.)
+- No endpoint paths, HTTP methods, or response field names in the body were factually
+  wrong; the body's API contract matches the OpenAPI and frontend sources.
+
+### Open assumptions
+
+- `published_at` unit (seconds vs milliseconds): the schema declares only
+  `integer`/`default 0` with no unit, and the inspected frontend region does not
+  disambiguate. Spec assumes **seconds** (`publishedAtEpochSec`). If the server emits
+  ms, the "Unknown for 0" rule still holds but non-zero formatting would be wrong —
+  confirm against a live response (Claim 9).
+- Cursor stability across sort/filter changes (R4): not specified in OpenAPI. Spec
+  assumes instability and resets paging on any query change — safe default but
+  unverifiable from sources (Claim 17).
+- AND-0xx internal contracts (AND-009 timeouts/`followRedirects(false)`, AND-011/012/
+  013 cookie/CSRF/refresh wiring, AND-015 `detail` mapper, AND-016 retry, AND-021
+  state composables, AND-032 logout purge, AND-045 cache pattern, AND-046/048 test
+  harnesses): treated as established by upstream tickets; not present in the OpenAPI or
+  frontend reference, so they are unverified here (dependency assumptions).
+- Android framework selections (Paging 3, Hilt, Compose, Room, DataStore): design
+  choices, not contract-derivable; cited as framework refs in claims 18–20.
+
+## 17. Test Plan
+
+Test targets: **JVM** (JVM unit/Robolectric, no device), **AVD test35** (headless
+x86_64 emulator, Android 15/API 35, CI), **A15** (physical Samsung Galaxy A15 5G,
+SM-A156U, serial R5CX821TA9R, Android 14/API 34, arm64-v8a). Use the physical device
+only where real hardware/behavior matters; for this data/list screen nearly everything
+runs on JVM or the emulator, with one ABI/API-level confidence run on A15.
+
+- **TC-AND-253-01** — Type: unit (JVM). Target: JVM. DTO→domain mapping.
+  Preconditions: a `ContentRevenueListDto` JSON fixture with one fully-populated item
+  and one item omitting all optional fields. Steps: deserialize via Moshi; map to
+  `ContentRevenue`/`ContentRevenuePage`. Expected: all six `*_cents` + `total_cents`
+  map as `Long`; `published_at` → `publishedAtEpochSec`; missing `content_type`→`post`,
+  missing `title`→``, missing `currency`→`USD`, missing fields default to 0; `next_cursor`
+  null preserved. Traces: AC-1, AC-7.
+- **TC-AND-253-02** — Type: contract/MockWebServer. Target: JVM (MockWebServer harness
+  AND-046). Happy-path list call. Preconditions: MockWebServer enqueues a 200
+  `ContentRevenueListOut` with 50 items + `next_cursor`. Steps: call
+  `ContentRevenueApi.list` with defaults. Expected: request path
+  `/ui/analytics/content-revenue`, method GET; query has `sort_by=total_cents`,
+  `sort_order=desc`, `limit=50`, and **no** `user_sub`/`from_date`/`to_date`/
+  `content_type`/`cursor` keys; response parses to 50 items. Traces: AC-1, AC-2.
+- **TC-AND-253-03** — Type: contract/MockWebServer. Target: JVM. Sort/filter →
+  query params. Preconditions: MockWebServer 200. Steps: issue queries varying
+  `sortBy` over all 7 keys, `sortOrder` asc/desc, `contentType="video"`, `fromDate`/
+  `toDate` set and unset. Expected: each emits exact param names/values; with empty
+  range, **no** `from_date`/`to_date` keys present; `limit` clamps to 200 when a larger
+  value is requested. Traces: AC-2, AC-3.
+- **TC-AND-253-04** — Type: unit (JVM). Target: JVM. PagingSource pagination.
+  Preconditions: fake `ContentRevenueApi` returning page 1 (`next_cursor="c1"`), page 2
+  (`next_cursor=null`). Steps: `load` with key null then "c1". Expected: page 1
+  `LoadResult.Page` `nextKey="c1"`/`prevKey=null`; page 2 `nextKey=null` (paging stops);
+  header callback fired once from first page. Traces: AC-4, AC-5.
+- **TC-AND-253-05** — Type: unit (JVM). Target: JVM. Query change resets paging &
+  header. Preconditions: ViewModel with fake repo. Steps: load defaults, then call
+  `onSortChange(TIPS, ASC)`. Expected: a new `ContentRevenueQuery` is emitted, pager
+  invalidated (re-load from cursor=null), `uiState` header summary reset then
+  repopulated from the new first page. Traces: AC-2, AC-5.
+- **TC-AND-253-06** — Type: contract/MockWebServer. Target: JVM. 422 validation error
+  shape. Preconditions: MockWebServer enqueues 422 `HTTPValidationError`
+  (`{"detail":[{"loc":["query","sort_by"],"msg":"...","type":"..."}]}`). Steps: call
+  list with a bad `sort_by`. Expected: AND-015 `detail` mapper yields a user-facing
+  message; client falls back to defaults; no crash. Traces: AC-6.
+- **TC-AND-253-07** — Type: contract/MockWebServer. Target: JVM. 401 single
+  refresh-and-retry. Preconditions: enqueue 401, then 200 for
+  `POST /ui/session/refresh`, then 200 for the retried list. Steps: call list while
+  "authenticated". Expected: exactly one refresh to `/ui/session/refresh`, list
+  retried once and succeeds; a second consecutive 401 propagates as an auth error
+  (defers to AND-025 routing). Traces: AC-6.
+- **TC-AND-253-08** — Type: unit (JVM). Target: JVM. Append-error preserves pages.
+  Preconditions: fake API returns page 1 ok then throws on page 2. Steps: load page 1,
+  scroll triggers page 2. Expected: `LoadState.Error` for append, loaded page-1 items
+  retained, `items.retry()` re-attempts the failed page only. Traces: AC-6.
+- **TC-AND-253-09** — Type: integration (JVM/Robolectric). Target: JVM. Offline +
+  stale cache path (flaky-dev-host). Preconditions: AND-017 probe reports offline;
+  Room `content_revenue_cache` holds a first-page payload for the default query hash.
+  Steps: open screen offline. Expected: cached items served, `isStale=true` (stale
+  banner), and **no** network request fired; on reconnect+refresh, fresh data replaces
+  cache and clears stale flag. Traces: AC-6.
+- **TC-AND-253-10** — Type: Compose-UI. Target: AVD test35. List renders with
+  formatted currency. Preconditions: fake repo returns a page with known cents (e.g.
+  `total_cents=27050`, `currency=USD`). Steps: render `PerContentRevenueScreen`.
+  Expected: rows show titles and `$270.50`; header shows formatted
+  `total_revenue_cents`/`total_items`; a `published_at=0` row shows "Unknown" not 1970.
+  Traces: AC-1, AC-5.
+- **TC-AND-253-11** — Type: Compose-UI. Target: AVD test35. Sort interaction +
+  breakdown expansion. Preconditions: fake repo records queries. Steps: select a sort
+  chip; assert announced sort state and a refetch with new `sort_by`/`sort_order`;
+  expand a row. Expected: refetch occurs from first page; expanded row shows all five
+  source labels (Tips, Unlocks, Subscriptions, Ads, VOD) with formatted values,
+  including `$0.00` for zero sources. Traces: AC-2, AC-7.
+- **TC-AND-253-12** — Type: Compose-UI. Target: AVD test35. State coverage. Steps:
+  drive fake `loadState` into loading (first load), empty (`items` empty), first-load
+  error (retry button calls `items.refresh()`), append error (inline retry). Expected:
+  each AND-021 state composable renders and the retry affordances invoke the right
+  action. Traces: AC-6.
+- **TC-AND-253-13** — Type: Compose-UI (accessibility). Target: AVD test35. TalkBack /
+  semantics + text scaling. Steps: assert sort chip `stateDescription` (e.g. "Sorted by
+  Total, descending"); each row breakdown is one grouped semantics node; tap targets
+  ≥48dp; set font scale to 2.0 and assert totals are not truncated (title ellipsizes
+  only). Expected: all assertions pass. Traces: AC-2, AC-6, AC-7.
+- **TC-AND-253-14** — Type: instrumented/e2e. Target: **A15 (physical device — MUST)**.
+  Real-device ABI/API confidence + security. Rationale: validate arm64-v8a / API 34
+  vs the emulator's x86_64 / API 35, plus on-device privacy behavior. Preconditions:
+  release-type build with logging at BASIC; logged-in session. Steps: open the screen
+  against a mock/staging backend, scroll/paginate, then inspect logcat. Expected: list
+  renders and paginates on arm64-v8a/API 34; **no monetary values or row/total figures
+  appear in release logs**; cache file lives in app-private storage only; logout purges
+  `content_revenue_cache` (AND-032). Traces: AC-1, AC-4.
+
+### Coverage matrix
+
+| AC (section 14) | Covered by |
+| --- | --- |
+| AC-1 (list renders, formatted total) | TC-01, TC-02, TC-10, TC-14 |
+| AC-2 (sort re-queries + reset, defaults) | TC-02, TC-03, TC-05, TC-11, TC-13 |
+| AC-3 (filters apply, empty range sends no dates) | TC-03 |
+| AC-4 (cursor paging, stop on null) | TC-04, TC-14 |
+| AC-5 (header total/items formatted) | TC-04, TC-05, TC-10 |
+| AC-6 (loading/empty/first-error/append-error/stale) | TC-06, TC-07, TC-08, TC-09, TC-12, TC-13 |
+| AC-7 (five-source breakdown incl. zero) | TC-01, TC-11, TC-13 |
+| AC-8 (unit + MockWebServer + Compose tests green) | TC-01..TC-13 (all) |

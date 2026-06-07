@@ -5,7 +5,8 @@ milestone: M6
 epic: E35
 priority: P1
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-258, AND-320]
 blocks: [AND-260, AND-262, AND-263]
 ---
@@ -48,9 +49,13 @@ and both branches are covered by deterministic tests.
   repository with setup-oriented use cases but must not duplicate endpoint or DTO
   definitions; coordinate any new `PayoutsApi` method with AND-258.
 - **AND-320** owns `TierStatus` / `TierRequirements` domain models and the KYC
-  tier repository (`/v1/kyc/tiers/me`, `/v1/kyc/requirements`, `/v1/kyc/evaluate`).
-  This ticket reads `currentTier` and the payout-required tier and calls
-  `evaluate()` to refresh after verification; it does not own the KYC API.
+  tier repository. **Verified endpoints** (frontend `src/api/endpoints/kyc-tiers.ts`,
+  OpenAPI index): `GET /v1/kyc/tiers/me`, `GET /v1/kyc/tiers/me/requirements/{target_tier}`,
+  `POST /v1/kyc/tiers/me/evaluate`. **Correction:** these are NOT under an `/api`
+  prefix, evaluate is `…/me/evaluate` (not `/v1/kyc/evaluate`), and requirements is a
+  per-target-tier GET (not a bare `/v1/kyc/requirements`). This ticket reads
+  `currentTier` and calls `evaluate()` to refresh after verification; it does not own
+  the KYC API.
 - KYC capture/verification UI (document capture AND-321, ID scanner AND-322) is
   the **route target** of the gate, not part of this ticket. This ticket navigates
   to the KYC verification entry route by name; it does not implement capture.
@@ -60,10 +65,15 @@ and both branches are covered by deterministic tests.
   (CSRF-required, not eligible for idempotent-GET backoff retry).
 - Dev backend `http://18.222.237.167:8000` is plaintext HTTP and unreliable:
   ~20s timeouts, offline/stale UI states, no auto-retry on mutations.
-- Web reference: `frontend/src/api/endpoints/payouts.ts`,
-  `frontend/src/api/endpoints/*kyc*.ts`, and `frontend/src/api/types.ts`. Exact
-  field names MUST be verified against `/openapi.json` at build time; shapes below
-  are the contract this ticket implements.
+- Web reference: `src/api/endpoints/payouts.ts`,
+  `src/api/endpoints/kyc-tiers.ts`, `src/api/types.ts`, and the web page
+  `src/pages/payouts/PayoutDashboard.tsx`. **Material correction from the reference:**
+  the backend has **no saved-payout-method CRUD**. The web client requests a payout of
+  an *amount* (`POST /ui/payouts/request` with `amount_cents` + a free-string `method`,
+  default `"bank_transfer"`, options `bank_transfer`/`paypal`) and lists/cancels
+  payouts; it does not store reusable `bank_account`/`card` objects with
+  account/routing fields. The "payout setup" of this ticket therefore maps onto the
+  payout-request flow + KYC gate, not a CRUD-of-methods flow. See §16 for the full audit.
 
 ## 3. Functional Requirements
 
@@ -71,15 +81,24 @@ FR-1. On entering Payout setup, the app concurrently loads (a) the current payou
 method(s) via `PayoutsRepository` (AND-258) and (b) the KYC tier status via the
 tier repository (AND-320), showing a single combined loading state.
 
-FR-2. The screen derives a **gate decision** by comparing `currentTier` against
-`requiredTierForPayouts` (the minimum tier required to receive payouts, sourced
-from tier requirements / payout config). Result is one of `Allowed` or
-`Blocked(missingRequirements)`.
+FR-2. The screen derives a **gate decision**. **Corrected source:** the backend does
+not expose a `required_tier_for_payouts` field. Instead the required tier is a
+**client/product constant** (`PAYOUT_REQUIRED_TIER`, an integer rank) and the gate is
+resolved either by (a) comparing `TierDetails.current_tier >= PAYOUT_REQUIRED_TIER`,
+or preferably (b) calling `GET /v1/kyc/tiers/me/requirements/{PAYOUT_REQUIRED_TIER}`
+and reading its `eligible` boolean plus `unmet[]` codes. Result is one of `Allowed`
+or `Blocked(unmetRequirements)`. The exact required-tier integer must be confirmed
+with product/backend (§16, Q2).
 
-FR-3. **Allowed branch:** the user can choose a payout-method type (e.g.
-`bank_account`, `paypal`, `card` — exact set from `/openapi.json`), fill the
-type-specific fields, validate locally, and submit. On success the saved method
-becomes the active method and the form reflects it.
+FR-3. **Allowed branch:** the user fills the payout-request form and submits.
+**Corrected to match the verified backend:** the form collects an `amount_cents`
+(validated client-side against `minimum_payout_cents ≤ amount ≤ available_cents` from
+`GET /ui/payouts/balance`), a `method` chosen from the web's set (`bank_transfer`,
+`paypal` — free string), and optional `notes` (≤500). Submit calls
+`POST /ui/payouts/request`. On 201 the created payout (`payout_id`, `amount_cents`,
+`status`) is shown as the latest request. (The original "choose a saved method type
+with type-specific account/routing fields" is a forward-looking assumption with no
+backend support — see §16; if implemented it requires new AND-258 endpoints.)
 
 FR-4. **Blocked branch:** the setup form is disabled/hidden and replaced by a
 KYC-gate panel that states the current tier, the required tier, and the
@@ -90,8 +109,12 @@ FR-5. After the user returns from the KYC flow, the screen calls `evaluate()`
 (AND-320) to refresh tier status and re-derives the gate; if the user now meets
 the requirement, the form unlocks without a full screen reload.
 
-FR-6. Editing an existing payout method is supported when allowed: the form is
-pre-populated from the active method, and submit performs an update.
+FR-6. **Re-scoped:** there is no "edit saved method" operation in the backend
+(no `PUT …/methods/{id}`). What IS supported is cancelling a pending payout request
+via `POST /ui/payouts/{payout_id}/cancel` and submitting a fresh request. Treat
+"edit" as cancel-and-resubmit; pre-populate the form from the last request's amount
+where useful. (Original method-edit wording was based on a nonexistent endpoint —
+§16.)
 
 FR-7. Form validation is local and per-type before any network call (e.g.
 non-empty account/routing for `bank_account`, valid email for `paypal`). Invalid
@@ -128,14 +151,27 @@ data class PayoutMethod(
     val fields: Map<String, String>, // type-specific, redacted in display
 )
 
-enum class KycTier { NONE, BASIC, VERIFIED, ENHANCED, UNKNOWN } // order = rank
+// Tiers are INTEGER ranks on the wire (TierDetails.current_tier: Int, tier_name: String).
+// Model the rank as Int (or an enum mapped from the int); do NOT assume a fixed
+// string enum — tier_name is server-supplied and labels are not guaranteed stable.
+@JvmInline value class KycTier(val rank: Int) // from AND-320; 0 = none, higher = more
 
-data class TierStatus(            // from AND-320
-    val currentTier: KycTier,
-    val requiredTierForPayouts: KycTier,
-    val missingRequirements: List<TierRequirement>,
+data class TierStatus(                 // mapped from TierDetails + a requirements call
+    val currentTier: KycTier,          // <- TierDetails.current_tier (Int)
+    val tierName: String,              // <- TierDetails.tier_name
+    val requiredTierForPayouts: KycTier, // <- client constant PAYOUT_REQUIRED_TIER (not server)
+    val eligibleForPayoutTier: Boolean?, // <- TierRequirements.eligible (null if not loaded)
+    val unmetRequirements: List<String>, // <- TierRequirements.unmet (codes, not objects)
 )
 ```
+
+> **Correction (verified against `src/api/types.ts`):** `TierDetails` =
+> `{ user_sub, current_tier: Int, tier_name: String, updated_at, history[] }`. It has
+> NO `required_tier_for_payouts` and NO `missing_requirements`. Requirements come from
+> `TierRequirements` = `{ target_tier: Int, current_tier: Int, met: String[],
+> unmet: String[], eligible: Boolean }`. The original `KycTier` string enum and the
+> `TierStatus.missingRequirements: List<TierRequirement>` object list were
+> inaccurate; use integer ranks and string requirement codes.
 
 Gate logic (pure, unit-testable, lives in this feature):
 
@@ -145,19 +181,22 @@ sealed interface PayoutGate {
     data class Blocked(
         val currentTier: KycTier,
         val requiredTier: KycTier,
-        val missing: List<TierRequirement>,
+        val missing: List<String>, // requirement codes from TierRequirements.unmet
     ) : PayoutGate
     data object Unknown : PayoutGate // tier unavailable -> fail closed
 }
 
 object PayoutGateEvaluator {
+    // Prefer the server's `eligible` boolean when available; fall back to rank compare.
     fun evaluate(status: TierStatus?): PayoutGate = when {
         status == null -> PayoutGate.Unknown
-        status.currentTier.rank() >= status.requiredTierForPayouts.rank() ->
+        status.eligibleForPayoutTier == true ||
+            (status.eligibleForPayoutTier == null &&
+             status.currentTier.rank >= status.requiredTierForPayouts.rank) ->
             PayoutGate.Allowed
         else -> PayoutGate.Blocked(
             status.currentTier, status.requiredTierForPayouts,
-            status.missingRequirements,
+            status.unmetRequirements,
         )
     }
 }
@@ -172,15 +211,18 @@ class PayoutSetupRepository @Inject constructor(
     private val tierRepository: TierRepository,       // AND-320
     private val dispatchers: AppDispatchers,
 ) {
-    suspend fun loadSetup(): ApiResult<PayoutSetupData> // method(s) + tier, parallel
-    suspend fun savePayoutMethod(draft: PayoutMethodDraft): ApiResult<PayoutMethod>
-    suspend fun refreshTier(): ApiResult<TierStatus>    // delegates evaluate()
+    suspend fun loadSetup(): ApiResult<PayoutSetupData> // balance + tier (+ reqs), parallel
+    // Corrected: there is no "save method". The mutation is a payout REQUEST.
+    suspend fun requestPayout(draft: PayoutRequestDraft): ApiResult<PayoutCreateResult>
+    suspend fun refreshTier(): ApiResult<TierStatus>    // delegates POST .../me/evaluate
 }
 
+// PayoutRequestDraft -> POST /ui/payouts/request { amount_cents, method, notes }
+
 data class PayoutSetupData(
-    val methods: List<PayoutMethod>,
-    val activeMethod: PayoutMethod?,
-    val tierStatus: TierStatus?,   // null if KYC load failed
+    val balance: PayoutBalance,       // available/min/pending from GET /ui/payouts/balance
+    val recentPayouts: List<Payout>,  // from GET /ui/payouts (status of prior requests)
+    val tierStatus: TierStatus?,      // null if KYC load failed
 )
 ```
 
@@ -260,55 +302,95 @@ ViewModel guards defensively as the single source of truth).
 ## 5. API Contract
 
 This ticket calls endpoints owned by AND-258 (payouts) and AND-320 (KYC tier).
-Field names MUST be verified against `/openapi.json`; Moshi DTOs use
-`@Json(name=...)` for snake_case.
+Field names below are **verified against the OpenAPI spec and the frontend
+reference**; Moshi DTOs use `@Json(name=...)` for snake_case. (An earlier draft of
+this section cited `…/payouts/methods` CRUD endpoints, string tier enums, and a
+`required_tier_for_payouts` field; none of those exist — corrected below, audited in
+§16.)
 
-Load payout method(s) — `GET /api/v1/payouts/methods` (AND-258) → 200:
-
-```json
-{
-  "methods": [
-    {
-      "id": "pm_01HX...",
-      "type": "bank_account",
-      "display_name": "Bank ****1234",
-      "is_default": true,
-      "details": { "last4": "1234", "routing_last4": "0021" }
-    }
-  ],
-  "default_method_id": "pm_01HX..."
-}
-```
-
-Save / create payout method — `POST /api/v1/payouts/methods` (AND-258), mutation,
-requires `X-CSRF-Token`. Request:
+Balance / eligibility context — `GET /ui/payouts/balance` (AND-258) → 200
+(`PayoutBalanceOut`):
 
 ```json
 {
-  "type": "bank_account",
-  "account_number": "000123456789",
-  "routing_number": "110000000",
-  "account_holder_name": "Jane Doe"
+  "available_cents": 50000,
+  "pending_cents": 0,
+  "hold_cents": 0,
+  "total_earned_cents": 120000,
+  "minimum_payout_cents": 1000,
+  "currency": "USD"
 }
 ```
 
-→ 201 returns the created `PayoutMethod` (same shape as a list item). Update uses
-`PUT /api/v1/payouts/methods/{id}` (same body, same response).
+List prior payouts — `GET /ui/payouts?limit=&cursor=` (AND-258) → 200
+(`PayoutListOut`): `{ "items": PayoutOut[], "next_cursor": string|null }`. Each
+`PayoutOut`: `{ payout_id, user_id, amount_cents, method, status, created_at,
+updated_at, notes, reject_reason, approved_by, completed_at }`.
 
-Tier status — `GET /api/v1/kyc/tiers/me` (AND-320) → 200:
+Request a payout — `POST /ui/payouts/request` (AND-258), mutation, requires
+`X-CSRF-Token`. Request (`PayoutRequestIn`):
 
 ```json
 {
-  "current_tier": "basic",
-  "required_tier_for_payouts": "verified",
-  "missing_requirements": [
-    { "code": "gov_id", "label": "Government ID", "satisfied": false }
-  ]
+  "amount_cents": 50000,
+  "method": "bank_transfer",
+  "notes": "Monthly withdrawal"
 }
 ```
 
-Evaluate (refresh after KYC) — `POST /api/v1/kyc/evaluate` (AND-320), mutation,
-returns the updated tier status (same shape as above).
+`amount_cents` is required (minimum 100) and is validated client-side against
+`minimum_payout_cents ≤ amount_cents ≤ available_cents`; `method` is a free string
+(default `"bank_transfer"`; web offers `bank_transfer`/`paypal`); `notes` is optional
+(≤500 chars). → 201 returns `PayoutCreateOut`:
+
+```json
+{ "ok": true, "payout_id": "po_01HX...", "amount_cents": 50000, "status": "pending" }
+```
+
+Cancel a pending payout — `POST /ui/payouts/{payout_id}/cancel` (AND-258), mutation
+→ 200 `PayoutActionOut` `{ ok, payout_id, status }`.
+
+> Note: there is **no** `bank_account`/`card` saved-method object, no
+> `account_number`/`routing_number`/`account_holder_name` request fields, no
+> `display_name`/`last4`/`is_default`/`default_method_id` in the backend today. The
+> "method-type form" described elsewhere in this spec is a forward-looking design
+> assumption and must be coordinated with AND-258 before implementation (see §16
+> Open assumptions).
+
+Tier status — `GET /v1/kyc/tiers/me` (AND-320) → 200 (`TierDetails`; OpenAPI declares
+an untyped `{}` body, shape taken from `src/api/types.ts`):
+
+```json
+{
+  "user_sub": "user_123",
+  "current_tier": 1,
+  "tier_name": "basic",
+  "updated_at": 1733000000,
+  "history": []
+}
+```
+
+`current_tier` is an **integer** rank (not a string enum). There is **no**
+`required_tier_for_payouts` and **no** `missing_requirements` on this payload.
+
+Requirements toward a target tier — `GET /v1/kyc/tiers/me/requirements/{target_tier}`
+(`target_tier` is an **integer**) → 200 (`TierRequirements`):
+
+```json
+{
+  "target_tier": 2,
+  "current_tier": 1,
+  "met": ["email_verified"],
+  "unmet": ["gov_id"],
+  "eligible": false
+}
+```
+
+`met`/`unmet` are arrays of **requirement code strings** (not `{code,label,satisfied}`
+objects); `eligible` is the boolean that drives the gate for the chosen target tier.
+
+Evaluate (refresh after KYC) — `POST /v1/kyc/tiers/me/evaluate` (AND-320), mutation,
+returns the updated `TierDetails` (same shape as `GET /v1/kyc/tiers/me`).
 
 Error envelope (FastAPI `detail`, mapped per project convention — string |
 `[{msg}]` | `{code,...}`):
@@ -319,12 +401,19 @@ Error envelope (FastAPI `detail`, mapped per project convention — string |
 { "detail": { "code": "kyc_tier_insufficient", "message": "Verification required" } }
 ```
 
-Status handling: 200/201 success; **403 `kyc_tier_insufficient` on save** → treat
-as server-side gate, switch UI to Blocked and surface "Verify identity" (defense
-in depth even if the client gate passed); 401 → authenticator refresh-once-retry
+Status handling: 200/201 success; **403 with a tier-gate `detail.code` on save** →
+treat as server-side gate, switch UI to Blocked and surface "Verify identity"
+(defense in depth even if the client gate passed). **Unverified:** the exact code
+string `kyc_tier_insufficient` is NOT present in the OpenAPI spec or frontend; the
+client must match defensively (treat any 403 whose `detail` is an object with a
+recognized tier/gate `code`, else fall back to a generic retryable 403) and the real
+code must be confirmed with backend — see §16. 401 → authenticator refresh-once-retry
 (transparent), persistent 401 → "Session expired" + re-auth; 403 CSRF → retryable;
-409 → "Payout method already exists / changed", refresh; 422 → map per-field
-validation into `fieldErrors`; 5xx / timeout → retryable, form state preserved.
+409 → conflict, refresh and re-show state; 422 → map FastAPI `detail[].loc`/`msg`
+into `fieldErrors`; 5xx / timeout → retryable, form state preserved. (The OpenAPI
+index lists only `422:HTTPValidationError` for `POST /ui/payouts/request`; 401/403/409
+behaviors are inferred from the shared `core-network` chain in `client.ts`, not from a
+per-endpoint declaration.)
 
 ## 6. Data & State Management
 
@@ -482,25 +571,28 @@ AC-1. Entering Payout setup loads payout method(s) and KYC tier and derives a ga
 above-tier fixtures render the configurable form, below-tier fixtures render the
 KYC-gate panel. (MockWebServer + Compose UI test.)
 
-AC-2. **Setup works:** with a sufficient tier, entering valid details and
-submitting calls `POST/PUT /api/v1/payouts/methods` with `X-CSRF-Token`, and on
-201 the saved method becomes the active method with a confirmation.
-(MockWebServer + ViewModel + UI test — satisfies "Setup works".)
+AC-2. **Setup works:** with a sufficient tier, entering a valid amount/method and
+submitting calls `POST /ui/payouts/request` with `X-CSRF-Token`, and on 201 the
+created payout (`payout_id`, `status`) is shown with a confirmation. (MockWebServer +
+ViewModel + UI test — satisfies "Setup works". Corrected from `POST/PUT
+/api/v1/payouts/methods`, which does not exist.)
 
 AC-3. **KYC gate routes to verification:** with an insufficient tier, the form is
 not submittable and the KYC-gate panel's "Verify identity" action navigates to the
 KYC verification route. (Unit + UI test — satisfies "KYC gate routes to
 verification when required".)
 
-AC-4. Returning from the KYC flow triggers `POST /api/v1/kyc/evaluate`; if the
+AC-4. Returning from the KYC flow triggers `POST /v1/kyc/tiers/me/evaluate`; if the
 tier now meets the requirement, the form unlocks without a full reload. (ViewModel
-test.)
+test. Corrected from `POST /api/v1/kyc/evaluate`.)
 
 AC-5. When tier status is unavailable, the gate is `Unknown` and saving is blocked
 (fail-closed); a retry-tier action is offered. (ViewModel test.)
 
-AC-6. A `403 kyc_tier_insufficient` from save flips the UI to Blocked and surfaces
-"Verify identity" rather than a generic error. (MockWebServer + ViewModel test.)
+AC-6. A `403` tier-gate response from the payout request (object `detail` with a
+recognized tier/gate `code`) flips the UI to Blocked and surfaces "Verify identity"
+rather than a generic error. (MockWebServer + ViewModel test. The exact `code` string
+is unverified — see §16; the test asserts behavior for the configured code constant.)
 
 AC-7. Local per-field validation blocks submit on invalid input, and a `422`
 response maps to inline field errors while preserving entered values. (ViewModel
@@ -526,3 +618,342 @@ state intact (no data loss on a failed save). (MockWebServer test.)
   Gradle 8.9 wrapper.
 - PR on `android-port` references AND-259 and links AND-258, AND-320 (and the KYC
   verification route owner once available).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. "OpenAPI index"
+refers to `reference/openapi.index.txt`; "OpenAPI spec" to
+`reference/openapi.pretty.json`; frontend paths are under `reference/src/`.
+
+1. **Payout balance is read from `GET /ui/payouts/balance` returning
+   `{available_cents, pending_cents, hold_cents, total_earned_cents,
+   minimum_payout_cents, currency}`.** — Verified. OpenAPI `GET /ui/payouts/balance`
+   → `PayoutBalanceOut` (spec `components.schemas.PayoutBalanceOut`); frontend
+   `src/api/endpoints/payouts.ts: getPayoutBalance`, `src/api/types.ts: PayoutBalance`.
+
+2. **A payout is created by `POST /ui/payouts/request` with body
+   `{amount_cents (req, min 100), method (string, default "bank_transfer"),
+   notes (≤500)}`, returning 201 `PayoutCreateOut {ok, payout_id, amount_cents,
+   status}`.** — Verified. OpenAPI `POST /ui/payouts/request` → req
+   `PayoutRequestIn`, resp `201:PayoutCreateOut`; frontend
+   `src/api/endpoints/payouts.ts: requestPayout`, `src/api/types.ts: PayoutCreateResp`.
+
+3. **The web payout method selector offers only `bank_transfer` and `paypal` as
+   free-string `method` values (no typed bank/card objects).** — Verified.
+   `src/pages/payouts/PayoutDashboard.tsx` (SelectItem `bank_transfer`/`paypal`;
+   default state `"bank_transfer"`).
+
+4. **A pending payout is cancelled via `POST /ui/payouts/{payout_id}/cancel` →
+   `PayoutActionOut {ok, payout_id, status}`; prior payouts list via `GET /ui/payouts`
+   → `PayoutListOut {items: PayoutOut[], next_cursor}`.** — Verified. OpenAPI
+   `POST /ui/payouts/{payout_id}/cancel`, `GET /ui/payouts`; frontend
+   `src/api/endpoints/payouts.ts: cancelPayout, listPayouts`,
+   `src/api/types.ts: PayoutActionResp, PayoutListResp, Payout`.
+
+5. **Original claim: payout methods are CRUD-managed via
+   `GET/POST/PUT /api/v1/payouts/methods` with `{type, account_number,
+   routing_number, account_holder_name}` and a `default_method_id`.** — Corrected
+   (does not exist). No `/payouts/methods` path appears anywhere in the OpenAPI index;
+   no such DTO in `src/api/types.ts`; the frontend has no method-CRUD call. Replaced
+   with the payout-request model above.
+
+6. **Tier status is read from `GET /v1/kyc/tiers/me` returning `TierDetails
+   {user_sub, current_tier: Int, tier_name: String, updated_at, history[]}`.** —
+   Verified path & shape. OpenAPI `GET /v1/kyc/tiers/me` (op `get_my_tier_…`); shape
+   from frontend `src/api/endpoints/kyc-tiers.ts: getMyTier` +
+   `src/api/types.ts: TierDetails`. (OpenAPI declares the 200 body as untyped `{}`, so
+   the field names are sourced from the frontend types, which is authoritative here.)
+
+7. **Original claim: tier endpoint is `GET /api/v1/kyc/tiers/me`.** — Corrected.
+   Real path has no `/api` prefix: `GET /v1/kyc/tiers/me` (OpenAPI index;
+   `kyc-tiers.ts`).
+
+8. **Original claim: tier payload includes `required_tier_for_payouts` (string enum)
+   and `missing_requirements: [{code,label,satisfied}]`, with string tiers
+   ("basic"/"verified"/"enhanced").** — Corrected. `TierDetails` has neither field;
+   `current_tier` is an **integer** rank with a separate `tier_name` string
+   (`src/api/types.ts: TierDetails`). Requirement detail lives in a different call
+   (#9), and requirement entries are plain **string codes** (also seen as
+   `missing_requirements: string[]` in the KYC-case schema, OpenAPI spec
+   `components.schemas` near the `kyc_case_id` field).
+
+9. **Requirements toward a target tier come from
+   `GET /v1/kyc/tiers/me/requirements/{target_tier}` (target_tier is an integer)
+   returning `TierRequirements {target_tier, current_tier, met: String[],
+   unmet: String[], eligible: Boolean}`.** — Verified. OpenAPI
+   `GET /v1/kyc/tiers/me/requirements/{target_tier}` (path param typed `integer`);
+   frontend `src/api/endpoints/kyc-tiers.ts: checkRequirements`,
+   `src/api/types.ts: TierRequirements`.
+
+10. **Tier re-evaluation is `POST /v1/kyc/tiers/me/evaluate` returning updated
+    `TierDetails`.** — Verified path. OpenAPI `POST /v1/kyc/tiers/me/evaluate` (op
+    `evaluate_my_tier_…`); frontend `src/api/endpoints/kyc-tiers.ts: evaluateTier`.
+
+11. **Original claim: evaluate endpoint is `POST /api/v1/kyc/evaluate`.** —
+    Corrected. Real path is `POST /v1/kyc/tiers/me/evaluate` (no `/api`, nested under
+    `…/me`). OpenAPI index; `kyc-tiers.ts`.
+
+12. **Original claim: requirements endpoint is `GET /v1/kyc/requirements`.** —
+    Corrected. Real path is `GET /v1/kyc/tiers/me/requirements/{target_tier}`. OpenAPI
+    index; `kyc-tiers.ts`.
+
+13. **CSRF: every mutating call sends `X-CSRF-Token` echoed from the `ui_csrf`
+    cookie; session rides cookies (`credentials: include`).** — Verified.
+    `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`;
+    `credentials: "include"`).
+
+14. **On 401 the client performs a single `POST /ui/session/refresh` then retries the
+    original request once; persistent 401 logs out.** — Verified.
+    `src/api/client.ts: refreshSession()` + the 401 branch (single shared
+    `refreshPromise`, one retry, `logout("session_expired")` on retry-401).
+
+15. **Error envelope is FastAPI `detail` that may be a string, an array of
+    `{msg, loc}`, or an object with a `code`.** — Verified.
+    `src/api/client.ts: normalizeErrorDetail` (handles string / array-of-`{msg}` /
+    object-with-`code`); object-`code` mapping in `mapAuthorizationError`.
+
+16. **A 403 with a `kyc_tier_insufficient` code is returned when tier is short on
+    save.** — Unverified-assumption. The string `kyc_tier_insufficient` appears in no
+    source (OpenAPI spec, frontend). `POST /ui/payouts/request` declares only
+    `200/201` + `422:HTTPValidationError` in OpenAPI. Treated as a defensively-matched
+    constant; the real code/behavior must be confirmed with backend.
+
+17. **The required tier for payouts is a single resolvable value driving the gate.**
+    — Unverified-assumption. No backend field expresses it; modeled as a client
+    constant `PAYOUT_REQUIRED_TIER` (integer) compared against `current_tier`, or via
+    the `eligible` boolean from `requirements/{PAYOUT_REQUIRED_TIER}`. The actual rank
+    must be confirmed (§13 Q2).
+
+18. **The web payout flow itself enforces a KYC tier gate.** — Unverified /
+    not-observed. `PayoutDashboard.tsx` validates only amount vs.
+    min/available balance and does not call any tier endpoint before requesting a
+    payout. The KYC gate in this ticket is an Android-side product requirement layered
+    on top of the existing API, not a behavior copied from the web client.
+
+19. **MVVM + Hilt + Compose Material 3 + Kotlin coroutines/StateFlow stack.** —
+    Verified as framework choices (no source contradicts; standard Android arch).
+    framework ref: developer.android.com/topic/architecture (UI layer / StateFlow),
+    developer.android.com/jetpack/compose. (Project-level: aligns with the
+    `compileSdk 35` / AGP 8.7.3 toolchain stated in §15.)
+
+20. **Test targets (Robolectric JVM, emulator AVD `test35` API 35 x86_64, physical
+    Samsung Galaxy A15 5G SM-A156U API 34 arm64) are available in CI/dev.** —
+    Verified from the task environment description (not the codebase). Used to assign
+    each §17 case to the right target.
+
+### Corrections made
+
+- C1 — Payout-method CRUD endpoints (`GET/POST/PUT /api/v1/payouts/methods`) and
+  their `account_number`/`routing_number`/`account_holder_name`/`display_name`/`last4`/
+  `default_method_id` fields **do not exist**; replaced with the verified payout-request
+  flow (`GET /ui/payouts/balance`, `GET /ui/payouts`, `POST /ui/payouts/request`,
+  `POST /ui/payouts/{id}/cancel`). Affected: §2, §3 (FR-3/FR-6), §4 (repo + data
+  classes), §5, §6, §14 (AC-2). (Audit #2,#4,#5.)
+- C2 — KYC tier paths corrected to drop the `/api` prefix and use the real nesting:
+  `GET /v1/kyc/tiers/me`, `POST /v1/kyc/tiers/me/evaluate`,
+  `GET /v1/kyc/tiers/me/requirements/{target_tier}`. Affected: §2, §5, §14 (AC-4).
+  (Audit #7,#11,#12.)
+- C3 — Tier model corrected: `current_tier` is an **integer** rank (+ `tier_name`
+  string), not a string enum; `required_tier_for_payouts` and
+  `missing_requirements` are NOT on `TierDetails`; requirements are
+  `met`/`unmet` **string arrays** + `eligible` boolean on `TierRequirements`.
+  Affected: §3 (FR-2), §4 (models + evaluator). (Audit #8,#9.)
+- C4 — `403 kyc_tier_insufficient` demoted from a stated fact to a defensively-matched
+  assumption pending backend confirmation. Affected: §5, §14 (AC-6). (Audit #16.)
+- C5 — Method type set corrected from `bank_account`/`paypal`/`card` typed objects to
+  the free-string values `bank_transfer`/`paypal`. Affected: §3 (FR-3), §5. (Audit #3.)
+
+### Open assumptions
+
+- OA1 — **Required payout tier value** (`PAYOUT_REQUIRED_TIER`): not exposed by any
+  endpoint; must be set as a client/product constant and confirmed with backend
+  (which integer rank gates payouts). Why unverifiable: no backend field; OpenAPI
+  tier bodies are untyped `{}`. (Audit #17, §13 Q2.)
+- OA2 — **Server-side tier-gate error code** on `POST /ui/payouts/request`: exact 403
+  `detail.code` (assumed `kyc_tier_insufficient`) and whether the server returns 403
+  vs 422 when tier is short. Why unverifiable: OpenAPI lists only `422` for that op;
+  the code string is absent from all sources. (Audit #16, §13 Q3.)
+- OA3 — **"Payout setup" product shape on Android**: whether M6 ships a true
+  saved-method form (requires NEW AND-258 endpoints) or maps onto the existing
+  amount+method payout-request flow. This spec implements the latter (verified API)
+  and flags the former as out-of-scope-until-backend. Why unverifiable: no backend
+  support today. (Audit #5, §13 Q1.)
+- OA4 — **KYC verification entry route availability at M6** (E42/AND-321/AND-322 land
+  M7): the gate's "Verify identity" destination may not exist yet; needs a graceful
+  "verification not yet available" fallback. Why unverifiable: cross-ticket sequencing,
+  not in these sources. (§13 Q5.)
+- OA5 — **Exact `status` string values** for `PayoutCreateOut.status` /
+  `PayoutOut.status` (e.g. "pending"): the schema types `status` as a free string with
+  no enum, so example values are illustrative. Why unverifiable: no enum in the
+  OpenAPI schema.
+
+## 17. Test Plan
+
+Test-target legend: **JVM** = local JVM/Robolectric (no device); **EMU** = headless
+emulator AVD `test35` (x86_64, API 35); **DEVICE** = physical Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a). Contract tests use MockWebServer (no real network).
+Traces link to §14 acceptance criteria.
+
+**TC-AND-259-01 — Gate evaluator: allowed/blocked/unknown + rank ordering**
+- Type: unit. Target: JVM (`PayoutGateEvaluator`).
+- Preconditions: none (pure function).
+- Steps: Call `evaluate()` with (a) `null` status, (b) `eligible=true`, (c)
+  `eligible=null` & `current_tier >= required`, (d) `eligible=false` &
+  `current_tier < required` carrying `unmet=["gov_id"]`.
+- Expected: (a) `Unknown`; (b)+(c) `Allowed`; (d) `Blocked(current, required,
+  ["gov_id"])`. Integer-rank comparison correct across boundary.
+- Traces: AC-1, AC-3, AC-5.
+
+**TC-AND-259-02 — loadSetup composes balance + tier in parallel (happy path)**
+- Type: contract/MockWebServer. Target: JVM (`PayoutSetupRepository`).
+- Preconditions: MockWebServer queued: `GET /ui/payouts/balance` 200, `GET /ui/payouts`
+  200, `GET /v1/kyc/tiers/me` 200 (`current_tier` above required), optionally
+  `GET /v1/kyc/tiers/me/requirements/{n}` 200 `eligible=true`.
+- Steps: Call `loadSetup()`; inspect recorded requests and result.
+- Expected: All three reads issued (in parallel); `PayoutSetupData` has balance,
+  recentPayouts, non-null `tierStatus`; derived gate = `Allowed`. Verb/path match the
+  verified endpoints.
+- Traces: AC-1, AC-2.
+
+**TC-AND-259-03 — Successful payout request sends X-CSRF-Token and shows confirmation**
+- Type: contract/MockWebServer. Target: JVM (`PayoutSetupRepository` +
+  `PayoutSetupViewModel`).
+- Preconditions: `ui_csrf` cookie present in the jar; gate `Allowed`; MockWebServer
+  queues `POST /ui/payouts/request` → 201 `{ok:true, payout_id:"po_1",
+  amount_cents:50000, status:"pending"}`.
+- Steps: Set valid amount (≥ min, ≤ available) + method `bank_transfer`; call
+  `submit()`.
+- Expected: Recorded request is `POST /ui/payouts/request`, body
+  `{amount_cents, method, notes}`, header `X-CSRF-Token` present; UiState shows
+  `savedMethod`/created payout + confirmation; `isSaving` returns to false.
+- Traces: AC-2.
+
+**TC-AND-259-04 — Below-tier load derives Blocked; submit is a no-op**
+- Type: unit (ViewModel, Turbine). Target: JVM.
+- Preconditions: Fake repo returns `tierStatus` with `eligible=false`,
+  `unmet=["gov_id"]`.
+- Steps: `load()`; then call `submit()` while gated.
+- Expected: gate = `Blocked` carrying current/required tier + `["gov_id"]`; `submit()`
+  performs no network call (defensive guard); no `savedMethod`.
+- Traces: AC-3, AC-5.
+
+**TC-AND-259-05 — onReturnedFromKyc evaluates and unlocks when tier rises**
+- Type: contract/MockWebServer. Target: JVM (ViewModel).
+- Preconditions: initial tier below required (Blocked); MockWebServer queues
+  `POST /v1/kyc/tiers/me/evaluate` → 200 `TierDetails` with raised `current_tier`
+  (now ≥ required).
+- Steps: After Blocked state, call `onReturnedFromKyc()`.
+- Expected: a `POST /v1/kyc/tiers/me/evaluate` is issued; gate re-derives to
+  `Allowed`; form unlocks without a full reload (no re-fetch of balance/list unless
+  designed). `evaluating` toggles true→false.
+- Traces: AC-4.
+
+**TC-AND-259-06 — Fail-closed when KYC leg fails on load**
+- Type: contract/MockWebServer. Target: JVM (repo + ViewModel).
+- Preconditions: `GET /ui/payouts/balance` 200, `GET /v1/kyc/tiers/me` → 500 (or
+  timeout).
+- Steps: `load()`.
+- Expected: `tierStatus = null` → gate = `Unknown`; form disabled; a retry-tier action
+  offered; payout-leg success does not enable submit.
+- Traces: AC-5.
+
+**TC-AND-259-07 — 403 tier-gate on request flips UI to Blocked**
+- Type: contract/MockWebServer. Target: JVM (ViewModel).
+- Preconditions: gate `Allowed` client-side; MockWebServer queues
+  `POST /ui/payouts/request` → 403 `{detail:{code:"<PAYOUT_GATE_CODE>",
+  message:"Verification required"}}` (code = configured constant, OA2).
+- Steps: `submit()` with a valid amount.
+- Expected: UI flips to `Blocked`, surfaces "Verify identity" (not a generic error);
+  entered amount preserved. Test is parameterized on the configured code constant.
+- Traces: AC-6.
+
+**TC-AND-259-08 — 422 validation maps to inline field errors; values preserved**
+- Type: contract/MockWebServer. Target: JVM (ViewModel).
+- Preconditions: MockWebServer queues `POST /ui/payouts/request` → 422
+  `{detail:[{msg:"amount too low", loc:["body","amount_cents"]}]}`.
+- Steps: `submit()` with an amount the client did not catch (forced).
+- Expected: `fieldErrors["amount_cents"]` set from `loc`/`msg`; entered amount/method/
+  notes retained; no crash on array `detail`.
+- Traces: AC-7.
+
+**TC-AND-259-09 — Local pre-network validation blocks submit**
+- Type: unit (ViewModel). Target: JVM.
+- Preconditions: balance min=1000, available=50000.
+- Steps: Enter amount below min, then above available, then empty.
+- Expected: `canSubmit=false` in each case; `submit()` issues no request; inline
+  amount error shown. Boundary values (== min, == available) → `canSubmit=true`.
+- Traces: AC-2, AC-7.
+
+**TC-AND-259-10 — Network/CSRF/5xx errors are retryable and preserve form state**
+- Type: contract/MockWebServer. Target: JVM (ViewModel).
+- Preconditions: MockWebServer queues `POST /ui/payouts/request` → first a 403 CSRF
+  (`detail:"Invalid CSRF token"`), then a disconnect/timeout, then a 500.
+- Steps: `submit()` three times.
+- Expected: each yields a non-blocking retryable `UiError` (csrf/network/server);
+  entered values intact every time; double-submit guard keeps a second `submit()`
+  while `isSaving` a no-op; no auto-retry of the mutation.
+- Traces: AC-8.
+
+**TC-AND-259-11 — Persistent 401 triggers single refresh then re-auth**
+- Type: contract/MockWebServer. Target: JVM (network chain through repo).
+- Preconditions: authenticated; MockWebServer: `POST /ui/payouts/request` → 401, then
+  `POST /ui/session/refresh` → 401 (refresh fails).
+- Steps: `submit()`.
+- Expected: exactly one refresh attempt; on its failure surface "Session expired" /
+  route to re-auth; no infinite retry loop. (Confirms the client.ts-derived behavior,
+  Audit #14.)
+- Traces: AC-8.
+
+**TC-AND-259-12 — Compose UI: below-tier renders KYC-gate panel, taps route to KYC**
+- Type: Compose-UI (instrumented). Target: EMU (`test35`).
+- Preconditions: ViewModel seeded with `Blocked` state via fake repo;
+  `onNavigateToKyc` lambda spy.
+- Steps: Render `PayoutSetupScreen`; assert gate panel shows current/required tier +
+  unmet; tap "Verify identity".
+- Expected: amount form is not present/submittable; `onNavigateToKyc` invoked exactly
+  once. Satisfies "KYC gate routes to verification".
+- Traces: AC-1, AC-3.
+
+**TC-AND-259-13 — Compose UI: above-tier form enables submit and shows confirmation**
+- Type: Compose-UI (instrumented). Target: EMU (`test35`).
+- Preconditions: ViewModel seeded with `Allowed` + balance; fake `submit()` → success.
+- Steps: Render screen; enter valid amount + method; tap submit.
+- Expected: submit enabled only with valid input; success confirmation rendered;
+  button disabled while `isSaving`. Satisfies "Setup works".
+- Traces: AC-1, AC-2.
+
+**TC-AND-259-14 — Accessibility: gate panel & form semantics with TalkBack**
+- Type: Compose-UI / accessibility (instrumented). Target: DEVICE (Samsung A15,
+  API 34) — real TalkBack on hardware exercises the production accessibility stack and
+  arm64/API-34 path; EMU is acceptable for the semantics-tree assertions only.
+- Preconditions: both Blocked and Allowed fixtures.
+- Steps: Assert merged semantics: gate panel announced as a single group ("Verify
+  identity to enable payouts"); amount field has label + error semantics; disabled
+  submit exposes reason ("Verification required"); touch targets ≥ 48dp; verify with
+  TalkBack enabled on device.
+- Expected: all semantics present; no unlabeled actionable nodes; targets meet size.
+- Traces: AC-1, AC-3.
+
+**TC-AND-259-15 — Manual: flaky/offline dev-host path (no data loss)**
+- Type: manual. Target: DEVICE (real network to dev host
+  `http://18.222.237.167:8000`, exercises cleartext + ~20s timeouts).
+- Preconditions: app pointed at dev host; valid session.
+- Steps: Enter a payout amount; toggle airplane mode mid-submit / let the request time
+  out; restore connectivity and retry.
+- Expected: offline banner with Retry; entered amount/method/notes preserved; no
+  duplicate payout created (mutation not auto-retried); retry succeeds when host
+  responds. Confirms §7 resilience on real hardware/network.
+- Traces: AC-8.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 | TC-01, TC-02, TC-12, TC-13, TC-14 |
+| AC-2 | TC-02, TC-03, TC-09, TC-13 |
+| AC-3 | TC-01, TC-04, TC-12, TC-14 |
+| AC-4 | TC-05 |
+| AC-5 | TC-01, TC-04, TC-06 |
+| AC-6 | TC-07 |
+| AC-7 | TC-08, TC-09 |
+| AC-8 | TC-10, TC-11, TC-15 |

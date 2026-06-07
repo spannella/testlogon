@@ -5,7 +5,8 @@ milestone: M5
 epic: E33
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-223]
 blocks: []
 ---
@@ -15,9 +16,16 @@ blocks: []
 ## 1. Overview & Goal
 
 Implement the **Tax documents** feature for the TestLogon native Android app: a
-screen that lists a signed-in user's tax documents (e.g. annual statements,
-1099-style forms) returned by the backend, and lets the user download an
-individual document to local storage and open it in an external viewer.
+screen that lists a signed-in user's previously generated tax documents (annual
+earnings summaries, `doc_type` typically `annual_summary`) returned by the
+backend, and lets the user download a document PDF (by tax **year**) to local
+storage and open it in an external viewer.
+
+> **Reviewer note (corrected):** the backend models these as *annual earnings
+> summaries*, not 1099-style forms. 1099 forms are a **distinct** resource under
+> `/ui/tax-forms/1099s*` (see `src/api/types.ts: TaxForm1099`) and are out of
+> scope for this ticket. References to "1099" as the primary document type in the
+> original draft were inaccurate and have been corrected throughout.
 
 This mirrors the web reference module `frontend/src/api/endpoints/taxDocuments.ts`
 and reuses the billing data plumbing delivered by **AND-223** (Billing API +
@@ -27,30 +35,43 @@ Compose UI, and download handling, wired into the existing Hilt graph and
 cookie-based session.
 
 Goal, stated as a single testable outcome: **a signed-in user can see their list
-of tax documents and download any one of them to device storage, with correct
-behavior on empty, offline, error, and slow-network conditions.**
+of generated tax documents and download a document PDF (by year) to device
+storage, with correct behavior on empty, offline, error, and slow-network
+conditions.**
 
 Out of scope: in-app PDF rendering (we hand off to a system viewer via
 `ACTION_VIEW`), document e-signing, generating/regenerating tax documents
-server-side, and any billing/invoice UI (owned by the broader billing epic).
+server-side (`POST /ui/tax-documents/generate`), the spending-summary and
+year-comparison cards shown on the web page, 1099 forms (`/ui/tax-forms/*`),
+and any billing/invoice UI (owned by the broader billing epic).
 
 ## 2. Context & References
 
 - **Web reference:** `frontend/src/api/endpoints/taxDocuments.ts` (authoritative
   for endpoint paths, query params, and DTO field names), `frontend/src/api/types.ts`
   (shared `TaxDocument` shape), and the FastAPI error contract used across the app.
-- **OpenAPI:** `GET http://18.222.237.167:8000/openapi.json` — confirm the exact
-  `/ui/billing/*` (or `/api/billing/*`) tax-document routes and response schema at
-  implementation time; the paths in §5 are taken from the web module and MUST be
-  reconciled against `openapi.json`.
+- **OpenAPI:** `GET http://18.222.237.167:8000/openapi.json` — routes have been
+  reconciled (2026-06-06). The tax-document routes live under **`/ui/tax-documents/*`**
+  (NOT `/ui/billing/*` or `/api/billing/*`, which do not exist for this resource).
+  Verified routes: `GET /ui/tax-documents/history` (op
+  `get_history_ui_tax_documents_history_get`, resp `TaxDocumentListOut`) and
+  `GET /ui/tax-documents/document/{year}/pdf` (op
+  `download_document_pdf_ui_tax_documents_document__year__pdf_get`, binary resp).
 - **Upstream dependency AND-223 (Billing API + DTOs):** provides
   `core-network` Retrofit wiring for billing, Moshi adapters, the shared
   `ApiResult<T>` error mapping, and the cookie/CSRF `OkHttp` stack. Tax documents
   is treated as a sub-resource of billing and reuses that infrastructure.
-- **Session/auth:** cookie-based session established via `/ui/session/start` →
-  MFA → `/ui/session/finalize`; all requests here are authenticated GETs that ride
-  the persistent cookie jar and echo `ui_csrf` as `X-CSRF-Token`. On `401` the
-  shared authenticator performs one `POST /ui/session/refresh` then retries.
+- **Session/auth:** cookie-based session established via `POST /ui/session/start`
+  → `POST /ui/session/finalize` (both verified in the OpenAPI index); all requests
+  here are authenticated GETs that ride the persistent cookie jar and echo `ui_csrf`
+  as `X-CSRF-Token`. **Correction:** the web client (`src/api/client.ts`) also sends
+  an `Authorization: Bearer <accessToken>` header from its auth store on requests
+  routed through the `api` wrapper — so auth is cookie **+** optional bearer, not
+  cookie-only. Note the web *download* helpers in `taxDocuments.ts` use a raw
+  `fetch(..., { credentials: "include" })` that bypasses the wrapper and sends
+  **neither** `Authorization` nor `X-CSRF-Token` (CSRF is not required for GETs).
+  On `401` the shared `api` wrapper performs one `POST /ui/session/refresh` then
+  retries exactly once (`src/api/client.ts: refreshSession`).
 - **Stack/layering:** `app -> feature-* -> core-*`; Kotlin 2.0.21, Compose +
   Material 3, Hilt (KSP), Retrofit 2.11 / OkHttp 4.12 / Moshi 1.15, Room 2.6,
   DataStore, Paging 3 (not required here — the list is expected to be small and
@@ -59,26 +80,37 @@ server-side, and any billing/invoice UI (owned by the broader billing epic).
 ## 3. Functional Requirements
 
 FR-1. **List tax documents.** On entering the Tax Documents screen, the app fetches
-the current user's tax documents via `GET /ui/billing/tax-documents` and renders
-them as a scrollable list sorted newest-first (by `tax_year` desc, then `issued_at`
-desc).
+the current user's previously generated tax documents via
+`GET /ui/tax-documents/history` (corrected from `/ui/billing/tax-documents`) and
+renders them as a scrollable list sorted newest-first (by `year` desc, then
+`created_at` desc). The endpoint takes **no query parameters** (the original draft's
+`tax_year` filter does not exist on `history`).
 
-FR-2. **List item content.** Each row shows: document title/label, tax year, form
-type (e.g. `1099-MISC`), issue date (localized), and file size (humanized, e.g.
-`248 KB`) when present. A trailing download affordance (icon button) is shown per row.
+FR-2. **List item content.** Each row shows the fields the backend actually returns
+(`TaxDocumentOut`): tax **year** (`year`, nullable → show "—"), document **type**
+(`doc_type`, e.g. `annual_summary`), **grand total** (`grand_total_cents`, money-
+formatted), and **transaction count** (`transaction_count`). A trailing download
+affordance (icon button) is shown per row. **Correction:** the original draft's
+`title`, `form_type` (`1099-MISC`), `issued_at`, and humanized `size_bytes` are NOT
+provided by the API and have been removed; there is no `Content-Length`-based size
+in the list. A row label may be derived locally as "{year} Annual Tax Statement".
 
-FR-3. **Empty state.** When the API returns an empty list, show a non-error empty
-state ("No tax documents available yet.") with a retry/refresh action.
+FR-3. **Empty state.** When the API returns an empty `documents` list, show a
+non-error empty state. The web copy is "No documents generated yet."
+(`TaxDocumentsPage.tsx`); the Android string should match intent. A retry/refresh
+action is shown.
 
-FR-4. **Download.** Tapping a row's download action downloads the document bytes
-from `GET /ui/billing/tax-documents/{documentId}/download` to app-scoped external
-storage and then offers to open it via a system `ACTION_VIEW` intent using a
-`FileProvider` content URI. A per-row progress/disabled state is shown while the
-download is in flight.
+FR-4. **Download.** Tapping a row's download action downloads the document PDF for
+that row's **year** from `GET /ui/tax-documents/document/{year}/pdf` (corrected from
+`/ui/billing/tax-documents/{documentId}/download`; the resource is keyed by year,
+not by `documentId`) to app-scoped external storage and then offers to open it via a
+system `ACTION_VIEW` intent using a `FileProvider` content URI. A per-row
+progress/disabled state is shown while the download is in flight. Rows whose `year`
+is null cannot be downloaded by this endpoint (disable the affordance).
 
-FR-5. **Re-download / open existing.** If a document was already downloaded this
-session and the file still exists, tapping again opens the existing file instead of
-re-fetching.
+FR-5. **Re-download / open existing.** If a document (keyed by year) was already
+downloaded this session and the file still exists, tapping again opens the existing
+file instead of re-fetching.
 
 FR-6. **Refresh.** Pull-to-refresh and an explicit retry button re-issue the list
 request. The list request is an idempotent GET and is subject to bounded backoff
@@ -114,31 +146,37 @@ TaxDocumentsScreen (Compose)
 **Model (core-model).**
 
 ```kotlin
+// Corrected to match TaxDocumentOut (openapi.pretty.json) /
+// src/api/types.ts: TaxDocument. Server uses unix-epoch seconds (integers)
+// for date_from/date_to/created_at, NOT ISO-8601 strings.
 data class TaxDocument(
-    val id: String,
-    val title: String,
-    val taxYear: Int,
-    val formType: String?,        // e.g. "1099-MISC"
-    val issuedAt: Instant?,       // ISO-8601 from server
-    val sizeBytes: Long?,
-    val mimeType: String?,        // defaults to application/pdf
-    val downloadable: Boolean,
+    val docId: String,            // doc_id (the only required field)
+    val docType: String,          // doc_type, default "annual_summary"
+    val year: Int?,               // nullable
+    val dateFrom: Long,           // date_from (unix seconds, default 0)
+    val dateTo: Long,             // date_to (unix seconds, default 0)
+    val grandTotalCents: Long,    // grand_total_cents (default 0)
+    val transactionCount: Int,    // transaction_count (default 0)
+    val currency: String,         // currency, default "usd"
+    val createdAt: Long,          // created_at (unix seconds, default 0)
 )
+// NOTE: there is no title / form_type / size_bytes / mime_type / downloadable
+// field on the server model. MIME is assumed application/pdf for the download.
 ```
 
 **API (core-network).**
 
 ```kotlin
 interface TaxDocumentsApi {
-    @GET("ui/billing/tax-documents")
-    suspend fun listTaxDocuments(
-        @Query("tax_year") taxYear: Int? = null,
-    ): TaxDocumentListDto
+    // Corrected path; history takes no query params.
+    @GET("ui/tax-documents/history")
+    suspend fun listTaxDocuments(): TaxDocumentListDto
 
+    // Corrected: download is keyed by YEAR, not documentId.
     @Streaming
-    @GET("ui/billing/tax-documents/{documentId}/download")
+    @GET("ui/tax-documents/document/{year}/pdf")
     suspend fun downloadTaxDocument(
-        @Path("documentId") documentId: String,
+        @Path("year") year: Int,
     ): ResponseBody
 }
 ```
@@ -217,8 +255,10 @@ content URI and `Intent.FLAG_GRANT_READ_URI_PERMISSION`.
 to `context.getExternalFilesDir("tax")` (app-scoped, no runtime storage permission
 on any supported API level), buffering with `source.readAll(sink)` on
 `Dispatchers.IO`, then returns a `content://com.testlogon.android.fileprovider/...`
-URI. Filename is derived as `${doc.taxYear}-${sanitize(doc.title)}.pdf` (or the
-extension implied by `mimeType`). A `FileProvider` entry and `provider_paths.xml`
+URI. Filename is derived as `tax-document-${doc.year}.pdf` (mirroring the web
+client's `earnings-summary-${year}.pdf`); a `Content-Disposition` filename is used
+if the server provides one. There is no server `title`/`mime_type` to derive from,
+so the extension is fixed to `.pdf`. A `FileProvider` entry and `provider_paths.xml`
 (`<external-files-path name="tax" path="tax/"/>`) are added to the feature module's
 manifest/res.
 
@@ -227,64 +267,74 @@ manifest/res.
 
 ## 5. API Contract
 
-All paths reconciled against `/openapi.json` and `taxDocuments.ts` at build time.
+All paths reconciled against `/openapi.json` and `taxDocuments.ts` (2026-06-06).
 Base URL `http://18.222.237.167:8000` (dev, plaintext). Cookie session + CSRF apply.
 
-**List — request**
+**List — request** (corrected path; no query params)
 
 ```
-GET /ui/billing/tax-documents?tax_year=2025      (tax_year optional)
+GET /ui/tax-documents/history
 Cookie: <session cookies>; ui_csrf=<token>
-X-CSRF-Token: <token>
+X-CSRF-Token: <token>              (echoed by the api wrapper; not required for GET)
+Authorization: Bearer <accessToken> (if present in auth store)
 Accept: application/json
 ```
 
-**List — response 200**
+**List — response 200** (schema `TaxDocumentListOut` → `TaxDocumentOut`)
 
 ```json
 {
-  "tax_documents": [
+  "documents": [
     {
-      "id": "txd_01HZY...",
-      "title": "2024 Annual Tax Statement",
-      "tax_year": 2024,
-      "form_type": "1099-MISC",
-      "issued_at": "2025-01-31T00:00:00Z",
-      "size_bytes": 254013,
-      "mime_type": "application/pdf",
-      "downloadable": true
+      "doc_id": "txd_01HZY...",
+      "doc_type": "annual_summary",
+      "year": 2024,
+      "date_from": 1704067200,
+      "date_to": 1735689599,
+      "grand_total_cents": 254013,
+      "transaction_count": 87,
+      "currency": "usd",
+      "created_at": 1738281600
     }
   ]
 }
 ```
 
-Moshi DTO maps `tax_documents` → `documents`, snake_case → camelCase via
-`@Json(name=...)`. A bare top-level array response is also tolerated by the adapter
-(the web module returns `data.tax_documents ?? data`).
+`doc_id` is the only required field; all others have server defaults
+(`doc_type="annual_summary"`, `currency="usd"`, numerics `0`, `year` nullable).
+Dates are **unix-epoch seconds (integers)**, not ISO-8601 strings. Moshi DTO maps
+the `documents` envelope → `List<TaxDocument>`, snake_case → camelCase via
+`@Json(name=...)`. (The original draft's `tax_documents` envelope and bare-array
+fallback are not what the API returns; the real envelope key is `documents`.)
 
-**Download — request**
+**Download — request** (corrected: keyed by year, returns raw PDF)
 
 ```
-GET /ui/billing/tax-documents/{documentId}/download
-Cookie / X-CSRF-Token as above
+GET /ui/tax-documents/document/{year}/pdf
+Cookie / X-CSRF-Token / Authorization as above
 Accept: application/pdf, application/octet-stream
 ```
 
-**Download — response 200:** binary body; `Content-Type` (used for MIME),
-`Content-Disposition` filename (used if present), `Content-Length` for progress.
+**Download — response 200:** binary PDF body (OpenAPI declares no JSON schema for
+the 200, i.e. a raw file stream); use `Content-Type` for MIME if present,
+`Content-Disposition` filename if present, `Content-Length` for progress.
 
-**Errors (FastAPI `detail`):** `401` → trigger one `/ui/session/refresh` + retry
-(shared authenticator); `403` → not-authorized message; `404` → "Document no longer
-available", refresh list; `422` → validation (rare for GET); `5xx`/timeout →
-retryable error. `detail` is mapped through the shared decoder handling
-`string | [{msg}] | {code,...}` shapes delivered by AND-223.
+**Errors (FastAPI `detail`):** declared error response for both endpoints is
+**`422 HTTPValidationError`** (e.g. a non-integer `year` path segment). `401` →
+trigger one `POST /ui/session/refresh` + retry (matches `src/api/client.ts`); `403`
+→ not-authorized message (the web client maps `detail.code` values like
+`role_required` via `mapAuthorizationError`); `404` → "Document no longer
+available", refresh list; `5xx`/timeout → retryable error. FastAPI `detail` is
+mapped through a decoder handling `string | [{msg}] | {code,...}` shapes, mirroring
+`normalizeErrorDetail` in `src/api/client.ts` and delivered by AND-223. Note network
+errors surface in the web client as `ApiError(0, "Network error")`.
 
 ## 6. Data & State Management
 
 - **Source of truth:** `TaxDocumentsViewModel.uiState` (`StateFlow`), survives
   config changes; downloads run in `viewModelScope`.
 - **Caching:** Reuse the Room cache pattern from billing. Add a `TaxDocumentEntity`
-  table keyed by `id` with `fetchedAt` epoch millis. The repository emits cached
+  table keyed by `doc_id` with `fetchedAt` epoch millis. The repository emits cached
   rows immediately when present, then refreshes from network; on refresh failure it
   keeps cached rows and sets `isStale = true` (drives a "Showing saved list" banner
   with last-updated time). Cache TTL is advisory only — staleness is surfaced, not
@@ -361,16 +411,21 @@ retryable error. `detail` is mapped through the shared decoder handling
 
 **Unit (core-testing + JUnit/Turbine/MockWebServer):**
 
-- DTO mapping: `tax_documents` array, bare-array fallback, missing optional fields
-  (`form_type`, `size_bytes`, `issued_at`), unknown JSON keys ignored.
+- DTO mapping: `documents` envelope, missing optional fields applying server
+  defaults (`doc_type`, `currency`, numerics → 0, `year` → null), unix-seconds dates
+  parsed as `Long`, unknown JSON keys ignored. (Corrected: there is no
+  `tax_documents` envelope or bare-array fallback in the real API.)
 - Repository: success → mapped list; network failure with cache → stale list +
-  `isStale`; network failure without cache → error; sort order (year desc).
+  `isStale`; network failure without cache → error; sort order (year desc, nulls
+  last).
 - ViewModel (`StateFlow` via Turbine): loading → content; empty → empty state;
   error → error state; download click → InProgress → Open event; download failure →
   Failed state + Error event; `consumeDownloadEvent()` clears the one-shot.
 - Downloader: streams `ResponseBody` to a temp file, returns FileProvider URI,
   deletes partial file on failure, reuses existing file (FR-5).
-- Error mapping: `401`/`403`/`404`/`422`/`5xx`/timeout produce expected `UiError`.
+- Error mapping: `401`/`403`/`404`/`422`/`5xx`/timeout/network(`0`) produce expected
+  `UiError`; FastAPI `detail` shapes (`string | [{msg}] | {code,...}`) normalize
+  correctly.
 
 **Instrumentation/Compose UI tests:**
 
@@ -397,10 +452,13 @@ retryable error. `detail` is mapped through the shared decoder handling
 
 ## 13. Risks & Open Questions
 
-- **Endpoint shape unconfirmed:** the `/ui/billing/tax-documents` paths and the
-  `tax_documents` envelope are inferred from `taxDocuments.ts`; MUST be verified
-  against `/openapi.json`. If tax docs live under `/api/billing/*` or a separate
-  `/ui/tax/*` namespace, adjust §5 accordingly (low effort).
+- **Endpoint shape — RESOLVED (2026-06-06):** paths verified against `/openapi.json`
+  and `taxDocuments.ts`. Real routes are `GET /ui/tax-documents/history` and
+  `GET /ui/tax-documents/document/{year}/pdf`; envelope key is `documents`; download
+  is keyed by **year**. The original `/ui/billing/tax-documents` paths and
+  `tax_documents` envelope were incorrect and have been corrected in §5. Residual
+  open question: whether the dev backend ever populates a `Content-Disposition`
+  filename (assumed absent → derived name).
 - **Download auth on dev host:** unreliable plaintext host may stall mid-download;
   partial-file cleanup and retry mitigate, but large files over a flaky link remain
   a UX risk.
@@ -414,7 +472,7 @@ retryable error. `detail` is mapped through the shared decoder handling
 ## 14. Acceptance Criteria
 
 - AC-1. A signed-in user opening `billing/tax-documents` sees their tax documents
-  list (newest year first) populated from `GET /ui/billing/tax-documents`.
+  list (newest year first) populated from `GET /ui/tax-documents/history`.
 - AC-2. An empty API result renders the non-error empty state with a refresh action.
 - AC-3. Tapping a row's download action downloads the document and opens it in a
   system viewer via a `FileProvider` content URI; a previously downloaded file in the
@@ -423,7 +481,8 @@ retryable error. `detail` is mapped through the shared decoder handling
   refresh with cached data keeps showing the list with a stale banner.
 - AC-5. List and download GETs use ~20s timeouts; list retries with bounded backoff
   on transient failures; a `401` triggers exactly one session refresh + retry.
-- AC-6. DTO mapping (incl. missing optionals and bare-array fallback) and
+- AC-6. DTO mapping (incl. missing optionals with server defaults and unix-seconds
+  dates) and
   ViewModel state transitions are covered by passing unit tests (the backlog
   acceptance: "Tax docs list + download", tested).
 - AC-7. Files are written only to app-scoped external storage; no session cookies,
@@ -447,3 +506,213 @@ retryable error. `detail` is mapped through the shared decoder handling
   the merged code and noted in the PR.
 - No new cleartext-traffic exemptions, no PII in logs, strings externalized, a11y
   checks pass.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **List endpoint is `GET /ui/tax-documents/history`** — *Corrected* (draft said
+   `GET /ui/billing/tax-documents`). Source: OpenAPI `GET /ui/tax-documents/history`
+   (op `get_history_ui_tax_documents_history_get`, resp `TaxDocumentListOut`);
+   `src/api/endpoints/taxDocuments.ts: getDocumentHistory`.
+2. **List response envelope key is `documents` (array of `TaxDocumentOut`)** —
+   *Corrected* (draft said `tax_documents` with bare-array fallback). Source:
+   `components.schemas.TaxDocumentListOut` and `src/api/types.ts: TaxDocumentList`.
+3. **`TaxDocumentOut` fields = `doc_id` (required), `doc_type`, `year?`,
+   `date_from`, `date_to`, `grand_total_cents`, `transaction_count`, `currency`,
+   `created_at`** — *Corrected* (draft invented `title`, `tax_year`, `form_type`,
+   `issued_at`, `size_bytes`, `mime_type`, `downloadable`). Source:
+   `components.schemas.TaxDocumentOut`; `src/api/types.ts: TaxDocument`.
+4. **Date fields are unix-epoch seconds (integers), not ISO-8601** — *Corrected*
+   (draft modeled `issuedAt: Instant` from an ISO string). Source: `TaxDocumentOut`
+   (`date_from`/`date_to`/`created_at` `type: integer`); web formats via
+   `fmtCents`/numeric handling in `TaxDocumentsPage.tsx`.
+5. **Download endpoint is `GET /ui/tax-documents/document/{year}/pdf`, keyed by
+   year, returning a raw PDF** — *Corrected* (draft said
+   `GET /ui/billing/tax-documents/{documentId}/download`). Source: OpenAPI
+   `GET /ui/tax-documents/document/{year}/pdf` (op
+   `download_document_pdf_ui_tax_documents_document__year__pdf_get`, resp `200:` with
+   no JSON schema = binary); `src/api/endpoints/taxDocuments.ts: downloadDocumentPdf`.
+6. **`history` takes no query params (no `tax_year` filter)** — *Corrected* (draft
+   had `@Query("tax_year")`). Source: OpenAPI index line for
+   `/ui/tax-documents/history` (`params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`
+   only — no `tax_year`); `getDocumentHistory()` passes no params.
+7. **The web "tax documents" feature is annual earnings summaries, not 1099 forms;
+   1099s are a distinct resource** — *Corrected* (draft framed the docs as
+   "1099-style"). Source: `TaxDocumentOut.doc_type` default `annual_summary`;
+   `src/api/types.ts` comment "DISTINCT from the consumer TaxDocument types above";
+   1099 routes under `/ui/tax-forms/1099s*` returning `TaxForm1099Out`.
+8. **Empty-state copy "No documents generated yet."** — *Verified*. Source:
+   `src/pages/billing/TaxDocumentsPage.tsx` (`EmptyState title="No documents
+   generated yet"`).
+9. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token`** — *Verified*. Source:
+   `src/api/client.ts` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+10. **Auth also sends `Authorization: Bearer <accessToken>` (not cookie-only)** —
+    *Corrected* (draft implied cookie-only). Source: `src/api/client.ts`
+    (`headers.set("Authorization", \`Bearer ${accessToken}\`)`).
+11. **Web download helpers bypass the `api` wrapper (raw `fetch`,
+    `credentials:"include"`, no CSRF/Bearer header)** — *Verified* (contract nuance).
+    Source: `src/api/endpoints/taxDocuments.ts: downloadBlob`.
+12. **`401` triggers exactly one `POST /ui/session/refresh` then one retry** —
+    *Verified*. Source: `src/api/client.ts: refreshSession` + the single
+    `refreshPromise`/retry path; OpenAPI `POST /ui/session/refresh`.
+13. **Session established via `POST /ui/session/start` → `POST /ui/session/finalize`**
+    — *Verified*. Source: OpenAPI `POST /ui/session/start` (`UiSessionStartReq` →
+    `UiSessionStartResp`) and `POST /ui/session/finalize` (`UiSessionFinalizeReq`).
+    (The intermediate "MFA" step is not a single named endpoint in the index;
+    treated as part of the start/finalize flow.)
+14. **Declared error response for both tax endpoints is `422 HTTPValidationError`** —
+    *Verified*. Source: OpenAPI index lines for `/ui/tax-documents/history` and
+    `/ui/tax-documents/document/{year}/pdf` (`resp=...;422:HTTPValidationError`).
+15. **FastAPI `detail` normalization handles `string | [{msg}] | {code,...}`** —
+    *Verified*. Source: `src/api/client.ts: normalizeErrorDetail` /
+    `mapAuthorizationError` (e.g. `code === "role_required_scope"`).
+16. **Network/offline error surfaces as status `0`** — *Verified*. Source:
+    `src/api/client.ts` (`throw new ApiError(0, "Network error", err)`).
+17. **Dev base URL `http://18.222.237.167:8000` (plaintext)** — *Unverified-
+    assumption* (carried from draft/ticket; not present in the provided OpenAPI
+    `servers` excerpt). Treated as a dev-environment config value.
+18. **`@Streaming` Retrofit + write to `getExternalFilesDir` needs no runtime
+    storage permission; `FileProvider` + `ACTION_VIEW` for hand-off** — *Verified
+    (framework ref)*. Android docs: app-specific external files dir requires no
+    permission (developer.android.com/training/data-storage/app-specific);
+    FileProvider/`FLAG_GRANT_READ_URI_PERMISSION`
+    (developer.android.com/reference/androidx/core/content/FileProvider).
+19. **Material 3 `PullToRefreshBox` for pull-to-refresh** — *Unverified-assumption
+    (framework ref)*. API name from Compose Material3 docs
+    (developer.android.com/jetpack/compose) but the exact composable name/signature
+    is version-dependent (Compose BOM at M5 not pinned in sources).
+
+### Corrections made
+
+- Endpoint paths: list `→ /ui/tax-documents/history`; download `→
+  /ui/tax-documents/document/{year}/pdf` (year-keyed, raw PDF). (Claims 1, 5)
+- Response envelope `tax_documents` + bare-array fallback `→ documents`. (Claim 2)
+- `TaxDocument` model rewritten to the real `TaxDocumentOut` fields; removed
+  invented `title/form_type/issued_at/size_bytes/mime_type/downloadable`. (Claim 3)
+- Dates retyped from `Instant`/ISO-8601 to `Long` unix-seconds. (Claim 4)
+- Removed non-existent `tax_year` query param on `history`. (Claim 6)
+- Reframed document type from "1099-style" to annual earnings summary; 1099s noted
+  as out of scope. (Claim 7)
+- Auth note: added `Authorization: Bearer` + download-helper CSRF/bearer bypass.
+  (Claims 10, 11)
+- Declared error response clarified as `422 HTTPValidationError`; added network
+  status `0`. (Claims 14, 16)
+- Updated FR-1/FR-2/FR-3/FR-4/FR-5, §4 model+API, §5 contract, §6 cache key,
+  §11 tests, §13 risks, AC-1/AC-6 accordingly.
+
+### Open assumptions
+
+- Dev base URL/host (`18.222.237.167:8000`): not in the provided OpenAPI `servers`
+  excerpt — environment config, unverifiable from sources. (Claim 17)
+- `Content-Type`/`Content-Disposition`/`Content-Length` headers on the PDF download:
+  the OpenAPI 200 has no declared schema/headers, so MIME=`application/pdf`,
+  derived filename, and length-based progress are best-effort assumptions to confirm
+  against a live response.
+- Exact Compose Material3 pull-to-refresh API at M5 (BOM version not pinned in the
+  sources). (Claim 19)
+- The intermediate MFA step in the session flow is not a single named endpoint in
+  the index; modeled as part of start→finalize.
+- Sort order (year desc, then created_at desc, nulls last) is an Android UX choice;
+  the web page renders `history` rows in server order with no client sort.
+
+## 17. Test Plan
+
+Test target legend per the CI/dev environment: **JVM** = JVM unit/Robolectric (no
+device); **emu35** = headless emulator AVD `test35` (x86_64, API 35); **phys** =
+physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a).
+Use **phys** for real hardware/behavior; ABI/API-34-vs-35 differences.
+
+- **TC-AND-246-01** — Type: contract/MockWebServer. Target: JVM. Preconditions:
+  MockWebServer enqueues a 200 `{"documents":[…]}` with two `TaxDocumentOut` items
+  (years 2024, 2023). Steps: call `TaxDocumentsApi.listTaxDocuments()`; map to
+  `List<TaxDocument>`; sort. Expected: request path is `/ui/tax-documents/history`
+  with **no** query string; two items mapped with `docId/docType/year/
+  grandTotalCents/transactionCount/currency` correct; list sorted year-desc.
+  Traces: AC-1, AC-6.
+- **TC-AND-246-02** — Type: unit. Target: JVM. Preconditions: JSON with only
+  `doc_id` present (all other fields omitted) plus a row with `year: null`. Steps:
+  Moshi-decode. Expected: server defaults applied (`doc_type="annual_summary"`,
+  `currency="usd"`, numerics 0), `year` is null, unix-seconds parse to `Long`,
+  unknown keys ignored, no crash. Traces: AC-6.
+- **TC-AND-246-03** — Type: unit. Target: JVM. Preconditions: list containing
+  years `[2023, null, 2025, 2024]`. Steps: apply repository sort. Expected: order
+  `2025, 2024, 2023, null` (year desc, nulls last). Traces: AC-1, AC-6.
+- **TC-AND-246-04** — Type: unit (Turbine). Target: JVM. Preconditions: repository
+  fake returns success then a populated list. Steps: `viewModel.load()`; collect
+  `uiState`. Expected: emissions `isLoading=true` → content (documents non-empty,
+  `error=null`). Traces: AC-1.
+- **TC-AND-246-05** — Type: unit (Turbine). Target: JVM. Preconditions: repository
+  returns empty `documents`. Steps: `load()`. Expected: terminal state has empty
+  documents and an empty-state flag (not `error`); refresh action available.
+  Traces: AC-2.
+- **TC-AND-246-06** — Type: contract/MockWebServer. Target: JVM. Preconditions:
+  enqueue `422` with body `{"detail":[{"msg":"value is not a valid integer"}]}`
+  for `history`. Steps: call repository; map error. Expected: `detail` normalized
+  to the `msg` string; mapped to a retryable/validation `UiError`; nothing logged
+  raw. Traces: AC-5, AC-6, AC-7.
+- **TC-AND-246-07** — Type: contract/MockWebServer. Target: JVM. Preconditions:
+  enqueue `401` once, then a 200 list; a fake refresher handles
+  `POST /ui/session/refresh`. Steps: call repository. Expected: exactly one refresh
+  call then one retry; final result is the 200 list; a second consecutive `401`
+  produces an auth error without a second refresh. Traces: AC-5.
+- **TC-AND-246-08** — Type: unit (Turbine). Target: JVM. Preconditions: repository
+  has cached rows; network refresh throws `IOException`. Steps: `load(forceRefresh
+  = true)`. Expected: cached rows retained, `isStale=true`, no full-screen error;
+  with no cache, full-screen offline error + Retry. Traces: AC-4.
+- **TC-AND-246-09** — Type: unit. Target: JVM. Preconditions: `TaxDocumentDownloader`
+  with a MockWebServer `@Streaming` body for year 2024; temp dir as
+  external-files. Steps: download year 2024; then download again. Expected: first
+  call requests `/ui/tax-documents/document/2024/pdf`, writes
+  `tax-document-2024.pdf`, returns a `content://…fileprovider/…` URI; second call
+  reuses the existing file without a new request (FR-5). On simulated failure mid-
+  stream, the partial file is deleted. Traces: AC-3, AC-7.
+- **TC-AND-246-10** — Type: Compose-UI. Target: emu35. Preconditions: ViewModel
+  seeded with two rows (one with `year=null`). Steps: render
+  `TaxDocumentsScreen`; assert rows, then assert states by re-seeding loading/empty/
+  error/stale. Expected: rows show year/type/total/count; loading shows spinner;
+  empty shows "No documents generated yet." copy + refresh; error shows Retry;
+  stale shows the saved-list banner; the `year=null` row's download affordance is
+  disabled. Traces: AC-1, AC-2, AC-4.
+- **TC-AND-246-11** — Type: Compose-UI (accessibility). Target: emu35.
+  Preconditions: one row rendered. Steps: query semantics tree; trigger TalkBack-
+  style assertions. Expected: download icon button has a non-empty
+  `contentDescription` (e.g. "Download 2024 tax statement"); touch targets ≥ 48dp;
+  row is a single merged semantics node; download progress exposes a live-region
+  status; no hardcoded strings (all from `strings.xml`). Traces: AC-8.
+- **TC-AND-246-12** — Type: instrumented/e2e. Target: **phys** (must run on the
+  physical device). Preconditions: app pointed at dev backend with a session that
+  has ≥1 generated document; system PDF viewer installed. Steps: open
+  `billing/tax-documents`; tap a row's download; wait for completion; confirm the
+  `ACTION_VIEW` chooser/viewer launches on the real PDF. Expected: file written to
+  app-scoped external storage, `FileProvider` URI opens read-only in an external
+  viewer; re-tap opens existing file without re-download. Rationale for phys: real
+  external-storage/FileProvider grant behavior and arm64/API-34 differ from the
+  x86_64/API-35 emulator. Traces: AC-3, AC-7.
+- **TC-AND-246-13** — Type: instrumented (resilience). Target: **phys** (real
+  flaky-network behavior). Preconditions: device on a throttled/intermittent link
+  to the dev host. Steps: start a download, drop connectivity mid-stream, then
+  retry; also attempt with airplane mode on. Expected: ~20s timeout enforced;
+  partial file deleted before retry; download Snackbar error + row `Failed` state
+  (tappable to retry); offline list shows stale cache (if present) or offline error.
+  Rationale for phys: real radio/connectivity transitions. Traces: AC-4, AC-5.
+- **TC-AND-246-14** — Type: manual (security/privacy). Target: phys or emu35 with
+  logcat capture. Preconditions: debug build, logcat capturing during a full
+  list+download cycle. Steps: exercise list, download, open; inspect logcat and the
+  written file location. Expected: no session cookies, `ui_csrf`/`X-CSRF-Token`
+  values, `Authorization` bearer, or document bytes in logs; file resides only in
+  `getExternalFilesDir("tax")` (not `Downloads`/MediaStore), removed on uninstall;
+  FileProvider grant is read-only and scoped to the chosen viewer. Traces: AC-7.
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+| --- | --- |
+| AC-1 (list, newest-first, from `/ui/tax-documents/history`) | TC-01, TC-03, TC-04, TC-10 |
+| AC-2 (empty state + refresh) | TC-05, TC-10 |
+| AC-3 (download → open via FileProvider; reuse existing) | TC-09, TC-12 |
+| AC-4 (loading/error/stale states; failed refresh keeps cache) | TC-08, TC-10, TC-13 |
+| AC-5 (~20s timeouts, bounded retry, one 401 refresh+retry) | TC-06, TC-07, TC-13 |
+| AC-6 (DTO mapping incl. defaults/nulls; ViewModel transitions) | TC-01, TC-02, TC-03, TC-04, TC-06 |
+| AC-7 (app-scoped storage; no cookies/CSRF/bytes in logs) | TC-06, TC-09, TC-12, TC-14 |
+| AC-8 (content descriptions; strings externalized) | TC-11 |

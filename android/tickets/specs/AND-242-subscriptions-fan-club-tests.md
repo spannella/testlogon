@@ -5,7 +5,8 @@ milestone: M5
 epic: E32
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-241]
 blocks: []
 ---
@@ -62,9 +63,14 @@ shared test fixtures/fakes promoted into `core-testing`.
   AND-240 fan-club tiers/members) own the Composables these UI tests drive. Where a screen
   is not yet merged, this ticket tests the screens that exist and leaves clearly-marked
   `@Ignore("blocked by AND-2xx")` placeholders so the suite stays green.
-- **Web reference:** `frontend/src/api/endpoints/subscriptions.ts` and
-  `frontend/src/api/types.ts` are the source of truth for the JSON fixtures used by the
-  repo tests.
+- **Web reference:** `src/api/endpoints/subscriptions.ts`, `src/api/endpoints/fan-club.ts`,
+  `src/api/types.ts`, and `src/api/client.ts` are the source of truth for the endpoint
+  paths, JSON fixtures, and auth/CSRF transport used by the repo tests. **CORRECTED
+  (review AND-242):** subscription endpoints live under `/api/...` and additionally send an
+  `X-User-Id` header (`subscriptions.ts: userIdHeader`); fan-club tier endpoints live under
+  `/ui/fan-club/...`. Both paths flow through the same `client.ts: api()` wrapper, so the
+  `X-CSRF-Token` (from the `ui_csrf` cookie) and `Authorization: Bearer` headers are added
+  to every request, `/api` and `/ui` alike.
 - **Backend:** FastAPI + DynamoDB; dev host `http://18.222.237.167:8000` is plaintext and
   unreliable. **No test in this ticket hits the live host.** All HTTP goes through
   `MockWebServer`; the unreliable host motivates explicit timeout/stale-path tests.
@@ -76,9 +82,13 @@ correct HTTP request: method, path, query params, `X-CSRF-Token` header echoed f
 `ui_csrf` cookie, and that the persistent cookie jar attaches session cookies.
 
 FR-2 **Repository mapping tests.** Verify DTO→domain mapping from recorded JSON fixtures
-for tiers, subscriptions, and fan-club tiers, including status enums (`ACTIVE`,
-`PAST_DUE`, `CANCELED`, `EXPIRED`), `price_cents`/`currency`/`period`, perks, and
-`renews_at` parsing to `Instant`.
+for plans, subscriptions, and fan-club tiers. **CORRECTED (review AND-242)** to the real
+field names: `status` is a free-form **string** (mapped to a domain enum with an
+`Unknown`/else branch — the backend declares no enum, so `ACTIVE`/`PAST_DUE`/`CANCELED`/
+`EXPIRED` are conventional values, not schema-fixed), `price_cents`/`currency`/`interval`
+(string cadence, e.g. `"month"` — not `period: "MONTH"`), fan-club `benefits` (not
+`perks`), and **epoch-integer** timestamps `current_period_end`/`start_at` parsed to
+`Instant` (there is no ISO `renews_at` field).
 
 FR-3 **Repository error/`ApiResult` tests.** Verify FastAPI `detail` shapes
 (`string | [{msg}] | {code,...}`), HTTP `401`/`404`/`5xx`, timeouts, and malformed JSON
@@ -170,17 +180,22 @@ class SubscriptionsRepositoryTest {
             clock = FixedClock("2026-06-05T00:00:00Z"))
     }
 
-    @Test fun getTiers_success_mapsDtoToDomain() = runTest {
+    // NOTE (review AND-242): path/fields corrected to the real contract — plans live at
+    // GET /api/creators/{creatorId}/plans (bare array), id field is plan_id, money is
+    // price_cents, billing cadence is `interval` (string), not `period`.
+    @Test fun getPlans_success_mapsDtoToDomain() = runTest {
         mws.server.enqueue(MockResponse().setResponseCode(200)
-            .setBody(readFixture("tiers_ok.json")))
-        val result = repo.getTiers("creator_42")
+            .setBody(readFixture("plans_ok.json")))
+        val result = repo.getPlans("creator_42")
         val req = mws.server.takeRequest()
-        assertThat(req.path).isEqualTo("/ui/subscriptions/tiers?creator_id=creator_42")
+        assertThat(req.path).isEqualTo("/api/creators/creator_42/plans")
+        assertThat(req.method).isEqualTo("GET")
         assertThat(req.getHeader("X-CSRF-Token")).isEqualTo("csrf-abc")
         assertThat(result).isInstanceOf(ApiResult.Success::class.java)
-        val tiers = (result as ApiResult.Success).data
-        assertThat(tiers.single().id).isEqualTo("tier_gold")
-        assertThat(tiers.single().priceCents).isEqualTo(999)
+        val plans = (result as ApiResult.Success).data
+        assertThat(plans.first().planId).isEqualTo("plan_gold")
+        assertThat(plans.first().priceCents).isEqualTo(999)
+        assertThat(plans.first().interval).isEqualTo("month")
     }
 }
 ```
@@ -232,44 +247,91 @@ virtual-time advance rather than real sleeps).
 ## 5. API Contract
 
 This ticket defines **no new endpoints**; it asserts the existing contract owned by
-AND-234. The repo tests exercise these upstream paths through `MockWebServer`:
+AND-234. **CORRECTED (review AND-242):** the original draft listed three endpoints
+(`GET /ui/subscriptions/tiers`, `GET /ui/subscriptions/me`, `GET /ui/fan-club/{creatorId}/tiers`)
+that **do not exist** in the backend OpenAPI or the web reference client. The real paths
+the web client uses — and therefore the contract the repo tests must pin — are:
 
-- `GET /ui/subscriptions/tiers?creator_id={id}` → `200` `{ "tiers": [...] }`.
-- `GET /ui/subscriptions/me` → `200` `{ "subscriptions": [...] }`.
-- `GET /ui/fan-club/{creatorId}/tiers` → `200` `{ "tiers": [...] }` (fan-club shape).
+- **Purchasable subscription plans** (a creator's "tiers"):
+  `GET /api/creators/{creatorId}/plans` → `200` **bare array** `[SubscriptionPlan, …]`
+  (web: `subscriptions.ts: listPlans`; public, no `X-User-Id`). There is **no**
+  `{ "tiers": [...] }` envelope.
+- **My subscriptions:** `GET /api/subscriptions?include_summary=true` → `200` **bare array**
+  `[SubscriptionOut, …]` (web: `subscriptions.ts: listSubscriptions`; sends `X-User-Id`).
+  There is **no** `/ui/subscriptions/me` and **no** `{ "subscriptions": [...] }` envelope.
+  (A cookie-session variant `GET /ui/billing/subscriptions` also exists; the repo under
+  test targets the `/api/subscriptions` path the web `subscriptions.ts` uses.)
+- **Fan-club tiers (creator-managed, current user's club):** `GET /ui/fan-club/tiers` →
+  `200` **bare array** `[TierOut, …]` (web: `fan-club.ts: listTiers`). The creator-scoped
+  **public** variant is `GET /api/creators/{creatorId}/tiers` (web: `fan-club.ts: getPublicTiers`).
+  Fan-club tier members: `GET /ui/fan-club/tiers/{tierId}/members`.
+- **Cancel** (non-GET, for the no-retry test): `POST /api/subscriptions/{subId}/cancel`
+  with body `{ cancel_at_period_end?, reason? }` → `200 SubscriptionOut`
+  (web: `subscriptions.ts: cancelSubscription`).
 - `POST /ui/session/refresh` → `200` (sets refreshed cookies) used by the 401-retry test.
+  **Verified** (OpenAPI `POST /ui/session/refresh`; web `client.ts: refreshSession`,
+  `auth.ts` line 60). Note the request body is empty.
 
-Fixtures (recorded from the web reference shapes; mirror `frontend/src/api/types.ts`):
+Fixtures must mirror the **actual** field names in `reference/src/api/types.ts` (verified
+against OpenAPI `components.schemas.SubscriptionOut`). Key corrections vs. the original
+draft fixtures: the plan/subscription id field is `plan_id`/`subscription_id` (not `id`),
+a subscription references its plan via `plan_id` (not `tier_id`), pricing uses `interval`
+(a string e.g. `"month"`, not `period: "MONTH"`), `status` is a free-form **string** (the
+DTO declares no enum — `ACTIVE`/`PAST_DUE`/etc. are conventional values, not schema-fixed),
+timestamps are **epoch integers** (`current_period_end`, `start_at`, `created_at`, not an
+ISO `renews_at`), and plans/fan-club tiers carry `benefits`/no `perks` field.
 
 ```json
-// tiers_ok.json
-{ "tiers": [
-  { "id": "tier_gold", "name": "Gold", "price_cents": 999, "currency": "USD",
-    "period": "MONTH", "perks": ["hd", "chat"] },
-  { "id": "tier_plat", "name": "Platinum", "price_cents": 1999, "currency": "USD",
-    "period": "MONTH", "perks": ["hd", "chat", "vault"] }
-] }
+// plans_ok.json  — GET /api/creators/{creatorId}/plans  (bare array of SubscriptionPlan)
+[
+  { "plan_id": "plan_gold", "creator_id": "creator_42", "name": "Gold",
+    "price_cents": 999, "currency": "USD", "interval": "month", "status": "active",
+    "created_at": 1750000000, "updated_at": 1750000000 },
+  { "plan_id": "plan_plat", "creator_id": "creator_42", "name": "Platinum",
+    "price_cents": 1999, "currency": "USD", "interval": "month", "status": "active",
+    "created_at": 1750000000, "updated_at": 1750000000 }
+]
 ```
 
 ```json
-// subscriptions_me.json
-{ "subscriptions": [
-  { "id": "sub_123", "tier_id": "tier_gold", "status": "ACTIVE",
-    "renews_at": "2026-07-01T00:00:00Z", "auto_renew": true }
-] }
+// subscriptions_me.json  — GET /api/subscriptions  (bare array of SubscriptionOut)
+[
+  { "subscription_id": "sub_123", "plan_id": "plan_gold", "creator_id": "creator_42",
+    "subscriber_id": "user_7", "interval": "month", "provider": "ccbill",
+    "provider_subscription_id": "ext_1", "status": "active", "start_at": 1748736000,
+    "current_period_end": 1751328000, "cancel_at_period_end": false,
+    "price_cents": 999, "currency": "USD", "auto_renew": true,
+    "created_at": 1748736000, "updated_at": 1748736000 }
+]
 ```
 
-FastAPI error fixtures the error-mapping test enumerates:
+```json
+// fanclub_tiers_ok.json  — GET /ui/fan-club/tiers  (bare array of TierOut)
+[
+  { "tier_id": "tier_gold", "creator_id": "creator_42", "plan_id": "plan_gold",
+    "name": "Gold", "level": 1, "color": "#FFD700", "badge_emoji": "⭐",
+    "benefits": [{ "kind": "chat", "label": "Member chat" }],
+    "member_count": 12, "sort_order": 1, "active": true,
+    "created_at": 1750000000, "updated_at": 1750000000 }
+]
+```
+
+FastAPI error fixtures the error-mapping test enumerates (all three `detail` shapes are
+**verified** against `client.ts: normalizeErrorDetail`, which handles string, `[{msg}]`,
+and `{code,…}`):
 
 ```json
 { "detail": "Subscription not found" }                       // detail_string.json
-{ "detail": [ { "loc": ["query","creator_id"], "msg": "field required" } ] } // detail_list.json
+{ "detail": [ { "loc": ["query","creator_id"], "msg": "field required", "type": "value_error.missing" } ] } // detail_list.json (real FastAPI 422 / HTTPValidationError → ValidationError items)
 { "detail": { "code": "TIER_GONE", "message": "Tier removed" } }            // detail_obj.json
 ```
 
-Each is enqueued with the matching status (`404`, `422`, `409`) and the test asserts the
-resulting `AppError`/`ApiResult.Failure` variant and that the human message is taken from
-the right field (top-level string, first `msg`, or `code`/`message`). N/A: no production
+`detail_list.json` is the canonical FastAPI `422` shape (OpenAPI `HTTPValidationError`
+whose `detail` is an array of `ValidationError{loc,msg,type}`). The string and `{code,…}`
+shapes are app-raised `HTTPException` bodies (e.g. `404`/`409`). Each is enqueued with the
+matching status (`404`, `422`, `409`) and the test asserts the resulting
+`AppError`/`ApiResult.Failure` variant and that the human message is taken from the right
+field (top-level string, first `msg`, or `code`/`message`). N/A: no production
 DTO/endpoint is introduced here.
 
 ## 6. Data & State Management
@@ -327,7 +389,13 @@ sleeps**, so resilience tests stay fast and deterministic.
 
 - **CSRF assertion:** repo tests assert the `X-CSRF-Token` header is present and equals
   the `ui_csrf` cookie value on every state-changing request and on GETs per the project
-  contract; a negative test asserts behavior when the cookie is absent.
+  contract; a negative test asserts behavior when the cookie is absent. **Verified** against
+  `client.ts` (lines 168–171: `X-CSRF-Token` set from the `ui_csrf` cookie on every request).
+- **Auth headers (review AND-242 addition):** `client.ts` also adds
+  `Authorization: Bearer <accessToken>` when the auth store holds a token, and the
+  subscription endpoints additionally send `X-User-Id` (`subscriptions.ts: userIdHeader`).
+  Repo tests assert `X-User-Id` is present on `/api/subscriptions*` calls and absent on the
+  public `GET /api/creators/{id}/plans` call (which the web client issues with no user id).
 - **Cookie jar:** a `TestCookieJar` verifies session cookies set by an earlier
   (`Set-Cookie`) response are attached to subsequent requests, proving the persistent jar
   wiring without persisting anything to disk in tests.
@@ -494,3 +562,239 @@ This ticket **is** the testing strategy; the matrix:
 - PR description links AND-241 (dependency), AND-234 (repo/DTO target), and the screen
   tickets (AND-235/236/237/240) it drives, and lists any remaining `@Ignore`s with their
   blocking tickets.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict (Verified / Corrected / Unverified-assumption), and
+the exact source pointer.
+
+1. **"Subscription tiers come from `GET /ui/subscriptions/tiers?creator_id={id}` returning
+   `{tiers:[...]}`."** — **Corrected.** No such path exists. Purchasable plans are
+   `GET /api/creators/{creatorId}/plans` returning a **bare `SubscriptionPlan[]`**.
+   Source: `src/api/endpoints/subscriptions.ts: listPlans`; OpenAPI has no
+   `/ui/subscriptions/tiers` entry (grep of `openapi.index.txt`).
+2. **"My subscriptions come from `GET /ui/subscriptions/me` returning `{subscriptions:[...]}`."**
+   — **Corrected.** Real path is `GET /api/subscriptions` (optional `include_summary`),
+   returning a **bare `SubscriptionOut[]`**. Source: `src/api/endpoints/subscriptions.ts:
+   listSubscriptions`; OpenAPI `GET /api/subscriptions` (op
+   `list_subscriptions_api_subscriptions_get`). A cookie-session sibling
+   `GET /ui/billing/subscriptions` also exists (OpenAPI line 1199) but is not the path the
+   web `subscriptions.ts` uses.
+3. **"Fan-club tiers come from `GET /ui/fan-club/{creatorId}/tiers` returning `{tiers:[...]}`."**
+   — **Corrected.** Real path is `GET /ui/fan-club/tiers` returning a **bare `TierOut[]`**;
+   the public creator-scoped variant is `GET /api/creators/{creatorId}/tiers`. Source:
+   `src/api/endpoints/fan-club.ts: listTiers` / `getPublicTiers`; OpenAPI
+   `GET /ui/fan-club/tiers` (op `api_list_tiers_ui_fan_club_tiers_get`) and
+   `GET /ui/fan-club/tiers/{tier_id}/members`.
+4. **"`POST /ui/session/refresh` is used for the 401→refresh→retry path."** — **Verified.**
+   Source: OpenAPI `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`);
+   `src/api/client.ts: refreshSession` (line 122) and `src/api/endpoints/auth.ts` (line 60).
+   Request body is empty.
+5. **"401 → refresh once → retry; if retry is still 401, log out; refresh is single-flight."**
+   — **Verified.** Source: `src/api/client.ts` lines 194–237 (`refreshPromise` single-flight
+   guard, one retry, `logout("session_expired")` on retry 401).
+6. **"`X-CSRF-Token` header is sent from the `ui_csrf` cookie on every request."** —
+   **Verified.** Source: `src/api/client.ts` lines 168–171.
+7. **"Subscription `/api` calls additionally send `X-User-Id`; the public plans call sends
+   none."** — **Verified.** Source: `src/api/endpoints/subscriptions.ts: userIdHeader`,
+   `subGet`/`subPost` (send it) vs. `listPlans` (uses bare `api.get`, no user id).
+8. **"An `Authorization: Bearer` token is attached when present."** — **Verified.** Source:
+   `src/api/client.ts` lines 157–160.
+9. **"FastAPI `detail` appears as `string`, `[{msg}]`, or `{code,...}` and the human
+   message is taken from the right field."** — **Verified.** Source:
+   `src/api/client.ts: normalizeErrorDetail` (lines 66–102, handles all three) and the
+   `mapAuthorizationError` `{code,...}` branch. The `[{...}]` form is the OpenAPI
+   `HTTPValidationError` → `ValidationError{loc,msg,type}` (schemas at lines 37133 / 80337).
+10. **"`422` is the FastAPI validation status with `detail: [ValidationError]`."** —
+    **Verified.** Source: OpenAPI — every subscription/fan-club op lists
+    `422:HTTPValidationError`; `HTTPValidationError.detail` is `array<ValidationError>`.
+11. **"Subscription/plan DTO money field is `price_cents` and currency `currency`."** —
+    **Verified.** Source: `src/api/types.ts: SubscriptionPlan`/`SubscriptionOut`; OpenAPI
+    `components.schemas.SubscriptionOut` (`price_cents: integer`, `currency: string`).
+12. **"Billing cadence field is `period` with values like `MONTH`."** — **Corrected.** The
+    field is `interval` (a free string, e.g. `"month"`). Source: `src/api/types.ts:
+    SubscriptionPlan.interval` / `SubscriptionOut.interval`; OpenAPI `SubscriptionOut.interval`
+    (`type: string`).
+13. **"Subscription id is `id`, plan reference is `tier_id`, renewal time is ISO `renews_at`."**
+    — **Corrected.** Ids are `subscription_id` / `plan_id`; there is no `tier_id` on a
+    subscription; renewal is `current_period_end` as an **epoch integer**. Source:
+    `src/api/types.ts: SubscriptionOut`; OpenAPI `SubscriptionOut` required list
+    (lines 71116–71133) and `current_period_end: integer`.
+14. **"`status` is an enum (`ACTIVE`/`PAST_DUE`/`CANCELED`/`EXPIRED`)."** —
+    **Corrected / Unverified-assumption.** The DTO declares `status` as a plain `string`
+    with no `enum` constraint (OpenAPI `SubscriptionOut.status: {type: string}`;
+    `types.ts: status: string`). Tests must map via an enum with a fail-safe `Unknown`
+    branch; the specific value spellings are an unverified backend convention.
+15. **"Fan-club tier carries `perks`."** — **Corrected.** `TierOut` has `benefits:
+    TierBenefit[]` (plus `level`, `color`, `badge_emoji`, `member_count`, `active`);
+    pricing lives on the linked plan via `plan_id`, not on the tier. Source:
+    `src/api/types.ts: TierOut`.
+16. **"Cancel (a non-GET mutation, used for the no-retry test) exists."** — **Verified.**
+    `POST /api/subscriptions/{subscription_id}/cancel` → `200 SubscriptionOut`. Source:
+    `src/api/endpoints/subscriptions.ts: cancelSubscription`; OpenAPI
+    `POST /api/subscriptions/{subscription_id}/cancel`.
+17. **"Network/offline failures surface as a distinct error (not a crash)."** — **Verified
+    (web analogue).** `client.ts` lines 185–189 throw `ApiError(0, "Network error")` on
+    `fetch` rejection; the Android repo's `AppError.Network`/`Timeout` mapping is the
+    parallel. The dev host (`http://18.222.237.167:8000`) being flaky/plaintext motivates
+    the timeout/offline tests but is never contacted (Verified: scope says MockWebServer only).
+18. **"Robolectric Compose tests run at `@Config(sdk=[34])`."** — **Verified (framework ref).**
+    Robolectric supports API-34 and the project compiles to SDK 35; running UI tests at
+    sdk 34 matches the physical Galaxy A15 (API 34). framework ref:
+    https://robolectric.org/configuring/ and
+    https://developer.android.com/jetpack/compose/testing.
+19. **"Determinism via `StandardTestDispatcher` + `MainDispatcherRule` + `FixedClock`."** —
+    **Verified (framework ref).** framework ref:
+    https://developer.android.com/kotlin/coroutines/test and
+    https://github.com/cashapp/turbine.
+20. **"`MockWebServer` is the HTTP test double for repo tests."** — **Verified
+    (framework ref).** framework ref: https://github.com/square/okhttp/tree/master/mockwebserver.
+
+### Corrections made
+
+- §5 API Contract rewritten: replaced the three non-existent endpoints with the real ones
+  (`GET /api/creators/{id}/plans`, `GET /api/subscriptions`, `GET /ui/fan-club/tiers`,
+  `POST /api/subscriptions/{id}/cancel`); removed the `{tiers:[...]}`/`{subscriptions:[...]}`
+  envelopes (responses are bare arrays); rewrote all three JSON fixtures to the real field
+  names (`plan_id`/`subscription_id`, `interval`, epoch-integer timestamps, `benefits`);
+  added the real FastAPI `422` `ValidationError{loc,msg,type}` item to `detail_list.json`.
+- §4 repo-test example: corrected the asserted path, method, and mapped fields
+  (`getTiers`→`getPlans`, `/ui/subscriptions/tiers?...`→`/api/creators/creator_42/plans`,
+  `id`→`planId`, added `interval`).
+- §2 web-reference bullet: pointed at the correct files and documented the `/api` vs `/ui`
+  split and that `X-User-Id` + `X-CSRF-Token` + `Authorization` all apply.
+- §8 Security: cited `client.ts` line numbers for CSRF; added the `X-User-Id`/`Bearer`
+  header assertions.
+- FR-2: corrected the field-name list (`interval` not `period`, `benefits` not `perks`,
+  epoch ints not `renews_at`, `status` is a string).
+- Frontmatter: `status: reviewed`, added `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Status value spellings** (`ACTIVE`/`PAST_DUE`/`CANCELED`/`EXPIRED`): the DTO types
+  `status` as an unconstrained `string`, so the exact set is unverifiable from OpenAPI or
+  `types.ts`. Tests assert the mapping path with a fail-safe `Unknown` branch rather than a
+  fixed enum set. (Why: no enum in the schema; backend convention only.)
+- **`EntitlementResolver` verdict matrix, domain `ApiResult`/`AppError` variants, retry
+  budget constant, and `testTag` names**: these are Android-side artifacts owned by AND-241 /
+  AND-234 / `core-network` / the screen tickets, not present in the web reference or OpenAPI.
+  They are assumed per the upstream tickets; tests read the retry-budget constant rather than
+  hardcoding it (R3). (Why: client-app internals, no authoritative source in this repo set.)
+- **Room/DataStore caching / stale-while-revalidate path**: whether the repo exposes a
+  cache-hit path is owned by AND-234; the related test is `@Ignore`d if absent (R5). (Why:
+  not determinable from the reference sources.)
+- **Telemetry event names/payloads** (`subscriptions_tiers_viewed`, etc.): an Android-side
+  analytics contract with no web/OpenAPI counterpart; assumed per this ticket's §10. (Why:
+  client-only.)
+
+## 17. Test Plan
+
+Test target legend — **JVM**: JVM unit/Robolectric, local, no device. **EMU**: headless
+emulator AVD `test35` (x86_64, API 35). **DEV**: physical Samsung Galaxy A15 5G (SM-A156U,
+serial R5CX821TA9R, API 34, arm64-v8a). This is a pure test ticket with no camera/biometric/
+push/WebRTC/Telecom surface, so almost everything runs JVM (Robolectric/MockWebServer) in
+CI; the only device-relevant cases are the on-device Compose parity run (real API-34/arm64
+vs. emulator API-35/x86_64) — those PREFER the physical DEV device.
+
+- **TC-AND-242-01** — Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `MockWebServerRule`, `TestCookieJar`, CSRF cookie `ui_csrf=csrf-abc`,
+  `X-User-Id` absent. Steps: enqueue `200` `plans_ok.json`; call
+  `repo.getPlans("creator_42")`; `takeRequest()`. Expected: request is
+  `GET /api/creators/creator_42/plans`, `X-CSRF-Token=csrf-abc` present, **no** `X-User-Id`;
+  result is `ApiResult.Success` with `plans[0].planId="plan_gold"`, `priceCents=999`,
+  `interval="month"`. Traces: AC-1.
+- **TC-AND-242-02** — Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: authenticated user (`X-User-Id=user_7`), CSRF cookie set. Steps: enqueue
+  `200` `subscriptions_me.json`; call `repo.getMySubscriptions(includeSummary=true)`;
+  `takeRequest()`. Expected: `GET /api/subscriptions?include_summary=true`,
+  `X-User-Id=user_7` and `X-CSRF-Token` present; mapped to bare list with
+  `subscription_id="sub_123"`, `plan_id="plan_gold"`, `current_period_end` parsed from epoch
+  `1751328000` to the right `Instant`, `auto_renew=true`. Traces: AC-1.
+- **TC-AND-242-03** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: as
+  above. Steps: enqueue `200` `fanclub_tiers_ok.json`; call `repo.getFanClubTiers()`;
+  `takeRequest()`. Expected: `GET /ui/fan-club/tiers`; bare `TierOut[]` mapped with
+  `tier_id="tier_gold"`, `level=1`, `benefits` size 1, `memberCount=12`, `active=true`; no
+  `perks` field expected. Traces: AC-1.
+- **TC-AND-242-04** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions:
+  prior `Set-Cookie: sid=...` response recorded in `TestCookieJar`. Steps: make a first
+  request that returns `Set-Cookie`; make a second request; inspect the second
+  `takeRequest()`. Expected: session cookie from response 1 is attached to request 2,
+  proving persistent-jar wiring; no cookie persisted to disk. Traces: AC-1.
+- **TC-AND-242-05** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions:
+  error fixtures present. Steps: parametrized — enqueue (`404`,`detail_string.json`),
+  (`422`,`detail_list.json`), (`409`,`detail_obj.json`), (`500`, empty), (`200`, malformed
+  JSON body). Expected: each maps to the correct `ApiResult.Failure(AppError…)` variant; the
+  human message is the top-level string / first `msg` / `code`+`message` respectively; `500`
+  → server error variant; malformed body → parse-failure variant, **never a crash**.
+  Traces: AC-2.
+- **TC-AND-242-06** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions:
+  ~20s client timeout, virtual time. Steps: enqueue a response with `setBodyDelay(25s)`;
+  advance virtual time past the timeout; call an idempotent GET. Expected:
+  `ApiResult.Failure(AppError.Timeout)` (no real sleep); a subsequent UI render of this
+  state is `error_state` with `retryable=true`. Traces: AC-3.
+- **TC-AND-242-07** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions:
+  retry budget read from the `core-network` constant (not hardcoded). Steps: (a) GET — enqueue
+  `503,503,200`; (b) non-GET cancel `POST /api/subscriptions/sub_123/cancel` — enqueue `503`.
+  Expected: (a) exactly N attempts per the configured budget then final `Success`,
+  `takeRequest()` count matches; (b) **single** request, no retry, `Failure`. Traces: AC-3.
+- **TC-AND-242-08** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions:
+  authenticated, refresh wired to `POST /ui/session/refresh`. Steps: (a) enqueue `401` for
+  the GET, `200` for refresh, `200` for the retried GET; (b) enqueue `401` for the GET then a
+  failing refresh (`401`). Expected: (a) final `Success`, refresh requested **exactly once**,
+  retried GET carries refreshed cookies; (b) terminal `ApiResult.Failure(AppError.Auth)`, no
+  infinite loop, no second refresh. Traces: AC-3.
+- **TC-AND-242-09** — Type: unit (JVM, pure). Target: JVM. Preconditions: `FixedClock`,
+  `EntitlementResolver`. Steps: drive the verdict matrix over {no subs, active at tier,
+  higher owned, lower owned, lapsed, multiple} × {Tier, Content, FanClub} keys, plus the
+  network-failure/unknown input. Expected: each cell yields the exact verdict incl.
+  `RequiresUpgrade(minTier)` and **fail-closed `Unknown`** (network failure ⇒ denied); 100%
+  branch coverage. Traces: AC-4.
+- **TC-AND-242-10** — Type: Compose-UI (Robolectric, JVM). Target: JVM `@Config(sdk=[34])`.
+  Preconditions: stateless screen + canned `UiState`. Steps: render each of
+  `Loading`/`Content`/`Empty`/`Error(retryable)`/`isStale`/`isRefreshing`. Expected: correct
+  node per state — `loading_indicator`, populated `tiers_screen`/`subscriptions_list`,
+  `empty_state` copy, `error_state` + `retry_button`, `stale_banner`, `refresh_indicator`.
+  Traces: AC-5.
+- **TC-AND-242-11** — Type: Compose-UI (Robolectric, JVM). Target: JVM. Preconditions:
+  content state with mixed entitlements. Steps: render tier rows where one is owned/current,
+  one upgradeable, one not owned, and one gated by `Denied`/`Unknown`. Expected:
+  `cta_{tierId}` shows `Current plan`/`Upgrade`/`Subscribe` correctly and gated affordances
+  are hidden/locked on `Denied`/`RequiresUpgrade`/`Unknown`. Traces: AC-5.
+- **TC-AND-242-12** — Type: Compose-UI (Robolectric, JVM). Target: JVM. Preconditions:
+  callbacks captured via fakes. Steps: `performClick()` on a CTA, trigger pull-to-refresh,
+  click `retry_button`; also assert a11y — interactive nodes `assertHasClickAction()`, have
+  non-empty content descriptions, error message is in the semantics tree; resolve copy via
+  `context.getString(R.string.…)` and re-run one screen under `@Config(qualifiers="fr")` to
+  prove locale-driven lookup and locale-aware currency/date formatting of `price_cents`.
+  Expected: each interaction fires the expected ViewModel/nav callback once; a11y + locale
+  assertions pass. Traces: AC-6.
+- **TC-AND-242-13** — Type: integration (ViewModel via Turbine + Fake repo, JVM). Target:
+  JVM. Preconditions: `FakeSubscriptionsRepository` scripted; fake `Analytics`/`Logger`.
+  Steps: drive `Loading→Content`; tiers-ok + subs-fail → `isStale`+`SUBSCRIBE`; full failure
+  → `Error(retryable)`; `refresh()` keeps prior rows + `isRefreshing` and shows
+  `stale_banner` (stale-while-revalidate). Expected: exact `StateFlow` sequence; on success
+  `subscriptions_tiers_viewed{creatorId,tierCount}` fires, on error
+  `subscriptions_load_failed{errorType,retryable}` fires, on CTA
+  `subscription_cta_clicked{tierId,cta}` fires — **no user id / subscription contents** in
+  any payload; `Logger` records `WARN` on failure/stale with no PII. Traces: AC-7.
+- **TC-AND-242-14** — Type: instrumented/e2e Compose parity (on-device). Target: **DEV
+  (physical Galaxy A15, API 34, arm64-v8a) — MUST run on the physical device**; EMU
+  `test35` (API 35, x86_64) as the secondary CI lane. Preconditions:
+  `:feature-subscriptions:connectedDebugAndroidTest`, MockWebServer still the HTTP double
+  (no live host). Steps: run the §17 Compose suite (states + CTA + interaction) on hardware.
+  Expected: identical pass results to Robolectric — confirms real-device Compose parity for
+  pull-to-refresh/animation behavior (R4) and API-34/arm64 vs. API-35/x86_64 ABI parity; no
+  network reaches `18.222.237.167`. Traces: AC-5, AC-6, AC-8.
+
+### Coverage matrix
+
+| AC (section 14) | Covering test case(s) |
+| --- | --- |
+| AC-1 (repo request + mapping: plans, subs, fan-club, CSRF, cookie) | TC-01, TC-02, TC-03, TC-04 |
+| AC-2 (error mapping: detail string/list/obj, 404/422/409/5xx, malformed, empty) | TC-05 |
+| AC-3 (timeout, GET-only retry, no-retry non-GET, 401→refresh-once→retry incl. refresh-fails) | TC-06, TC-07, TC-08 |
+| AC-4 (EntitlementResolver matrix, 100% branch, fail-closed Unknown) | TC-09 |
+| AC-5 (UI state rendering + CTA per entitlement) | TC-10, TC-11, TC-14 |
+| AC-6 (UI interactions, a11y semantics, locale lookup) | TC-12, TC-14 |
+| AC-7 (telemetry events/payloads, no PII) | TC-13 |
+| AC-8 (no live host, deterministic, `testDebugUnitTest` green; on-device documented) | TC-06, TC-07, TC-08, TC-14 (all suites; no case contacts the dev host) |

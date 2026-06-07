@@ -5,7 +5,8 @@ milestone: M6
 epic: E34
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-019]
 blocks: [AND-256, AND-257]
 ---
@@ -58,10 +59,15 @@ scope; only line and bar are required by the acceptance criteria.
   catalog; verify it targets Compose Compiler compatible with Kotlin 2.0.21.
 - Depends on **AND-019** (Material 3 theme): chart colors, typography, and shapes
   are derived from `TestLogonTheme`. Do not introduce a separate palette.
-- Web reference: the React app renders finance charts (e.g. payouts/ads) using a
-  JS charting lib; treat its axis formatting, currency formatting, and series
-  semantics as the design reference for parity, but the data shapes here are
-  defined locally because no backend call is made by this ticket.
+- Web reference: the React app renders finance charts using **recharts**
+  (verified: `src/pages/earnings/EarningsPage.tsx` and
+  `src/pages/analytics/AnalyticsPage.tsx` import `BarChart`/`Bar`/`Line`/
+  `ComposedChart`/`CartesianGrid`/`Tooltip`/`Legend`/`ResponsiveContainer` from
+  `recharts`). A few simpler surfaces hand-roll div-based bars instead
+  (`src/components/shared/VolumeChart.tsx`, `FunnelChart.tsx`). Treat recharts'
+  axis formatting, currency formatting, legend, and series semantics as the
+  design reference for parity, but the data shapes here are defined locally
+  because no backend call is made by this ticket.
 - No backend interaction in this ticket; FastAPI/DynamoDB and the dev host
   `http://18.222.237.167:8000` are not contacted (see §5).
 
@@ -208,9 +214,19 @@ CSRF handling, and no `ApiResult<T>` involvement in this ticket.
 
 The only "contract" is the in-process boundary between feature modules and this
 component: features map their already-fetched domain models into `ChartData`/
-`ChartUiState` and pass them in. Mapping backend payout/ads payloads (e.g.
-`GET /ui/payouts`, `GET /ui/ads/stats`) into `ChartData` is owned by the
-consuming tickets AND-256 (payouts) and AND-257 (ads), which depend on this one.
+`ChartUiState` and pass them in. Mapping backend payout/ads payloads into
+`ChartData` is owned by the consuming tickets AND-256 (payouts) and AND-257
+(ads), which depend on this one. For reference, the relevant backend endpoints
+those tickets will call are (verified against the OpenAPI index):
+`GET /ui/payouts` (resp `PayoutListOut`) and `GET /ui/payouts/balance` (resp
+`PayoutBalanceOut`) for payouts; and for ads time-series charts
+`GET /ui/ads/analytics/timeseries` (params `account_id,campaign_id,days,
+granularity,...`) and `GET /ui/ads/analytics/summary` (resp shapes inline).
+NOTE: the earlier draft cited `GET /ui/ads/stats` as the ads chart source — that
+bare path does not exist; the only `stats` ads endpoint is
+`GET /ui/ads/stats/{campaign_id}` (per-campaign serving stats), which is not the
+time-series source. These `/ui/...` endpoints authenticate via session headers
+(`X-SESSION-ID`, optional `X-IMPERSONATION-TOKEN`), not via this component.
 Those tickets are responsible for the dev-host resilience concerns (20s timeouts,
 bounded backoff for idempotent GETs, offline/stale states); this component merely
 renders whatever `ChartUiState` it is handed, including a failure surfaced as
@@ -370,9 +386,13 @@ Previews: `@Preview` light/dark for line, bar, loading, and empty states.
 - R-4 Stale-data UX: should the chart show a "stale" badge when the screen is
   offline? Deferred to consuming tickets; this component only exposes
   `Empty(message)`.
-- R-5 Time-axis formatting: epoch-day vs. timestamp granularity for payouts is
-  unconfirmed against the backend shape; `AxisLabelProvider` keeps this the
-  caller's concern, so no blocker here.
+- R-5 Time-axis formatting: time granularity differs by source. The ads/earnings
+  time-series endpoints take a `granularity` query param (a free-form string,
+  backend default `"daily"`/`"day"` — verified in `openapi.pretty.json`, not a
+  strict enum), while `GET /ui/payouts` returns a cursor-paginated list with no
+  built-in time bucketing. So the x-axis bucketing/labels must be decided by the
+  consuming screen. `AxisLabelProvider` keeps this the caller's concern, so no
+  blocker here.
 
 ## 14. Acceptance Criteria
 
@@ -414,3 +434,230 @@ AC-7. Unit and Compose UI tests from §11 are present and green in CI.
 - Public types documented with KDoc; `SampleChartData` available for downstream
   AND-256/AND-257.
 - Code review approved; ticket linked to AND-256 and AND-257 as blocked-by.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source pointer.
+
+1. Claim: This ticket performs no network I/O and contacts no backend endpoint.
+   VERDICT: Verified (by scope). SOURCE: ticket scope `specs-src/AND-255.md`
+   ("Line/bar charts composable … for finance screens") plus §1/§3 — no endpoint
+   is referenced as a deliverable. The component only consumes `ChartUiState`.
+
+2. Claim: The web app renders finance charts using a JS charting library.
+   VERDICT: Verified (and named). SOURCE: `src/pages/earnings/EarningsPage.tsx`
+   (imports from `recharts`) and `src/pages/analytics/AnalyticsPage.tsx`
+   (`BarChart, Bar, Line, ComposedChart, Legend` from `recharts`). It is
+   **recharts**, not an unspecified lib.
+
+3. Claim: Some web finance surfaces use hand-rolled (non-library) charts.
+   VERDICT: Verified (additional context). SOURCE:
+   `src/components/shared/VolumeChart.tsx` and `src/components/shared/FunnelChart.tsx`
+   render div/flex bars directly (no recharts import). Used as parity reference for
+   the simple bar case.
+
+4. Claim (original draft): the ads chart data comes from `GET /ui/ads/stats`.
+   VERDICT: Corrected. SOURCE: OpenAPI index — no `GET /ui/ads/stats` collection
+   path exists. Only `GET /ui/ads/stats/{campaign_id}`
+   (op `serving_stats_endpoint_ui_ads_stats__campaign_id__get`) exists, which is
+   per-campaign serving stats, not a chart time-series. The chart time-series
+   source is `GET /ui/ads/analytics/timeseries`
+   (op `analytics_timeseries_endpoint_ui_ads_analytics_timeseries_get`,
+   params `account_id,campaign_id,days,granularity,...`) and
+   `GET /ui/ads/analytics/summary`.
+
+5. Claim: payouts chart data comes from `GET /ui/payouts`.
+   VERDICT: Verified. SOURCE: OpenAPI index
+   `GET /ui/payouts | op=list_payouts_ui_payouts_get | resp=200:PayoutListOut`,
+   plus `GET /ui/payouts/balance` (resp `PayoutBalanceOut`). Note: ownership of
+   this call is downstream (AND-256), not this ticket.
+
+6. Claim: the `/ui/...` finance endpoints authenticate via session headers.
+   VERDICT: Verified. SOURCE: OpenAPI index params for `/ui/payouts`,
+   `/ui/earnings/summary`, `/ui/ads/analytics/timeseries` all list
+   `user_sub, X-SESSION-ID, X-IMPERSONATION-TOKEN`. (Not consumed by this
+   component; recorded for downstream parity.)
+
+7. Claim: time granularity for finance series is a fixed/known shape.
+   VERDICT: Corrected/clarified. SOURCE: `openapi.pretty.json` — `granularity`
+   query param is a free-form `string` with backend default `"daily"`/`"day"`
+   (not an enum). `GET /ui/payouts` has no time bucketing at all. Hence x-axis
+   bucketing is a caller concern (§13 R-5).
+
+8. Claim: charts must consume Material 3 theme (colorScheme/typography) from
+   AND-019 and not hard-code colors/text. VERDICT: Verified (dependency).
+   SOURCE: ticket `Deps: AND-019` in `specs-src/AND-255.md`; framework ref for
+   `MaterialTheme.colorScheme`/`typography`:
+   https://developer.android.com/develop/ui/compose/designsystems/material3
+
+9. Claim: Vico 2.x is the chosen Compose-native charting library
+   (`com.patrykandpatrick.vico:compose-m3` + `vico:core`).
+   VERDICT: Unverified-assumption (framework choice). SOURCE: framework ref
+   https://patrykandpatrick.com/vico/ — exact artifact/version vs. Kotlin 2.0.21
+   Compose Compiler compatibility is not verifiable from the repo sources here and
+   must be confirmed at implementation time (see §13 R-1/R-2).
+
+10. Claim: `@Immutable` data classes enable Compose strong-skipping; one semantic
+    node per chart via `clearAndSetSemantics`. VERDICT: Verified (framework).
+    SOURCE: framework refs
+    https://developer.android.com/develop/ui/compose/performance/stability and
+    https://developer.android.com/develop/ui/compose/accessibility
+
+11. Claim: dev host `http://18.222.237.167:8000` / cleartext concerns are out of
+    scope here. VERDICT: Verified (by scope). SOURCE: §5/§8 — no I/O in this
+    module; cleartext belongs to `core-network` (a different module/ticket). The
+    host string itself is from the project environment, not sources reviewed here.
+
+### Corrections made
+
+- §2 (Context): replaced "uses a JS charting lib" with the verified, named
+  library **recharts**, with exact file pointers, and noted the div-based
+  hand-rolled charts as additional parity context.
+- §5 (API Contract): removed the incorrect `GET /ui/ads/stats` citation;
+  replaced with the real ads time-series endpoints
+  (`/ui/ads/analytics/timeseries`, `/ui/ads/analytics/summary`) and confirmed
+  `/ui/payouts`(+`/balance`); added the verified `X-SESSION-ID` auth note. These
+  are downstream-owned and informational only.
+- §13 R-5: corrected the time-axis claim to reflect that `granularity` is a
+  free-form string (default `daily`/`day`) on ads/earnings endpoints and that
+  `/ui/payouts` has no bucketing, so axis bucketing is a caller concern.
+
+### Open assumptions
+
+- The Vico artifact coordinate/version and its Compose Compiler compatibility
+  with Kotlin 2.0.21 cannot be verified from the provided sources (no Android
+  build files in `reference/`); confirm during implementation. (§13 R-1, R-2.)
+- The exact downstream `ChartData` mapping from `PayoutListOut` /
+  `/ui/ads/analytics/timeseries` response fields is owned by AND-256/AND-257 and
+  is intentionally not specified here; the response field shapes were not deeply
+  mapped because this ticket renders only `ChartUiState`.
+- Dynamic-color palette legibility (§13 R-3) is an empirical/visual concern not
+  resolvable from sources; flagged for screenshot-test coverage.
+
+## 17. Test Plan
+
+Test targets legend: JVM = JVM unit/Robolectric (local, no device);
+EMU = headless emulator AVD `test35` (x86_64, API 35); DEV = physical Samsung
+Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Because this is a pure rendering
+library with no hardware dependency (no camera/biometrics/network/WebRTC), nearly
+all cases run on JVM or EMU; one ABI-difference smoke is noted for DEV.
+
+- TC-AND-255-01 — Happy path: line chart renders sample series
+  Type: Compose-UI (screenshot + smoke). Target: EMU (CI). Preconditions:
+  `TestLogonTheme` applied (light); `SampleChartData.payoutsLine`.
+  Steps: set content `TestLogonLineChart(ChartUiState.Content(SampleChartData.payoutsLine))`;
+  let composition settle. Expected: chart draws, Y-axis tick nodes and X labels
+  present, no exception; screenshot matches baseline. Traces: AC-1.
+
+- TC-AND-255-02 — Happy path: bar chart renders sample series (light + dark)
+  Type: Compose-UI (screenshot). Target: EMU (CI). Preconditions:
+  `SampleChartData.payoutsBar`, run once in light and once in dark theme.
+  Steps: render `TestLogonBarChart(Content(payoutsBar))` under each theme.
+  Expected: columns render; colors derive from `colorScheme` (differ light vs
+  dark); both screenshots match their baselines. Traces: AC-1, AC-3.
+
+- TC-AND-255-03 — Reused by payouts AND ads through the same composables
+  Type: Compose-UI (integration). Target: EMU (CI). Preconditions:
+  `SampleChartData.payoutsBar` and `SampleChartData.adsLine`.
+  Steps: render `TestLogonBarChart(Content(payoutsBar))` and
+  `TestLogonLineChart(Content(adsLine))` in one test tree. Expected: both render
+  without throwing, proving reuse across two finance series. Traces: AC-2.
+
+- TC-AND-255-04 — Visual states: Loading / Empty / Content
+  Type: Compose-UI. Target: EMU. Preconditions: a test tag/semantics on each
+  state node. Steps: render `ChartUiState.Loading` (assert shimmer/placeholder
+  node), then `Empty("No data")` (assert message node with "No data"), then
+  `Content(payoutsLine)` (assert axis nodes). Expected: each state shows its
+  correct visual and only that visual. Traces: AC-4.
+
+- TC-AND-255-05 — Degenerate inputs do not crash
+  Type: Compose-UI + JVM. Target: EMU (render) / JVM (mapping). Preconditions:
+  inputs: empty `ChartData.EMPTY`, single-point series, all-zero series, all-
+  negative series. Steps: render each through both line and bar charts.
+  Expected: empty -> Empty visual (Vico body not built); single point ->
+  marker/one column; zero/negative -> sane Y range (maxYTicks>=2), no
+  exception. Traces: AC-4.
+
+- TC-AND-255-06 — Non-finite values filtered (mapping)
+  Type: unit (JVM, JUnit+Truth). Target: JVM. Preconditions: a series containing
+  NaN and +/-Infinity points. Steps: run the mapping
+  `points.filter { x.isFinite() && y.isFinite() }`; build `ChartData`.
+  Expected: non-finite points dropped; a series emptied by filtering is dropped;
+  resulting `ChartData.isEmpty` true when all filtered out. Traces: AC-4.
+
+- TC-AND-255-07 — `ChartData.isEmpty` logic
+  Type: unit (JVM). Target: JVM. Preconditions: three inputs: `emptyList()`,
+  list of series each with `emptyList()` points, populated data.
+  Steps: read `isEmpty`. Expected: true, true, false respectively. Traces: AC-4.
+
+- TC-AND-255-08 — `CompactNumberFormatter` outputs (Locale.US)
+  Type: unit (JVM). Target: JVM. Preconditions: `Locale.US`.
+  Steps: format 999, 1_200, 3_400_000. Expected: "999", "1.2K", "3.4M".
+  Traces: AC-1 (axis labels correct).
+
+- TC-AND-255-09 — `CurrencyAxisValueFormatter` USD output
+  Type: unit (JVM/Robolectric for `NumberFormat`). Target: JVM. Preconditions:
+  currency code "USD", Locale.US. Steps: format `1234.5f`. Expected:
+  "$1,234.50". Traces: AC-1.
+
+- TC-AND-255-10 — Theme-only colors/typography (no hard-coded literals)
+  Type: unit/static (JVM) + Robolectric palette check. Target: JVM.
+  Preconditions: chart package sources. Steps: (a) lint/regex assertion that no
+  `Color(` literal or `TextStyle(` literal exists in the chart package; (b)
+  `rememberChartPalette()` under a known theme yields >= 4 distinct colors with
+  deterministic ordering. Expected: no literals found; palette deterministic and
+  >= 4 distinct. Traces: AC-3, AC-6 (palette derives from theme only).
+
+- TC-AND-255-11 — Accessibility: single semantic node with contentDescription
+  Type: Compose-UI (semantics) + accessibility check. Target: EMU.
+  Preconditions: render line chart without an explicit `contentDescription`.
+  Steps: query semantics tree. Expected: exactly one merged semantic node for the
+  chart with a non-empty generated description (e.g. "Line chart, {n} series,
+  latest value {formatted}"); inner canvas not separately announced
+  (`clearAndSetSemantics`). When a caller supplies `contentDescription`, it is
+  used verbatim. Traces: AC-5.
+
+- TC-AND-255-12 — i18n strings come from resources, not literals
+  Type: unit/static (JVM). Target: JVM. Preconditions: `core-ui` strings.xml.
+  Steps: assert "No data" and default-description fallbacks resolve via
+  `stringResource`/parameterized resources, not concatenated string literals in
+  Kotlin. Expected: strings sourced from `strings.xml`; parameterized, no
+  concatenation. Traces: AC-5.
+
+- TC-AND-255-13 — Vico-scope isolation (no Vico types leak to feature modules)
+  Type: contract/static (JVM, dependency-config assertion). Target: JVM.
+  Preconditions: `core-ui/build.gradle.kts` declares Vico as `implementation`.
+  Steps: assert Vico is `implementation` (not `api`); assert public chart API
+  exposes only TestLogon types (no `com.patrykandpatrick.vico.*` in public
+  signatures). Expected: Vico not on the API surface; a feature module can use
+  charts without a Vico dependency. Traces: AC-6.
+
+- TC-AND-255-14 — Defensive renderer-failure fallback
+  Type: Compose-UI / integration. Target: EMU. Preconditions: inject a chart body
+  that throws (or feed input that forces a Vico render exception via a test seam).
+  Steps: render and let it throw inside the body. Expected: caught, logged at
+  WARN with exception class, falls back to `Empty("Chart unavailable")` rather
+  than crashing the screen. Traces: AC-4.
+
+- TC-AND-255-15 — ABI/API smoke on physical device
+  Type: instrumented/e2e (smoke). Target: DEV (Samsung A15, arm64-v8a, API 34) —
+  MUST run on the physical device to catch arm64-vs-x86 and API-34-vs-35 rendering
+  differences not seen on the x86_64 API-35 emulator. Preconditions: app/test APK
+  installed on SM-A156U via adb. Steps: render line+bar `SampleChartData` and the
+  Loading/Empty/Content states. Expected: renders identically (within screenshot
+  tolerance) to the EMU baselines; no ABI/API crash. Traces: AC-1, AC-4.
+
+### Coverage matrix (section-14 ACs -> test cases)
+
+- AC-1 (charts exist + render sample series, light/dark): TC-01, TC-02, TC-08,
+  TC-09, TC-15.
+- AC-2 (reused by payouts + ads samples): TC-03.
+- AC-3 (theme-only colors/typography, no literals): TC-02, TC-10.
+- AC-4 (Loading/Empty/Content + degenerate inputs render without crashing):
+  TC-04, TC-05, TC-06, TC-07, TC-14, TC-15.
+- AC-5 (single semantic node + non-empty contentDescription; localizable
+  strings): TC-11, TC-12.
+- AC-6 (Vico implementation-scope only; no Vico type in feature modules):
+  TC-10, TC-13.
+- AC-7 (unit + Compose-UI tests present and green in CI): satisfied collectively
+  by TC-01..TC-15 (all run in CI; TC-15 on the connected device).

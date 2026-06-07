@@ -5,7 +5,8 @@ milestone: M6
 epic: E37
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: [AND-138]
 ---
@@ -16,7 +17,11 @@ blocks: [AND-138]
 
 This ticket defines the typed HTTP seam for the TestLogon **calendar** domain on
 Android: the Retrofit service interface `CalendarApi`, the Moshi DTOs it
-(de)serializes (events, recurrence, calendars, RSVP), and the DTO→domain mappers
+(de)serializes (calendars, events, recurrence), and the DTO→domain mappers
+<!-- CORRECTED: the backend calendar contract has NO RSVP concept. There is no
+RSVP field on the event and no RSVP endpoint in frontend/src/api/endpoints/calendar.ts
+nor in the OpenAPI index. RSVP/`setRsvp` has been removed throughout. Attendees are
+modeled as a plain `attendees: string[]` on the event (EventOut.attendees). -->
 that produce the canonical `core-model` calendar types consumed by every
 downstream calendar feature (calendar list/agenda screens, event detail, and the
 calendar-message renderer AND-138).
@@ -27,7 +32,7 @@ recurrence).* This is the Kotlin port of the web reference API layer file
 `frontend/src/api/types.ts`. The single acceptance criterion is that **calendar
 payloads map (tested)** — i.e. every endpoint is callable with verb/path/body
 matching the backend contract, and every calendar JSON shape (including recurring
-events and RSVP) decodes losslessly into the domain model, proven by
+events and all-day events) decodes losslessly into the domain model, proven by
 `MockWebServer` and pure-mapper unit tests.
 
 This is a **transport + serialization-definition** ticket. It owns:
@@ -90,46 +95,71 @@ DTO→domain mapping (including recurrence and missing/unknown fields).
 ## 3. Functional Requirements
 
 FR-1. Declare a single Retrofit interface `CalendarApi` covering the calendar
-operations exposed by `calendar.ts`: list calendars, list events in a range, get
-a single event, create an event, update an event, delete an event, and set the
-viewer's RSVP. (Exact set reconciled against `/openapi.json`; Section 5 is the
-working contract.)
+operations exposed by `calendar.ts`: list calendars, get a single calendar,
+create/update/delete a calendar, list events for a calendar (paged), get a single
+event, create/update/delete an event. <!-- CORRECTED: there is NO "set RSVP"
+operation. Events are nested under a calendar (`/ui/calendars/{calendar_id}/events`),
+so there is no flat "list events in a range" call; the per-calendar list is the
+primitive. Verified against frontend/src/api/endpoints/calendar.ts and OpenAPI
+GET/POST /ui/calendars and /ui/calendars/{calendar_id}/events. --> (Exact set
+reconciled against the OpenAPI index; Section 5 is the working contract.)
 
 FR-2. Each method's HTTP verb and relative path match the backend contract.
 Paths are declared **without** a leading slash (AND-010 convention) so they append
-to the normalized base URL `http://18.222.237.167:8000/`.
+to the normalized base URL `http://18.222.237.167:8000/`. <!-- CORRECTED: the
+backend paths are under the `ui/` prefix — `ui/calendars`,
+`ui/calendars/{calendar_id}/events`, `ui/calendars/{calendar_id}/events/{event_id}`
+— NOT the flat `calendars` / `calendar/events`. See Section 5. -->
 
 FR-3. All methods are `suspend` and return typed DTO bodies (Retrofit native
 coroutine support). A method with no meaningful body returns `Unit`.
 
-FR-4. The range-list endpoint uses typed `@Query` params (`from`, `to`,
-`calendar_id?`, `page?`) — RFC-3339 / ISO-8601 strings on the wire. Mutations use
-`@Body` request DTOs; single-resource ops use `@Path`. No raw `Map`/`JsonObject`.
+FR-4. The event-list endpoint uses typed `@Query` params. <!-- CORRECTED: the
+real query params are `start_utc`, `end_utc`, `limit`, `cursor` (see OpenAPI
+GET /ui/calendars/{calendar_id}/events params=start_utc,end_utc,limit,cursor). The
+web client (`getEvents`) only ever sends `cursor`, treating `start_utc`/`end_utc`/
+`limit` as optional. There is NO `from`/`to`/`page`/`calendar_id` query param —
+`calendar_id` is a `@Path`, not a query. --> Param names are `start_utc`, `end_utc`
+(RFC-3339, both optional), `limit` (optional Int), and `cursor` (opaque, optional).
+Mutations use `@Body` request DTOs; single-resource ops use `@Path` (both
+`calendarId` and `eventId`). No raw `Map`/`JsonObject`.
 
 FR-5. Define Moshi `@JsonClass(generateAdapter = true)` DTOs for every calendar
-shape: `CalendarDto`, `CalendarEventDto`, `RecurrenceDto`, `EventRangeRespDto`
-(paged), `RsvpReqDto`, plus request DTOs `EventCreateReqDto`/`EventUpdateReqDto`.
+shape: `CalendarDto` (CalendarOut), `CalendarEventDto` (EventOut), `RecurrenceRuleDto`
+(RecurrenceRule), `EventsPageDto` (EventsPageOut, paged), plus request DTOs
+`CalendarCreateReqDto` (CalendarCreateIn), `EventCreateReqDto` (EventCreateIn), and
+`EventUpdateReqDto` (the PATCH uses a partial of EventCreateIn — see
+`updateEvent(..., body: Partial<EventCreateIn>)`). <!-- CORRECTED: there is no
+`RsvpReqDto`; the recurrence DTO mirrors the backend `RecurrenceRule` schema. -->
 Wire fields are snake_case; Kotlin properties are camelCase via `@Json(name=...)`
 only where codegen cannot infer.
 
-FR-6. **Recurrence MUST be modeled losslessly.** A recurring event carries an
-RRULE-style recurrence. The DTO preserves the raw `rrule` string verbatim and any
-structured fields the backend sends (`freq`, `interval`, `until`, `count`,
-`byday`, `exdates[]`). The mapper produces a domain `Recurrence` that retains the
-raw RRULE (so the client never silently drops recurrence) plus parsed convenience
-fields where present. No client-side RRULE *expansion* is implemented here (that
-is a downstream feature concern); this ticket only transports/maps it.
+FR-6. **Recurrence MUST be modeled losslessly.** <!-- CORRECTED: the backend does
+NOT use a raw RRULE string. The `RecurrenceRule` schema is fully structured:
+`freq` (enum DAILY|WEEKLY|MONTHLY only — NO YEARLY), `interval` (default 1),
+`until_utc`, `count`, `byday` (enum MO..SU), `bymonthday` (int[]), `bysetpos`
+(int[]). There is NO `rrule` field and NO `exdates` inside the recurrence object.
+Exception dates live at the EVENT level as `exdates_utc: string[]`, and
+per-occurrence edits live in `recurrence_overrides: Record<string,
+OccurrenceOverrideIn>`. --> A recurring event carries a structured
+`recurrence_rule` plus event-level `exdates_utc` and `recurrence_overrides`. The
+DTO preserves every structured field the backend sends; the mapper produces a
+domain `Recurrence` that retains them all (so the client never silently drops
+recurrence). No client-side recurrence *expansion* is implemented here (that is a
+downstream feature concern); this ticket only transports/maps it.
 
 FR-7. Provide pure DTO→domain mappers in `CalendarMappers.kt`:
 `CalendarEventDto.toDomain(): CalendarEvent`, `CalendarDto.toDomain(): Calendar`,
-`RecurrenceDto.toDomain(): Recurrence`, and the inverse request mappers for
-create/update. Mappers MUST map unknown enum strings to `UNKNOWN`/`PENDING`
-(never throw), and tolerate absent optional fields via Kotlin defaults.
+`RecurrenceRuleDto.toDomain(): Recurrence`, and the inverse request mappers for
+create/update. Mappers MUST map unknown enum strings to `UNKNOWN` (never throw),
+and tolerate absent optional fields via Kotlin defaults.
 
 FR-8. Timestamps are parsed to `java.time.Instant` via the shared
-`InstantJsonAdapter`; all-day events expose `allDay = true` and a `LocalDate`
-start/end so callers avoid off-by-one across DST. The event's IANA `timezone` (if
-present) is preserved on the domain model.
+`InstantJsonAdapter`; all-day events expose `allDay = true` and a single
+`LocalDate` (`all_day_date`) so callers avoid off-by-one across DST. <!-- CORRECTED:
+the backend uses a single `all_day_date` string for all-day events, not separate
+`start_date`/`end_date`. Timed events use `start_utc`/`end_utc`. --> The event's
+IANA `timezone` (required, non-null on EventOut) is preserved on the domain model.
 
 FR-9. A Hilt `@Provides @Singleton fun provideCalendarApi(retrofit: Retrofit):
 CalendarApi` constructs the service from the shared Retrofit (AND-010). No new
@@ -139,6 +169,12 @@ registered explicitly on the shared Moshi if not already present.
 
 FR-10. CSRF (`X-CSRF-Token`) and cookies are **not** declared per-method; they are
 injected globally (AND-012/AND-011). `CalendarApi` stays header-agnostic.
+<!-- VERIFIED: web client (src/api/client.ts) reads the `ui_csrf` cookie and sets
+`X-CSRF-Token` on every request. NOTE: the web client ALSO sends
+`Authorization: Bearer <accessToken>` from the auth store, and the OpenAPI calendar
+endpoints additionally declare `authorization` / `X-SESSION-ID` params. Whether the
+Android port uses bearer-token or pure-cookie auth is an AND-027 decision delegated
+out of this ticket; see §16 Open assumptions. -->
 
 ## 4. Technical Design
 
@@ -150,6 +186,18 @@ Production code lands in
 
 ### 4.1 Domain types (core-model)
 
+> **CORRECTED 2026-06-06.** The original domain model was invented and did not
+> match the backend. The shapes below mirror `CalendarOut`, `EventOut`,
+> `RecurrenceRule`, and `EventsPageOut` (OpenAPI) / `Calendar`, `CalendarEvent`,
+> `RecurrenceRule`, `EventsPage` (frontend `src/api/types.ts`). Removed:
+> `ownerDisplayName`, `permission`/`color` on `Calendar`; `title`, `location`,
+> `visibility`, `rsvp`, `recurringEventId`, `startDate`/`endDate`, `updatedAt`,
+> the raw `rrule`, `RecurrenceFreq.YEARLY`, and in-recurrence `exDates`. Added:
+> `name`, `ownerUserId`, `conflictDetection`, `bufferBefore/AfterMinutes` on
+> `Calendar`; `name`, `attendees`, `status`, `category`, `bookingEnabled`,
+> `approvalRequired`, `allDayDate`, event-level `exDatesUtc`, `recurrenceOverrides`,
+> `createdAtUtc`, and recurrence `byMonthDay`/`bySetPos` on the event.
+
 ```kotlin
 package com.testlogon.android.core.model.calendar
 
@@ -157,52 +205,73 @@ import java.time.Instant
 import java.time.LocalDate
 
 data class Calendar(
-    val id: String,
+    val calendarId: String,
     val name: String,
-    val ownerDisplayName: String,
-    val permission: SharePermission, // VIEWER | EDITOR | OWNER | UNKNOWN
-    val color: String?,              // hex, optional
+    val timezone: String,                 // IANA, required
+    val ownerUserId: String,
+    val conflictDetection: Boolean,
+    val bufferBeforeMinutes: Int,
+    val bufferAfterMinutes: Int,
+    val createdAtUtc: Instant,
+    val workingHours: Map<String, List<WorkingHoursWindow>>? = null,
 )
-
-enum class SharePermission { VIEWER, EDITOR, OWNER, UNKNOWN }
 
 data class CalendarEvent(
-    val id: String,
+    val eventId: String,
     val calendarId: String,
-    val title: String,
-    val description: String?,
-    val location: String?,
-    val startAt: Instant,
-    val endAt: Instant?,
+    val name: String,
+    val description: String,              // required (defaults to "" on EventOut)
+    val timezone: String,                 // IANA, required
+    val startAt: Instant?,                // start_utc (null for all-day)
+    val endAt: Instant?,                  // end_utc
     val allDay: Boolean,
-    val startDate: LocalDate?,        // populated when allDay
-    val endDate: LocalDate?,          // populated when allDay
-    val timezone: String?,           // IANA tz, e.g. "America/New_York"
-    val visibility: EventVisibility, // PUBLIC | PRIVATE | UNKNOWN
-    val rsvp: RsvpStatus,            // viewer's RSVP
-    val recurrence: Recurrence?,     // null for one-off events
-    val recurringEventId: String?,   // parent id for an expanded instance
-    val updatedAt: Instant?,
+    val allDayDate: LocalDate?,           // populated when allDay
+    val attendees: List<String>,
+    val bookingEnabled: Boolean,
+    val approvalRequired: Boolean,
+    val status: String,                   // free-form on the wire
+    val category: String?,
+    val recurrence: Recurrence?,          // null for one-off events
+    val exDatesUtc: List<Instant>,        // event-level exception dates
+    val recurrenceOverrides: Map<String, OccurrenceOverride>, // keyed by occurrence start
+    val createdAtUtc: Instant,
+    val syncState: String? = null,
+    val syncConflictReason: String? = null,
 )
-
-enum class EventVisibility { PUBLIC, PRIVATE, UNKNOWN }
-enum class RsvpStatus { YES, NO, MAYBE, PENDING, UNKNOWN }
 
 data class Recurrence(
-    val rrule: String,               // raw RRULE, preserved verbatim
-    val freq: RecurrenceFreq,        // DAILY | WEEKLY | MONTHLY | YEARLY | UNKNOWN
-    val interval: Int?,              // every N units
-    val until: Instant?,             // explicit end, mutually exclusive with count
-    val count: Int?,                 // number of occurrences
-    val byDay: List<String>,         // e.g. ["MO","WE","FR"]
-    val exDates: List<Instant>,      // exception dates
+    val freq: RecurrenceFreq,             // DAILY | WEEKLY | MONTHLY | UNKNOWN
+    val interval: Int,                    // default 1
+    val untilUtc: Instant?,               // explicit end, mutually exclusive with count
+    val count: Int?,                      // number of occurrences
+    val byDay: List<String>,              // e.g. ["MO","WE","FR"]
+    val byMonthDay: List<Int>,
+    val bySetPos: List<Int>,
 )
 
-enum class RecurrenceFreq { DAILY, WEEKLY, MONTHLY, YEARLY, UNKNOWN }
+enum class RecurrenceFreq { DAILY, WEEKLY, MONTHLY, UNKNOWN } // NO YEARLY on the backend
+
+// `SharePermission` is owned by the calendar-sharing surface (CalendarShare:
+// permission is "read" | "write"), NOT the event model. Modeled here only if the
+// share endpoints are in scope; otherwise deferred. AND-138's provisional
+// SharePermission maps onto "read"/"write" semantics.
+enum class SharePermission { READ, WRITE, UNKNOWN }
+
+data class OccurrenceOverride(
+    val name: String? = null,
+    val description: String? = null,
+    val timezone: String? = null,
+    val startAt: Instant? = null,
+    val endAt: Instant? = null,
+    val allDay: Boolean? = null,
+    val allDayDate: LocalDate? = null,
+    val status: String? = null,
+    val category: String? = null,
+)
 ```
 
-These are the canonical types AND-138 migrates onto. `SharePermission` extends
-AND-138's provisional enum with `OWNER`; `RsvpStatus`/visibility match its semantics.
+These are the canonical types AND-138 migrates onto. There is no RSVP and no event
+`visibility` concept in the backend; AND-138's payloads must reconcile to these.
 
 ### 4.2 DTOs (core-network)
 
@@ -213,84 +282,107 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import java.time.Instant
 
+// CORRECTED 2026-06-06 to mirror CalendarOut / EventOut / RecurrenceRule /
+// EventsPageOut (OpenAPI) and src/api/types.ts.
+
 @JsonClass(generateAdapter = true)
 data class CalendarDto(
-    val id: String,
+    @Json(name = "calendar_id") val calendarId: String,
     val name: String,
-    @Json(name = "owner_display_name") val ownerDisplayName: String? = null,
-    val permission: String? = null,
-    val color: String? = null,
+    val timezone: String,
+    @Json(name = "owner_user_id") val ownerUserId: String,
+    @Json(name = "conflict_detection") val conflictDetection: Boolean = false,
+    @Json(name = "buffer_before_minutes") val bufferBeforeMinutes: Int = 0,
+    @Json(name = "buffer_after_minutes") val bufferAfterMinutes: Int = 0,
+    @Json(name = "created_at_utc") val createdAtUtc: Instant,
+    @Json(name = "working_hours") val workingHours: Map<String, List<WorkingHoursWindowDto>>? = null,
 )
 
 @JsonClass(generateAdapter = true)
 data class CalendarEventDto(
-    val id: String,
+    @Json(name = "event_id") val eventId: String,
     @Json(name = "calendar_id") val calendarId: String,
-    val title: String,
-    val description: String? = null,
-    val location: String? = null,
-    @Json(name = "start_at") val startAt: Instant? = null,
-    @Json(name = "end_at") val endAt: Instant? = null,
-    @Json(name = "start_date") val startDate: String? = null, // ISO date, all-day
-    @Json(name = "end_date") val endDate: String? = null,
+    val name: String,
+    val description: String = "",
+    val timezone: String,
+    @Json(name = "start_utc") val startUtc: Instant? = null,
+    @Json(name = "end_utc") val endUtc: Instant? = null,
     @Json(name = "all_day") val allDay: Boolean = false,
-    val timezone: String? = null,
-    val visibility: String? = null,
-    val rsvp: String? = null,
-    val recurrence: RecurrenceDto? = null,
-    @Json(name = "recurring_event_id") val recurringEventId: String? = null,
-    @Json(name = "updated_at") val updatedAt: Instant? = null,
+    @Json(name = "all_day_date") val allDayDate: String? = null, // ISO date string
+    val attendees: List<String> = emptyList(),
+    @Json(name = "booking_enabled") val bookingEnabled: Boolean = false,
+    @Json(name = "approval_required") val approvalRequired: Boolean = false,
+    val status: String = "",
+    val category: String? = null,
+    @Json(name = "recurrence_rule") val recurrenceRule: RecurrenceRuleDto? = null,
+    @Json(name = "exdates_utc") val exdatesUtc: List<Instant>? = null,
+    @Json(name = "recurrence_overrides")
+    val recurrenceOverrides: Map<String, OccurrenceOverrideDto>? = null,
+    @Json(name = "created_at_utc") val createdAtUtc: Instant,
+    @Json(name = "sync_state") val syncState: String? = null,
+    @Json(name = "sync_conflict_reason") val syncConflictReason: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
-data class RecurrenceDto(
-    val rrule: String? = null,
-    val freq: String? = null,
-    val interval: Int? = null,
-    val until: Instant? = null,
+data class RecurrenceRuleDto(
+    val freq: String? = null,                  // "DAILY" | "WEEKLY" | "MONTHLY"
+    val interval: Int = 1,
+    @Json(name = "until_utc") val untilUtc: Instant? = null,
     val count: Int? = null,
-    val byday: List<String>? = null,
-    val exdates: List<Instant>? = null,
+    val byday: List<String>? = null,           // "MO".."SU"
+    val bymonthday: List<Int>? = null,
+    val bysetpos: List<Int>? = null,
 )
 
 @JsonClass(generateAdapter = true)
-data class EventRangeRespDto(
-    val items: List<CalendarEventDto>,
-    @Json(name = "next_page") val nextPage: String? = null,
+data class EventsPageDto(
+    val events: List<CalendarEventDto>,
+    @Json(name = "next_cursor") val nextCursor: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
 data class EventCreateReqDto(
-    @Json(name = "calendar_id") val calendarId: String,
-    val title: String,
-    @Json(name = "start_at") val startAt: Instant,
-    @Json(name = "end_at") val endAt: Instant?,
-    @Json(name = "all_day") val allDay: Boolean,
-    val location: String? = null,
+    val name: String,
     val description: String? = null,
     val timezone: String? = null,
-    val recurrence: RecurrenceDto? = null,
-)
-
-@JsonClass(generateAdapter = true)
-data class EventUpdateReqDto(
-    val title: String? = null,
-    @Json(name = "start_at") val startAt: Instant? = null,
-    @Json(name = "end_at") val endAt: Instant? = null,
+    @Json(name = "start_utc") val startUtc: Instant? = null,
+    @Json(name = "end_utc") val endUtc: Instant? = null,
     @Json(name = "all_day") val allDay: Boolean? = null,
-    val location: String? = null,
-    val description: String? = null,
-    val timezone: String? = null,
-    val recurrence: RecurrenceDto? = null,
+    @Json(name = "all_day_date") val allDayDate: String? = null,
+    val attendees: List<String>? = null,
+    @Json(name = "booking_enabled") val bookingEnabled: Boolean? = null,
+    @Json(name = "approval_required") val approvalRequired: Boolean? = null,
+    val status: String? = null,
+    val category: String? = null,
+    @Json(name = "recurrence_rule") val recurrenceRule: RecurrenceRuleDto? = null,
+    @Json(name = "exdates_utc") val exdatesUtc: List<Instant>? = null,
 )
 
+// PATCH uses the same shape as create (the web client passes Partial<EventCreateIn>);
+// every field is nullable/omittable so unset fields are not serialized.
+typealias EventUpdateReqDto = EventCreateReqDto
+
 @JsonClass(generateAdapter = true)
-data class RsvpReqDto(val status: String) // "yes" | "no" | "maybe"
+data class CalendarCreateReqDto(
+    val name: String,
+    val timezone: String? = null,
+    @Json(name = "conflict_detection") val conflictDetection: Boolean? = null,
+    @Json(name = "buffer_before_minutes") val bufferBeforeMinutes: Int? = null,
+    @Json(name = "buffer_after_minutes") val bufferAfterMinutes: Int? = null,
+)
 ```
 
-`CalendarEventDto` accepts **either** `start_at`/`end_at` (`Instant`) **or**
-`start_date`/`end_date` (ISO date string, all-day); the mapper reconciles them
-(R-3). `Instant` (de)serialization uses the shared `InstantJsonAdapter`.
+Supporting DTOs (also `@JsonClass(generateAdapter = true)`): `OkRespDto(val ok:
+Boolean)` (mirrors `OkResp`, returned by deletes), `OccurrenceOverrideDto` (mirrors
+`EventOccurrenceOverrideIn`/`OccurrenceOverrideIn`: optional `name`/`description`/
+`timezone`/`start_utc`/`end_utc`/`all_day`/`all_day_date`/`status`/`category`), and
+`WorkingHoursWindowDto` (mirrors `WorkingHoursWindow`; carried opaquely on
+`CalendarDto.workingHours`).
+
+`CalendarEventDto` carries **either** `start_utc`/`end_utc` (`Instant`, timed) **or**
+`all_day:true` with `all_day_date` (a single ISO date string); the mapper reconciles
+them (R-3). `Instant` (de)serialization uses the shared `InstantJsonAdapter`.
+**Note:** there is no `RsvpReqDto` and no `start_date`/`end_date` pair on the wire.
 
 ### 4.3 The `CalendarApi` interface
 
@@ -306,53 +398,78 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+// CORRECTED 2026-06-06: paths are `ui/calendars...`; events are nested under a
+// calendar; there is no RSVP endpoint; delete returns an `OkResp` body, not empty.
 interface CalendarApi {
 
-    /** Calendars visible to the principal (owned + shared). Idempotent GET. */
-    @GET("calendars")
-    suspend fun listCalendars(): List<CalendarDto>
+    /** Calendars visible to the principal. Idempotent GET. `limit` optional. */
+    @GET("ui/calendars")
+    suspend fun listCalendars(@Query("limit") limit: Int? = null): List<CalendarDto>
 
-    /** Events overlapping [from, to). Idempotent GET; paged via next_page cursor. */
-    @GET("calendar/events")
+    @GET("ui/calendars/{calendarId}")
+    suspend fun getCalendar(@Path("calendarId") calendarId: String): CalendarDto
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/calendars")
+    suspend fun createCalendar(@Body body: CalendarCreateReqDto): CalendarDto
+
+    @Headers("Content-Type: application/json")
+    @PATCH("ui/calendars/{calendarId}")
+    suspend fun updateCalendar(
+        @Path("calendarId") calendarId: String,
+        @Body body: CalendarCreateReqDto, // backend takes Partial<CalendarCreateIn>
+    ): CalendarDto
+
+    @DELETE("ui/calendars/{calendarId}")
+    suspend fun deleteCalendar(@Path("calendarId") calendarId: String): OkRespDto
+
+    /** Events for a calendar. Idempotent GET; paged via next_cursor. */
+    @GET("ui/calendars/{calendarId}/events")
     suspend fun listEvents(
-        @Query("from") from: String,            // RFC-3339, inclusive
-        @Query("to") to: String,                // RFC-3339, exclusive
-        @Query("calendar_id") calendarId: String? = null,
-        @Query("page") page: String? = null,    // opaque cursor
-    ): EventRangeRespDto
+        @Path("calendarId") calendarId: String,
+        @Query("start_utc") startUtc: String? = null, // RFC-3339, optional
+        @Query("end_utc") endUtc: String? = null,     // RFC-3339, optional
+        @Query("limit") limit: Int? = null,
+        @Query("cursor") cursor: String? = null,      // opaque cursor
+    ): EventsPageDto
 
-    /** Single event (may be a recurrence master or an instance). Idempotent GET. */
-    @GET("calendar/events/{eventId}")
-    suspend fun getEvent(@Path("eventId") eventId: String): CalendarEventDto
+    /** Single event (may be a recurrence master). Idempotent GET. */
+    @GET("ui/calendars/{calendarId}/events/{eventId}")
+    suspend fun getEvent(
+        @Path("calendarId") calendarId: String,
+        @Path("eventId") eventId: String,
+    ): CalendarEventDto
 
     @Headers("Content-Type: application/json")
-    @POST("calendar/events")
-    suspend fun createEvent(@Body body: EventCreateReqDto): CalendarEventDto
+    @POST("ui/calendars/{calendarId}/events")
+    suspend fun createEvent(
+        @Path("calendarId") calendarId: String,
+        @Body body: EventCreateReqDto,
+        @Query("force") force: Boolean? = null, // backend supports a `force` flag
+    ): CalendarEventDto
 
     @Headers("Content-Type: application/json")
-    @PATCH("calendar/events/{eventId}")
+    @PATCH("ui/calendars/{calendarId}/events/{eventId}")
     suspend fun updateEvent(
+        @Path("calendarId") calendarId: String,
         @Path("eventId") eventId: String,
         @Body body: EventUpdateReqDto,
     ): CalendarEventDto
 
-    @DELETE("calendar/events/{eventId}")
-    suspend fun deleteEvent(@Path("eventId") eventId: String): Unit
-
-    /** Set the viewer's RSVP for an event. */
-    @Headers("Content-Type: application/json")
-    @POST("calendar/events/{eventId}/rsvp")
-    suspend fun setRsvp(
+    @DELETE("ui/calendars/{calendarId}/events/{eventId}")
+    suspend fun deleteEvent(
+        @Path("calendarId") calendarId: String,
         @Path("eventId") eventId: String,
-        @Body body: RsvpReqDto,
-    ): CalendarEventDto
+    ): OkRespDto
 }
 ```
 
-Notes: exact paths (`calendar/events` vs `calendars/{id}/events`) and the RSVP
-verb/path are confirmed against `/openapi.json` and `calendar.ts` before coding
-(Q-1/Q-2). `deleteEvent` returns `Unit` (tolerates empty 2xx); if the backend
-returns a body, switch to a thin `OkResp`-style DTO.
+Notes: paths and the absence of an RSVP endpoint are confirmed against the OpenAPI
+index and `calendar.ts`. `deleteEvent`/`deleteCalendar` return an `OkRespDto`
+(`{ ok: true }`-style) per `api.del<OkResp>(...)` in `calendar.ts`. The
+per-occurrence operations (`exclude`/`override`/`clear`) and sharing/conflicts/
+booking endpoints exist in `calendar.ts` but are scoped OUT of this ticket (see
+§13/Q-2); only the core calendar+event CRUD is in scope.
 
 ### 4.4 Mappers
 
@@ -362,44 +479,49 @@ package com.testlogon.android.core.network.calendar
 import com.testlogon.android.core.model.calendar.*
 import java.time.LocalDate
 
-fun CalendarEventDto.toDomain(): CalendarEvent {
-    val startInstant = startAt ?: startDate?.let { LocalDate.parse(it).atStartOfDay(...).toInstant() }
-        ?: error("event $id has neither start_at nor start_date")
-    return CalendarEvent(
-        id = id,
-        calendarId = calendarId,
-        title = title,
-        description = description,
-        location = location,
-        startAt = startInstant,
-        endAt = endAt,
-        allDay = allDay,
-        startDate = startDate?.let(LocalDate::parse),
-        endDate = endDate?.let(LocalDate::parse),
-        timezone = timezone,
-        visibility = visibility.toEventVisibility(),
-        rsvp = rsvp.toRsvpStatus(),
-        recurrence = recurrence?.toDomain(),
-        recurringEventId = recurringEventId,
-        updatedAt = updatedAt,
-    )
-}
-
-fun RecurrenceDto.toDomain(): Recurrence = Recurrence(
-    rrule = rrule ?: synthesizeRrule(this), // never drop recurrence
-    freq = freq.toRecurrenceFreq(),
-    interval = interval,
-    until = until,
-    count = count,
-    byDay = byday.orEmpty(),
-    exDates = exdates.orEmpty(),
+fun CalendarEventDto.toDomain(): CalendarEvent = CalendarEvent(
+    eventId = eventId,
+    calendarId = calendarId,
+    name = name,
+    description = description,
+    timezone = timezone,
+    startAt = startUtc,                                  // null for all-day
+    endAt = endUtc,
+    allDay = allDay,
+    allDayDate = allDayDate?.let(LocalDate::parse),
+    attendees = attendees,
+    bookingEnabled = bookingEnabled,
+    approvalRequired = approvalRequired,
+    status = status,
+    category = category,
+    recurrence = recurrenceRule?.toDomain(),
+    exDatesUtc = exdatesUtc.orEmpty(),
+    recurrenceOverrides = recurrenceOverrides.orEmpty().mapValues { it.value.toDomain() },
+    createdAtUtc = createdAtUtc,
+    syncState = syncState,
+    syncConflictReason = syncConflictReason,
 )
 
-private fun String?.toRsvpStatus(): RsvpStatus = when (this?.lowercase()) {
-    "yes" -> RsvpStatus.YES; "no" -> RsvpStatus.NO; "maybe" -> RsvpStatus.MAYBE
-    "pending", null -> RsvpStatus.PENDING; else -> RsvpStatus.UNKNOWN
+fun RecurrenceRuleDto.toDomain(): Recurrence = Recurrence(
+    freq = freq.toRecurrenceFreq(),                     // unknown -> UNKNOWN, never throws
+    interval = interval,
+    untilUtc = untilUtc,
+    count = count,
+    byDay = byday.orEmpty(),
+    byMonthDay = bymonthday.orEmpty(),
+    bySetPos = bysetpos.orEmpty(),
+)
+
+private fun String?.toRecurrenceFreq(): RecurrenceFreq = when (this?.uppercase()) {
+    "DAILY" -> RecurrenceFreq.DAILY
+    "WEEKLY" -> RecurrenceFreq.WEEKLY
+    "MONTHLY" -> RecurrenceFreq.MONTHLY
+    else -> RecurrenceFreq.UNKNOWN
 }
-// analogous String?.toEventVisibility(), .toRecurrenceFreq(), CalendarDto.toDomain()
+// analogous CalendarDto.toDomain(), OccurrenceOverrideDto.toDomain().
+// NOTE: no start/end reconciliation is needed for timed events — `start_utc` is
+// nullable on EventOut and simply maps to a nullable `startAt`. There is no RSVP
+// or visibility mapping (those concepts do not exist in the backend).
 ```
 
 Mappers are pure, side-effect-free, and individually unit-tested. Enum extension
@@ -442,74 +564,94 @@ mappers, provider) and domain types in `:core-model` only.
 ## 5. API Contract
 
 Base path (`dev`): `http://18.222.237.167:8000/`. All bodies JSON; all reads ride
-the cookie session + `X-CSRF-Token` (mutations). Shapes below are the working
-contract, reconciled against `/openapi.json` + `calendar.ts` before merge.
+the cookie session + `X-CSRF-Token` (mutations). Shapes below are **verified**
+against the OpenAPI index/spec (`CalendarOut`, `EventOut`, `RecurrenceRule`,
+`EventsPageOut`) and `frontend/src/api/endpoints/calendar.ts` + `types.ts`.
 
-### GET `calendars`
-Response `200`:
+> **CORRECTED 2026-06-06.** The prior Section 5 used invented flat paths
+> (`calendars`, `calendar/events`), invented fields (`title`, `start_at`,
+> `visibility`, `rsvp`, `start_date`/`end_date`, `next_page`, raw `rrule`), and a
+> nonexistent RSVP endpoint. All replaced with the real contract below.
+
+### GET `ui/calendars?limit=50`
+Response `200` — array of `CalendarOut`:
 ```json
 [
-  { "id": "cal_55", "name": "Team On-call", "owner_display_name": "Dana Ruiz",
-    "permission": "editor", "color": "#2E7D32" }
+  { "calendar_id": "cal_55", "name": "Team On-call", "timezone": "America/New_York",
+    "owner_user_id": "usr_7", "conflict_detection": true,
+    "buffer_before_minutes": 0, "buffer_after_minutes": 0,
+    "created_at_utc": "2026-05-01T12:00:00Z" }
 ]
 ```
 
-### GET `calendar/events?from=…&to=…&calendar_id=…&page=…`
-`from`/`to` RFC-3339; `page` opaque cursor. Response `200`:
+### GET `ui/calendars/{calendar_id}/events?start_utc=…&end_utc=…&limit=…&cursor=…`
+All four query params optional (web client typically sends only `cursor`).
+Response `200` — `EventsPageOut`:
 ```json
 {
-  "items": [
+  "events": [
     {
-      "id": "evt_91", "calendar_id": "cal_55", "title": "Sprint review",
-      "start_at": "2026-06-10T17:00:00Z", "end_at": "2026-06-10T18:00:00Z",
-      "all_day": false, "timezone": "America/New_York",
-      "visibility": "public", "rsvp": "pending", "updated_at": "2026-06-05T12:00:00Z"
+      "event_id": "evt_91", "calendar_id": "cal_55", "name": "Sprint review",
+      "description": "", "timezone": "America/New_York",
+      "start_utc": "2026-06-10T17:00:00Z", "end_utc": "2026-06-10T18:00:00Z",
+      "all_day": false, "attendees": ["usr_7","usr_8"],
+      "booking_enabled": false, "approval_required": false, "status": "confirmed",
+      "created_at_utc": "2026-06-05T12:00:00Z"
     },
     {
-      "id": "evt_92", "calendar_id": "cal_55", "title": "Standup",
-      "start_at": "2026-06-08T13:00:00Z", "end_at": "2026-06-08T13:15:00Z",
-      "all_day": false, "rsvp": "yes",
-      "recurrence": {
-        "rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;UNTIL=20260731T130000Z",
+      "event_id": "evt_92", "calendar_id": "cal_55", "name": "Standup",
+      "description": "", "timezone": "America/New_York",
+      "start_utc": "2026-06-08T13:00:00Z", "end_utc": "2026-06-08T13:15:00Z",
+      "all_day": false, "attendees": [], "booking_enabled": false,
+      "approval_required": false, "status": "confirmed",
+      "recurrence_rule": {
         "freq": "WEEKLY", "interval": 1, "byday": ["MO","TU","WE","TH","FR"],
-        "until": "2026-07-31T13:00:00Z",
-        "exdates": ["2026-06-19T13:00:00Z"]
-      }
+        "until_utc": "2026-07-31T13:00:00Z"
+      },
+      "exdates_utc": ["2026-06-19T13:00:00Z"],
+      "created_at_utc": "2026-06-01T09:00:00Z"
     },
     {
-      "id": "evt_93", "calendar_id": "cal_55", "title": "Company holiday",
-      "all_day": true, "start_date": "2026-07-03", "end_date": "2026-07-04",
-      "rsvp": "pending"
+      "event_id": "evt_93", "calendar_id": "cal_55", "name": "Company holiday",
+      "description": "", "timezone": "America/New_York",
+      "all_day": true, "all_day_date": "2026-07-03",
+      "attendees": [], "booking_enabled": false, "approval_required": false,
+      "status": "confirmed", "created_at_utc": "2026-06-01T09:00:00Z"
     }
   ],
-  "next_page": "eyJvZmZzZXQiOjUwfQ=="
+  "next_cursor": "eyJvZmZzZXQiOjUwfQ=="
 }
 ```
 
-### GET `calendar/events/{eventId}`
-Response `200`: a single `CalendarEventDto` (same shape as an `items[]` element).
-`404` if unknown.
+### GET `ui/calendars/{calendar_id}/events/{event_id}`
+Response `200`: a single `EventOut` (same shape as an `events[]` element).
+`422` on validation; `404` if unknown.
 
-### POST `calendar/events`
-Request:
+### POST `ui/calendars/{calendar_id}/events?force=…`
+Request — `EventCreateIn` (note: `name`, not `title`; `start_utc`, not `start_at`):
 ```json
-{ "calendar_id": "cal_55", "title": "1:1", "start_at": "2026-06-12T15:00:00Z",
-  "end_at": "2026-06-12T15:30:00Z", "all_day": false }
+{ "name": "1:1", "start_utc": "2026-06-12T15:00:00Z",
+  "end_utc": "2026-06-12T15:30:00Z", "all_day": false }
 ```
-Response `201`/`200`: the created `CalendarEventDto` (with server `id`).
+Response `200` (NOT 201): the created `EventOut` (with server `event_id`).
 
-### PATCH `calendar/events/{eventId}`
-Request: sparse `EventUpdateReqDto` (only changed fields). Response `200`: updated event.
+### PATCH `ui/calendars/{calendar_id}/events/{event_id}`
+Request: sparse `EventCreateIn` (only changed fields; web client passes
+`Partial<EventCreateIn>`). Response `200`: updated `EventOut`.
 
-### DELETE `calendar/events/{eventId}`
-Response `200`/`204` (empty body). `404` if already deleted.
+### DELETE `ui/calendars/{calendar_id}/events/{event_id}`
+Response `200` with an `OkResp` body (`api.del<OkResp>` in `calendar.ts`).
+`422` on validation.
 
-### POST `calendar/events/{eventId}/rsvp`
-Request: `{ "status": "yes" }`. Response `200`: updated `CalendarEventDto` with new `rsvp`.
+> **There is no RSVP endpoint.** The web app has no per-viewer RSVP concept for
+> calendar events. Attendees are a flat `attendees: string[]`. (Removed the prior
+> `POST .../rsvp` section entirely.)
 
-**Error envelope (all endpoints):** FastAPI `detail` union
-(`string | [{msg,type,loc}] | {code,...}`). Mapping to typed `ApiError` is owned by
-**AND-015**; this ticket lets non-2xx surface as `retrofit2.HttpException`.
+**Error envelope (all endpoints):** FastAPI `HTTPValidationError` for `422`
+(`{ "detail": [{ "loc": [...], "msg": "...", "type": "..." }] }`) and the
+`detail` union (`string | [{msg,type,loc}] | {code,...}`) for other errors — see
+`normalizeErrorDetail` in `src/api/client.ts`. Mapping to typed `ApiError` is
+owned by **AND-015**; this ticket lets non-2xx surface as `retrofit2.HttpException`.
 
 ## 6. Data & State Management
 
@@ -517,8 +659,9 @@ Request: `{ "status": "yes" }`. Response `200`: updated `CalendarEventDto` with 
 ticket holds no `StateFlow`/`UiState`, no Room, no DataStore.
 
 - **Session state** lives in cookies, persisted by the cookie jar (AND-011);
-  `CalendarApi` never reads/writes cookies. CSRF (`ui_csrf` → `X-CSRF-Token`) is
-  attached by AND-012 for mutating verbs (`POST`/`PATCH`/`DELETE`).
+  `CalendarApi` never reads/writes cookies. CSRF (`ui_csrf` cookie → `X-CSRF-Token`
+  header, verified in `src/api/client.ts`) is attached by AND-012 for mutating
+  verbs (`POST`/`PATCH`/`DELETE`).
 - **Serialization:** request/response (de)serialization uses Moshi codegen
   adapters (KSP) + the shared `InstantJsonAdapter` via the shared converter.
   Unknown JSON keys are ignored; absent optional fields fall back to Kotlin
@@ -528,9 +671,10 @@ ticket holds no `StateFlow`/`UiState`, no Room, no DataStore.
   DTO→`core-model` via pure `toDomain()` functions. Callers (`core-data`
   repositories) decide whether to wrap in `ApiResult<T>` (AND-018), cache in Room,
   or expose via `StateFlow`. None of that is here.
-- **Paging:** `listEvents` returns an `EventRangeRespDto` with a `next_page`
-  cursor; the actual Paging 3 `PagingSource`/`RemoteMediator` is a downstream
-  `core-data`/feature concern. This ticket only exposes the cursor-bearing call.
+- **Paging:** `listEvents` returns an `EventsPageDto` with a `next_cursor`
+  cursor (verified: `EventsPageOut.next_cursor`); the actual Paging 3
+  `PagingSource`/`RemoteMediator` is a downstream `core-data`/feature concern.
+  This ticket only exposes the cursor-bearing call.
 - **Threading:** suspend methods are invoked from a coroutine on an IO dispatcher
   injected at the repository layer. This ticket imposes no dispatcher.
 
@@ -546,13 +690,18 @@ ticket holds no `StateFlow`/`UiState`, no Room, no DataStore.
   AND-009/AND-016 on the shared client. Mutating verbs are **not** auto-retried.
 - **Deserialization failures** surface as `JsonDataException` from the converter.
   Mappers are written defensively so that *recoverable* shape variance (missing
-  optionals, unknown enums, `start_date` vs `start_at`) never throws; only a
-  genuinely malformed/contract-violating payload (e.g. event with no start at all)
-  produces an error, and it does so deterministically (`error(...)` in the mapper),
-  surfaced to callers for AND-015/AND-018 handling.
-- **Recurrence safety:** an event with a `recurrence` object but no `rrule` string
-  is still mapped (R-1) by synthesizing an RRULE from structured fields; recurrence
-  is never silently dropped.
+  optionals, unknown `freq` enums, timed-vs-all-day events where `start_utc` is
+  absent and `all_day_date` is present) never throws. <!-- CORRECTED: `start_utc`
+  is legitimately nullable on EventOut (all-day events), so a missing start is NOT
+  a malformed payload and the mapper must NOT `error(...)` on it. The original
+  "event with no start at all → error()" rule is wrong. --> A genuinely
+  contract-violating payload (e.g. an EventOut missing the required `event_id`,
+  `calendar_id`, `name`, `timezone`, or `created_at_utc`) fails at the Moshi
+  adapter as a `JsonDataException`, surfaced to callers for AND-015/AND-018.
+- **Recurrence safety:** an event with a `recurrence_rule` object whose `freq` is
+  unknown is still mapped (R-1) with `freq = UNKNOWN` and all structured fields
+  preserved; recurrence is never silently dropped. (There is no raw `rrule` string
+  to synthesize — recurrence is fully structured.)
 - This ticket maps **no** errors to user-facing types itself — that is AND-015
   (`ApiError`) / AND-018 (`ApiResult`).
 
@@ -561,9 +710,11 @@ ticket holds no `StateFlow`/`UiState`, no Room, no DataStore.
 - **Authenticated surface:** all calendar endpoints require the cookie session
   established by the auth flow (AND-027 family). `CalendarApi` adds no manual
   `Cookie`/`Authorization` headers; identity is carried implicitly by the jar.
-- **CSRF:** mutating verbs (`POST`/`PATCH`/`DELETE`, including `createEvent`,
-  `updateEvent`, `deleteEvent`, `setRsvp`) rely on AND-012 to attach
-  `X-CSRF-Token`; without it they will `403` against a real backend (R-4).
+- **CSRF:** mutating verbs (`POST`/`PATCH`/`DELETE`, i.e. `createCalendar`,
+  `updateCalendar`, `deleteCalendar`, `createEvent`, `updateEvent`, `deleteEvent`)
+  rely on AND-012 to attach `X-CSRF-Token` (read from the `ui_csrf` cookie, as the
+  web client does in `src/api/client.ts`); without it they may fail against a real
+  backend (R-4). <!-- CORRECTED: removed `setRsvp` (no such endpoint). -->
 - **Cleartext on dev:** calendar payloads (titles, locations, descriptions,
   attendee-adjacent data) ride plaintext HTTP on the dev host — a known,
   dev-only risk permitted by the scoped cleartext config (AND-006);
@@ -575,8 +726,9 @@ ticket holds no `StateFlow`/`UiState`, no Room, no DataStore.
 - **No new permissions / no token storage:** purely network transport. The
   `ACTION_INSERT` calendar hand-off (and its permission-free design) is AND-138's
   concern, not this ticket.
-- **Scope:** event/RSVP operations act only within calendars the principal can see
-  (server-enforced by the cookie-scoped identity).
+- **Scope:** event operations act only within calendars the principal can see /
+  has been shared (server-enforced by the cookie-scoped identity; sharing is
+  `read`/`write` per `CalendarShare`).
 
 ## 9. Accessibility & i18n
 
@@ -595,11 +747,11 @@ no UI surface and no user-facing strings. Two hand-offs to downstream UI tickets
 - **HTTP logging** is inherited from AND-009's redacting `HttpLoggingInterceptor`
   (debug builds only). No new logging here; calendar payload bodies must be redacted
   (Section 8). No `Timber` payload dumps.
-- **No analytics events** emitted by this layer. Calendar-view, event-open, and
-  RSVP-changed analytics are emitted by the consuming feature ViewModels (their own
-  tickets), derived from `ApiResult` outcomes — and must follow the AND-052
-  redaction policy (no titles/locations/ids beyond anonymized form), mirroring
-  AND-138's telemetry rules.
+- **No analytics events** emitted by this layer. Calendar-view and event-open
+  analytics are emitted by the consuming feature ViewModels (their own tickets),
+  derived from `ApiResult` outcomes — and must follow the AND-052 redaction policy
+  (no event names/descriptions/ids beyond anonymized form), mirroring AND-138's
+  telemetry rules.
 - **Build-time signal:** KSP must generate Moshi adapters for every calendar DTO; a
   missing adapter fails the build (no reflection fallback, per AND-010 policy).
 
@@ -624,58 +776,67 @@ private fun api(server: MockWebServer): CalendarApi {
 }
 ```
 
-**T-1 — `listCalendars`** issues `GET /calendars`, decodes `List<CalendarDto>`.
+> **CORRECTED 2026-06-06.** Test descriptions below now use the real paths
+> (`/ui/calendars...`), field names (`name`/`start_utc`/`next_cursor`/`event_id`),
+> and the structured recurrence. T-10 (RSVP) is replaced with a calendar-delete
+> test since no RSVP endpoint exists.
+
+**T-1 — `listCalendars`** issues `GET /ui/calendars`, decodes `List<CalendarDto>`;
+asserts `calendarId`/`name`/`timezone`/`ownerUserId` map.
 
 **T-2 — `listEvents` query.**
 ```kotlin
-@Test fun listEvents_sendsRangeQueryAndDecodes() = runTest {
+@Test fun listEvents_sendsQueryAndDecodes() = runTest {
     val server = MockWebServer().apply {
-        enqueue(MockResponse().setBody(RANGE_JSON)); start()
+        enqueue(MockResponse().setBody(EVENTS_PAGE_JSON)); start()
     }
     val resp = api(server).listEvents(
-        from = "2026-06-08T00:00:00Z", to = "2026-06-15T00:00:00Z", calendarId = "cal_55")
+        calendarId = "cal_55", startUtc = "2026-06-08T00:00:00Z",
+        endUtc = "2026-06-15T00:00:00Z", cursor = "abc")
     val req = server.takeRequest()
     assertEquals("GET", req.method)
     val url = req.requestUrl!!
-    assertEquals("/calendar/events", url.encodedPath)
-    assertEquals("2026-06-08T00:00:00Z", url.queryParameter("from"))
-    assertEquals("cal_55", url.queryParameter("calendar_id"))
-    assertEquals("eyJvZmZzZXQiOjUwfQ==", resp.nextPage)
-    assertEquals(3, resp.items.size)
+    assertEquals("/ui/calendars/cal_55/events", url.encodedPath)
+    assertEquals("2026-06-08T00:00:00Z", url.queryParameter("start_utc"))
+    assertEquals("abc", url.queryParameter("cursor"))
+    assertEquals("eyJvZmZzZXQiOjUwfQ==", resp.nextCursor)
+    assertEquals(3, resp.events.size)
     server.shutdown()
 }
 ```
 
-**T-3 — recurrence mapping (KEY).** `RANGE_JSON.items[1]` (weekly RRULE) maps to a
-`CalendarEvent` whose `recurrence` retains `rrule` verbatim, `freq == WEEKLY`,
-`byDay == ["MO","TU","WE","TH","FR"]`, `until` parsed to the right `Instant`, and
-`exDates.size == 1`. Recurrence is never null/dropped.
+**T-3 — recurrence mapping (KEY).** `EVENTS_PAGE_JSON.events[1]` (weekly rule) maps
+to a `CalendarEvent` whose `recurrence` has `freq == WEEKLY`,
+`byDay == ["MO","TU","WE","TH","FR"]`, `untilUtc` parsed to the right `Instant`,
+and whose event-level `exDatesUtc.size == 1`. Recurrence is never null/dropped.
 
-**T-4 — all-day mapping.** `items[2]` (`all_day:true`, `start_date`/`end_date`, no
-`start_at`) maps to `allDay == true`, non-null `startDate`/`endDate`
-(`LocalDate`), and a derived `startAt` `Instant`; no off-by-one.
+**T-4 — all-day mapping.** `events[2]` (`all_day:true`, `all_day_date`, no
+`start_utc`) maps to `allDay == true`, non-null `allDayDate` (`LocalDate`), and a
+null `startAt`; no off-by-one and no error thrown for the absent `start_utc`.
 
-**T-5 — enum tolerance.** `rsvp:"pending"` → `PENDING`; an unknown
-`visibility:"secret"` → `UNKNOWN`; missing `permission` → `UNKNOWN`. No throw.
+**T-5 — enum/optional tolerance.** unknown `freq:"HOURLY"` → `RecurrenceFreq.UNKNOWN`;
+missing `category` → null; missing `recurrence_rule` → null. No throw.
 
-**T-6 — `getEvent`** issues `GET /calendar/events/evt_91` (path param) and decodes
-a single event.
+**T-6 — `getEvent`** issues `GET /ui/calendars/cal_55/events/evt_91` (both path
+params) and decodes a single event.
 
-**T-7 — `createEvent`** issues `POST /calendar/events` with a JSON body containing
-`calendar_id`, `title`, `start_at`; decodes the returned event with server `id`.
+**T-7 — `createEvent`** issues `POST /ui/calendars/cal_55/events` with a JSON body
+containing `name`, `start_utc`; decodes the returned event with server `event_id`.
 
-**T-8 — `updateEvent`** issues `PATCH /calendar/events/evt_91` with a **sparse**
-body (only the changed field serialized; nulls omitted) and decodes the response.
+**T-8 — `updateEvent`** issues `PATCH /ui/calendars/cal_55/events/evt_91` with a
+**sparse** body (only the changed field serialized; nulls omitted) and decodes the
+response.
 
-**T-9 — `deleteEvent`** issues `DELETE /calendar/events/evt_91` and tolerates an
-empty `204`/`200` (returns `Unit`).
+**T-9 — `deleteEvent`** issues `DELETE /ui/calendars/cal_55/events/evt_91` and
+decodes the `OkResp` body (e.g. `{"ok":true}` → `OkRespDto(ok = true)`).
 
-**T-10 — `setRsvp`** issues `POST /calendar/events/evt_91/rsvp` with
-`{"status":"yes"}` and decodes the updated event (`rsvp == YES`).
+**T-10 — `deleteCalendar`** issues `DELETE /ui/calendars/cal_55` and decodes the
+`OkResp` body. (Replaces the obsolete RSVP test — no RSVP endpoint exists.)
 
 **T-11 — error propagation.** A `401` from `listEvents` throws
 `retrofit2.HttpException` with `code() == 401` (non-2xx not swallowed, leaving room
-for AND-013/AND-015).
+for AND-013/AND-015); a `422` from `createEvent` carries the
+`HTTPValidationError` body for AND-015.
 
 **T-12 — Hilt provider.** `@HiltAndroidTest` (or `core-testing` harness) injects
 `CalendarApi` and asserts a non-null singleton built on the shared Retrofit (same
@@ -709,41 +870,45 @@ Integration-depends on AND-011/AND-012/AND-013 for cookies/CSRF/refresh at runti
   (agenda/list/detail screens, Paging 3 over `listEvents`) consume `CalendarApi`
   and the mappers.
 
-**Sequencing within the ticket:** (1) confirm endpoint set, paths, RSVP verb, and
-field names against `/openapi.json` + `calendar.ts`; (2) define `core-model` domain
+**Sequencing within the ticket:** (1) endpoint set, paths, and field names are now
+confirmed against the OpenAPI index + `calendar.ts` (see §16); (2) define `core-model` domain
 types; (3) define DTOs + codegen adapters; (4) write `CalendarMappers.kt`;
-(5) declare `CalendarApi`; (6) add `CalendarApiModule`; (7) write tests T-1..T-12.
+(5) declare `CalendarApi`; (6) add `CalendarApiModule`; (7) write tests T-1..T-11.
 
 ## 13. Risks & Open Questions
 
-- **R-1 Recurrence representation.** Backend may send a raw `rrule` string, a
-  structured object, or both. Mitigation: DTO captures both; mapper preserves
-  `rrule` verbatim and synthesizes one from structured fields if absent, so
-  recurrence is never dropped. Guarded by T-3. No RRULE expansion in this ticket.
-- **R-2 Paging shape.** `listEvents` may return a bare array, a `{items,next_page}`
-  envelope, or offset/limit params. Mitigation: match `calendar.ts`/OpenAPI;
-  default to the `EventRangeRespDto` cursor envelope. Guarded by T-2.
-- **R-3 All-day timestamps.** Server may send `all_day` with `start_date`/`end_date`
-  (ISO date) and omit `start_at`, or send naive timestamps + separate `timezone`.
-  Mitigation: DTO accepts both; mapper derives `Instant` + `LocalDate` using the
-  event tz when present, device tz otherwise. Open: is `start_at` always UTC?
-  Guarded by T-4.
+- **R-1 Recurrence representation.** RESOLVED: the backend uses a fully structured
+  `RecurrenceRule` (`freq`/`interval`/`until_utc`/`count`/`byday`/`bymonthday`/
+  `bysetpos`) — there is no raw `rrule` string. Exception dates and per-occurrence
+  edits live at the EVENT level (`exdates_utc`, `recurrence_overrides`). Mapper
+  preserves every field; unknown `freq` → `UNKNOWN`. Guarded by T-3/T-5. No
+  recurrence expansion in this ticket.
+- **R-2 Paging shape.** RESOLVED: `listEvents` returns the `EventsPageOut` envelope
+  `{ events, next_cursor }`; the list is per-calendar (path), with optional
+  `start_utc`/`end_utc`/`limit`/`cursor` query params. Guarded by T-2.
+- **R-3 All-day timestamps.** RESOLVED: all-day events set `all_day:true` with a
+  single `all_day_date` (ISO date) and omit `start_utc`; timed events use
+  `start_utc`/`end_utc` (UTC `Z`). Mapper derives `LocalDate` for all-day and leaves
+  `startAt` null. Guarded by T-4. Open: server-side semantics of all-day end
+  boundary (inclusive vs exclusive) are unverified from the schema — see §16.
 - **R-4 CSRF on mutations.** If AND-012's interceptor is absent, `create`/`update`/
-  `delete`/`rsvp` may `403` end-to-end. Unit tests (MockWebServer) are unaffected.
+  `delete` (calendar and event) may fail end-to-end. Unit tests (MockWebServer) are
+  unaffected.
 - **R-5 Type duplication with AND-138.** Until AND-138 migrates to these canonical
   types, the provisional copies coexist. Mitigation: land canonical types in
   `core-model` here; track AND-138 migration as the follow-up.
-- **Q-1** Endpoint paths: `calendar/events` vs `calendars/{id}/events`? *Proposed:*
-  match `calendar.ts`/OpenAPI; spec assumes flat `calendar/events` with optional
-  `calendar_id` query.
-- **Q-2** RSVP contract: `POST /calendar/events/{id}/rsvp` vs `PATCH` on the event?
-  *Proposed:* confirm via OpenAPI; spec assumes the dedicated RSVP POST.
-- **Q-3** Does `deleteEvent` return an empty body or `{"ok":true}`? *Proposed:*
-  default `Unit`; switch to `OkResp` if a body is returned. Guarded by T-9.
-- **Q-4** Recurring-instance semantics: does `getEvent` on a recurrence master
-  return the series or a single instance, and is `recurring_event_id` populated on
-  instances? *Proposed:* confirm via OpenAPI; mapper carries `recurringEventId`
-  through regardless.
+- **Q-1** Endpoint paths — RESOLVED: events are nested under a calendar at
+  `ui/calendars/{calendar_id}/events`; calendars at `ui/calendars`. There is no flat
+  `calendar/events`.
+- **Q-2** Scope of the per-occurrence / sharing / conflict / booking endpoints
+  (`.../occurrences/...`, `.../shares`, `.../events/conflicts`,
+  `.../events/suggestions`, `availability`, booking links) — they exist in
+  `calendar.ts` but are NOT in this ticket's backlog scope (`events, recurrence`).
+  *Proposed:* land core calendar+event CRUD here; track the rest as follow-ups.
+- **Q-3** `deleteEvent`/`deleteCalendar` return body — RESOLVED: an `OkResp`
+  (`{ ok: true }`-style), per `api.del<OkResp>` in `calendar.ts`. Guarded by T-9/T-10.
+- **Q-4** Create-event response code — RESOLVED: `200` with `EventOut` (NOT `201`),
+  per OpenAPI `POST /ui/calendars/{calendar_id}/events resp=200:EventOut`.
 
 ## 14. Acceptance Criteria
 
@@ -752,18 +917,23 @@ types; (3) define DTOs + codegen adapters; (4) write `CalendarMappers.kt`;
   production Moshi config and maps losslessly into the `core-model` domain types,
   proven by mapper unit tests (T-3, T-4, T-5).
 - **AC-2.** `CalendarApi` declares the calendar operations (`listCalendars`,
-  `listEvents`, `getEvent`, `createEvent`, `updateEvent`, `deleteEvent`, `setRsvp`)
-  and the module compiles against the new DTOs and `core-model` types.
+  `getCalendar`, `createCalendar`, `updateCalendar`, `deleteCalendar`,
+  `listEvents`, `getEvent`, `createEvent`, `updateEvent`, `deleteEvent`) and the
+  module compiles against the new DTOs and `core-model` types. <!-- CORRECTED:
+  removed `setRsvp`; added the calendar CRUD operations that exist in calendar.ts. -->
 - **AC-3.** Each endpoint is callable and its **verb + resolved path + query/body**
   match Section 5, asserted with MockWebServer (T-1, T-2, T-6..T-10).
-- **AC-4.** `listEvents` serializes `from`/`to`/`calendar_id`/`page` query params
-  and decodes the paged `{items, next_page}` envelope (T-2).
-- **AC-5.** Recurrence is preserved end-to-end: raw `rrule` retained, `freq`/`byDay`/
-  `until`/`exDates` mapped, recurrence never dropped (T-3).
-- **AC-6.** All-day events map to `allDay=true` with `LocalDate` start/end and a
-  derived `Instant`, with no off-by-one (T-4).
-- **AC-7.** Unknown enum strings and missing optional fields map to
-  `UNKNOWN`/`PENDING`/defaults without throwing (T-5).
+- **AC-4.** `listEvents` serializes `start_utc`/`end_utc`/`limit`/`cursor` query
+  params (under the per-calendar path) and decodes the paged
+  `{events, next_cursor}` envelope (T-2).
+- **AC-5.** Recurrence is preserved end-to-end: structured
+  `freq`/`interval`/`byDay`/`untilUtc`/`count`/`byMonthDay`/`bySetPos` mapped, plus
+  event-level `exDatesUtc`, recurrence never dropped (T-3).
+- **AC-6.** All-day events map to `allDay=true` with a `LocalDate` `allDayDate` and
+  a null `startAt`, with no off-by-one and no error thrown for the absent
+  `start_utc` (T-4).
+- **AC-7.** Unknown enum strings (`freq`) and missing optional fields map to
+  `UNKNOWN`/defaults without throwing (T-5).
 - **AC-8.** Non-2xx (e.g. `401` from `listEvents`) surfaces as `HttpException` and
   is not swallowed (T-11).
 - **AC-9.** `CalendarApi` is Hilt-provided as a `@Singleton` on the shared Retrofit;
@@ -794,3 +964,260 @@ types; (3) define DTOs + codegen adapters; (4) write `CalendarMappers.kt`;
 - A one-line note in the `core-network` README (owned by AND-007) records the
   `CalendarApi` path/verb map and the delegation of cookie/CSRF/refresh to
   AND-011/AND-012/AND-013.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source. Sources are
+the OpenAPI index (`reference/openapi.index.txt`), the OpenAPI spec
+(`reference/openapi.pretty.json` → `components.schemas.*`), and the frontend
+(`reference/src/...`). "framework ref" labels Android/library framework choices.
+
+1. **Calendar list endpoint is `GET /calendars`.** — **Corrected** → real path is
+   `GET /ui/calendars`. Source: OpenAPI `GET /ui/calendars`
+   (op=list_calendars_ui_calendars_get); `src/api/endpoints/calendar.ts: getCalendars`.
+2. **Event list endpoint is a flat `GET /calendar/events` with a `calendar_id`
+   query.** — **Corrected** → events are nested per-calendar:
+   `GET /ui/calendars/{calendar_id}/events`; `calendar_id` is a path param, not a
+   query. Source: OpenAPI `GET /ui/calendars/{calendar_id}/events`
+   (resp=200:EventsPageOut); `src/api/endpoints/calendar.ts: getEvents`.
+3. **List-events query params are `from`/`to`/`calendar_id`/`page`.** —
+   **Corrected** → `start_utc`/`end_utc`/`limit`/`cursor` (all optional). Source:
+   OpenAPI index line `params=start_utc,end_utc,limit,cursor,...`;
+   `src/api/endpoints/calendar.ts: getEvents` sends only `cursor`.
+4. **Paged response is `{ items, next_page }` (`EventRangeRespDto`).** —
+   **Corrected** → `{ events, next_cursor }`. Source: OpenAPI
+   `components.schemas.EventsPageOut` (`events`, `next_cursor`);
+   `src/api/types.ts: EventsPage`.
+5. **Single-event / mutate paths are `calendar/events/{eventId}`.** — **Corrected**
+   → `ui/calendars/{calendar_id}/events/{event_id}` (both path params). Source:
+   OpenAPI `GET|PATCH|DELETE /ui/calendars/{calendar_id}/events/{event_id}`;
+   `src/api/endpoints/calendar.ts: getEvent/updateEvent/deleteEvent`.
+6. **Create event verb/path `POST calendar/events`, response `201`.** —
+   **Corrected** → `POST /ui/calendars/{calendar_id}/events`, response **`200`**
+   with `EventOut`. Source: OpenAPI `POST /ui/calendars/{calendar_id}/events`
+   (resp=200:EventOut; params include `force`); `calendar.ts: createEvent`.
+7. **Update verb is `PATCH`.** — **Verified.** Source: OpenAPI
+   `PATCH /ui/calendars/{calendar_id}/events/{event_id}` (req=EventUpdateIn);
+   `calendar.ts: updateEvent` (`api.patch`, `Partial<EventCreateIn>`).
+8. **A `POST .../{eventId}/rsvp` endpoint exists and events carry an `rsvp`
+   field.** — **Corrected (removed).** No RSVP endpoint or field exists anywhere.
+   Source: absent from OpenAPI index (grep `calendar` shows no `/rsvp`); absent from
+   `src/api/endpoints/calendar.ts`; `EventOut`/`CalendarEvent` have no `rsvp` field.
+9. **`deleteEvent` returns empty body (`Unit`).** — **Corrected** → returns an
+   `OkResp` body. Source: `src/api/endpoints/calendar.ts: deleteEvent`
+   (`api.del<OkResp>`); `src/api/types.ts: OkResp`.
+10. **Event fields `title`, `location`, `start_at`, `end_at`, `visibility`,
+    `recurring_event_id`, `updated_at`, `start_date`/`end_date`.** — **Corrected** →
+    actual EventOut fields: `event_id`, `calendar_id`, `name`, `description`
+    (required), `timezone` (required), `start_utc`, `end_utc`, `all_day`,
+    `all_day_date` (single), `attendees`, `booking_enabled`, `approval_required`,
+    `status`, `category`, `recurrence_rule`, `exdates_utc`, `recurrence_overrides`,
+    `created_at_utc`, `sync_state`, `sync_conflict_reason`. No `title`/`location`/
+    `visibility`/`recurring_event_id`/`updated_at`. Source:
+    `components.schemas.EventOut`; `src/api/types.ts: CalendarEvent`.
+11. **Recurrence carries a raw `rrule` string plus structured fields, with
+    in-recurrence `exdates`.** — **Corrected** → `RecurrenceRule` is fully
+    structured with NO `rrule`: `freq` (enum DAILY|WEEKLY|MONTHLY), `interval`
+    (default 1), `until_utc`, `count`, `byday`, `bymonthday`, `bysetpos`. Exception
+    dates live at the EVENT level (`exdates_utc`); per-occurrence edits in
+    `recurrence_overrides`. Source: `components.schemas.RecurrenceRule`;
+    `src/api/types.ts: RecurrenceRule`.
+12. **`RecurrenceFreq` includes `YEARLY`.** — **Corrected** → enum is only
+    `DAILY | WEEKLY | MONTHLY`. Source: `components.schemas.RecurrenceRule.freq.enum`.
+13. **`Calendar` carries `owner_display_name`, `permission`, `color`.** —
+    **Corrected** → CalendarOut fields: `calendar_id`, `name`, `timezone`,
+    `owner_user_id`, `conflict_detection`, `buffer_before_minutes`,
+    `buffer_after_minutes`, `created_at_utc`, `working_hours`. No display name /
+    permission / color on the calendar. Permission is on `CalendarShare`
+    (`read`|`write`). Source: `components.schemas.CalendarOut`;
+    `src/api/types.ts: Calendar` and `CalendarShare`.
+14. **CSRF is the `ui_csrf` cookie sent as `X-CSRF-Token` on mutations.** —
+    **Verified.** Source: `src/api/client.ts` (`getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", csrf)`).
+15. **401 triggers a single session refresh + retry.** — **Verified** (delegated to
+    AND-013). The web client refreshes via `POST /ui/session/refresh` then retries
+    once. Source: `src/api/client.ts: refreshSession` + 401 branch.
+16. **Error envelope is the FastAPI `detail` union; `422` is
+    `HTTPValidationError`.** — **Verified.** Source: OpenAPI index
+    (`resp=...;422:HTTPValidationError` on every calendar op);
+    `src/api/client.ts: normalizeErrorDetail` handles `string | [{msg}] | {code}`.
+17. **Base URL `http://18.222.237.167:8000/`, cleartext on dev.** —
+    **Unverified-assumption.** Not derivable from the OpenAPI/frontend sources
+    (the web client reads `VITE_API_BASE_URL` from env). Carried over from
+    AND-006; treated as an AND-006 input, not re-verified here.
+18. **Retrofit 2.11.0 / OkHttp 4.12.0 / Moshi 1.15.x codegen via KSP; suspend +
+    Moshi converter.** — **framework ref** (Retrofit `@HTTP`/coroutine + Moshi
+    codegen are standard). Versions are pins owned by AND-009/AND-010, not
+    re-verified against an upstream catalog here.
+
+### Corrections made
+
+- **Paths:** `calendars` → `ui/calendars`; `calendar/events*` →
+  `ui/calendars/{calendarId}/events*` (events nested under a calendar; `calendarId`
+  is a path param). [§4.3, §5; cites 1,2,5]
+- **RSVP removed entirely:** no `setRsvp` method, no `RsvpReqDto`, no `rsvp`/`RsvpStatus`
+  on the model, no RSVP test, no RSVP mentions in §1/§6/§8/§10/§14. [cite 8]
+- **List query params:** `from`/`to`/`calendar_id`/`page` → `start_utc`/`end_utc`/
+  `limit`/`cursor`. [§3 FR-4, §4.3, §5, §14 AC-4; cite 3]
+- **Paging envelope:** `{items,next_page}`/`EventRangeRespDto` →
+  `{events,next_cursor}`/`EventsPageDto`. [§4.2, §5, §6; cite 4]
+- **Event field names:** `title`→`name`, `start_at`/`end_at`→`start_utc`/`end_utc`,
+  `start_date`/`end_date`→single `all_day_date`, dropped `location`/`visibility`/
+  `recurring_event_id`/`updated_at`, added `attendees`/`status`/`category`/
+  `booking_enabled`/`approval_required`/`exdates_utc`/`recurrence_overrides`/
+  `created_at_utc`. [§4.1, §4.2, §4.4, §5; cite 10]
+- **Recurrence:** removed raw `rrule` + synthesis logic; modeled the structured
+  `RecurrenceRule`; moved `exdates` to event-level `exdates_utc`; removed `YEARLY`.
+  [§3 FR-6, §4.1, §4.2, §4.4, §7, §13 R-1; cites 11,12]
+- **Calendar shape:** dropped `owner_display_name`/`permission`/`color`; added
+  `timezone`/`owner_user_id`/`conflict_detection`/buffers/`created_at_utc`; added
+  calendar CRUD methods. [§4.1, §4.2, §4.3, §5, §14 AC-2; cite 13]
+- **Delete return:** `Unit`/empty → `OkRespDto`. [§4.3, §5, §11 T-9/T-10; cite 9]
+- **Create response code:** `201` → `200`. [§5, §13 Q-4; cite 6]
+- **Mapper safety:** removed the wrong `error(...)`-on-missing-start rule
+  (`start_utc` is legitimately null for all-day). [§4.4, §7; cite 10]
+
+### Open assumptions
+
+- **Auth scheme of the Android port (bearer vs pure-cookie).** The web client
+  sends BOTH `Authorization: Bearer <accessToken>` and the cookie session, and the
+  OpenAPI calendar ops also declare `authorization`/`X-SESSION-ID` params. This spec
+  delegates auth wholly to AND-027/AND-011/AND-012/AND-013, so the exact header set
+  is not pinned here. Unverifiable from this ticket's scope — it is an AND-027
+  decision. (cite: `src/api/client.ts`; OpenAPI index `params=...,X-SESSION-ID`)
+- **Base URL / cleartext dev host.** See citation 17 — an AND-006 input, not
+  derivable from the OpenAPI/frontend sources.
+- **All-day end-boundary semantics** (is `all_day_date` a single day, or is there an
+  implicit exclusive end?). The schema exposes only a single `all_day_date`; the
+  inclusive/exclusive boundary is a server behavior not described by the schema.
+  Flagged in §13 R-3; the mapper does not assume an end date.
+- **`status`/`category` value domains.** `EventOut.status` is a free-form string in
+  the schema (no enum); the domain model keeps it as `String`. Unverifiable list of
+  allowed values from the sources.
+- **Library version pins** (Retrofit/OkHttp/Moshi/AGP/Gradle). Inherited from
+  AND-009/AND-010; not re-verified against an upstream version catalog.
+
+## 17. Test Plan
+
+Test IDs `TC-AND-270-NN`. This is a headless transport+serialization ticket, so the
+bulk runs as **JVM unit / contract (MockWebServer)** with no device. The Hilt-graph
+case and the real-dev-host smoke are the only ones that touch a device/emulator;
+none of this ticket's behavior is hardware-dependent (no camera/biometrics/WebRTC/
+FCM), so the **physical Samsung A15 (SM-A156U, API 34)** is used only for the
+real-network dev-host smoke (to exercise true cleartext HTTP + flaky-host timeouts
+on arm64/API-34), while the **emulator AVD `test35` (API 35)** covers the
+instrumented Hilt graph.
+
+Test targets per case: **JVM** = JVM unit/Robolectric (local); **MWS** =
+contract/MockWebServer (local JVM); **emu(test35)** = headless API-35 emulator;
+**device(A15)** = physical Samsung A15 over adb.
+
+- **TC-AND-270-01 — listEvents happy path + query + decode.** Type:
+  contract/MWS. Target: MWS. Preconditions: `EVENTS_PAGE_JSON` (3 events: timed,
+  recurring, all-day) enqueued `200`. Steps: call
+  `listEvents("cal_55", startUtc, endUtc, limit=50, cursor="abc")`; capture request.
+  Expected: method `GET`; path `/ui/calendars/cal_55/events`; query `start_utc`,
+  `end_utc`, `limit=50`, `cursor=abc` present; decodes to `EventsPageDto` with
+  3 events and `nextCursor`. Traces: AC-3, AC-4.
+
+- **TC-AND-270-02 — listCalendars decode.** Type: contract/MWS. Target: MWS.
+  Preconditions: array-of-`CalendarOut` body enqueued `200`. Steps: call
+  `listCalendars(limit=50)`. Expected: `GET /ui/calendars?limit=50`; decodes a
+  `List<CalendarDto>`; `calendarId`/`name`/`timezone`/`ownerUserId` mapped. Traces:
+  AC-2, AC-3.
+
+- **TC-AND-270-03 — recurrence mapping (KEY).** Type: unit (mapper). Target: JVM.
+  Preconditions: `events[1]` (weekly rule, event-level `exdates_utc`). Steps:
+  `CalendarEventDto.toDomain()`. Expected: `recurrence.freq == WEEKLY`,
+  `interval == 1`, `byDay == [MO,TU,WE,TH,FR]`, `untilUtc` parsed to the correct
+  `Instant`, `exDatesUtc.size == 1`; recurrence non-null. Traces: AC-1, AC-5.
+
+- **TC-AND-270-04 — all-day mapping, no off-by-one.** Type: unit (mapper). Target:
+  JVM. Preconditions: `events[2]` (`all_day:true`, `all_day_date:"2026-07-03"`, no
+  `start_utc`). Steps: `toDomain()`. Expected: `allDay == true`,
+  `allDayDate == LocalDate(2026-07-03)`, `startAt == null`, **no** exception thrown.
+  Traces: AC-1, AC-6.
+
+- **TC-AND-270-05 — enum/optional tolerance.** Type: unit (mapper). Target: JVM.
+  Preconditions: DTOs with unknown `freq:"HOURLY"`, missing `category`, missing
+  `recurrence_rule`, missing `attendees`. Steps: `toDomain()`. Expected:
+  `freq == UNKNOWN`, `category == null`, `recurrence == null`,
+  `attendees == []`; no throw. Traces: AC-1, AC-7.
+
+- **TC-AND-270-06 — getEvent both path params.** Type: contract/MWS. Target: MWS.
+  Preconditions: single `EventOut` enqueued `200`. Steps:
+  `getEvent("cal_55","evt_91")`. Expected: `GET /ui/calendars/cal_55/events/evt_91`;
+  decodes one event with `eventId == "evt_91"`. Traces: AC-3.
+
+- **TC-AND-270-07 — createEvent body + 200.** Type: contract/MWS. Target: MWS.
+  Preconditions: created `EventOut` enqueued `200`. Steps:
+  `createEvent("cal_55", EventCreateReqDto(name="1:1", startUtc=..., endUtc=...))`.
+  Expected: `POST /ui/calendars/cal_55/events`; JSON body contains `"name"` and
+  `"start_utc"` (NOT `title`/`start_at`); response decoded with server `event_id`.
+  Traces: AC-3.
+
+- **TC-AND-270-08 — updateEvent sparse PATCH.** Type: contract/MWS. Target: MWS.
+  Preconditions: updated `EventOut` enqueued `200`. Steps:
+  `updateEvent("cal_55","evt_91", EventUpdateReqDto(name="renamed"))`. Expected:
+  `PATCH /ui/calendars/cal_55/events/evt_91`; body serializes only `"name"`
+  (null fields omitted — verifies Moshi omits nulls / sparse update); decodes
+  response. Traces: AC-3.
+
+- **TC-AND-270-09 — deleteEvent OkResp.** Type: contract/MWS. Target: MWS.
+  Preconditions: `{"ok":true}` enqueued `200`. Steps: `deleteEvent("cal_55","evt_91")`.
+  Expected: `DELETE /ui/calendars/cal_55/events/evt_91`; decodes
+  `OkRespDto(ok=true)` (does NOT assume an empty body). Traces: AC-3.
+
+- **TC-AND-270-10 — 401 propagation (not swallowed).** Type: contract/MWS. Target:
+  MWS. Preconditions: `401` enqueued for `listEvents`. Steps: call + expect throw.
+  Expected: `retrofit2.HttpException` with `code() == 401`; raw body preserved for
+  AND-013/AND-015 (this layer does not retry/refresh). Traces: AC-8.
+
+- **TC-AND-270-11 — 422 validation error shape.** Type: contract/MWS. Target: MWS.
+  Preconditions: `422` with `HTTPValidationError` body
+  (`{"detail":[{"loc":["body","name"],"msg":"field required","type":"missing"}]}`)
+  enqueued for `createEvent`. Steps: call + expect throw. Expected:
+  `HttpException` `code() == 422`; `errorBody()` contains the `detail[].msg` so
+  AND-015 can map it. Traces: AC-8.
+
+- **TC-AND-270-12 — security: no per-method CSRF/cookie/auth headers; redaction.**
+  Type: unit (reflection/source) + contract/MWS. Target: JVM/MWS. Preconditions:
+  inspect `CalendarApi` annotations; enqueue a mutation. Steps: assert no method
+  declares `@Header("X-CSRF-Token")`/`@Header("Cookie")`/`@Header("Authorization")`
+  (headers are global, AND-011/AND-012); and confirm `@Headers` only set
+  `Content-Type`. Expected: interface is header-agnostic; no event `name`/
+  `description` appears in any log (redaction policy). Traces: AC-9, plus §8 security.
+
+- **TC-AND-270-13 — Hilt provider singleton on shared Retrofit.** Type:
+  instrumented (`@HiltAndroidTest`). Target: **emu(test35)**. Preconditions: test
+  app graph with AND-010 `NetworkModule`. Steps: inject `CalendarApi` twice.
+  Expected: non-null; same instance on repeated injection; built from the shared
+  `Retrofit` (no second `OkHttpClient`/`Retrofit`). Note: runs on the emulator
+  (fast, no hardware dependency). Traces: AC-9.
+
+- **TC-AND-270-14 — real dev-host smoke + flaky/offline path.** Type:
+  integration/e2e (manual-assisted). Target: **device(A15)** — MUST run on the
+  physical device to exercise real cleartext HTTP over the network against the
+  unreliable dev host on arm64/API-34. Preconditions: a valid cookie session
+  (AND-027) on the device; `BuildConfig.API_BASE_URL = http://18.222.237.167:8000/`.
+  Steps: (a) `listCalendars` then `listEvents` and confirm real decode; (b) enable
+  airplane mode and repeat. Expected: (a) live `200` decodes into domain types;
+  (b) offline raises `UnknownHostException`/`SocketTimeoutException` propagated
+  unchanged (no crash, no retry storm), confirming AND-009 timeouts/AND-016 backoff
+  behavior on idempotent GETs. Traces: AC-3, AC-8 (transport-failure resilience,
+  §7).
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (payloads map, tested) | TC-03, TC-04, TC-05 |
+| AC-2 (operations declared, compiles) | TC-01, TC-02 |
+| AC-3 (verb+path+query/body) | TC-01, TC-02, TC-06, TC-07, TC-08, TC-09, TC-14 |
+| AC-4 (list query + paged envelope) | TC-01 |
+| AC-5 (recurrence preserved) | TC-03 |
+| AC-6 (all-day, no off-by-one) | TC-04 |
+| AC-7 (unknown enum/missing optional tolerance) | TC-05 |
+| AC-8 (non-2xx surfaces, not swallowed) | TC-10, TC-11, TC-14 |
+| AC-9 (Hilt singleton; no extra client; no per-method headers) | TC-12, TC-13 |
+| AC-10 (CI build/tests green, lint/detekt clean) | all TCs run in CI (TC-13 on emu(test35); TC-14 device smoke is out-of-CI manual) |

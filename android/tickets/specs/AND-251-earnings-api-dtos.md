@@ -5,7 +5,8 @@ milestone: M6
 epic: E34
 priority: P0
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-027]
 blocks: [AND-252, AND-253, AND-254]
 ---
@@ -74,6 +75,12 @@ already attach to the shared `OkHttpClient`/`Retrofit` and apply to
   `EarningsQuickStatsOut`, `EarningsTransactionsOut`, `EarningsTransactionOut`.
 - **Web reference:** `frontend/src/api/endpoints/earnings.ts` for the call shape
   and query-param conventions; `frontend/src/api/types.ts` for field names.
+  Caveat: the web `EarningsSummary` TS interface (`src/api/types.ts`) **omits**
+  `time_series` and the web `getEarningsSummary` call sends only
+  `from_date`/`to_date`/`granularity` (no `from_ts`/`to_ts`). The
+  authoritative field/param set for this ticket is the **OpenAPI** schema
+  (`EarningsSummaryOut` carries `time_series`; the operation accepts
+  `from_ts`/`to_ts`), which we follow.
 
 ## 3. Functional Requirements
 
@@ -242,11 +249,18 @@ Query: `limit` (1–200, default 50), `cursor`, `from_date`, `to_date`,
 }
 ```
 
-Error envelope (all endpoints, via AND-015): FastAPI `detail` is one of a string,
-`[{ "msg": "...", ... }]`, or `{ "code": "...", ... }`. This ticket does **not**
-re-map errors; it relies on the shared error adapter. `401` triggers the shared
-`Authenticator` (one refresh + retry). The dev host's `422` validation errors are
-mapped by AND-015 and surfaced to AND-253.
+Error envelope (all endpoints, via AND-015): the **only** error response these
+three operations document in the OpenAPI spec is `422 HTTPValidationError`, whose
+`detail` is an **array** of `ValidationError` objects (`[{ "loc": [...],
+"msg": "...", "type": "..." }]`) — verified against `components.schemas.
+HTTPValidationError` / `ValidationError`. At runtime FastAPI may also emit the
+plain-string form (`HTTPException(detail="…")`) and some handlers a
+`{ "code": "…", … }` object; the web client's `normalizeErrorDetail` already
+tolerates all three, so AND-015's adapter is expected to do the same. This ticket
+does **not** re-map errors; it relies on the shared error adapter. `401` triggers
+the shared `Authenticator` (one refresh + retry — matching the web client's
+single-refresh-then-retry path in `src/api/client.ts`). The dev host's `422`
+validation errors are mapped by AND-015 and surfaced to AND-253.
 
 ## 6. Data & State Management
 
@@ -288,6 +302,9 @@ data class EarningsQuickStatsDto(
 
 @JsonClass(generateAdapter = true)
 data class EarningsTransactionsDto(
+    // NB: `items` is `required` in EarningsTransactionsOut; the `emptyList()`
+    // default is a defensive convenience for the unreliable dev host returning
+    // `200 {}`, not a relaxation of the contract.
     val items: List<EarningsTransactionDto> = emptyList(),
     @Json(name = "next_cursor") val nextCursor: String? = null,
 )
@@ -510,3 +527,248 @@ Coverage gate: 100% of the mapper functions exercised.
   repository PR that follows).
 - PR description references AND-251 and AND-027, and notes the open questions in
   §13 for the E34 screen/charts and E35 payouts owners.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim below is paired with a VERDICT and an exact SOURCE
+pointer. OpenAPI references are to
+`reference/openapi.index.txt` (METHOD /path lines) and
+`reference/openapi.pretty.json` (`components.schemas.<Name>`). Frontend
+references are paths under `reference/src/`.
+
+1. **`GET /ui/earnings/summary` → `200 EarningsSummaryOut`, query params
+   `from_date,to_date,granularity,from_ts,to_ts`.** VERDICT: Verified. SOURCE:
+   OpenAPI `GET /ui/earnings/summary` (op
+   `earnings_summary_ui_earnings_summary_get`,
+   `resp=200:EarningsSummaryOut`, `params=from_date,to_date,granularity,from_ts,
+   to_ts,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`); frontend
+   `src/api/endpoints/earnings.ts: getEarningsSummary`.
+2. **`GET /ui/earnings/quick-stats` → `200 EarningsQuickStatsOut`, no query
+   params.** VERDICT: Verified. SOURCE: OpenAPI `GET /ui/earnings/quick-stats`
+   (op `earnings_quick_stats_ui_earnings_quick_stats_get`); frontend
+   `src/api/endpoints/earnings.ts: getEarningsQuickStats`.
+3. **`GET /ui/earnings/transactions` → `200 EarningsTransactionsOut`, query
+   params `limit,cursor,from_date,to_date,from_ts,to_ts`.** VERDICT: Verified.
+   SOURCE: OpenAPI `GET /ui/earnings/transactions` (op
+   `earnings_transactions_ui_earnings_transactions_get`); frontend
+   `src/api/endpoints/earnings.ts: getEarningsTransactions` (web sends
+   `from_date,to_date,limit,cursor`; `from_ts/to_ts` are OpenAPI-only).
+4. **All three operations are GET.** VERDICT: Verified. SOURCE: OpenAPI index
+   lines 1431–1433 (all `GET`).
+5. **`EarningsSummaryOut` fields: `total_cents` (int, default 0), `currency`
+   (str, default "USD"), `transaction_count` (int, default 0), `breakdown`
+   (`EarningsBreakdown`), `time_series` (array of `TimeSeriesPoint`).** VERDICT:
+   Verified. SOURCE: `components.schemas.EarningsSummaryOut`. Note: the web
+   `EarningsSummary` interface (`src/api/types.ts`) omits `time_series` — we
+   follow OpenAPI, which includes it.
+6. **`EarningsBreakdown` fields: `subscriptions,tips,unlocks,vod_purchases,other`
+   (all int, default 0).** VERDICT: Verified. SOURCE:
+   `components.schemas.EarningsBreakdown`; mirrors
+   `src/api/types.ts: EarningsBreakdown`.
+7. **`TimeSeriesPoint` fields: `date` (str, required) + `total,tips,
+   subscriptions,unlocks,vod_purchases,other` (int, default 0).** VERDICT:
+   Verified. SOURCE: `components.schemas.TimeSeriesPoint` (`required:["date"]`).
+8. **`EarningsQuickStatsOut` fields: `today_cents,this_week_cents,
+   this_month_cents,all_time_cents,pending_payout_cents` (int, default 0),
+   `currency` (str, default "USD"); no required fields.** VERDICT: Verified.
+   SOURCE: `components.schemas.EarningsQuickStatsOut`.
+9. **`EarningsTransactionOut` fields: `entry_id` (str), `ts` (int),
+   `amount_cents` (int) — all required; `reason` (str, default ""), `category`
+   (str, default ""), `currency` (str, default "USD"), `meta` (object,
+   `additionalProperties: true`).** VERDICT: Verified. SOURCE:
+   `components.schemas.EarningsTransactionOut`
+   (`required:["entry_id","ts","amount_cents"]`); mirrors
+   `src/api/types.ts: EarningsTransaction`.
+10. **`EarningsTransactionsOut` fields: `items` (array, required),
+    `next_cursor` (string|null).** VERDICT: Verified. SOURCE:
+    `components.schemas.EarningsTransactionsOut` (`required:["items"]`); mirrors
+    `src/api/types.ts: EarningsTransactionsResp`.
+11. **All money fields are integer cents (no float/double).** VERDICT: Verified.
+    SOURCE: every `*_cents`/breakdown/series money field is
+    `"type": "integer"` across the schemas above.
+12. **Auth is session cookie + `X-CSRF-Token` header (CSRF value from `ui_csrf`
+    cookie).** VERDICT: Verified. SOURCE: `src/api/client.ts` lines 167–171
+    (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`) and
+    `credentials: "include"` (cookie transport).
+13. **`401` triggers a single session refresh then one retry.** VERDICT:
+    Verified. SOURCE: `src/api/client.ts` lines 194–221 (`refreshSession()` then
+    single retry `fetch`).
+14. **Error `detail` may be a string, an array `[{msg,…}]`, or an object
+    `{code,…}`.** VERDICT: Corrected/clarified. SOURCE: the only documented
+    error response for these ops is `422 HTTPValidationError`, whose `detail` is
+    an **array** of `ValidationError` (`components.schemas.HTTPValidationError`
+    → `ValidationError`). The string/object forms are runtime FastAPI variants
+    the web client's `normalizeErrorDetail` (`src/api/client.ts`) handles; they
+    are not in the schema for these endpoints. §5 was updated to say so.
+15. **`user_sub`, `X-SESSION-ID`, `X-IMPERSONATION-TOKEN` params exist on the
+    operations but are operator/impersonation hooks the mobile client omits.**
+    VERDICT: Verified (existence) / Assumption (omission policy). SOURCE: OpenAPI
+    index lines 1431–1433 list these params; web client only sets
+    `X-IMPERSONATION-TOKEN` when an impersonation session is active
+    (`src/api/client.ts` lines 162–165). Mobile-omit is a design decision (see
+    Open assumptions).
+16. **Retrofit omits `@Query` params whose value is `null`.** VERDICT: Verified.
+    SOURCE: framework ref — Retrofit `@Query` null-omission behaviour,
+    https://square.github.io/retrofit/2.x/retrofit/retrofit2/http/Query.html .
+17. **Stack pins: Retrofit 2.11.0, OkHttp 4.12.0, Moshi 1.15.x, Hilt, minSdk 24
+    / compileSdk 35.** VERDICT: Unverified-assumption (no source in the provided
+    reference set). SOURCE: project convention asserted by the spec; not checkable
+    against OpenAPI/frontend.
+18. **`granularity=week|month` may return non-`YYYY-MM-DD` `date` labels.**
+    VERDICT: Unverified-assumption. SOURCE: `TimeSeriesPoint.date` is an
+    unformatted `"type": "string"` with no `format`/examples in OpenAPI; the
+    exact week/month label format is not specified anywhere in the references.
+
+### Corrections made
+
+- **§2 (References):** Added a caveat that the web `EarningsSummary` type omits
+  `time_series` and the web summary call omits `from_ts`/`to_ts`; declared
+  OpenAPI as the authoritative field/param source for this ticket.
+- **§5 (API Contract — error envelope):** Clarified that the only
+  schema-documented error for these endpoints is `422 HTTPValidationError` with
+  an **array** `detail`; the string/object `detail` shapes are runtime variants
+  handled by the shared adapter, not part of these operations' schema. Added that
+  the `401` single-refresh-then-retry matches the web client.
+- **§6 (DTOs):** Annotated `EarningsTransactionsDto.items` to note it is
+  `required` in the schema and the `emptyList()` default is a defensive choice
+  for the flaky dev host, not a contract relaxation.
+
+No endpoint path, HTTP method, request param, or response field name in the
+original spec was found to be factually wrong against OpenAPI — the corrections
+above are clarifications and one error-shape fix.
+
+### Open assumptions
+
+- **Stack/version pins (claim 17):** not verifiable from OpenAPI or frontend;
+  trusted as project setup from AND-009/010/027.
+- **Mobile omission of `user_sub`/impersonation params (claim 15):** a security
+  design decision for the Android client; the sources confirm the params exist
+  but cannot confirm the mobile policy.
+- **Week/month `date` label format (claim 18):** OpenAPI gives `date` as a bare
+  string with no examples; the `rawDate` + nullable `LocalDate` fallback is the
+  mitigation. Confirm with backend before E34 charts.
+- **`pending_payout_cents` semantics (gross/net, overlap with `all_time_cents`):**
+  not described in the schema; deferred to E35 (Payouts).
+- **Bearer `Authorization` header:** the web client also attaches
+  `Authorization: Bearer` (`src/api/client.ts` lines 156–160) in addition to
+  cookies. This spec assumes the Android client is cookie-session-only per
+  AND-027; if AND-027 also issues a bearer token, the shared interceptor (not
+  this ticket) would attach it.
+
+## 17. Test Plan
+
+All cases below are pure JVM/instrumentation tests for a transport+mapping
+ticket; no earnings UI is delivered here, so Compose-UI/e2e cases are scoped to
+the downstream screen tickets and only a11y-relevant *data-layer* guarantees are
+asserted. Test targets: **JVM unit/Robolectric** (local, no device) and
+**contract/MockWebServer** (also JVM) cover everything functional. The two
+device-class rows exist only to confirm the decoder/mapper behaves identically
+across ABI/API; they are NOT required for the acceptance criterion and may be
+skipped in PR CI.
+
+- **TC-AND-251-01** — Type: contract/MockWebServer. Target: JVM
+  (`core-network`). Preconditions: `MockWebServer` enqueues `200` with
+  `summary_full.json`; `EarningsApi` built from a `Retrofit` pointed at the mock.
+  Steps: call `getSummary(granularity = "day")`; inspect `RecordedRequest`.
+  Expected: `method == "GET"`, path == `/ui/earnings/summary?granularity=day`,
+  and no `from_date/to_date/from_ts/to_ts` keys appear in the query string.
+  Traces: AC-1.
+- **TC-AND-251-02** — Type: contract/MockWebServer. Target: JVM. Preconditions:
+  mock enqueues `200` for each endpoint. Steps: call `getQuickStats()` and
+  `getTransactions(limit = 50)`; inspect both `RecordedRequest`s. Expected:
+  `GET /ui/earnings/quick-stats` with empty query; `GET
+  /ui/earnings/transactions?limit=50` with `cursor/from_date/to_date` absent.
+  Traces: AC-1.
+- **TC-AND-251-03** — Type: unit. Target: JVM (`core-model`). Preconditions:
+  real Moshi instance; `summary_full.json` fixture. Steps: decode to
+  `EarningsSummaryDto`, call `.toDomain()`. Expected: `total.amountCents ==
+  1284350`, `total.currencyCode == "USD"`, `transactionCount == 412`, every
+  `breakdown` component equals the fixture, `series` length and order preserved,
+  `series[0].date == LocalDate.parse("2026-05-01")` with `rawDate == "2026-05-01"`.
+  Traces: AC-3, AC-5.
+- **TC-AND-251-04** — Type: unit. Target: JVM. Preconditions:
+  `summary_missing_optional_fields.json` (only `time_series[0].date` present,
+  everything else omitted). Steps: decode + map. Expected: schema defaults apply
+  — `currency == "USD"`, `totalCents == 0`, `breakdown.tips == 0`,
+  `transactionCount == 0`, empty/absent series handled without throwing. Traces:
+  AC-2, AC-3.
+- **TC-AND-251-05** — Type: unit. Target: JVM. Preconditions:
+  `summary_weekly_dates.json` whose series `date` values are `"2026-W18"` /
+  `"2026-05"` (granularity week/month). Steps: decode + map. Expected: mapping
+  does not throw; `EarningsSeriesPoint.date == null`, `rawDate` preserved
+  verbatim. Traces: AC-5.
+- **TC-AND-251-06** — Type: unit. Target: JVM. Preconditions: `quick_stats.json`.
+  Steps: decode `EarningsQuickStatsDto` + map. Expected: all five `Money` fields
+  (`today,thisWeek,thisMonth,allTime,pendingPayout`) carry the exact fixture
+  cents and `currencyCode == "USD"`. Traces: AC-3.
+- **TC-AND-251-07** — Type: unit. Target: JVM. Preconditions:
+  `transactions_page1.json` (with `next_cursor`) and `transactions_last_page.json`
+  (`next_cursor: null`). Steps: decode + map both. Expected: page1
+  `nextCursor == "<fixture>"`; last page `nextCursor == null`; `items` order and
+  count preserved; each `amount` is `Money(amount_cents, currency)`. Traces:
+  AC-3, AC-6.
+- **TC-AND-251-08** — Type: unit. Target: JVM. Preconditions: a transactions
+  fixture containing `category` values `"tips"`, `"subscription"`,
+  `"vod_purchase"`, and an unknown `"chargeback"`. Steps: map each. Expected:
+  known values map to the matching `EarningsCategory`; `"chargeback"` →
+  `EarningsCategory.OTHER` with `rawCategory == "chargeback"`. Traces: AC-3.
+- **TC-AND-251-09** — Type: unit (reflection guard). Target: JVM. Preconditions:
+  none. Steps: reflectively walk every property of all earnings DTOs and domain
+  models. Expected: no property is `Double`/`Float`/`kotlin.Double`/`kotlin.Float`
+  — money is integer cents end-to-end. Traces: AC-4.
+- **TC-AND-251-10** — Type: contract/MockWebServer (error path). Target: JVM.
+  Preconditions: mock enqueues `422` with a real `HTTPValidationError` body
+  (`{"detail":[{"loc":["query","limit"],"msg":"...","type":"..."}]}`). Steps:
+  call `getTransactions(limit = 500)`; observe the thrown `HttpException`.
+  Expected: Retrofit raises `HttpException(code = 422)`; the raw `detail` array
+  body is available for the shared AND-015 adapter (this ticket asserts the call
+  surfaces the 422, not the re-mapping). Traces: AC-1.
+- **TC-AND-251-11** — Type: unit (resilience). Target: JVM. Preconditions:
+  fixture `200 {}` (empty body, dev-host degraded case). Steps: decode
+  `EarningsSummaryDto` + map. Expected: maps to an all-zero `EarningsSummary`
+  (`total.amountCents == 0`, empty series, default `currency`) without throwing —
+  the "empty state" surfaced downstream. Traces: AC-2, AC-3.
+- **TC-AND-251-12** — Type: contract/MockWebServer (offline / flaky host).
+  Target: JVM. Preconditions: `MockWebServer` configured to drop the connection
+  (`SocketPolicy.DISCONNECT_AT_START`) or no enqueued response. Steps: call
+  `getSummary()`. Expected: an `IOException` propagates from the suspend call
+  (mapping is never reached); confirms `EarningsApi` does not swallow transport
+  errors and leaves `ApiResult` wrapping to AND-252/AND-018. Traces: AC-1.
+- **TC-AND-251-13** — Type: contract/MockWebServer (security). Target: JVM.
+  Preconditions: mock enqueues `200`s. Steps: invoke all three methods; inspect
+  every `RecordedRequest`. Expected: no `user_sub`, `X-SESSION-ID`, or
+  `X-IMPERSONATION-TOKEN` is sent by the client; auth is left to the shared
+  cookie jar + `X-CSRF-Token` interceptor (not added here). Traces: AC-1, AC-7.
+- **TC-AND-251-14** — Type: unit (Hilt graph). Target: JVM / Robolectric.
+  Preconditions: a test component installing `EarningsNetworkModule` with a
+  fake/shared `Retrofit` binding. Steps: request `EarningsApi` from the graph.
+  Expected: a non-null `EarningsApi` is provided from the **shared** `Retrofit`;
+  no new `OkHttpClient`/`Retrofit` is instantiated (assert the injected
+  `Retrofit` is the same instance). Traces: AC-7.
+
+Device-class confirmation (optional, not gating):
+
+- **TC-AND-251-15** — Type: instrumented. Target: emulator **AVD test35**
+  (x86_64, API 35). Preconditions: instrumented variant of TC-03/07 fixtures on
+  device. Steps: run the decode+map assertions on-device. Expected: identical
+  results to JVM. Rationale: API-35 baseline. Traces: AC-3.
+- **TC-AND-251-16** — Type: instrumented. Target: **physical device** Samsung
+  Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, arm64-v8a, API 34). Preconditions:
+  device connected via adb; same instrumented decode+map suite. Steps: run on the
+  arm64 device. Expected: identical results — confirms no ABI/API-34-vs-35
+  divergence in Moshi codegen / `LocalDate` parsing. MUST run on the physical
+  device (arm64 + API 34 path the emulator cannot represent). Traces: AC-3,
+  AC-4, AC-5.
+
+### Coverage matrix
+
+| §14 Acceptance Criterion | Covered by |
+| --- | --- |
+| AC-1 — paths/verb/query params; null params omitted | TC-01, TC-02, TC-10, TC-12, TC-13 |
+| AC-2 — DTOs/domain models exist, Moshi codegen, defaults tolerated | TC-04, TC-11 |
+| AC-3 — fixtures decode & map ("payloads map (tested)") | TC-03, TC-04, TC-06, TC-07, TC-08, TC-11, TC-15, TC-16 |
+| AC-4 — integer cents only, no Float/Double | TC-09, TC-16 |
+| AC-5 — series order preserved; date parse vs. degrade | TC-03, TC-05, TC-16 |
+| AC-6 — `next_cursor` surfaced; last page → null | TC-07 |
+| AC-7 — Hilt provider from shared Retrofit; no new client | TC-13, TC-14 |
+| AC-8 — full unit suite (T-1…T-8) green in CI | TC-01…TC-14 (all JVM cases) |

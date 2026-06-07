@@ -5,7 +5,8 @@ milestone: M6
 epic: E34
 priority: P0
 size: L
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-251, AND-255]
 blocks: []
 ---
@@ -14,7 +15,7 @@ blocks: []
 
 ## 1. Overview & Goal
 
-Build the **Earnings dashboard** screen for the TestLogon native Android app: the primary creator-finance surface that renders real earnings data fetched from the FastAPI backend. The screen presents three coordinated regions — (a) **totals** (lifetime, current period, and pending payout headline figures), (b) **time-series charts** (a selectable-range line/bar chart of earnings over time), and (c) **breakdowns** (per-source attribution such as ads, subscriptions, tips, and payouts).
+Build the **Earnings dashboard** screen for the TestLogon native Android app: the primary creator-finance surface that renders real earnings data fetched from the FastAPI backend. The screen presents three coordinated regions — (a) **totals** (lifetime, current period, and pending payout headline figures), (b) **time-series charts** (a selectable-range line/bar chart of earnings over time), and (c) **breakdowns** (per-source attribution: the backend's fixed source set is `subscriptions`, `tips`, `unlocks`, `vod_purchases`, `other` — there is no `ads`/`payouts` source in this contract; corrected during review).
 
 This ticket owns the `feature-earnings` UI module: the `EarningsViewModel`, the `EarningsUiState` model, the Compose screen and its sub-composables, range/segment selection logic, and wiring to the data layer. It consumes the typed API + DTOs delivered by **AND-251** (`EarningsApi`, summary/series DTOs and their Moshi mapping) and the reusable chart composable delivered by **AND-255**. The acceptance bar is that the dashboard **renders real earnings** from the dev backend, with correct loading/empty/error/offline states and a working range selector.
 
@@ -34,10 +35,10 @@ Out of scope: the API surface and DTO mapping (AND-251), the chart rendering pri
 
 ## 3. Functional Requirements
 
-1. **Totals header.** Display three primary KPI cards: *Total earnings* (lifetime), *This period* (current selected range), and *Pending payout*. Each shows a formatted currency value, the currency code, and a delta indicator (% change vs. previous comparable period) when the backend provides one. Values are localized via `NumberFormat.getCurrencyInstance`.
-2. **Range selector.** A segmented control offering `7D`, `30D`, `90D`, `12M`, `ALL`. Changing the range re-queries the series + summary and updates totals, chart, and breakdown atomically. Default range is `30D`. The selection is persisted to DataStore so it survives process death and is restored on next visit.
+1. **Totals header.** Display primary KPI cards. The backend (`/ui/earnings/quick-stats`) supplies `today_cents`, `this_week_cents`, `this_month_cents`, `all_time_cents`, and `pending_payout_cents`. The web client renders four cards (Today / This Week / This Month / All Time) and does **not** surface pending-payout; this ticket may additionally surface *Pending payout* (open question §13) and a *This period* total from the summary call's `total_cents`. **CORRECTED:** there is **no** `period_change_pct` / delta field in either response — the "% change vs. previous period" delta indicator is **not backend-supported**; either drop it or compute it client-side from a second summary call for the prior period (treat as out of scope unless confirmed). Values are localized via `NumberFormat.getCurrencyInstance`.
+2. **Range selector.** A segmented control offering `7D`, `30D`, `90D`, `1Y`, `ALL` (web uses labels `7d/30d/90d/1y/All`; corrected from `12M`). **CORRECTED:** the range is NOT a backend param — it is converted client-side to `from_date`/`to_date` (`today - days`; `ALL` omits both). A separate `granularity` control (`day`/`week`/`month`) drives the chart bucketing. Changing the range re-queries quick-stats (unchanged, no range) + summary and updates totals, chart, and breakdown atomically. Default range is `30D`. The selection is persisted to DataStore so it survives process death and is restored on next visit.
 3. **Time-series chart.** Render a line chart (default) of earnings amount over time for the selected range, using the AND-255 chart composable. Support a chart-type toggle to a bar chart for granularity that is naturally discrete (daily/weekly buckets). The chart shows axis labels, a currency-formatted Y axis, and date-formatted X axis. Tapping/selecting a data point surfaces a tooltip with the exact date + value.
-4. **Breakdowns.** Render a list of earnings sources (e.g., `ads`, `subscriptions`, `tips`, `payouts`) with per-source amount, share-of-total percentage, and a proportional inline bar. Sorted descending by amount. If a breakdown is empty for the range, hide its row rather than show zero noise.
+4. **Breakdowns.** Render a list of earnings sources with per-source amount, share-of-total percentage, and a proportional inline bar. Sorted descending by amount. If a source is zero for the range, hide its row rather than show zero noise (web filters `v > 0`). **CORRECTED:** the source set is the fixed `EarningsBreakdown` keys — `subscriptions`, `tips`, `unlocks`, `vod_purchases`, `other` (not `ads`/`payouts`). Localized labels per the web map: Subscriptions / Tips / Unlocks / VOD Purchases / Other.
 5. **Loading state.** First load shows skeleton placeholders for totals, chart, and breakdown (via AND-021 primitives).
 6. **Empty state.** When the account has no earnings in the selected range (all zero / empty series), show a friendly empty state with the range selector still interactive.
 7. **Error state.** On a non-recoverable failure, show the shared error state with a Retry action that re-triggers the load.
@@ -68,12 +69,15 @@ data class EarningsDashboard(
     val isStale: Boolean = false,
 )
 
-enum class EarningsRange(val apiValue: String, val days: Int?) {
-    D7("7d", 7), D30("30d", 30), D90("90d", 90), M12("12m", 365), ALL("all", null)
+// CORRECTED: the backend has no `range` param. Each range maps to a day-count
+// used to compute from_date = today - days (null days = all-time, omit dates).
+// Web presets are 7d/30d/90d/1y/All (note "1y", not "12m").
+enum class EarningsRange(val days: Int?) {
+    D7(7), D30(30), D90(90), Y1(365), ALL(null)
 }
 ```
 
-`EarningsRepositoryImpl` (Hilt `@Singleton`) calls `EarningsApi.getSummary(range)` and `EarningsApi.getSeries(range)` concurrently (`coroutineScope { async {} }`), combines them into `EarningsDashboard`, writes the result to a Room cache keyed by `range`, and emits cache-first then network via `observeDashboard`. The breakdown is derived from the summary payload's `by_source` field (single call) so only two network calls are made per range.
+`EarningsRepositoryImpl` (Hilt `@Singleton`) issues **two** GETs concurrently (`coroutineScope { async {} }`): `EarningsApi.getQuickStats()` (for lifetime / pending-payout / period headline figures) and `EarningsApi.getSummary(fromDate, toDate, granularity)` where `fromDate`/`toDate` are derived from the selected `EarningsRange` (`today - days`, or omitted for `ALL`) and `granularity` defaults to `day` (client may choose `week`/`month` for wide ranges). It combines them into `EarningsDashboard`, writes the result to a Room cache keyed by range, and emits cache-first then network via `observeDashboard`. **CORRECTED:** there is no `/ui/earnings/series` endpoint and no summary `by_source` array — the chart's time series comes from `EarningsSummaryOut.time_series` and the breakdown from the `EarningsSummaryOut.breakdown` fixed-key object (both in the single summary call). Quick-stats is a separate call because the lifetime/pending figures are not in the summary payload.
 
 **Caching.** Room entity `EarningsSnapshotEntity(range: String PK, payloadJson: String, currency: String, fetchedAtEpochMs: Long)` in `core-data` or module-local DAO. `observeDashboard` emits the cached snapshot immediately (flagged `isStale = true` if older than 15 min), then fetches fresh and re-emits.
 
@@ -118,16 +122,21 @@ fun EarningsScreen(
 Sub-composables: `TotalsRow(totals, modifier)`, `RangeSelector(selected, onSelect)`, `EarningsChartCard(series, chartType, selectedIndex, currency, onPointSelected)` (delegates to AND-255 `LineChart`/`BarChart`), `BreakdownList(items, currency)`. The chart card maps `EarningsSeries.points` to the AND-255 `ChartModel`:
 
 ```kotlin
-fun EarningsSeries.toChartModel(): ChartModel =
+// CORRECTED: time-series points come from EarningsSummaryOut.time_series.
+// Each point's date field is "date" (ISO YYYY-MM-DD string) and the plotted
+// value is the per-point "total" (cents). Per-source fields (subscriptions,
+// tips, unlocks, vod_purchases, other) are available for a stacked chart,
+// which is what the web client renders (stacked area by source).
+fun List<TimeSeriesPoint>.toChartModel(): ChartModel =
     ChartModel(
-        x = points.map { it.bucketStart.toEpochDay().toFloat() },
-        y = points.map { it.amountMinor / 100f },
+        x = map { LocalDate.parse(it.date).toEpochDay().toFloat() },
+        y = map { it.totalCents / 100f },           // "total" cents -> major units
         xLabeler = { epochDay -> formatBucketLabel(LocalDate.ofEpochDay(it.toLong())) },
         yLabeler = { currencyShort(it) },
     )
 ```
 
-**Money handling.** Amounts are integer minor units (`amountMinor: Long`) from the backend; convert to major units only at format time to avoid float drift in computation. Percentage shares computed in minor units.
+**Money handling.** Amounts are integer **cents** (e.g. `total_cents`, `*_cents`, breakdown values; field naming corrected from `*_minor`) from the backend; convert to major units only at format time to avoid float drift in computation. Percentage shares computed in integer cents (share = round(sourceCents / totalCents * 100), matching the web client).
 
 **Navigation registration** (in authenticated nav graph, AND-024):
 
@@ -140,44 +149,51 @@ composable(
 
 ## 5. API Contract
 
-Endpoints are **owned and tested by AND-251**; this ticket consumes them. Documented here for the consuming contract.
+Endpoints are **owned and tested by AND-251**; this ticket consumes them. Documented here for the consuming contract. **CORRECTED during review** — verified against `openapi.index.txt`, `openapi.pretty.json` (`EarningsSummaryOut`, `EarningsQuickStatsOut`, `EarningsBreakdown`, `TimeSeriesPoint`) and the web client (`src/api/endpoints/earnings.ts`, `src/api/types.ts`, `src/pages/earnings/EarningsPage.tsx`).
 
-**GET `/ui/earnings/summary?range={7d|30d|90d|12m|all}`** → 200:
+> **Important corrections:** There is **no** `range` query param and **no** `/ui/earnings/series` endpoint. The dashboard is assembled from **two** GETs: `/ui/earnings/quick-stats` (lifetime / pending-payout / period headline figures) and `/ui/earnings/summary` (total, breakdown, and embedded time-series for the chart). Range is expressed as `from_date`/`to_date` (YYYY-MM-DD) computed client-side; chart granularity is the `granularity` param (`day|week|month`). All money fields are integer **cents** (`*_cents`), not `*_minor`. There is **no** `as_of`, no `totals` object, no `period_change_pct`, and the breakdown is a **fixed-key object** (`subscriptions`/`tips`/`unlocks`/`vod_purchases`/`other`), not an array of `{source, amount_minor, share_pct}`. There is **no** `ads` or `payouts` earnings source in this contract.
+
+**GET `/ui/earnings/quick-stats`** (`EarningsQuickStatsOut`) → 200:
 
 ```json
 {
+  "today_cents": 4200,
+  "this_week_cents": 31800,
+  "this_month_cents": 120500,
+  "all_time_cents": 4827310,
+  "pending_payout_cents": 120000,
+  "currency": "USD"
+}
+```
+
+All numeric fields default to `0` and `currency` defaults to `"USD"` server-side. The web app renders four KPI cards from this (`Today`, `This Week`, `This Month`, `All Time`); `pending_payout_cents` exists in the schema but is **not** surfaced by the web client (see §13 open question on whether to show it).
+
+**GET `/ui/earnings/summary?from_date={YYYY-MM-DD}&to_date={YYYY-MM-DD}&granularity={day|week|month}`** (`EarningsSummaryOut`) → 200:
+
+```json
+{
+  "total_cents": 318900,
+  "transaction_count": 87,
   "currency": "USD",
-  "as_of": "2026-06-05T12:00:00Z",
-  "totals": {
-    "lifetime_minor": 4827310,
-    "period_minor": 318900,
-    "pending_payout_minor": 120000,
-    "period_change_pct": 0.142
+  "breakdown": {
+    "subscriptions": 98500,
+    "tips": 40000,
+    "unlocks": 12000,
+    "vod_purchases": 8000,
+    "other": 1500
   },
-  "by_source": [
-    { "source": "ads",           "amount_minor": 180400, "share_pct": 0.566 },
-    { "source": "subscriptions", "amount_minor": 98500,  "share_pct": 0.309 },
-    { "source": "tips",          "amount_minor": 40000,  "share_pct": 0.125 }
+  "time_series": [
+    { "date": "2026-05-07", "total": 10200, "subscriptions": 6000, "tips": 3000, "unlocks": 800, "vod_purchases": 400, "other": 0 },
+    { "date": "2026-05-08", "total": 9800,  "subscriptions": 5500, "tips": 2800, "unlocks": 1000, "vod_purchases": 500, "other": 0 }
   ]
 }
 ```
 
-**GET `/ui/earnings/series?range={...}&bucket={day|week|month}`** → 200:
+Notes: `granularity` defaults to `day` server-side; `from_date`/`to_date` are optional (omitting both = all-time, matching the web "All" preset). `from_ts`/`to_ts` (Unix seconds) are accepted alternatives but the web client uses the date form. Each `TimeSeriesPoint` carries per-source cents plus `total`; the only required field is `date`. The `EarningsBreakdown` object's keys are the canonical source set. (Caveat: the frontend `EarningsSummary` TS interface omits `time_series`, but `EarningsPage.tsx` reads `summary.time_series` and the OpenAPI schema includes it — treat `time_series` as present.)
 
-```json
-{
-  "currency": "USD",
-  "bucket": "day",
-  "points": [
-    { "bucket_start": "2026-05-07", "amount_minor": 10200 },
-    { "bucket_start": "2026-05-08", "amount_minor": 9800 }
-  ]
-}
-```
+Both are **idempotent GETs** → eligible for bounded backoff retry (AND-016) and for the 401→refresh→retry path. Requests ride the persistent cookie session (`credentials: include`); the web client also attaches an `Authorization: Bearer <token>` header and a CSRF header named **`X-CSRF-Token`** read from the `ui_csrf` cookie — attached uniformly to all requests including GETs (verified `src/api/client.ts`). CSRF is not strictly required for these safe GETs but is sent. The 401-refresh path calls **`POST /ui/session/refresh`** then retries once. Granularity is chosen client-side and sent as `granularity`; there is no server "bucket" echo field.
 
-Both are **idempotent GETs** → eligible for bounded backoff retry (AND-016) and for the 401→refresh→retry path (AND-013). Requests ride the persistent cookie jar; mutating requests are absent here so the CSRF header is not required, though the OkHttp stack attaches it uniformly. Bucket granularity is chosen client-side by range (`7d/30d`→day, `90d/12m`→week, `all`→month) unless the backend overrides via the returned `bucket`.
-
-**Error envelope** (FastAPI `detail`, mapped by AND-015): `401` (handled by refresh authenticator), `422` validation (`detail: [{msg}]`), `5xx`/timeout → recoverable error surfaced as Retry. Empty/zero data is a **200 with empty `points` / zeroed totals**, not an error → empty state.
+**Error envelope** (FastAPI `detail`, mapped by AND-015): `422` validation returns `HTTPValidationError` with `detail: [{loc, msg, type}]` (verified — both endpoints declare `422:HTTPValidationError`); `401` handled by refresh authenticator; `5xx`/timeout → recoverable error surfaced as Retry. **Note:** the OpenAPI declares only `200` and `422` for these endpoints — `401`/`5xx` are runtime/transport realities, not documented responses. Empty/zero data is a **200 with empty `time_series` / zeroed `total_cents` and breakdown**, not an error → empty state.
 
 ## 6. Data & State Management
 
@@ -205,6 +221,7 @@ sealed interface EarningsUiState {
     ) : EarningsUiState
 }
 
+// periodChangePct is nullable and currently always null: no backend field supplies it (see §5/§3.1 correction).
 data class TotalsUi(val lifetime: String, val period: String, val pending: String, val periodChangePct: Float?)
 data class ChartUi(val model: ChartModel, val pointDates: List<LocalDate>, val pointValues: List<String>)
 data class BreakdownRowUi(val source: String, val label: String, val amount: String, val sharePct: Float)
@@ -224,8 +241,8 @@ enum class ChartType { LINE, BAR }
 - **401:** handled transparently by the refresh authenticator (AND-013); a second 401 propagates as auth failure and the auth-gated router (AND-025) ejects to login — the earnings VM does not special-case it.
 - **Partial failure:** if summary succeeds but series fails (or vice versa), the combined call fails → fall back to cache if present (stale `Ready`) else `Error`/`Offline`. No half-rendered dashboard.
 - **Stale data:** cached snapshot older than 15 min is shown with the stale banner while a background refresh runs; success replaces it silently.
-- **Malformed/missing fields:** Moshi mapping (AND-251) defaults absent numeric fields to 0; a missing `currency` defaults to the account currency from `/ui/me`, falling back to `USD`.
-- **Empty series with non-zero totals** (rare): render totals + breakdown, show an in-chart "No data points for this range" placeholder rather than the full-screen empty state.
+- **Malformed/missing fields:** Moshi mapping (AND-251) defaults absent numeric fields to 0 (matches the backend, where all `*_cents` and breakdown fields default to 0); `currency` defaults to `"USD"` server-side and as a client fallback. (The earlier claim of deriving currency from `/ui/me` is an unverified assumption — both earnings schemas already carry `currency` with a `"USD"` default, so a `/ui/me` lookup is unnecessary.)
+- **Empty series with non-zero totals** (rare): render totals + breakdown, show an in-chart "No revenue data for this period" placeholder (web wording) rather than the full-screen empty state.
 
 ## 8. Security & Privacy
 
@@ -237,7 +254,7 @@ enum class ChartType { LINE, BAR }
 
 ## 9. Accessibility & i18n
 
-- All KPI cards, chart, and breakdown rows expose `contentDescription`/`semantics`. Each totals card reads as "Total earnings, 48,273 dollars 10 cents". The chart exposes a textual `stateDescription` summary ("Earnings trend, 30 days, up 14 percent") plus a data-table fallback reachable via an "View as table" affordance for screen-reader users (chart canvases are not natively traversable).
+- All KPI cards, chart, and breakdown rows expose `contentDescription`/`semantics`. Each totals card reads as "All time, 48,273 dollars 10 cents" (web uses `aria-label="<title>: $48,273.10"` on each card). The chart exposes a textual `stateDescription` summary (e.g. "Revenue over time, 30 days, total 3,189 dollars" — note: no backend % change field exists, so avoid an "up 14 percent" claim) plus a data-table fallback reachable via a "View as table" affordance for screen-reader users (chart canvases are not natively traversable).
 - Range segmented control uses `Tab`/`selectable` semantics with `selected` state and role.
 - Currency and dates formatted via `NumberFormat`/`DateTimeFormatter` with the device locale; all strings in `strings.xml` (`feature-earnings`), no hardcoded UI text. Source labels (`ads`, `tips`, …) mapped through a localized label table, not raw API enums.
 - Color is not the sole signal for the delta indicator (up/down arrow glyph accompanies the green/red). Meets 4.5:1 contrast on Material 3 theme tokens (AND-019). Supports dynamic type / large font scaling without truncating KPI values (auto-size or wrap).
@@ -263,7 +280,7 @@ Logging: redacted, structured logs at `Timber` debug for cache hit/miss and stal
 - `EarningsRepositoryImplTest`: concurrent summary+series combine; cache-first emission then network re-emit; partial failure → falls back to cache/error; stale threshold (15 min) computation; `clear()` empties DAO.
 - Mapper tests: `EarningsSeries.toChartModel()` axis/value mapping; minor→major conversion; share-pct sort order and zero-row filtering.
 
-**MockWebServer (AND-046 harness + fixtures):** golden JSON fixtures for each range (populated, empty, 422, 500, slow/timeout). Assert correct query params (`range`, `bucket`) and that retry fires on 500 then succeeds.
+**MockWebServer (AND-046 harness + fixtures):** golden JSON fixtures for `EarningsQuickStatsOut` and `EarningsSummaryOut` per range (populated, empty/zeroed, 422 `HTTPValidationError`, 500, slow/timeout). Assert correct query params on the summary call (`from_date`, `to_date`, `granularity`) — and that quick-stats carries no range params — and that retry fires on 500 then succeeds.
 
 **Compose UI tests:** `EarningsScreen` renders totals/chart/breakdown for `Ready`; skeletons for `Loading`; empty/error/offline states show correct affordances; range segmented control selection updates; Retry invokes callback; semantics nodes present for accessibility (table fallback exists). Chart presence asserted via test tag (chart internals owned by AND-255 tests).
 
@@ -278,8 +295,8 @@ Logging: redacted, structured logs at `Timber` debug for cache hit/miss and stal
 
 ## 13. Risks & Open Questions
 
-- **Bucket selection authority:** Does the backend honor the client `bucket` query param, or always decide server-side? If server-side only, drop the param and trust the returned `bucket`. (Confirm against `/openapi.json` during AND-251.)
-- **`period_change_pct` availability:** Field may be absent for `ALL` range; UI must hide the delta gracefully (handled), but confirm semantics (vs. previous period of equal length).
+- **Bucket/granularity authority:** RESOLVED during review — the backend accepts a `granularity` query param (`day|week|month`, default `day`) and does **not** echo a `bucket` field. The client sends `granularity`; the web exposes it as a separate selector. No client-side override-vs-server reconciliation is needed.
+- **`period_change_pct` availability:** RESOLVED during review — there is **no** such field in `EarningsSummaryOut` or `EarningsQuickStatsOut`. The delta/% change indicator is not backend-supported. Decision needed: drop it, or compute client-side via a second summary call for the prior equal-length period (currently treated as out of scope; `TotalsUi.periodChangePct` stays null).
 - **Currency mixing:** Assumes a single account currency. If the backend can return multi-currency earnings, the totals/chart aggregation model needs revision — out of scope, flag for product.
 - **Chart performance for `ALL`:** month-bucketed series should be small, but a creator with years of daily data on `ALL` without bucketing could be large; rely on server bucketing — verify max point count.
 - **Screenshot suppression:** Should the earnings screen set `FLAG_SECURE`? Deferred to a security-hardening ticket; noted in §8.
@@ -287,14 +304,14 @@ Logging: redacted, structured logs at `Timber` debug for cache hit/miss and stal
 
 ## 14. Acceptance Criteria
 
-1. Navigating to `earnings` from the authenticated graph fetches and **renders real earnings** from the dev backend: totals (lifetime/period/pending), a time-series chart, and a source breakdown.
-2. The range selector (`7D/30D/90D/12M/ALL`) re-queries and updates all three regions atomically; the selected range is persisted across process death (DataStore).
-3. The chart renders the returned `points` via the AND-255 composable with currency-formatted Y axis and date X axis; the line/bar toggle works; selecting a point shows date + exact value.
+1. Navigating to `earnings` from the authenticated graph fetches and **renders real earnings** from the dev backend: totals (from `/ui/earnings/quick-stats` + summary `total_cents`), a time-series chart (summary `time_series`), and a source breakdown (summary `breakdown`).
+2. The range selector (`7D/30D/90D/1Y/ALL`, mapped to `from_date`/`to_date`) re-queries and updates all three regions atomically; the selected range is persisted across process death (DataStore).
+3. The chart renders the returned `time_series` points via the AND-255 composable with currency-formatted Y axis and date X axis; the line/bar toggle works; selecting a point shows date + exact value.
 4. Breakdown rows show per-source amount, share %, and proportional bar, sorted descending, with zero/empty sources hidden.
 5. Loading shows skeletons; a 200 with empty data shows the empty state; a 5xx/timeout shows a recoverable error with a working Retry; offline-with-cache shows stale data + "Showing saved data" banner + timestamp; offline-no-cache shows the offline state.
 6. Pull-to-refresh forces a network fetch bypassing cache.
 7. No monetary values appear in logs or telemetry (verified by test asserting redaction); earnings cache is cleared on logout.
-8. Money is computed in integer minor units and only formatted to major units at display, with locale-correct currency formatting.
+8. Money is computed in integer **cents** and only formatted to major units at display, with locale-correct currency formatting.
 9. Unit, MockWebServer, and Compose UI tests for the states above pass in CI (AND-050/AND-051).
 
 ## 15. Definition of Done
@@ -307,3 +324,84 @@ Logging: redacted, structured logs at `Timber` debug for cache hit/miss and stal
 - Accessibility: semantics on all interactive/data nodes, chart table fallback, dynamic type safe, localized strings — verified.
 - Tests in §11 written and green in CI; lint/detekt/ktlint (AND-005) clean.
 - Code reviewed and merged to `android-port`; spec acceptance criteria (§14) demonstrably met.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Source shorthand: `index` = `reference/openapi.index.txt`; `schema:<Name>` = `components.schemas.<Name>` in `reference/openapi.pretty.json`; frontend paths are under `reference/src/`.
+
+1. **Dashboard data comes from `/ui/earnings/summary`.** VERIFIED (but contract was wrong — see corrections). Source: `index` line `GET /ui/earnings/summary | op=earnings_summary_ui_earnings_summary_get | resp=200:EarningsSummaryOut;422:HTTPValidationError`; `src/api/endpoints/earnings.ts: getEarningsSummary`.
+2. **Spec claimed a second `/ui/earnings/series` endpoint.** CORRECTED — no such endpoint exists. Source: `index` (earnings endpoints are only `quick-stats`, `summary`, `transactions`; plus `/api/creators/{creator_id}/earnings` and a syndicate one). Time series is embedded in `schema:EarningsSummaryOut.time_series`.
+3. **Spec claimed `?range={7d|30d|90d|12m|all}` query param.** CORRECTED — the summary endpoint takes `from_date`, `to_date`, `granularity` (and `from_ts`/`to_ts`), no `range`. Source: summary `parameters` block in `schema`/path (`openapi.pretty.json` ~L205903-206040); `src/api/endpoints/earnings.ts: getEarningsSummary` params `{from_date, to_date, granularity}`; `src/pages/earnings/EarningsPage.tsx` computes `fromDate=daysAgo(n)`, `toDate=isoDate(new Date())`.
+4. **Range presets `7D/30D/90D/12M/ALL`.** CORRECTED label — web presets are `7d/30d/90d/1y/All` (note "1y" not "12m"). Source: `src/pages/earnings/EarningsPage.tsx: PRESETS`.
+5. **`granularity` param `day|week|month`, default `day`.** VERIFIED. Source: summary path param "Time series grouping: day, week, month", default `day` (`openapi.pretty.json` ~L205944); `src/pages/earnings/EarningsPage.tsx: granularity` selector.
+6. **Lifetime / pending-payout / period headline figures.** CORRECTED — these are NOT in the summary payload; they come from `/ui/earnings/quick-stats` (`all_time_cents`, `pending_payout_cents`, `this_month_cents`, `this_week_cents`, `today_cents`, `currency`). Source: `schema:EarningsQuickStatsOut`; `index` `GET /ui/earnings/quick-stats`; `src/pages/earnings/EarningsPage.tsx` QuickStatCards.
+7. **Money fields are `*_minor` units.** CORRECTED to integer **cents** (`total_cents`, `all_time_cents`, breakdown int values, etc.). Source: `schema:EarningsSummaryOut.total_cents`, `schema:EarningsQuickStatsOut.*_cents`, `schema:EarningsTransactionOut.amount_cents`; `src/pages/earnings/EarningsPage.tsx: formatCents = cents/100`.
+8. **Breakdown is an array of `{source, amount_minor, share_pct}` incl. `ads`/`payouts`.** CORRECTED — `EarningsBreakdown` is a fixed-key object with integer-cents fields `subscriptions`, `tips`, `unlocks`, `vod_purchases`, `other`; no `ads`/`payouts`; no `share_pct` (share computed client-side). Source: `schema:EarningsBreakdown`; `src/api/types.ts: EarningsBreakdown`; `src/pages/earnings/EarningsPage.tsx: BreakdownList` (`pct = round(cents/total*100)`, filter `v>0`, sort desc).
+9. **Time-series point shape `{bucket_start, amount_minor}`.** CORRECTED — `TimeSeriesPoint` has `date` (string, required), per-source cents (`subscriptions`/`tips`/`unlocks`/`vod_purchases`/`other`) and `total` (cents). Source: `schema:TimeSeriesPoint`; `src/pages/earnings/EarningsPage.tsx: RevenueChart` maps `pt.date` + per-source `/100`.
+10. **Response includes `as_of` timestamp.** CORRECTED — no `as_of` in either schema. The `asOf` in `EarningsDashboard` must use fetch time, not a server field. Source: `schema:EarningsSummaryOut`, `schema:EarningsQuickStatsOut`.
+11. **Response includes a `totals` object with `period_change_pct`.** CORRECTED — no `totals` object and no `period_change_pct`/delta field anywhere. Source: `schema:EarningsSummaryOut`, `schema:EarningsQuickStatsOut`; no delta logic in `src/pages/earnings/EarningsPage.tsx`.
+12. **`currency` defaults / `USD` fallback.** VERIFIED — `currency` defaults to `"USD"` server-side in both schemas. The earlier `/ui/me`-derived-currency claim is unnecessary. Source: `schema:EarningsSummaryOut.currency` (default "USD"), `schema:EarningsQuickStatsOut.currency` (default "USD").
+13. **Both endpoints are idempotent GETs.** VERIFIED. Source: `index` (both `GET`).
+14. **401 → refresh → retry once.** VERIFIED (transport behavior). Web refreshes via `POST /ui/session/refresh` then retries the original request once; a second 401 logs out. Source: `src/api/client.ts: refreshSession` + 401 branch.
+15. **CSRF header attached uniformly including GETs.** VERIFIED with correction to header name — the header is `X-CSRF-Token`, read from the `ui_csrf` cookie, set on every request. Auth also rides `Authorization: Bearer <token>` + cookies (`credentials: include`). Source: `src/api/client.ts` (lines setting `Authorization`, `X-CSRF-Token`, `credentials: "include"`).
+16. **422 validation error shape `detail: [{msg}]`.** VERIFIED — `HTTPValidationError` with `detail` array of `{loc, msg, type}`; web `normalizeErrorDetail` reads `item.msg`. Source: `index` (`422:HTTPValidationError` on both); `schema:HTTPValidationError`; `src/api/client.ts: normalizeErrorDetail`.
+17. **Empty data is 200 (empty `time_series` / zeroed fields), not an error.** VERIFIED — fields default to 0 / arrays empty; web renders "No revenue data" / "No earnings yet" placeholders on empty. Source: defaults in `schema:EarningsSummaryOut`/`schema:EarningsBreakdown`; `src/pages/earnings/EarningsPage.tsx` empty branches.
+18. **Web chart is a single-total line/bar.** UNVERIFIED-ASSUMPTION (app design choice) — the web renders a **stacked area chart by source** (`RevenueChart` stacks Tips/Subscriptions/Unlocks/VOD/Other). The Android single-total line+bar toggle is an acceptable design variation; per-source fields are available if a stacked chart is preferred. Source: `src/pages/earnings/EarningsPage.tsx: RevenueChart`.
+19. **`pending_payout` shown as a headline KPI.** UNVERIFIED-ASSUMPTION — the field exists (`schema:EarningsQuickStatsOut.pending_payout_cents`) but the web client does NOT render a pending-payout card (only Today/Week/Month/AllTime). Whether to surface it is an open product question (§13). Source: `schema:EarningsQuickStatsOut`; absence in `src/pages/earnings/EarningsPage.tsx` cards.
+20. **Stack/tooling choices** (Compose, Hilt, Retrofit/Moshi, Room, DataStore, Vico chart via AND-255, Navigation-Compose). UNVERIFIED here — not derivable from backend/frontend sources; these are Android-side decisions owned by the project's architecture tickets (framework refs: Jetpack Compose, Hilt, Retrofit, Room — standard AndroidX docs). Treated as project conventions, not re-verified.
+21. **`feature-earnings` consumes AND-251 `EarningsApi`/DTOs and AND-255 chart.** UNVERIFIED-ASSUMPTION — depends on sibling tickets not present in these sources; the DTO field names assumed from AND-251 must match the corrected backend shapes above (cents, `time_series`, fixed breakdown keys).
+
+### Corrections made
+
+- §5 API Contract: removed the nonexistent `/ui/earnings/series` endpoint and the `?range=` param; documented the real two-call model (`/ui/earnings/quick-stats` + `/ui/earnings/summary` with `from_date`/`to_date`/`granularity`); replaced both JSON examples with the real `EarningsQuickStatsOut` / `EarningsSummaryOut` shapes; fixed CSRF header name to `X-CSRF-Token` and noted Bearer+cookie auth and `POST /ui/session/refresh`.
+- §1 / §3.4: corrected breakdown source set to `subscriptions/tips/unlocks/vod_purchases/other` (removed `ads`/`payouts`); added localized labels.
+- §3.1: removed the backend-supported delta/% change claim (no field exists); clarified KPI sources (quick-stats + summary `total_cents`).
+- §3.2 / §14.2: range labels `12M`→`1Y`; clarified range→`from_date`/`to_date` and separate `granularity` control.
+- §4: corrected the repository to call `getQuickStats()` + `getSummary(fromDate,toDate,granularity)`; fixed `EarningsRange` enum (day-counts, no `apiValue`); rewrote `toChartModel` to map `TimeSeriesPoint.date`/`total` (cents) instead of `bucketStart`/`amountMinor`.
+- §4 / §8 (money): `*_minor` → cents throughout; share computed in integer cents.
+- §6: noted `TotalsUi.periodChangePct` is always null (no backend source).
+- §7: removed `/ui/me` currency-derivation; `currency` defaults to `"USD"` from the payload.
+- §9: corrected the chart `stateDescription` example to drop the fabricated "up 14 percent"; aligned card aria-label with the web pattern.
+- §11: MockWebServer param assertions changed from `range`/`bucket` to `from_date`/`to_date`/`granularity` and split quick-stats vs summary fixtures.
+- §13: resolved the bucket-authority and `period_change_pct` open questions with verified findings.
+- §14: ACs realigned to the corrected contract (sources, cents, `time_series`, `1Y`).
+
+### Open assumptions
+
+- **AND-251 DTO names** (`EarningsSummary`, `EarningsSeries`, `EarningsBreakdown` domain models): not present in these sources; assumed to be regenerated to match the corrected backend shapes. If AND-251 already shipped `*_minor`/`series`/`by_source` names, this ticket and AND-251 must be reconciled. Note the upstream `EarningsSeries` model is dubious since there is no series endpoint — the chart series lives inside summary.
+- **AND-255 chart API** (`ChartModel`, `LineChart`/`BarChart`, stacked support): unverifiable here; assumed to accept the mapping in §4. If only single-series is supported, the per-source stacked option (claim 18) is deferred.
+- **Android stack/tooling versions** (Kotlin 2.0.21, AGP 8.7.3, etc.): project conventions, not verifiable from backend/frontend sources.
+- **`pending_payout` placement and any delta indicator**: product decisions; backend supplies the pending field but not a delta. Left as §13 open questions.
+- **Telemetry facade and AND-0xx infra tickets**: referenced but outside these sources; assumed to exist as described.
+
+## 17. Test Plan
+
+Test target legend — `JVM` = JVM unit/Robolectric (local, no device); `EMU` = headless emulator AVD `test35` (x86_64, API 35) on the Ubuntu CI server; `DEVICE` = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, Android 14 / API 34, arm64-v8a). For this ticket no case strictly requires the physical device (no camera/biometrics/FCM/WebRTC/Telecom/streaming); instrumented UI runs on `EMU`. TC-AND-252-13 is the one case that SHOULD additionally run on `DEVICE` to validate arm64 + API-34 behavior vs the API-35 emulator.
+
+- **TC-AND-252-01 — Happy path: dashboard renders real earnings.** Type: integration (MockWebServer). Target: JVM. Preconditions: MockWebServer enqueues 200 `EarningsQuickStatsOut` (populated) and 200 `EarningsSummaryOut` (populated `breakdown` + `time_series`), default range `30D`. Steps: launch `EarningsViewModel`/repo against MockWebServer; collect `uiState`. Expected: state transitions `Loading`→`Ready`; totals reflect quick-stats cents + summary `total_cents`; chart model has N points from `time_series`; breakdown rows present. Verify summary request path `/ui/earnings/summary` with `from_date`/`to_date` (today−30) and `granularity=day`, and quick-stats request has no range params. Traces: AC-1, AC-2.
+- **TC-AND-252-02 — Currency/cents formatting.** Type: unit. Target: JVM. Preconditions: `total_cents=318900`, `currency=USD`. Steps: run formatter mapping. Expected: displays `$3,189.00` (cents/100, locale-correct via `NumberFormat`); no float drift; breakdown shares = round(sourceCents/totalCents*100). Traces: AC-8.
+- **TC-AND-252-03 — `TimeSeriesPoint` → ChartModel mapping.** Type: unit. Target: JVM. Preconditions: list of points with `date` ISO strings and `total` cents. Steps: call `toChartModel()`. Expected: X = epoch-day of `LocalDate.parse(date)`, Y = `total/100f`; X/Y labelers produce date and currency-short strings; order preserved. Traces: AC-3, AC-8.
+- **TC-AND-252-04 — Breakdown sort + zero filtering + labels.** Type: unit. Target: JVM. Preconditions: `breakdown={subscriptions:98500, tips:40000, unlocks:0, vod_purchases:8000, other:0}`. Steps: map to `BreakdownRowUi`. Expected: rows for subscriptions, tips, vod_purchases only (zeros hidden), sorted desc by cents; localized labels (Subscriptions/Tips/VOD Purchases); share % from cents. Traces: AC-4.
+- **TC-AND-252-05 — Range change re-queries + persists.** Type: unit. Target: JVM. Preconditions: VM at `30D`, fake `EarningsPrefs`. Steps: `onRangeSelected(D7)`. Expected: new summary call with `from_date`=today−7; `granularity` retained; selected point reset; `earnings_range` persisted to DataStore; quick-stats not re-fetched with a range param. Traces: AC-2.
+- **TC-AND-252-06 — Range persistence survives process death.** Type: unit/Robolectric. Target: JVM. Preconditions: DataStore seeded `earnings_range=90d`. Steps: construct a fresh VM (simulating recreate) with no deep-link arg. Expected: initial range `D90` restored from prefs before default. Traces: AC-2.
+- **TC-AND-252-07 — Empty data → Empty state.** Type: integration (MockWebServer). Target: JVM. Preconditions: 200 summary with `total_cents=0`, empty `time_series`, all-zero `breakdown`; quick-stats zeroed. Steps: load. Expected: `Empty` state (not error); range selector still interactive; in-chart "No revenue data for this period" if totals zero. Traces: AC-5.
+- **TC-AND-252-08 — 5xx/timeout → recoverable Error + Retry.** Type: integration (MockWebServer). Target: JVM. Preconditions: summary returns 500 (after AND-016 retries exhausted) or socket timeout. Steps: load; then enqueue 200 and invoke `onRetry()`. Expected: `Error(recoverable=true)`; after Retry → `Ready`. Asserts retry interceptor fired on 500 then the user Retry recovers. Traces: AC-5.
+- **TC-AND-252-09 — 422 validation error mapping.** Type: contract (MockWebServer). Target: JVM. Preconditions: summary returns 422 `HTTPValidationError` `{detail:[{loc,msg,type}]}` (e.g. bad `granularity`). Steps: load. Expected: error message derived from `detail[].msg`; recoverable Error surfaced (matches AND-015 mapping). Traces: AC-5.
+- **TC-AND-252-10 — Offline with cache → stale Ready + banner; partial failure falls back.** Type: integration (MockWebServer + connectivity fake). Target: JVM. Preconditions: Room snapshot exists (>15 min old); network unavailable OR summary succeeds but quick-stats fails. Steps: load offline / partial. Expected: cached `Ready(isStale=true)` with "Showing saved data" banner + `asOfLabel` from fetch time; no half-rendered dashboard. Traces: AC-5.
+- **TC-AND-252-11 — Offline no cache → Offline state.** Type: integration. Target: JVM. Preconditions: empty Room cache; connectivity probe = offline. Steps: load. Expected: `Offline` state (not Error); Retry available. Traces: AC-5.
+- **TC-AND-252-12 — Pull-to-refresh bypasses cache.** Type: integration (MockWebServer). Target: JVM. Preconditions: fresh cache present. Steps: `onRefresh()`. Expected: `isRefreshing=true` then network fetch issued (force-network, cache bypassed), `isRefreshing` clears; new data replaces cached. Traces: AC-6.
+- **TC-AND-252-13 — Compose UI: Ready/Loading/Empty/Error/Offline render + range selector + Retry.** Type: Compose-UI / instrumented. Target: EMU (primary) and DEVICE (re-run to confirm arm64/API-34 parity). Preconditions: each state injected as `EarningsUiState`. Steps: assert totals/chart(test-tag)/breakdown for `Ready`; skeletons for `Loading`; correct affordances for Empty/Error/Offline; tap a range segment → `onRangeSelected` callback; tap Retry → `onRetry`. Expected: all assertions pass identically on EMU and DEVICE. Traces: AC-1, AC-2, AC-3, AC-5, AC-9.
+- **TC-AND-252-14 — Accessibility semantics.** Type: Compose-UI. Target: EMU. Preconditions: `Ready` state. Steps: query semantics tree. Expected: each KPI card exposes contentDescription with title + currency value; range control nodes have `selectable`/`selected` role; chart exposes `stateDescription` summary and a "View as table" affordance; no fabricated % change text; delta has glyph + color (not color-only). Traces: AC-1, AC-3.
+- **TC-AND-252-15 — Security: no monetary values in logs/telemetry; cache cleared on logout.** Type: unit + instrumented. Target: JVM (redaction) + EMU (logout cleanup). Preconditions: spy on analytics facade + Timber tree; populated cache. Steps: trigger load + range change; then invoke logout cleanup (AND-032) calling `EarningsRepository.clear()`. Expected: emitted events (`earnings_load_result`, etc.) and logs contain only ranges/counts/outcomes — no cents/currency totals; after logout the Room snapshot DAO is empty. Traces: AC-7.
+
+### Coverage matrix (§14 AC → TCs)
+
+- AC-1 (renders real earnings: totals, chart, breakdown): TC-01, TC-13, TC-14.
+- AC-2 (range selector re-queries atomically + persists across process death): TC-01, TC-05, TC-06, TC-13.
+- AC-3 (chart renders `time_series`, currency Y / date X, toggle, point selection): TC-03, TC-13, TC-14.
+- AC-4 (breakdown amount/share/bar, sorted desc, zeros hidden): TC-04.
+- AC-5 (loading/empty/error+Retry/offline-with-cache+banner/offline-no-cache): TC-07, TC-08, TC-09, TC-10, TC-11, TC-13.
+- AC-6 (pull-to-refresh bypasses cache): TC-12.
+- AC-7 (no monetary values in logs/telemetry; cache cleared on logout): TC-15.
+- AC-8 (integer cents; format to major units at display; locale-correct): TC-02, TC-03.
+- AC-9 (unit/MockWebServer/Compose tests green in CI): TC-01 through TC-15 collectively (JVM + EMU jobs).
