@@ -1228,6 +1228,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Analytics Events (GAP-0333 / PLATFORM-019): raw event store that feeds
+        # the rollup job. TTL on "ttl_epoch" is enabled in main() via
+        # _enable_ttl_if_needed (default ddb_ttl_attr == "ttl_epoch").
+        TableDef(
+            _resolve_table_name(S.analytics_events_table_name, "AnalyticsEvents"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
         # Privacy / GDPR (PRIVACY-001)
         TableDef(
             _resolve_table_name(S.data_requests_table_name, "data_requests"),
@@ -2518,6 +2529,8 @@ def main() -> None:
     _wait_for_tables(ddb, created)
     _enable_ttl_if_needed(ddb, _resolve_table_name(S.api_usage_table_name, "api_usage_events"))
     _enable_ttl_if_needed(ddb, os.getenv("APP_TABLE", "app_single_table"))
+    # GAP-0333 / PLATFORM-019: analytics_events expires raw events via ttl_epoch.
+    _enable_ttl_if_needed(ddb, _resolve_table_name(S.analytics_events_table_name, "AnalyticsEvents"))
     # SHOP-003: Enable TTL on shopping_cart table with attribute "ttl"
     _cart_table = _resolve_table_name(S.shopping_cart_table_name, "shopping_cart")
     try:

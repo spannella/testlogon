@@ -1877,6 +1877,8 @@ class Settings:
 
     # Creator Analytics Dashboard (ANALYTICS-001)
     analytics_rollups_table_name: str = os.environ.get("DDB_ANALYTICS_ROLLUPS", "AnalyticsRollups")
+    # GAP-0333 / PLATFORM-019: raw analytics events table (feeds the rollup job).
+    analytics_events_table_name: str = os.environ.get("DDB_ANALYTICS_EVENTS", "AnalyticsEvents")
     analytics_rollup_enabled: bool = os.environ.get("ANALYTICS_ROLLUP_ENABLED", "1") not in ("0", "false", "False")
     analytics_rollup_interval_seconds: int = int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "900"))
     analytics_rollup_lookback_days: int = int(os.environ.get("ANALYTICS_ROLLUP_LOOKBACK_DAYS", "3"))

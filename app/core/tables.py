@@ -185,6 +185,7 @@ class Tables:
     rate_limits: Any
     rate_limit_events: Any
     analytics_rollups: Any
+    analytics_events: Any
     data_requests: Any
     data_request_audit: Any
     account_deletion_requests: Any
@@ -424,6 +425,7 @@ T = Tables(
     rate_limits=_safe_table(S.rate_limits_table_name),
     rate_limit_events=_safe_table(S.rate_limit_events_table_name),
     analytics_rollups=_safe_table(S.analytics_rollups_table_name),
+    analytics_events=_safe_table(S.analytics_events_table_name),
     data_requests=_safe_table(S.data_requests_table_name),
     data_request_audit=_safe_table(S.data_request_audit_table_name),
     account_deletion_requests=_safe_table(S.account_deletion_requests_table_name),
