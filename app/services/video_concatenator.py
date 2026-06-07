@@ -316,8 +316,16 @@ async def execute_concat(job: Dict[str, Any]) -> None:
 
         logger.info("Concat job %s completed: method=%s", job_id, method)
 
-    except Exception:
+    except Exception as e:
         logger.exception("Concat job %s failed", job_id)
+        # Transition the job out of "running" so it can retry or surface the
+        # error; a bookkeeping failure here must never mask the original error.
+        try:
+            from app.services.transcode_job_store import fail_job
+
+            fail_job(job_id, str(e)[:4096], int(job.get("attempt", 0)))
+        except Exception:
+            logger.exception("fail_job itself failed for concat job %s", job_id)
         raise
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)

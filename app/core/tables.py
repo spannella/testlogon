@@ -167,6 +167,7 @@ class Tables:
     broadcast_inputs: Any
     broadcast_tip_goals: Any
     video_views: Any
+    video_comments: Any
     video_likes: Any
     ad_impressions: Any
     ad_accounts: Any
@@ -408,6 +409,7 @@ T = Tables(
     broadcast_inputs=_safe_table(S.broadcast_inputs_table_name),
     broadcast_tip_goals=_safe_table(S.broadcast_tip_goals_table_name),
     video_views=_safe_table(S.video_views_table_name),
+    video_comments=_safe_table(S.video_comments_table_name),
     video_likes=_safe_table(S.video_likes_table_name),
     ad_impressions=_safe_table(S.ad_impressions_table_name),
     ad_accounts=_safe_table(S.ad_accounts_table_name),

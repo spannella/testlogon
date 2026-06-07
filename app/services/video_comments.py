@@ -1,7 +1,15 @@
-"""Video comments service (VOD-017).
+"""Video comments service (VOD-017 / GAP-0380).
 
-Stores comments in the VideoViews table using PK=VCOMMENT#{video_id},
-SK={timestamp}#{comment_id} pattern to avoid needing a new DDB table.
+Stores comments in a DEDICATED ``video_comments`` table (no TTL — comments are
+durable). Previously comments lived in the VideoViews table under a
+``VCOMMENT#`` prefix, which co-mingled them with view records that carry a
+90-day TTL, silently deleting comments after 90 days. The dedicated table fixes
+that data-loss bug.
+
+Key schema (PK=``pk``, SK=``sk``):
+  pk = VIDEO#{video_id}
+  sk = COMMENT#{ts:012d}#{comment_id}   (zero-padded ts → chronological order)
+A ``created_at`` numeric attribute backs the ByVideoCreatedAt GSI.
 """
 
 from __future__ import annotations
@@ -34,10 +42,10 @@ def add_comment(
     ts = now_ts()
     comment_id = f"vc_{uuid.uuid4().hex[:16]}"
     # SK uses zero-padded timestamp for chronological ordering
-    sk = f"{ts:012d}#{comment_id}"
+    sk = f"COMMENT#{ts:012d}#{comment_id}"
 
     item = {
-        "pk": f"VCOMMENT#{video_id}",
+        "pk": f"VIDEO#{video_id}",
         "sk": sk,
         "comment_id": comment_id,
         "video_id": video_id,
@@ -46,7 +54,7 @@ def add_comment(
         "created_at": ts,
     }
 
-    T.video_views.put_item(Item=item)
+    T.video_comments.put_item(Item=item)
 
     # Increment comment_count on video metadata (best-effort)
     try:
@@ -77,18 +85,18 @@ def list_comments(
     limit = min(limit, 100)
 
     kwargs: Dict[str, Any] = {
-        "KeyConditionExpression": Key("pk").eq(f"VCOMMENT#{video_id}"),
+        "KeyConditionExpression": Key("pk").eq(f"VIDEO#{video_id}"),
         "ScanIndexForward": False,
         "Limit": limit,
     }
     if cursor:
         # cursor is the SK of the last seen item
         kwargs["ExclusiveStartKey"] = {
-            "pk": f"VCOMMENT#{video_id}",
+            "pk": f"VIDEO#{video_id}",
             "sk": cursor,
         }
 
-    resp = T.video_views.query(**kwargs)
+    resp = T.video_comments.query(**kwargs)
     items_raw = resp.get("Items", [])
 
     comments = []
@@ -126,13 +134,13 @@ def delete_comment(
     last_key = None
     while True:
         kwargs: Dict[str, Any] = {
-            "KeyConditionExpression": Key("pk").eq(f"VCOMMENT#{video_id}"),
+            "KeyConditionExpression": Key("pk").eq(f"VIDEO#{video_id}"),
             "FilterExpression": "comment_id = :cid",
             "ExpressionAttributeValues": {":cid": comment_id},
         }
         if last_key:
             kwargs["ExclusiveStartKey"] = last_key
-        resp = T.video_views.query(**kwargs)
+        resp = T.video_comments.query(**kwargs)
         items = resp.get("Items", [])
         if items:
             item = items[0]
@@ -147,7 +155,7 @@ def delete_comment(
     if item.get("user_id") != user_id:
         raise HTTPException(403, "Not your comment")
 
-    T.video_views.delete_item(
+    T.video_comments.delete_item(
         Key={"pk": item["pk"], "sk": item["sk"]}
     )
 

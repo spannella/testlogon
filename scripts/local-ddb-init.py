@@ -1069,6 +1069,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"liked_at": "N"},
         ),
+        # Video Comments (VOD-017 / GAP-0380) — durable, NO TTL (moved out of VideoViews)
+        TableDef(
+            os.environ.get("DDB_VIDEO_COMMENTS", "VideoComments"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoCreatedAt", "partition_key": "video_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Ad Impressions (VOD-018)
         TableDef(
             os.environ.get("DDB_AD_IMPRESSIONS", "AdImpressions"),

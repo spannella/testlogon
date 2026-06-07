@@ -1682,6 +1682,7 @@ class Settings:
     # Video Gallery (VOD-017)
     video_gallery_enabled: bool = os.environ.get("VIDEO_GALLERY_ENABLED", "1") not in ("0", "false", "False")
     video_views_table_name: str = os.environ.get("DDB_VIDEO_VIEWS", "VideoViews")
+    video_comments_table_name: str = os.environ.get("DDB_VIDEO_COMMENTS", "VideoComments")
     video_likes_table_name: str = os.environ.get("DDB_VIDEO_LIKES", "VideoLikes")
     video_gallery_trending_decay_hours: int = int(os.environ.get("VIDEO_GALLERY_TRENDING_DECAY_HOURS", "72"))
     video_gallery_page_size: int = int(os.environ.get("VIDEO_GALLERY_PAGE_SIZE", "24"))
