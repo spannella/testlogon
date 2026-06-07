@@ -8,7 +8,7 @@ from app.auth.root_invariant import validate_startup_root_invariant
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.settings import Settings
@@ -361,6 +361,102 @@ def _playback_entitlement_middleware():
         return await call_next(request)
     return _middleware
 
+# --- GAP-0323: crawler-detection meta-tag middleware ---------------------
+# Social bots (Facebook, Twitter/X, Discord, Slack, LinkedIn, ...) do not
+# execute JS, so client-side react-helmet-async produces no OG/meta tags for
+# them. For GET requests from known crawler User-Agents to public page routes
+# we return a minimal server-rendered HTML document containing the OG/meta
+# tags from the existing seo_metadata service instead of the SPA shell.
+# Non-bot requests (and any error during meta rendering) pass through unchanged.
+import re as _re
+
+_CRAWLER_BOT_RE = _re.compile(
+    r"(facebookexternalhit|Twitterbot|LinkedInBot|Slackbot|Discordbot"
+    r"|WhatsApp|TelegramBot|Pinterest|Googlebot|bingbot|DuckDuckBot"
+    r"|Applebot|vkShare|W3C_Validator|ia_archiver|SemrushBot"
+    r"|AhrefsBot|MJ12bot|redditbot|Embedly|Google-InspectionTool)",
+    _re.IGNORECASE,
+)
+
+# Public, share-able page routes that have crawler-facing metadata.
+_CRAWLER_PUBLIC_PATH_RE = _re.compile(
+    r"^/(u/[^/?#]+|posts/[^/?#]+|event/[^/?#]+/[^/?#]+"
+    r"|videos/[^/?#]+|live/[^/?#]+)/?$"
+)
+
+# Prefixes that are never page routes (API / static / internal surfaces).
+_CRAWLER_EXCLUDED_PREFIXES = (
+    "/api", "/ui", "/seo", "/internal", "/mock", "/telemetry",
+    "/static", "/v1", "/metrics", "/openapi.json", "/docs", "/redoc",
+)
+
+_CRAWLER_META_SHELL = (
+    '<!DOCTYPE html>\n<html lang="en"><head>\n'
+    "    {tags}\n"
+    "</head><body></body></html>\n"
+)
+
+
+def _is_crawler_ua(user_agent: str) -> bool:
+    """Return True when the User-Agent matches a known social/search crawler."""
+    if not user_agent:
+        return False
+    return bool(_CRAWLER_BOT_RE.search(user_agent))
+
+
+def _is_crawler_eligible_path(path: str) -> bool:
+    """Return True when the path is a public page route eligible for meta injection."""
+    if not path:
+        return False
+    for prefix in _CRAWLER_EXCLUDED_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return False
+    return bool(_CRAWLER_PUBLIC_PATH_RE.match(path))
+
+
+def _crawler_middleware_enabled() -> bool:
+    return os.environ.get("SEO_CRAWLER_MIDDLEWARE_ENABLED", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _render_crawler_meta_html(path: str, base_url: str) -> str:
+    """Render the minimal meta-only HTML document for a crawler request.
+
+    Delegates entirely to the existing seo_metadata service -- no meta logic
+    is reimplemented here.
+    """
+    from app.services.seo_metadata import metadata_for_path, render_meta_tags
+
+    meta = metadata_for_path(path, base_url=base_url)
+    tags = render_meta_tags(meta)
+    return _CRAWLER_META_SHELL.format(tags=tags)
+
+
+def _crawler_meta_middleware():
+    async def _middleware(request: Request, call_next):
+        try:
+            if (
+                _crawler_middleware_enabled()
+                and request.method == "GET"
+                and _is_crawler_ua(request.headers.get("user-agent", ""))
+                and _is_crawler_eligible_path(request.url.path or "")
+            ):
+                try:
+                    base = str(request.base_url).rstrip("/")
+                except Exception:
+                    base = ""
+                html = _render_crawler_meta_html(request.url.path, base)
+                return HTMLResponse(content=html, status_code=200)
+        except Exception:
+            # Any failure in crawler detection / meta rendering must never
+            # break real users or bots -- fall through to the normal response.
+            logger.debug("crawler_meta_middleware fell through", exc_info=True)
+        return await call_next(request)
+
+    return _middleware
+
+
 def _security_headers_middleware(default_csp: str):
     async def _middleware(request: Request, call_next):
         response = await call_next(request)
@@ -429,6 +525,7 @@ def create_app() -> FastAPI:
     if _S.multi_tenancy_enabled:
         from app.middleware.tenant import TenantMiddleware
         app.add_middleware(TenantMiddleware)
+    app.middleware("http")(_crawler_meta_middleware())
     app.middleware("http")(rate_limit_middleware_factory())
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())

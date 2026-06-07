@@ -183,6 +183,12 @@ SMS_RATE_LIMITED = Counter(
     "Total SMS messages skipped due to rate limiting",
 )
 
+# Email delivery metrics (PLATFORM-006)
+EMAIL_FAILED = Counter(
+    "email_failed_total",
+    "Total alert email send failures (SES rejections, quota, domain verification, etc.)",
+)
+
 FILEMGR_PURGE_RESULTS = Counter(
     "filemgr_purge_results_total",
     "File manager purge outcomes",
