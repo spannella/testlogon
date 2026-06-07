@@ -93,6 +93,8 @@ def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
         out["category_id"] = item["category_id"]
     if item.get("item_id"):
         out["item_id"] = item["item_id"]
+    if item.get("creator_user_id"):
+        out["creator_user_id"] = item["creator_user_id"]
     if item.get("product_type"):
         out["product_type"] = item.get("product_type")
         out["scope"] = dict(item.get("scope") or {})
@@ -358,6 +360,8 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         item["category_id"] = payload["category_id"]
     if payload.get("item_id"):
         item["item_id"] = payload["item_id"]
+    if payload.get("creator_user_id"):
+        item["creator_user_id"] = payload["creator_user_id"]
     T.shopping_cart.put_item(Item=item)
     _touch_cart_activity(user_sub, cart_id)
     return _item_from_item(item)
@@ -388,6 +392,7 @@ def add_catalog_item(
         "name": item.get("name", "Catalog item"),
         "quantity": quantity,
         "unit_price_cents": int(item.get("price_cents", 0)),
+        "creator_user_id": item.get("creator_id"),
     }
     return add_item(user_sub, cart_id, payload)
 

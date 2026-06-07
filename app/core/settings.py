@@ -336,6 +336,10 @@ class Settings:
     ups_client_id: str = os.environ.get("UPS_CLIENT_ID", "")
     ups_client_secret: str = os.environ.get("UPS_CLIENT_SECRET", "")
     ups_webhook_secret: str = os.environ.get("UPS_WEBHOOK_SECRET", "")
+    # UPS webhook replay protection (GAP-0350): timestamp tolerance window (seconds)
+    ups_webhook_timestamp_tolerance_seconds: int = int(
+        os.environ.get("UPS_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", "300")
+    )
     # Carrier tracking (SHOP-004)
     carrier_tracking_poll_enabled: bool = os.environ.get("CARRIER_TRACKING_POLL_ENABLED", "false").lower() not in ("0", "false", "")
     carrier_tracking_poll_interval_minutes: int = int(os.environ.get("CARRIER_TRACKING_POLL_INTERVAL_MINUTES", "30"))
