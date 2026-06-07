@@ -38,7 +38,35 @@ Next up: real-time messaging.
 ---
 
 ## SEGMENT 02 — Messaging
-<!-- TODO after seg02 is recorded -->
+
+Now let's talk to people. Messaging is real-time — direct messages and group chats that sync
+instantly between everyone in the conversation.
+
+Here's a live thread. A two-sided history streams in the moment it's sent. Composing is simple:
+type a message and fire it off, and your bubble appears right at the bottom, newest first.
+
+But these aren't ordinary messages. Turn on view-once, and the recipient can open the message
+exactly once — after they peek, the content self-destructs. Perfect for anything sensitive.
+
+For real privacy, enable client-side encryption. The message is encrypted right here in the
+browser, with AES-256-GCM and a key derived from a shared password, before it ever leaves your
+device. The server only ever stores ciphertext — never the plaintext. The recipient decrypts on
+demand by entering the password, and the original text appears.
+
+Creators can monetize, too. Send a tip — real money attached to a message, with micro-payments
+built right in. Or lock premium content behind a one-time payment: the recipient sees an unlock
+button and pays to reveal it.
+
+You can schedule a send to deliver automatically at a future time. And attachments go far beyond
+text — images, video and PDFs with optional view-once, files shared straight from your file
+manager, calendar events and meeting polls, and voice notes including listen-once.
+
+Everything direct messages can do, group chats do too — with sender names, reactions, and the same
+rich toolset for the whole team.
+
+That's messaging. Next up: voice and video calls.
+
+---
 
 ## SEGMENT 03 — Calls
 <!-- TODO -->
