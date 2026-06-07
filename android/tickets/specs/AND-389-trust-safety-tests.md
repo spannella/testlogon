@@ -5,7 +5,8 @@ milestone: M8
 epic: E50
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-388]
 blocks: []
 ---
@@ -72,15 +73,36 @@ The test suite MUST verify the following observable behaviours of the SUT
 (production code from AND-382/AND-388):
 
 - **FR-1 Block calls correct endpoint.** Confirming a block on user `targetId`
-  issues `POST /ui/users/{targetId}/block` with the CSRF header and maps a `2xx`
-  to `BlockState.Blocked`.
-- **FR-2 Unblock calls correct endpoint.** Unblock issues `DELETE
-  /ui/users/{targetId}/block` and maps `2xx` to `BlockState.NotBlocked`.
-- **FR-3 Report calls correct endpoint.** Confirming a report issues
-  `POST /ui/users/{targetId}/report` with body `{reason, details?}` and maps `2xx`
-  to a `Reported` success state.
-- **FR-4 Mute calls correct endpoint.** Mute/unmute toggles via
-  `POST` / `DELETE /ui/users/{targetId}/mute`.
+  issues `POST /ui/social/block` with JSON body `{ target_user_id, reason? }` and
+  the CSRF header, and maps a `200` (`BlockActionResponse`) to `BlockState.Blocked`.
+  **[Corrected — was `POST /ui/users/{targetId}/block` with empty body.]**
+  Source: OpenAPI `POST /ui/social/block` (req=`BlockRequest`, resp=`200:BlockActionResponse`);
+  frontend `src/api/endpoints/blocking.ts: blockUser`.
+- **FR-2 Unblock calls correct endpoint.** Unblock issues `POST /ui/social/unblock`
+  with JSON body `{ target_user_id }` and maps `200` (`BlockActionResponse`) to
+  `BlockState.NotBlocked`. **[Corrected — was `DELETE /ui/users/{targetId}/block`;
+  the real contract is a POST, not a DELETE.]** Source: OpenAPI
+  `POST /ui/social/unblock` (req=`UnblockRequest`); `src/api/endpoints/blocking.ts: unblockUser`.
+  Block status is read via `GET /ui/social/block-status/{targetId}` (`BlockStatusResponse`
+  with `is_blocked_by_me` / `is_blocking_me`).
+- **FR-3 Report calls correct endpoint.** There is **no** per-user report endpoint.
+  Content reporting goes to `POST /moderation/reports` with body
+  `CreateModerationReportIn { content_type, content_id, topics[], reason_text, ... }`
+  (resp `CreateModerationReportOut { ok, report_id, status, ticket_id, created_at }`);
+  message-scoped reports use `POST /messaging/conversations/{conversation_id}/messages/{message_id}/report`
+  (`ReportMessageReq`). **[Corrected — was `POST /ui/users/{targetId}/report` with
+  `{reason, details?}`, which does not exist. `reason`/`details` are not the wire
+  field names; the moderation report uses `topics[]` + `reason_text`.]** Source:
+  OpenAPI `POST /moderation/reports` and `POST .../messages/{message_id}/report`;
+  frontend `src/api/endpoints/moderation.ts: createModerationReport`,
+  `src/api/endpoints/messaging.ts: reportMessage`.
+- **FR-4 Mute calls correct endpoint.** **[Unverified-assumption / likely
+  out-of-scope.]** No per-user mute endpoint (`/ui/users/{id}/mute` or
+  `/ui/social/.../mute`) exists in the OpenAPI. The only mute endpoints are
+  conversation-scoped (`POST /messaging/conversations/{conversation_id}/mute`,
+  req=`MuteIn`) and broadcast/chat-scoped. If a per-user mute is required it must
+  be added upstream; otherwise FR-4 and the mute test cases should be dropped (see
+  §13). Source: OpenAPI index — no per-user mute path found.
 - **FR-5 Confirmation gating (core).** For each irreversible action (block, report,
   leave/delete thread) the ViewModel transitions to a `Confirming(action)` state
   on the request intent and performs **no** repository call until `confirm()` is
@@ -208,35 +230,64 @@ class TrustSafetyViewModelTest {
 These tests assert against the contract; they do not define it (owned by AND-382).
 Repository-tier tests pin the exact HTTP wire shapes via `MockWebServer`:
 
-- **Block:** `POST /ui/users/{userId}/block` — empty body; headers include
-  `X-CSRF-Token`. Success `204`/`200`. Response asserted as `ApiResult.Success`.
-- **Unblock:** `DELETE /ui/users/{userId}/block` — `204`.
-- **Report:**
-  `POST /ui/users/{userId}/report`
+> **Contract correction (this review):** the original draft's `/ui/users/{id}/...`
+> paths, the `DELETE`-based unblock, the `{reason, details}` report body, and the
+> `204`/`201` success codes were all wrong. The verified wire shapes below come from
+> the OpenAPI spec and the web `blocking.ts`/`moderation.ts`/`messaging.ts` clients.
+
+- **Block:** `POST /ui/social/block` — JSON body
+  `{ "target_user_id": "u42", "reason": "harassment" }` (`reason` optional,
+  `maxLength: 500`; `target_user_id` required, `minLength: 1`). Headers include
+  `X-CSRF-Token`. Success **`200`** with `BlockActionResponse`
+  `{ "ok": true, "status": "blocked", "target_user_id": "u42" }`. Asserted as
+  `ApiResult.Success`. **[Corrected from `POST /ui/users/{id}/block`, empty body, `204`.]**
+- **Unblock:** `POST /ui/social/unblock` — JSON body `{ "target_user_id": "u42" }`.
+  Success `200` `BlockActionResponse`. **[Corrected from `DELETE /ui/users/{id}/block`.]**
+- **Block status (for FR-7 propagation):** `GET /ui/social/block-status/{targetUserId}`
+  → `200` `BlockStatusResponse { "is_blocked_by_me": true, "is_blocking_me": false }`.
+- **Report:** `POST /moderation/reports` — JSON body `CreateModerationReportIn`:
   ```json
-  { "reason": "harassment", "details": "optional free text" }
+  { "content_type": "profile_photo", "content_id": "u42",
+    "topics": ["harassment"], "reason_text": "free text >=5 chars" }
   ```
-  Success `201` `{ "report_id": "rep_abc123", "status": "received" }`.
-- **Mute / unmute:** `POST` / `DELETE /ui/users/{userId}/mute` — `204`.
-- **Error envelope (FastAPI `detail`):** tests cover all three shapes the client
-  must handle:
+  (`content_type` enum: feed_post|feed_comment|feed_media|message|message_media|profile_photo;
+  `topics` 1..5 items; `reason_text` `minLength: 5`, `maxLength: 2000`). Success
+  `200` `CreateModerationReportOut { "ok": true, "report_id": "...",
+  "status": "submitted"|"deduplicated", "ticket_id": "...", "created_at": <int> }`.
+  Message-scoped variant: `POST /messaging/conversations/{conversation_id}/messages/{message_id}/report`
+  (`ReportMessageReq`). **[Corrected from `POST /ui/users/{id}/report` `{reason, details}` → `201`.]**
+- **Mute / unmute:** no per-user mute endpoint exists; only
+  `POST /messaging/conversations/{conversation_id}/mute` (`MuteIn`) and
+  broadcast-scoped mutes. **[Corrected: `POST`/`DELETE /ui/users/{id}/mute` does not exist.]**
+- **Error envelope (FastAPI):** the social/moderation endpoints document only
+  `422 HTTPValidationError`. The client (`src/api/client.ts: normalizeErrorDetail`)
+  must still handle three observed `detail` shapes — string, validation-array, and
+  object-with-`code` (used by 403 authorization errors elsewhere):
   ```json
   { "detail": "User not found" }
-  { "detail": [ { "loc": ["body","reason"], "msg": "field required" } ] }
-  { "detail": { "code": "already_blocked", "message": "Already blocked" } }
+  { "detail": [ { "loc": ["body","target_user_id"], "msg": "field required", "type": "value_error.missing" } ] }
+  { "detail": { "code": "role_required", "message": "..." } }
   ```
-- **Auth/CSRF:** one test stubs a `401` on the first block request, expects exactly
-  one `POST /ui/session/refresh`, then a replayed block returning `204`
-  (FR-9). `RecordedRequest` assertions confirm the `X-CSRF-Token` header is present
-  and equals the `ui_csrf` cookie value.
+  Note: `{ "code": "already_blocked" }` was an **invented** example in the original
+  draft — no such code exists in the sources; the object-with-`code` shape is real
+  but the `code` values come from authorization/geo (`role_required`, `geo_blocked`,
+  etc.). Use a generic synthetic code in fixtures or one of the real codes.
+- **Auth/CSRF:** verified against `src/api/client.ts`. Every request attaches
+  `X-CSRF-Token` set from the `ui_csrf` cookie value. A single `401` (when
+  authenticated) triggers exactly one `POST /ui/session/refresh` then **one** retry
+  of the original request with the same headers; a second `401` logs the user out
+  (`session_expired`) and surfaces an auth error (FR-9). A transport/network failure
+  surfaces as `ApiError(0, "Network error")`. `RecordedRequest` assertions confirm
+  the `X-CSRF-Token` header is present and equals the `ui_csrf` cookie value.
 
 `MockWebServer` `Dispatcher` example:
 
 ```kotlin
 server.dispatcher = object : Dispatcher() {
     override fun dispatch(req: RecordedRequest) = when {
-        req.path == "/ui/users/u42/block" && req.method == "POST" ->
-            MockResponse().setResponseCode(204)
+        req.path == "/ui/social/block" && req.method == "POST" ->
+            MockResponse().setResponseCode(200)
+                .setBody("""{"ok":true,"status":"blocked","target_user_id":"u42"}""")
         else -> MockResponse().setResponseCode(404)
     }
 }
@@ -376,22 +427,32 @@ flake before merge.
   ViewModel) implies ViewModel-level — tests assume this. *Open:* if gating is
   UI-only, FR-5 moves entirely to Tier 3 and the ViewModel "never called" assertion
   is dropped.
-- **Endpoint shapes unverified against live OpenAPI** (dev host unreliable).
-  *Open:* reconcile block/report/mute paths and report body with `/openapi.json`
-  and `frontend/src/api/endpoints/blocking.ts` before pinning Tier 1 fixtures.
+- **Endpoint shapes — RESOLVED this review** against the OpenAPI spec and the web
+  `blocking.ts`/`moderation.ts`/`messaging.ts` clients. Block=`POST /ui/social/block`,
+  unblock=`POST /ui/social/unblock`, report=`POST /moderation/reports`; all `200`
+  on success. The original `/ui/users/{id}/...` paths were wrong and are corrected
+  in §3/§5/§14. Tier 1 fixtures must be pinned to these verified shapes (see §16).
 - **Instrumented flake** on emulator for dialog timing. Mitigation: idling via
   Compose test clock + semantics waits, no `Thread.sleep`.
-- **Mute endpoint existence** is inferred; if mute is out of M8 scope, drop FR-4.
+- **Mute endpoint existence — RESOLVED (negative):** no per-user mute endpoint
+  exists in the OpenAPI (only conversation/broadcast mute). FR-4 as written is not
+  implementable against the current backend; either descope FR-4 and its test cases
+  or retarget them at `POST /messaging/conversations/{id}/mute`. *Open:* product
+  decision on whether per-user mute ships in M8.
 
 ## 14. Acceptance Criteria
 
 - **AC-1** All new unit (Tier 1+2) and instrumented (Tier 3) tests compile and pass
   green in CI (`testDebugUnitTest` + `connectedDebugAndroidTest`). (Backlog: "Pass".)
 - **AC-2** A test proves the block repository call hits
-  `POST /ui/users/{id}/block` with the CSRF header and maps `2xx→Success`,
-  and unblock hits `DELETE /ui/users/{id}/block`. (FR-1/FR-2)
-- **AC-3** A test proves report (`POST /ui/users/{id}/report` with `{reason}`) and
-  mute/unmute endpoints are called with correct method+payload. (FR-3/FR-4)
+  `POST /ui/social/block` with body `{target_user_id, reason?}` and the CSRF header
+  and maps `200→Success`, and unblock hits `POST /ui/social/unblock` with
+  `{target_user_id}`. (FR-1/FR-2) **[Corrected endpoints/method this review.]**
+- **AC-3** A test proves report (`POST /moderation/reports` with
+  `{content_type, content_id, topics[], reason_text}`) is called with correct
+  method+payload and maps `200→Success`. (FR-3) Mute coverage applies only if a
+  per-user mute endpoint exists (FR-4 is unverified — see §13/§16); the conversation
+  mute (`POST /messaging/conversations/{id}/mute`) is the closest real endpoint.
 - **AC-4** For block and report, a test proves the repository is **not** invoked
   until `confirm()`, and `cancel()`/dismiss results in zero repository calls and a
   return to `Idle`. (FR-5/FR-6)
@@ -428,3 +489,256 @@ flake before merge.
   against `/openapi.json` and `frontend/src/api/endpoints/blocking.ts`.
 - Reviewed and merged to `android-port`; trust & safety (E50/M8) feature gate marked
   test-complete.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its verdict and an exact source pointer. Sources:
+OpenAPI index (`reference/openapi.index.txt`) and full spec
+(`reference/openapi.pretty.json`, `components.schemas.<Name>`); frontend
+(`reference/src/...`); Android docs (labelled "framework ref").
+
+1. **Block endpoint is `POST /ui/social/block` with body `{target_user_id, reason?}`
+   → `200 BlockActionResponse`.** VERDICT: Corrected (was `POST /ui/users/{id}/block`,
+   empty body, `204`). SOURCE: OpenAPI `POST /ui/social/block` (req=`BlockRequest`,
+   resp=`200:BlockActionResponse`); schema `BlockRequest` (`target_user_id` required
+   minLength 1; `reason` optional maxLength 500); `src/api/endpoints/blocking.ts: blockUser`.
+2. **Unblock endpoint is `POST /ui/social/unblock` with body `{target_user_id}` →
+   `200 BlockActionResponse`.** VERDICT: Corrected (was `DELETE /ui/users/{id}/block`).
+   SOURCE: OpenAPI `POST /ui/social/unblock` (req=`UnblockRequest`); schema
+   `UnblockRequest`; `src/api/endpoints/blocking.ts: unblockUser`.
+3. **`BlockActionResponse` shape `{ ok: bool(=true), status: str, target_user_id: str }`
+   (required: status, target_user_id).** VERDICT: Verified. SOURCE:
+   `openapi.pretty.json: components.schemas.BlockActionResponse`.
+4. **Block status read via `GET /ui/social/block-status/{target_user_id}` →
+   `BlockStatusResponse { is_blocked_by_me, is_blocking_me }`.** VERDICT: Verified
+   (newly cited; supports FR-7). SOURCE: OpenAPI `GET /ui/social/block-status/{target_user_id}`;
+   schema `BlockStatusResponse`; `src/api/endpoints/blocking.ts: getBlockStatus`.
+5. **Blocked-users list: `GET /ui/social/blocked` → `BlockedUsersListResponse`
+   (`blocked_users[]`, `next_cursor`).** VERDICT: Verified. SOURCE: OpenAPI
+   `GET /ui/social/blocked`; schema `BlockedUsersListResponse`/`BlockedUserItem`;
+   `src/api/endpoints/blocking.ts: getBlockedUsers`; `src/pages/settings/BlockedUsersPage.tsx`.
+6. **No per-user report endpoint; reporting is `POST /moderation/reports`
+   (`CreateModerationReportIn`) or message-scoped
+   `POST /messaging/conversations/{cid}/messages/{mid}/report` (`ReportMessageReq`).**
+   VERDICT: Corrected (was `POST /ui/users/{id}/report` with `{reason, details}`).
+   SOURCE: OpenAPI `POST /moderation/reports` (resp=`CreateModerationReportOut`) and
+   `POST .../messages/{message_id}/report`; `src/api/endpoints/moderation.ts: createModerationReport`,
+   `src/api/endpoints/messaging.ts: reportMessage`.
+7. **Report body fields are `content_type` (enum), `content_id`, `topics[]` (1..5),
+   `reason_text` (5..2000) — NOT `reason`/`details`.** VERDICT: Corrected.
+   SOURCE: `openapi.pretty.json: components.schemas.CreateModerationReportIn`;
+   `src/api/endpoints/moderation.ts: CreateModerationReportReq`.
+8. **Report response `CreateModerationReportOut { ok, report_id, status:
+   submitted|deduplicated, ticket_id, created_at }`.** VERDICT: Corrected (draft
+   claimed `201 {report_id, status:"received"}`; real code is `200` and
+   `status` enum is submitted/deduplicated). SOURCE:
+   `components.schemas.CreateModerationReportOut`.
+9. **No per-user mute endpoint exists.** VERDICT: Corrected / Unverified-assumption
+   (FR-4 not implementable as drafted). SOURCE: OpenAPI index — only
+   `POST /messaging/conversations/{conversation_id}/mute` (`MuteIn`) and
+   broadcast/chat mutes (`/broadcast/sessions/{id}/chat/mute`, etc.); no
+   `/ui/users/{id}/mute` or `/ui/social/.../mute` path.
+10. **CSRF: client sends header `X-CSRF-Token` set to the `ui_csrf` cookie value on
+    every request.** VERDICT: Verified. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")`
+    → `headers.set("X-CSRF-Token", csrf)`).
+11. **401 handling: one `POST /ui/session/refresh` then exactly one retry; second
+    `401` logs out (`session_expired`). Refresh is de-duplicated via a shared
+    promise.** VERDICT: Verified (FR-9 path/behavior correct). SOURCE:
+    `src/api/client.ts` (`refreshSession`, `refreshPromise`, retry block); OpenAPI
+    `POST /ui/session/refresh` (req empty, resp 200).
+12. **Network/transport failure surfaces a distinct error (web: `ApiError(0,
+    "Network error")`).** VERDICT: Verified (informs the offline/flaky-host case).
+    SOURCE: `src/api/client.ts` catch block around `fetch`.
+13. **Error `detail` shapes the client handles: string, validation-array
+    (`{loc,msg,type}`), and object-with-`code`.** VERDICT: Verified (shapes), but
+    the draft's `code:"already_blocked"` example is Corrected — that code is invented.
+    Real object-`code` values are authorization/geo (`role_required`,
+    `role_required_scope`, `geo_blocked`, helpdesk_*). SOURCE:
+    `src/api/client.ts: normalizeErrorDetail` / `mapAuthorizationError`; social/
+    moderation endpoints in OpenAPI document only `422 HTTPValidationError`.
+14. **Web unblock has NO confirmation dialog (direct mutate); block/report on
+    message surface DO use a confirm/report modal (`ConfirmDialog`,
+    `ReportContentModal`).** VERDICT: Verified — note this nuance: FR-5's "gate every
+    irreversible action incl. unblock" is an Android-side product choice, not mirrored
+    by the web app for unblock. SOURCE: `src/pages/settings/BlockedUsersPage.tsx`
+    (direct `unblockMut.mutate`); `src/pages/messages/MessageBubble.tsx`
+    (imports `ConfirmDialog`, `ReportContentModal`, `reportMessage`).
+15. **ViewModel/Repository Kotlin contracts (`TrustSafetyRepository`, `TrustUiState`,
+    `PendingAction`) and the `ApiResult` type.** VERDICT: Unverified-assumption —
+    these are AND-382/AND-388 SUT types not present in this reference snapshot
+    (frontend is TypeScript; no Android module source provided). Tests must bind to
+    the merged Kotlin signatures. SOURCE: none available here; see §4.3 / §13.
+16. **Android test framework choices (coroutines-test, Turbine, MockK,
+    MockWebServer, Compose `createAndroidComposeRule`, Hilt test runner).** VERDICT:
+    Unverified-assumption for this repo's exact versions (no Gradle catalog in the
+    snapshot), but standard. SOURCE: framework ref —
+    https://developer.android.com/jetpack/compose/testing and
+    https://developer.android.com/training/dependency-injection/hilt-testing.
+17. **Compose semantics-based a11y assertions (role=Button, non-empty labels,
+    destructive description).** VERDICT: Unverified-assumption (depends on AND-388
+    UI), backed by framework ref. SOURCE:
+    https://developer.android.com/jetpack/compose/semantics.
+
+### Corrections made
+
+- §3 FR-1/FR-2: block/unblock paths fixed to `POST /ui/social/block` /
+  `POST /ui/social/unblock`; bodies and success code (`200`) corrected; DELETE→POST.
+- §3 FR-3: report retargeted from the non-existent `POST /ui/users/{id}/report`
+  `{reason, details}` to `POST /moderation/reports` with `topics[]`+`reason_text`
+  (and the message-scoped variant).
+- §3 FR-4: flagged that no per-user mute endpoint exists; descope or retarget.
+- §5 API Contract: all paths/methods/bodies/status codes corrected; the invented
+  `already_blocked` error code removed; CSRF/401-refresh behavior cited to `client.ts`.
+- §13: endpoint-shape and mute-existence open questions resolved with sources.
+- §14 AC-2/AC-3: endpoints/bodies corrected to match the verified contract.
+- Frontmatter: `status: reviewed`, `reviewed_on: 2026-06-06`.
+
+### Open assumptions
+
+- **Kotlin SUT signatures (AND-382/AND-388)** — not present in this snapshot; tests
+  must track the merged Android code. Why unverifiable: only the TS reference app and
+  OpenAPI are provided, not the Android module source.
+- **Per-user mute (FR-4)** — no backend endpoint; pending product/scope decision.
+- **Android dependency versions / convention plugin** — no Gradle files in the
+  snapshot; versions in §4.1 are assumed-current, not verified.
+- **Confirmation-gating location (ViewModel vs Compose)** — AND-388 design choice;
+  web mixes both (unblock ungated, message report/block gated). Assumed ViewModel
+  `Confirming` per backlog "irreversible-action guards."
+
+## 17. Test Plan
+
+IDs `TC-AND-389-NN`. "Traces" link to §14 Acceptance Criteria. Test targets:
+JVM/Robolectric (local), emulator AVD `test35` (API 35 x86_64), or the physical
+Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). Unit + contract tiers are
+device-independent (JVM). UI/instrumented tiers run on the emulator unless a case
+requires real-hardware behavior, in which case the physical device is noted.
+
+- **TC-AND-389-01 — Block happy path (contract).** Type: contract/MockWebServer
+  (JVM). Target: JVM unit. Preconditions: `MockWebServer` enqueues `200`
+  `{"ok":true,"status":"blocked","target_user_id":"u42"}`; authenticated session,
+  `ui_csrf` cookie set. Steps: call `repo.block("u42")`; capture `RecordedRequest`.
+  Expected: request is `POST /ui/social/block`, JSON body contains
+  `target_user_id="u42"`, header `X-CSRF-Token` equals the `ui_csrf` value; result is
+  `ApiResult.Success`. Traces: AC-2.
+
+- **TC-AND-389-02 — Unblock happy path (contract).** Type: contract/MockWebServer
+  (JVM). Target: JVM unit. Preconditions: enqueue `200` `BlockActionResponse`. Steps:
+  call `repo.unblock("u42")`; inspect `RecordedRequest`. Expected: `POST
+  /ui/social/unblock` with body `{target_user_id:"u42"}`, CSRF header present,
+  `ApiResult.Success`. Traces: AC-2.
+
+- **TC-AND-389-03 — Report happy path (contract).** Type: contract/MockWebServer
+  (JVM). Target: JVM unit. Preconditions: enqueue `200`
+  `{"ok":true,"report_id":"rep_1","status":"submitted","ticket_id":"t1","created_at":1}`.
+  Steps: call report with `content_type="profile_photo"`, `content_id="u42"`,
+  `topics=["harassment"]`, `reason_text="abusive dms"`. Expected: `POST
+  /moderation/reports`; body matches `CreateModerationReportIn`; `ApiResult.Success`
+  carrying `report_id`. Traces: AC-3.
+
+- **TC-AND-389-04 — Confirmation gating: request does not call repo (unit).** Type:
+  unit. Target: JVM unit (Robolectric not needed). Preconditions: `FakeTrustSafetyRepository`,
+  fresh ViewModel in `Idle`. Steps: `vm.requestBlock("u42")`. Expected: state
+  `Confirming(Block("u42"))`; `repo.blockCalls` is empty. Traces: AC-4.
+
+- **TC-AND-389-05 — Confirm invokes repo, reaches Done; cancel is a no-op (unit).**
+  Type: unit. Target: JVM unit. Preconditions: as above; `blockResult=Success`.
+  Steps: (a) `requestBlock("u42")`→`confirm()`→`advanceUntilIdle()`; (b) separate
+  run `requestBlock("u42")`→`cancel()`. Expected: (a) `blockCalls==["u42"]`, terminal
+  `Done`; (b) `blockCalls` empty, state back to `Idle`. Traces: AC-4.
+
+- **TC-AND-389-06 — Idempotent intent: duplicate request does not stack/duplicate
+  (unit).** Type: unit. Target: JVM unit. Preconditions: ViewModel in `Confirming`.
+  Steps: call `requestBlock("u42")` twice without confirming, then `confirm()`,
+  `advanceUntilIdle()`. Expected: still one logical pending action; `blockCalls`
+  contains exactly one `"u42"`. Traces: AC-4 (FR-6).
+
+- **TC-AND-389-07 — Validation (422) error mapping (contract).** Type:
+  contract/MockWebServer (JVM). Target: JVM unit. Preconditions: enqueue `422`
+  `{"detail":[{"loc":["body","target_user_id"],"msg":"field required","type":"value_error.missing"}]}`.
+  Steps: call `repo.block("")`. Expected: `ApiResult.Error` with message derived from
+  `detail[].msg` ("field required"); block state unchanged (no optimistic stickiness).
+  Traces: AC-6.
+
+- **TC-AND-389-08 — String + object `detail` error shapes (contract).** Type:
+  contract/MockWebServer (JVM). Target: JVM unit. Preconditions: two enqueued
+  responses: `404 {"detail":"User not found"}` and `403
+  {"detail":{"code":"role_required","message":"..."}}`. Steps: call block twice.
+  Expected: each maps to `ApiResult.Error` with the human-readable message
+  (string passthrough; mapped authorization message for the object form); state
+  reverts on both. Traces: AC-6.
+
+- **TC-AND-389-09 — 401 → single refresh → retry; POST not auto-retried on 500
+  (contract).** Type: contract/MockWebServer (JVM). Target: JVM unit. Preconditions:
+  Dispatcher: first `/ui/social/block` → `401`; `/ui/session/refresh` → `200`;
+  replayed block → `200`. Second scenario: block → `500`. Steps: run both. Expected:
+  scenario A records exactly one `POST /ui/session/refresh` then one replayed block
+  (total 2 block requests) ending `Success`; scenario B records exactly one block
+  request (no auto-retry of the POST) ending `Error`. A second consecutive `401`
+  surfaces an auth error. Traces: AC-7.
+
+- **TC-AND-389-10 — Offline / flaky dev-host transport error (contract).** Type:
+  contract/MockWebServer (JVM). Target: JVM unit. Preconditions: enqueue a response
+  with `socketPolicy = DISCONNECT_AFTER_REQUEST` (or stop the server) to simulate the
+  unreliable plaintext dev host. Steps: call `repo.block("u42")`. Expected:
+  `ApiResult.Error` of IO/network category (parity with web `ApiError(0,"Network
+  error")`); ViewModel maps to `TrustUiState.Error`; no state mutation. Traces: AC-6, AC-10.
+
+- **TC-AND-389-11 — Block hides content + disables send path (Compose-UI).** Type:
+  Compose-UI / instrumented. Target: emulator `test35` (no real hardware needed).
+  Preconditions: Hilt-injected screen with fake repo; `blockState("u42")` emits
+  `Blocked`. Steps: render feed/thread containing an item authored by `u42` and the
+  composer; trigger a confirmed block. Expected: `u42`'s items are absent from the
+  list (assert by semantics), and the composer/"Message" CTA is disabled or replaced
+  by a "You blocked this user" affordance (send node not enabled). Traces: AC-5.
+
+- **TC-AND-389-12 — Confirmation dialog gating in UI: cancel = no call, confirm =
+  action (Compose-UI).** Type: Compose-UI / instrumented. Target: emulator `test35`.
+  Preconditions: screen with fake repo, action menu visible. Steps: tap "Block";
+  assert dialog shown and `repo.blockCalls` empty; tap "Cancel" → dialog gone, still
+  empty; reopen, tap "Confirm" → exactly one call. Expected: as described. Traces:
+  AC-4, AC-5.
+
+- **TC-AND-389-13 — Accessibility of destructive confirm dialog (Compose-UI).**
+  Type: Compose-UI / instrumented (a11y). Target: emulator `test35`. Preconditions:
+  block confirm dialog shown. Steps: locate title and confirm/cancel by
+  `onNodeWithText(R.string.block_confirm_title)` and by role; assert each button has
+  a non-empty accessible label, `Role.Button`, and the destructive confirm carries a
+  distinguishing description. Expected: all assertions pass; no hard-coded literals
+  where a string resource exists. Traces: AC-8.
+
+- **TC-AND-389-14 — Telemetry/privacy: cancel never logs Blocked; report `details`
+  free-text never emitted (unit).** Type: unit. Target: JVM unit. Preconditions:
+  `FakeTrustTelemetry` injected. Steps: (a) `requestBlock`→`cancel()`; (b) confirmed
+  report with `reason_text="secret free text"`. Expected: (a) no `TrustEvent.Blocked`
+  (at most `ConfirmDismissed`); (b) emitted events contain the topic/category but not
+  the raw `reason_text`; no PII (username/cookie) in any event. Traces: AC-9.
+
+- **TC-AND-389-15 — CSRF regression: missing header rejected (contract).** Type:
+  contract/MockWebServer (JVM, security). Target: JVM unit. Preconditions: Dispatcher
+  returns `403` when `X-CSRF-Token` is absent, `200` when present. Steps: issue a
+  block via the production client. Expected: client always attaches `X-CSRF-Token`
+  (so the call succeeds); a negative control omitting the cookie produces the `403`
+  path → `ApiResult.Error`. Traces: AC-7 (security), §8.
+
+- **TC-AND-389-16 — ABI/API parity smoke for the gating UI (instrumented).** Type:
+  instrumented/e2e. Target: PHYSICAL DEVICE (Galaxy A15, arm64-v8a, API 34) — MUST
+  run on the physical device to catch arm64-vs-x86 / API-34-vs-35 differences not
+  seen on the x86_64 API-35 emulator. Preconditions: debug build installed via adb.
+  Steps: run the block confirm→hide-content flow (TC-11/TC-12 abbreviated) on-device.
+  Expected: identical gating/hide behavior as on the emulator; no ABI/API-level
+  regressions. Traces: AC-1, AC-5.
+
+### Coverage matrix (AC → TC)
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (all tiers compile & pass) | TC-01..TC-16 (suite); TC-16 device parity |
+| AC-2 (block/unblock endpoints+CSRF) | TC-01, TC-02 |
+| AC-3 (report endpoint+payload) | TC-03 |
+| AC-4 (gating: no call until confirm; cancel no-op; idempotent) | TC-04, TC-05, TC-06, TC-12 |
+| AC-5 (block hides content + disables send) | TC-11, TC-12, TC-16 |
+| AC-6 (all error `detail` shapes; no stale state) | TC-07, TC-08, TC-10 |
+| AC-7 (401→one refresh→retry; POST not retried; CSRF) | TC-09, TC-15 |
+| AC-8 (a11y semantics on dialog) | TC-13 |
+| AC-9 (telemetry: no Blocked on cancel; no `reason_text` leak) | TC-14 |
+| AC-10 (hermetic, non-flaky) | TC-09, TC-10 (and suite-wide virtual-time discipline) |

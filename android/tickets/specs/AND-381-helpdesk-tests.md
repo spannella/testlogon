@@ -5,7 +5,8 @@ milestone: M8
 epic: E49
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-380, AND-379, AND-378, AND-377]
 blocks: []
 ---
@@ -19,6 +20,8 @@ This ticket delivers the automated test suite for the **Helpdesk** feature area 
 The goal is to lock down the behaviour of the `feature-helpdesk` module so that the helpdesk surface — metrics dashboard, queue preview, ownership mutations (claim/assign/transfer), and the availability toggle that gates claim eligibility — is verified end-to-end at the unit and screen level against faked transport. Concretely, the suite must prove that: (a) helpdesk DTOs map correctly from FastAPI JSON into `core-model` domain types; (b) `HelpdeskMetricsRepository` and the assignment/availability repository surfaces translate transport outcomes into the typed `ApiResult<T>` envelope, including all three FastAPI `detail` error shapes, 401-refresh-then-retry, `409` conflict handling, and 20s-timeout behaviour; (c) the Helpdesk ViewModel(s) emit the correct `StateFlow<UiState>` transitions for loading/content/stale/empty/access-denied/error, optimistic-update-then-reconcile, and the availability toggle gating claim eligibility; and (d) the Compose dashboard, queue-preview, assignment bottom sheet, and availability toggle render each `UiState` and route correctly on interaction.
 
 Out of scope: writing or modifying production source for helpdesk (owned by AND-377/378/379/380), backend changes, end-to-end tests against the live dev backend, and screenshot/visual-regression tooling. Network is always faked at the OkHttp boundary (`MockWebServer`); no test in this ticket contacts `http://18.222.237.167:8000`.
+
+> **REVIEWER NOTE (AND-381, 2026-06-06): scope corrected against authoritative sources.** The backend OpenAPI exposes **only two** helpdesk endpoints: `POST /messaging/helpdesk/conversations/{conversation_id}/claim` (→ `HelpdeskClaimOut`) and `GET /messaging/helpdesk/queue` (→ `ConversationOut[]`). There is **no metrics endpoint, no transfer endpoint, and no helpdesk availability endpoint** in the backend or the web reference. Consequently the metrics dashboard, the `assign`/`transfer` actions, the availability toggle, Room metrics caching, and queue *pagination* described below are **unverified / fabricated assumptions** and the corresponding test obligations are downgraded to "only if the upstream feature ticket actually ships them." The verified, in-contract behaviour this suite must lock down is: (1) the agent **queue** fetch (`getHelpdeskQueue`, flat array, `silent403` for non-agents); (2) the **claim** action (idempotent, returns new routing `state` + `assigned_agent_user_id` + `assignment_version`); (3) the shared transport contract — CSRF echo, 401→refresh→retry, and the three FastAPI `detail` error shapes. See §16 for the full audit.
 
 ## 2. Context & References
 
@@ -50,10 +53,12 @@ FR-6. **CI gate:** `:feature-helpdesk:testDebugUnitTest` and `:feature-helpdesk:
 
 ### 4.1 JVM unit tests (`src/test`)
 
-Repository tests use `MockWebServer` wired to a real Retrofit/Moshi/OkHttp stack so JSON deserialization, the CSRF header interceptor, the 401 refresh interceptor, and the persistent cookie jar are exercised together (integration-style at the repo boundary, no production code mocked). Room-backed metrics caching is tested with an in-memory Robolectric Room database.
+Repository tests use `MockWebServer` wired to a real Retrofit/Moshi/OkHttp stack so JSON deserialization, the CSRF header interceptor, the 401 refresh interceptor, and the persistent cookie jar are exercised together (integration-style at the repo boundary, no production code mocked). The verified repository surfaces are the **queue** (`getHelpdeskQueue` → `List<Conversation>`) and **claim** (`claim` → `HelpdeskClaimOut`) calls.
+
+> **CORRECTED:** The `HelpdeskMetricsRepositoryTest` snippet below references `/metrics`, `openCount`, and `avgFirstResponseSeconds`, **none of which exist** in the backend contract. It is retained only as an *illustrative harness pattern*; if AND-377 does not ship a real metrics source, delete this class and apply the same MockWebServer pattern to `HelpdeskQueueRepositoryTest` / `HelpdeskClaimRepositoryTest` instead (asserting `HelpdeskClaimOut` fields `ok`/`state`/`assigned_agent_user_id`/`assignment_version`/`idempotent`). Room metrics caching is likewise conditional on AND-377 actually persisting metrics.
 
 ```kotlin
-class HelpdeskMetricsRepositoryTest {
+class HelpdeskMetricsRepositoryTest { // ILLUSTRATIVE ONLY — no /metrics endpoint exists; see §16
     private val server = MockWebServer()
     private lateinit var repo: HelpdeskMetricsRepository
 
@@ -169,31 +174,24 @@ A managed Gradle device (Pixel 6 / API 34, ATD image) is configured so `connecte
 
 ## 5. API Contract
 
-This ticket defines **no new API**; it asserts the contracts owned by AND-377 (metrics), AND-378 (assignment), and AND-379 (availability). Canonical payload shapes that fixtures must mirror (verified against `/openapi.json` and `frontend/src/api/endpoints/helpdesk.ts`):
+This ticket defines **no new API**; it asserts the contracts owned by AND-377/378/379. The canonical payload shapes below are **corrected against the authoritative `openapi.pretty.json` and `frontend/src/api/endpoints/messaging.ts`** (note: there is no `endpoints/helpdesk.ts` — the helpdesk calls live in `messaging.ts`). Fixtures MUST mirror these exact shapes.
 
-**`GET /messaging/helpdesk/metrics`** → dashboard metrics (AND-377):
+> The frontend has **no `helpdesk.ts`**; helpdesk calls (`claimHelpdeskConversation`, `getHelpdeskQueue`, `startHelpdeskConversation`) are defined in `src/api/endpoints/messaging.ts`. There is **no `types.ts` helpdesk metrics/assignment/availability DTO**.
+
+**~~`GET /messaging/helpdesk/metrics`~~ — DOES NOT EXIST.** *(Corrected.)* No metrics endpoint is present in OpenAPI; `HelpdeskMetricsDto`/`HelpdeskMetricsRepository`/Room metrics caching have no backend contract. Any metrics-derivation must be a client-side count fallback if AND-377 ships one (see R2); fixtures for a `/metrics` JSON body are removed. Do not author `GET /metrics` MockWebServer fixtures.
+
+**`GET /messaging/helpdesk/queue`** *(Corrected)* → **flat array** `ConversationOut[]` (NOT a paged envelope). Verified params: `group_id` (**required**, maxLength 128), `state` (optional string), `limit` (optional int, default **50**, max **200**). There is **no `page` param and no `has_more`/`items` envelope** — pagination and `asSnapshot` second-page assertions do not apply. The web client (`getHelpdeskQueue`) passes `group_id` (+ optional `state`) and uses `silent403: true` so non-agents silently get `403` and render no queue. Each element is a `ConversationOut`; helpdesk rows are keyed by `conversation_id` and carry `routing_mode: "helpdesk_bridge"`, `routing_state` (`awaiting_agent` | `assigned` | `paused_no_agents_online`), and `active_agent_user_id`.
+
+**Claim** *(Corrected)* — `POST /messaging/helpdesk/conversations/{conversation_id}/claim` with an **empty JSON body `{}`** → `200 HelpdeskClaimOut`:
 ```json
-{
-  "open": 42, "unassigned": 11, "assigned_to_me": 6, "sla_at_risk": 3,
-  "avg_first_response_seconds": 540, "avg_resolution_seconds": 7200,
-  "resolved_by_me_today": 9,
-  "deltas": { "open": -4, "resolved_by_me_today": 2 },
-  "generated_at": "2026-06-05T14:30:00Z"
-}
+{"ok": true, "conversation_id": "cnv_1", "state": "assigned",
+ "assigned_agent_user_id": "usr_self", "assignment_version": 3, "idempotent": false}
 ```
+Required fields: `ok`, `conversation_id`, `state`, `assigned_agent_user_id`, `assignment_version` (integer); `idempotent` defaults `false`. **There are NO `assignee_id`/`assignee_name`/`queue_id`/`updated_at` fields** — those were fabricated. Documented responses are **`200` and `422` only**; **no `409` is documented** and the operation is **idempotent** (re-claiming returns `idempotent: true`), so the "409 conflict / Already claimed by {name}" rollback narrative is unverified (see §16). On success the web client calls `onClaimSuccess(data.state, data.assigned_agent_user_id)` and invalidates the `conversations` + `helpdesk-queue` query caches.
 
-**`GET /messaging/helpdesk/queue?page={n}`** → paged queue (reused from AND-161): `{ "items": [{"id":"cnv_1","subject":"...","assignee":null,"status":"open","requester":{...}}], "page":1, "has_more": true }`.
+**~~Assign / transfer~~ — DO NOT EXIST.** *(Corrected.)* There is no `POST .../conversations/{id}/transfer` and no generic assign endpoint; `AssignmentAction.{ASSIGN,TRANSFER}` and the assign/transfer bottom sheet have no backend contract. Only **claim** exists.
 
-**Claim / assign / transfer** (AND-378) — request/response asserted for each `AssignmentAction`:
-```json
-// POST .../conversations/{id}/claim   -> 200
-{"conversation_id":"cnv_1","assignee_id":"usr_self","assignee_name":"Me",
- "status":"assigned","queue_id":null,"updated_at":"2026-06-05T14:31:00Z"}
-// POST .../conversations/{id}/transfer  body {"agent_id":"usr_2","note":"ctx"}
-// 409 conflict -> {"detail":{"code":"conflict","message":"Already claimed by B. Agent"}}
-```
-
-**Availability toggle** (AND-379): `POST .../agents/me/availability` body `{"available": true}` → `200 {"available": true, "updated_at": "..."}`; the availability value gates claim eligibility in the ViewModel.
+**~~Availability toggle `POST .../agents/me/availability`~~ — DOES NOT EXIST for helpdesk.** *(Corrected.)* The only availability endpoints in OpenAPI are KYC (`GET`/`PATCH /v1/kyc/assignment/availability`, schema `KycAdminAvailabilityOut`/`KycAdminAvailabilityIn`) and find-datetime poll availability — neither is the helpdesk agent toggle. The "availability gates claim eligibility" contract is **unverified** against backend/web; if AND-379 ships it, the gate is presumed client/presence-side (web uses `useHeartbeat`/`usePresence` for online state, not an availability POST). Treat AC-7 as conditional (see §16/§17).
 
 **Error envelope** (asserted in all three `detail` variants):
 ```json
@@ -201,7 +199,7 @@ This ticket defines **no new API**; it asserts the contracts owned by AND-377 (m
 {"detail": [{"msg": "field required", "loc": ["body","agent_id"]}]}
 {"detail": {"code": "forbidden", "message": "Not an agent"}}
 ```
-The `DetailErrorMapper` reduces each to a stable `ApiError` (`message`, optional `code`, optional field list, `httpStatus`); tests assert the human-readable message and `retryable` classification chosen for each shape (`403`/`409`/`422` non-retryable; `5xx`/timeout retryable).
+The three `detail` shapes are **Verified** against the web client's `normalizeErrorDetail` (`src/api/client.ts`): a `string` is returned verbatim; an **array** is mapped item-by-item to each `.msg` and joined with ", "; an **object** with `{code,...}` is run through `mapAuthorizationError` and otherwise falls back to its `.msg`. The `DetailErrorMapper` (Android) reduces each to a stable `ApiError` (`message`, optional `code`, optional field list, `httpStatus`); tests assert the human-readable message and `retryable` classification chosen for each shape (`403`/`422` non-retryable; `5xx`/timeout retryable). **`409` is NOT a documented helpdesk response** (claim returns only 200/422), so a 409-non-retryable assertion against `claim` is testing a hypothetical shape — keep it only as a generic mapper unit test, not as a claim-endpoint contract test.
 
 ## 6. Data & State Management
 
@@ -218,7 +216,7 @@ sealed interface HelpdeskDashboardUiState {
 }
 ```
 
-State assertions cover: cold-start `Loading` (initial `StateFlow` value); `AccessDenied` for non-agent roles **with zero metrics requests issued**; `Content(isStale=false)` after a successful fetch; `Content(isStale=true)` + `cachedAt` when the network fails but Room holds a prior row; `Empty` for all-zero payload with no cache history; `Error(retryable)` on failure-without-cache. Room caching is in scope (AND-377 owns a single-row `helpdesk_metrics` table): a DAO round-trip test (`upsert`/`observe`/`clear`) and a stale-then-fresh emission test (cache emits first, network success replaces) are required. A logout test asserts `HelpdeskMetricsDao.clear()` is invoked so a second agent never sees the prior agent's `assigned_to_me`/`resolved_by_me_today`. Queue paging is asserted with `queuePreview.asSnapshot { scrollTo(24) }` to confirm a second page is requested and appended, and that `refresh()` invalidates the paging source (`server.requestCount` increments).
+State assertions cover: cold-start `Loading` (initial `StateFlow` value); `AccessDenied` for non-agent roles **with zero metrics requests issued**; `Content(isStale=false)` after a successful fetch; `Content(isStale=true)` + `cachedAt` when the network fails but Room holds a prior row; `Empty` for all-zero payload with no cache history; `Error(retryable)` on failure-without-cache. Room caching is in scope (AND-377 owns a single-row `helpdesk_metrics` table): a DAO round-trip test (`upsert`/`observe`/`clear`) and a stale-then-fresh emission test (cache emits first, network success replaces) are required. A logout test asserts `HelpdeskMetricsDao.clear()` is invoked so a second agent never sees the prior agent's `assigned_to_me`/`resolved_by_me_today`. ~~Queue paging is asserted with `queuePreview.asSnapshot { scrollTo(24) }`~~ — **CORRECTED:** `GET /messaging/helpdesk/queue` returns a **flat `ConversationOut[]`** with a `limit` cap (default 50, max 200) and **no cursor/page param**, so there is no Paging 3 source to invalidate or second page to append. Replace the paging assertions with: (a) a `limit`-respecting fetch test, (b) a `refresh()` re-fetch test asserting `server.requestCount` increments, and (c) a `silent403`/empty-list rendering test. (Metrics Room caching above is conditional on AND-377 — see §16.)
 
 ## 7. Error Handling & Resilience
 
@@ -227,14 +225,14 @@ Tests are the resilience contract here. Required cases:
 - **Timeout:** `MockWebServer` `NO_RESPONSE` → repo returns `ApiResult.Error` with a timeout-classified error within the configured bound; ViewModel surfaces `Error(retryable=true)` (or `Content(isStale=true)` if a cache exists).
 - **Bounded backoff (idempotent GET only):** transient `503` then `200` on `GET /metrics` → success after retry; `server.requestCount` confirms ≤ max-retries+1 attempts. Non-idempotent claim/assign/transfer POSTs are asserted **not** to retry on failure.
 - **401 refresh:** enqueue `401`, then `200` for `POST /ui/session/refresh`, then `200` for the retried request; assert exactly one refresh occurs and the original call succeeds; a second consecutive 401 yields a terminal auth error (no infinite loop).
-- **409 conflict:** claim against an already-claimed conversation rolls back the optimistic update and surfaces "Already claimed by {name}", reconciling the row from the server payload.
+- **~~409 conflict~~ (CORRECTED → not in contract):** the claim endpoint documents only `200`/`422` and is **idempotent** (`HelpdeskClaimOut.idempotent`). There is no documented `409` and no "Already claimed by {name}" payload. Replace this with: a **re-claim idempotency** test (second claim returns `idempotent: true`, `state`/`assigned_agent_user_id` unchanged) and a generic `DetailErrorMapper` unit test for an arbitrary `{code,...}` object shape. Keep optimistic-update/rollback testing **only if** AND-378 implements a client-side conflict path against a real server error; otherwise drop it (no transfer/assign endpoints exist either).
 - **403 non-agent:** mapped to a non-retryable error / `AccessDenied`, no further requests.
 - **Malformed JSON:** mapped parse error, not an uncaught exception/crash.
 - **Refresh race:** an in-flight `load()` is cancelled by a subsequent `refresh()` so no stale emission overwrites fresh state (asserted via Turbine ordering).
 
 ## 8. Security & Privacy
 
-No production security surface changes. Test-specific obligations: `NetworkTestHarness` must reproduce the CSRF header echo (`ui_csrf` cookie → `X-CSRF-Token`) and persistent cookie jar so the 401-refresh test is realistic; a regression test asserts `X-CSRF-Token` is present on both GET metrics and POST claim/assign/transfer/availability requests. A test asserts metrics cache is cleared on logout (privacy: per-agent counts must not leak across sessions). Fixtures contain only synthetic data — no real credentials, tokens, or PII; the spec mandates no logging of cookie/CSRF values or full response bodies in test output. Cleartext dev-host usage is irrelevant here since all traffic is local-loopback `MockWebServer`. Role gating is verified as UX-only with the server (`403`) treated as authoritative.
+No production security surface changes. Test-specific obligations: `NetworkTestHarness` must reproduce the CSRF header echo (`ui_csrf` cookie → `X-CSRF-Token`) and persistent cookie jar so the 401-refresh test is realistic — **both Verified** against `src/api/client.ts` (CSRF read from `ui_csrf` cookie and set as `X-CSRF-Token`; 401 triggers a single `POST /ui/session/refresh` then one retry with `credentials: "include"`). A regression test asserts `X-CSRF-Token` is present on the **GET queue** and **POST claim** requests (the only two helpdesk calls; ~~GET metrics / POST assign/transfer/availability~~ do not exist — CORRECTED). A test asserts metrics cache is cleared on logout (privacy: per-agent counts must not leak across sessions). Fixtures contain only synthetic data — no real credentials, tokens, or PII; the spec mandates no logging of cookie/CSRF values or full response bodies in test output. Cleartext dev-host usage is irrelevant here since all traffic is local-loopback `MockWebServer`. Role gating is verified as UX-only with the server (`403`) treated as authoritative.
 
 ## 9. Accessibility & i18n
 
@@ -299,3 +297,78 @@ AC-12. No test contacts a real network host; all transport is `MockWebServer`.
 - No production behaviour changed except additive, non-functional test tags/content descriptions agreed per Q3.
 - Code reviewed and merged; the helpdesk fixtures confirmed reusable by downstream helpdesk tickets.
 - Open questions Q1–Q3 and risk R2/R3 (fallback path, availability semantics) resolved or explicitly deferred with the owner noted in the PR description.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources: **OAPI** = `reference/openapi.pretty.json` / `reference/openapi.index.txt`; **FE** = `reference/src/...`.
+
+1. **Helpdesk exposes a metrics endpoint `GET /messaging/helpdesk/metrics`.** — **Corrected (false).** No such path exists. OAPI index has only two helpdesk routes (index lines 393–394). Source: `openapi.index.txt:393-394`; grep of `openapi.pretty.json` for `helpdesk` returns only `claim` + `queue`.
+2. **`GET /messaging/helpdesk/queue` is paged with `?page=` and `{items,page,has_more}`.** — **Corrected (false).** Returns a flat `array of ConversationOut`; params are `group_id` (required, maxLen 128), `state` (optional), `limit` (default 50, max 200). Source: OAPI `GET /messaging/helpdesk/queue` (`openapi.pretty.json:120907-120996`); FE `src/api/endpoints/messaging.ts: getHelpdeskQueue` (lines 1002–1012).
+3. **Claim path `POST /messaging/helpdesk/conversations/{conversation_id}/claim`.** — **Verified.** Source: OAPI `POST .../claim` (`openapi.index.txt:393`); FE `src/api/endpoints/messaging.ts: claimHelpdeskConversation` (line 998), body is `{}`.
+4. **Claim response fields `{conversation_id, assignee_id, assignee_name, status, queue_id, updated_at}`.** — **Corrected (false).** Real schema `HelpdeskClaimOut` = `{ok:bool, conversation_id:str, state:str, assigned_agent_user_id:str, assignment_version:int, idempotent:bool=false}`; required: `ok, conversation_id, state, assigned_agent_user_id, assignment_version`. Source: OAPI `components.schemas.HelpdeskClaimOut` (`openapi.pretty.json:37249-37286`); FE consumes `data.state` + `data.assigned_agent_user_id` (`src/pages/messages/ConversationView.tsx:643-647`).
+5. **Claim returns `409 conflict` / "Already claimed by {name}".** — **Corrected (false / unverified).** Claim documents only `200` + `422`; the op is idempotent (`HelpdeskClaimOut.idempotent`). No 409 and no such message anywhere in OAPI or FE. Source: OAPI `POST .../claim` responses (`openapi.pretty.json:120879-120900`).
+6. **`POST .../conversations/{id}/transfer` and a generic assign endpoint exist (AND-378).** — **Corrected (false).** No transfer/assign helpdesk routes in OAPI. Source: full `helpdesk` grep of `openapi.index.txt` (only lines 393–394).
+7. **`POST /messaging/helpdesk/agents/me/availability` toggles agent availability (AND-379).** — **Corrected (false).** No helpdesk availability route. Availability endpoints that DO exist are KYC (`GET`/`PATCH /v1/kyc/assignment/availability`, schemas `KycAdminAvailabilityOut`/`In`) and find-datetime polls. Source: `openapi.index.txt:2284-2285, 409, 491`.
+8. **Availability gates claim eligibility.** — **Unverified-assumption.** No backend contract; FE drives agent online-state via presence/heartbeat (`useHeartbeat`/`usePresence` in `src/pages/helpdesk/HelpdeskPage.tsx:11-12,81`), not an availability POST. Cannot be confirmed from sources.
+9. **CSRF: `ui_csrf` cookie echoed as `X-CSRF-Token` header.** — **Verified.** Source: FE `src/api/client.ts:167-171` (`getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`).
+10. **401 → single refresh via `POST /ui/session/refresh` → retry once; double-401 → terminal logout.** — **Verified.** Source: FE `src/api/client.ts:119-237` (`refreshSession()` posts `/ui/session/refresh`; single in-flight `refreshPromise`; retry; `retryRes.status===401` → `logout("session_expired")`).
+11. **Three FastAPI `detail` shapes (`string` | `[{msg}]` | `{code,...}`) map to stable messages.** — **Verified.** Source: FE `src/api/client.ts: normalizeErrorDetail` (lines 66-102); tests `src/api/client.errorMapping.test.ts`.
+12. **Non-agents get `403` on the queue and the UI silently shows no queue.** — **Verified.** Source: FE `getHelpdeskQueue` uses `silent403: true` (`messaging.ts:1005-1010`); `HelpdeskPage` sets `isAgent = !queueError` (`HelpdeskPage.tsx:83-90,133`).
+13. **Queue rows carry `routing_mode:"helpdesk_bridge"`, `routing_state` ∈ {awaiting_agent, assigned, paused_no_agents_online}, `active_agent_user_id`.** — **Verified.** Source: FE `HelpdeskPage.tsx:23-33,100-103` and `ConversationView.tsx:1476-1490`.
+14. **Helpdesk endpoint calls live in `frontend/src/api/endpoints/helpdesk.ts`.** — **Corrected (false).** No `helpdesk.ts`; the calls are in `src/api/endpoints/messaging.ts` (lines 987-1012). DTOs are not in a helpdesk-specific `types.ts` section.
+15. **Framework choices (Compose UI Test `createAndroidComposeRule`, Turbine, MockWebServer, Robolectric, Paging 3, Hilt `@TestInstallIn`).** — **Unverified-assumption (framework refs).** These are reasonable Android test stack choices but are project conventions, not derivable from the backend/FE sources. Paging 3 is **not applicable** to the queue (claim #2). Framework refs: developer.android.com/jetpack/compose/testing, developer.android.com/training/dependency-injection/hilt-testing.
+
+### Corrections made
+
+- Frontmatter: `status: draft → reviewed`; added `reviewed_on: 2026-06-06`.
+- §1, §5: flagged that **`/metrics`, `/transfer`, assign, and `/agents/me/availability` do not exist**; corrected the queue to a flat `ConversationOut[]` (no `page`/`has_more`); corrected `HelpdeskClaimOut` field names; corrected claim responses to `200`/`422` only (no `409`, idempotent); corrected the endpoint-file location (`messaging.ts`, not `helpdesk.ts`).
+- §5 (errors): annotated the three `detail` shapes as Verified; noted `409` is out-of-contract for claim.
+- §4.1: marked the `HelpdeskMetricsRepositoryTest` snippet as illustrative-only (no metrics endpoint).
+- §6: removed the `asSnapshot` paging assertion (no cursor/pagination); replaced with `limit`/refresh/empty-list assertions.
+- §7: replaced the `409` conflict case with a re-claim **idempotency** test + generic mapper unit test.
+- §8: cited CSRF + 401-refresh as Verified; corrected the CSRF-presence regression to the two real calls (GET queue, POST claim).
+
+### Open assumptions
+
+- **AvailabilitySerial gating (AC-7, §1/§5/§6 FR-3):** no backend/FE contract for a helpdesk availability toggle; if AND-379 ships one it is presumed presence/client-side. Tests for it are conditional and must be re-pointed once AND-379 lands. *Why unverifiable:* not in OAPI or FE.
+- **Metrics dashboard (AND-377, FR-1/FR-2, §6 Room caching):** no `/metrics` endpoint; depends entirely on whether AND-377 ships a client-side count-derivation fallback (R2). *Why unverifiable:* not in OAPI or FE.
+- **Assign/transfer optimistic-update + conflict (AND-378):** no endpoints exist; only **claim** does, and it is idempotent. *Why unverifiable:* not in OAPI or FE.
+- **Analytics events (Q1, §10):** cannot confirm AND-377/378/380 emit any events. *Why unverifiable:* upstream production source not present in this reference set.
+- **Exact `Me.roles` agent taxonomy (Q2):** not derivable from helpdesk OAPI/FE; FE infers agent-ness purely from a non-403 queue response. *Why unverifiable:* no role schema referenced by helpdesk.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit / Robolectric (local, no device); **emu35** = headless AVD `test35` (x86_64, API 35) for fast Compose/instrumented CI; **A15** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a) for hardware-dependent behaviour. This ticket is almost entirely faked-transport + Compose, so the default target is JVM/emu35; A15 is only required where ABI/API-34-vs-35 behaviour is in question (TC-13). No case contacts a real host.
+
+- **TC-AND-381-01 — Queue happy path maps flat array.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: `MockWebServer` up; valid `ui_csrf` cookie. Steps: enqueue `200` with a 3-element `ConversationOut[]` fixture; call `repo.getQueue(groupId, state=null)`. Expected: `ApiResult.Success` with 3 items, `conversation_id`/`routing_state`/`active_agent_user_id` mapped; request line is `GET /messaging/helpdesk/queue?group_id=...&limit=50` (no `page`); `X-CSRF-Token` header present. Traces: AC-1, AC-12.
+- **TC-AND-381-02 — Queue respects `limit` and omits unset `state`.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: server up. Steps: call queue with `limit=200`, no `state`; inspect recorded request. Expected: query has `limit=200`, **no `state` param**, `group_id` present; `limit>200` is clamped/rejected per repo. Traces: AC-1.
+- **TC-AND-381-03 — Non-agent queue 403 is silent / empty.** Type: contract/MockWebServer + ViewModel (JVM). Target: JVM. Preconditions: server up. Steps: enqueue `403 {"detail":{"code":"forbidden","message":"Not an agent"}}`; call queue via VM. Expected: repo returns non-retryable `ApiResult.Error` (httpStatus 403); VM emits `AccessDenied` (or empty/non-error per spec) with **no error toast/banner** (mirrors `silent403`); no further requests. Traces: AC-2, AC-8.
+- **TC-AND-381-04 — Claim happy path returns `HelpdeskClaimOut`.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: server up; agent role. Steps: enqueue `200 {"ok":true,"conversation_id":"cnv_1","state":"assigned","assigned_agent_user_id":"usr_self","assignment_version":3,"idempotent":false}`; call `repo.claim("cnv_1")`. Expected: `ApiResult.Success`; fields `ok/state/assigned_agent_user_id/assignment_version/idempotent` mapped; request is `POST .../cnv_1/claim` with body `{}` and `X-CSRF-Token` set; **no** `assignee_id/queue_id/updated_at` expected. Traces: AC-6 (claim portion), AC-12.
+- **TC-AND-381-05 — Claim idempotency (re-claim).** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: server up. Steps: enqueue a second claim `200` with `idempotent:true` and unchanged `state`/`assigned_agent_user_id`; call claim twice. Expected: second result `idempotent==true`, `assignment_version` non-decreasing, `state` stable; **no 409 handling path exercised**. Traces: AC-6.
+- **TC-AND-381-06 — Claim validation error (422) maps the `[{msg}]` detail shape.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: server up. Steps: enqueue `422 {"detail":[{"msg":"field required","loc":["body","conversation_id"]}]}`; call claim. Expected: `ApiResult.Error` with message "field required", `retryable=false`, httpStatus 422. Traces: AC-3.
+- **TC-AND-381-07 — `DetailErrorMapper` covers all three detail shapes.** Type: unit (JVM). Target: JVM. Preconditions: none. Steps: feed mapper a `string`, an array `[{msg}]`, and an object `{code,message}` (incl. a `{code:"forbidden"}` 403). Expected: string→verbatim; array→joined `.msg`; object→`message`/mapped code; `retryable` = `5xx`/timeout true, `403`/`422` false. (Object-with-`409` is exercised here as a generic mapper case only, NOT as a claim contract.) Traces: AC-3.
+- **TC-AND-381-08 — 401 → single refresh → retry succeeds.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: authenticated session; `ui_csrf` cookie. Steps: enqueue `401`, then `200` for `POST /ui/session/refresh`, then `200` for the retried GET queue. Expected: exactly one refresh; original call succeeds; assert request order via `server.takeRequest()`. Traces: AC-4.
+- **TC-AND-381-09 — Double-401 → terminal auth error, no loop.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: authenticated. Steps: enqueue `401`, refresh `200`, retry `401`. Expected: terminal auth error surfaced, session logout("session_expired") triggered, exactly one refresh attempt, no infinite retry. Traces: AC-4.
+- **TC-AND-381-10 — Timeout on GET queue → retryable error; transient 503→200 retried; claim POST NOT retried.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: harness read/connect timeout shortened (~2s) via `SocketPolicy.NO_RESPONSE`. Steps: (a) NO_RESPONSE on GET → timeout-classified `ApiResult.Error(retryable=true)` within bound; (b) `503` then `200` on GET → success, `requestCount ≤ maxRetries+1`; (c) `500` on `POST claim` → single attempt, `requestCount==1`, no retry. Traces: AC-5.
+- **TC-AND-381-11 — VM state sequence: Loading → Content / Empty / Error(retryable).** Type: ViewModel unit + Turbine (JVM). Target: JVM. Preconditions: fakes. Steps: with agent role, script success (non-empty queue), empty list, and a retryable failure; collect `uiState`. Expected: initial `Loading`; then `Content` (queue rendered), `Empty` (no items, no cache), `Error(retryable=true)` respectively; `refresh()` toggles `isRefreshing` and re-invokes the fetch (`server.requestCount`/fake call-count increments). Traces: AC-1, AC-2, AC-9 (refresh portion).
+- **TC-AND-381-12 — Compose: queue render + row/empty/error/retry + a11y.** Type: Compose-UI / instrumented. Target: emu35. Preconditions: stateless `HelpdeskDashboardContent`/queue composable with hoisted state. Steps: render `Content` with 2 rows, then `Empty`, then `Error`; tap a queue row and "View full queue"; tap retry in `Error`. Expected: correct nodes per state; row tap and "view full queue" emit their callbacks; retry re-invokes `onRetry`; **a11y:** primary actions selectable via `onNodeWithText`/content-description (not only tags), interactive nodes have non-empty descriptions and ≥48dp targets; error banner shows mapped `detail` text from `R.string` (not a literal). Traces: AC-2, AC-9 (callbacks), AC-11.
+- **TC-AND-381-13 — ABI/API parity for the helpdesk suite on real hardware.** Type: instrumented/e2e. **Target: A15 (physical, MUST).** Preconditions: app installed on SM-A156U via adb; fake repository bindings via `@TestInstallIn`. Steps: run the Hilt-backed helpdesk Compose flow (queue render + claim) on arm64/API 34 and compare to the emu35 (x86_64/API 35) run. Expected: identical pass/results; no Moshi-codegen/Compose behaviour divergence across ABI or API level. *Why physical:* this is the only case where arm64-vs-x86 / API-34-vs-35 differences could surface; the rest are deterministic on emu35/JVM. Traces: AC-2, AC-12.
+- **TC-AND-381-14 — CSRF present on both real helpdesk calls; no PII/cookie logging.** Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: `ui_csrf` cookie seeded in the cookie jar. Steps: perform GET queue and POST claim; inspect recorded headers; capture test log output. Expected: `X-CSRF-Token` present on both; cookie/CSRF values and full response bodies are **not** emitted to test logs; fixtures contain only synthetic data. Traces: AC-12.
+- **TC-AND-381-15 — (CONDITIONAL) availability-gates-claim, only if AND-379 ships a gate.** Type: ViewModel unit + Compose-UI. Target: JVM + emu35. Preconditions: AND-379 merged with a real availability/presence gate; fakes expose `available`. Steps: with `available=false`, assert `canClaim=false`, claim control disabled, and `claim()` issues **no** request; flip `available=true` and assert claim proceeds. Expected: gate behaves per the implemented contract. **If AND-379 does not ship a gate, mark this case N/A and document in the PR** (see §16 open assumptions). Traces: AC-7.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|-----------|
+| AC-1 | TC-01, TC-02, TC-11 |
+| AC-2 | TC-03, TC-11, TC-12, TC-13 |
+| AC-3 | TC-06, TC-07 |
+| AC-4 | TC-08, TC-09 |
+| AC-5 | TC-10 |
+| AC-6 | TC-04, TC-05 (claim/idempotency; assign/transfer/409 rollback removed — no contract, see §16) |
+| AC-7 | TC-15 (conditional on AND-379) |
+| AC-8 | TC-03 (non-agent → AccessDenied; metrics-cache-clear is conditional on AND-377 metrics existing) |
+| AC-9 | TC-11 (refresh re-fetch + isRefreshing; second-page append removed — queue is not paged, see §16) |
+| AC-10 | JaCoCo Gradle gate (build config; no single TC — enforced over VMs+repos+mappers per §11) |
+| AC-11 | TC-12, plus shared `HelpdeskFixtures` consumed by TC-01/04 |
+| AC-12 | TC-01, TC-04, TC-13, TC-14 |

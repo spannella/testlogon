@@ -5,7 +5,8 @@ milestone: M8
 epic: E51
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-073]
 blocks: []
 ---
@@ -67,8 +68,12 @@ endpoints. It is sized **M** (UI + navigation + intent-filter wiring + tests).
   shape and the unauthenticated view.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000`
   (plaintext, unreliable; ~20s timeouts, bounded backoff for idempotent GETs
-  only). Public profile metadata served by `GET /ui/profile/meta/{identifier}`.
-  OpenAPI at `/openapi.json`.
+  only). Public profile payload served by `GET /ui/profile/public/{identifier}`
+  (op `get_public_profile_ui_profile_public__identifier__get`). *(Correction:
+  earlier drafts cited `GET /ui/profile/meta/{identifier}`; that endpoint exists
+  but returns only "Lightweight meta tag data for SEO" — it is not the profile
+  payload the screen renders. The web client's `getPublicProfile()` calls
+  `/ui/profile/public/{identifier}`.)* OpenAPI at `/openapi.json`.
 
 ## 3. Functional Requirements
 
@@ -89,10 +94,15 @@ opaque IDs untouched — see Open Question OQ-1). An empty, whitespace-only, or
 syntactically invalid identifier MUST route to the not-found state (reusing
 AND-073's not-found UI), never crash.
 
-FR-4. **Private & missing handling (inherited).** A `403`/private response shows
-the private-profile state and a "Sign in to view" CTA; a `404` shows the
-not-found state. These states are defined in AND-073; AND-390 only adds the CTA
-copy and the unauth-aware sign-in action.
+FR-4. **Private/suppressed & missing handling (inherited).** Per the verified
+contract there is no distinct `403`: the server returns `404` for both missing
+**and** private/suppressed profiles (web error code `not_found_or_suppressed`).
+AND-390 renders AND-073's not-found state for `404` and presents the unauth-aware
+"Sign in to view" CTA there (signing in may reveal a profile that is suppressed
+from anonymous viewers). A `429` shows a rate-limited/retry state. These base
+states are defined in AND-073; AND-390 adds the CTA copy and sign-in action.
+*(Correction: prior text assumed a `403`/private response that the backend does
+not emit for this endpoint.)*
 
 FR-5. **Share action.** A share affordance (overflow menu + visible icon) in the
 public profile top bar MUST launch the system share sheet via `ACTION_SEND`
@@ -270,38 +280,73 @@ intents and an injected `ProfileShareHelper`.
 ## 5. API Contract
 
 AND-390 introduces **no new endpoints** and **no DTO changes**. It consumes the
-existing public-metadata endpoint owned by AND-070 / AND-073:
+existing public-profile endpoint owned by AND-070 / AND-073:
 
-`GET /ui/profile/meta/{identifier}` — idempotent, cacheable, callable
-unauthenticated. Wrapped by `ProfileApi.getProfileMeta(identifier)` returning
-`ApiResult<PublicProfileDto>` (typed result per AND-018). Eligible for the
-bounded-backoff retry policy (AND-016, idempotent GET) and the ~20s OkHttp
-timeout (AND-009).
+`GET /ui/profile/public/{identifier}` — idempotent, cacheable, callable
+unauthenticated (OpenAPI: *"Public profile with social metrics and follow
+status. Auth is optional -- unauthenticated callers get follow fields as
+False."*). Wrapped by `ProfileApi.getPublicProfile(identifier)` returning
+`ApiResult<PublicProfileDto>` (typed result per AND-018; web mirror is
+`getPublicProfile()` → `PublicProfileData` in `src/api/endpoints/profile.ts`).
+Eligible for the bounded-backoff retry policy (AND-016, idempotent GET) and the
+~20s OkHttp timeout (AND-009).
 
-Representative success (`200`) shape (subset; canonical definition in AND-070):
+**Correction:** earlier drafts used `GET /ui/profile/meta/{identifier}` and a
+DTO with `bio`/`avatar_url`/`links`/`is_private`. The authoritative
+`PublicProfileData` shape (web `src/api/types.ts`) has none of those fields. The
+true success (`200`) shape (verified subset) is:
 
 ```json
 {
+  "user_id": "u_123",
   "identifier": "ada",
+  "canonical_identifier": "ada",
   "display_name": "Ada Lovelace",
-  "bio": "Mathematician.",
-  "avatar_url": "https://.../ada.png",
-  "links": [{ "label": "site", "url": "https://example.com" }],
-  "is_private": false
+  "title": "Mathematician",
+  "description": "Analytical engine enthusiast.",
+  "location": "London",
+  "profile_photo_url": "https://.../ada.png",
+  "cover_photo_url": "https://.../cover.png",
+  "follower_count": 0,
+  "following_count": 0,
+  "post_count": 0,
+  "is_following": false,
+  "is_followed_by": false,
+  "is_mutual": false,
+  "has_subscription_plans": false,
+  "created_at": 1700000000,
+  "discoverability": "public"
 }
 ```
 
-Failure shapes (FastAPI `detail`, mapped by AND-015 to `ApiError`):
+Notes on the corrected shape: bio → `description`; avatar → `profile_photo_url`;
+there is a `cover_photo_url`; no `links` array; **no `is_private` boolean** — the
+server folds private/suppressed profiles into the `404` path (see below). Display
+name fallback is `identifier` when `display_name` is blank (per the web page).
 
-- `404` → `{ "detail": "profile_not_found" }` → not-found state (FR-3/FR-4).
-- `403` → `{ "detail": "profile_private" }` → private state + sign-in CTA.
+Failure shapes (verified against OpenAPI + web client error mapping in
+`src/api/endpoints/profile.ts` and `src/pages/profile/PublicUserProfilePage.tsx`):
+
+- `404` → not-found **or suppressed/private** state (FR-3/FR-4). The web client
+  maps `404` to error code `not_found_or_suppressed` with message "Profile not
+  available" — there is **no distinct `403 profile_private` response** in the
+  contract. *(Correction: the prior `403 → profile_private` and the literal
+  `detail` strings `profile_not_found` / `profile_private` are NOT in the sources;
+  privacy is expressed as `404`.)*
+- `429` → rate-limited. Web maps this to code `rate_limited` ("Too many profile
+  lookups…"); honor `Retry-After`. *(Added: previously omitted; it is a real
+  handled case in the web client.)*
+- `422` → `HTTPValidationError` (the only non-200 schema declared in OpenAPI for
+  this path) for a malformed identifier; treat as not-found (FR-3).
 - `401` → MUST NOT occur for this public endpoint; if it does, treat as
   not-found and log a telemetry warning (do **not** trigger the AND-013 refresh
-  authenticator for the public read path).
+  authenticator — `POST /ui/session/refresh` — for the public read path).
 
-Cookies/CSRF: the public read works with **no** session cookie. The persistent
-cookie jar (AND-011) and CSRF header (AND-012) are not required for this call;
-if a session exists it may ride along harmlessly.
+Cookies/CSRF: the public read works with **no** session cookie. The web
+transport (`src/api/client.ts`) uses cookie auth (`credentials: include`) plus a
+CSRF token read from the `ui_csrf` cookie and sent as the `X-CSRF-Token` header;
+neither the persistent cookie jar (AND-011) nor the CSRF header (AND-012) is
+required for this GET. If a session exists it may ride along harmlessly.
 
 ## 6. Data & State Management
 
@@ -310,14 +355,16 @@ ViewModel exposes `StateFlow<PublicProfileUiState>` (from AND-073, extended):
 ```kotlin
 data class PublicProfileUiState(
     val identifier: String,
-    val phase: Phase,                       // Loading | Content | NotFound | Private | Offline
+    val phase: Phase,                       // Loading | Content | NotFound | RateLimited | Offline
     val profile: PublicProfileUi? = null,
     val isAuthenticated: Boolean = false,   // collected from AuthStateStore
     val shareUrl: String? = null,
     val snackbar: SnackbarEvent? = null,    // one-shot copy/share feedback
 )
 
-enum class Phase { Loading, Content, NotFound, Private, Offline }
+// Correction: no Private phase — the backend folds private/suppressed into 404
+// (NotFound). RateLimited added for the verified 429 case.
+enum class Phase { Loading, Content, NotFound, RateLimited, Offline }
 ```
 
 One-shot effects (share intent launch, copy confirmation, navigate-to-login) are
@@ -335,7 +382,7 @@ served from the Room cache if AND-070 populated it; otherwise show Offline).
   only) and AND-009 ~20s timeout. On exhausted retries or no connectivity, show
   the Offline state with a Retry button; do not show login.
 - **No-session path:** Public read explicitly bypasses the AND-013 401-refresh
-  authenticator for `GET /ui/profile/meta/**` so an unauthenticated open never
+  authenticator for `GET /ui/profile/public/**` so an unauthenticated open never
   attempts `POST /ui/session/refresh`.
 - **Share with missing data:** If `display_name` is null (still loading), the
   share affordance is disabled until `Content`; the share URL itself only needs
@@ -350,8 +397,9 @@ served from the Room cache if AND-070 populated it; otherwise show Offline).
   precondition for rendering (FR-1).
 - The share URL contains only the public identifier — no session ids, CSRF
   tokens, or PII beyond what the public profile already exposes.
-- Private profiles (`403`) MUST NOT leak any field beyond the private-state
-  message; the ViewModel discards the body on `403`.
+- Private/suppressed profiles are returned as `404` (no body leakage by design —
+  the server reveals nothing beyond "not available"); the ViewModel treats `404`
+  as NotFound and renders no profile fields.
 - App Link auto-verification (`autoVerify="true"`) prevents arbitrary apps from
   silently claiming `testlogon.com/u/*`; this protects against link hijacking.
   The custom `testlogon://` scheme is unverifiable and is treated as
@@ -384,8 +432,8 @@ facade requires):
 - `public_profile_open` — props: `source` (`app_link` | `custom_scheme` |
   `in_app`), `cold_start` (bool), `authenticated` (bool).
 - `public_profile_share` — props: `method` (`share_sheet` | `copy_link`).
-- `public_profile_result` — props: `phase` (`content`/`not_found`/`private`/
-  `offline`), `latency_ms`.
+- `public_profile_result` — props: `phase` (`content`/`not_found`/
+  `rate_limited`/`offline`), `latency_ms`.
 - `public_profile_signin_cta` — fired on CTA tap.
 
 Logging: deep-link resolution logs at DEBUG (`tag=DeepLink`) the raw vs.
@@ -404,12 +452,13 @@ Unit (`feature-profile`, `app`):
   `https://testlogon.com/x/y`, whitespace) → `Default`/not-found, no throw.
 - TC-4 `ProfileShareHelper.shareUrl` returns
   `https://testlogon.com/u/<id>` even when base URL is the dev host.
-- TC-5 ViewModel: `403` → `Phase.Private`; `404` → `Phase.NotFound`; success →
-  `Phase.Content` with affordances gated by `isAuthenticated`.
+- TC-5 ViewModel: `404` → `Phase.NotFound` (covers missing **and**
+  private/suppressed); `429` → `Phase.RateLimited`; success → `Phase.Content`
+  with affordances gated by `isAuthenticated`.
 
 Repository/contract (MockWebServer, AND-046 harness):
 
-- TC-6 `getProfileMeta` succeeds with **no** cookie jar entry (unauth read);
+- TC-6 `getPublicProfile` succeeds with **no** cookie jar entry (unauth read);
   asserts no `POST /ui/session/refresh` is issued on the public path.
 
 Instrumentation / Compose UI (AND-048-style):
@@ -445,9 +494,15 @@ on the existing emulator job.
 ## 13. Risks & Open Questions
 
 - **OQ-1 Identifier semantics.** Are `/u/:identifier` values usernames (safe to
-  lower-case) or opaque IDs? Current design lower-cases only values matching
-  `USERNAME_RE` and passes others through. Confirm against `profile.ts` /
-  backend routing.
+  lower-case) or opaque IDs? **Partly resolved:** the web client does NOT
+  lower-case client-side — `getProfileByIdentifier` only trims/encodes, and the
+  server returns a `canonical_identifier` on `PublicProfileData`; the web page
+  then `navigate(...replace)`s to `/u/{canonical_identifier}` when it differs
+  (`PublicUserProfilePage.tsx`). **Recommendation/correction:** Android should
+  rely on the server's `canonical_identifier` for normalization rather than the
+  local `USERNAME_RE.lowercase()` heuristic, which risks mismatching an
+  opaque/case-sensitive id. Keep local trim/URL-decode; drop aggressive
+  lower-casing. Confirm with backend whether lookups are case-insensitive.
 - **OQ-2 Canonical host.** Spec assumes the verified App Link host is
   `testlogon.com`. Confirm the production web host and whether `www.` or other
   subdomains must also be claimed (would require additional `<data>` entries +
@@ -473,8 +528,10 @@ AC-2. `testlogon://u/<identifier>` opens the same public profile. *(FR-1; TC-2.)
 AC-3. Malformed/empty identifiers route to the not-found state without crashing.
 *(FR-3; TC-3.)*
 
-AC-4. Private (`403`) and missing (`404`) profiles show their respective states
-with a working "Sign in to view" CTA. *(FR-4; TC-5.)*
+AC-4. Missing and private/suppressed profiles (both returned as `404`) show the
+not-found state with a working "Sign in to view" CTA; a `429` shows a
+rate-limited/retry state. *(FR-4; TC-5.)* *(Corrected: the backend does not emit
+a distinct `403` for private profiles.)*
 
 AC-5. The share sheet emits `ACTION_SEND` with `EXTRA_TEXT ==
 https://testlogon.com/u/<identifier>`; copy-link writes that URL to the
@@ -511,3 +568,251 @@ no blank screen. *(FR-10.)*
 - Lint/detekt/ktlint (AND-005) clean; no new warnings in `feature-profile`/`app`.
 - OQ-1/OQ-2/OQ-3 resolved or explicitly deferred with an owner noted in the PR.
 - PR reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer. Sources:
+**OpenAPI index** = `reference/openapi.index.txt`; **OpenAPI spec** =
+`reference/openapi.pretty.json`; **FE** = `reference/src/...`.
+
+1. **Public-profile payload endpoint is `GET /ui/profile/public/{identifier}`.**
+   VERDICT: Corrected (spec previously said `GET /ui/profile/meta/{identifier}`).
+   SOURCE: OpenAPI `GET /ui/profile/public/{identifier}` (op
+   `get_public_profile_ui_profile_public__identifier__get`); FE
+   `src/api/endpoints/profile.ts: getPublicProfile`.
+
+2. **`GET /ui/profile/meta/{identifier}` is SEO meta tags, not the screen
+   payload.** VERDICT: Verified. SOURCE: OpenAPI spec `/ui/profile/meta/{identifier}`
+   description "Lightweight meta tag data for SEO. No auth required."
+
+3. **The public read is callable unauthenticated.** VERDICT: Verified. SOURCE:
+   OpenAPI spec `/ui/profile/public/{identifier}` description "Auth is optional
+   -- unauthenticated callers get follow fields as False."
+
+4. **Success DTO field names (`user_id`, `display_name`, `description`,
+   `profile_photo_url`, `cover_photo_url`, counts, follow flags,
+   `has_subscription_plans`, `canonical_identifier`, `created_at`,
+   `discoverability`).** VERDICT: Corrected (spec used `bio`/`avatar_url`/`links`/
+   `is_private`, none of which exist). SOURCE: FE `src/api/types.ts:
+   PublicProfileData`.
+
+5. **No distinct `403`/private response; private+missing are both `404`.**
+   VERDICT: Corrected. SOURCE: OpenAPI declares only `200` and `422` for the
+   path; FE `src/api/endpoints/profile.ts: mapProfileLookupError` maps `404` →
+   code `not_found_or_suppressed`; FE `src/pages/profile/PublicUserProfilePage.tsx`
+   handles only `404`/`429`/generic, with no private branch.
+
+6. **`429` rate-limited is a real handled case.** VERDICT: Corrected (added;
+   previously omitted). SOURCE: FE `mapProfileLookupError` (`429` → `rate_limited`)
+   and `PublicUserProfilePage.tsx` (`status === 429` ErrorPage).
+
+7. **`422 HTTPValidationError` is the only declared non-200 schema.** VERDICT:
+   Verified. SOURCE: OpenAPI index line for the path
+   (`resp=200:;422:HTTPValidationError`).
+
+8. **Normalization should defer to server `canonical_identifier` rather than
+   client lower-casing.** VERDICT: Corrected/Recommendation. SOURCE: FE
+   `PublicUserProfilePage.tsx` canonical-redirect effect + `getProfileByIdentifier`
+   (trim/encode only, no lower-case); `PublicProfileData.canonical_identifier`.
+
+9. **Refresh authenticator endpoint is `POST /ui/session/refresh` and must be
+   bypassed for the public read.** VERDICT: Verified. SOURCE: OpenAPI
+   `POST /ui/session/refresh` (op `ui_session_refresh_ui_session_refresh_post`);
+   FE `src/api/client.ts` refresh call to `/ui/session/refresh`.
+
+10. **Web auth transport is cookie-based with CSRF via `ui_csrf` cookie →
+    `X-CSRF-Token` header; not required for this GET.** VERDICT: Verified.
+    SOURCE: FE `src/api/client.ts` (`credentials: "include"`, `getCookie("ui_csrf")`,
+    `headers.set("X-CSRF-Token", csrf)`).
+
+11. **`GET /ui/me` exists for auth state (AND-029 `AuthStateStore`).** VERDICT:
+    Verified. SOURCE: OpenAPI `GET /ui/me` (op `ui_me_ui_me_get`).
+
+12. **Web `/u/:identifier` route renders unauthenticated and gates affordances on
+    auth (follow/message/add-contact shown only when authenticated & not own
+    profile; "Sign in to view more" shown when signed out).** VERDICT: Verified.
+    SOURCE: FE `PublicUserProfilePage.tsx` (`isAuthenticated`, `canUseMemberActions`,
+    signed-out "Sign in" button).
+
+13. **Canonical share URL shape `/u/{identifier}`.** VERDICT: Verified (matches
+    web canonical). SOURCE: FE `PublicUserProfilePage.tsx` Helmet `og:url` /
+    `link rel="canonical"` = `${window.location.origin}/u/${canonicalIdentifier}`.
+
+14. **Native Android share sheet (`ACTION_SEND`) + copy-link are net-new Android
+    affordances.** VERDICT: Unverified-assumption (no web equivalent — web relies
+    on OG meta tags + browser share). Reasonable Android UX; flagged. SOURCE: FE
+    `PublicUserProfilePage.tsx` has no in-app share/copy control.
+
+15. **Android framework choices (App Links `autoVerify`, `singleTask` +
+    `onNewIntent`, Navigation Compose `navDeepLink`, `Intent.createChooser`,
+    `ClipboardManager`).** VERDICT: Unverified-assumption (framework refs, not in
+    repo sources). SOURCE (framework ref):
+    https://developer.android.com/training/app-links ,
+    https://developer.android.com/guide/navigation/navigation-deep-link ,
+    https://developer.android.com/training/sharing/send .
+
+16. **`assetlinks.json` Digital Asset Links published for `testlogon.com`.**
+    VERDICT: Unverified-assumption (backend/web concern; not in provided sources).
+
+17. **Production host is `testlogon.com` (App Link host).** VERDICT:
+    Unverified-assumption. The web reference uses `window.location.origin`
+    (runtime), so the literal host is not pinned in source. SOURCE: FE
+    `PublicUserProfilePage.tsx` (`window.location.origin`).
+
+### Corrections made
+
+- Endpoint `GET /ui/profile/meta/{identifier}` → `GET /ui/profile/public/{identifier}`
+  (§2, §5, §7); wrapper `getProfileMeta` → `getPublicProfile` (§5, §11 TC-6).
+- Success DTO rewritten to the real `PublicProfileData` fields; removed
+  `bio`/`avatar_url`/`links`/`is_private` (§5).
+- Removed the non-existent `403`/private response; private/suppressed folded into
+  `404` (§3 FR-4, §5, §6 `Phase`, §8, §11 TC-5, §14 AC-4, §10 telemetry).
+- Added the verified `429` rate-limited case (§5, §6 `Phase`, §11 TC-5, §14 AC-4,
+  §10 telemetry).
+- Reworked OQ-1 to prefer server `canonical_identifier` over client lower-casing
+  (§13).
+
+### Open assumptions
+
+- **Net-new share/copy UI (claim 14):** no web counterpart to verify against;
+  taken as an Android-native UX decision.
+- **Android framework behaviors (claim 15):** verified only against Android docs,
+  not project sources — labeled framework refs.
+- **`assetlinks.json` publication & production host = `testlogon.com` (claims 16,
+  17):** owned by web/backend; not present in the provided sources. App Link
+  auto-verification (and thus TC-AND-390-07's device verification leg) cannot be
+  asserted from these sources — confirm with the web/backend team (mirrors OQ-2).
+- **FR-7 "report"/"edit" affordances:** the web page exposes follow / message /
+  add-contact (no report/edit on this screen). The Android list of suppressed
+  affordances is broader than the web reference; their existence is owned by other
+  tickets and is unverified here.
+
+## 17. Test Plan
+
+Test targets (per the CI/dev inventory): **JVM** = local JVM/Robolectric, no
+device; **emu35** = headless AVD `test35`, x86_64, Android 15 / API 35;
+**device** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R),
+Android 14 / API 34, arm64-v8a, via adb on the build host. Hardware/OS-edge cases
+prefer **device**.
+
+- **TC-AND-390-01** — Type: unit (JVM). Target: JVM. Preconditions:
+  `DeepLinkResolver` instance. Steps: resolve an `ACTION_VIEW` intent with data
+  `https://testlogon.com/u/Ada`. Expected: returns
+  `StartDestination.PublicProfile("ada")` after trim/decode/normalize (or the
+  server-canonical value once OQ-1 lands). Traces: AC-1, AC-3.
+
+- **TC-AND-390-02** — Type: unit (JVM). Target: JVM. Preconditions: resolver.
+  Steps: resolve `testlogon://u/ada`. Expected:
+  `StartDestination.PublicProfile("ada")`. Traces: AC-2.
+
+- **TC-AND-390-03** — Type: unit (JVM). Target: JVM. Preconditions: resolver.
+  Steps: resolve each of `https://testlogon.com/u/` (empty),
+  `https://testlogon.com/x/y` (wrong prefix), `testlogon://u/%20%20`
+  (whitespace), and a malformed URI. Expected: each yields `Default` (→ launch
+  default / not-found) and never throws. Traces: AC-3.
+
+- **TC-AND-390-04** — Type: unit (JVM). Target: JVM. Preconditions:
+  `ProfileShareHelper` with the Retrofit base URL pointed at the dev host
+  `http://18.222.237.167:8000`. Steps: call `shareUrl("ada")`. Expected: returns
+  `https://testlogon.com/u/ada` (always production host, never the dev base
+  URL). Traces: AC-5.
+
+- **TC-AND-390-05** — Type: unit (JVM/Robolectric). Target: JVM. Preconditions:
+  `PublicProfileViewModel` with a fake `ProfileApi`. Steps: feed (a) a `200`
+  `PublicProfileData`, (b) a `404`, (c) a `429`, (d) a transport failure.
+  Expected: phases `Content` / `NotFound` / `RateLimited` / `Offline`
+  respectively; on `Content`, affordances are gated by `isAuthenticated`. Verify
+  no `bio`/`avatar_url` mapping — uses `description`/`profile_photo_url`. Traces:
+  AC-4, AC-7, AC-10.
+
+- **TC-AND-390-06** — Type: contract/MockWebServer. Target: JVM (AND-046
+  harness). Preconditions: empty cookie jar; MockWebServer enqueues a `200`
+  `PublicProfileData` for `/ui/profile/public/ada`. Steps: call
+  `getPublicProfile("ada")`. Expected: request carries **no** session cookie and
+  **no** `X-CSRF-Token`; succeeds; recorder shows **no** `POST /ui/session/refresh`
+  was issued. Traces: AC-9.
+
+- **TC-AND-390-07** — Type: contract/MockWebServer. Target: JVM. Preconditions:
+  MockWebServer scripted to return `404`, then `429`, then `422`. Steps: call
+  `getPublicProfile` for each. Expected: mapped to `NotFound`, `RateLimited`,
+  and `NotFound` (malformed) respectively; a `401`, if injected, is mapped to
+  NotFound + WARN telemetry and does **not** invoke the refresh authenticator.
+  Traces: AC-4, AC-9.
+
+- **TC-AND-390-08** — Type: instrumented/e2e (deep link, cold start). Target:
+  emu35 (functional) and **device** (must also pass on API 34/arm64 to cover the
+  ABI/API-34-vs-35 difference). Preconditions: signed-out app, process not
+  running. Steps: `adb shell am start -a android.intent.action.VIEW -d
+  "https://testlogon.com/u/ada"` to a freshly killed app. Expected:
+  `PublicProfileScreen` for `ada` renders directly, no login redirect. Traces:
+  AC-1.
+
+- **TC-AND-390-09** — Type: Compose-UI/instrumented. Target: emu35.
+  Preconditions: signed-out app. Steps: open the public profile; tap Share.
+  Expected: Espresso-Intents `intended` captures an `ACTION_SEND` chooser whose
+  inner intent has `type=text/plain` and `EXTRA_TEXT ==
+  https://testlogon.com/u/ada`. Traces: AC-5, AC-6.
+
+- **TC-AND-390-10** — Type: Compose-UI/instrumented. Target: emu35
+  (snackbar path, API 35) **and device** (clipboard-toast suppression on API 34
+  is < 33? No — A15 is API 34 ≥ 33, so OS toast shows and in-app snackbar is
+  suppressed; the < API 33 snackbar path requires an emu API ≤ 32). Steps: tap
+  Copy link. Expected: `ClipboardManager` primary clip == `https://testlogon.com/u/ada`;
+  on the < API 33 emulator the in-app confirmation snackbar shows; on API ≥ 33
+  (emu35 / device) the in-app snackbar is suppressed (no duplicate feedback) and
+  copy still succeeds. Traces: AC-5.
+
+- **TC-AND-390-11** — Type: Compose-UI/instrumented. Target: emu35.
+  Preconditions: run twice with `AuthStateStore` signed-out then signed-in.
+  Steps: render `PublicProfileScreen`. Expected: signed-out hides
+  follow/message/(report/edit) and shows the Sign-in CTA; signed-in shows
+  follow/message per their owning tickets. Traces: AC-7.
+
+- **TC-AND-390-12** — Type: instrumented/e2e (back-stack). Target: emu35 and
+  **device**. Preconditions: cold-start deep link (single destination on the
+  stack). Steps: launch via `ACTION_VIEW` as in TC-08, then press Back. Expected:
+  the activity finishes to the launcher (app exits), not into an empty
+  authenticated graph; a separate in-app navigation to a profile returns to the
+  prior screen on Back. Traces: AC-8.
+
+- **TC-AND-390-13** — Type: manual + instrumented (App Link verification).
+  Target: **device** (MUST — real OS Digital Asset Links fetch needs network and
+  a published `assetlinks.json`; emulators have no reliable internet asset
+  fetch). Preconditions: `assetlinks.json` published for `testlogon.com`; app
+  installed. Steps: `adb shell pm get-app-links com.testlogon.android` and tap a
+  `https://testlogon.com/u/ada` link from a browser/another app. Expected: domain
+  verification state is `verified`; the link opens the app directly without a
+  disambiguation chooser. Traces: AC-1, AC-6. (Open assumption: depends on
+  `assetlinks.json` / production host — see §16 Open assumptions, OQ-2.)
+
+- **TC-AND-390-14** — Type: instrumented (accessibility). Target: emu35.
+  Preconditions: TalkBack enabled (or `AccessibilityChecks` in Espresso).
+  Steps: traverse the loading shimmer, then the loaded content, then the
+  not-found state. Expected: share/copy controls expose
+  `contentDescription` (`cd_share_profile`, `cd_copy_link`) with ≥48dp targets;
+  shimmer placeholders are excluded from TalkBack order once content loads; focus
+  moves to the Sign-in CTA on the not-found state; layout passes in RTL with the
+  share URL LTR-isolated. Traces: AC-4, AC-7, AC-10.
+
+- **TC-AND-390-15** — Type: integration (flaky-host/offline). Target: emu35
+  (airplane mode / network shaping) — JVM/MockWebServer covers timeout logic in
+  TC-07; this validates real UI. Preconditions: device offline or dev host
+  unreachable. Steps: open a public profile. Expected: after bounded backoff
+  (AND-016) / ~20s timeout (AND-009) the `Offline` state with a Retry button is
+  shown — **never** a login redirect; Retry re-issues the GET. Traces: AC-1,
+  AC-10.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1  | TC-AND-390-01, TC-AND-390-08, TC-AND-390-13, TC-AND-390-15 |
+| AC-2  | TC-AND-390-02 |
+| AC-3  | TC-AND-390-01, TC-AND-390-03 |
+| AC-4  | TC-AND-390-05, TC-AND-390-07, TC-AND-390-14 |
+| AC-5  | TC-AND-390-04, TC-AND-390-09, TC-AND-390-10 |
+| AC-6  | TC-AND-390-09, TC-AND-390-13 |
+| AC-7  | TC-AND-390-05, TC-AND-390-11, TC-AND-390-14 |
+| AC-8  | TC-AND-390-12 |
+| AC-9  | TC-AND-390-06, TC-AND-390-07 |
+| AC-10 | TC-AND-390-05, TC-AND-390-14, TC-AND-390-15 |

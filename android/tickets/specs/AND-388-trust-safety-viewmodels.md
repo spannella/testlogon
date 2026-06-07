@@ -5,7 +5,8 @@ milestone: M8
 epic: E50
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-382]
 blocks: []
 ---
@@ -65,9 +66,13 @@ the single, testable choke point for all of them.
 - **Sibling features whose state this ticket owns:**
   - **AND-383 (Report flows):** report user / content / message with reasons; ties to
     AND-163 (report message/conversation). `ReportViewModel` lives here.
-  - **AND-384 (DMCA submit):** `dmca.ts` takedown submission. `DmcaViewModel` lives here.
-  - **AND-385 (Privacy / data export):** `/ui/privacy/account-deletion/export(+download)`
-    and a requests list. `PrivacyExportViewModel` lives here.
+  - **AND-384 (DMCA submit):** `dmca.ts` takedown submission via `POST /v1/dmca/claims`
+    (CORRECTED: not `POST /ui/dmca` — see §5). `DmcaViewModel` lives here.
+  - **AND-385 (Privacy / data export):** `POST /ui/privacy/account-deletion/export` (create),
+    `GET .../export/{request_id}` (status), `GET .../export/{request_id}/download` (path
+    segment, not a `?id=` query). The user's request *list* is the account-deletion requests
+    list `GET /ui/privacy/account-deletion/requests` (`AccountDeletionListResp`); there is no
+    list-of-exports GET. `PrivacyExportViewModel` lives here.
 - **Web reference:** `frontend/src/api/endpoints/blocking.ts`, `dmca.ts`, the report
   endpoints, and the privacy export endpoints under `frontend/src/api/endpoints/*.ts`;
   shared types in `frontend/src/api/types.ts`. Confirm exact paths against `/openapi.json`
@@ -75,9 +80,14 @@ the single, testable choke point for all of them.
 - **Backend:** FastAPI + DynamoDB; dev host `http://18.222.237.167:8000` (plaintext HTTP,
   unreliable). Design for ~20s timeouts; bounded backoff retry applies to idempotent GETs
   only (e.g. the export requests list) — never to the mutating POSTs in this ticket.
-- **Auth:** cookie-based session; all calls ride the persistent cookie jar and send
-  `X-CSRF-Token` on mutating verbs; a single `POST /ui/session/refresh` on 401 then retry,
-  handled transparently in `core-network`.
+- **Auth:** cookie-based session; all calls ride the persistent cookie jar. CORRECTED: the
+  web client (`src/api/client.ts`) sends `X-CSRF-Token` (value of the `ui_csrf` cookie) on
+  **every** request whenever that cookie is present — not only on mutating verbs — and also
+  attaches a `Bearer` `Authorization` header when an access token is in the auth store. On a
+  401, exactly one `POST /ui/session/refresh` is attempted (deduped via a shared promise) then
+  the original request is retried once; a second 401 logs out. Handled transparently in
+  `core-network`; the Android port may scope CSRF to mutating verbs as a hardening choice but
+  must not assume the backend requires that scoping.
 - **Conventions referenced:** `MainDispatcherRule` and Turbine from `core-testing`;
   `UiText` from `core-ui`; injected `@IoDispatcher CoroutineDispatcher`.
 
@@ -115,8 +125,11 @@ FR-6. Submitting a report requires a selected reason; submission flows through t
 confirmation. For a user/message report the ViewModel optionally offers "also block this user",
 which, if checked, issues a block via `BlockActionDelegate` after the report succeeds.
 
-FR-7. Reports are effectively idempotent to the user: a duplicate-report rejection from the
-backend (e.g. `already_reported`) is surfaced as a benign "Already reported" confirmation,
+FR-7. Reports are effectively idempotent to the user. CORRECTED: the backend does **not**
+reject duplicates with a 409 `already_reported`; instead `POST /moderation/reports` (and the
+canonical `POST /v1/moderation/reports`) returns **200** with `status: "deduplicated"` (vs
+`"submitted"`) in the `CreateModerationReportOut` body. The ViewModel maps
+`status == "deduplicated"` to the benign "Already reported" confirmation (treated as success),
 not a hard error.
 
 **DMCA (AND-384)**
@@ -248,13 +261,14 @@ class ReportViewModel @Inject constructor(
         submitJob?.cancel()
         submitJob = viewModelScope.launch(io) {
             when (val r = reportRepository.submit(draft)) {
+                // CORRECTED: dedup is signalled by status=="deduplicated" in a 200 body
+                // (CreateModerationReportOut), NOT a 409 error code. Both submitted and
+                // deduplicated are benign successes.
                 is ApiResult.Success -> {
                     if (_state.value.alsoBlock) blocking.block(draft.target.userId)
-                    guard.onSuccess()
+                    guard.onSuccess()  // r.value.status is "submitted" | "deduplicated"
                 }
-                is ApiResult.Failure ->
-                    if (r.error.code == "already_reported") guard.onSuccess()
-                    else guard.onFailure(r.error.toUiText())
+                is ApiResult.Failure -> guard.onFailure(r.error.toUiText())
             }
             syncGuard()
         }
@@ -295,56 +309,109 @@ This is a state ticket; it defines **no new endpoints**. It consumes repositorie
 existing endpoints. Authoritative shapes are the web `frontend/src/api/endpoints/*.ts` files
 and `/openapi.json`; confirm before implementation.
 
-**Block / unblock (AND-382, reused):**
-`POST /ui/users/{id}/block` and `DELETE /ui/users/{id}/block` (or the path established by
-AND-382 / `blocking.ts`). Idempotent from the user's perspective per AND-382.
+> NOTE (review, 2026-06-06): the original draft's endpoint paths and shapes below were largely
+> wrong. They have been CORRECTED against the OpenAPI index/spec and the web client
+> (`src/api/endpoints/*.ts`, `src/api/types.ts`). See §16 for the per-claim audit.
 
-**Report (AND-383, ties to AND-163):** `POST /ui/reports` with body:
+**Block / unblock (AND-382, reused):** CORRECTED.
+`POST /ui/social/block` with body `{ "target_user_id": "...", "reason"?: "..." }` and
+`POST /ui/social/unblock` with body `{ "target_user_id": "..." }`. NOTE: unblock is a **POST**
+to a separate path, **not** a `DELETE`, and the target is in the **body**, not a path segment.
+Both return `BlockActionResponse { "ok": bool, "status": "blocked" | "unblocked",
+"target_user_id": "..." }`. Block status is `GET /ui/social/block-status/{target_user_id}` →
+`{ "is_blocked_by_me": bool, "is_blocking_me": bool }`; blocked list is
+`GET /ui/social/blocked`. Idempotent from the user's perspective per AND-382. (Source:
+OpenAPI `POST /ui/social/block`, `POST /ui/social/unblock`; `src/api/endpoints/blocking.ts`.)
 
-```json
-{
-  "target_type": "user | content | message",
-  "target_id": "usr_… | post_… | msg_…",
-  "reason": "harassment",
-  "detail": "optional free text"
-}
-```
-
-→ 201:
-
-```json
-{ "id": "rpt_01HF…", "status": "received", "created_at": "2026-06-05T14:21:09Z" }
-```
-
-Duplicate → 409 `{ "detail": { "code": "already_reported" } }` (treated as benign, FR-7).
-Reason list: `GET /ui/reports/reasons` → `[{ "key": "harassment", "label": "Harassment" }, …]`
-(if absent, fall back to a static `core-model` enum — see R1).
-
-**DMCA (AND-384):** `POST /ui/dmca` (per `dmca.ts`) with body:
-
-```json
-{
-  "claimant_name": "…",
-  "contact_email": "…",
-  "infringing_url": "https://…",
-  "original_work": "description …",
-  "good_faith_ack": true
-}
-```
-
-→ 201 `{ "id": "dmca_01HF…", "status": "submitted" }`.
-
-**Privacy / data export (AND-385):**
-- `GET /ui/privacy/account-deletion/export` → list of requests:
+**Report (AND-383, ties to AND-163):** CORRECTED. There is **no** `POST /ui/reports`.
+- Content/user/profile reports: the web client calls `POST /moderation/reports` (compat
+  alias of canonical `POST /v1/moderation/reports`) with `CreateModerationReportIn`:
   ```json
-  [{ "id": "exp_01HF…", "status": "pending|processing|ready|expired", "requested_at": "…", "expires_at": "…" }]
+  {
+    "content_type": "feed_post | feed_comment | feed_media | message | message_media | profile_photo",
+    "content_id": "...",
+    "topics": ["spam"],
+    "reason_text": "free text, 5..2000 chars",
+    "post_id": "...", "comment_id": "...", "media_index": 0,
+    "conversation_id": "...", "message_id": "...", "profile_user_id": "..."
+  }
   ```
-- `POST /ui/privacy/account-deletion/export` → creates a request, returns the new item.
-- `GET /ui/privacy/account-deletion/export/download?id=exp_…` (the `+download` path) → a
-  short-lived download URL/token for a `ready` request.
+  Required: `content_type`, `content_id`, `topics` (1..5 of e.g. `sexual | extortion |
+  criminal | spam | racist`), `reason_text`. → **200** `CreateModerationReportOut`:
+  ```json
+  { "ok": true, "report_id": "...", "ticket_id": "...",
+    "status": "submitted | deduplicated", "created_at": 1717593669 }
+  ```
+  (`created_at` is an epoch **integer**, not an ISO string.) Duplicate handling is the
+  `"deduplicated"` status, NOT a 409 — see FR-7.
+- Message/conversation report: `POST /messaging/conversations/{conversation_id}/messages/
+  {message_id}/report` with `ReportMessageReq { "reason_code": "...", "statement": "..." }`
+  → `ReportMessageResp { "ok", "report_id", "conversation_id", "message_id", "reason_code",
+  "status": "submitted", "created_at": <int> }`. Its error responses use
+  `MessageControlsErrorOut { "detail": string, "error_code"?: string|null }` on
+  401/403/404/422/429.
 
-All mutating calls carry session cookies + `X-CSRF-Token`; a 401 triggers one
-`POST /ui/session/refresh` then a single retry in `core-network`, transparent to these
+  Reason list: **there is no `GET /ui/reports/reasons` endpoint** (verified absent). The
+  reason taxonomy is the fixed `topics` enum above for moderation reports and a static
+  `reason_code` for message reports. CORRECTED: implement the static `ReportReason`/topic
+  enum in `core-model` (R2's "fallback" is in fact the only path).
+
+**DMCA (AND-384):** CORRECTED. `POST /v1/dmca/claims` (NOT `POST /ui/dmca`) with `DmcaClaimIn`:
+```json
+{
+  "claimant_name": "...",
+  "claimant_email": "...",
+  "claimant_address": "...",
+  "claimant_phone": "optional",
+  "content_url": "https://...",
+  "content_type": "feed_post | feed_media | message_media | video | other",
+  "content_id": "optional",
+  "original_work_description": "...",
+  "sworn_statement": true,
+  "good_faith_belief": true,
+  "signature": "typed name"
+}
+```
+NOTE the field names: `claimant_email` (not `contact_email`), `content_url` (not
+`infringing_url`), `original_work_description` (not `original_work`), and **two** boolean
+acknowledgements `sworn_statement` AND `good_faith_belief` plus a `signature` string (not a
+single `good_faith_ack`). → **201** `DmcaClaimCreateOut`:
+```json
+{ "ok": true, "claim_id": "...", "status": "...", "content_removed": false,
+  "strike_number": 1, "created_at": 1717593669 }
+```
+The returned id is `claim_id` (not `id`). (Source: `src/api/endpoints/dmca.ts: submitDmcaClaim`;
+OpenAPI `POST /v1/dmca/claims`, schema `DmcaClaimIn` / `DmcaClaimCreateOut`.)
+
+**Privacy / data export (AND-385):** CORRECTED.
+- Create: `POST /ui/privacy/account-deletion/export` with `PrivacyExportRequestIn`
+  `{ "categories": { "<name>": true, ... } }` (a string→bool map — there is no empty/implicit
+  body) → **201** `PrivacyExportStatusOut`.
+- Status of one export: `GET /ui/privacy/account-deletion/export/{request_id}` →
+  `PrivacyExportStatusOut`:
+  ```json
+  { "request_id": "...", "status": "<string>", "created_at": 1717593669,
+    "completed_at": null, "download_url": null, "download_expires_at": null,
+    "categories_requested": 3, "file_size_bytes": null, "data": null }
+  ```
+  `status` is a free-form **string** (the draft's `pending|processing|ready|expired` enum and
+  `READY` constant are unverified assumptions — see §16). Readiness is determined by a
+  non-null `download_url`. `created_at`/`completed_at`/`download_expires_at` are epoch
+  **integers**, not ISO-8601 strings (this contradicts §9's "stay ISO-8601" note — see §16).
+- Download: `GET /ui/privacy/account-deletion/export/{request_id}/download` — the `request_id`
+  is a **path segment**, NOT a `?id=` query param.
+- Requests **list**: CORRECTED — there is no list-of-exports GET. The user's requests list is
+  `GET /ui/privacy/account-deletion/requests` → `AccountDeletionListResp
+  { "requests": AccountDeletionStatus[], "total": <int> }` (account-deletion requests). A
+  parallel general data-request surface also exists: `GET /ui/privacy/requests`
+  (`DataRequestListResp`) with `POST /ui/privacy/export` (`ExportRequestIn` → `DataRequestOut`).
+  Pick one list source per product decision (R3); the spec assumes the account-deletion list.
+  (Source: `src/api/endpoints/accountDeletion.ts`, `src/api/endpoints/privacy.ts`;
+  `src/api/types.ts: PrivacyExportStatus`, `AccountDeletionListResp`.)
+
+All calls carry session cookies; the web client also echoes `X-CSRF-Token` (the `ui_csrf`
+cookie) on every request (see §2 correction) and may carry a `Bearer` token. A 401 triggers
+one `POST /ui/session/refresh` then a single retry in `core-network`, transparent to these
 ViewModels (they observe only the final `ApiResult`). POSTs are never auto-retried by the
 backoff layer.
 
@@ -382,7 +449,12 @@ data class PrivacyExportUiState(
 ```
 
 `ReportTarget`, `ReportReason`, `ReportDraft`, `DmcaForm`, `ExportRequest`, and `BlockAction`
-are `core-model` types (DMCA/report/export DTOs are added by the respective feature tickets;
+are `core-model` types. NOTE (review): the backend `PrivacyExportStatusOut.status` is a
+free-form string, so `ExportRequest` should carry the raw status string and derive a `READY`
+predicate from a non-null `download_url` (rather than matching a brittle status literal — see
+§5/§16). DMCA's acknowledgement maps to **two** booleans + a signature (`sworn_statement`,
+`good_faith_belief`, `signature`), so `DmcaForm.isValid` must require both flags and a non-blank
+signature. These (DMCA/report/export DTOs are added by the respective feature tickets;
 where they do not yet exist, minimal models are introduced here and back-filled). Derived
 fields (`canSubmit`) are computed, not stored, so they cannot drift.
 
@@ -407,8 +479,10 @@ The reducers map as follows:
 - **Validation (local):** missing reason (FR-5), missing acknowledgement (FR-2), invalid DMCA
   fields (FR-8), or download of a non-`READY` request (FR-12) are rejected before any network
   call, with a `banner`, leaving the guard in `Confirming`/`Idle` as appropriate.
-- **Duplicate / benign conflicts:** `already_reported` (409) and re-blocking an already-blocked
-  user are mapped to success (`onSuccess`), per FR-6/FR-7 and AND-382's idempotency rule.
+- **Duplicate / benign conflicts:** CORRECTED — a duplicate report is the **200**
+  `status == "deduplicated"` response (not a 409 `already_reported`), and re-blocking an
+  already-blocked user (200 `BlockActionResponse`) are both mapped to success (`onSuccess`),
+  per FR-6/FR-7 and AND-382's idempotency rule.
 - **Re-entrancy:** `confirm()` returns `null` while already `Submitting` (FR-4), so a
   double-tap cannot create two reports/filings; `submitJob` is cancelled-then-relaunched only
   on a fresh confirm. List `refresh()` cancels the prior load job.
@@ -449,7 +523,11 @@ backend list where available (already localized server-side) and otherwise map t
 (e.g. "This can't be undone") is supplied by the host screen from string resources; the
 ViewModel only signals the phase. The acknowledgement requirement (FR-2) maps to a labelled,
 focusable checkbox in the UI. No locale-specific date formatting occurs in the ViewModel —
-`requested_at` / `expires_at` stay ISO-8601 in state for the Composable to format. RTL
+`created_at` / `download_expires_at` stay in their wire form in state for the Composable to
+format. CORRECTED: these are **epoch-second integers** in the backend
+(`PrivacyExportStatusOut`, `created_at`/`completed_at`/`download_expires_at`), not ISO-8601
+strings as the original draft assumed; the ViewModel carries the raw `Long` and the Composable
+applies locale formatting. RTL
 readiness is unaffected (no directional logic here).
 
 ## 10. Telemetry & Logging
@@ -535,12 +613,20 @@ cancellation-safety (a second refresh cancels the first) per FR-13/FR-14.
   interfaces + `core-model` types here against `frontend/src/api/endpoints/*.ts` and
   `/openapi.json`, and back-fill to the owning tickets; keep the ViewModel↔repository seam
   stable so the feature tickets can swap implementations without ViewModel changes.
-- **R2 — Report reason source:** `GET /ui/reports/reasons` is assumed; if the backend has no
-  such endpoint, fall back to a static `ReportReason` enum in `core-model`. Verify against
-  `/openapi.json`.
-- **R3 — Exact paths:** block/report/DMCA/export paths must be confirmed against
-  `/openapi.json` where the web client and OpenAPI disagree (per project convention). The
-  privacy `+download` path shape (query param vs path segment) in particular needs confirming.
+- **R2 — Report reason source:** RESOLVED (review): there is **no** `GET /ui/reports/reasons`
+  endpoint. Ship a static `ReportReason`/topic enum in `core-model`. Moderation reports use a
+  fixed `topics` enum (`sexual | extortion | criminal | spam | racist`) plus free `reason_text`;
+  message reports use a `reason_code` string. (Source: OpenAPI — no reasons path;
+  `CreateModerationReportIn.topics`; `src/api/types.ts: ReportMessageReq`.)
+- **R3 — Exact paths:** RESOLVED (review). Confirmed paths: block `POST /ui/social/block`,
+  unblock `POST /ui/social/unblock` (POST+body, not DELETE+path); report `POST /moderation/reports`
+  (or `POST /v1/moderation/reports`) and message report `POST /messaging/conversations/{cid}/
+  messages/{mid}/report`; DMCA `POST /v1/dmca/claims`; export create `POST /ui/privacy/
+  account-deletion/export`, status `GET .../export/{request_id}`, download
+  `GET .../export/{request_id}/download`. The `+download` path is a **path segment**, not a
+  `?id=` query. Open sub-question: whether the requests list should be the account-deletion
+  list (`GET /ui/privacy/account-deletion/requests`) or the general data-request list
+  (`GET /ui/privacy/requests`) — product to decide; spec assumes the former.
 - **R4 — Acknowledgement scope:** product/legal must confirm which actions require the FR-2
   acknowledgement. Current default: DMCA and account-deletion export require it; report and
   block use plain confirmation. Adjust the guard's `requiresAcknowledgement` flag accordingly.
@@ -567,8 +653,8 @@ AC-5. Unit tests cover every scenario in §11, run on a `TestDispatcher` with no
 and pass deterministically; line coverage ≥ 90% on the ViewModels, 100% on the guard.
 
 AC-6. Submission timeouts move the guard to `Failed` and are **never** auto-retried; the
-export list GET is the only retry-eligible call; `already_reported`/re-block are benign —
-each proven by a test.
+export-status/requests GET is the only retry-eligible call; report `status=="deduplicated"`
+(CORRECTED from `already_reported`) and re-block are benign — each proven by a test.
 
 AC-7. No PII (report detail, DMCA fields, emails, export contents/download URLs) is logged at
 INFO+ or persisted by this layer; `SavedStateHandle` holds only non-sensitive inputs —
@@ -590,3 +676,229 @@ verified by review against §8/§10.
   screens wire to these ViewModels without modification.
 - Spec references to AND-382, AND-383, AND-384, AND-385, and AND-163 remain consistent with the
   backlog; any deviations (R1/R2/R3/R4 resolutions) recorded back into the depended-on tickets.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its VERDICT, and an exact source pointer. Sources are the backend
+OpenAPI (`METHOD /path` and/or `components.schemas.<Name>`) and the web client under
+`src/api/...`. "framework ref" tags Android-platform claims.
+
+1. **Block uses `POST /ui/social/block` + body `{target_user_id, reason?}`** — Corrected (draft
+   said `POST /ui/users/{id}/block`). Source: OpenAPI `POST /ui/social/block` (`req=BlockRequest`,
+   `resp=200:BlockActionResponse`); `src/api/endpoints/blocking.ts: blockUser`; schema
+   `BlockRequest` (`target_user_id` required, `reason` ≤500).
+2. **Unblock is `POST /ui/social/unblock` + body `{target_user_id}` (POST, not DELETE; no path
+   id)** — Corrected (draft said `DELETE /ui/users/{id}/block`). Source: OpenAPI
+   `POST /ui/social/unblock` (`req=UnblockRequest`); `src/api/endpoints/blocking.ts: unblockUser`.
+3. **Block/unblock response is `BlockActionResponse {ok, status: "blocked"|"unblocked",
+   target_user_id}`** — Verified. Source: `src/api/types.ts: BlockActionResponse`; OpenAPI
+   schema `BlockActionResponse`.
+4. **Report endpoint is `POST /moderation/reports` (web) / `POST /v1/moderation/reports`
+   (canonical), NOT `POST /ui/reports`** — Corrected. Source: `src/api/endpoints/moderation.ts:
+   createModerationReport`; OpenAPI `POST /moderation/reports`, `POST /v1/moderation/reports`
+   (both `req=CreateModerationReportIn`).
+5. **Report request body is `CreateModerationReportIn {content_type(enum), content_id,
+   topics[1..5], reason_text, post_id?, comment_id?, media_index?, conversation_id?, message_id?,
+   profile_user_id?}` — NOT `{target_type, target_id, reason, detail}`** — Corrected. Source:
+   OpenAPI schema `CreateModerationReportIn` (required: content_type, content_id, topics,
+   reason_text); `src/api/endpoints/moderation.ts: CreateModerationReportReq`.
+6. **Report success response is `CreateModerationReportOut {ok, report_id, ticket_id,
+   status: "submitted"|"deduplicated", created_at:int}` (HTTP 200)** — Corrected (draft said
+   201 with `{id, status:"received", created_at: ISO}`). Source: OpenAPI schema
+   `CreateModerationReportOut`; `resp=200:CreateModerationReportOut`.
+7. **Duplicate report is the 200 `status=="deduplicated"`, NOT a 409 `already_reported`** —
+   Corrected. Source: OpenAPI `CreateModerationReportOut.status` enum `["submitted",
+   "deduplicated"]`; no `already_reported` token exists in the spec.
+8. **`GET /ui/reports/reasons` does not exist; reasons are a static topics enum
+   (`sexual|extortion|criminal|spam|racist`) + free `reason_text`** — Corrected (draft assumed
+   the endpoint with static fallback). Source: OpenAPI index has no `reports/reasons` path;
+   `src/api/endpoints/moderation.ts: listModerationTickets` topic param enumerates the topics.
+9. **Message/conversation report is `POST /messaging/conversations/{cid}/messages/{mid}/report`
+   with `ReportMessageReq {reason_code, statement}` → `ReportMessageResp {..., status:
+   "submitted", created_at:int}`; errors use `MessageControlsErrorOut {detail, error_code?}`** —
+   Verified. Source: OpenAPI `POST /messaging/conversations/{conversation_id}/messages/
+   {message_id}/report` (`req=ReportMessageIn`, error responses `MessageControlsErrorOut`);
+   `src/api/types.ts: ReportMessageReq/ReportMessageResp`.
+10. **DMCA endpoint is `POST /v1/dmca/claims`, NOT `POST /ui/dmca`** — Corrected. Source:
+    OpenAPI `POST /v1/dmca/claims` (`req=DmcaClaimIn`, `resp=201:DmcaClaimCreateOut`);
+    `src/api/endpoints/dmca.ts: submitDmcaClaim`.
+11. **DMCA body field names are `claimant_email`, `content_url`, `original_work_description`,
+    and TWO acks `sworn_statement`+`good_faith_belief` plus `signature` (plus `claimant_address`,
+    `content_type` enum) — NOT `contact_email`/`infringing_url`/`original_work`/single
+    `good_faith_ack`** — Corrected. Source: `src/api/endpoints/dmca.ts: DmcaClaimIn`.
+12. **DMCA success returns `DmcaClaimCreateOut {ok, claim_id, status, content_removed,
+    strike_number, created_at:int}` — id is `claim_id`, not `id`** — Corrected. Source:
+    `src/api/endpoints/dmca.ts: DmcaClaimCreateOut`; OpenAPI schema `DmcaClaimCreateOut`.
+13. **Export create is `POST /ui/privacy/account-deletion/export` with `PrivacyExportRequestIn
+    {categories: {string: bool}}`** — Corrected (draft implied an empty/implicit body and used
+    the path as a list GET). Source: OpenAPI `POST /ui/privacy/account-deletion/export`
+    (`req=PrivacyExportRequestIn`); schema `PrivacyExportRequestIn`;
+    `src/api/endpoints/accountDeletion.ts: requestPrivacyExport`.
+14. **Export status is `GET /ui/privacy/account-deletion/export/{request_id}` →
+    `PrivacyExportStatusOut`; there is NO list-of-exports GET. The requests list is
+    `GET /ui/privacy/account-deletion/requests` → `AccountDeletionListResp {requests[], total}`**
+    — Corrected (draft used `GET .../export` as the list). Source: OpenAPI
+    `GET /ui/privacy/account-deletion/export/{request_id}`,
+    `GET /ui/privacy/account-deletion/requests`; `src/api/endpoints/accountDeletion.ts:
+    getPrivacyExport, listAccountDeletions`.
+15. **Export download is the path `GET /ui/privacy/account-deletion/export/{request_id}/download`
+    (path segment), NOT `?id=` query** — Corrected. Source: OpenAPI
+    `GET /ui/privacy/account-deletion/export/{request_id}/download`;
+    `src/api/endpoints/accountDeletion.ts: privacyExportDownloadUrl`.
+16. **`PrivacyExportStatusOut.status` is a free-form string; readiness derives from non-null
+    `download_url`** — Corrected (draft hard-coded `pending|processing|ready|expired` and a
+    `READY` literal). Source: OpenAPI schema `PrivacyExportStatusOut.status` (plain string, no
+    enum) + `download_url`; `src/api/types.ts: PrivacyExportStatus`.
+17. **`created_at`/`completed_at`/`download_expires_at` are epoch-second integers, not ISO-8601
+    strings** — Corrected (§9 said ISO-8601). Source: OpenAPI schema `PrivacyExportStatusOut`
+    (those fields typed `integer`); `src/api/types.ts: PrivacyExportStatus` (`number`).
+18. **Auth: cookie session + `X-CSRF-Token` (value of `ui_csrf` cookie) sent on every request,
+    not only mutating verbs; optional `Bearer` token also attached** — Corrected (draft said
+    "mutating verbs" only). Source: `src/api/client.ts` (CSRF set whenever `ui_csrf` present;
+    `Authorization: Bearer` from auth store; `credentials: "include"`).
+19. **On 401: a single `POST /ui/session/refresh` (deduped) then one retry; second 401 logs
+    out** — Verified. Source: `src/api/client.ts: refreshSession` + the 401 branch; OpenAPI
+    `POST /ui/session/refresh`.
+20. **`IrreversibleActionGuard` four-phase machine, re-entrancy guard, ack requirement** —
+    Unverified-assumption (an Android-side design construct with no backend/web counterpart).
+    It is internally consistent and unit-testable; no external source to cite.
+21. **Hilt `@HiltViewModel` + `StateFlow`/`SavedStateHandle`/injected `@IoDispatcher`** —
+    Verified as framework usage (framework ref:
+    https://developer.android.com/topic/libraries/architecture/viewmodel and
+    https://dagger.dev/hilt/view-model). Pattern correctness is a platform convention, not a
+    backend claim.
+22. **Backoff retry restricted to idempotent GETs; POSTs never auto-retried** —
+    Unverified-assumption (Android `core-network` policy; not expressed in OpenAPI). Reasonable
+    and consistent with the duplicate-submission concern; flagged as a local design decision.
+
+### Corrections made
+
+- Block/unblock paths and verbs (claims 1–2): `/ui/social/block` + `/ui/social/unblock` (POST
+  with body), replacing the invented `/ui/users/{id}/block` GET/DELETE shape.
+- Report endpoint, request body, response, and duplicate semantics (claims 4–8): real path
+  `/moderation/reports`, `CreateModerationReportIn` (`topics[]` + `reason_text`),
+  `CreateModerationReportOut` (200, `status` incl. `deduplicated`). Removed the 409
+  `already_reported` mechanism from §3 FR-7, §4.2 code, §7, AC-6.
+- Message-report endpoint and error shape documented (claim 9).
+- DMCA path, body field names, dual acknowledgements, and `claim_id` response (claims 10–12).
+- Privacy export create body, status path, requests-list source, download path-segment, status
+  as free string, and epoch-integer timestamps (claims 13–17); reconciled §6 and §9.
+- Auth/CSRF scope (claim 18): CSRF on all requests, plus optional Bearer.
+- `R2`/`R3` resolved in §13 from authoritative sources.
+
+### Open assumptions
+
+- The `IrreversibleActionGuard` and its acknowledgement model (claim 20) are Android-only
+  inventions; "which actions require acknowledgement" (R4) remains a product/legal decision.
+- The retry policy "GETs only, never POSTs" (claim 22) is a `core-network` design choice; the
+  backend does not declare idempotency, so this cannot be verified against a source.
+- Whether the requests list should read account-deletion requests vs the general
+  `/ui/privacy/requests` data-request surface (R3 sub-question) — product decision; both exist.
+- Export `status` string vocabulary is not enumerated by the backend; any UI mapping beyond
+  "download_url present ⇒ ready" is an assumption pending observed values from the dev host.
+- The web client's `requestPrivacyExport` posts a `categories` map; the exact category keys are
+  not enumerated in the spec/types and must be confirmed against a live response.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = JVM unit/Robolectric (local, no device); **Emu35** = headless
+emulator AVD `test35` (x86_64, API 35) in CI; **Device** = physical Samsung Galaxy A15 5G
+(SM-A156U, API 34, arm64-v8a). This ticket is a pure JVM state layer, so the substance runs on
+JVM; a few instrumented/UI cases are listed for the host screens and explicitly note device vs
+emulator. MockWebServer "contract" cases assert the wire shapes corrected in §5/§16.
+
+- **TC-AND-388-01** — Type: unit (JVM). Target: `IrreversibleActionGuardTest`. Preconditions:
+  guard with `requiresAcknowledgement=false`. Steps: `request(a)`; assert `Confirming(a)`; call
+  `confirm()`. Expected: returns `a`, phase → `Submitting(a)`; calling `confirm()` from `Idle`
+  returns null. Traces: AC-1, AC-4.
+- **TC-AND-388-02** — Type: unit (JVM). Target: `IrreversibleActionGuardTest`. Preconditions:
+  guard with `requiresAcknowledgement=true`. Steps: `request(a)`; `confirm()` without ack;
+  `setAcknowledged(true)`; `confirm()`. Expected: first `confirm()` returns null and stays
+  `Confirming(acknowledged=false)`; after ack, `confirm()` returns `a` → `Submitting`.
+  Traces: AC-1, AC-4.
+- **TC-AND-388-03** — Type: unit (JVM). Target: `IrreversibleActionGuardTest`. Preconditions:
+  phase `Submitting(a)`. Steps: call `confirm()` again; then `cancel()`; also call `cancel()`
+  from `Idle`. Expected: second `confirm()` returns null (re-entrancy); `cancel()` from
+  `Submitting` is a no-op; `cancel()` from `Confirming` → `Idle`; `cancel()` from `Idle` is a
+  no-op. Traces: AC-1, AC-4.
+- **TC-AND-388-04** — Type: unit (JVM, Turbine + `MainDispatcherRule`). Target:
+  `ReportViewModelTest`. Preconditions: `FakeReportRepository` returns
+  `Success(status="submitted")`; target = CONTENT. Steps: `onIntent(Request)` with no reason →
+  expect banner, no repo call; `SelectReason`; `Request`; `Confirm`. Expected: repo `submit`
+  called exactly once; terminal phase `Submitted`; no duplicate equal emissions. Traces: AC-3,
+  AC-4, AC-5; FR-5/FR-6/FR-13.
+- **TC-AND-388-05** — Type: contract/MockWebServer (JVM, Robolectric/OkHttp). Target:
+  `ReportRepository` against `POST /moderation/reports`. Preconditions: MockWebServer returns
+  `200 {ok:true, report_id, ticket_id, status:"submitted", created_at:<int>}`. Steps: submit a
+  `ReportDraft`. Expected: request path is `/moderation/reports`, JSON body carries
+  `content_type`, `content_id`, `topics` (array, 1..5), `reason_text` (NOT `target_type`/
+  `reason`/`detail`); `X-CSRF-Token` header present; response parsed into success. Traces: AC-3;
+  FR-6 (validates §5 corrections #4–#6).
+- **TC-AND-388-06** — Type: unit (JVM). Target: `ReportViewModelTest`. Preconditions:
+  `FakeReportRepository` returns `Success(status="deduplicated")`. Steps: `SelectReason` →
+  `Request` → `Confirm`. Expected: phase → `Submitted` (benign), banner shows "Already
+  reported", no `Failed`. Traces: AC-6; FR-7 (validates corrected dedup #7).
+- **TC-AND-388-07** — Type: unit (JVM). Target: `ReportViewModelTest`. Preconditions: happy
+  path repo; `alsoBlock=true`; `FakeBlockingRepository`. Steps: `SetAlsoBlock(true)` →
+  `SelectReason` → `Request` → `Confirm`; then a separate run with double `Confirm`. Expected:
+  with alsoBlock, `blocking.block(userId)` called exactly once *after* report success; with
+  double `Confirm`, `submit` called exactly once (re-entrancy). Traces: AC-4; FR-6/FR-4.
+- **TC-AND-388-08** — Type: unit (JVM). Target: `DmcaViewModelTest`. Preconditions:
+  `FakeDmcaRepository` returns `Success(DmcaClaimCreateOut(claim_id="dmca_1", status="received"))`.
+  Steps: fill form but leave one ack false → assert `canSubmit==false` and `Confirm` does not
+  submit; set both `sworn_statement` & `good_faith_belief` + signature → `canSubmit==true` →
+  `Request`→`Confirm`. Expected: submit called once; `caseId == "dmca_1"`. Traces: AC-3, AC-4;
+  FR-2/FR-8/FR-9.
+- **TC-AND-388-09** — Type: contract/MockWebServer (JVM). Target: `DmcaRepository` against
+  `POST /v1/dmca/claims`. Preconditions: MockWebServer returns `201 DmcaClaimCreateOut`. Steps:
+  submit a `DmcaForm`. Expected: path `/v1/dmca/claims`; body field names exactly
+  `claimant_email`, `content_url`, `original_work_description`, `sworn_statement`,
+  `good_faith_belief`, `signature` (NOT `contact_email`/`infringing_url`/`good_faith_ack`);
+  parsed id read from `claim_id`. Traces: AC-3; FR-9 (validates §16 #10–#12).
+- **TC-AND-388-10** — Type: unit (JVM, Turbine). Target: `PrivacyExportViewModelTest`.
+  Preconditions: `FakePrivacyExportRepository` list load succeeds. Steps: init → assert
+  `isLoading` then populated `requests`; trigger `refresh()` that times out. Expected: existing
+  data kept, `isStale=true`, dismissible banner; second `refresh()` cancels the first (no race).
+  Traces: AC-5, AC-6; FR-10/FR-11/FR-14.
+- **TC-AND-388-11** — Type: unit (JVM). Target: `PrivacyExportViewModelTest`. Preconditions:
+  guard `requiresAcknowledgement=true`; one request with `download_url=null` and one with a
+  non-null `download_url`. Steps: request-new export without ack (rejected), then with ack
+  (adds request on success); attempt download on the `download_url==null` item, then on the
+  non-null item. Expected: ack-gated create works only after ack; download on the not-ready item
+  emits a banner and no effect; download on the ready item emits exactly one `DownloadReady(url)`
+  effect. Expected readiness derives from `download_url` presence, not a status literal. Traces:
+  AC-3, AC-4; FR-11/FR-12 (validates §16 #16).
+- **TC-AND-388-12** — Type: unit (JVM). Target: `ReportViewModelTest` /
+  `PrivacyExportViewModelTest` (submission timeout). Preconditions: repo returns
+  `Failure(NetworkError.Timeout)` for a POST (report submit / export create). Steps:
+  `Request`→`Confirm`. Expected: guard → `Failed(timeoutMessage)`; the POST is **not**
+  auto-retried (single repo call); user can re-`Confirm`. Traces: AC-6; §7.
+- **TC-AND-388-13** — Type: unit (JVM). Target: `BlockActionDelegateTest` +
+  telemetry/logging assertions. Preconditions: `FakeBlockingRepository`; fake `AnalyticsClient`
+  + `Logger`. Steps: `block(userId)` (success, then re-block already-blocked), `unblock`.
+  Expected: delegate forwards to repository; re-block is benign (success); analytics records
+  `report_submitted`/`safety_action_*` counts only with bounded keys; assert NO PII (report
+  detail, emails, DMCA fields, export URLs) appears in any captured log line at INFO+. Traces:
+  AC-2, AC-7; FR-6, §8/§10.
+- **TC-AND-388-14** — Type: Compose-UI + instrumented (Emu35 for UI logic; **Device** for the
+  accessibility/TalkBack pass). Target: a host screen wiring these ViewModels (smoke for the
+  contract, owned by AND-382/383/384/385 but exercised here). Preconditions: app installed.
+  Steps: drive the Confirm dialog for an irreversible action; verify the acknowledgement
+  checkbox is focusable and labelled, confirmation copy is present, and the destructive action
+  cannot fire without traversing Confirming→Submitting; run Accessibility Scanner / TalkBack
+  focus order. Expected: guard invariants observable in UI; checkbox has a content description;
+  no hard-coded English (all `UiText`). MUST run the TalkBack/accessibility portion on the
+  physical Device (real AccessibilityService behavior differs from emulator); functional UI may
+  run on Emu35. Traces: AC-2, AC-4, AC-7; §9.
+
+### Coverage matrix
+
+| AC | Covered by |
+|----|------------|
+| AC-1 (guard exists, 100% covered, FR-1..4 proven) | TC-01, TC-02, TC-03 |
+| AC-2 (4 state holders, single StateFlow + onIntent) | TC-04, TC-13, TC-14 |
+| AC-3 (FR-1..FR-14 observable via state) | TC-04, TC-05, TC-08, TC-09, TC-11 |
+| AC-4 (every irreversible action gated; double-tap = one submission) | TC-01, TC-02, TC-03, TC-07, TC-08, TC-11, TC-14 |
+| AC-5 (tests on TestDispatcher, no real delays, ≥90%/100%) | TC-04, TC-10 (and all JVM cases) |
+| AC-6 (timeouts→Failed never retried; only list GET retried; dedup/re-block benign) | TC-06, TC-10, TC-12 |
+| AC-7 (no PII logged/persisted; SavedStateHandle non-sensitive only) | TC-13, TC-14 |

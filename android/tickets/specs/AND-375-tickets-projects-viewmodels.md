@@ -5,9 +5,10 @@ milestone: M8
 epic: E48
 priority: P2
 size: M
-status: draft
 depends_on: [AND-371]
 blocks: [AND-372, AND-373, AND-374]
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-375 — Tickets/projects ViewModels
@@ -69,11 +70,18 @@ screen to bind without churn.
   define the payload shapes the AND-371/AND-374 domain models mirror. Web has no
   offline/stale concept; that is Android-specific.
 - **Shared conventions:** ViewModels expose `StateFlow<UiState>`; the typed
-  `ApiResult<T>` lives in `core-network`; FastAPI `detail` mapping
-  (`string | [{msg}] | {code,...}`) is normalized by the `core-network` error
-  mapper. Auth is cookie-based and fully owned by `core-network` (cookie jar,
-  `X-CSRF-Token`, single `/ui/session/refresh` on 401); these ViewModels react to
-  an `Unauthorized` `ApiResult` with a re-auth effect.
+  `ApiResult<T>` lives in `core-network`. **[Corrected]** The ticket/project
+  endpoints document their non-2xx bodies as `ErrorEnvelope { error: { code,
+  message, details? } }` (schema `ErrorEnvelope`/`ErrorDetail`), not the bare
+  FastAPI `detail` union. The shared web client additionally tolerates a legacy
+  `detail` field (`string | [{msg}] | {code,...}`) for endpoints that still use
+  it, but for AND-375's surface the `core-network` mapper should read
+  `error.code`/`error.message` from `ErrorEnvelope` (falling back to `detail` and
+  then `statusText`). Auth is cookie-based and fully owned by `core-network`
+  (cookie jar, `X-CSRF-Token` taken from the `ui_csrf` cookie, single
+  `/ui/session/refresh` POST retry on 401 — all verified against
+  `src/api/client.ts`); these ViewModels react to an `Unauthorized` `ApiResult`
+  with a re-auth effect.
 
 ## 3. Functional Requirements
 
@@ -92,10 +100,20 @@ space metadata, full-screen error/empty before first page). Intents:
 `onRefresh()`, `onRetry()`, `onTicketClicked(ticketId)` → `NavigateToThread`
 effect, optional `onFilterChanged(status)`.
 
-FR-3. **Ticket thread.** `TicketThreadViewModel` is constructed with a
-`ticketId`, loads the ticket header + members + messages (messages paged, newest
-or oldest-first per backend), and exposes `val uiState:
-StateFlow<TicketThreadUiState>` plus `val messages: Flow<PagingData<TicketMessage>>`.
+FR-3. **Ticket thread.** `TicketThreadViewModel` is constructed with **both a
+`spaceId` and a `ticketId`** (the detail endpoint is
+`GET /ticket-spaces/{spaceId}/tickets/{ticketId}`, not a flat ticket route — both
+ids are required `SavedStateHandle` args). It loads the ticket header + messages
+and exposes `val uiState: StateFlow<TicketThreadUiState>`. **[Corrected]** The
+backend returns `SpaceTicketOut.messages` as an INLINE array inside the single
+ticket payload (no per-message `next_cursor`), so messages are NOT independently
+paged from this endpoint; the `Flow<PagingData<TicketMessage>>` surface is
+retained as an OPTIONAL convenience only if AND-371 chooses to expose a client-
+side `PagingData` wrapper, otherwise messages live as a plain
+`List<TicketMessage>` field in `TicketThreadUiState`. Members are NOT part of the
+ticket payload; they come from the space (`TicketSpaceOut.members`), so the VM
+either reuses an already-loaded space or issues
+`GET /ticket-spaces/{spaceId}` for member data.
 It owns the **reply compose state** consumed by AND-373: `replyDraft`,
 `isSending`, `canSend`. Intents: `onReplyDraftChanged(text)`,
 `onSendReply()`, `onRetrySend()`, `onRefresh()`, `onRetry()`. (Posting the reply
@@ -111,10 +129,13 @@ Exposes `val uiState: StateFlow<ProjectListUiState>`. Intents: `onRefresh()`,
 FR-5. **Project detail.** `ProjectDetailViewModel` is constructed with a
 `projectId`, loads `ProjectDetail`, and exposes `val uiState:
 StateFlow<ProjectDetailUiState>`. It also exposes the **Google Drive provider
-connect** intent surface (`onConnectDrive()` → starts provider auth, surfaces a
-`OpenUrl(authUrl)` effect; the callback resolution is AND-374's concern, but the
-VM models `driveStatus: DriveConnectState`). Intents: `onRefresh()`,
-`onRetry()`, `onConnectDrive()`.
+connect** intent surface (`onConnectDrive()` → starts provider auth via
+`POST /v1/projects/providers/google_drive/oauth/start`, surfaces an
+`OpenUrl(authorization_url)` effect from the `ProviderOAuthStartOut` response; the
+callback resolution is AND-374's concern, but the VM models `driveStatus:
+DriveConnectState`). Intents: `onRefresh()`, `onRetry()`, `onConnectDrive()`.
+**[Assumption — see R7]** the web client uses provider *credential* endpoints
+rather than this OAuth-start flow, so the connect UX is unverified against web.
 
 FR-6. **Common state variants.** Each list/detail `UiState` represents:
 `Loading`, `Content`, `Empty`, `Error(error, canRetry)`, and a stale flag
@@ -312,7 +333,8 @@ fun onSendReply() {
     if (draft.isBlank() || _uiState.value.isSending) return
     viewModelScope.launch(io) {
         _uiState.update { it.copy(isSending = true) }
-        when (val r = repository.postMessage(ticketId, draft)) {   // AND-373 impl
+        // POST /ticket-spaces/{spaceId}/tickets/{ticketId}/messages — needs spaceId too
+        when (val r = repository.postMessage(spaceId, ticketId, draft)) {   // AND-373 impl
             is ApiResult.Success      -> { _uiState.update { it.copy(isSending = false, replyDraft = "") }
                                            /* AND-372/373 UI triggers messages.refresh() */ }
             is ApiResult.Unauthorized -> { _effects.send(RequireReauth)
@@ -338,31 +360,58 @@ owned by AND-371 (`TicketsApi`) and AND-374 (`ProjectsApi`), mirrored from
 wired by AND-373. For reference, the upstream payloads the consumed domain models
 derive from are shaped roughly as:
 
+**[Corrected — verified against OpenAPI index + `src/api/endpoints/tickets.ts`,
+`projects.ts`.]** The earlier draft prefixed every path with `/ui/` and invented
+a flat `/ui/tickets/{ticketId}`; the real contract is:
+
 ```json
-// GET /ui/ticket-spaces  -> spaces list
-{ "items": [ { "id": "sp_123", "name": "Support", "ticket_count": 12,
-               "updated_at": "2026-06-05T12:00:00Z" } ], "next_cursor": null }
+// GET /ticket-spaces  (params: cursor,limit)  -> TicketSpaceListEnvelope
+{ "items": [ { "space_id": "sp_123", "name": "Support", "owner_sub": "u_x",
+               "visibility": "shared", "created_at": 1749124800,
+               "updated_at": 1749124800,
+               "members": [ { /* SpaceMemberOut */ } ] } ], "next_cursor": null }
+// NOTE: no `ticket_count` field; ids are `space_id`; timestamps are integer
+// (epoch seconds), NOT ISO strings; the space owns its `members`.
 
-// GET /ui/ticket-spaces/{spaceId}/tickets -> paged tickets
-{ "items": [ { "id": "tk_1", "subject": "Login fails", "status": "open",
-               "last_message_at": "2026-06-05T11:00:00Z" } ], "next_cursor": "..." }
+// GET /ticket-spaces/{spaceId}/tickets  (params: status,assignee_sub,cursor,limit)
+//   -> SpaceTicketListEnvelope { items: SpaceTicketOut[], next_cursor? }
+//   ticket id is `ticket_id`; status enum =
+//   open|in_progress|waiting_on_user|done|reopened
 
-// GET /ui/tickets/{ticketId} -> header + members + messages page
-{ "ticket": { "id": "tk_1", "subject": "...", "status": "open" },
-  "members": [ { "u": "u_abc", "role": "agent" } ],
-  "messages": { "items": [ { "id": "m_1", "author_u": "u_abc",
-                 "body": "...", "created_at": "..." } ], "next_cursor": "..." } }
+// GET /ticket-spaces/{spaceId}/tickets/{ticketId}  -> SpaceTicketEnvelope
+//   { "ticket": SpaceTicketOut }
+//   SpaceTicketOut carries `messages: SpaceTicketMessage[]` INLINE (no nested
+//   paging object, no `next_cursor` for messages) plus `activity[]`. Each
+//   message: { message_id, sender_sub, sender_role, body, created_at(int),
+//   email_alert_queued_for[] }. The ticket has NO `members` array — members come
+//   from the space (TicketSpaceOut.members / SpaceMemberOut).
 
-// POST /ui/tickets/{ticketId}/messages  (AND-373)  body: { "body": "..." }
+// POST /ticket-spaces/{spaceId}/tickets/{ticketId}/messages  (AND-373)
+//   req SpaceTicketMessageReq { body: string (minLength 1, maxLength 4000) }
+//   -> SpaceTicketEnvelope (the updated ticket, messages included)
 
-// GET /ui/projects -> list ; GET /ui/projects/{projectId} -> detail
-// GET /ui/projects/{projectId}/providers/google-drive/start -> { "auth_url": "..." }
+// GET /v1/projects  (params: limit,cursor,tag,name_query)  -> ProjectListOut
+// GET /v1/projects/{projectId}/detail  (params: limit,cursor,status,provider)
+//   -> ProjectDetailOut { project: ProjectOut, files: TrackedFileOut[], cursor? }
+// POST /v1/projects/providers/google_drive/oauth/start -> ProviderOAuthStartOut
+//   { provider, authorization_url, state, expires_at }   // field is
+//   `authorization_url`, NOT `auth_url`; method is POST not GET; the endpoint is
+//   NOT project-scoped; provider segment is `google_drive` (underscore).
+// POST /v1/projects/providers/google_drive/oauth/callback (req ProviderOAuthCallbackIn)
 ```
 
+**Drive caveat (unverified for the web flow):** the web `projects.ts` does NOT
+call `oauth/start`; its provider UI uses the credential endpoints
+(`GET/PUT/DELETE /v1/projects/providers/{provider}/credentials`). The
+`oauth/start`→`OpenUrl(authorization_url)` flow this VM models exists in the
+backend OpenAPI but has no web precedent; treat the connect-via-OAuth UX as an
+Android-specific assumption to confirm with AND-374 (see R7).
+
 The ViewModels consume already-mapped domain objects, not this JSON. Error
-normalization (FastAPI `detail`: `string | [{msg}] | {code,...}`) is performed by
-the `core-network` mapper before reaching the repository; this ticket only maps
-`ApiResult.Error` → `TicketsError` and treats 401 as `Unauthorized`.
+normalization (`ErrorEnvelope.error.{code,message}`, with legacy `detail`
+fallback) is performed by the `core-network` mapper before reaching the
+repository; this ticket only maps `ApiResult.Error` → `TicketsError` and treats
+401 as `Unauthorized`.
 
 ## 6. Data & State Management
 
@@ -392,9 +441,10 @@ the `core-network` mapper before reaching the repository; this ticket only maps
 - **Thread reply transitions:** `Idle → (draft non-blank) canSend=true →
   onSendReply → isSending=true → Success(draft cleared) | Error(sendError set)`.
   `onReplyDraftChanged` clears any prior `sendError`.
-- **Drive connect:** `Disconnected → onConnectDrive → Connecting + OpenUrl(authUrl)
-  → (callback handled by AND-374) → Connected`. The VM moves to `Connecting` only
-  after the start call returns an `auth_url`.
+- **Drive connect:** `Disconnected → onConnectDrive → Connecting +
+  OpenUrl(authorization_url) → (callback handled by AND-374) → Connected`. The VM
+  moves to `Connecting` only after the start call returns a non-empty
+  `authorization_url` (field name `authorization_url`, per `ProviderOAuthStartOut`).
 
 ## 7. Error Handling & Resilience
 
@@ -418,7 +468,8 @@ the `core-network` mapper before reaching the repository; this ticket only maps
 
 - No credentials, tokens, or cookies are handled here; the cookie jar and CSRF
   header live in `core-network`. ViewModels must never log message bodies,
-  subjects, member identifiers (`u_…`), project contents, or Drive `auth_url`s.
+  subjects, member identifiers (`sender_sub`/`owner_sub`/`u_…`), project contents,
+or Drive `authorization_url`s (which also carry an OAuth `state` secret).
 - `RequireReauth` carries no sensitive payload; it only signals navigation to the
   auth flow.
 - `OpenUrl(authUrl)` for the Google Drive provider is passed straight to the
@@ -546,6 +597,15 @@ Compose/UI tests are explicitly out of scope (owned by AND-372/AND-373/AND-374).
   single-shot for spaces and projects unless `next_cursor` is present in the
   payloads.
 - **R6:** Analytics facade availability — gated behind a no-op `Analytics`.
+- **R7 (Drive connect contract):** The web `projects.ts` provider UI uses the
+  credential endpoints (`GET/PUT/DELETE /v1/projects/providers/{provider}/
+  credentials`), not the `POST /v1/projects/providers/google_drive/oauth/start`
+  flow this VM's `onConnectDrive()` models. The OAuth-start endpoint and its
+  `ProviderOAuthStartOut { authorization_url, state, expires_at }` response are
+  real in the backend OpenAPI, but the connect-via-Custom-Tab UX is unverified
+  against any web precedent. Confirm with AND-374 whether Android should drive the
+  OAuth-start flow or the credential-upsert flow before finalizing
+  `DriveConnectState`.
 
 ## 14. Acceptance Criteria
 
@@ -564,7 +624,8 @@ Compose/UI tests are explicitly out of scope (owned by AND-372/AND-373/AND-374).
   `onSendReply`, `onRetrySend`) consumed by AND-373; blank draft is a no-op; send
   failure preserves the draft.
 - AC-6: `ProjectDetailViewModel.onConnectDrive()` produces `DriveConnectState.
-  Connecting` + `OpenUrl(authUrl)` on a successful start.
+  Connecting` + `OpenUrl(authorization_url)` (the `ProviderOAuthStartOut.
+  authorization_url` field) on a successful start.
 - AC-7: No Composables, no direct HTTP, no Room/DataStore access are added; the
   ViewModels depend only on the AND-371/AND-374 repositories.
 - AC-8: All user-facing messages are referenced by `@StringRes` id, not literals;
@@ -584,3 +645,273 @@ Compose/UI tests are explicitly out of scope (owned by AND-372/AND-373/AND-374).
   lint/detekt suppressions added.
 - No hard-coded user-facing strings; no message-body/PII/auth-URL logging.
 - Code reviewed and merged to `android-port`; AND-372/AND-373/AND-374 unblocked.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and an exact source pointer.
+
+1. **Ticket spaces list endpoint is `GET /ticket-spaces` (no `/ui/` prefix),
+   returning `TicketSpaceListEnvelope { items[], next_cursor? }`.** VERDICT:
+   Corrected (draft said `GET /ui/ticket-spaces`). SOURCE: OpenAPI
+   `GET /ticket-spaces` (op `list_ticket_spaces_ticket_spaces_get`,
+   resp `200:TicketSpaceListEnvelope`); `src/api/endpoints/tickets.ts: listTicketSpaces`
+   (`api.get("/ticket-spaces")`); schema `TicketSpaceListEnvelope`.
+2. **A ticket space has fields `space_id, name, owner_sub, visibility,
+   created_at(int), updated_at(int), members[]` — there is NO `ticket_count` and
+   timestamps are integer epoch, not ISO strings.** VERDICT: Corrected (draft JSON
+   used `id`, `ticket_count`, ISO `updated_at`). SOURCE: schema `TicketSpaceOut`
+   (`components.schemas.TicketSpaceOut`).
+3. **Tickets-in-space list is `GET /ticket-spaces/{spaceId}/tickets` (params
+   `status, assignee_sub, cursor, limit`) → `SpaceTicketListEnvelope`.** VERDICT:
+   Corrected (draft said `/ui/ticket-spaces/{spaceId}/tickets`). SOURCE: OpenAPI
+   `GET /ticket-spaces/{space_id}/tickets` (op `list_space_tickets_…`);
+   `src/api/endpoints/tickets.ts: listSpaceTickets`.
+4. **Ticket detail is the nested `GET /ticket-spaces/{spaceId}/tickets/{ticketId}`
+   → `SpaceTicketEnvelope { ticket }`; there is NO flat `/ui/tickets/{ticketId}`.
+   The thread VM therefore needs both `spaceId` and `ticketId`.** VERDICT:
+   Corrected. SOURCE: OpenAPI `GET /ticket-spaces/{space_id}/tickets/{ticket_id}`
+   (op `get_space_ticket_…`); `src/api/endpoints/tickets.ts: getSpaceTicket`.
+5. **The ticket payload embeds `messages: SpaceTicketMessage[]` INLINE (no nested
+   paging / `next_cursor` for messages) and `activity[]`; it has NO `members`
+   array.** VERDICT: Corrected (draft modeled paged messages + a per-ticket
+   `members` array). SOURCE: schema `SpaceTicketOut` (required incl. `messages`,
+   `activity`; no `members`).
+6. **A message is `{ message_id, sender_sub, sender_role, body, created_at(int),
+   email_alert_queued_for[] }` — not `{ id, author_u/u, role, created_at(ISO) }`.**
+   VERDICT: Corrected. SOURCE: schema `SpaceTicketMessage`.
+7. **Members belong to the space (`TicketSpaceOut.members: SpaceMemberOut[]`),
+   reached via `GET /ticket-spaces/{spaceId}` or the spaces list.** VERDICT:
+   Verified/Corrected (relocates the draft's per-ticket members). SOURCE: schema
+   `TicketSpaceOut.members`; OpenAPI `GET /ticket-spaces/{space_id}`.
+8. **Reply POST is `POST /ticket-spaces/{spaceId}/tickets/{ticketId}/messages`
+   with body `SpaceTicketMessageReq { body: string, 1..4000 chars }` →
+   `SpaceTicketEnvelope`.** VERDICT: Corrected (draft said
+   `POST /ui/tickets/{ticketId}/messages`). SOURCE: OpenAPI
+   `POST /ticket-spaces/{space_id}/tickets/{ticket_id}/messages`
+   (req `SpaceTicketMessageReq`); `src/api/endpoints/tickets.ts: replyToTicket`
+   (`api.post(..., { body })`); schema `SpaceTicketMessageReq` (minLength 1,
+   maxLength 4000).
+9. **Ticket status enum = `open | in_progress | waiting_on_user | done |
+   reopened`.** VERDICT: Verified (draft only showed `open`; now enumerated).
+   SOURCE: schema `SpaceTicketStatusReq.status.enum`.
+10. **Projects list is `GET /v1/projects` (params `limit, cursor, tag,
+    name_query`) → `ProjectListOut`.** VERDICT: Corrected (draft said
+    `GET /ui/projects`). SOURCE: OpenAPI `GET /v1/projects` (op
+    `list_projects_route_v1_projects_get`); `src/api/endpoints/projects.ts:
+    listProjects`.
+11. **Project detail is `GET /v1/projects/{projectId}/detail` →
+    `ProjectDetailOut { project, files[], cursor? }`.** VERDICT: Corrected (draft
+    said `GET /ui/projects/{projectId}`; the flat `GET /v1/projects/{id}` returns
+    `ProjectOut`, but the detail screen uses `/detail`). SOURCE: OpenAPI
+    `GET /v1/projects/{project_id}/detail`; `src/api/endpoints/projects.ts:
+    getProjectDetail`; schema `ProjectDetailOut`.
+12. **Drive provider OAuth start is `POST /v1/projects/providers/google_drive/
+    oauth/start` → `ProviderOAuthStartOut { provider, authorization_url, state,
+    expires_at }`. Method is POST (not GET); path is provider-level (not
+    project-scoped); provider segment is `google_drive` (underscore); URL field is
+    `authorization_url` (not `auth_url`).** VERDICT: Corrected. SOURCE: OpenAPI
+    `POST /v1/projects/providers/google_drive/oauth/start` (op
+    `start_google_drive_oauth_…`); schema `ProviderOAuthStartOut`.
+13. **The web client's projects provider UI uses credential endpoints
+    (`GET/PUT/DELETE /v1/projects/providers/{provider}/credentials`), NOT the
+    `oauth/start` flow.** VERDICT: Verified (this is what makes the VM's
+    OAuth-start connect UX an assumption — R7). SOURCE: `src/api/endpoints/
+    projects.ts: getProviderCredential / upsertProviderCredential /
+    deleteProviderCredential`; OpenAPI `.../providers/{provider}/credentials`.
+14. **Auth is cookie-based: `credentials: include`, CSRF via `X-CSRF-Token`
+    header sourced from the `ui_csrf` cookie, with a single
+    `POST /ui/session/refresh` retry on 401.** VERDICT: Verified. SOURCE:
+    `src/api/client.ts` (`refreshSession` → `fetch(withApiBase("/ui/session/
+    refresh"))`; `getCookie("ui_csrf")` → `headers.set("X-CSRF-Token", csrf)`;
+    `if (res.status === 401) … refreshPromise` single-flight).
+15. **Documented error body for ticket/project endpoints is `ErrorEnvelope {
+    error: ErrorDetail { code, message, details? } }`, not the bare FastAPI
+    `detail` union; the web client also tolerates legacy `detail` (`string |
+    [{msg}] | {code,...}`).** VERDICT: Corrected (draft attributed everything to
+    FastAPI `detail`). SOURCE: schemas `ErrorEnvelope`, `ErrorDetail`; non-2xx
+    `$ref: ErrorEnvelope` on the ticket-space routes (OpenAPI index resp lists);
+    legacy handling in `src/api/client.ts: normalizeErrorDetail`.
+16. **Validation failures return `422 HTTPValidationError`.** VERDICT: Verified.
+    SOURCE: OpenAPI resp `422:HTTPValidationError` on the ticket-space/projects
+    routes; schema `HTTPValidationError`.
+17. **ViewModels add no networking/DTOs of their own; they consume AND-371/AND-374
+    repositories.** VERDICT: Unverified-assumption (scope decision local to the
+    Android port; no external source). SOURCE: ticket scope "State" only
+    (`specs-src/AND-375.md`); no Android repo present to confirm AND-371/AND-374
+    interfaces exist yet.
+18. **Framework choices (Hilt `@HiltViewModel`, `StateFlow` + `Channel`
+    one-shot effects, `SavedStateHandle` args, Paging 3 `cachedIn`, coroutine
+    `TestDispatcher`).** VERDICT: Verified against Android docs (framework ref),
+    not the backend. SOURCE (framework ref):
+    https://developer.android.com/topic/libraries/architecture/viewmodel ,
+    https://developer.android.com/topic/libraries/architecture/coroutines#viewmodelscope ,
+    https://developer.android.com/topic/libraries/architecture/paging/v3-paging-data#convert-ui ,
+    https://developer.android.com/kotlin/flow/stateflow-and-sharedflow ,
+    https://developer.android.com/training/dependency-injection/hilt-jetpack#viewmodels ,
+    https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/ .
+
+### Corrections made
+
+- §2, §5, §7-mapping: error contract changed from FastAPI `detail` union to
+  `ErrorEnvelope.error.{code,message}` (legacy `detail` kept as fallback). (#15)
+- §5 JSON block fully rewritten: removed the `/ui/` prefix from all ticket
+  endpoints; replaced flat `/ui/tickets/{ticketId}` with the nested
+  `/ticket-spaces/{spaceId}/tickets/{ticketId}`; fixed space fields (`space_id`,
+  integer timestamps, removed `ticket_count`); fixed message fields (`message_id`,
+  `sender_sub`, `sender_role`, integer `created_at`); made thread messages inline
+  (not paged) and moved members to the space; corrected projects to `/v1/projects`
+  and `/v1/projects/{id}/detail`; corrected Drive start to
+  `POST /v1/projects/providers/google_drive/oauth/start` with `authorization_url`.
+  (#1–#12)
+- FR-3 (§3): thread VM now takes `spaceId` + `ticketId`; messages inline; members
+  sourced from the space; `PagingData` for messages downgraded to optional. (#4,
+  #5, #7)
+- FR-5/§6/§8/AC-6: Drive `auth_url` → `authorization_url`; start is a POST. (#12)
+- §4.6: `postMessage(spaceId, ticketId, draft)` now carries `spaceId`. (#8)
+- Added R7 documenting the OAuth-start-vs-credentials discrepancy. (#13)
+
+### Open assumptions
+
+- **AND-371/AND-374 repository interfaces and an `ApiResult.Cached` variant exist
+  as assumed (FR-6, R2).** Why unverifiable: no Android source tree is present in
+  the references — only the backend OpenAPI and the web client. The offline/stale
+  model and the repository method signatures are Android-port design, not
+  confirmable from the given sources.
+- **The Drive connect UX uses OAuth-start rather than credential upsert (R7,
+  claim #13).** Why unverifiable: the backend exposes both, and the web client
+  uses credentials; which one the Android detail screen should drive is an
+  AND-374 product decision.
+- **Whether `TicketRepository.ticketsPager` / message paging is client-side over
+  inline data or server cursor-backed.** Why unverifiable: the tickets list does
+  expose `next_cursor` (server paging is possible) but the ticket *detail*
+  messages are inline; AND-371's pager design is not in the sources.
+- **`@StringRes` / no-PII-logging / analytics-facade conventions.** Why
+  unverifiable: project-internal conventions with no authoritative reference file.
+
+## 17. Test Plan
+
+All cases are JVM unit/Robolectric unless noted; this ticket's acceptance is
+"Unit-tested" and it produces no Composables, so the bulk runs with no device.
+Cases that touch a Compose host or instrumented behavior name the target
+explicitly and note emulator vs physical device. Fakes: `FakeTicketRepository`,
+`FakeProjectRepository`, `FakeSpaceRepository` (scripted `ApiResult`), a
+`PagingData` factory, and `StandardTestDispatcher` + Turbine.
+
+- **TC-AND-375-01 — Spaces happy path.** Type: unit (JVM). Target:
+  `TicketSpacesViewModel`. Preconditions: `FakeTicketRepository.getSpaces` →
+  `ApiResult.Success(listOf(space))`. Steps: construct VM; collect `uiState` with
+  Turbine; `advanceUntilIdle()`. Expected: emits `Phase.Loading` then
+  `Phase.Content` with the mapped space, `isStale=false`, `error=null`. Traces:
+  AC-1, AC-2.
+- **TC-AND-375-02 — Spaces empty.** Type: unit (JVM). Target:
+  `TicketSpacesViewModel`. Preconditions: `getSpaces` → `Success(emptyList())`.
+  Steps: construct; advance. Expected: terminal `Phase.Empty`, `canRetry=true`.
+  Traces: AC-2.
+- **TC-AND-375-03 — Cached/offline → stale content + ShowMessage.** Type: unit
+  (JVM). Target: `TicketSpacesViewModel`. Preconditions: `getSpaces` →
+  `ApiResult.Cached(listOf(space))`. Steps: construct; collect `uiState` and
+  `effects`. Expected: `Phase.Content`, `isStale=true`, `isOffline=true`, and a
+  `ShowMessage(R.string.tickets_showing_saved)` effect. Traces: AC-4. (Mirrors the
+  flaky-dev-host/offline path.)
+- **TC-AND-375-04 — Server error (ErrorEnvelope 5xx) → Error, retryable.** Type:
+  contract/MockWebServer. Target: `TicketSpacesViewModel` over
+  `TicketRepository` backed by MockWebServer. Preconditions: MockWebServer returns
+  `500` with body `{"error":{"code":"internal","message":"boom"}}` for
+  `GET /ticket-spaces`. Steps: drive a real `getSpaces`; advance. Expected:
+  `ApiResult.Error` maps to `TicketsError.Server(500,"boom")`; `uiState`
+  `Phase.Error`, `canRetry=true`; the mapper reads `error.message` (NOT the legacy
+  `detail`). Traces: AC-2; validates claim #15.
+- **TC-AND-375-05 — 422 validation on reply (body too long).** Type:
+  contract/MockWebServer. Target: `TicketThreadViewModel.onSendReply`.
+  Preconditions: draft of 4001 chars; MockWebServer returns `422
+  HTTPValidationError` for
+  `POST /ticket-spaces/{spaceId}/tickets/{ticketId}/messages`. Steps: set draft;
+  `onSendReply()`; advance. Expected: `isSending` flips true→false, `sendError` is
+  set (mapped from the 422 body), the draft is PRESERVED (non-idempotent POST not
+  cleared). Traces: AC-5; validates claim #8 (1..4000 bound).
+- **TC-AND-375-06 — Unauthorized after refresh exhausted → SessionExpired +
+  RequireReauth.** Type: unit (JVM). Target: `TicketSpacesViewModel` (and asserted
+  again for a detail VM). Preconditions: `getSpaces` → `ApiResult.Unauthorized`.
+  Steps: construct; collect state + effects. Expected: `RequireReauth` effect and
+  `Phase.Error` with `TicketsError.SessionExpired` (`canRetry=false`) for the list
+  VM; detail VM keeps last content behind the prompt (R3). Traces: AC-4.
+- **TC-AND-375-07 — Concurrent refresh de-dup (job guard).** Type: unit (JVM).
+  Target: `TicketSpacesViewModel`. Preconditions: `FakeTicketRepository` counts
+  `getSpaces` calls and suspends on a gate. Steps: call `onRefresh()` twice before
+  releasing the gate; advance. Expected: repository `getSpaces` call-count == 1
+  (FR-7). Traces: AC-3.
+- **TC-AND-375-08 — Refresh-over-content failure keeps content, sets stale.**
+  Type: unit (JVM). Target: `TicketSpacesViewModel`. Preconditions: first
+  `getSpaces` → `Success`; second (forced) → `Error` while cached content exists.
+  Steps: reach `Content`; `onRefresh()`; advance. Expected: `isRefreshing` toggles
+  true→false, content retained, `isStale=true`, a `ShowMessage` is emitted, phase
+  stays `Content` (not `Error`). Traces: AC-2, AC-3. (Flaky-dev-host path.)
+- **TC-AND-375-09 — Ticket list paging emits mapped items from
+  `SpaceTicketListEnvelope`.** Type: unit (JVM, `paging-testing`). Target:
+  `TicketListViewModel`. Preconditions: `SavedStateHandle["spaceId"]="sp_1"`;
+  fake pager yields two `SpaceTicketOut` pages with a `next_cursor`. Steps: collect
+  `tickets` via `AsyncPagingDataDiffer`/snapshot. Expected: items map to
+  `TicketListItem` carrying `ticket_id`, `subject`, `status`; second page appends.
+  Traces: AC-2; validates claims #3, #9.
+- **TC-AND-375-10 — Navigation effects.** Type: unit (JVM). Target: spaces / list
+  / project VMs. Preconditions: loaded content. Steps: `onSpaceClicked("sp_1")`,
+  `onTicketClicked("tk_1")`, `onProjectClicked("pr_1")`. Expected: exactly
+  `NavigateToTickets("sp_1")`, `NavigateToThread("tk_1")`,
+  `NavigateToProject("pr_1")` effects; no state mutation. Traces: AC-2.
+- **TC-AND-375-11 — Thread loads inline messages + space members; blank draft is a
+  no-op.** Type: unit (JVM). Target: `TicketThreadViewModel`. Preconditions:
+  `SavedStateHandle["spaceId"]`+`["ticketId"]`; `getSpaceTicket` →
+  `Success(SpaceTicketOut with messages[])`; space members available. Steps:
+  construct; advance; then `onReplyDraftChanged("")` and `onSendReply()`. Expected:
+  `uiState` carries messages as an inline list and members from the space;
+  `canSend=false` for blank draft; `onSendReply` with blank draft does NOT call
+  `repository.postMessage`. Traces: AC-5; validates claims #4, #5, #7.
+- **TC-AND-375-12 — Reply success clears draft; `onReplyDraftChanged` clears prior
+  sendError.** Type: unit (JVM). Target: `TicketThreadViewModel`. Preconditions:
+  prior failed send left `sendError` set. Steps: `onReplyDraftChanged("ok")`
+  (assert `sendError` cleared, `canSend=true`); `onSendReply()` with
+  `postMessage(spaceId,ticketId,"ok")` → `Success`. Expected: `isSending`
+  true→false, `replyDraft=""`, `sendError=null`. Traces: AC-5; validates claim #8
+  (spaceId in signature).
+- **TC-AND-375-13 — Drive connect produces Connecting + OpenUrl(authorization_url).**
+  Type: unit (JVM). Target: `ProjectDetailViewModel`. Preconditions:
+  `FakeProjectRepository.startDriveOAuth` →
+  `Success(ProviderOAuthStartOut(authorization_url="https://accounts.google…",
+  state="s", expires_at="…"))`. Steps: load detail; `onConnectDrive()`; advance.
+  Expected: `driveStatus=Connecting` and an `OpenUrl("https://accounts.google…")`
+  effect; start failure instead leaves `Disconnected` + `ShowMessage`. Traces:
+  AC-6; validates claim #12.
+- **TC-AND-375-14 — No PII/auth-URL logging; @StringRes-only messages.** Type:
+  unit (JVM, Robolectric for `Timber` tree). Target: all five VMs. Preconditions:
+  a capturing `Timber` test tree; effects carry `@StringRes` ids. Steps: drive
+  load/error/cached/reply/connect paths; inspect captured logs and effect
+  payloads. Expected: no message bodies, subjects, `sender_sub`/`owner_sub`,
+  project contents, or `authorization_url`/`state` appear in any log; every
+  `ShowMessage` carries an `Int` res id, never a literal string. Traces: AC-8.
+- **TC-AND-375-15 — Effects do not replay across config change (rotation).** Type:
+  instrumented/e2e (Compose host wrapping a real VM in a `ViewModelStore`).
+  Target: `TicketSpacesViewModel`. **Runs on emulator AVD `test35` (API 35)** —
+  no special hardware; physical device not required. Preconditions: a one-shot
+  `ShowMessage` already consumed. Steps: recreate the host Activity (rotation);
+  re-subscribe to `effects` and `uiState`. Expected: the `Channel`-backed effect
+  is NOT re-delivered; `uiState` content is retained without a reload (FR-10).
+  Traces: AC-2. Note: a JVM `cachedIn(viewModelScope)` survival check is the unit
+  counterpart, but config-change survival is best verified instrumented.
+
+No case in this ticket requires the physical Samsung A15 (SM-A156U): there is no
+camera/biometric/FCM/WebRTC/Telecom/HLS or ABI-specific behavior here — it is a
+pure JVM/coroutine state layer. TC-AND-375-15 uses the emulator only to exercise
+real `ViewModelStore` recreation.
+
+### Coverage matrix
+
+| AC   | Covered by |
+|------|------------|
+| AC-1 | TC-01, TC-02, TC-03, TC-06, TC-07, TC-08 (deterministic under `StandardTestDispatcher`) |
+| AC-2 | TC-01, TC-02, TC-04, TC-08, TC-09, TC-10, TC-15 |
+| AC-3 | TC-07, TC-08 |
+| AC-4 | TC-03, TC-06 |
+| AC-5 | TC-05, TC-11, TC-12 |
+| AC-6 | TC-13 |
+| AC-7 | (structural — asserted by absence of HTTP/Room in all unit cases; TC-04/TC-05 use repository, not direct HTTP) |
+| AC-8 | TC-14 |

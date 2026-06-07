@@ -5,7 +5,8 @@ milestone: M8
 epic: E47
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-363]
 blocks: []
 ---
@@ -74,10 +75,16 @@ records the chosen account (for navigation by the UI ticket) and exposes it as p
 state; selection does not itself trigger network I/O.
 
 FR-4 **Billing state.** `AdsBillingViewModel` takes an `accountId` (via
-`SavedStateHandle` nav arg) and loads the billing summary
-(`GET /ui/ads/accounts/{accountId}/billing`), exposing `AdsBillingUiState`
-(loading/content/error). Content includes balance, currency, and any payment-method
-summary fields provided by the AND-363 domain model.
+`SavedStateHandle` nav arg) and loads the billing **history**
+(`GET /ui/ads/accounts/{account_id}/billing`, optional `limit` query param, default 50),
+exposing `AdsBillingUiState` (loading/content/empty/error). **[Corrected]** The backend
+returns a **list** of ledger entries (`AdBillingEntry[]`), not a single balance/currency/
+payment-method summary. Each entry carries `entry_id`, `account_id`, `campaign_id`,
+`entry_type`, `amount_cents`, `state`, `reason`, `meta`, and `created_at`. The account's
+running **balance** is `balance_cents` on the `AdAccount` (from `GET /ui/ads/accounts`),
+not on the billing endpoint. There is **no `currency` field** anywhere in these models —
+the web client hard-codes USD formatting (`$X.XX`); see §16. So billing content is the
+entry list (and, if the UI ticket needs it, the selected account's `balance_cents`).
 
 FR-5 **Campaigns state (read-only).** `AdsCampaignsViewModel` takes an `accountId` and
 loads campaigns (`GET /ui/ads/accounts/{accountId}/campaigns`), exposing
@@ -109,7 +116,7 @@ Retrofit `Response`, Moshi types, or `Throwable` stack traces.
 package com.testlogon.android.feature.ads.state
 
 import com.testlogon.android.core.model.ads.AdsAccount
-import com.testlogon.android.core.model.ads.AdsBilling
+import com.testlogon.android.core.model.ads.AdsBillingEntry
 import com.testlogon.android.core.model.ads.AdsCampaign
 import com.testlogon.android.core.ui.error.UiText
 
@@ -127,10 +134,16 @@ data class AdsAccountsUiState(
 data class AdsBillingUiState(
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
-    val billing: AdsBilling? = null,
+    // [Corrected] /billing returns a LIST of ledger entries, not a single summary.
+    val entries: List<AdsBillingEntry> = emptyList(),
+    // Optional running balance, sourced from the selected AdAccount.balance_cents
+    // (the /billing endpoint does NOT return a balance). May be null until accounts load.
+    val balanceCents: Long? = null,
     val error: UiText? = null,
     val transientError: UiText? = null,
-)
+) {
+    val isEmpty: Boolean get() = !isLoading && error == null && entries.isEmpty()
+}
 
 data class AdsCampaignsUiState(
     val isLoading: Boolean = false,
@@ -218,7 +231,7 @@ class AdsBillingViewModel @Inject constructor(
     fun refresh() = load(initial = false)
     fun retry() = load(initial = true)
     fun onErrorShown() { _state.update { it.copy(transientError = null) } }
-    // load() calls repository.getBilling(accountId): ApiResult<AdsBilling>
+    // load() calls repository.getBilling(accountId): ApiResult<List<AdsBillingEntry>>
 }
 ```
 
@@ -230,7 +243,8 @@ ApiResult<List<AdsCampaign>>`.
 ```kotlin
 interface AdsRepository {
     suspend fun getAccounts(): ApiResult<List<AdsAccount>>
-    suspend fun getBilling(accountId: String): ApiResult<AdsBilling>
+    // [Corrected] /billing returns a list of ledger entries (history), not a summary.
+    suspend fun getBilling(accountId: String, limit: Int = 50): ApiResult<List<AdsBillingEntry>>
     suspend fun getCampaigns(accountId: String): ApiResult<List<AdsCampaign>>
 }
 ```
@@ -263,38 +277,56 @@ This ticket performs **no direct HTTP**; all network calls go through `AdsReposi
 only to fix the response shapes the ViewModels map into UiState. The Retrofit service,
 endpoint paths, and Moshi adapters are **owned by AND-363**.
 
-Consumed endpoints (cookie-auth, `X-CSRF-Token` echoed by interceptor):
+Consumed endpoints (verified against OpenAPI index lines 784/787/789 and
+`src/api/endpoints/ads.ts`). The real backend path param is **`{account_id}`**
+(snake_case); auth is **Bearer token + cookies** with a **`X-CSRF-Token`** header sourced
+from the `ui_csrf` cookie (web `client.ts`). Note these `/ui/*` routes also accept
+`user_sub`, `X-SESSION-ID`, and `X-IMPERSONATION-TOKEN` params in the OpenAPI spec, but the
+web client does not send them on these calls; they are not this layer's concern (AND-027).
 
-- `GET /ui/ads/accounts`
-- `GET /ui/ads/accounts/{accountId}/billing`
-- `GET /ui/ads/accounts/{accountId}/campaigns`
+- `GET /ui/ads/accounts` — op `list_my_accounts...` → returns `AdAccount[]` (bare array).
+- `GET /ui/ads/accounts/{account_id}/billing` — op `billing_history_endpoint...`, optional
+  `limit` query (default 50) → returns `AdBillingEntry[]` (bare array, billing **history**).
+- `GET /ui/ads/accounts/{account_id}/campaigns` — op `list_campaigns_endpoint...` →
+  returns `Campaign[]` (bare array).
 
-Representative success bodies (authoritative shape lives in AND-363 DTOs):
+**[Corrected]** All three responses are **bare JSON arrays**, NOT `{accounts:[…]}` /
+`{campaigns:[…]}` envelopes, and there is **no `currency` field** on any model. Authoritative
+shapes from `src/api/types.ts`:
 
 ```json
-// GET /ui/ads/accounts
-{ "accounts": [
-  { "id": "acct_123", "name": "Acme Ads", "status": "active", "currency": "USD" }
-] }
+// GET /ui/ads/accounts  →  AdAccount[]
+[ { "account_id": "acct_123", "owner_sub": "user_1", "company_name": "Acme Ads",
+    "billing_email": "ops@acme.test", "status": "active",
+    "balance_cents": 4210, "lifetime_spend_cents": 99000,
+    "created_at": 1700000000, "updated_at": 1700000100 } ]
 ```
 
 ```json
-// GET /ui/ads/accounts/acct_123/billing
-{ "account_id": "acct_123", "balance_cents": 4210, "currency": "USD",
-  "payment_method": { "brand": "visa", "last4": "4242" } }
+// GET /ui/ads/accounts/acct_123/billing?limit=50  →  AdBillingEntry[]
+[ { "entry_id": "ent_1", "account_id": "acct_123", "campaign_id": "camp_1",
+    "entry_type": "impression_charge", "amount_cents": -120, "state": "settled",
+    "reason": "cpm", "meta": {}, "created_at": 1700000200 } ]
 ```
 
 ```json
-// GET /ui/ads/accounts/acct_123/campaigns
-{ "campaigns": [
-  { "id": "camp_1", "name": "Spring", "status": "paused", "daily_budget_cents": 1000 }
-] }
+// GET /ui/ads/accounts/acct_123/campaigns  →  Campaign[]
+[ { "campaign_id": "camp_1", "account_id": "acct_123", "name": "Spring",
+    "objective": "traffic", "budget_cents": 50000, "budget_type": "lifetime",
+    "daily_budget_cents": 1000, "spent_today_cents": 120, "lifetime_spent_cents": 8400,
+    "status": "paused", "created_at": 1700000000, "updated_at": 1700000300 } ]
 ```
+
+(Field names above are the FastAPI/web wire shapes; AND-363 owns the Moshi→domain mapping.
+This ticket consumes whatever AND-363 names the domain types but must not assume an
+envelope, a single billing summary, or a `currency` field that the backend does not send.)
 
 Error bodies surface as `ApiResult.Failure(ApiError)` per the global mapping
-(`detail: string | [{msg}] | {code,...}`); `401` triggers one
-`POST /ui/session/refresh` + retry **inside the network layer** before a failure reaches
-this ViewModel.
+(`detail: string | [{msg}] | {code,...}`, verified in `client.ts: normalizeErrorDetail`).
+Validation failures on these GETs return **HTTP 422 with `HTTPValidationError`**
+(`{"detail":[{"loc","msg","type"}]}`); `401` triggers one
+`POST /ui/session/refresh` + a single retry **inside the network layer** (verified in
+`client.ts: refreshSession`) before a failure reaches this ViewModel.
 
 ## 6. Data & State Management
 
@@ -335,9 +367,10 @@ this ViewModel.
 
 - No credentials, cookies, or CSRF tokens are handled in `feature-ads`; auth rides entirely
   on the `core-network` cookie jar + CSRF interceptor.
-- UiState carries only display-grade data. Billing exposes a payment-method **summary**
-  (brand + last4) as provided by the backend; no PAN/full card data is requested, stored,
-  or logged.
+- UiState carries only display-grade data. **[Corrected]** The billing endpoint returns
+  ledger entries (amounts/types/timestamps) — there is **no payment-method/card data**
+  (no brand, no last4, no PAN) in any of the three consumed responses, so none is requested,
+  stored, or logged. Monetary fields are integer cents.
 - No PII or financial figures are written to logs (see Section 10). `Throwable` details are
   never surfaced into `UiText`.
 - Account/campaign identifiers are opaque server ids and are safe to hold in memory; they
@@ -349,9 +382,11 @@ this ViewModel.
   (`ads_error_offline`, `ads_error_timeout`, `ads_error_session`, `ads_error_server`,
   `ads_error_generic`); the only literal is the server-provided `detail` message, which is
   already localized server-side or shown verbatim as a last resort.
-- ViewModels expose currency as `currency` code + integer cents so the UI can format with
-  the device locale (`NumberFormat.getCurrencyInstance`); no locale assumptions are baked
-  into state.
+- ViewModels expose monetary amounts as integer cents. **[Corrected]** The backend provides
+  **no `currency` field** on these models; the web client hard-codes USD (`$X.XX`). This
+  ticket therefore exposes cents only and treats the currency as an app-level constant (USD)
+  for UI formatting (`NumberFormat.getCurrencyInstance(Locale.US)`), pending a backend
+  currency field (see §16 Open assumptions). No other locale assumptions are baked into state.
 - No `Context`/resource resolution occurs in the ViewModel, keeping the layer locale- and
   configuration-agnostic. Actual content-description and screen-reader work belongs to the
   downstream UI ticket; this ticket only guarantees the state contract supports it.
@@ -384,8 +419,9 @@ Required cases per ViewModel:
   `onErrorShown()` clears it; (f) `onAccountSelected` updates `selectedAccountId` without
   any repo call (verify via fake call count); (g) latest-wins ordering when two loads race.
 - **Billing:** (a) `accountId` resolved from `SavedStateHandle`; (b) missing arg throws on
-  construction; (c) success maps balance/currency/payment-method summary; (d) failure →
-  error/retry; (e) refresh transient-error path.
+  construction; (c) success maps the **entry list** (`AdsBillingEntry[]`), empty list →
+  `isEmpty=true` (no balance/currency/payment-method mapping — those fields do not exist);
+  (d) failure → error/retry; (e) refresh transient-error path.
 - **Campaigns:** (a) success populates list; (b) empty → `isEmpty`; (c) failure → error;
   (d) refresh paths.
 - **Error mapper:** table-driven test mapping each `ApiError` subtype to the expected
@@ -419,8 +455,11 @@ in this ticket. A `MainDispatcherRule` (JUnit `TestWatcher`) sets `Dispatchers.M
   ticket needs strict single-flight.
 - **R3 (unreliable dev host):** Frequent timeouts on `18.222.237.167:8000` make manual
   verification flaky; mitigated by the fake-repository unit tests being the gate.
-- **OQ1:** Does billing return a list of payment methods or a single summary? Assumed
-  single summary; adjust `AdsBilling` consumption if AND-363 models a list.
+- **OQ1 [RESOLVED]:** Billing returns neither a payment-method list nor a single summary —
+  it returns a **billing-history list** (`AdBillingEntry[]`, op `billing_history_endpoint`,
+  `limit` default 50), verified against OpenAPI line 787 and `src/api/types.ts:AdBillingEntry`.
+  `AdsBillingUiState` now models `entries: List<AdsBillingEntry>`; the account balance comes
+  from `AdAccount.balance_cents`. No follow-up needed.
 - **OQ2:** Should campaigns paginate (Paging 3)? Out of scope here (read-only flat list);
   if the backend paginates, a follow-up ticket adds `PagingData`.
 
@@ -456,3 +495,217 @@ in this ticket. A `MainDispatcherRule` (JUnit `TestWatcher`) sets `Dispatchers.M
 - Spec reviewed; any DTO-field assumptions reconciled against the merged AND-363 models;
   open questions OQ1/OQ2 either resolved or explicitly deferred with a follow-up note.
 - PR description links AND-369 and AND-363 and lists the covered test cases.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the exact source pointer.
+
+1. **`GET /ui/ads/accounts` lists the user's advertiser accounts.** VERIFIED.
+   OpenAPI `GET /ui/ads/accounts` (op `list_my_accounts_ui_ads_accounts_get`, index line 784);
+   `src/api/endpoints/ads.ts: listMyAdAccounts`.
+2. **Accounts response is a bare `AdAccount[]` array, NOT an `{accounts:[…]}` envelope.**
+   CORRECTED (spec originally showed an envelope). `src/api/endpoints/ads.ts: listMyAdAccounts`
+   returns `AdAccount[]`; `src/pages/ads/AdBillingPage.tsx` consumes `AdAccount[]`.
+3. **`AdAccount` fields are `account_id`, `owner_sub`, `company_name`, `billing_email`,
+   `status`, `balance_cents`, `lifetime_spend_cents`, `created_at`, `updated_at`.** CORRECTED
+   (spec used `id`/`name`/`currency`). `src/api/types.ts: AdAccount` (lines ~5698-5708).
+   There is **no `id`, no top-level `name` (it is `company_name`), and no `currency`.**
+4. **`GET /ui/ads/accounts/{account_id}/campaigns` returns campaigns for an account.** VERIFIED.
+   OpenAPI line 789 (op `list_campaigns_endpoint...`); `src/api/endpoints/ads.ts: listCampaigns`.
+5. **Campaigns response is a bare `Campaign[]` array, NOT a `{campaigns:[…]}` envelope.**
+   CORRECTED. `src/api/endpoints/ads.ts: listCampaigns` returns `Campaign[]`.
+6. **`Campaign` fields include `campaign_id`, `account_id`, `name`, `objective`, `budget_cents`,
+   `budget_type`, `daily_budget_cents`, `spent_today_cents`, `lifetime_spent_cents`, `status`,
+   `created_at`, `updated_at`.** CORRECTED (spec used `id`). `src/api/types.ts: Campaign`
+   (lines ~5710-5723). Primary key is `campaign_id`, not `id`.
+7. **`GET /ui/ads/accounts/{account_id}/billing` returns a single balance/currency/
+   payment-method summary.** CORRECTED — it returns a **billing-history list**
+   (`AdBillingEntry[]`) with an optional `limit` query (default 50). OpenAPI line 787
+   (op `billing_history_endpoint...`, param `limit`); `src/api/endpoints/ads.ts:
+   getAdBillingHistory` returns `AdBillingEntry[]`; `src/pages/ads/AdBillingPage.tsx`
+   names the query `["ad-billing", …]` over `entries`.
+8. **`AdBillingEntry` fields: `entry_id`, `account_id`, `campaign_id`, `entry_type`,
+   `amount_cents`, `state`, `reason`, `meta`, `created_at`.** VERIFIED.
+   `src/api/types.ts: AdBillingEntry` (lines ~5727-5737). No `balance_cents`, no `currency`,
+   no `payment_method`/`brand`/`last4` on this shape.
+9. **Account balance is exposed as `balance_cents` on `AdAccount` (not on /billing).** VERIFIED.
+   `src/api/types.ts: AdAccount.balance_cents`.
+10. **No `currency` field exists on any of the three consumed models; the web UI hard-codes
+    USD.** VERIFIED. No `currency` key in `AdAccount`/`Campaign`/`AdBillingEntry`
+    (`src/api/types.ts`); `src/pages/ads/AdBillingPage.tsx: formatCents` produces `$X.XX`.
+11. **Path parameter is `{account_id}` (snake_case), not `{accountId}`.** VERIFIED.
+    OpenAPI lines 787/789 list `params=account_id,...`. (Kotlin code may use a camelCase
+    nav-arg key; the wire path segment is unaffected since AND-363 builds the Retrofit path.)
+12. **Auth/CSRF: requests carry an `Authorization: Bearer` header AND cookies; CSRF token is
+    read from the `ui_csrf` cookie and sent as the `X-CSRF-Token` header.** VERIFIED with a
+    nuance — spec said "cookie-authenticated"; it is **Bearer token + cookies**, not cookie-only.
+    `src/api/client.ts` (Authorization at L157-160, `ui_csrf`→`X-CSRF-Token` at L168-171,
+    `credentials: "include"`).
+13. **A 401 triggers exactly one `POST /ui/session/refresh` + a single retry inside the
+    network layer.** VERIFIED. `src/api/client.ts: refreshSession` (POST `/ui/session/refresh`,
+    L121-130) and the single-flight refresh+retry block (L194-237).
+14. **FastAPI error `detail` is `string | [{msg}] | {code,...}` and is normalized to one
+    message.** VERIFIED. `src/api/client.ts: normalizeErrorDetail` (L66-102) and
+    `mapAuthorizationError` for `{code,...}` shapes (e.g. `role_required_scope`).
+15. **Validation errors on these GETs are HTTP 422 `HTTPValidationError`.** VERIFIED.
+    OpenAPI lines 784/787/789 all declare `422:HTTPValidationError`. Network error (offline/
+    DNS) is surfaced by the web client as status `0` (`client.ts` L185-189) — the Android
+    analogue is `ApiError.Network` (AND-027).
+16. **`SavedStateHandle` survives process death for nav args; ViewModels survive config
+    changes.** VERIFIED (framework ref): https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate
+    and https://developer.android.com/topic/libraries/architecture/viewmodel
+17. **`collectAsStateWithLifecycle()` for safe StateFlow collection in Compose.** VERIFIED
+    (framework ref): https://developer.android.com/topic/architecture/ui-layer/state-production#state-flow-compose
+18. **`@HiltViewModel` + KSP for ViewModel injection.** VERIFIED (framework ref):
+    https://developer.android.com/training/dependency-injection/hilt-jetpack
+19. **`StandardTestDispatcher` + `runTest` + `MainDispatcherRule` for deterministic VM tests;
+    Turbine for StateFlow.** VERIFIED (framework refs):
+    https://developer.android.com/kotlin/coroutines/test and
+    https://github.com/cashapp/turbine
+20. **Bearer 401 refresh/backoff/timeout live in `core-network` (AND-027), not this layer.**
+    UNVERIFIED-ASSUMPTION at the Android level — AND-027 source is not in the provided
+    reference tree. The behavior is consistent with the web `client.ts` model (single refresh,
+    network status `0`), but the exact Kotlin `ApiError` taxonomy and backoff are taken on
+    faith from AND-027.
+
+### Corrections made
+
+- **C1 (response envelopes):** Accounts and campaigns return **bare arrays**, not
+  `{accounts:[…]}`/`{campaigns:[…]}`. Fixed §5 JSON examples (claims 2, 5).
+- **C2 (account fields):** `AdAccount` uses `account_id`/`company_name`/`balance_cents` and
+  has **no `id`/`name`/`currency`**. Fixed §5 (claim 3).
+- **C3 (campaign fields):** primary key is `campaign_id`, not `id`. Fixed §5 (claim 6).
+- **C4 (billing shape — the big one):** `/billing` is a **history list** (`AdBillingEntry[]`,
+  `limit` default 50), not a single balance/currency/payment-method summary. Rewrote FR-4,
+  `AdsBillingUiState` (now `entries`/`balanceCents`), the repository `getBilling` signature,
+  §5 example, §11 billing test case (c), and resolved OQ1 (claims 7, 8).
+- **C5 (no payment-method PII):** removed the brand/last4 payment-method-summary claim from
+  §8 — that data is not in any consumed response (claim 8).
+- **C6 (no currency):** removed `currency`-code claims from §9 and elsewhere; amounts are
+  integer cents, USD assumed app-side (claim 10).
+- **C7 (auth nuance):** §5 now states Bearer token + cookies + `X-CSRF-Token` from `ui_csrf`,
+  rather than "cookie-authenticated" only (claim 12).
+- **C8 (path param):** noted the real wire param is `{account_id}` (claim 11).
+
+### Open assumptions
+
+- **OA1 (AND-027 internals):** The Android `ApiResult`/`ApiError` taxonomy, GET backoff, ~20s
+  timeout, and 401-refresh-retry are assumed from AND-027; that module's source is **not** in
+  the reference tree. Web `client.ts` corroborates the single-refresh + network-status-0 model
+  but not the exact Kotlin types. (Claim 20.)
+- **OA2 (AND-363 domain mapping):** The exact Kotlin domain type names
+  (`AdsAccount`/`AdsBillingEntry`/`AdsCampaign`) and the Moshi field mapping are owned by
+  AND-363 and assumed; this spec verified the **wire shapes** only. If AND-363 names types
+  differently, adapt call sites (not DTOs).
+- **OA3 (currency):** No backend currency field exists today; USD is assumed app-side. If the
+  backend later adds a `currency`, billing/account state must surface it.
+- **OA4 (campaigns pagination):** OQ2 — the campaigns endpoint exposes no pagination params in
+  OpenAPI (line 789 has only `account_id` + auth params), so the flat-list assumption holds
+  for now; revisit if the backend adds cursors.
+- **OA5 (`limit` exposure):** Whether the UI needs to vary the billing `limit` (default 50) is
+  unconfirmed; this spec defaults it and leaves tuning to the UI ticket.
+
+## 17. Test Plan
+
+All cases are JVM/Robolectric unit tests on the **JVM unit** target unless noted — this
+ticket is a pure state layer with no UI, no device dependency, and no real network. The
+unreliable dev host is never contacted; `FakeAdsRepository` returns scripted `ApiResult`.
+Tools: JUnit4, `kotlinx-coroutines-test` (`StandardTestDispatcher` + `runTest`),
+`MainDispatcherRule`, Turbine.
+
+- **TC-AND-369-01** — Type: unit (JVM). Target: `AdsAccountsViewModel`.
+  Preconditions: `FakeAdsRepository.getAccounts` scripted to return
+  `ApiResult.Success(listOf(account))`. Steps: construct VM (triggers `init` load); advance
+  dispatcher; collect `state`. Expected: emits `isLoading=true` (first paint) then
+  `accounts=[account]`, `isLoading=false`, `error=null`, `isEmpty=false`.
+  Traces: AC-1, AC-2.
+- **TC-AND-369-02** — Type: unit (JVM). Target: `AdsAccountsViewModel`.
+  Preconditions: `getAccounts` → `Success(emptyList())`. Steps: construct; advance.
+  Expected: `accounts=[]`, `isLoading=false`, `error=null`, `isEmpty=true`.
+  Traces: AC-2.
+- **TC-AND-369-03** — Type: unit (JVM). Target: `AdsAccountsViewModel`.
+  Preconditions: `getAccounts` → `Failure(ApiError.Network)` on first call, then
+  `Success(listOf(account))` on the second. Steps: construct; advance → assert terminal
+  `error` set, `accounts=[]`; call `retry()`; advance. Expected: after retry, `error=null`,
+  `accounts=[account]`. (Flaky-host/offline path simulated via `ApiError.Network`.)
+  Traces: AC-2, AC-6.
+- **TC-AND-369-04** — Type: unit (JVM). Target: `AdsAccountsViewModel`.
+  Preconditions: first load `Success(listOf(a))`; refresh load `Success(listOf(a,b))`.
+  Steps: construct; advance; call `refresh()`; assert `isRefreshing=true` mid-flight (content
+  retained); advance. Expected: during refresh `accounts` still `[a]` and `isRefreshing=true`;
+  after, `accounts=[a,b]`, `isRefreshing=false`, `isLoading` never re-toggles to a full spinner.
+  Traces: AC-2.
+- **TC-AND-369-05** — Type: unit (JVM). Target: `AdsAccountsViewModel`.
+  Preconditions: first load `Success(listOf(a))`; refresh `Failure(ApiError.Timeout)`.
+  Steps: construct; advance; `refresh()`; advance; then call `onErrorShown()`.
+  Expected: after failed refresh, `accounts=[a]` retained, `transientError != null`,
+  `error == null`; after `onErrorShown()`, `transientError == null`.
+  (Offline/flaky-host transient path.) Traces: AC-3.
+- **TC-AND-369-06** — Type: unit (JVM). Target: `AdsAccountsViewModel`.
+  Preconditions: any loaded state; `FakeAdsRepository` records call counts.
+  Steps: call `onAccountSelected("acct_123")`. Expected: `selectedAccountId == "acct_123"`
+  and `FakeAdsRepository` network call count is **unchanged** (no fetch).
+  Traces: AC-4.
+- **TC-AND-369-07** — Type: unit (JVM). Target: `AdsAccountsViewModel` (concurrency).
+  Preconditions: two loads race — slow first (`Success(stale)`), fast second
+  (`Success(fresh)`) via controlled dispatcher ordering. Steps: trigger `refresh()` twice;
+  control completion order so the stale result resolves last. Expected: final `accounts`
+  reflect the **latest-issued** load (fresh), proving latest-wins (job cancellation/guard).
+  Traces: AC-2.
+- **TC-AND-369-08** — Type: unit (JVM). Target: `AdsBillingViewModel`.
+  Preconditions: `SavedStateHandle` seeded with `accountId="acct_123"`; `getBilling` →
+  `Success(listOf(entry))`. Steps: construct; advance. Expected: `entries=[entry]`,
+  `isLoading=false`, `error=null`; the fake received `accountId="acct_123"` and default
+  `limit=50`. Traces: AC-5, AC-2.
+- **TC-AND-369-09** — Type: unit (JVM). Target: `AdsBillingViewModel`.
+  Preconditions: `SavedStateHandle` **missing** `accountId`. Steps: attempt construction.
+  Expected: constructor throws `IllegalArgumentException` ("accountId nav arg required")
+  via `requireNotNull`. Traces: AC-5.
+- **TC-AND-369-10** — Type: unit (JVM). Target: `AdsBillingViewModel`.
+  Preconditions: `getBilling` → `Success(emptyList())` then (on refresh)
+  `Failure(ApiError.Http(500))`. Steps: construct; advance (assert `isEmpty=true`);
+  `refresh()`; advance. Expected: empty state first; after failed refresh with no prior
+  content, terminal `error` set (no content to retain). Traces: AC-2, AC-3.
+- **TC-AND-369-11** — Type: unit (JVM). Target: `AdsCampaignsViewModel`.
+  Preconditions: `SavedStateHandle` `accountId="acct_123"`; `getCampaigns` →
+  `Success(listOf(c1,c2))`. Steps: construct; advance. Expected: `campaigns=[c1,c2]`,
+  `isLoading=false`, `isEmpty=false`. Traces: AC-2, AC-5.
+- **TC-AND-369-12** — Type: unit (JVM). Target: `AdsCampaignsViewModel`.
+  Preconditions: `getCampaigns` → `Success(emptyList())`; then `Failure(ApiError.Network)`
+  on `retry()` is not used here — instead first `Failure(ApiError.Unauthorized)`.
+  Steps: script `getCampaigns` → `Failure(ApiError.Unauthorized)`; construct; advance.
+  Expected: terminal `error` mapped to the session message; `campaigns=[]`. (Persistent-401
+  path that survived upstream refresh.) Traces: AC-2, AC-6.
+- **TC-AND-369-13** — Type: unit (JVM). Target: `AdsUiErrorMapper`.
+  Preconditions: none. Steps: table-driven — map each `ApiError` subtype
+  (`Network`, `Timeout`, `Unauthorized`, `Http(503)`, `Detail("server says no")`, and an
+  unknown/`else`). Expected: each maps to the documented `UiText` —
+  `ads_error_offline`, `ads_error_timeout`, `ads_error_session`, `ads_error_server` (with the
+  status arg), `UiText.Literal("server says no")`, `ads_error_generic` respectively.
+  Traces: AC-6.
+- **TC-AND-369-14** — Type: unit (JVM). Target: ViewModels (no-leakage / logging).
+  Preconditions: injected `Logger` fake; load success + load failure. Steps: drive a success
+  and a failure; inspect (a) the public `state` type and (b) logged records. Expected: every
+  field reachable from `state` is a `core-model`/primitive/`UiText` type — **no** Retrofit
+  `Response`, Moshi, or `Throwable` is exposed; logs contain only the `ApiError` category
+  (`network`/`timeout`/`http:{status}`/`detail`) and list counts, **never** balances, account
+  names, or stack traces. Traces: AC-7.
+
+(No instrumented/Compose-UI/e2e cases: this ticket ships no UI and no device-dependent code,
+so neither the `test35` emulator nor the physical Galaxy A15 is required. Accessibility/i18n
+is asserted indirectly — TC-14 confirms state carries cents + `UiText.Res` keys so the
+downstream UI ticket can localize; there is no UI here to run TalkBack against. Security is
+covered by TC-06 (no I/O on selection) and TC-14 (no PII/financials leaked or logged).)
+
+### Coverage matrix
+
+| Acceptance criterion | Covered by |
+|---|---|
+| AC-1 (VMs exist, `@HiltViewModel`, single `StateFlow`) | TC-01 |
+| AC-2 (loading→content/empty/error; refresh/retry; isRefreshing) | TC-01, TC-02, TC-03, TC-04, TC-07, TC-08, TC-10, TC-11, TC-12 |
+| AC-3 (transient vs terminal error; `onErrorShown`) | TC-05, TC-10 |
+| AC-4 (`onAccountSelected` no network) | TC-06 |
+| AC-5 (`accountId` from `SavedStateHandle`; throws if missing) | TC-08, TC-09, TC-11 |
+| AC-6 (`AdsUiErrorMapper` covers every `ApiError`) | TC-03, TC-12, TC-13 |
+| AC-7 (no Retrofit/Moshi/`Throwable` leakage) | TC-14 |
+| AC-8 (all §11 branches pass deterministically) | TC-01 … TC-14 (all) |

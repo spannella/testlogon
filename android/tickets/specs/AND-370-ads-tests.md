@@ -5,7 +5,8 @@ milestone: M8
 epic: E47
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-369]
 blocks: []
 ---
@@ -37,7 +38,7 @@ Concretely, this ticket provides two test layers for the ads feature module(s):
   - AND-368 — Ad analytics (read): campaign analytics dashboards.
   - AND-369 — Ads ViewModels: `StateFlow<UiState>` for all ads screens (**direct dependency**).
 - Web reference for endpoint parity: `frontend/src/api/endpoints/contentBoost.ts`, `frontend/src/api/endpoints/sponsorshipDeals.ts`, `frontend/src/api/endpoints/ads*.ts`; shared types `frontend/src/api/types.ts`. Backend OpenAPI at `/openapi.json`.
-- Auth model under test: cookie-based session + `ui_csrf` cookie echoed as `X-CSRF-Token`; on 401 the client calls `POST /ui/session/refresh` once then retries. The suite must assert these mechanics for ads calls.
+- Auth model under test: cookie-based session + `ui_csrf` cookie echoed as `X-CSRF-Token`; on 401 the client calls `POST /ui/session/refresh` once then retries. The suite must assert these mechanics for ads calls. **[Corrected]** Per the web reference (`src/api/client.ts`), `X-CSRF-Token` is attached to **every** request (GET included), not only mutating ones, and the client *also* sets `Authorization: Bearer <accessToken>` when an access token is present in the auth store — i.e. transport uses cookie session **and** a bearer header in parallel (see §8 correction). The single-refresh-then-retry-once behavior and the exact `POST /ui/session/refresh` path are verified.
 
 ## 3. Functional Requirements
 
@@ -50,7 +51,7 @@ FR-3. Repo tests cover the **resilience** paths: read timeout (~20s budget, simu
 
 FR-4. **UI tests** exist for each ads screen produced in E47 and render each declared `UiState`. Minimum screens: Campaign Analytics dashboard (AND-368), Content Boost create + detail (AND-364), Sponsorship inbox (AND-365) + deal detail (AND-366), Ad billing + deposit (AND-367).
 
-FR-5. UI tests assert user interactions are wired to ViewModel intents: e.g., tapping "Boost" submits with the entered budget; "Accept"/"Decline"/"Negotiate" on a deal calls the corresponding ViewModel function; "Deposit" submits the amount; pull-to-refresh re-invokes the loader.
+FR-5. UI tests assert user interactions are wired to ViewModel intents: e.g., tapping "Boost" submits with the entered budget; "Accept"/"Decline"/"Negotiate" on a deal calls the corresponding ViewModel function (which maps to the **distinct** `/accept`, `/reject`, and `/counter` endpoints respectively — there is no single `/respond` endpoint); "Deposit" submits the amount; pull-to-refresh re-invokes the loader.
 
 FR-6. UI tests assert the Error and Offline/Stale states show the mapped message and a retry affordance, and that retry re-triggers the load.
 
@@ -120,14 +121,18 @@ class ContentBoostRepositoryTest {
         harness.cookieJar.seed("ui_csrf", "csrf-abc")
         harness.enqueueJson(200, AdsFixtures.BOOST_CREATE_OK)
 
-        val result = repo.createBoost(postId = "p1", BoostRequest(budgetCents = 5000, currency = "USD"))
+        // [Corrected] real request body: content_type/content_id/budget_cents/duration_seconds (ContentBoostCreate)
+        val result = repo.createBoost(
+            BoostRequest(contentType = "post", contentId = "p1", budgetCents = 5000, durationSeconds = 86_400),
+        )
 
         val req = harness.takeRequest()
         assertEquals("POST", req.method)
-        assertEquals("/ui/ads/boosts", req.path)
+        assertEquals("/ui/ads/boost", req.path)   // [Corrected] singular /ui/ads/boost, not /ui/ads/boosts
         assertEquals("csrf-abc", req.getHeader("X-CSRF-Token"))
         assertThat(result).isInstanceOf(ApiResult.Success::class.java)
-        assertEquals(BoostStatus.PENDING, (result as ApiResult.Success).data.status)
+        // ContentBoostOut.status is a free-form string; createBoost returns 200 (not 201)
+        assertEquals("pending", (result as ApiResult.Success).data.status)
     }
 
     @Test fun `401 triggers single refresh then retry`() = runTest {
@@ -165,35 +170,44 @@ class SponsorshipInboxScreenTest {
 
 ## 5. API Contract
 
-This ticket consumes (does not define) the ads contract owned by AND-363/364/367/368. The endpoints the **repo tests** stub via `MockWebServer` are:
+This ticket consumes (does not define) the ads contract owned by AND-363/364/367/368. Note: the ads UI client uses the cookie-session `/ui/ads/*` surface; a separate machine-facing `/api/v1/ads/*` surface also exists in the backend but is **not** the contract under test here (verified in `openapi.index.txt`). The endpoints the **repo tests** stub via `MockWebServer` are:
+
+The table below has been **reconciled against `openapi.index.txt` and the web reference**; corrected cells are flagged. Note every `/ui/ads/*` op also accepts `user_sub`, `X-SESSION-ID`, and `X-IMPERSONATION-TOKEN` params/headers server-side — the Android client relies on the cookie session + bearer + CSRF instead and does not send these explicitly, so tests assert on the cookie/CSRF/bearer transport only.
 
 | Method | Path | Used by | Notes |
 |---|---|---|---|
-| GET | `/ui/ads/accounts` | AdsAccountsRepository | idempotent; retry-eligible |
-| GET | `/ui/ads/accounts/{id}/billing` | AdBillingRepository | read |
-| GET | `/ui/ads/accounts/{id}/campaigns` | AdsAccountsRepository | read |
-| GET | `/ui/ads/campaigns/{id}/analytics` | AdAnalyticsRepository | read, dashboard |
-| POST | `/ui/ads/boosts` | ContentBoostRepository | create; requires `X-CSRF-Token` |
-| GET | `/ui/ads/boosts/{id}` | ContentBoostRepository | detail |
-| GET | `/ui/ads/sponsorships` | SponsorshipRepository | inbox |
-| GET | `/ui/ads/sponsorships/{id}` | SponsorshipRepository | deal detail |
-| POST | `/ui/ads/sponsorships/{id}/respond` | SponsorshipRepository | accept/decline/negotiate; CSRF |
-| POST | `/ui/ads/accounts/{id}/deposit` | AdBillingRepository | deposit; CSRF |
+| GET | `/ui/ads/accounts` | AdsAccountsRepository | idempotent; retry-eligible. Returns a **bare JSON array** (`AdAccount[]`), not an envelope |
+| GET | `/ui/ads/accounts/{account_id}/billing` | AdBillingRepository | read; `?limit=` query; returns `AdBillingEntry[]` |
+| GET | `/ui/ads/accounts/{account_id}/campaigns` | AdsAccountsRepository | read; returns `Campaign[]` |
+| GET | `/ui/ads/analytics/summary` | AdAnalyticsRepository | **[Corrected]** dashboard analytics is a query-param endpoint `?account_id=&campaign_id=&days=`, **not** `/ui/ads/campaigns/{id}/analytics` (which does not exist). Companion reads: `/ui/ads/analytics/timeseries`, `/ui/ads/analytics/breakdown` |
+| POST | `/ui/ads/boost` | ContentBoostRepository | **[Corrected]** create boost is **singular** `/ui/ads/boost`, not `/ui/ads/boosts`; req `ContentBoostCreate`, resp **200** `ContentBoostOut`; requires `X-CSRF-Token` |
+| GET | `/ui/ads/boost/{boost_id}` | ContentBoostRepository | **[Corrected]** detail at `/ui/ads/boost/{boost_id}` (singular); resp `ContentBoostOut` |
+| GET | `/ui/ads/sponsorships` | SponsorshipRepository | inbox; `?status=&role=` query; returns a **bare array** `SponsorshipDeal[]` |
+| GET | `/ui/ads/sponsorships/{deal_id}` | SponsorshipRepository | deal detail; resp `SponsorshipDeal` |
+| POST | `/ui/ads/sponsorships/{deal_id}/accept` | SponsorshipRepository | **[Corrected]** accept is its own endpoint; there is **no** `/respond` endpoint |
+| POST | `/ui/ads/sponsorships/{deal_id}/reject` | SponsorshipRepository | **[Corrected]** "decline" is `reject` (body `{reason}`); CSRF |
+| POST | `/ui/ads/sponsorships/{deal_id}/counter` | SponsorshipRepository | **[Corrected]** "negotiate" is `counter` (req `SponsorshipCounterRequest`: `compensation_cents`, `note`); CSRF |
+| POST | `/ui/ads/accounts/{account_id}/deposit` | AdBillingRepository | deposit; req `AdDepositIn` (`amount_cents`, optional `payment_method_id`), resp **200** `{ok, entry_id, new_balance_cents}`; CSRF |
 
-> Exact paths must be reconciled against `/openapi.json` and `frontend/src/api/endpoints/*.ts` during implementation; if a feature ticket finalized a different path, the fixture and assertion are updated to match. Representative fixtures:
+> Verified against `reference/openapi.index.txt` and `reference/src/api/endpoints/{contentBoost,sponsorshipDeals,ads}.ts`. Corrected fixtures (field names taken from `components.schemas`):
 
 ```json
-// BOOST_CREATE_OK
-{ "id": "b_123", "post_id": "p1", "budget_cents": 5000, "currency": "USD",
-  "status": "pending", "created_at": "2026-06-05T00:00:00Z" }
+// BOOST_CREATE_OK  — [Corrected] ContentBoostOut: boost_id/content_id (not id/post_id),
+// no currency, timestamps are integer epochs (not ISO strings)
+{ "boost_id": "b_123", "owner_sub": "u_1", "content_type": "post", "content_id": "p1",
+  "budget_cents": 5000, "spent_cents": 0, "remaining_cents": 5000, "duration_seconds": 86400,
+  "starts_at": 1749081600, "ends_at": 1749168000, "status": "pending", "created_at": 1749081600 }
 ```
 ```json
-// SPONSORSHIP_INBOX_OK
-{ "items": [ { "id": "d_1", "advertiser": "Acme", "amount_cents": 250000,
-  "status": "offered" } ], "next_cursor": null }
+// SPONSORSHIP_INBOX_OK  — [Corrected] endpoint returns a bare array (no items/next_cursor envelope);
+// money field is compensation_cents (not amount_cents)
+[ { "id": "d_1", "advertiser_account_id": "acc_1", "creator_sub": "u_2", "content_type": "post",
+    "compensation_cents": 250000, "status": "proposed" } ]
 ```
 ```json
-// CAMPAIGN_ANALYTICS_OK
+// CAMPAIGN_ANALYTICS_OK  — representative summary payload from GET /ui/ads/analytics/summary;
+// exact AdAnalyticsSummary shape (KPIs + period comparison) is finalized by AND-368, so treat
+// the inner key names as an unverified assumption and reconcile at implementation time
 { "impressions": 10234, "clicks": 412, "ctr": 0.04, "spend_cents": 80000,
   "series": [ { "date": "2026-06-01", "impressions": 1200 } ] }
 ```
@@ -229,14 +243,14 @@ The suite is the primary place these behaviors are proven:
 - **Timeout**: `enqueueDelay(21)` against a 20s OkHttp read timeout → repo returns `ApiResult.Error` of network/timeout kind, no crash.
 - **Bounded retry, GET only**: a GET that 503s twice then 200s is retried and succeeds; a POST that 503s is **not** retried (assert exactly one recorded request) — guards against duplicate boosts/deposits.
 - **401 refresh-once**: assert `/ui/session/refresh` is called exactly once and the original request is retried once; a second 401 surfaces an auth error (no infinite loop).
-- **CSRF**: mutating requests carry `X-CSRF-Token` matching the `ui_csrf` cookie; tests fail if header is absent.
+- **CSRF**: requests carry `X-CSRF-Token` matching the `ui_csrf` cookie; tests fail if header is absent. **[Note]** The web client sets this header on **all** requests (GET included), not just mutations — so while AC-2 only mandates the assertion on mutating endpoints, the harness should also confirm the header is present on at least one GET to match web parity.
 - **Malformed `detail`**: all three shapes map to a non-null human-readable message; an unparseable body maps to a generic fallback string, never throws.
 
 ## 8. Security & Privacy
 
 - Tests must contain **no real credentials, cookies, or tokens**. CSRF/cookie values are obvious fakes (`csrf-abc`).
 - The suite must never point at `http://18.222.237.167:8000`; a CI guard/assert fails the build if a base URL other than the `MockWebServer` localhost URL is configured in test.
-- Tests assert that the cookie jar is the mechanism carrying auth (no Authorization bearer header is added) and that secrets are not logged by the OkHttp logging interceptor at the test log level.
+- **[Corrected]** Tests assert that the cookie jar carries the session, but the web reference (`src/api/client.ts`) shows the client *does* also add `Authorization: Bearer <accessToken>` whenever an access token is present, so the Android transport is expected to send **both** the session cookie and (when available) a bearer header — tests should assert the bearer header is present when the auth store holds a token and absent (cookie-only) when it does not, rather than asserting "no bearer ever". Tests also assert secrets are not logged by the OkHttp logging interceptor at the test log level.
 - No PII fixtures: advertiser/user names in fixtures are synthetic.
 
 ## 9. Accessibility & i18n
@@ -277,7 +291,7 @@ This ticket *is* the testing strategy for E47. Composition:
 - **R2 — Payment/deposit semantics.** Whether deposit/boost involve a payment intent (Stripe-style two-step) affects request shape and idempotency assertions. Open question for AND-364/367 owners: is there a client-generated idempotency key? If so, retry-suppression tests must also assert the key is reused.
 - **R3 — Compose-on-Robolectric flakiness.** Some Compose APIs misbehave under Robolectric. Mitigation: pin Robolectric/Compose versions used elsewhere in the repo; fall back to `androidTest` for any screen that proves unstable.
 - **R4 — ViewModel shape uncertainty.** Final `UiState` sealed hierarchies depend on AND-369; this spec's signatures are representative. Tests must track AND-369's actual types.
-- **Open question:** Does sponsorship "negotiate" open a sub-flow (counter-offer screen) requiring its own UI test, or is it a single POST? Assumed single POST until AND-366 confirms.
+- **Open question (partially resolved):** Sponsorship "negotiate" maps to a single `POST /ui/ads/sponsorships/{deal_id}/counter` with body `SponsorshipCounterRequest` (`compensation_cents`, `note`) — confirmed against the web client and OpenAPI. Whether the UI presents a dedicated counter-offer screen (and thus needs its own Compose-UI test) vs. an inline dialog is still an AND-366 presentation decision; the contract-level test is unaffected either way.
 
 ## 14. Acceptance Criteria
 
@@ -302,3 +316,192 @@ AC-11. The suite passes in CI on `android-port` via the documented Gradle comman
 - No secrets, real cookies, or PII in fixtures; CI base-URL guard in place.
 - New test code passes lint/detekt; no production code changed except minor visibility/test-hook adjustments (documented in the PR).
 - PR reviewed and merged; coverage report generated for ads repositories and ViewModels (≥ 80% advisory).
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim with its verdict and an exact source pointer. Sources: OpenAPI index = `reference/openapi.index.txt`; OpenAPI schemas = `reference/openapi.pretty.json` (`components.schemas.<Name>`); frontend = `reference/src/...`.
+
+1. **Ads UI endpoints live under `/ui/ads/*`.** VERIFIED. Source: OpenAPI index lines 784–880 (`GET /ui/ads/accounts` … `GET /ui/ads/why/{creative_id}`); frontend `src/api/endpoints/ads.ts`.
+2. **A separate `/api/v1/ads/*` surface exists but is NOT the contract under test.** VERIFIED. Source: OpenAPI index lines 94–109 (`/api/v1/ads/account`, `/api/v1/ads/campaigns`, …). The UI client never calls these.
+3. **Create boost path is `POST /ui/ads/boost` (singular), resp 200 `ContentBoostOut`, req `ContentBoostCreate`.** CORRECTED (spec said `POST /ui/ads/boosts`). Source: OpenAPI index line 810 `POST /ui/ads/boost | op=create_boost | req=ContentBoostCreate | resp=200:ContentBoostOut`; frontend `src/api/endpoints/contentBoost.ts: create` → `api.post("/ui/ads/boost", body)`.
+4. **Boost detail path is `GET /ui/ads/boost/{boost_id}` (singular).** CORRECTED (spec said `/ui/ads/boosts/{id}`). Source: OpenAPI index line 811; `src/api/endpoints/contentBoost.ts: get`.
+5. **`ContentBoostCreate` fields: `content_type`, `content_id`, `budget_cents`, `duration_seconds` (all required).** CORRECTED (spec fixture used `post_id`, `currency`). Source: `openapi.pretty.json` schema `ContentBoostCreate` (lines ~18931–18964).
+6. **`ContentBoostOut` fields: `boost_id`, `owner_sub`, `content_type`, `content_id`, `budget_cents`, `spent_cents`, `remaining_cents`, `duration_seconds`, `starts_at`, `ends_at`, `status`, `created_at` — timestamps are integer epochs; no `currency`.** CORRECTED (spec fixture used `id`, `post_id`, `currency`, ISO `created_at`). Source: `openapi.pretty.json` schema `ContentBoostOut` (lines ~18981–19048).
+7. **Boost list returns envelope `ContentBoostListOut { boosts: ContentBoostOut[] }`.** VERIFIED. Source: OpenAPI index line 809; schema `ContentBoostListOut` (lines ~18965–18980).
+8. **Campaign analytics dashboard is a query-param endpoint `GET /ui/ads/analytics/summary?account_id=&campaign_id=&days=`, not `GET /ui/ads/campaigns/{id}/analytics`.** CORRECTED. Source: OpenAPI index line 807 (`analytics_summary_endpoint`); no `campaigns/{id}/analytics` path exists in the index. Companions: index lines 805 (breakdown), 808 (timeseries). Frontend `src/api/endpoints/ads.ts: getAnalyticsSummary/getAnalyticsTimeseries/getAnalyticsBreakdown`.
+9. **Sponsorship inbox `GET /ui/ads/sponsorships` returns a bare `SponsorshipDeal[]` array (no `{items,next_cursor}` envelope); query params `status`, `role`.** CORRECTED (spec fixture used an envelope). Source: OpenAPI index line 866 (`params=status,role`); frontend `src/api/endpoints/sponsorshipDeals.ts: listSponsorshipDeals` → `api.get<SponsorshipDeal[]>`.
+10. **Sponsorship deal detail `GET /ui/ads/sponsorships/{deal_id}`.** VERIFIED. Source: OpenAPI index line 870; `sponsorshipDeals.ts: getSponsorshipDeal`.
+11. **Sponsorship responses are separate endpoints `/accept`, `/reject`, `/counter` (plus `/cancel`, `/complete`, `/submit-content`); there is NO `/respond` endpoint.** CORRECTED (spec listed a single `POST .../{id}/respond`). Source: OpenAPI index lines 871 (accept), 876 (reject), 874 (counter), 872 (cancel), 873 (complete), 877 (submit-content); frontend `sponsorshipDeals.ts: acceptSponsorshipDeal/rejectSponsorshipDeal/counterSponsorshipDeal`.
+12. **"Decline" = `reject` (`POST /ui/ads/sponsorships/{deal_id}/reject`, body `{reason}`); "Negotiate" = `counter` (`POST .../counter`, req `SponsorshipCounterRequest` = `compensation_cents`, `note`).** CORRECTED. Source: `sponsorshipDeals.ts: rejectSponsorshipDeal/counterSponsorshipDeal`; schema `SponsorshipCounterRequest` (`openapi.pretty.json` lines ~68985–69008).
+13. **Deposit `POST /ui/ads/accounts/{account_id}/deposit`, req `AdDepositIn` (`amount_cents` required, optional `payment_method_id`), resp 200 `{ok, entry_id, new_balance_cents}`.** VERIFIED. Source: OpenAPI index line 794; schema `AdDepositIn` (`openapi.pretty.json` lines ~1071–1093); frontend `ads.ts: depositAdFunds`.
+14. **Billing history `GET /ui/ads/accounts/{account_id}/billing?limit=` → `AdBillingEntry[]`; campaigns `GET /ui/ads/accounts/{account_id}/campaigns` → `Campaign[]`.** VERIFIED. Source: OpenAPI index lines 787, 789; frontend `ads.ts: getAdBillingHistory/listCampaigns`.
+15. **Accounts list `GET /ui/ads/accounts` returns a bare array `AdAccount[]`.** VERIFIED. Source: OpenAPI index line 784; frontend `ads.ts: listMyAdAccounts` → `api.get<AdAccount[]>`.
+16. **401 handling: client calls `POST /ui/session/refresh` exactly once then retries the original request once; a failed refresh / second 401 logs out (no loop).** VERIFIED. Source: `src/api/client.ts` `refreshSession()` (line ~121, `fetch("/ui/session/refresh", {method:"POST"})`) and the 401 block (lines ~194–237) which guards with a single shared `refreshPromise` and retries once.
+17. **CSRF: `X-CSRF-Token` is taken from the `ui_csrf` cookie and sent on EVERY request (not only mutations).** CORRECTED/CLARIFIED (spec implied mutating-only). Source: `src/api/client.ts` lines ~167–171 (`const csrf = getCookie("ui_csrf"); if (csrf) headers.set("X-CSRF-Token", csrf)`), executed for all methods.
+18. **Transport also sends `Authorization: Bearer <accessToken>` when an access token is present — i.e. cookie session AND bearer in parallel.** CORRECTED (spec §8 claimed "no Authorization bearer header is added"). Source: `src/api/client.ts` lines ~157–160.
+19. **Error `detail` normalization handles three shapes — string, list of `{msg}` objects, and object with `code` (authorization codes) — and falls back to a default string otherwise (never throws).** VERIFIED. Source: `src/api/client.ts: normalizeErrorDetail` (lines ~66–102) and `mapAuthorizationError` (lines ~34–64).
+20. **Offline/network failure surfaces a distinct error (`ApiError(0, "Network error")`) rather than an HTTP status error.** VERIFIED. Source: `src/api/client.ts` catch block lines ~185–189. Android equivalent: maps `IOException`/timeout to `ApiResult.Error` of network kind.
+21. **Idempotency key for boost/deposit retry-suppression.** UNVERIFIED-ASSUMPTION. Neither the OpenAPI schemas (`ContentBoostCreate`, `AdDepositIn`) nor the frontend send a client-generated idempotency key; retry-suppression for POSTs relies on "do not retry non-idempotent methods" rather than a key (see Open assumptions).
+22. **Robolectric + Compose test rule (`createComposeRule`) runs Compose UI tests on the JVM in CI.** VERIFIED (framework ref). Source: https://developer.android.com/develop/ui/compose/testing and https://robolectric.org/ . Device variant uses `createAndroidComposeRule` (same framework ref).
+23. **MockWebServer is the supported hermetic HTTP test double for OkHttp/Retrofit.** VERIFIED (framework ref). Source: https://github.com/square/okhttp/tree/master/mockwebserver .
+24. **`StateFlow`/coroutine ordering via `kotlinx-coroutines-test` (`runTest`, `StandardTestDispatcher`) and Turbine for emission assertions.** VERIFIED (framework ref). Source: https://developer.android.com/kotlin/coroutines/test and https://github.com/cashapp/turbine .
+
+### Corrections made
+
+- §2 / §7 / §8 / §16-17,18: CSRF is sent on all requests (not mutations only), and an `Authorization: Bearer` header is sent alongside the cookie session when a token exists (§8 previously claimed no bearer is ever added).
+- §4 repo-test example: boost create path `/ui/ads/boosts` → `/ui/ads/boost`; request body changed to `ContentBoostCreate` fields (`content_type`/`content_id`/`budget_cents`/`duration_seconds`); status assertion changed to a string ("pending") and noted resp is 200.
+- §5 table: corrected boost create/detail paths to singular `/ui/ads/boost[/{boost_id}]`; replaced non-existent `/ui/ads/campaigns/{id}/analytics` with `/ui/ads/analytics/summary` (query-param); replaced the single `/respond` row with the real `/accept`, `/reject`, `/counter` endpoints; clarified accounts/sponsorship list shapes are bare arrays; spelled out deposit request/response shape.
+- §5 fixtures: `BOOST_CREATE_OK` rebuilt to the real `ContentBoostOut` shape (`boost_id`, `content_id`, integer-epoch timestamps, no `currency`); `SPONSORSHIP_INBOX_OK` changed from envelope to bare array and `amount_cents`→`compensation_cents`.
+- §13: "negotiate" open question resolved to `POST .../counter`.
+
+### Open assumptions
+
+- **AdAnalyticsSummary inner field names** (`impressions`, `clicks`, `ctr`, `spend_cents`, `series[...]`): the analytics-summary response body is untyped in the OpenAPI index (`resp=200:` with no named schema) and AND-368 owns the final DTO; the analytics fixture keys remain a representative assumption pending AND-368.
+- **Idempotency key for boost/deposit:** not present in current schemas or the web client; if AND-364/367 later introduce one, the POST retry-suppression tests (TC-AND-370-04) must additionally assert the key is reused across the (suppressed) retry. Marked open because it cannot be confirmed from current sources.
+- **Final `UiState` sealed hierarchies and ViewModel constructor signatures** depend on AND-369 (not yet present in the reference sources); the §4/§6 signatures are representative and tests must track AND-369's actual types.
+- **`X-SESSION-ID` / `user_sub` / `X-IMPERSONATION-TOKEN` params** appear on every `/ui/ads/*` op in the OpenAPI index but the web client does not send them (it relies on the session cookie + bearer); assumed the Android client follows web parity and omits them. Reconcile if AND-363 says otherwise.
+
+## 17. Test Plan
+
+Test target legend: **JVM** = local JVM unit/Robolectric (no device); **emu35** = headless emulator AVD `test35` (x86_64, API 35); **device** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64-v8a). This suite is hermetic and ViewModel/Compose-centric, so almost everything runs JVM/emu35; the physical device is only relevant for the optional real-device parity smoke (no camera/biometrics/WebRTC/FCM surface in this ticket).
+
+| ID | Type | Target | Summary |
+|---|---|---|---|
+| TC-AND-370-01 | contract/MockWebServer | JVM | Boost create happy path |
+| TC-AND-370-02 | contract/MockWebServer | JVM | Sponsorship accept/reject/counter endpoint mapping |
+| TC-AND-370-03 | contract/MockWebServer | JVM | CSRF header on mutating + GET requests |
+| TC-AND-370-04 | contract/MockWebServer | JVM | Retry policy: GET retried, POST not |
+| TC-AND-370-05 | contract/MockWebServer | JVM | 401 → single refresh → retry once |
+| TC-AND-370-06 | contract/MockWebServer | JVM | FastAPI `detail` shapes + unparseable body |
+| TC-AND-370-07 | contract/MockWebServer | JVM | Read timeout → ApiResult.Error, no crash |
+| TC-AND-370-08 | unit | JVM | Bearer + cookie transport assertion |
+| TC-AND-370-09 | unit (Turbine) | JVM | Sponsorship inbox StateFlow emission order |
+| TC-AND-370-10 | unit (Turbine) | JVM | Content boost StateFlow incl. Empty/Error |
+| TC-AND-370-11 | Compose-UI | JVM (Robolectric) | Each screen renders Loading/Content/Error + retry |
+| TC-AND-370-12 | Compose-UI | JVM (Robolectric) | Primary actions invoke ViewModel with args |
+| TC-AND-370-13 | Compose-UI (a11y) | JVM (Robolectric) | Semantics/content descriptions + string-resource text |
+| TC-AND-370-14 | integration (guard) | JVM | Hermetic base-URL guard fails on non-localhost |
+| TC-AND-370-15 | instrumented/e2e | device | API-34 arm64 parity smoke of UI suite |
+
+---
+
+**TC-AND-370-01 — Boost create happy path**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: `ApiTestHarness` with `ui_csrf=csrf-abc` seeded; `ContentBoostRepositoryImpl` over `AdsApi`.
+- Steps: enqueue `200` `AdsFixtures.BOOST_CREATE_OK`; call `repo.createBoost(content_type="post", content_id="p1", budget_cents=5000, duration_seconds=86400)`; `takeRequest()`.
+- Expected: request is `POST /ui/ads/boost`; JSON body has exactly `content_type/content_id/budget_cents/duration_seconds`; result is `ApiResult.Success` with `boost_id="b_123"`, `status="pending"`, mapped integer-epoch timestamps.
+- Traces: AC-1.
+
+**TC-AND-370-02 — Sponsorship accept/reject/counter endpoint mapping**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: harness with CSRF seeded; `SponsorshipRepositoryImpl`.
+- Steps: for each action call `repo.accept("d_1")`, `repo.reject("d_1","spam")`, `repo.counter("d_1", compensation_cents=300000, note="more")`; enqueue `200` each; `takeRequest()` per call.
+- Expected: paths are `POST /ui/ads/sponsorships/d_1/accept`, `.../reject` (body `{reason:"spam"}`), `.../counter` (body `{compensation_cents:300000,note:"more"}`); no `/respond` path is ever produced; each returns `ApiResult.Success<SponsorshipDeal>`.
+- Traces: AC-1, AC-9.
+
+**TC-AND-370-03 — CSRF header present**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: harness seeds cookie `ui_csrf=csrf-abc`.
+- Steps: perform one mutating call (`createBoost`) and one GET (`getAccounts`); inspect both recorded requests.
+- Expected: both carry `X-CSRF-Token: csrf-abc` matching the cookie (web parity: header on GET too); test fails if header missing on either.
+- Traces: AC-2.
+
+**TC-AND-370-04 — Retry policy (GET retried, POST not)**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: harness with bounded-retry interceptor.
+- Steps: (a) enqueue `503,503,200(ACCOUNTS_OK)` then `getAccounts()`; (b) enqueue `503` once then `createBoost()`.
+- Expected: (a) succeeds after retries (3 recorded GETs, final `Success`); (b) exactly **one** recorded POST and an `ApiResult.Error` (no duplicate boost). If an idempotency key is later added (see §16 Open assumptions), also assert it is identical across any suppressed retry.
+- Traces: AC-3.
+
+**TC-AND-370-05 — 401 refresh-once then retry**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: authenticated state (token present in fake auth store).
+- Steps: enqueue `401{"detail":"expired"}`, then `200{}` (for `POST /ui/session/refresh`), then `200 ACCOUNTS_OK` (retried GET); call `getAccounts()`. Also a second case: `401` then refresh `200` then `401` again.
+- Expected: exactly one `POST /ui/session/refresh`; original request retried exactly once → `Success`. Second case: surfaces an auth `ApiResult.Error`, no infinite loop, no third attempt.
+- Traces: AC-4.
+
+**TC-AND-370-06 — FastAPI `detail` shapes + unparseable body**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: harness; error-mapping mirrors `normalizeErrorDetail`.
+- Steps: enqueue, across calls, `400 DETAIL_STRING_ERR` (`{"detail":"not allowed"}`), `422 DETAIL_LIST_ERR` (`{"detail":[{"msg":"bad"}]}`), `403 DETAIL_OBJ_ERR` (`{"detail":{"code":"role_required"}}`), and `500` with a non-JSON body.
+- Expected: each yields `ApiResult.Error` with a non-null human-readable message ("not allowed"; "bad"; the mapped role-required sentence; and a generic fallback for the unparseable body); no exception thrown for any case.
+- Traces: AC-5.
+
+**TC-AND-370-07 — Read timeout → error, no crash**
+- Type: contract/MockWebServer. Target: JVM.
+- Preconditions: harness configured with the prod-equivalent read timeout.
+- Steps: `enqueueDelay(readTimeout + 1s)`; call an idempotent GET inside `runTest`.
+- Expected: returns `ApiResult.Error` of network/timeout kind; no crash; no leaked coroutine. (This is the flaky-dev-host/offline path proven hermetically.)
+- Traces: AC-6.
+
+**TC-AND-370-08 — Bearer + cookie transport**
+- Type: unit (interceptor). Target: JVM.
+- Preconditions: harness with pluggable auth store.
+- Steps: (a) token present → perform a GET; (b) token absent → perform a GET.
+- Expected: (a) request carries both the session cookie and `Authorization: Bearer <token>`; (b) request carries the cookie only and no `Authorization` header. (Corrects the prior "no bearer" assumption.)
+- Traces: AC-2, AC-10.
+
+**TC-AND-370-09 — Sponsorship inbox StateFlow order**
+- Type: unit (Turbine). Target: JVM.
+- Preconditions: `FakeAdsRepositories`; `MainDispatcherRule` (StandardTestDispatcher).
+- Steps: drive ViewModel with (i) non-empty list, (ii) empty list, (iii) repo error, (iv) cache-hit while network fails.
+- Expected emission orders: (i) `Loading → Content(stale=false)`; (ii) `Loading → Empty`; (iii) `Loading → Error(mapped)`; (iv) `Loading → Content(stale=true)`.
+- Traces: AC-7.
+
+**TC-AND-370-10 — Content boost StateFlow incl. Empty/Error**
+- Type: unit (Turbine). Target: JVM.
+- Preconditions: as above for the boost ViewModel(s).
+- Steps: drive create-success, create-error, and list-empty scenarios.
+- Expected: full emission order asserted including `Loading`, terminal `Content`/`Empty`/`Error`; submit success transitions to the expected post-submit state.
+- Traces: AC-7, AC-9.
+
+**TC-AND-370-11 — Screen state rendering + retry**
+- Type: Compose-UI. Target: JVM (Robolectric `@Config(sdk=[34])`).
+- Preconditions: `createComposeRule`; fake-backed ViewModels per screen (Campaign analytics, Content boost create + detail, Sponsorship inbox, Deal detail, Ad billing/deposit).
+- Steps: for each screen render Loading, Content, then Error; locate the error message and tap the `retry` tagged node.
+- Expected: each state renders its expected nodes; Error shows the mapped message and a retry affordance; tapping retry re-invokes the loader (`loadCalled == true`).
+- Traces: AC-8.
+
+**TC-AND-370-12 — Primary actions invoke ViewModel with args**
+- Type: Compose-UI. Target: JVM (Robolectric).
+- Preconditions: fake ViewModels recording invocations/args.
+- Steps: enter a budget and tap "Boost"; tap Accept / Decline / Negotiate on a deal; enter an amount and tap "Deposit"; pull-to-refresh.
+- Expected: "Boost" calls create with the entered `budget_cents` (and `content_type`/`content_id`); Accept→accept fn, Decline→reject fn, Negotiate→counter fn; "Deposit" calls deposit with `amount_cents`; refresh re-invokes the loader.
+- Traces: AC-9.
+
+**TC-AND-370-13 — Accessibility & i18n hygiene**
+- Type: Compose-UI (a11y). Target: JVM (Robolectric).
+- Preconditions: rendered ads screens.
+- Steps: query icon-only actions (boost/deposit) via `onNodeWithContentDescription`; compare visible labels against `context.getString(R.string.ads_*)`.
+- Expected: every interactive node exposes a content description / merged semantics (TalkBack-readable); user-visible strings resolve from string resources, not hardcoded literals.
+- Traces: AC-8, AC-9.
+
+**TC-AND-370-14 — Hermetic base-URL guard**
+- Type: integration (guard). Target: JVM.
+- Preconditions: CI guard reads the test base URL.
+- Steps: run the guard with the MockWebServer localhost URL (pass) and with `http://18.222.237.167:8000` (fail).
+- Expected: build/test passes only for the localhost MockWebServer URL; any non-localhost URL (esp. the dev host) fails the build; assert no socket connects to `18.222.237.167`.
+- Traces: AC-10.
+
+**TC-AND-370-15 — Physical-device parity smoke (API 34 / arm64)**
+- Type: instrumented/e2e. Target: **device** (SM-A156U, API 34, arm64-v8a) — MUST run on the physical device (not emu35) to catch arm64-vs-x86 ABI and API-34-vs-35 differences for the Compose ads screens.
+- Preconditions: app installed via adb on serial `R5CX821TA9R`; fakes/MockWebServer wired for instrumented run (still hermetic — no live host).
+- Steps: run a representative subset of the Compose-UI suite (`connectedDebugAndroidTest`) covering one render path and one action per ads screen.
+- Expected: subset passes on the physical device with identical assertions to the Robolectric run; no ABI/runtime divergence. (Emulator `test35` runs the full Compose suite in CI; this case is the device-parity backstop.)
+- Traces: AC-8, AC-9, AC-11.
+
+### Coverage matrix
+
+| AC | Covered by |
+|---|---|
+| AC-1 (repo tests exist & pass) | TC-AND-370-01, -02 (and the per-repo pattern applied to all five repositories) |
+| AC-2 (CSRF == cookie on mutations) | TC-AND-370-03, -08 |
+| AC-3 (retry GET yes / POST no) | TC-AND-370-04 |
+| AC-4 (single refresh + one retry) | TC-AND-370-05 |
+| AC-5 (three detail shapes + unparseable) | TC-AND-370-06 |
+| AC-6 (timeout → Error, no crash) | TC-AND-370-07 |
+| AC-7 (StateFlow emission order) | TC-AND-370-09, -10 |
+| AC-8 (Compose screens render states + retry) | TC-AND-370-11, -13, -15 |
+| AC-9 (actions invoke ViewModel w/ args) | TC-AND-370-02, -10, -12, -13, -15 |
+| AC-10 (hermetic; guard fails otherwise) | TC-AND-370-08, -14 |
+| AC-11 (suite passes in CI) | TC-AND-370-15 (device) + all JVM/emu35 cases via the documented Gradle commands |

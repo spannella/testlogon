@@ -5,9 +5,10 @@ milestone: M8
 epic: E48
 priority: P2
 size: M
-status: draft
 depends_on: [AND-027]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-374 — Projects
@@ -72,9 +73,12 @@ added — the OAuth client lives on the backend.
 ## 3. Functional Requirements
 
 FR-1. A **Projects** list screen shows the authenticated user's projects: each
-row shows the project name, a short description/status, the project's connected
-provider chips (e.g. a Drive icon when connected), and updated time. The list is
-paged (Paging 3) and supports pull-to-refresh.
+row shows the project name, the short `description`, the `tags`, and the
+`updated_at` time. The list is paged (Paging 3) and supports pull-to-refresh.
+CORRECTION (§16): `ProjectOut` has no `status` and no per-project provider list,
+so the list does **not** render a status field or Drive connection chips; Drive
+connection is an account-scoped state surfaced on the detail screen via the
+`/v1/projects/providers/google_drive/credentials` read.
 
 FR-2. The list renders the standard state set from `core-ui` (AND-021 family):
 loading (shimmer/spinner), populated, **empty** ("No projects yet"), **error**
@@ -82,8 +86,10 @@ loading (shimmer/spinner), populated, **empty** ("No projects yet"), **error**
 backend is unreachable).
 
 FR-3. Tapping a project row navigates to the **Project detail** screen
-(`projects/{projectId}`), which loads the full project and displays name,
-description, status, timestamps, and the list of connected storage providers.
+(`projects/{projectId}`), which loads the project via
+`GET /v1/projects/{projectId}/detail` and displays name, description, tags,
+timestamps, and the Drive connection state (read from the provider-credentials
+endpoint, since the project object itself carries no provider list — §16).
 
 FR-4. The detail screen shows a **"Connect Google Drive"** action when no Drive
 provider is connected for the project. Tapping it begins the server-mediated
@@ -112,29 +118,46 @@ New module `feature-projects` with package
 Retrofit service (in `core-network`):
 
 ```kotlin
+// CORRECTED (§16): paths are /v1/projects, not /ui/projects; the Drive OAuth
+// start/callback are account-scoped (no {projectId} segment) and live under
+// /v1/projects/providers/google_drive/oauth/{start,callback}. The detail read
+// surface used by the web app is GET /v1/projects/{id}/detail (returns
+// {project, files[], cursor}); GET /v1/projects/{id} returns a bare ProjectOut.
 interface ProjectsApi {
-    @GET("ui/projects")
+    @GET("v1/projects")
     suspend fun listProjects(
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int = 20,
     ): ProjectPageDto
 
-    @GET("ui/projects/{projectId}")
+    @GET("v1/projects/{projectId}")
     suspend fun getProject(
         @Path("projectId") projectId: String,
     ): ProjectDto
 
-    @POST("ui/projects/{projectId}/providers/google_drive/start")
-    suspend fun startGoogleDrive(
+    // Detail used by the web reference (projects.ts: getProjectDetail).
+    @GET("v1/projects/{projectId}/detail")
+    suspend fun getProjectDetail(
         @Path("projectId") projectId: String,
-        @Body body: ProviderStartRequest,
-    ): ProviderStartResponse
+        @Query("limit") limit: Int = 20,
+        @Query("cursor") cursor: String? = null,
+    ): ProjectDetailDto
 
-    @POST("ui/projects/{projectId}/providers/google_drive/callback")
+    // Account-scoped (NOT per-project). Empty request body.
+    @POST("v1/projects/providers/google_drive/oauth/start")
+    suspend fun startGoogleDrive(): ProviderStartResponse
+
+    @POST("v1/projects/providers/google_drive/oauth/callback")
     suspend fun completeGoogleDrive(
-        @Path("projectId") projectId: String,
         @Body body: ProviderCallbackRequest,
-    ): ProjectDto
+    ): ProviderCredentialDto
+
+    // Connected-provider status is read separately, not embedded in ProjectOut.
+    @GET("v1/projects/providers/{provider}/credentials")
+    suspend fun getProviderCredential(
+        @Path("provider") provider: String,
+        @Query("org") org: String? = null,
+    ): ProviderCredentialDto
 }
 ```
 
@@ -155,10 +178,14 @@ class ProjectsRepository @Inject constructor(
     fun projectsPager(): Flow<PagingData<Project>>      // Paging 3 + cache
     fun observeProject(id: String): Flow<Project?>      // Room-backed, SWR
     suspend fun refreshProject(id: String): ApiResult<Project>
-    suspend fun startGoogleDrive(id: String): ApiResult<ProviderStart>
+    // CORRECTED: Drive OAuth is account-scoped — no project id is sent to the
+    // backend. completeGoogleDrive returns a ProviderCredential, not a Project;
+    // the repo then re-reads the credentials/detail to refresh the screen.
+    suspend fun startGoogleDrive(): ApiResult<ProviderStart>
     suspend fun completeGoogleDrive(
-        id: String, params: ProviderCallbackParams,
-    ): ApiResult<Project>
+        params: ProviderCallbackParams,
+    ): ApiResult<ProviderCredential>
+    suspend fun isDriveConnected(): ApiResult<Boolean>   // via credentials GET
 }
 ```
 
@@ -217,108 +244,154 @@ fun openCustomTab(context: Context, url: String) {
 ```
 
 The deep link `testlogon://projects/{projectId}/providers/google_drive/callback`
-is declared as a `<nav-deep-link>` / intent filter on the single Activity; on
+is the app-internal route the Activity uses to resume the detail screen. NOTE
+(§16): the `redirect_uri` actually registered with the backend Drive OAuth client
+is NOT supplied by the `start` request (the request body is empty — see §5);
+whatever redirect the backend uses must land back in the app. R2 in §13 captures
+the open question of whether the backend supports a `testlogon://` redirect or
+requires an https App Link bounce. The deep link is declared as a
+`<nav-deep-link>` / intent filter on the single Activity; on
 resume the Activity routes the `Uri` to the detail destination, which calls
 `viewModel.onProviderCallback(parse(uri))` → `repo.completeGoogleDrive(...)` →
 refresh.
 
 ## 5. API Contract
 
-All paths are session-authenticated (cookies + `X-CSRF-Token`). Exact paths and
-field names are reconciled against `/openapi.json` and
-`frontend/src/api/endpoints/projects.ts` during implementation; the shapes below
-are the contract this ticket targets.
+All paths are session-authenticated (cookies + `X-CSRF-Token`). The shapes below
+have been reconciled against `reference/openapi.index.txt` /
+`reference/openapi.pretty.json` (`components.schemas.*`) and the web reference
+`reference/src/api/endpoints/projects.ts` + `types.ts`. Corrections vs. the
+original draft are audited in §16.
 
-**List** — `GET /ui/projects?cursor=&limit=20`:
+**List** — `GET /v1/projects?cursor=&limit=20` (CORRECTED path: `/v1/`, not
+`/ui/`). Returns `ProjectListOut`. Note the cursor field is `cursor`, **not**
+`next_cursor`, and `ProjectOut` has **no** `providers[]` and **no** `status`
+field:
 
 ```json
 {
   "items": [
     {
       "id": "prj_01H...",
+      "owner": "usr_01H...",
       "name": "Spring Campaign",
       "description": "Q2 assets",
-      "status": "active",
-      "providers": [
-        { "kind": "google_drive", "connected": true,
-          "account_email": "user@example.com", "folder_id": "1AbC..." }
-      ],
+      "tags": ["q2", "campaign"],
+      "settings": {},
       "created_at": "2026-05-01T10:00:00Z",
       "updated_at": "2026-05-30T12:01:02Z"
     }
   ],
-  "next_cursor": "eyJwayI6..."
+  "cursor": "eyJwayI6..."
 }
 ```
 
-**Detail** — `GET /ui/projects/{projectId}` → a single project object (same
-shape as a list `items[]` element).
+**Detail** — two options exist; the web app uses
+`GET /v1/projects/{projectId}/detail` (CORRECTED) which returns
+`ProjectDetailOut` = `{ "project": ProjectOut, "files": TrackedFileOut[],
+"cursor": string|null }`. `GET /v1/projects/{projectId}` returns a bare
+`ProjectOut`. This ticket renders the project object; `files[]` belongs to the
+Files epic (AND-336) and is ignored here.
 
-**Drive start** — `POST /ui/projects/{projectId}/providers/google_drive/start`
-request `{ "redirect_uri": "testlogon://projects/{id}/providers/google_drive/callback" }`
-response:
+**Drive start** — `POST /v1/projects/providers/google_drive/oauth/start`
+(CORRECTED: account-scoped, no `{projectId}` in the path; OAuth lives under
+`.../oauth/start`). The request body is **empty** (the OpenAPI index lists
+`req=` for this op — there is no `redirect_uri` field). Response is
+`ProviderOAuthStartOut`:
 
 ```json
-{ "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
-  "state": "st_9f2a..." }
+{ "provider": "google_drive",
+  "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
+  "state": "st_9f2a...",
+  "expires_at": "2026-06-06T12:10:00Z" }
 ```
 
+(All four fields are `required`. The draft omitted `provider` and `expires_at`.)
+
 **Drive callback** —
-`POST /ui/projects/{projectId}/providers/google_drive/callback` request
-`{ "code": "4/0Ax...", "state": "st_9f2a..." }` → the updated `ProjectDto` with
-`providers[].connected == true`. If the deep link instead carries an error
+`POST /v1/projects/providers/google_drive/oauth/callback` (CORRECTED path)
+request `ProviderOAuthCallbackIn` = `{ "code": "4/0Ax...", "state": "st_9f2a..."
+}` (both required, 1..8192 chars). The response is `ProviderCredentialOut`
+(CORRECTED — it does **not** return an updated project), shape:
+`{ "provider": "google_drive", "org": null, "scopes": ["..."], "metadata": {},
+"created_at": "...", "updated_at": "..." }`. There is no `account_email` or
+`folder_id` field. If the deep link instead carries an error
 (`?error=access_denied`), the app does **not** call `callback`; it surfaces a
 cancel/denied message.
+
+**Connected-provider status** — because `ProjectOut` carries no provider list,
+the "is Drive connected" state is read via
+`GET /v1/projects/providers/{provider}/credentials` (returns
+`ProviderCredentialOut`; a 404 / error indicates not connected).
 
 Moshi models (`core-model`):
 
 ```kotlin
+// CORRECTED to match ProjectListOut / ProjectOut / ProviderOAuthStartOut /
+// ProviderOAuthCallbackIn / ProviderCredentialOut (see §16).
 @JsonClass(generateAdapter = true)
 data class ProjectPageDto(
-    @Json(name = "items") val items: List<ProjectDto>,
-    @Json(name = "next_cursor") val nextCursor: String?,
+    @Json(name = "items") val items: List<ProjectDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,   // was next_cursor
 )
 
 @JsonClass(generateAdapter = true)
 data class ProjectDto(
     val id: String,
+    val owner: String,
     val name: String,
     val description: String? = null,
-    val status: String? = null,
-    val providers: List<ProviderDto> = emptyList(),
-    @Json(name = "created_at") val createdAt: String? = null,
-    @Json(name = "updated_at") val updatedAt: String? = null,
+    val tags: List<String> = emptyList(),
+    val settings: Map<String, Any?> = emptyMap(),
+    @Json(name = "created_at") val createdAt: String,    // required by schema
+    @Json(name = "updated_at") val updatedAt: String,    // required by schema
 )
+// NOTE: ProjectOut has no `status` and no `providers[]`. Removed ProviderDto
+// (account_email/folder_id/connected do not exist on the project object).
 
 @JsonClass(generateAdapter = true)
-data class ProviderDto(
-    val kind: String,                       // "google_drive"
-    val connected: Boolean = false,
-    @Json(name = "account_email") val accountEmail: String? = null,
-    @Json(name = "folder_id") val folderId: String? = null,
+data class ProjectDetailDto(
+    val project: ProjectDto,
+    val files: List<Any> = emptyList(),   // TrackedFileOut[] — out of scope (AND-336)
+    val cursor: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
-data class ProviderStartRequest(@Json(name = "redirect_uri") val redirectUri: String)
-
+// start request has NO body; no request DTO is needed.
 @JsonClass(generateAdapter = true)
 data class ProviderStartResponse(
+    val provider: String,
     @Json(name = "authorization_url") val authorizationUrl: String,
     val state: String,
+    @Json(name = "expires_at") val expiresAt: String,
 )
 
 @JsonClass(generateAdapter = true)
 data class ProviderCallbackRequest(val code: String, val state: String)
+
+// callback returns ProviderCredentialOut, NOT a project.
+@JsonClass(generateAdapter = true)
+data class ProviderCredentialDto(
+    val provider: String,
+    val org: String? = null,
+    val scopes: List<String> = emptyList(),
+    val metadata: Map<String, Any?> = emptyMap(),
+    @Json(name = "created_at") val createdAt: String,
+    @Json(name = "updated_at") val updatedAt: String,
+)
 ```
 
-Domain mappers convert `ProjectDto`/`ProviderDto` to `Project`/`Provider`
-(`core-model` domain types) used by ViewModels/UI. Error responses are mapped
-through AND-027's `ApiErrorMapper` (FastAPI `detail`).
+Domain mappers convert `ProjectDto` to a `Project` domain type, and
+`ProviderCredentialDto` (or a 404 from the credentials GET) to a
+"Drive connected?" boolean used by ViewModels/UI. Error responses are mapped
+through AND-027's `ApiErrorMapper` (FastAPI `detail`: string | `[{msg}]` |
+`{code,message,details}`; the latter matches the `ErrorDetail` schema).
 
 ## 6. Data & State Management
 
-- Room cache (`core-data`): `ProjectEntity` (PK `id`, columns mirroring the DTO;
-  `providers` serialized as a JSON column via a Moshi `TypeConverter`) and a
+- Room cache (`core-data`): `ProjectEntity` (PK `id`, columns mirroring the
+  corrected DTO — `owner`, `name`, `description`, `tags` and `settings`
+  serialized as JSON columns via Moshi `TypeConverter`s, `created_at`,
+  `updated_at`; there is no `status`/`providers` column, per §16) and a
   `RemoteKeysEntity` (cursor) for the `RemoteMediator`. `ProjectDao` exposes
   `pagingSource()`, `observeById(id)`, `upsert`, `clearAll`, and a
   `RemoteKeysDao`.
@@ -382,9 +455,11 @@ fun ApiResult.Error.toProjectsMessage(): String = when (this) {
 - Cleartext: Projects calls go to the dev host over plaintext HTTP, permitted
   only because network-security-config scopes cleartext to `18.222.237.167`. The
   Google authorization URL is HTTPS (opened in the browser).
-- No tokens, `code`, `state`, or account emails are written to logs, crash
-  reports, or analytics (see §10). `account_email` is shown in UI but treated as
-  PII (not logged).
+- No tokens, `code`, or `state` are written to logs, crash reports, or analytics
+  (see §10). NOTE (§16): the corrected contract exposes no `account_email`/
+  `folder_id` on the project or credential objects, so there is no provider email
+  rendered or logged; if a future provider response adds an email it must be
+  treated as PII (not logged).
 
 ## 9. Accessibility & i18n
 
@@ -417,15 +492,17 @@ fun ApiResult.Error.toProjectsMessage(): String = when (this) {
 ## 11. Testing Strategy
 
 Unit (JVM, `core-testing` + MockWebServer):
-- `ProjectsApi` deserialization: `ProjectPageDto` maps `items` + `next_cursor`;
-  `ProjectDto` maps snake_case fields and a `providers[]` with `google_drive`;
-  absent optionals (`description`, `status`, `account_email`) tolerated.
+- `ProjectsApi` deserialization: `ProjectPageDto` maps `items` + `cursor`
+  (CORRECTED from `next_cursor`); `ProjectDto` maps snake_case fields
+  (`created_at`/`updated_at` required, `description` optional, `tags`/`settings`
+  present). No `status`/`providers` on the project (§16).
 - `ProjectsRepository`: list happy path upserts cache and returns paged data;
   `getProject` SWR emits cache then refreshed value; error path returns mapped
   `ApiResult.Error` and preserves cached data.
-- `startGoogleDrive` returns `authorization_url` + `state`; `completeGoogleDrive`
-  posts `code`+`state` and returns the updated project with
-  `providers[kind=google_drive].connected == true`.
+- `startGoogleDrive` returns `provider`+`authorization_url`+`state`+`expires_at`;
+  `completeGoogleDrive` posts `code`+`state` and returns a `ProviderCredential`
+  (CORRECTED — not an updated project); the screen then re-reads the credentials
+  endpoint to flip "Drive connected".
 - `state` mismatch in callback aborts without calling `completeGoogleDrive`.
 - Idempotent-GET retry/backoff applies to list/detail; POSTs are not retried.
 - `toProjectsMessage` covers network/timeout/http/unknown.
@@ -444,9 +521,9 @@ Instrumented/UI (Compose test):
 
 Acceptance verification:
 - **Projects render**: instrumented test with MockWebServer-stubbed `GET
-  /ui/projects` shows the list populated. (Maps to ticket: *Projects render*.)
+  /v1/projects` shows the list populated. (Maps to ticket: *Projects render*.)
 - **Detail opens**: tapping a row navigates to `projects/{id}` and renders the
-  stubbed `GET /ui/projects/{id}`. (Maps to ticket: *detail opens*.)
+  stubbed `GET /v1/projects/{id}/detail`. (Maps to ticket: *detail opens*.)
 - Manual QA: full Drive `start`/Custom Tab/`callback` round-trip against the dev
   backend with a real Google account.
 
@@ -472,10 +549,11 @@ Acceptance verification:
 
 ## 13. Risks & Open Questions
 
-- R1: Exact endpoint paths and field names must be confirmed against
-  `/openapi.json` and `projects.ts` — the web app may namespace Drive under a
-  generic `providers/{kind}/...` route or use different body keys. OPEN: verify
-  before freezing the contract in §5.
+- R1: RESOLVED in this review (§16). Paths are `/v1/projects*`; Drive OAuth is
+  account-scoped under `/v1/projects/providers/google_drive/oauth/{start,callback}`;
+  list cursor field is `cursor` (not `next_cursor`); `ProjectOut` carries no
+  `status`/`providers`; callback returns `ProviderCredentialOut`. Contract in §5
+  updated accordingly.
 - R2: Deep-link redirect URI registration — the backend's allowed `redirect_uri`
   for the Drive OAuth client must include the app scheme
   `testlogon://.../callback`. If the backend only supports an https redirect, we
@@ -484,8 +562,9 @@ Acceptance verification:
 - R3: `state` lifetime across process death — held in `SavedStateHandle`; verify
   it survives the Custom Tab excursion on low-memory devices, else fall back to a
   short-lived encrypted DataStore entry keyed by project.
-- R4: Pagination contract — assumed cursor-based (`next_cursor`); if the API is
-  offset/page-based, adjust `ProjectsApi`/`RemoteMediator`. OPEN: confirm.
+- R4: RESOLVED (§16). Pagination is cursor-based; the response field is `cursor`
+  (opaque) and the request takes `cursor`+`limit`. `ProjectsApi`/`RemoteMediator`
+  use `cursor` (not `next_cursor`).
 - R5: Provider model generality — current scope is Google Drive only; the
   `kind`-keyed model leaves room for future providers without a redesign.
 - R6: Cancel semantics — confirm an abandoned `start` requires no server cleanup
@@ -493,19 +572,23 @@ Acceptance verification:
 
 ## 14. Acceptance Criteria
 
-AC-1. The Projects list screen loads the user's projects via `GET /ui/projects`,
-renders rows (name, status, provider chips, updated time) with Paging 3, and
+AC-1. The Projects list screen loads the user's projects via `GET /v1/projects`,
+renders rows (name, description, tags, updated time) with Paging 3, and
 shows correct loading/empty/error/offline states. (Maps to ticket: **Projects
-render**.)
+render**.) (CORRECTED §16: `/v1/projects`; no status/provider chips on rows.)
 
 AC-2. Tapping a project row navigates to `projects/{projectId}` and the detail
-screen loads and displays the project via `GET /ui/projects/{projectId}`,
-including its connected providers. (Maps to ticket: **detail opens**.)
+screen loads and displays the project via `GET /v1/projects/{projectId}/detail`.
+(Maps to ticket: **detail opens**.) (CORRECTED §16: `/v1/.../detail`.)
 
 AC-3. On the detail screen with no Drive provider connected, "Connect Google
-Drive" calls the `start` endpoint, opens the returned `authorization_url` in a
-Custom Tab, and on the deep-link callback posts `code`+`state` to the `callback`
-endpoint; on success the screen refreshes and shows the Drive provider connected.
+Drive" calls `POST /v1/projects/providers/google_drive/oauth/start` (empty body),
+opens the returned `authorization_url` in a Custom Tab, and on the deep-link
+callback posts `code`+`state` to
+`POST /v1/projects/providers/google_drive/oauth/callback`; on success
+(`ProviderCredentialOut`) the screen re-reads connection state and shows the
+Drive provider connected. (CORRECTED §16: account-scoped OAuth paths; callback
+returns a credential, not a project.)
 
 AC-4. The callback `state` is validated against the stored `start` `state`;
 mismatch/missing aborts without calling `callback` and shows a verification
@@ -543,3 +626,294 @@ the Custom Tab; cleartext stays scoped to the dev host.
   telemetry or logs (redaction verified).
 - Open questions R1/R2/R4 resolved against `/openapi.json` + backend, or
   explicitly deferred with an owner; spec `status` advanced from `draft`.
+
+## 16. Citations & Assumption Audit
+
+Sources are exact pointers. OpenAPI index = `reference/openapi.index.txt`;
+OpenAPI spec = `reference/openapi.pretty.json` (`components.schemas.*`); frontend
+= `reference/src/...`.
+
+1. **Projects list path is `GET /v1/projects` (not `/ui/projects`).**
+   VERDICT: Corrected. SOURCE: OpenAPI `GET /v1/projects | resp=200:ProjectListOut`;
+   `src/api/endpoints/projects.ts: listProjects` (`api.get("/v1/projects")`).
+
+2. **Project detail used by the web app is `GET /v1/projects/{project_id}/detail`
+   returning `ProjectDetailOut = {project, files[], cursor}`; a bare
+   `GET /v1/projects/{project_id}` returns `ProjectOut`.**
+   VERDICT: Corrected (draft used `/ui/projects/{id}` and claimed the detail
+   equals a list item). SOURCE: OpenAPI `GET /v1/projects/{project_id}/detail |
+   resp=200:ProjectDetailOut` and `GET /v1/projects/{project_id} |
+   resp=200:ProjectOut`; `projects.ts: getProjectDetail` / `getProject`;
+   schema `ProjectDetailOut` (`project`, `files`, `cursor`).
+
+3. **List pagination field is `cursor`, not `next_cursor`; request params are
+   `cursor` + `limit`.** VERDICT: Corrected. SOURCE: schema `ProjectListOut`
+   (`items`, `cursor`); `src/api/types.ts: ProjectListResp` (`items`, `cursor`);
+   OpenAPI index params `limit,cursor` on `GET /v1/projects`.
+
+4. **`ProjectOut` has fields `id, owner, name, description?, tags[], settings{},
+   created_at, updated_at` — and NO `status`, NO `providers[]`.**
+   VERDICT: Corrected (draft added `status` and an embedded `providers[]`).
+   SOURCE: schema `ProjectOut` (required `id, owner, name, created_at,
+   updated_at`); `src/api/types.ts: Project`.
+
+5. **Per-project provider chips / `connected`/`account_email`/`folder_id` do not
+   exist on the project object.** VERDICT: Corrected. SOURCE: schema `ProjectOut`
+   (no such fields); connection state instead comes from
+   `GET /v1/projects/providers/{provider}/credentials` → `ProviderCredentialOut`.
+
+6. **Drive OAuth start = `POST /v1/projects/providers/google_drive/oauth/start`
+   with an EMPTY request body (no `redirect_uri`).** VERDICT: Corrected (draft
+   used `/ui/projects/{id}/providers/google_drive/start` with a `redirect_uri`
+   body). SOURCE: OpenAPI index `POST /v1/projects/providers/google_drive/oauth/start
+   | req= | resp=200:ProviderOAuthStartOut` (empty `req`).
+
+7. **`ProviderOAuthStartOut` = `{provider, authorization_url, state, expires_at}`
+   (all required).** VERDICT: Corrected (draft returned only
+   `authorization_url` + `state`). SOURCE: schema `ProviderOAuthStartOut`.
+
+8. **Drive OAuth callback = `POST /v1/projects/providers/google_drive/oauth/callback`,
+   request `ProviderOAuthCallbackIn = {code, state}` (both required, 1..8192),
+   response `ProviderCredentialOut` (NOT a project).** VERDICT: Corrected (draft
+   path was `/ui/projects/{id}/.../callback` and claimed an updated project
+   response). SOURCE: OpenAPI index `POST .../oauth/callback |
+   req=ProviderOAuthCallbackIn | resp=200:ProviderCredentialOut`; schemas
+   `ProviderOAuthCallbackIn`, `ProviderCredentialOut`.
+
+9. **The Drive OAuth start/callback are account-scoped — there is no
+   `{project_id}` segment in the path.** VERDICT: Corrected. SOURCE: OpenAPI
+   index lines for `/v1/projects/providers/google_drive/oauth/{start,callback}`
+   (no path param; `params=user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`).
+
+10. **`ProviderCredentialOut` = `{provider, org?, scopes[], metadata{},
+    created_at, updated_at}` — no `account_email`/`folder_id`.** VERDICT:
+    Corrected. SOURCE: schema `ProviderCredentialOut`; `src/api/types.ts:
+    ProviderCredential`.
+
+11. **The web app's account-level Drive integration (`/ui/integrations/google-drive/*`)
+    is a SEPARATE flow from the project-provider OAuth and is out of scope here.**
+    VERDICT: Verified. SOURCE: `src/api/endpoints/googleDrive.ts`
+    (`initiateGoogleDriveConnect` → `/ui/integrations/google-drive/connect`,
+    `completeGoogleDriveConnect` → `/ui/integrations/google-drive/callback`);
+    OpenAPI index lines 1521-1526. This ticket targets the project-provider OAuth
+    endpoints (items 6-8), matching the ticket scope "Google Drive provider
+    start/callback".
+
+12. **Auth/CSRF/refresh transport (AND-027): CSRF is read from the `ui_csrf`
+    cookie and sent as `X-CSRF-Token`; cookies via `credentials: include`; a 401
+    triggers one `POST /ui/session/refresh` then a single retry.** VERDICT:
+    Verified. SOURCE: `src/api/client.ts` (CSRF `getCookie("ui_csrf")` →
+    `X-CSRF-Token`, lines 168-171; `refreshSession()` → `/ui/session/refresh`,
+    line 122; single-flight 401 refresh + retry, lines 204-237).
+
+13. **FastAPI error `detail` mapping handles string | array of `{msg}` |
+    object `{code, message, details}`.** VERDICT: Verified. SOURCE:
+    `src/api/client.ts: normalizeErrorDetail` (lines 66-102) + `mapAuthorizationError`;
+    schemas `HTTPValidationError` (`detail: ValidationError[]` with `msg`) and
+    `ErrorDetail` (`code`, `message`, `details?`).
+
+14. **Projects endpoints document `422:HTTPValidationError` for validation
+    errors.** VERDICT: Verified. SOURCE: OpenAPI index — every `/v1/projects*`
+    line lists `resp=...;422:HTTPValidationError`. (Note: unlike many other
+    endpoints these lines do NOT enumerate `ErrorEnvelope`; runtime 401/403/404/5xx
+    still occur and are mapped via AND-027 by status + `detail`.)
+
+15. **Cleartext dev host `http://18.222.237.167:8000`.** VERDICT:
+    Unverified-assumption (carried from AND-027/§2; not derivable from the
+    reference sources, which use a build-time `VITE_API_BASE_URL`). SOURCE:
+    framework ref — Android `network-security-config`
+    (https://developer.android.com/privacy-and-security/security-config); host
+    value must be confirmed with the backend/AND-027.
+
+16. **Chrome Custom Tabs (`androidx.browser:browser:1.8.0`) for the OAuth
+    redirect.** VERDICT: Unverified-assumption (Android framework choice; not in
+    the reference sources). SOURCE: framework ref — Custom Tabs
+    (https://developer.android.com/develop/ui/views/layout/webapps/customtabs).
+
+17. **App deep link `testlogon://projects/{projectId}/providers/google_drive/callback`
+    as the post-OAuth landing route.** VERDICT: Unverified-assumption — the
+    `start` request sends no `redirect_uri`, so the backend-registered redirect
+    is unknown from the sources (see R2). SOURCE: framework ref — Navigation deep
+    links (https://developer.android.com/guide/navigation/navigation-deep-link).
+
+### Corrections made
+
+- C1: List/detail/OAuth base path `/ui/projects*` → `/v1/projects*` (§4, §5, §6,
+  §11, §14 AC-1/AC-2/AC-3). [items 1, 2, 6, 8, 9]
+- C2: Detail endpoint set to `/v1/projects/{id}/detail` (`ProjectDetailOut`); the
+  bare project GET returns `ProjectOut`. [item 2]
+- C3: List cursor field `next_cursor` → `cursor`; DTO/RemoteMediator updated.
+  [item 3]
+- C4: Removed non-existent `status` and embedded `providers[]`/`ProviderDto`
+  (`connected`/`account_email`/`folder_id`) from `ProjectDto`; added real fields
+  `owner`, `tags`, `settings`; `created_at`/`updated_at` made required. [items 4,
+  5, 10]
+- C5: Drive OAuth made account-scoped (`/v1/projects/providers/google_drive/oauth/
+  {start,callback}`); `start` request body removed (empty); `start` response
+  expanded to `{provider, authorization_url, state, expires_at}`; callback
+  response corrected to `ProviderCredentialOut`. [items 6, 7, 8, 9, 10]
+- C6: Repository/ViewModel/connection-state design reworked to read
+  connection via the provider-credentials GET (since the project carries no
+  provider list). [item 5]
+- C7: §8 security and AC-7 de-referenced `account_email` (field does not exist).
+  [item 10]
+- C8: §13 R1 and R4 marked RESOLVED with the verified contract.
+
+### Open assumptions
+
+- A1 (item 15): Dev host + cleartext scope inherited from AND-027/§2; not present
+  in the reference sources (web build uses `VITE_API_BASE_URL`). Confirm with
+  backend/AND-027 before pinning `network-security-config`.
+- A2 (items 16-17, R2): The backend-registered OAuth `redirect_uri` is unknown —
+  `start` sends no redirect and the sources show only the web flow. Whether a
+  `testlogon://` app scheme is accepted, or an https App Link bounce is required,
+  must be confirmed with the backend. Custom Tabs + deep-link routing are Android
+  framework choices, not contract-derived.
+- A3 (R3): `state` survival across process death during the Custom Tab excursion
+  is a device-runtime behavior, verifiable only by instrumented test (see §17),
+  not by the static sources.
+- A4 (R6): Whether an abandoned `start` needs server cleanup is not specified by
+  the OpenAPI (no documented side effect); assumed no-op until `callback`.
+
+## 17. Test Plan
+
+IDs `TC-AND-374-NN`. "Traces" link to §14 acceptance criteria. Test targets:
+JVM/Robolectric (local), emulator AVD `test35` (API 35 x86_64), or the physical
+**Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a)**.
+Most cases run on JVM or the emulator; cases needing a real Chrome Custom Tab /
+real browser OAuth redirect handoff MUST run on the physical device.
+
+- **TC-AND-374-01** — Type: contract/MockWebServer (JVM). Target: JVM unit.
+  Preconditions: MockWebServer queued with a `ProjectListOut` body (2 items,
+  `cursor` set; `ProjectOut` with `owner/tags/settings`, no `status`/`providers`).
+  Steps: call `ProjectsApi.listProjects(cursor=null, limit=20)`; assert request
+  line is `GET /v1/projects?...limit=20`. Expected: `ProjectPageDto` maps `items`
+  + `cursor` (NOT `next_cursor`); each `ProjectDto` has `owner`, `tags`,
+  `settings`, required `createdAt/updatedAt`; deserialization does not fail on the
+  absent `status`/`providers`. Traces: AC-1, AC-5.
+
+- **TC-AND-374-02** — Type: contract/MockWebServer (JVM). Target: JVM unit.
+  Preconditions: MockWebServer queued with `ProjectDetailOut`
+  (`{project, files:[...], cursor}`). Steps: call
+  `getProjectDetail(projectId, limit=20)`; assert path
+  `GET /v1/projects/{id}/detail`. Expected: `ProjectDetailDto.project` maps to a
+  `ProjectDto`; `files[]` is ignored by the domain mapper (AND-336 scope). Traces:
+  AC-2, AC-5.
+
+- **TC-AND-374-03** — Type: unit (JVM). Target: JVM unit. Preconditions: fake API
+  returning a `ProjectListOut` page then a second page. Steps: drive
+  `ProjectsRepository.projectsPager()` through `RemoteMediator` LOAD/APPEND.
+  Expected: items upserted into the Room cache (single source of truth); the
+  `cursor` from page 1 is used as the next request's `cursor` query; APPEND with a
+  null `cursor` ends pagination. Traces: AC-1, AC-6.
+
+- **TC-AND-374-04** — Type: unit (JVM/Robolectric). Target: JVM unit.
+  Preconditions: cached project present in Room; API set to fail (IOException).
+  Steps: collect `observeProject(id)` then call `refreshProject(id)`. Expected:
+  cached `Project` emitted immediately (SWR); on refresh failure the cached value
+  is preserved and an `ApiResult.Error.Network` is returned and mapped to "You're
+  offline. Showing saved projects." (stale banner). Traces: AC-6.
+
+- **TC-AND-374-05** — Type: contract/MockWebServer (JVM). Target: JVM unit.
+  Preconditions: MockWebServer queued with `ProviderOAuthStartOut`
+  (`provider, authorization_url, state, expires_at`). Steps: call
+  `startGoogleDrive()`; inspect the request. Expected: request is
+  `POST /v1/projects/providers/google_drive/oauth/start` with an EMPTY body and no
+  `redirect_uri`; response maps all four fields incl. `expiresAt`. Traces: AC-3.
+
+- **TC-AND-374-06** — Type: contract/MockWebServer (JVM). Target: JVM unit.
+  Preconditions: MockWebServer queued with `ProviderCredentialOut`. Steps: call
+  `completeGoogleDrive(ProviderCallbackParams(code, state))`. Expected: request is
+  `POST /v1/projects/providers/google_drive/oauth/callback` with body
+  `{code, state}`; response maps to `ProviderCredentialDto` (NOT a project); the
+  POST is NOT auto-retried on 5xx (one attempt only). Traces: AC-3, AC-6.
+
+- **TC-AND-374-07** — Type: unit (JVM). Target: JVM unit. Preconditions: stored
+  `start` `state = "st_A"` in `SavedStateHandle`; callback `Uri` carries
+  `state = "st_B"`. Steps: call `onProviderCallback(parse(uri))`. Expected: state
+  mismatch aborts WITHOUT calling `completeGoogleDrive` (verify no MockWebServer
+  request); UI shows the "Connection couldn't be verified" message. Repeat with
+  `?error=access_denied`: no callback POST, neutral "Connection canceled" message,
+  project unchanged. Traces: AC-4.
+
+- **TC-AND-374-08** — Type: unit (JVM). Target: JVM unit. Preconditions: build
+  each `ApiResult.Error` subtype (Network, Timeout, Http with/without
+  `detailMessage`, Unknown), plus error bodies for the three FastAPI `detail`
+  shapes (string; `[{msg}]` 422 `HTTPValidationError`; `{code,message,details}`
+  `ErrorDetail`). Steps: run `toProjectsMessage()` and the AND-027 mapper.
+  Expected: each maps to the documented copy; the 422 array yields joined `msg`
+  strings; `{code,message}` yields `message`. Traces: AC-5.
+
+- **TC-AND-374-09** — Type: unit/ViewModel (kotlinx-coroutines-test + Turbine).
+  Target: JVM unit. Preconditions: fake repo. Steps: collect
+  `ProjectDetailViewModel.state`: `Loading → Content`; on error then `retry()` →
+  `Content`; `connectGoogleDrive()` emits `launchAuthUrl` exactly once (consumed
+  via `onAuthLaunchHandled()`, not re-emitted on recomposition);
+  `onProviderCallback` → `connecting=true` → refreshed `Content` with Drive shown
+  connected. Expected: state machine matches; `launchAuthUrl` is a one-shot.
+  Traces: AC-2, AC-3, AC-4.
+
+- **TC-AND-374-10** — Type: Compose-UI (instrumented). Target: emulator `test35`.
+  Preconditions: fake `PagingSource`/MockWebServer stub for `GET /v1/projects`.
+  Steps: render `ProjectsListScreen`; assert populated rows (name, description,
+  tags, updated time); then drive empty, error (with retry), and offline/stale
+  (cached + banner) states. Expected: all four state renders correct; rows expose
+  no status/Drive chip. Traces: AC-1, AC-6.
+
+- **TC-AND-374-11** — Type: Compose-UI / integration (instrumented). Target:
+  emulator `test35`. Preconditions: MockWebServer stubs for
+  `GET /v1/projects` and `GET /v1/projects/{id}/detail`. Steps: tap a row; assert
+  the NavController navigates to `projects/{id}` and the detail screen renders the
+  stubbed project. Expected: detail opens and displays name/description/tags/
+  timestamps. Traces: AC-2 (acceptance: "Projects render" + "detail opens").
+
+- **TC-AND-374-12** — Type: Compose-UI (instrumented). Target: emulator `test35`.
+  Preconditions: detail screen, Drive not connected; Custom Tab launch faked;
+  MockWebServer stubs for `start`, then a simulated deep-link callback Uri with a
+  matching `state`, then the `callback` + credentials read. Steps: tap "Connect
+  Google Drive" → assert the launch effect fires with the `authorization_url`;
+  deliver the deep link → assert `code/state` posted to the callback endpoint and
+  the screen flips to "Drive connected". Expected: full faked round-trip updates
+  the UI. Traces: AC-3, AC-4.
+
+- **TC-AND-374-13** — Type: instrumented/e2e. Target: **physical device
+  (SM-A156U)** — REQUIRED. Rationale: needs a real Chrome Custom Tab and real
+  browser→app deep-link handoff (process may be backgrounded/killed during the
+  excursion), which the headless emulator cannot exercise faithfully.
+  Preconditions: dev backend reachable; a real Google account for authorization;
+  `testlogon://` intent filter installed. Steps: tap "Connect Google Drive",
+  authorize in the Custom Tab, allow the redirect back to the app; also run a
+  low-memory variant (force-stop / "Don't keep activities") to verify the `start`
+  `state` survives via `SavedStateHandle`. Expected: callback posts `code/state`,
+  Drive shows connected; on cancel/back the project is unchanged; `state`
+  validated across process death (R3). Traces: AC-3, AC-4.
+
+- **TC-AND-374-14** — Type: instrumented security + redaction. Target: emulator
+  `test35` (logging) + cross-check on physical device for the Custom Tab cookie
+  boundary. Preconditions: logging interceptor (AND-009) enabled; run the
+  start/callback flow. Steps: capture Logcat / interceptor output and the Custom
+  Tab request. Expected: no `code`, `state`, session cookie, or `X-CSRF-Token`
+  appears in logs/analytics; the Custom Tab (separate browser context) does NOT
+  receive the app's cookie jar; cleartext stays scoped to the dev host while the
+  Google authorization URL is HTTPS. Traces: AC-7.
+
+- **TC-AND-374-15** — Type: Compose-UI accessibility (instrumented). Target:
+  emulator `test35`. Preconditions: list + detail rendered. Steps: run TalkBack /
+  semantics assertions. Expected: list rows expose a combined `contentDescription`
+  (name + updated time; status/provider icons absent or decorative
+  `contentDescription=null`); pull-to-refresh, detail retry, and "Connect Google
+  Drive" are TalkBack-operable with ≥48dp touch targets; dates use locale-aware
+  formatting; status conveyed by text+icon (no color-only). Traces: AC-1, AC-2,
+  AC-3.
+
+### Coverage matrix
+
+| AC   | Covered by |
+|------|------------|
+| AC-1 | TC-01, TC-03, TC-10, TC-15 |
+| AC-2 | TC-02, TC-09, TC-11, TC-15 |
+| AC-3 | TC-05, TC-06, TC-09, TC-12, TC-13, TC-15 |
+| AC-4 | TC-07, TC-09, TC-12, TC-13 |
+| AC-5 | TC-01, TC-02, TC-08 |
+| AC-6 | TC-03, TC-04, TC-06, TC-10 |
+| AC-7 | TC-14 |
