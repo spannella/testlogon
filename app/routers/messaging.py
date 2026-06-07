@@ -1861,6 +1861,17 @@ class SendTextMessageIn(BaseModel):
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     lock_description: Optional[str] = Field(default=None, max_length=200)
+    # GAP-0344: client-generated idempotency key. Same key (for the same
+    # sender/conversation) deduplicates a retried/offline-replayed send so a
+    # dropped-response retry does NOT create a duplicate message. Permissive but
+    # bounded — mirrors the lottery endpoint's Idempotency-Key validation.
+    client_request_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"[A-Za-z0-9._:-]+",
+        description="Client-generated idempotency key. Same key = deduplicated send.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -8015,6 +8026,35 @@ def send_text_message(
         deliver_at = inp.send_at
         is_scheduled = True
 
+    # GAP-0344: when a client supplies an idempotency key, derive a DETERMINISTIC
+    # message_id from (sender | conversation | client_request_id) so that a retried
+    # / offline-replayed send maps to the same row. Combined with the conditional
+    # put below, this makes the send idempotent. Absent the key, behavior is
+    # unchanged (a fresh random id). The early existence check short-circuits a
+    # replay BEFORE any billing/tip side effects run, so a retried tipped message
+    # is not charged twice.
+    if inp.client_request_id:
+        mid = _lottery_dedupe_message_id(
+            sender_id=user_id,
+            conversation_id=conversation_id,
+            idempotency_key=inp.client_request_id,
+        )
+        try:
+            existing = tbl_msgs.get_item(
+                Key={"conversation_id": conversation_id, "message_id": mid}
+            ).get("Item")
+        except Exception:
+            existing = None
+        if existing:
+            logger.debug(
+                "messaging.send_text idempotent_replay message_id=%s conv=%s",
+                mid,
+                conversation_id,
+            )
+            return _message_out_from_item(existing, user_id)
+    else:
+        mid = "m_" + new_id()
+
     # Process tip
     tip_amount_cents: Optional[int] = None
     tip_currency: Optional[str] = None
@@ -8024,8 +8064,6 @@ def send_text_message(
         tip_currency = "USD"
         # In dev mode, mock the payment; in production this would call a payment processor
         tip_payment_id = "tip_" + new_id()
-
-    mid = "m_" + new_id()
 
     is_encrypted = inp.encryption is not None
     message_text = inp.text or ""
@@ -8114,7 +8152,33 @@ def send_text_message(
         )
     )
 
-    tbl_msgs.put_item(Item=item)
+    if inp.client_request_id:
+        # GAP-0344: conditional put guards the concurrent-retry race. Two replays
+        # with the same deterministic message_id race here; the loser hits the
+        # condition and returns the already-written message (idempotent success),
+        # NOT a 409 and NOT a duplicate row.
+        try:
+            tbl_msgs.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(message_id)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                existing = tbl_msgs.get_item(
+                    Key={"conversation_id": conversation_id, "message_id": mid}
+                ).get("Item")
+                if existing:
+                    logger.debug(
+                        "messaging.send_text idempotent_replay message_id=%s conv=%s",
+                        mid,
+                        conversation_id,
+                    )
+                    return _message_out_from_item(existing, user_id)
+                # Rare race: condition failed but item vanished — surface a retryable error.
+                raise HTTPException(409, "Duplicate message detected; please retry")
+            raise
+    else:
+        tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
 
     preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]

@@ -2010,6 +2010,122 @@ def _placeholder_mutation_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _rotate_secrets_command(args: argparse.Namespace) -> Dict[str, Any]:
+    """Rotate signing secrets (UI_ACCESS_TOKEN_SECRET, API_KEY_PEPPER,
+    WS_TOKEN_SECRET) and the KMS break-glass key (GAP-0345).
+
+    Generates new cryptographically-strong values, persists them to the active
+    secret store (``.env.local`` in dev, AWS Secrets Manager in prod), rotates
+    the KMS break-glass key best-effort, revokes all active root sessions/API
+    keys, and writes an immutable audit record. SECURITY: never returns or logs
+    the raw secret values — only the rotated secret NAMES and identifiers.
+    """
+    from app.services import secret_rotation
+
+    shared = _shared_opts(args)
+    root_sub = _validate_preflight(args)
+
+    scope = str(getattr(args, "scope", "all") or "all").strip() or "all"
+    if scope not in secret_rotation.VALID_SCOPES:
+        raise ValueError(
+            "invalid scope; choose from: "
+            + ", ".join(sorted(secret_rotation.VALID_SCOPES))
+        )
+
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+
+    new_values = secret_rotation.generate_new_secrets(scope)
+    rotated_env_keys = sorted(new_values.keys())
+
+    if shared.dry_run:
+        kms_descr = {"rotated": False, "reason": "dry_run"}
+        return {
+            "ok": True,
+            "group": str(args.group),
+            "command": str(args.command),
+            "dry_run": True,
+            "scope": scope,
+            "would_rotate": rotated_env_keys,
+            "kms": kms_descr,
+            "actor_sub": actor_sub,
+            "request_id": shared.request_id,
+            "correlation_id": shared.correlation_id,
+        }
+
+    # Persist the new secret values to the active store (env file / SM).
+    persistence = secret_rotation.persist_secrets(new_values)
+
+    # Rotate the KMS break-glass key (best-effort).
+    kms_result = secret_rotation.rotate_kms_break_glass_key()
+
+    rotated: Dict[str, Any] = {"secrets": rotated_env_keys}
+    if "API_KEY_PEPPER" in new_values:
+        rotated["api_keys_invalidated"] = (
+            "All API key hashes are now stale; keys must be re-issued."
+        )
+
+    # Invalidate active root sessions/API keys so the old secret can't be used.
+    sessions_revoked = False
+    api_keys_revoked = False
+    if "UI_ACCESS_TOKEN_SECRET" in new_values:
+        try:
+            revoke_all_sessions(root_sub)
+            sessions_revoked = True
+        except Exception:
+            sessions_revoked = False
+    if "API_KEY_PEPPER" in new_values:
+        try:
+            revoke_all_api_keys(root_sub)
+            api_keys_revoked = True
+        except Exception:
+            api_keys_revoked = False
+
+    ts = now_ts()
+    audit_event(
+        "rotate_secrets",
+        root_sub,
+        None,
+        outcome="success",
+        actor_sub=actor_sub,
+        scope=scope,
+        rotated_secrets=rotated_env_keys,
+        kms_rotated=bool(kms_result.get("rotated", False)),
+        kms_key_id=str(kms_result.get("key_id", "") or ""),
+        persistence_backend=str(persistence.get("backend", "") or ""),
+        sessions_revoked=sessions_revoked,
+        api_keys_revoked=api_keys_revoked,
+        reason=reason,
+        ticket_id=ticket,
+        request_id=shared.request_id,
+        correlation_id=shared.correlation_id,
+        cli=True,
+    )
+
+    return {
+        "ok": True,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": False,
+        "scope": scope,
+        "rotated": rotated,
+        "rotated_secrets": rotated_env_keys,
+        "kms": kms_result,
+        "persistence_backend": str(persistence.get("backend", "") or ""),
+        "sessions_revoked": sessions_revoked,
+        "api_keys_revoked": api_keys_revoked,
+        "actor_sub": actor_sub,
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": shared.correlation_id,
+        "audit_event": "rotate_secrets",
+        "ts": ts,
+        "note": "Backend processes must be restarted to pick up the new secret values.",
+    }
+
+
 _BREAK_GLASS_ENV = "ROOTCTL_BREAK_GLASS_SECRET"
 _BREAK_GLASS_TOKEN_ENV = "ROOTCTL_BREAK_GLASS_TOKEN"
 
@@ -2228,11 +2344,17 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
             requires_confirm=False,
         )
 
-        rotate = commands.add_parser("rotate-secrets", help="Placeholder root mutation command")
+        rotate = commands.add_parser("rotate-secrets", help="Rotate signing secrets and KMS break-glass key")
         _add_shared_options(rotate)
         _add_mutation_guard_options(rotate)
+        rotate.add_argument(
+            "--scope",
+            default="all",
+            choices=("all", "ui_access_token", "api_key_pepper", "ws_token"),
+            help="Which secrets to rotate (default: all)",
+        )
         rotate.set_defaults(
-            handler=_placeholder_mutation_command,
+            handler=_rotate_secrets_command,
             group=group_name,
             mutating=True,
             requires_root=True,

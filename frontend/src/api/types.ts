@@ -1267,6 +1267,9 @@ export interface SendTextMessageReq {
   expires_in_seconds?: number;
   tip_amount_cents?: number;
   tip_payment_method_id?: string;
+  // GAP-0344: stable per-action ID for idempotent retries (PWA offline-queue
+  // action id). Same key = the backend deduplicates the send.
+  client_request_id?: string;
 }
 
 export interface SendImageMessageReq {
