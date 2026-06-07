@@ -23,7 +23,13 @@ from pydantic import BaseModel
 from app.core.aws import ddb
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.rate_limit import _bucket_limit
 from app.services.sessions import require_ui_session
+
+# Global search fan-out is expensive (ThreadPoolExecutor across up to 9 backend
+# search modules → CPU + DDB read amplification). Cap per-user request rate.
+_GLOBAL_SEARCH_MAX_PER_WINDOW = 30
+_GLOBAL_SEARCH_WINDOW_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -823,6 +829,25 @@ def global_search(
     session=Depends(require_ui_session),
 ):
     user_id = session["user_sub"]
+
+    # Rate limit the expensive multi-module fan-out per authenticated user.
+    if not _bucket_limit(
+        user_id,
+        "rl#global_search",
+        _GLOBAL_SEARCH_MAX_PER_WINDOW,
+        _GLOBAL_SEARCH_WINDOW_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "global_search_rate_limited",
+                "message": "Too many search requests; try again later",
+                "limit": _GLOBAL_SEARCH_MAX_PER_WINDOW,
+                "window_seconds": _GLOBAL_SEARCH_WINDOW_SECONDS,
+            },
+            headers={"Retry-After": str(_GLOBAL_SEARCH_WINDOW_SECONDS)},
+        )
+
     q = _sanitize_query(q)
     if not q:
         raise HTTPException(status_code=400, detail="Query is empty")

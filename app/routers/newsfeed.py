@@ -6456,6 +6456,36 @@ def create_repost(post_id: str, req: RepostRequest, user_id: UserIdDep):
         repost_item["quote"] = quote_text
     ddb_put_item(repost_item)
 
+    # 7b. Notify the original author that their post was reposted.
+    # Skip self-reposts (already guarded above) and empty author_id.
+    # Best-effort: a notification failure must never fail the repost.
+    if author_id and author_id != user_id:
+        try:
+            put_notification(
+                recipient_user_id=author_id,
+                notif_type="post_shared",
+                payload={
+                    "post_id": post_id,
+                    "repost_id": repost_id,
+                    "from_user_id": user_id,
+                },
+            )
+        except Exception:
+            logger.warning("repost put_notification failed post_id=%s repost_id=%s", post_id, repost_id, exc_info=True)
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=author_id,
+                alert_type="post_shared",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                title=f"{actor_name} shared your post",
+                details={"post_id": post_id, "repost_id": repost_id},
+                action_url=f"/feed?post={post_id}",
+            )
+        except Exception:
+            logger.warning("repost social alert failed post_id=%s repost_id=%s", post_id, repost_id, exc_info=True)
+
     # 8. Atomically increment repost_count on the post
     updated = ddb_update_item(
         key={"pk": pk_post(post_id), "sk": sk_post()},
