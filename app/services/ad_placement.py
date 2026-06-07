@@ -335,11 +335,92 @@ def record_ad_impression(
     except Exception:
         logger.warning("ad_impression_counter_failed", extra={"video_id": video_id})
 
-    # On complete: credit creator with ad revenue
+    # On complete: credit creator with ad revenue — but only ONCE per slot per
+    # user per video per calendar day (GAP-0382). A single authenticated user
+    # could otherwise POST event_type=complete unboundedly, inflating creator ad
+    # revenue. We claim a deterministic dedup record with a DDB conditional write
+    # (attribute_not_exists) before crediting; a ConditionalCheckFailedException
+    # means the slot was already credited today → skip the credit (non-billable
+    # duplicate). The atomic check-and-insert avoids any race between concurrent
+    # requests. Same DDB path in dev (moto / DDB Local) and prod (SECOPS-007).
     if event_type == "complete":
-        _credit_ad_revenue(video_id=video_id, event_id=event_id, ts=ts)
+        if _claim_complete_slot(
+            date_str=_date_str(ts),
+            user_id=user_id,
+            video_id=video_id,
+            slot_index=slot_index,
+            event_id=event_id,
+            ts=ts,
+        ):
+            _credit_ad_revenue(video_id=video_id, event_id=event_id, ts=ts)
+        else:
+            logger.info(
+                "ad_impression_duplicate_skipped",
+                extra={
+                    "video_id": video_id,
+                    "user_id": user_id,
+                    "slot_index": slot_index,
+                },
+            )
 
     return {"ok": True, "event_id": event_id}
+
+
+def _claim_complete_slot(
+    *,
+    date_str: str,
+    user_id: str,
+    video_id: str,
+    slot_index: int,
+    event_id: str,
+    ts: int,
+) -> bool:
+    """Atomically claim the (user, video, slot, day) completion slot.
+
+    Returns True if this is the first billable ``complete`` event for that slot
+    today (caller should credit revenue), or False if a credit was already
+    recorded today (duplicate — caller must NOT credit again).
+
+    Uses a deterministic dedup key + a DynamoDB conditional ``put_item``
+    (``attribute_not_exists(pk)``) so the check-and-insert is a single atomic
+    round-trip with no race. Dedup records carry a 48h ``ttl`` so the once-per-
+    day cap resets across calendar days. Fails OPEN on unexpected errors so a
+    DDB hiccup never silently drops legitimate revenue.
+    """
+    from botocore.exceptions import ClientError
+
+    dedup_pk = (
+        f"AD_DEDUP#{date_str}#USER#{user_id}"
+        f"#VIDEO#{video_id}#SLOT#{slot_index}"
+    )
+    try:
+        T.ad_impressions.put_item(
+            Item={
+                "pk": dedup_pk,
+                "sk": "DEDUP",
+                "event_id": event_id,
+                "created_at": ts,
+                "ttl": ts + 86400 * 2,  # auto-expire after 48h
+            },
+            ConditionExpression="attribute_not_exists(pk)",
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        # Unexpected DDB error: fail open (credit) rather than silently drop
+        # legitimate revenue. Matches the best-effort posture elsewhere here.
+        logger.warning(
+            "ad_impression_dedup_claim_failed",
+            extra={"video_id": video_id, "user_id": user_id},
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "ad_impression_dedup_claim_failed",
+            extra={"video_id": video_id, "user_id": user_id},
+        )
+        return True
 
 
 def _credit_ad_revenue(*, video_id: str, event_id: str, ts: int) -> None:

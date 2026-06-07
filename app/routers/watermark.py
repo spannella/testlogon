@@ -103,6 +103,31 @@ def request_watermarked_download(
     user_id = ctx["user_sub"]
     video = get_video(video_id)
 
+    # ─── VOD-019 download-tier entitlement check (GAP-0383) ───────────────────
+    # Mirror the plain-download guard at app/routers/video_listing.py:786-806.
+    # The video owner always bypasses; for non-owners, when purchase tiers are
+    # enabled and the video is purchase-gated, the caller's entitlement must
+    # include download rights. Placed BEFORE the cache lookup / job minting so a
+    # cached watermarked MP4 is never served to an unauthorized user.
+    is_owner = video.owner_user_id == user_id
+    if not is_owner:
+        requires_purchase = bool(
+            getattr(video, "available_purchase_types", None)
+            or getattr(video, "price_cents", None)
+            or getattr(video, "download_price_cents", None)
+            or getattr(video, "entitlement_sku", None)
+        )
+        if S.vod_purchase_tiers_enabled and requires_purchase:
+            from app.services.vod_purchase import check_entitlement_purchase_only
+
+            ent = check_entitlement_purchase_only(user_id=user_id, video_id=video_id)
+            if not ent.entitled or not ent.download_allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Download access not included in your purchase",
+                )
+    # ─── end entitlement check ────────────────────────────────────────────────
+
     if not video.allow_download:
         raise HTTPException(status_code=403, detail="downloads not enabled for this video")
 
