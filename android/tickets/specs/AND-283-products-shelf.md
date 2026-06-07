@@ -5,7 +5,8 @@ milestone: M6
 epic: E38
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-280, AND-206]
 blocks: []
 ---
@@ -16,7 +17,9 @@ blocks: []
 
 Add an in-stream **products shelf** to the live viewer experience: while an
 authorized viewer watches a broadcast (AND-280), the app fetches the products
-associated with that live session via the `chat/product` surface, renders them
+associated with that live session via the broadcast **shelf** endpoint
+`GET /broadcast/sessions/{session_id}/products` (the source-ticket
+"`chat/product`" label is a misnomer — corrected in §2/§5), renders them
 as a compact, dismissible horizontal shelf overlaid on the player, and lets the
 viewer **buy from the stream** without leaving playback. Tapping a product's
 Buy action routes the viewer into the existing checkout/commerce flow seeded by
@@ -63,10 +66,15 @@ cart/checkout tickets), and broadcaster-side product management.
   destination at route `shop/{categoryId}/{itemId}`, the `CatalogItem` /
   `ProductUiModel` domain types, and the `CartSummary` surface. The shelf's Buy
   action navigates to this route; checkout proceeds from there.
-- Web reference: `frontend/src/api/endpoints/*.ts` (the `chat/product`
-  endpoints), shared types `frontend/src/api/types.ts`. Backend OpenAPI at
-  `http://18.222.237.167:8000/openapi.json` — verify exact `chat/product`
-  path, the session→product linkage, and the product payload shape.
+- Web reference (verified): the shelf list call lives in
+  `frontend/src/api/endpoints/broadcast-shelf.ts` (`getShelfProducts`), and the
+  viewer UI in `frontend/src/pages/broadcast/ProductShelf.tsx`. The endpoint is
+  **`GET /broadcast/sessions/{session_id}/products`** (NOT a `chat/product` GET —
+  `chat/product` is only `POST /broadcast/sessions/{session_id}/chat/product`,
+  a broadcaster-side action that posts a product *link message* into chat). The
+  session→product linkage is the path segment `{session_id}`; the payload is
+  `BroadcastShelfListOut` (see §5). The original "`chat/product` surface" framing
+  in the source ticket scope was inaccurate and is corrected here.
 - Auth is cookie-based: session cookies + `ui_csrf` echoed as `X-CSRF-Token`;
   on `401` the shared authenticator does one `POST /ui/session/refresh` then
   retries. The products fetch is an idempotent GET (bounded-backoff retried);
@@ -148,7 +156,7 @@ interface ProductsShelfRepository {
 }
 
 class ProductsShelfRepositoryImpl @Inject constructor(
-    private val api: ChatProductApi,                 // §5; may be added here or core-network
+    private val api: BroadcastShelfApi,              // §5; may be added here or core-network
     private val cache: ShelfProductCacheDao,         // core-data / Room, keyed by sessionId
     @IoDispatcher private val io: CoroutineDispatcher,
 ) : ProductsShelfRepository {
@@ -156,7 +164,8 @@ class ProductsShelfRepositoryImpl @Inject constructor(
     override suspend fun getSessionProducts(sessionId: String): ApiResult<List<CatalogItem>> =
         withContext(io) {
             when (val r = api.getSessionProducts(sessionId)) {
-                is ApiResult.Success -> r.data.map { it.toDomain() }
+                // r.data is BroadcastShelfListOut; unwrap .items then map.
+                is ApiResult.Success -> r.data.items.map { it.toDomain() }
                     .also { cache.replace(sessionId, it.map { p -> p.toEntity(sessionId) }) }
                     .let { ApiResult.Success(it) }
                 is ApiResult.Failure -> cache.findBySession(sessionId)
@@ -244,58 +253,101 @@ controls.
 
 ## 5. API Contract
 
-The shelf reads products linked to a broadcast/chat session via the
-`chat/product` surface. **Verify the exact path and linkage against
-`/openapi.json` and `frontend/src/api/endpoints/*.ts`** — see §13.
+The shelf reads products linked to a broadcast session via the broadcast
+**shelf** surface. **VERIFIED** against OpenAPI and the web client — see §16.
 
-**Get session products** — `GET /ui/chat/product` (session-scoped)
-
-Likely shape: `GET /ui/chat/product?session_id={sessionId}` or
-`GET /ui/chat/sessions/{sessionId}/products`. Response (200):
+**Get session products** — `GET /broadcast/sessions/{session_id}/products`
+(VERIFIED: OpenAPI index line 219, `op=list_shelf_products_route_...`;
+web client `broadcast-shelf.ts: getShelfProducts`). The session linkage is the
+`{session_id}` path segment (NOT a `?session_id=` query param). Response (200)
+is schema **`BroadcastShelfListOut`**, NOT a `{ products: [...] }` wrapper:
 
 ```json
 {
-  "products": [
+  "session_id": "sess_123",
+  "count": 1,
+  "items": [
     {
-      "id": "itm_001",
+      "session_id": "sess_123",
+      "item_id": "itm_001",
       "category_id": "cat_live",
       "name": "Tour Hoodie",
-      "price": { "amount_cents": 4500, "currency": "USD" },
-      "media": [
-        { "type": "image", "url": "https://…/h.jpg", "thumbnail_url": "https://…/h_t.jpg" }
-      ],
-      "availability": { "in_stock": true, "quantity": 30 }
+      "description": "Limited tour merch",
+      "price_cents": 4500,
+      "currency": "USD",
+      "image_url": "https://…/h.jpg",
+      "display_order": 0,
+      "added_by": "usr_abc",
+      "added_at": 1717600000,
+      "broadcast_price_cents": 3900,
+      "effective_price_cents": 3900,
+      "is_broadcast_price": true,
+      "discount_pct": 13,
+      "original_price_cents": 4500,
+      "broadcast_price_expires_at": null,
+      "broadcast_price_set_at": 1717600000
     }
   ]
 }
 ```
 
-The product object reuses the AND-206 `CatalogItemDto` shape (id, category_id,
-name, price, media, availability), so the Buy hand-off to
-`shop/{categoryId}/{itemId}` requires no field translation.
+CORRECTIONS vs. the original draft (all verified against schema
+`BroadcastShelfItemOut`):
+- The list lives under **`items`**, not `products`; the envelope also carries
+  `session_id` and `count`.
+- Each item is a **flat** `BroadcastShelfItemOut`, NOT a nested AND-206
+  `CatalogItemDto`. Fields are `item_id` (not `id`), flat `price_cents` +
+  `currency` (NOT a nested `price: { amount_cents, currency }`), a single
+  `image_url` (NOT a `media: [{ url, thumbnail_url }]` array).
+- **`category_id` is a REQUIRED field** (schema `required` list), so the §13
+  "fallback category" concern is resolved: the Buy route always has a real
+  `category_id` and `DEFAULT_CATEGORY` is dead/defensive only.
+- There is **no `availability`/`in_stock`** object in the payload. The draft's
+  `inStock` UI field is therefore an *unverified assumption*; the contract does
+  carry live-pricing fields instead: `broadcast_price_cents`,
+  `effective_price_cents`, `is_broadcast_price`, `discount_pct`,
+  `original_price_cents`, `broadcast_price_expires_at` (LCOM-004 pricing). The
+  shelf SHOULD prefer `effective_price_cents` for the displayed price and MAY
+  show a strikethrough `original_price_cents` when `is_broadcast_price` is true.
 
 Retrofit:
 
 ```kotlin
-interface ChatProductApi {
-    @GET("ui/chat/product")
+interface BroadcastShelfApi {
+    @GET("broadcast/sessions/{sessionId}/products")
     suspend fun getSessionProducts(
-        @Query("session_id") sessionId: String,
-    ): ApiResult<SessionProductsDto>   // { products: List<CatalogItemDto> }
+        @Path("sessionId") sessionId: String,
+    ): ApiResult<BroadcastShelfListOut>   // { session_id, count, items: List<BroadcastShelfItemOut> }
 }
 ```
 
-The request is authenticated: cookies + `X-CSRF-Token` attached by
-core-network; on `401`, core-network does one `POST /ui/session/refresh` then
-retries. This GET is idempotent and **is** eligible for bounded-backoff retry.
-FastAPI errors surface via the shared `detail` mapper
-(`string | [{msg}] | {code,...}`); the shelf treats any failure as a
-retryable/stale error (no special `404` semantics — a missing list is `Empty`).
+The request is authenticated. **VERIFIED** in `frontend/src/api/client.ts`: the
+web client sends cookies (`credentials: "include"`), echoes the `ui_csrf`
+cookie as the `X-CSRF-Token` header on **every** request (GET included), and
+also attaches `Authorization: Bearer <accessToken>` from its auth store plus an
+optional `X-IMPERSONATION-TOKEN`. On `401`, the client refreshes **exactly
+once** via `POST /ui/session/refresh` (VERIFIED: OpenAPI index line 1847) and
+retries the original request; a second `401` is terminal (logout). core-network
+on Android mirrors this (cookie jar + CSRF interceptor + single-refresh
+authenticator). NOTE: the OpenAPI op also lists header params
+`X-SESSION-ID`/`X-IMPERSONATION-TOKEN` and a `user_sub` — core-network owns
+these; the shelf module passes only `sessionId`. This GET is idempotent and
+eligible for bounded-backoff retry. FastAPI errors surface via the shared
+`detail` mapper (`string | [{msg}] | {code,...}` — VERIFIED:
+`client.ts: normalizeErrorDetail`); the only documented error is `422
+HTTPValidationError` (malformed `session_id`). The shelf treats any failure as
+a retryable/stale error (no special `404` semantics — a missing list is
+`Empty`).
 
 **Buy hand-off:** no new endpoint. Navigation targets the AND-206 route
-`shop/{categoryId}/{itemId}`; the add-to-cart `POST /ui/shop/cart/items` and
-any checkout-session creation are owned downstream (AND-206 and the cart/
-checkout tickets), not by this ticket.
+`shop/{categoryId}/{itemId}` (VERIFIED present in web routing,
+`frontend/src/App.tsx: <Route path="shop/:categoryId/:itemId">`). NOTE /
+deviation: the *web* `ProductShelf.tsx` does NOT route to the detail screen on
+buy — it performs an inline add-to-cart (`getCarts`/`createCart`/`addCartItem`
+with `sku = item_id`). This ticket deliberately interprets "buy from stream" as
+*routing to the AND-206 detail/add-to-cart destination* instead (see §13 open
+question). Either way, the add-to-cart mutation and checkout-session creation
+are owned downstream, not by this ticket.
 
 ## 6. Data & State Management
 
@@ -312,14 +364,23 @@ sealed interface ProductsShelfUiState {
 }
 
 data class ShelfProductUiModel(
-    val id: String,
-    val categoryId: String?,        // null -> host uses DEFAULT_CATEGORY for the route
+    val id: String,                 // <- BroadcastShelfItemOut.item_id
+    val categoryId: String,         // REQUIRED in the contract (never null); DEFAULT_CATEGORY is defensive only
     val name: String,
-    val priceLabel: String,         // locale currency-formatted
-    val thumbnailUrl: String?,
-    val inStock: Boolean,
+    val priceLabel: String,         // currency-formatted from effective_price_cents (fallback price_cents)
+    val originalPriceLabel: String?,// non-null only when is_broadcast_price == true (strikethrough)
+    val thumbnailUrl: String?,      // <- image_url (single URL; contract has no media[] array)
 )
 ```
+
+> CORRECTION: the contract's `BroadcastShelfItemOut` carries **no `availability`
+> / `in_stock`** field, so the original `inStock: Boolean` field is dropped (it
+> was an unverified assumption). Out-of-stock handling is owned by the AND-206
+> detail screen after the Buy hand-off. The contract does expose LCOM-004
+> live-pricing fields (`broadcast_price_cents`, `effective_price_cents`,
+> `is_broadcast_price`, `discount_pct`, `original_price_cents`); the shelf
+> displays `effective_price_cents` (or `price_cents` when null) and may show a
+> strikethrough `original_price_cents`.
 
 - **Caching (core-data / Room 2.6).** Successful fetches `replace` the cached
   product rows for `sessionId` in a `shelf_products` table; on network failure
@@ -331,9 +392,14 @@ data class ShelfProductUiModel(
   re-fetched on rotation (held in `uiState`).
 - **Lazy load.** `uiState` starts `Idle`; the first `setExpanded(true)`
   triggers `load()`. This keeps the network request off the playback hot path.
-- Price formatting uses `NumberFormat.getCurrencyInstance` with the DTO
-  `currency`, matching AND-206 so identical products read identically across the
-  shelf and the detail screen.
+- Price formatting uses `NumberFormat.getCurrencyInstance` over
+  `effective_price_cents / 100` (fallback `price_cents / 100`) with the DTO
+  `currency`. NOTE: the web shelf (`ProductShelf.tsx: formatPrice`) hardcodes the
+  `en-US` locale via `Intl.NumberFormat("en-US", { style: "currency", currency })`;
+  the Android port intentionally uses the **device locale** (i18n requirement
+  §9) rather than copying the web's fixed `en-US`, so a non-US device formats the
+  same currency per its locale conventions. Parity is on the amount, not the
+  locale grouping.
 
 ## 7. Error Handling & Resilience
 
@@ -425,7 +491,8 @@ Latency measured around `getSessionProducts`.
 - Shelf overlay does not cover the player's primary controls (layout assertion).
 
 **Instrumented integration (MockWebServer):** mount the shelf inside the
-AND-280 viewer destination, return canned `chat/product` JSON, open the shelf,
+AND-280 viewer destination, return canned `BroadcastShelfListOut` JSON from
+`GET /broadcast/sessions/{session_id}/products`, open the shelf,
 assert cards render, tap Buy and assert navigation to
 `shop/{categoryId}/{itemId}` with the tapped id; include an empty-list case, a
 500-then-Retry-then-200 case, and a 401-then-refresh-then-200 sequence.
@@ -445,32 +512,41 @@ AND-206 destination for the tapped item).
 - **Blocks:** none in the backlog. The buy hand-off relies on the downstream
   cart/checkout tickets (reached via AND-206) to complete a purchase, but those
   are not gated by this ticket.
-- **Sequencing:** (1) add `ChatProductApi.getSessionProducts` + DTOs if absent;
+- **Sequencing:** (1) add `BroadcastShelfApi.getSessionProducts` + DTOs if absent;
   (2) `ProductsShelfRepository` + per-session cache; (3) `ProductsShelfViewModel`
   + state/expand logic; (4) `ProductsShelf` Compose + cards + states; (5) mount
   in AND-280's viewer screen and wire the Buy nav lambda; (6) tests.
 
 ## 13. Risks & Open Questions
 
-- **`chat/product` endpoint shape.** Path and session linkage
-  (`GET /ui/chat/product?session_id=` vs.
-  `GET /ui/chat/sessions/{sessionId}/products`) are unconfirmed. *Mitigation:*
-  isolate in `ChatProductApi`/repository. **Open: verify in OpenAPI /
-  `frontend/src/api/endpoints/*.ts`.**
-- **Product payload parity.** Assumes products use the AND-206 `CatalogItemDto`
-  shape (id, category_id, price, media, availability). If `chat/product`
-  returns a leaner/different shape (e.g., no `category_id`), the Buy route needs
-  a fallback category and possibly a lookup. **Open: confirm payload + whether
-  `category_id` is always present.**
+- **~~`chat/product` endpoint shape.~~ RESOLVED (verified).** The path is
+  `GET /broadcast/sessions/{session_id}/products` (session via path segment),
+  returning `BroadcastShelfListOut` (`items[]` + `count`). The source ticket's
+  "`chat/product`" label was a misnomer (`chat/product` is a *POST* that drops a
+  product-link chat message). See §5/§16.
+- **~~Product payload parity.~~ RESOLVED (verified).** Items are flat
+  `BroadcastShelfItemOut`, NOT the AND-206 `CatalogItemDto`. `category_id` **is
+  required** in the contract, so no fallback/lookup is needed in practice
+  (DEFAULT_CATEGORY remains as defensive code only). The shape carries no
+  `availability`; it carries LCOM-004 live-pricing fields instead. A thin
+  DTO→domain map is required (item_id→id, price_cents/effective_price_cents→
+  priceLabel, image_url→thumbnailUrl). See §5/§16.
 - **Buy destination semantics.** "Buy from stream" is interpreted as routing to
   the AND-206 product-detail/add-to-cart destination (which leads to checkout).
-  If product owners expect a one-tap "instant buy" straight to a checkout
-  session, an additional path is needed. **Open: confirm with design/product
-  whether Buy = detail+cart or direct checkout.**
-- **Live updates.** Whether the product list changes mid-stream (broadcaster
-  pins/unpins products) and should update in real time (SSE) is unspecified;
-  this ticket fetches once on open with manual retry. **Open: confirm if live
-  shelf updates are required for M6.**
+  NOTE: the *web* shelf does inline add-to-cart instead of navigating
+  (`ProductShelf.tsx: handleAddToCart`). If product owners want web parity
+  (one-tap add-to-cart) or a one-tap "instant buy" straight to checkout, an
+  additional path is needed. **Open: confirm with design/product whether
+  Android Buy = route-to-detail (current plan), inline add-to-cart (web parity),
+  or direct checkout.**
+- **Live updates.** The *web* shelf DOES update live: it consumes
+  `shelf:add` / `shelf:remove` / `shelf:reorder` window events (sourced from
+  SSE) in `ProductShelf.tsx`. This Android ticket fetches once on open with
+  manual retry and does **not** subscribe to live shelf deltas. **Open: confirm
+  whether live shelf updates (SSE deltas) are required for M6 parity, or are
+  deferred to a follow-up.** *(Note: matching the web also implies the shelf can
+  be reordered by `display_order`, which the Android list should respect when
+  rendering — sort by `display_order`.)**
 - **Overlay vs. PiP / fullscreen.** Behavior of the shelf in fullscreen or
   (future) picture-in-picture is undefined; default is shelf hidden in PiP.
 - **Dev host flakiness** makes a live shelf nondeterministic; all assertions use
@@ -479,7 +555,8 @@ AND-206 destination for the tapped item).
 ## 14. Acceptance Criteria
 
 AC-1. With the viewer playing a broadcast for `sessionId`, opening the shelf
-fetches `chat/product` for that session and renders the products as a
+fetches `GET /broadcast/sessions/{sessionId}/products` for that session and
+renders the `items[]` products as a
 horizontally scrollable shelf of cards (thumbnail, name, locale-formatted
 price, Buy) over the player (**shelf renders** — primary).
 AC-2. Tapping Buy on a card navigates to the AND-206 destination
@@ -515,6 +592,230 @@ gates and the empty / 500-retry / 401-refresh sequences.
 - Telemetry events (§10) emitted and verified; no secrets/PII logged.
 - Accessibility pass (TalkBack + pseudolocale + RTL) completed; shelf does not
   obstruct player controls.
-- `ChatProductApi` additions documented for core-network consumers; §13 open
+- `BroadcastShelfApi` additions documented for core-network consumers; §13 open
   questions resolved or explicitly deferred with owners.
 - Code reviewed and merged to `android-port`.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its VERDICT, and an exact source pointer.
+
+1. **List endpoint is `GET /broadcast/sessions/{session_id}/products`.**
+   VERDICT: **Corrected** (draft said `GET /ui/chat/product?session_id=`).
+   SOURCE: OpenAPI `GET /broadcast/sessions/{session_id}/products`
+   (op `list_shelf_products_route_...`, openapi.index.txt line 219); frontend
+   `src/api/endpoints/broadcast-shelf.ts: getShelfProducts`.
+2. **Session linkage is the `{session_id}` path segment, not a query param.**
+   VERDICT: **Corrected.** SOURCE: same endpoint params=`session_id` (path);
+   `broadcast-shelf.ts: getShelfProducts` builds `/broadcast/sessions/${sessionId}/products`.
+3. **Response envelope is `BroadcastShelfListOut` = `{ session_id, count, items[] }`,
+   not `{ products: [...] }`.** VERDICT: **Corrected.** SOURCE: schema
+   `BroadcastShelfListOut` (openapi.pretty.json ~line 12617); frontend
+   `src/api/endpoints/broadcast-shelf.ts: ShelfListResponse`.
+4. **Item is flat `BroadcastShelfItemOut` with `item_id`, `price_cents`,
+   `currency`, `image_url` — NOT a nested `CatalogItemDto` with
+   `price:{amount_cents,currency}` and `media[]`.** VERDICT: **Corrected.**
+   SOURCE: schema `BroadcastShelfItemOut` (openapi.pretty.json line 12476);
+   frontend `ShelfItem` (`broadcast-shelf.ts`).
+5. **`category_id` is a REQUIRED item field (always present).** VERDICT:
+   **Corrected** (draft treated it as possibly absent, needing a fallback).
+   SOURCE: `BroadcastShelfItemOut.required` includes `category_id`
+   (openapi.pretty.json ~line 12605); `ShelfItem.category_id: string` (non-null).
+6. **No `availability`/`in_stock` field exists; the draft's `inStock` UI field
+   is dropped.** VERDICT: **Corrected** (was an unverified assumption). SOURCE:
+   `BroadcastShelfItemOut` properties (no availability key); `ShelfItem` has no
+   stock field.
+7. **Contract carries LCOM-004 live-pricing fields (`broadcast_price_cents`,
+   `effective_price_cents`, `is_broadcast_price`, `discount_pct`,
+   `original_price_cents`, `broadcast_price_expires_at`).** VERDICT: **Verified**
+   (new, added to spec). SOURCE: `BroadcastShelfItemOut` properties
+   (openapi.pretty.json lines 12487-12595).
+8. **Auth: `ui_csrf` cookie echoed as `X-CSRF-Token` on every request; cookies
+   sent (`credentials:"include"`).** VERDICT: **Verified.** SOURCE:
+   `src/api/client.ts` lines 167-171, 183.
+9. **401 -> single `POST /ui/session/refresh` then one retry; 2nd 401 terminal.**
+   VERDICT: **Verified.** SOURCE: `src/api/client.ts` lines 119-128, 194-229;
+   OpenAPI `POST /ui/session/refresh` (openapi.index.txt line 1847).
+10. **Error `detail` mapper accepts `string | [{msg}] | {code,...}`.** VERDICT:
+    **Verified.** SOURCE: `src/api/client.ts: normalizeErrorDetail` lines 66-102.
+11. **Only documented error on the GET is `422 HTTPValidationError`.** VERDICT:
+    **Verified.** SOURCE: endpoint resp=`200:BroadcastShelfListOut;422:HTTPValidationError`
+    (openapi.index.txt line 219); schema `HTTPValidationError`→`ValidationError`
+    (`{loc, msg, type}`, openapi.pretty.json lines 37133, 80337).
+12. **Buy destination route `shop/{categoryId}/{itemId}` exists.** VERDICT:
+    **Verified.** SOURCE: `src/App.tsx` line 331
+    `<Route path="shop/:categoryId/:itemId" element={<ProductDetail/>} />`.
+13. **Web buy behavior is inline add-to-cart, not navigate-to-detail.** VERDICT:
+    **Verified** (documented as a deliberate Android deviation). SOURCE:
+    `src/pages/broadcast/ProductShelf.tsx: handleAddToCart`
+    (`getCarts`/`createCart`/`addCartItem`, sku=`item_id`).
+14. **Web shelf receives live SSE deltas (`shelf:add/remove/reorder`).** VERDICT:
+    **Verified** (Android defers this; §13 open question). SOURCE:
+    `src/pages/broadcast/ProductShelf.tsx` lines 131-161.
+15. **Web price format is fixed `en-US` `Intl.NumberFormat`.** VERDICT:
+    **Verified** (Android intentionally uses device locale instead). SOURCE:
+    `src/pages/broadcast/ProductShelf.tsx: formatPrice` lines 17-22.
+16. **`chat/product` is a broadcaster POST (chat product-link message), not a
+    viewer GET.** VERDICT: **Verified** (explains the source-ticket misnomer).
+    SOURCE: OpenAPI `POST /broadcast/sessions/{session_id}/chat/product`
+    (req `BroadcastChatProductLinkIn`, openapi.index.txt line 164).
+17. **Compose/Material 3, Navigation-Compose, Hilt+KSP, Retrofit/OkHttp/Moshi,
+    Room, Coil, SavedStateHandle process-death survival, minSdk 24/target 35.**
+    VERDICT: **Unverified-assumption** for this repo (no Android sources in the
+    reference set) but consistent with standard Android guidance. SOURCE:
+    framework ref — developer.android.com/jetpack/compose,
+    developer.android.com/guide/navigation,
+    developer.android.com/topic/libraries/architecture/saving-states.
+18. **Android transport is purely cookie-based.** VERDICT:
+    **Unverified-assumption.** The *web* client additionally sends
+    `Authorization: Bearer <accessToken>` and may send `X-IMPERSONATION-TOKEN`
+    (`src/api/client.ts` lines 157-165). Whether the Android core-network mirrors
+    cookie-only or also carries a bearer token is an AND-280/core-network
+    decision not visible here.
+
+### Corrections made
+
+- Endpoint path/linkage rewritten to `GET /broadcast/sessions/{session_id}/products`
+  (path segment), replacing the fictional `GET /ui/chat/product?session_id=`
+  (§1, §2, §5, §11, §14 AC-1).
+- Response model corrected to `BroadcastShelfListOut` (`items[]`+`count`),
+  replacing `{ products: [...] }`; repository unwrap changed to `r.data.items`
+  (§4, §5, §6).
+- Item DTO corrected to flat `BroadcastShelfItemOut` (`item_id`, `price_cents`,
+  `currency`, `image_url`); removed nested `price{}`/`media[]`/`availability{}`
+  assumptions; dropped `inStock` UI field; added live-pricing fields and
+  `effective/original_price` display rule (§5, §6).
+- `category_id` documented as required; DEFAULT_CATEGORY demoted to defensive
+  only (§5, §6, §13).
+- Retrofit interface renamed `ChatProductApi`→`BroadcastShelfApi` with `@Path`
+  (was `@Query`) (§4, §5, §12, §15).
+- §13 risks 1 & 2 marked RESOLVED with citations; risks 3 (buy semantics) and 4
+  (live updates) updated with the verified web behavior they were uncertain about.
+- Price-format note: web hardcodes `en-US`; Android uses device locale (§6).
+
+### Open assumptions
+
+- **A1 (Buy semantics).** Routing to the AND-206 detail screen vs. web-parity
+  inline add-to-cart vs. direct checkout is a product decision; only the route's
+  *existence* is verified. Why unresolved: design/product sign-off needed.
+- **A2 (Live SSE shelf deltas).** Web has them; this ticket fetches once.
+  Whether M6 requires parity is unconfirmed. Why: scope/PM decision.
+- **A3 (Android stack & framework choices).** No Android sources in the
+  reference set; all module/library/lifecycle choices are best-practice
+  assumptions (citation 17), inherited from AND-280/AND-206 conventions.
+- **A4 (Bearer vs. cookie-only transport).** core-network's exact auth header
+  policy is owned by AND-280; the web uses cookie + bearer (citation 18).
+- **A5 (Android Room cache TTL/eviction, analytics facade, `ApiResult` type).**
+  Inherited from core-data/core-network/core-testing (AND-280 deps), not
+  independently verifiable from the provided sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** (Robolectric/JUnit, local), **emulator** (AVD `test35`,
+x86_64, API 35), **device** (Samsung Galaxy A15 5G, SM-A156U, API 34, arm64-v8a).
+This ticket is pure UI/networking with no camera/biometric/WebRTC/FCM/Telecom
+behavior, so almost everything runs on JVM or the headless emulator; the device
+is used only to confirm arm64/API-34 parity for the real player overlay
+(AND-280 hardware video decode) and offline/airplane-mode behavior.
+
+- **TC-AND-283-01** — Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: `BroadcastShelfApi` + MockWebServer enqueuing a 200
+  `BroadcastShelfListOut` with 2 `items`. Steps: call
+  `getSessionProducts("sess_1")`; inspect the recorded request and parsed result.
+  Expected: request is `GET /broadcast/sessions/sess_1/products`; Moshi parses
+  `items[]` (flat fields `item_id`, `price_cents`, `currency`, `image_url`,
+  `category_id`), DTO→domain maps `item_id`→id and `effective_price_cents`
+  (fallback `price_cents`)→priceLabel; cache `replace(sess_1, …)` invoked.
+  Traces: AC-1.
+- **TC-AND-283-02** — Type: unit (JVM). Target: JVM. Preconditions: repository
+  with fake api+cache; api returns empty `items`. Steps: `getSessionProducts`.
+  Expected: `ApiResult.Success(emptyList())`; ViewModel maps it to
+  `ProductsShelfUiState.Empty`. Traces: AC-4.
+- **TC-AND-283-03** — Type: unit (JVM). Target: JVM. Preconditions: ViewModel
+  in `Idle`. Steps: `setExpanded(true)` once, then again. Expected: exactly ONE
+  `load()` from `Idle`→`Loading`→`Ready`; second toggle does not re-fetch;
+  `expanded` flips and is written to `SavedStateHandle` (process-death survival).
+  Traces: AC-6, AC-7.
+- **TC-AND-283-04** — Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: MockWebServer returns 422 with body
+  `{"detail":[{"loc":["query","session_id"],"msg":"field required","type":"value_error"}]}`
+  and the cache is empty. Steps: `getSessionProducts`; map to UI. Expected:
+  failure surfaces; `detail` mapper yields the `msg` string; ViewModel →
+  `Error(message, retryable=true)`; playback untouched. Traces: AC-5.
+- **TC-AND-283-05** — Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: cache has 1 stale row for `sess_1`; MockWebServer returns 500
+  (or a socket failure). Steps: `getSessionProducts`. Expected: repository
+  returns `ApiResult.Success(stale)`; ViewModel → `Ready(stale=true)` and the
+  "saved data" marker is set; no `Error`. Traces: AC-5, AC-8.
+- **TC-AND-283-06** — Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: MockWebServer scripted 500 then 200. Steps: open shelf (500 →
+  `Error(retryable=true)`), invoke `retry()`. Expected: second request issued,
+  `Ready` rendered; matches the 500-then-Retry-then-200 acceptance sequence.
+  Traces: AC-5, AC-7, AC-8.
+- **TC-AND-283-07** — Type: contract/MockWebServer (JVM, OkHttp authenticator).
+  Target: JVM. Preconditions: MockWebServer returns 401, then 200 on
+  `/broadcast/sessions/{id}/products`, with `POST /ui/session/refresh`→200 in
+  between. Steps: open shelf. Expected: exactly one refresh POST, original GET
+  retried once, `Ready` rendered; a second 401 would be terminal/non-retryable.
+  Traces: AC-7, AC-8.
+- **TC-AND-283-08** — Type: Compose-UI (emulator `test35`). Target: emulator.
+  Preconditions: `ProductsShelf` hosted with a `Ready` state of 5 cards. Steps:
+  tap `ShelfToggleButton`; scroll the `LazyRow`. Expected: panel animates open,
+  cards show name + locale price + Coil thumbnail; scrolling reveals later cards;
+  toggle again closes. Distinct Loading (shimmer), Empty ("No products"), and
+  Error+Retry states each render with correct semantics. Traces: AC-1, AC-3,
+  AC-4, AC-5.
+- **TC-AND-283-09** — Type: Compose-UI (emulator `test35`). Target: emulator.
+  Preconditions: `Ready` card for `item_id=itm_9`, `category_id=cat_live`.
+  Steps: tap the card's Buy action; capture the `onBuy` lambda arg. Expected:
+  `onBuy(ShelfProductUiModel(id="itm_9", categoryId="cat_live", …))` fires once;
+  host maps to nav `shop/cat_live/itm_9`. Traces: AC-2.
+- **TC-AND-283-10** — Type: instrumented/e2e (emulator `test35`, MockWebServer).
+  Target: emulator. Preconditions: shelf mounted inside the AND-280 viewer
+  destination with a NavController under test; canned `BroadcastShelfListOut`.
+  Steps: open shelf, tap Buy on the first card. Expected: NavController current
+  destination becomes `shop/{categoryId}/{itemId}` with the tapped id args
+  (renders + buy-route acceptance gate). Traces: AC-1, AC-2, AC-8.
+- **TC-AND-283-11** — Type: instrumented (emulator `test35`). Target: emulator.
+  Preconditions: shelf open and `Ready`. Steps: rotate device; trigger process
+  death (`savedStateHandle` restore) via the testing API. Expected: `expanded`
+  stays true, `LazyRow` scroll position restored, product list NOT re-fetched
+  (held in `uiState`), `sessionId`+`expanded` survive process death. Traces:
+  AC-6.
+- **TC-AND-283-12** — Type: instrumented/accessibility (emulator `test35`,
+  TalkBack/pseudolocale/RTL). Target: emulator. Preconditions: `Ready` shelf.
+  Steps: enable pseudolocale + RTL; traverse with accessibility checks. Expected:
+  each card has a `contentDescription` (name+price), Buy labeled "Buy {name}",
+  toggle labeled "Show/Hide products" announcing state; open/close announced via
+  live region; touch targets ≥48dp; no hardcoded strings; no focus trap over
+  player controls. Traces: AC-3.
+- **TC-AND-283-13** — Type: instrumented/e2e (**physical device**, SM-A156U,
+  API 34, arm64-v8a). Target: **device (required)**. Preconditions: AND-280
+  player playing a stream on the real device; MockWebServer (or recorded
+  response) for the shelf. Steps: open the shelf over live hardware-decoded
+  video, scroll, then close. Expected: the player is never paused, stuttered, or
+  released by shelf presence/animation (no-playback-regression); overlay
+  composes above the SurfaceView without taking video focus. MUST run on the
+  device because hardware video decode + Surface compositing differ from the
+  emulator. Traces: AC-3.
+- **TC-AND-283-14** — Type: manual/instrumented offline (**physical device**).
+  Target: **device (required)**. Preconditions: a cached shelf list for the
+  session exists; then enable airplane mode (real radio off). Steps: open the
+  shelf with no connectivity; tap Retry; restore connectivity and Retry again.
+  Expected: offline open shows cached products with the "saved data" marker (no
+  crash, no playback disruption); after reconnect, Retry fetches fresh `items`.
+  Device preferred because the flaky-dev-host/real-offline radio behavior is not
+  reproducible on the headless emulator. Traces: AC-5, AC-7.
+
+### Coverage matrix
+
+| AC | Covered by |
+| --- | --- |
+| AC-1 (shelf renders) | TC-01, TC-08, TC-10 |
+| AC-2 (buy routes to checkout) | TC-09, TC-10 |
+| AC-3 (hidden by default / no playback regression / a11y) | TC-08, TC-12, TC-13 |
+| AC-4 (Empty + Loading states) | TC-02, TC-08 |
+| AC-5 (error+retry / cache stale marker) | TC-04, TC-05, TC-06, TC-08, TC-14 |
+| AC-6 (rotation + process-death survival) | TC-03, TC-11 |
+| AC-7 (lazy GET / idempotent retry / 401-refresh) | TC-03, TC-06, TC-07, TC-14 |
+| AC-8 (CI gates: renders + buy + empty/500/401) | TC-05, TC-06, TC-07, TC-10 |

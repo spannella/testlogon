@@ -5,7 +5,8 @@ milestone: M6
 epic: E37
 priority: P1
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-270]
 blocks: [AND-275]
 ---
@@ -32,8 +33,9 @@ owns:
 
 - `ContentCalendarApi` (the Retrofit seam for `content-calendar.ts`), its Moshi
   DTOs, and DTO→domain mappers — modeled on AND-270's `CalendarApi` patterns but
-  for the *content scheduling* shapes (`ScheduledContent`, publish status,
-  channel/platform), which are distinct from raw calendar events.
+  for the *content scheduling* shapes (`ScheduledContent`, content `type`
+  post/broadcast/vod, schedule `status`), which are distinct from raw calendar
+  events.
 - `ContentCalendarRepository` in `core-data`, returning `ApiResult<T>` (AND-018).
 - `ContentCalendarViewModel` exposing `StateFlow<ContentCalendarUiState>`.
 - `ContentCalendarScreen` (Compose, Material 3) and its date-grouped list, wired
@@ -84,8 +86,9 @@ backed by a tested API/repository/ViewModel chain.
   (authenticated nav graph + bottom-nav), AND-006 (`BuildConfig.API_BASE_URL`).
 - **Web reference (authoritative for shapes):**
   `frontend/src/api/endpoints/content-calendar.ts` (endpoints) and the
-  content-calendar slice of `frontend/src/api/types.ts` (`ScheduledContent`,
-  publish `status`, `channel`/platform). OpenAPI at `/openapi.json` is the final
+  content-calendar slice of `frontend/src/api/types.ts`
+  (`ContentCalendarItem`/`ContentCalendarResponse`, content `type`, schedule
+  `status`). OpenAPI at `/openapi.json` is the final
   authority; any deviation here is reconciled against it before merge.
 - **Sibling / downstream — AND-275 (Scheduler):** adds schedule/reschedule create
   and edit on top of the content domain. This read-only view is the surface AND-275
@@ -101,20 +104,33 @@ within a date range (the primary read). Exact set reconciled against
 `/openapi.json`; Section 5 is the working contract. All reads are `suspend`,
 return typed DTO bodies, and are idempotent GETs.
 
-FR-2. The range-list endpoint accepts typed `@Query` params (`from`, `to`,
-`channel?`, `status?`, `page?`) as RFC-3339 / ISO-8601 strings on the wire. Paths
-are declared **without** a leading slash (AND-010 convention).
+FR-2. **[CORRECTED]** The range-list endpoint accepts typed `@Query` params
+`from_ts` and `to_ts` (**Unix epoch seconds, integer, both REQUIRED**) plus an
+optional `types` param (a **comma-separated** string of `post,broadcast,vod`).
+There is **no** `channel`, `status`, or `page` query param and **no** RFC-3339
+date strings on the wire — verified against OpenAPI `GET /ui/content-calendar`
+(params `from_ts,to_ts,types`) and `src/api/endpoints/content-calendar.ts:
+getContentCalendar`. The relative Retrofit path is `ui/content-calendar`
+(declared **without** a leading slash per the AND-010 convention; the full path
+is `/ui/content-calendar`).
 
-FR-3. Define Moshi `@JsonClass(generateAdapter = true)` DTOs for every
-content-calendar shape: `ScheduledContentDto`, `ContentCalendarRespDto` (paged
-envelope). Wire fields are snake_case; Kotlin properties camelCase via
-`@Json(name=...)` where codegen cannot infer.
+FR-3. **[CORRECTED]** Define Moshi `@JsonClass(generateAdapter = true)` DTOs for
+the content-calendar shapes confirmed in `src/api/types.ts`:
+`ContentCalendarItemDto` (the per-item shape) and `ContentCalendarRespDto` (the
+response envelope `{items, from_ts, to_ts, count, conflicts}` — **not** a paged
+`{items, next_page}` cursor envelope; the real API returns no paging cursor) and
+`ContentCalendarConflictDto`. Wire fields are snake_case; Kotlin properties
+camelCase via `@Json(name=...)` where codegen cannot infer.
 
-FR-4. Provide pure DTO→domain mappers
-(`ScheduledContentDto.toDomain(): ScheduledContent`) that map unknown enum strings
-to `UNKNOWN` (never throw) and tolerate absent optional fields via Kotlin
-defaults. Timestamps parse to `java.time.Instant` via the shared
-`InstantJsonAdapter`.
+FR-4. **[CORRECTED]** Provide pure DTO→domain mappers
+(`ContentCalendarItemDto.toDomain(): ScheduledContent`) that map unknown enum
+strings to `UNKNOWN` (never throw) and tolerate absent optional fields via Kotlin
+defaults. **`scheduled_at` is a Unix epoch-seconds integer on the wire**
+(verified `src/api/types.ts: ContentCalendarItem.scheduled_at: number`), so the
+mapper converts via `Instant.ofEpochSecond(scheduledAt)` — it is **not** an
+RFC-3339 string and does **not** flow through `InstantJsonAdapter`. (The shared
+`InstantJsonAdapter` may still register globally for other DTOs, but this DTO's
+timestamp is a plain numeric field.)
 
 FR-5. `ContentCalendarRepository` exposes a single read:
 `suspend fun scheduledContent(range: DateRange, filter: ContentFilter):
@@ -132,8 +148,9 @@ ordered by scheduled time.
 FR-7. `ContentCalendarScreen` renders the grouped content as a vertically
 scrolling list with **sticky date headers** (a "schedule"/agenda layout) — each
 day header shows the localized date; under it, one row per scheduled content item
-showing title, scheduled time, channel/platform badge, publish-status chip, and
-an optional thumbnail (Coil). Tapping a row navigates toward the content/scheduler
+showing title, scheduled time, a **content-type** badge (post/broadcast/vod),
+status chip (scheduled/overdue/cancelled), and an optional thumbnail (Coil, VOD
+items). Tapping a row navigates toward the content/scheduler
 detail route (AND-275). The screen MUST render the **loading**, **empty**
 ("No scheduled content for this period"), **error** (with Retry), and **offline /
 stale** states via the AND-021 state composables.
@@ -162,29 +179,37 @@ package com.testlogon.android.core.model.contentcalendar
 import java.time.Instant
 import java.time.LocalDate
 
+// [CORRECTED] Fields/enums realigned to the verified web contract
+// (src/api/types.ts: ContentCalendarItem). The wire item is keyed by content
+// `type` (post|broadcast|vod), NOT a delivery `channel`, and its `status`
+// vocabulary is scheduled|overdue|cancelled, NOT a publish lifecycle.
 data class ScheduledContent(
     val id: String,
+    val type: ContentItemType,          // post | broadcast | vod
     val title: String,
-    val summary: String?,
-    val channel: ContentChannel,        // platform/destination
-    val status: PublishStatus,
-    val scheduledAt: Instant,           // when it is set to publish
+    val status: ScheduledStatus,        // scheduled | overdue | cancelled
+    val scheduledAt: Instant,           // from `scheduled_at` (Unix epoch seconds)
     val scheduledDate: LocalDate,       // derived (in effective tz) for grouping
     val timezone: String?,              // IANA tz, if the item carries one
-    val thumbnailUrl: String?,
-    val author: String?,
-    val updatedAt: Instant?,
+    val localTime: String?,             // server-formatted local time (`local_time`)
+    val color: String?,                 // server hint
+    val icon: String?,                  // server hint
+    val thumbnailUrl: String?,          // VOD-specific (optional)
+    val description: String?,           // broadcast-specific (optional)
+    val durationSeconds: Long?,         // VOD-specific (optional)
 )
 
-enum class ContentChannel { EMAIL, SMS, PUSH, BLOG, SOCIAL, WEB, UNKNOWN }
+enum class ContentItemType { POST, BROADCAST, VOD, UNKNOWN }
 
-enum class PublishStatus { DRAFT, SCHEDULED, PUBLISHING, PUBLISHED, FAILED, CANCELED, UNKNOWN }
+enum class ScheduledStatus { SCHEDULED, OVERDUE, CANCELLED, UNKNOWN }
 
 data class DateRange(val from: Instant, val to: Instant) // [from, to)
 
+// [CORRECTED] Only `types` is a server-supported filter (comma-separated
+// post,broadcast,vod). There is no server status filter; any status filtering
+// is client-side. See Q-2.
 data class ContentFilter(
-    val channel: ContentChannel? = null,
-    val status: PublishStatus? = null,
+    val types: Set<ContentItemType> = emptySet(),
 )
 ```
 
@@ -195,33 +220,63 @@ package com.testlogon.android.core.network.contentcalendar
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
-import java.time.Instant
 
+// [CORRECTED] Field set verified against src/api/types.ts: ContentCalendarItem.
+// scheduled_at is Unix epoch SECONDS (Long), not an Instant string. There is no
+// `summary`, `author`, `updated_at`, `channel`, or `scheduled_date` field. The
+// item is keyed by `type` (post|broadcast|vod) and carries server `color`/`icon`
+// plus type-specific optionals.
 @JsonClass(generateAdapter = true)
-data class ScheduledContentDto(
+data class ContentCalendarItemDto(
     val id: String,
+    val type: String? = null,                                  // post|broadcast|vod
     val title: String,
-    val summary: String? = null,
-    val channel: String? = null,
-    val status: String? = null,
-    @Json(name = "scheduled_at") val scheduledAt: Instant? = null,
-    @Json(name = "scheduled_date") val scheduledDate: String? = null, // ISO date fallback
+    @Json(name = "scheduled_at") val scheduledAt: Long,        // Unix epoch seconds
     val timezone: String? = null,
+    @Json(name = "local_time") val localTime: String? = null,
+    val status: String? = null,                                // scheduled|overdue|cancelled
+    val color: String? = null,
+    val icon: String? = null,
+    // Post-specific (optional)
+    @Json(name = "has_images") val hasImages: Boolean? = null,
+    @Json(name = "has_video") val hasVideo: Boolean? = null,
+    val visibility: String? = null,
+    val locked: Boolean? = null,
+    @Json(name = "unlock_price_cents") val unlockPriceCents: Int? = null,
+    // Broadcast-specific (optional)
+    val description: String? = null,
+    @Json(name = "profile_id") val profileId: String? = null,
+    @Json(name = "has_announcement") val hasAnnouncement: Boolean? = null,
+    // VOD-specific (optional)
+    @Json(name = "duration_seconds") val durationSeconds: Long? = null,
     @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
-    val author: String? = null,
-    @Json(name = "updated_at") val updatedAt: Instant? = null,
 )
 
 @JsonClass(generateAdapter = true)
+data class ContentCalendarConflictDto(
+    @Json(name = "item_a_id") val itemAId: String,
+    @Json(name = "item_a_type") val itemAType: String? = null,
+    @Json(name = "item_b_id") val itemBId: String,
+    @Json(name = "item_b_type") val itemBType: String? = null,
+    @Json(name = "gap_seconds") val gapSeconds: Long? = null,
+    @Json(name = "gap_minutes") val gapMinutes: Long? = null,
+)
+
+// [CORRECTED] Real envelope: {items, from_ts, to_ts, count, conflicts}.
+// No `next_page` cursor exists on this endpoint.
+@JsonClass(generateAdapter = true)
 data class ContentCalendarRespDto(
-    val items: List<ScheduledContentDto>,
-    @Json(name = "next_page") val nextPage: String? = null,
+    val items: List<ContentCalendarItemDto>,
+    @Json(name = "from_ts") val fromTs: Long? = null,
+    @Json(name = "to_ts") val toTs: Long? = null,
+    val count: Int? = null,
+    val conflicts: List<ContentCalendarConflictDto> = emptyList(),
 )
 ```
 
-`ScheduledContentDto` accepts either `scheduled_at` (`Instant`) or
-`scheduled_date` (ISO date string); the mapper reconciles them (R-3). `Instant`
-(de)serialization uses the shared `InstantJsonAdapter` from AND-026/AND-270.
+`scheduled_at` is a Unix epoch-seconds integer; the mapper converts via
+`Instant.ofEpochSecond(...)` (R-3). No `InstantJsonAdapter` is involved for this
+DTO — the timestamp is a plain numeric JSON field.
 
 ### 4.3 The `ContentCalendarApi` interface
 
@@ -233,21 +288,24 @@ import retrofit2.http.Query
 
 interface ContentCalendarApi {
 
-    /** Scheduled content overlapping [from, to). Idempotent GET; paged. */
-    @GET("content-calendar")
+    /** Scheduled content overlapping [fromTs, toTs). Idempotent GET; not paged. */
+    // [CORRECTED] Path is `ui/content-calendar` (full: /ui/content-calendar).
+    // Params are from_ts/to_ts (Unix epoch seconds, required) + optional
+    // comma-separated `types`. No channel/status/page params exist.
+    @GET("ui/content-calendar")
     suspend fun listScheduledContent(
-        @Query("from") from: String,            // RFC-3339, inclusive
-        @Query("to") to: String,                // RFC-3339, exclusive
-        @Query("channel") channel: String? = null,
-        @Query("status") status: String? = null,
-        @Query("page") page: String? = null,    // opaque cursor
+        @Query("from_ts") fromTs: Long,          // Unix epoch seconds, inclusive
+        @Query("to_ts") toTs: Long,              // Unix epoch seconds, exclusive
+        @Query("types") types: String? = null,   // CSV: post,broadcast,vod
     ): ContentCalendarRespDto
 }
 ```
 
-The exact path (`content-calendar` vs `content/calendar` vs
-`calendar/content`) is confirmed against `/openapi.json` + `content-calendar.ts`
-before coding (Q-1).
+The exact path and params are **confirmed** against OpenAPI
+`GET /ui/content-calendar` (op `content_calendar_ui_content_calendar_get`,
+params `from_ts,to_ts,types`) and `src/api/endpoints/content-calendar.ts:
+getContentCalendar`. Q-1 is therefore resolved: the path is `ui/content-calendar`,
+not flat `content-calendar`.
 
 ### 4.4 Mappers
 
@@ -255,36 +313,45 @@ before coding (Q-1).
 package com.testlogon.android.core.network.contentcalendar
 
 import com.testlogon.android.core.model.contentcalendar.*
-import java.time.LocalDate
+import java.time.Instant
 import java.time.ZoneId
 
-fun ScheduledContentDto.toDomain(deviceZone: ZoneId): ScheduledContent {
-    val instant = scheduledAt
-        ?: scheduledDate?.let { LocalDate.parse(it).atStartOfDay(deviceZone).toInstant() }
-        ?: error("scheduled content $id has neither scheduled_at nor scheduled_date")
+// [CORRECTED] scheduled_at is Unix epoch seconds; convert with
+// Instant.ofEpochSecond. No scheduled_date alternation, no summary/author/
+// updated_at, and enums use the real vocabularies.
+fun ContentCalendarItemDto.toDomain(deviceZone: ZoneId): ScheduledContent {
+    val instant = Instant.ofEpochSecond(scheduledAt)
     val zone = timezone?.let(ZoneId::of) ?: deviceZone
     return ScheduledContent(
         id = id,
+        type = type.toContentItemType(),
         title = title,
-        summary = summary,
-        channel = channel.toContentChannel(),
-        status = status.toPublishStatus(),
+        status = status.toScheduledStatus(),
         scheduledAt = instant,
         scheduledDate = instant.atZone(zone).toLocalDate(),
         timezone = timezone,
+        localTime = localTime,
+        color = color,
+        icon = icon,
         thumbnailUrl = thumbnailUrl,
-        author = author,
-        updatedAt = updatedAt,
+        description = description,
+        durationSeconds = durationSeconds,
     )
 }
 
-private fun String?.toPublishStatus(): PublishStatus = when (this?.lowercase()) {
-    "draft" -> PublishStatus.DRAFT; "scheduled" -> PublishStatus.SCHEDULED
-    "publishing" -> PublishStatus.PUBLISHING; "published" -> PublishStatus.PUBLISHED
-    "failed" -> PublishStatus.FAILED; "canceled", "cancelled" -> PublishStatus.CANCELED
-    else -> PublishStatus.UNKNOWN
+private fun String?.toScheduledStatus(): ScheduledStatus = when (this?.lowercase()) {
+    "scheduled" -> ScheduledStatus.SCHEDULED
+    "overdue" -> ScheduledStatus.OVERDUE
+    "cancelled", "canceled" -> ScheduledStatus.CANCELLED
+    else -> ScheduledStatus.UNKNOWN
 }
-// analogous String?.toContentChannel()
+
+private fun String?.toContentItemType(): ContentItemType = when (this?.lowercase()) {
+    "post" -> ContentItemType.POST
+    "broadcast" -> ContentItemType.BROADCAST
+    "vod" -> ContentItemType.VOD
+    else -> ContentItemType.UNKNOWN
+}
 ```
 
 Mappers are pure and individually unit-tested; enum helpers centralize
@@ -314,11 +381,13 @@ class DefaultContentCalendarRepository @Inject constructor(
     override suspend fun scheduledContent(range: DateRange, filter: ContentFilter) =
         withContext(io) {
             apiCall { // AND-018 helper wrapping try/catch → ApiResult, AND-015 mapping
+                // [CORRECTED] from_ts/to_ts are Unix epoch SECONDS; `types` is a
+                // CSV of the requested content types. No channel/status query.
                 api.listScheduledContent(
-                    from = range.from.toString(),
-                    to = range.to.toString(),
-                    channel = filter.channel?.wire(),
-                    status = filter.status?.wire(),
+                    fromTs = range.from.epochSecond,
+                    toTs = range.to.epochSecond,
+                    types = filter.types.takeIf { it.isNotEmpty() }
+                        ?.joinToString(",") { it.wire() },
                 ).items.map { it.toDomain(zone) }
                  .sortedBy { it.scheduledAt }
             }
@@ -326,9 +395,12 @@ class DefaultContentCalendarRepository @Inject constructor(
 }
 ```
 
-Paging beyond the first page is deferred (R-2): the dev range is a single month;
-if `next_page` is present the repository may follow it eagerly within bounds, or a
-Paging-3 source is a follow-up. The contract surface is page-cursor-ready.
+**[CORRECTED]** There is **no** paging cursor on this endpoint — the response
+envelope is `{items, from_ts, to_ts, count, conflicts}`, so the prior
+"`next_page` cursor / Paging-3 follow-up" note (R-2) is dropped. The full result
+for the range is returned in a single response; the repository simply maps and
+sorts `items`. (The `conflicts` array is available for a future overlap-warning
+UI but is out of scope for this read-only render ticket.)
 
 ### 4.6 UI state, ViewModel (feature-calendar)
 
@@ -413,8 +485,9 @@ private fun ContentCalendarList(
 ```
 
 `LoadingState`/`EmptyState`/`ErrorState`/`OfflineState` are AND-021 composables.
-`ScheduledContentRow` renders title, localized time, a `ChannelBadge`, a
-`StatusChip(status)` (color-coded), and an optional Coil thumbnail.
+`ScheduledContentRow` renders title, localized time, a `ContentTypeBadge`
+(post/broadcast/vod), a `StatusChip(status)` (scheduled/overdue/cancelled,
+color-coded), and an optional Coil thumbnail (VOD).
 
 ### 4.8 Navigation + Gradle wiring
 
@@ -425,61 +498,95 @@ a nav entry only.
 
 ## 5. API Contract
 
-Base path (`dev`): `http://18.222.237.167:8000/`. All reads ride the cookie
-session; GET is idempotent (bounded backoff per AND-016). Shapes below are the
-working contract, reconciled against `/openapi.json` + `content-calendar.ts`
-before merge.
+Base path (`dev`): `http://18.222.237.167:8000/`. **[CORRECTED]** Shapes below are
+the **verified** contract from OpenAPI `GET /ui/content-calendar` and
+`src/api/types.ts` / `src/api/endpoints/content-calendar.ts`.
 
-### GET `content-calendar?from=…&to=…&channel=…&status=…&page=…`
-`from`/`to` RFC-3339; `channel`/`status` optional filters; `page` opaque cursor.
-Response `200`:
+**Transport / auth (verified against `src/api/client.ts`):** the web client sends,
+on every request, an `Authorization: Bearer <accessToken>` header (from the auth
+store) **and** cookies (`credentials: "include"`) **and** an `X-CSRF-Token` header
+read from the `ui_csrf` cookie — i.e. it is **not** a pure cookie session; a Bearer
+token is also present. The CSRF header is sent on **all** verbs including GET (so
+the earlier "GET needs no CSRF" claim in §8 is corrected). OpenAPI additionally
+declares optional `X-SESSION-ID` and `X-IMPERSONATION-TOKEN` headers and a
+`user_sub` query param on this operation. On `401`, the web client performs **one**
+refresh via `POST /ui/session/refresh` (credentials included) and retries; a
+second `401` logs out. The Android port supplies these headers globally via the
+shared OkHttp interceptors (AND-011/AND-012/AND-013) and does not declare them
+per-method. GET is idempotent (bounded backoff per AND-016).
+
+### GET `/ui/content-calendar?from_ts=…&to_ts=…&types=…`
+`from_ts`/`to_ts` are **Unix epoch seconds (integers, both required)**; `types` is
+an optional **comma-separated** string of `post,broadcast,vod`. Response `200`
+(envelope `{items, from_ts, to_ts, count, conflicts}`):
 ```json
 {
   "items": [
     {
       "id": "cnt_4012",
+      "type": "post",
       "title": "June product newsletter",
-      "summary": "Monthly roundup + release notes",
-      "channel": "email",
-      "status": "scheduled",
-      "scheduled_at": "2026-06-10T14:00:00Z",
+      "scheduled_at": 1781445600,
       "timezone": "America/New_York",
-      "thumbnail_url": "https://cdn.testlogon.dev/c/4012.png",
-      "author": "Dana Ruiz",
-      "updated_at": "2026-06-05T12:00:00Z"
+      "local_time": "10:00 AM",
+      "status": "scheduled",
+      "color": "#3b82f6",
+      "icon": "calendar",
+      "has_images": true,
+      "visibility": "subscribers"
     },
     {
       "id": "cnt_4013",
+      "type": "broadcast",
       "title": "Launch teaser",
-      "channel": "social",
-      "status": "draft",
-      "scheduled_date": "2026-06-12",
-      "updated_at": "2026-06-04T09:30:00Z"
+      "scheduled_at": 1781618400,
+      "timezone": null,
+      "local_time": null,
+      "status": "overdue",
+      "color": "#ef4444",
+      "icon": "video",
+      "description": "Go-live teaser",
+      "profile_id": "prf_22"
     },
     {
       "id": "cnt_4014",
-      "title": "Welcome SMS blast",
-      "channel": "sms",
-      "status": "failed",
-      "scheduled_at": "2026-06-09T16:30:00Z"
+      "type": "vod",
+      "title": "Welcome clip",
+      "scheduled_at": 1781367000,
+      "status": "cancelled",
+      "color": "#9ca3af",
+      "icon": "film",
+      "duration_seconds": 95,
+      "thumbnail_url": "https://cdn.testlogon.dev/c/4014.png"
     }
   ],
-  "next_page": null
+  "from_ts": 1780723200,
+  "to_ts": 1783315200,
+  "count": 3,
+  "conflicts": []
 }
 ```
 
-Notes: `scheduled_at` (instant) and `scheduled_date` (ISO date) are alternatives;
-unknown `channel`/`status` strings map to `UNKNOWN`. A bare array (no envelope) is
-a possible shape variance (R-2).
+Notes: `scheduled_at` is **always** a Unix epoch-seconds integer (no
+`scheduled_date` ISO variant exists). `type` is `post|broadcast|vod`; `status` is
+`scheduled|overdue|cancelled`; unknown strings map to `UNKNOWN`. The
+`200` response schema is declared as an open object (`schema: {}`) in OpenAPI, so
+the concrete field shape is taken from `src/api/types.ts: ContentCalendarResponse`
+/ `ContentCalendarItem` (the authoritative client contract).
 
-**Error envelope (all endpoints):** FastAPI `detail` union
-(`string | [{msg,type,loc}] | {code,...}`), decoded to typed `ApiError` by
-**AND-015** and surfaced through `ApiResult.Failure` (AND-018). A `401` is
-intercepted by the AND-013 `Authenticator` (one refresh + retry) before
-propagating.
+**Error envelope:** validation failures return `422` with
+`HTTPValidationError` (`{detail: [{loc, msg, type}]}` — the only error response
+documented for this operation in OpenAPI). FastAPI `detail` may also be a
+`string` or a `{code,...}` object for other statuses (see `normalizeErrorDetail`
+in `src/api/client.ts`); it is decoded to a typed `ApiError` by **AND-015** and
+surfaced through `ApiResult.Failure` (AND-018). A `401` is intercepted by the
+AND-013 `Authenticator` (one refresh via `/ui/session/refresh` + retry) before
+propagating; `403` carries a permission/`geo_blocked` `detail`.
 
-This ticket adds **no mutating endpoints** — create/reschedule/cancel are owned by
-**AND-275 (Scheduler)**.
+The sibling mutating operations confirmed in OpenAPI but **owned by AND-275** are:
+`POST /ui/content-calendar/reschedule`, `POST /ui/content-calendar/cancel`, plus
+the read helpers `GET /ui/content-calendar/today` and
+`GET /ui/content-calendar/conflicts`. This ticket adds **no** mutating endpoints.
 
 ## 6. Data & State Management
 
@@ -499,9 +606,10 @@ This ticket adds **no mutating endpoints** — create/reschedule/cancel are owne
   period is retained to back the `isStale` state on transient failure. **No Room**
   table is introduced here; durable offline cache for content-calendar, if needed,
   is a follow-up (mirrors AND-045's auth-area stale pattern).
-- **Paging:** the contract is cursor-ready (`next_page`); the dev one-month range
-  is expected to fit a single page. A full Paging-3 `PagingSource` is out of scope
-  (R-2).
+- **Paging:** **[CORRECTED]** the endpoint is **not** paged — the response is a
+  single `{items, from_ts, to_ts, count, conflicts}` envelope with no cursor. All
+  items in the requested range arrive in one response; no Paging-3 source is
+  needed (R-2 closed).
 - **Threading:** network + mapping + grouping run on the injected IO dispatcher;
   the ViewModel only reduces into state on the main-safe flow.
 
@@ -523,23 +631,31 @@ This ticket adds **no mutating endpoints** — create/reschedule/cancel are owne
 - **Stale fallback:** on a transient failure when a previous successful load for
   the same period exists, the screen shows `Content(isStale = true)` with a subtle
   "showing last loaded" indicator plus Retry, rather than blanking the list.
-- **Deserialization variance:** mappers tolerate missing optionals,
-  `scheduled_at`/`scheduled_date` alternation, and unknown enums; only a
-  genuinely malformed item (no schedule timestamp at all) errors, deterministically.
+- **Deserialization variance:** **[CORRECTED]** mappers tolerate missing
+  type-specific optionals and unknown `type`/`status` strings (→ `UNKNOWN`).
+  `scheduled_at` is a required Unix-seconds integer in the contract (there is no
+  `scheduled_date` alternation); a payload missing it is a contract violation and
+  surfaces as a deterministic decode failure via `ApiResult.Failure`.
 
 ## 8. Security & Privacy
 
-- **Authenticated surface:** the content-calendar read requires the cookie session
-  (AND-027 family). `ContentCalendarApi` adds no manual `Cookie`/`Authorization`
-  headers; identity rides the persistent jar (AND-011). The read is server-scoped
-  to content the principal may see.
-- **CSRF:** the only verb here is GET, so `X-CSRF-Token` is not required for this
-  ticket; mutating content operations (AND-275) will rely on AND-012.
+- **Authenticated surface:** the content-calendar read requires an authenticated
+  session. **[CORRECTED]** Per `src/api/client.ts`, the web client authenticates
+  with an `Authorization: Bearer <accessToken>` header **plus** cookies
+  (`credentials: include`), not cookies alone. `ContentCalendarApi` adds no manual
+  auth headers per-method; identity is injected globally (Bearer/token interceptor
+  + persistent cookie jar, AND-011). The read is server-scoped to content the
+  principal may see.
+- **CSRF:** **[CORRECTED]** the web client sends `X-CSRF-Token` (from the `ui_csrf`
+  cookie) on **every** request, including GET — not only on mutations. The Android
+  port therefore attaches CSRF globally via AND-012 for all verbs; the earlier
+  "GET needs no CSRF" assumption was wrong. Mutating content operations are still
+  out of scope (AND-275).
 - **Cleartext on dev:** content titles/summaries/thumbnails ride plaintext HTTP on
   the dev host — a known, dev-only risk permitted by the scoped cleartext config
   (AND-006); `staging`/`prod` are HTTPS-only.
-- **No payload logging:** content titles/summaries/author names are potentially
-  sensitive. This ticket adds no body logging; the shared logging interceptor
+- **No payload logging:** content titles and broadcast descriptions are
+  potentially sensitive. This ticket adds no body logging; the shared logging interceptor
   (AND-009) is debug-only and redacted. A review check confirms no content payload
   reaches logcat in any build.
 - **Image loading:** Coil loads `thumbnail_url` over the session; on dev these are
@@ -553,11 +669,11 @@ This ticket adds **no mutating endpoints** — create/reschedule/cancel are owne
   IANA `timezone` are grouped/displayed in their effective zone; the absence of a
   zone falls back to device tz. No hard-coded date formats.
 - **Strings:** all visible text ("No scheduled content for this period", "Retry",
-  "Today", status labels, channel labels) lives in `strings.xml` — no string
+  "Today", status labels, content-type labels) lives in `strings.xml` — no string
   literals in composables — ready for translation.
 - **TalkBack:** each `ScheduledContentRow` exposes a merged content description
-  combining title, localized time, channel, and status (e.g. "June product
-  newsletter, email, scheduled, June 10 at 10:00 AM"). Status chips are not
+  combining title, content type, localized time, and status (e.g. "June product
+  newsletter, post, scheduled, June 10 at 10:00 AM"). Status chips are not
   color-only — they carry text/iconography so meaning is not lost for color-blind
   users (WCAG 1.4.1). Sticky date headers use `heading()` semantics.
 - **Touch targets / scaling:** rows meet the 48dp minimum target; layout reflows
@@ -570,9 +686,9 @@ This ticket adds **no mutating endpoints** — create/reschedule/cancel are owne
   new payload logging.
 - **Analytics (redacted, per AND-052 policy):** emit
   `content_calendar_viewed { period, item_count }` on a successful load,
-  `content_calendar_item_opened { content_id_hashed, channel, status }` on row tap,
+  `content_calendar_item_opened { content_id_hashed, type, status }` on row tap,
   and `content_calendar_load_failed { reason, is_offline }` on failure. **No**
-  titles/summaries/author names or raw ids are logged; ids are hashed/anonymized.
+  titles/descriptions or raw ids are logged; ids are hashed/anonymized.
 - **Build-time signal:** KSP must generate Moshi adapters for both content-calendar
   DTOs; a missing adapter fails the build (no reflection fallback).
 
@@ -581,18 +697,20 @@ This ticket adds **no mutating endpoints** — create/reschedule/cancel are owne
 **Unit — mappers & API (core-network, JVM + MockWebServer).** Using the production
 Moshi config (incl. `InstantJsonAdapter`):
 
-- **T-1 — `listScheduledContent` query.** Issues `GET /content-calendar`, sends
-  `from`/`to`/`channel`/`status` query params, decodes the `{items,next_page}`
-  envelope. Asserts verb, `encodedPath == "/content-calendar"`, and each query
-  value.
-- **T-2 — instant-scheduled mapping.** `items[0]` (`scheduled_at` + `timezone`)
-  maps to `scheduledAt` parsed correctly and `scheduledDate` derived in the item
-  tz (no off-by-one across the UTC→ET boundary).
-- **T-3 — date-only mapping.** `items[1]` (`scheduled_date`, no `scheduled_at`)
-  maps to a derived `Instant` at start-of-day in the effective zone and a non-null
-  `scheduledDate`.
-- **T-4 — enum tolerance.** `status:"failed"` → `FAILED`; `channel:"social"` →
-  `SOCIAL`; an unknown `channel:"carrier-pigeon"` → `UNKNOWN`; missing `status` →
+- **T-1 — `listScheduledContent` query.** [CORRECTED] Issues
+  `GET /ui/content-calendar`, sends `from_ts`/`to_ts` (Unix seconds) and a CSV
+  `types` query param, decodes the `{items, from_ts, to_ts, count, conflicts}`
+  envelope. Asserts verb, `encodedPath == "/ui/content-calendar"`, and each query
+  value (e.g. `types=post,broadcast`).
+- **T-2 — epoch-seconds mapping + tz derivation.** [CORRECTED] `items[0]`
+  (`scheduled_at` epoch seconds + `timezone`) maps to `scheduledAt ==
+  Instant.ofEpochSecond(...)` and `scheduledDate` derived in the item tz (no
+  off-by-one across the UTC→ET boundary).
+- **T-3 — null-timezone fallback.** [CORRECTED] `items[1]` (`timezone: null`)
+  derives `scheduledDate` in the device zone; `localTime`/`description` optionals
+  map through; status `overdue` → `OVERDUE`.
+- **T-4 — enum tolerance.** [CORRECTED] `status:"cancelled"` → `CANCELLED`;
+  `type:"vod"` → `VOD`; unknown `type:"reel"` → `UNKNOWN`; missing `status` →
   `UNKNOWN`. No throw.
 - **T-5 — error propagation.** A `401` surfaces as `HttpException`/`ApiResult.Failure`
   (not swallowed), leaving room for AND-013/AND-015.
@@ -618,7 +736,7 @@ Moshi config (incl. `InstantJsonAdapter`):
 **Compose UI tests (feature-calendar, instrumented).**
 - **T-13 — renders content (ACCEPTANCE).** With a fake ViewModel emitting
   `Content`, the screen shows sticky date headers and one row per item with title,
-  time, channel, and status — satisfying the backlog "Content calendar renders."
+  time, content type, and status — satisfying the backlog "Content calendar renders."
 - **T-14 — state surfaces.** Loading shows the spinner; empty shows the empty
   message; error shows the message + Retry (clicking calls `retry`); offline shows
   the offline state.
@@ -660,42 +778,49 @@ codegen adapters; (4) mappers; (5) `ContentCalendarApi` + Hilt provider;
   *content*, not raw `CalendarEvent`s. Mitigation: a dedicated `ScheduledContent`
   model; reuse only shared infra (`InstantJsonAdapter`, mapper conventions), not
   `CalendarEvent`. Revisit if OpenAPI shows the backend reuses the event shape.
-- **R-2 Paging / envelope shape.** The endpoint may return a bare array, a
-  `{items,next_page}` envelope, or offset/limit. Mitigation: default to the cursor
-  envelope; tolerate a bare array via a lenient response type if OpenAPI dictates.
-  Full Paging-3 is a follow-up. Guarded by T-1.
-- **R-3 Timestamp form.** Items may carry `scheduled_at` (instant), a naive time +
-  separate `timezone`, or only `scheduled_date`. Mitigation: DTO accepts both;
-  mapper derives `Instant` + `LocalDate` using item tz when present, device tz
-  otherwise. Open: is `scheduled_at` always UTC? Guarded by T-2/T-3.
+- **R-2 Envelope shape.** [RESOLVED] Verified: the response is the fixed envelope
+  `{items, from_ts, to_ts, count, conflicts}` (`src/api/types.ts:
+  ContentCalendarResponse`). There is no bare array, no `next_page`, and no
+  offset/limit paging. Guarded by T-1.
+- **R-3 Timestamp form.** [RESOLVED] Verified: `scheduled_at` is a Unix
+  epoch-seconds **integer** (`ContentCalendarItem.scheduled_at: number`); there is
+  no `scheduled_date` ISO variant. The mapper uses `Instant.ofEpochSecond` and
+  derives `LocalDate` in the item `timezone` when present, device tz otherwise.
+  (Epoch seconds are absolute/UTC by definition, so the "is it UTC?" question is
+  moot.) Guarded by T-2/T-3.
 - **R-4 Read-only boundary.** This view is display-only; create/edit is AND-275.
   Risk of scope creep into scheduling. Mitigation: row tap only navigates; no
   mutation endpoints declared here.
 - **R-5 Unreliable dev host.** Loads may time out/flap. Mitigation: robust
   offline/stale/error states + Retry + bounded backoff (AND-016).
-- **Q-1** Endpoint path: `content-calendar` vs `content/calendar` vs
-  `calendar/content`? *Proposed:* match `content-calendar.ts`/OpenAPI; spec assumes
-  flat `content-calendar`.
-- **Q-2** Filter params: are `channel`/`status` server-supported query filters, or
-  must filtering be client-side? *Proposed:* send as query if OpenAPI lists them;
-  otherwise filter client-side in the repository.
-- **Q-3** Status/channel enum value sets — confirm the full vocabulary against
-  `types.ts`/OpenAPI; unknowns map to `UNKNOWN` regardless.
+- **Q-1** [RESOLVED] Endpoint path is **`/ui/content-calendar`** (Retrofit
+  relative `ui/content-calendar`) — confirmed in OpenAPI and
+  `src/api/endpoints/content-calendar.ts`. Not flat `content-calendar`.
+- **Q-2** [RESOLVED] The only server-supported filter is **`types`** (CSV of
+  `post,broadcast,vod`). There is **no** server `status` filter, so any status
+  filtering must be **client-side** in the repository/ViewModel.
+- **Q-3** [RESOLVED] Vocabularies (from `src/api/types.ts`): item `type` =
+  `post|broadcast|vod`; `status` = `scheduled|overdue|cancelled`. There is no
+  delivery "channel" concept. Unknown strings map to `UNKNOWN`.
 - **Q-4** Default period: current month vs current week? *Proposed:* current month
-  in device tz; confirm with the web reference's default range.
+  in device tz, converting month bounds to `from_ts`/`to_ts` epoch seconds.
+  **Open** — the web reference computes the range from caller-supplied `fromTs`/
+  `toTs` and does not pin a default month vs week in `content-calendar.ts`; the
+  Android default is a product choice (see §16 Open assumptions).
 
 ## 14. Acceptance Criteria
 
 - **AC-1 (backlog).** **Content calendar renders.** With a session (or fake
   ViewModel), `ContentCalendarScreen` fetches scheduled content for the selected
   period and renders it grouped by date with sticky day headers and per-item rows
-  (title, time, channel, status), proven by Compose UI test T-13.
-- **AC-2.** `ContentCalendarApi.listScheduledContent` issues `GET /content-calendar`
-  with `from`/`to`/`channel`/`status`/`page` query params and decodes the paged
-  envelope (T-1).
-- **AC-3.** `ScheduledContentDto.toDomain` maps both instant- and date-scheduled
-  items losslessly into `ScheduledContent`, deriving `scheduledDate` in the
-  effective tz with no off-by-one (T-2, T-3).
+  (title, time, content type, status), proven by Compose UI test T-13.
+- **AC-2.** [CORRECTED] `ContentCalendarApi.listScheduledContent` issues
+  `GET /ui/content-calendar` with `from_ts`/`to_ts` (Unix epoch seconds) and an
+  optional CSV `types` query param, and decodes the
+  `{items, from_ts, to_ts, count, conflicts}` envelope (T-1).
+- **AC-3.** [CORRECTED] `ContentCalendarItemDto.toDomain` maps `scheduled_at`
+  (Unix epoch seconds) losslessly into `ScheduledContent.scheduledAt` and derives
+  `scheduledDate` in the effective tz with no off-by-one (T-2, T-3).
 - **AC-4.** Unknown enum strings and missing optional fields map to `UNKNOWN`/
   defaults without throwing (T-4).
 - **AC-5.** `ContentCalendarRepository.scheduledContent` returns `ApiResult` with
@@ -715,8 +840,8 @@ codegen adapters; (4) mappers; (5) `ContentCalendarApi` + Hilt provider;
 
 ## 15. Definition of Done
 
-- Domain types (`ScheduledContent`, `ContentChannel`, `PublishStatus`, `DateRange`,
-  `ContentFilter`) in `core-model`
+- Domain types (`ScheduledContent`, `ContentItemType`, `ScheduledStatus`,
+  `DateRange`, `ContentFilter`) in `core-model`
   (`com.testlogon.android.core.model.contentcalendar`); DTOs, `ContentCalendarApi`,
   mappers, and the Hilt provider in `core-network`
   (`com.testlogon.android.core.network.contentcalendar`); repository in `core-data`;
@@ -742,3 +867,306 @@ codegen adapters; (4) mappers; (5) `ContentCalendarApi` + Hilt provider;
   with the content domain types and the read-only view to build create/edit on.
 - A one-line note in the `feature-calendar` README (per AND-007) records the
   `content_calendar` route and the `ContentCalendarApi` path/verb.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim below is paired with a VERDICT and an exact SOURCE
+pointer. Sources: OpenAPI index/spec (`reference/openapi.index.txt`,
+`reference/openapi.pretty.json`) and frontend reference (`reference/src/...`).
+
+1. **Endpoint path is `/ui/content-calendar`** (Retrofit relative
+   `ui/content-calendar`). VERDICT: **Corrected** (spec originally said flat
+   `content-calendar`). SOURCE: OpenAPI `GET /ui/content-calendar`
+   (op `content_calendar_ui_content_calendar_get`);
+   `src/api/endpoints/content-calendar.ts: getContentCalendar`
+   (`api.get("/ui/content-calendar", …)`).
+2. **HTTP method is GET, idempotent read.** VERDICT: **Verified**. SOURCE: OpenAPI
+   `GET /ui/content-calendar`; `src/api/endpoints/content-calendar.ts:
+   getContentCalendar`.
+3. **Query params are `from_ts` + `to_ts` (Unix epoch seconds, integer, both
+   required) and optional `types` (CSV of `post,broadcast,vod`).** VERDICT:
+   **Corrected** (spec said `from`/`to` RFC-3339 + `channel`/`status`/`page`).
+   SOURCE: OpenAPI `GET /ui/content-calendar` params `from_ts,to_ts,types`
+   (`from_ts`/`to_ts` `type: integer`, "Unix seconds"; `types` "Comma-separated
+   content types: post,broadcast,vod"); `src/api/endpoints/content-calendar.ts:
+   getContentCalendar` (builds `from_ts`/`to_ts`/`types` params).
+4. **No paging cursor; response envelope is
+   `{items, from_ts, to_ts, count, conflicts}`.** VERDICT: **Corrected** (spec said
+   `{items, next_page}` cursor envelope). SOURCE:
+   `src/api/types.ts: ContentCalendarResponse`.
+5. **Item shape `ContentCalendarItem`: `id`, `type` (post|broadcast|vod),
+   `title`, `scheduled_at` (number = Unix seconds), `timezone`, `local_time`,
+   `status` (scheduled|overdue|cancelled), `color`, `icon`, plus type-specific
+   optionals (`has_images`, `description`, `duration_seconds`, `thumbnail_url`,
+   …).** VERDICT: **Corrected** (spec invented `summary`, `author`, `updated_at`,
+   `channel`, `scheduled_date`, and a publish-lifecycle status). SOURCE:
+   `src/api/types.ts: ContentCalendarItem`.
+6. **`scheduled_at` is a Unix epoch-seconds integer (not an RFC-3339 string, no
+   `scheduled_date` ISO variant).** VERDICT: **Corrected**. SOURCE:
+   `src/api/types.ts: ContentCalendarItem.scheduled_at: number`; OpenAPI param
+   wording confirms epoch seconds for the matching range params.
+7. **Content `type` vocabulary = `post | broadcast | vod`.** VERDICT: **Corrected**
+   (spec used delivery channels email/sms/push/etc.). SOURCE:
+   `src/api/types.ts: ContentItemType`.
+8. **`status` vocabulary = `scheduled | overdue | cancelled`.** VERDICT:
+   **Corrected** (spec used draft/scheduled/publishing/published/failed/canceled).
+   SOURCE: `src/api/types.ts: ContentCalendarItem.status`.
+9. **Auth: web client sends `Authorization: Bearer <accessToken>` AND cookies
+   (`credentials: include`) AND `X-CSRF-Token` (from `ui_csrf` cookie) on every
+   request.** VERDICT: **Corrected** (spec described a pure cookie session with no
+   Authorization header). SOURCE: `src/api/client.ts` (the `api<T>()` core sets
+   `Authorization: Bearer`, `credentials: "include"`, and `X-CSRF-Token`).
+10. **CSRF is sent on GET too, not only mutations.** VERDICT: **Corrected** (spec
+    said GET needs no CSRF). SOURCE: `src/api/client.ts` (CSRF header set
+    unconditionally before the fetch, for all verbs).
+11. **401 handling: one refresh via `POST /ui/session/refresh`, then retry; second
+    401 logs out.** VERDICT: **Verified** (consistent with the spec's AND-013
+    one-refresh model). SOURCE: `src/api/client.ts: refreshSession` + the 401
+    branch.
+12. **OpenAPI also declares optional `X-SESSION-ID`, `X-IMPERSONATION-TOKEN`
+    headers and a `user_sub` query param on this op.** VERDICT: **Verified**.
+    SOURCE: OpenAPI `GET /ui/content-calendar` params
+    `…,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN`; `X-IMPERSONATION-TOKEN` also
+    set in `src/api/client.ts`.
+13. **Error model: `422` → `HTTPValidationError` (`{detail:[{loc,msg,type}]}`);
+    `detail` may also be a string or `{code,...}` object.** VERDICT: **Verified**.
+    SOURCE: OpenAPI `GET /ui/content-calendar` `resp 422:HTTPValidationError`;
+    `src/api/client.ts: normalizeErrorDetail`.
+14. **Sibling mutating ops belong to AND-275:
+    `POST /ui/content-calendar/reschedule`, `POST /ui/content-calendar/cancel`;
+    read helpers `GET /ui/content-calendar/today`, `…/conflicts`.** VERDICT:
+    **Verified**. SOURCE: OpenAPI lines for those paths;
+    `src/api/endpoints/content-calendar.ts` (`rescheduleCalendarItem`,
+    `cancelCalendarItem`, `getTodayAgenda`, `getConflicts`).
+15. **`conflicts` array shape `{item_a_id, item_a_type, item_b_id, item_b_type,
+    gap_seconds, gap_minutes}`.** VERDICT: **Verified**. SOURCE:
+    `src/api/types.ts: ContentCalendarConflict`.
+16. **Stack pins (Kotlin 2.0.21, Compose/M3, Retrofit 2.11.0, OkHttp 4.12.0,
+    Moshi 1.15.x KSP, Coil, core-library desugaring for `java.time`, minSdk 24,
+    compile/target 35, AGP 8.7.3, Gradle 8.9, JDK 17).** VERDICT:
+    **Unverified-assumption** (no build files in the provided sources). These are
+    inherited project conventions; framework ref for desugaring `java.time`:
+    `developer.android.com/studio/write/java8-support` (framework ref).
+17. **Compose `LazyColumn` `stickyHeader` for date-grouped agenda layout.**
+    VERDICT: **Unverified-assumption** (UI design choice; not in sources).
+    Framework ref: `developer.android.com/jetpack/compose/lists#sticky-headers`
+    (framework ref).
+18. **`collectAsStateWithLifecycle` + `SavedStateHandle` for state/period
+    persistence.** VERDICT: **Unverified-assumption** (Android architecture
+    choice). Framework ref:
+    `developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate`
+    (framework ref).
+
+### Corrections made
+
+- **Path:** `content-calendar` → `ui/content-calendar` (full `/ui/content-calendar`)
+  — §3 FR-2, §4.3, §5, §13 Q-1, §14 AC-2, §11 T-1.
+- **Query params:** dropped `from`/`to` (RFC-3339), `channel`, `status`, `page`;
+  replaced with `from_ts`/`to_ts` (Unix epoch seconds) + CSV `types` — §3 FR-2,
+  §4.3, §4.5, §5, §13 Q-2, §14 AC-2.
+- **Response envelope:** `{items, next_page}` cursor → `{items, from_ts, to_ts,
+  count, conflicts}` (no paging) — §3 FR-3, §4.2, §4.5, §5, §6, §13 R-2.
+- **Item fields:** removed `summary`/`author`/`updated_at`/`channel`/
+  `scheduled_date`; added real fields (`type`, `local_time`, `color`, `icon`,
+  type-specific optionals) — §4.1, §4.2, §4.4, §5, §7, §8 (privacy wording),
+  §9 (TalkBack), §10 (analytics).
+- **Timestamp:** `scheduled_at` Instant/RFC-3339 (+`scheduled_date` fallback) →
+  Unix epoch seconds via `Instant.ofEpochSecond` — §3 FR-4, §4.2, §4.4, §5, §7,
+  §13 R-3, §14 AC-3, §11 T-2/T-3.
+- **Enums:** `ContentChannel`(email/sms/…)/`PublishStatus`(draft/publishing/…) →
+  `ContentItemType`(post/broadcast/vod)/`ScheduledStatus`(scheduled/overdue/
+  cancelled) — §4.1, §4.4, §11 T-4, §15.
+- **Auth/CSRF:** pure cookie session → Bearer token + cookies + `X-CSRF-Token` on
+  all verbs (incl. GET) — §5, §8.
+- **Open questions:** Q-1/Q-2/Q-3 resolved; R-2/R-3 marked resolved.
+
+### Open assumptions
+
+- **Default period (Q-4):** current month vs week is **not** pinned by the web
+  reference (`content-calendar.ts` takes caller-supplied `fromTs`/`toTs`); the
+  Android default (current month in device tz) is a product decision, not a
+  verified contract fact.
+- **200 response schema is open (`schema: {}`) in OpenAPI**, so the concrete field
+  shape is taken from `src/api/types.ts` (the TypeScript client contract), which is
+  treated as authoritative but is not formally pinned in the OpenAPI document.
+- **Stale-cache (`isStale`) behavior** and the AND-045-style retain-last-good
+  policy are an Android UX decision, not derived from the backend or web client.
+- **Build/toolchain pins (item 16)** and the framework choices (items 17–18) are
+  not present in the provided sources; treated as inherited project conventions.
+- **Whether the `types` filter and `status`/type vocabularies are exhaustive** at
+  runtime cannot be guaranteed; unknown values are defended via `UNKNOWN` mapping.
+
+## 17. Test Plan
+
+Test target keys: **JVM** (local unit/Robolectric, no device); **emulator**
+(headless AVD `test35`, x86_64, API 35); **device** (physical Samsung Galaxy A15
+5G, SM-A156U, serial R5CX821TA9R, API 34, arm64-v8a). For this read-only,
+non-hardware feature most cases run on JVM/emulator; one ABI/API-parity case is
+called out for the physical device.
+
+- **TC-AND-274-01 — Happy-path query + decode.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: MockWebServer enqueues a `200` with the §5 envelope (3 items,
+  `conflicts: []`).
+  Steps: call `ContentCalendarApi.listScheduledContent(fromTs, toTs,
+  types="post,broadcast")`; capture `RecordedRequest`.
+  Expected: method `GET`; `encodedPath == "/ui/content-calendar"`; query has
+  `from_ts`/`to_ts` (epoch seconds) and `types=post,broadcast`; body decodes to
+  `ContentCalendarRespDto` with 3 items and `count == 3`.
+  Traces: AC-2.
+
+- **TC-AND-274-02 — Epoch-seconds + timezone mapping (no off-by-one).**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: `items[0]` has `scheduled_at` epoch seconds late-evening UTC and
+  `timezone: "America/New_York"` (so ET date < UTC date).
+  Steps: map via `ContentCalendarItemDto.toDomain(deviceZone)`.
+  Expected: `scheduledAt == Instant.ofEpochSecond(raw)`; `scheduledDate` equals the
+  ET calendar date, not the UTC one.
+  Traces: AC-3.
+
+- **TC-AND-274-03 — Null-timezone falls back to device zone.**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: `items[1]` has `timezone: null`.
+  Steps: map with a fixed device `ZoneId`.
+  Expected: `scheduledDate` derived in device zone; `localTime`/`description`
+  optionals carried; `status "overdue" → OVERDUE`.
+  Traces: AC-3, AC-4.
+
+- **TC-AND-274-04 — Enum + optional tolerance (never throws).**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: items with `type:"vod"`/`status:"cancelled"`, an unknown
+  `type:"reel"`, and one with `status` absent.
+  Steps: map each.
+  Expected: `VOD`/`CANCELLED`; unknown `type → UNKNOWN`; missing `status →
+  UNKNOWN`; no exception.
+  Traces: AC-4.
+
+- **TC-AND-274-05 — Repository success: map + ascending sort.**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: fake `ContentCalendarApi` returns 3 items out of time order.
+  Steps: call `repository.scheduledContent(range, ContentFilter())`.
+  Expected: `ApiResult.Success` whose list is sorted ascending by `scheduledAt`;
+  `from_ts`/`to_ts` passed as `range.from.epochSecond`/`range.to.epochSecond`.
+  Traces: AC-5.
+
+- **TC-AND-274-06 — Repository failure mapping (offline/transport).**
+  Type: unit (JVM). Target: JVM.
+  Preconditions: fake API throws `UnknownHostException` (and a separate case:
+  `IOException`).
+  Steps: call the repository.
+  Expected: `ApiResult.Failure` classified as offline/transport (AND-017/018); no
+  exception escapes.
+  Traces: AC-5.
+
+- **TC-AND-274-07 — 422 validation error decode.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: MockWebServer enqueues `422` with
+  `{"detail":[{"loc":["query","from_ts"],"msg":"field required","type":"missing"}]}`.
+  Steps: call the repository.
+  Expected: `ApiResult.Failure` carrying a typed `ApiError` whose message derives
+  from `detail[].msg` (AND-015); not swallowed, not crashed.
+  Traces: AC-5.
+
+- **TC-AND-274-08 — 401 triggers single refresh + retry.**
+  Type: contract/MockWebServer (JVM). Target: JVM.
+  Preconditions: enqueue `401`, then (refresh succeeds) a `200`; AND-013
+  authenticator wired.
+  Steps: call the repository once.
+  Expected: exactly one refresh attempt, original request retried, final
+  `ApiResult.Success`; a second consecutive `401` instead yields `Failure` routing
+  to login.
+  Traces: AC-5, AC-8.
+
+- **TC-AND-274-09 — ViewModel Loading → Content, grouped & ordered.**
+  Type: unit (JVM, `runTest` + fake repo). Target: JVM.
+  Preconditions: repo returns items spanning 3 distinct dates.
+  Steps: collect `uiState` from init.
+  Expected: first `Loading`, then `Content` with `days` ascending by date and each
+  day's items ascending by time; item count matches input.
+  Traces: AC-1, AC-6.
+
+- **TC-AND-274-10 — ViewModel Empty / Error+Offline / retry / period change.**
+  Type: unit (JVM, `runTest`). Target: JVM.
+  Preconditions: parametrized fake repo (empty list; failure; failure→success on
+  retry; period switch).
+  Steps: drive `retry()`, `onPeriod(next)`, `onToday()`; recreate ViewModel with
+  the saved `SavedStateHandle`.
+  Expected: empty→`Empty`; failure→`Error`/offline; `retry()` recovers to
+  `Content`; `onPeriod`/`onToday` re-query the new range; restored period survives
+  via `SavedStateHandle`.
+  Traces: AC-6.
+
+- **TC-AND-274-11 — Stale fallback retains last-good.**
+  Type: unit (JVM, `runTest`). Target: JVM.
+  Preconditions: one successful load for a period, then a transient failure for the
+  same period.
+  Steps: trigger the second load.
+  Expected: state is `Content(isStale = true)` with prior items retained (not
+  blanked).
+  Traces: AC-6.
+
+- **TC-AND-274-12 — Screen renders grouped content (ACCEPTANCE).**
+  Type: Compose-UI (instrumented). Target: emulator (`test35`).
+  Preconditions: fake ViewModel emits `Content` with sticky-headed days.
+  Steps: launch `ContentCalendarScreen`; assert nodes.
+  Expected: sticky date headers present; one row per item showing title, localized
+  time, content-type badge (post/broadcast/vod), and status chip
+  (scheduled/overdue/cancelled). Satisfies backlog "Content calendar renders."
+  Traces: AC-1, AC-7.
+
+- **TC-AND-274-13 — State surfaces + navigation hand-off.**
+  Type: Compose-UI (instrumented). Target: emulator (`test35`).
+  Preconditions: fake ViewModel toggles Loading/Empty/Error/Offline; then Content.
+  Steps: assert each state's composable (spinner; empty message "No scheduled
+  content for this period"; error message + Retry invoking `retry`; offline state);
+  tap a row.
+  Expected: each state renders its AND-021 composable; row tap invokes
+  `onItemClick(id)` (AND-275 hand-off).
+  Traces: AC-7, AC-1.
+
+- **TC-AND-274-14 — Accessibility (TalkBack semantics, targets, color-safe).**
+  Type: Compose-UI / instrumented a11y. Target: emulator (`test35`).
+  Preconditions: `Content` with one item per status/type.
+  Steps: inspect semantics tree; enable font scaling 2x and landscape.
+  Expected: each row exposes a merged content description (title, type, time,
+  status); status chips carry text/icon (not color-only, WCAG 1.4.1); date headers
+  have `heading()` semantics; touch targets ≥48dp; layout reflows without
+  truncation.
+  Traces: AC-1, AC-7.
+
+- **TC-AND-274-15 — Auth headers present; no per-method/second client.**
+  Type: contract/MockWebServer (JVM) + review check. Target: JVM.
+  Preconditions: app-wired OkHttp with global Bearer/cookie/CSRF interceptors;
+  authenticated session fixture.
+  Steps: issue the GET; inspect `RecordedRequest` headers; assert DI graph.
+  Expected: request carries `Authorization: Bearer …`, session cookie(s), and
+  `X-CSRF-Token`; `ContentCalendarApi` declares no per-method auth/cookie/CSRF
+  headers; `@Singleton` provider uses the shared `Retrofit` (no second
+  `OkHttpClient`/`Retrofit`).
+  Traces: AC-8.
+
+- **TC-AND-274-16 — ABI/API parity smoke (real device).**
+  Type: instrumented/e2e. Target: **device** (must run on physical SM-A156U,
+  arm64-v8a, API 34 — to catch arm64-vs-x86 desugaring/`java.time` and
+  API-34-vs-35 differences not exercised by the x86_64 API-35 emulator).
+  Preconditions: debug build installed via adb on serial R5CX821TA9R; MockWebServer
+  or dev backend reachable.
+  Steps: open the content calendar, scroll the agenda, rotate, tap an item.
+  Expected: dates/times group and format identically to emulator results (no
+  desugaring/tz off-by-one on arm64/API 34); navigation hand-off works; no crash.
+  Traces: AC-1, AC-3, AC-10.
+
+### Coverage matrix
+
+| Acceptance criterion (§14) | Covered by |
+| --- | --- |
+| AC-1 (Content calendar renders) | TC-09, TC-12, TC-13, TC-14, TC-16 |
+| AC-2 (GET /ui/content-calendar with from_ts/to_ts/types, decode envelope) | TC-01 |
+| AC-3 (epoch-seconds → scheduledAt + scheduledDate, no off-by-one) | TC-02, TC-03, TC-16 |
+| AC-4 (unknown enums / missing optionals tolerated) | TC-03, TC-04 |
+| AC-5 (repository ApiResult: sorted success; typed failures) | TC-05, TC-06, TC-07, TC-08 |
+| AC-6 (ViewModel StateFlow cycle, grouping, retry, period, SavedStateHandle) | TC-09, TC-10, TC-11 |
+| AC-7 (loading/empty/error/offline composables; row-tap nav) | TC-12, TC-13, TC-14 |
+| AC-8 (Hilt @Singleton on shared Retrofit; no per-method auth/CSRF, no 2nd client) | TC-08, TC-15 |
+| AC-9 (route `content_calendar` registered + reachable) | TC-13 (nav hand-off); manual nav-graph check |
+| AC-10 (CI green; builds clean; instrumented pass on emulator) | TC-12..TC-14 (emulator), TC-16 (device) |

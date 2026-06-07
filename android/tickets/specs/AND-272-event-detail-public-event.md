@@ -5,9 +5,10 @@ milestone: M6
 epic: E37
 priority: P1
 size: L
-status: draft
 depends_on: [AND-271, AND-022]
 blocks: []
+status: reviewed
+reviewed_on: 2026-06-06
 ---
 
 # AND-272 — Event detail (+ public event)
@@ -25,7 +26,7 @@ This ticket owns: the `feature-calendar` detail route/screen, its `EventDetailVi
 - **Upstream AND-271 (Calendar views):** exposes `onEventClick(calendarId: String, eventId: String, occurrenceStart: Instant)`; this ticket consumes that callback and routes to detail. Reuses `SlottedEvent`/`CalendarEvent` domain models and the `CalendarZonePreferences` display-zone resolution defined there.
 - **Upstream AND-022 (Navigation host & routes):** single-Activity `NavHost`, typed route definitions, transitions. This ticket registers a new typed destination and a `navDeepLink` for the public URL.
 - **Upstream AND-270 (transitive):** `CalendarRepository` and Moshi DTO mapping; this ticket adds a single-event read method (see §5). FastAPI error `detail` mapping and `ApiResult<T>` come from `core-network`.
-- **Web reference:** `frontend/src/api/endpoints/calendar.ts` (single-event + public-event endpoint shapes) and `frontend/src/api/types.ts` (event/attendee/recurrence types). The web route `/event/:calendarId/:eventId` is the canonical public URL shape to mirror.
+- **Web reference:** `src/api/endpoints/calendar.ts` (`getEvent`, `getPublicEvent`, `getPublicIcalUrl`), `src/api/types.ts` (`CalendarEvent`, `CalendarEventAttachment`, `RecurrenceRule`), and `src/pages/calendar/PublicEventPage.tsx` (the only screen that consumes a single event). The web route `/event/:calendarId/:eventId` (verified `src/App.tsx`) is the canonical public URL shape to mirror. **Note (verified):** the web app does NOT have an authenticated single-event detail screen — `getEvent` is defined but unused; calendar views render from the list endpoint, and the only single-event consumer is the public page. The Android authenticated detail screen is therefore an Android-specific design; see §16 for the endpoint-availability caveat.
 - **Backend:** FastAPI + DynamoDB, dev host `http://18.222.237.167:8000` (plaintext HTTP, unreliable). OpenAPI at `/openapi.json`. Cookie + `ui_csrf`/`X-CSRF-Token` auth handled by `core-network`; 401 triggers one `POST /ui/session/refresh` + retry.
 - **Stack:** Kotlin 2.0.21, Compose + Material 3, Navigation-Compose, Hilt (KSP), Coroutines/Flow, Coil (organizer/attendee avatars + attachment thumbnails), `java.time` via core library desugaring. minSdk 24, compileSdk/targetSdk 35, AGP 8.7.3, Gradle 8.9, JDK 17, branch `android-port`.
 
@@ -33,15 +34,15 @@ This ticket owns: the `feature-calendar` detail route/screen, its `EventDetailVi
 
 FR-1 **Detail entry (in-app).** Tapping any event in Month/Week/Agenda (AND-271 `onEventClick`) navigates to `EventDetail` with `calendarId`, `eventId`, and `occurrenceStart` (epoch millis). The detail screen loads and renders that occurrence.
 
-FR-2 **Rendered fields.** Title; date/time range formatted in the effective display zone with an explicit zone label; all-day and multi-day rendered as date spans (no time); recurrence summary (e.g., "Repeats weekly on Mon"); location (tappable → maps intent); description (rich text rendered as plain/linkified text); organizer (avatar + name); attendee list with RSVP status; source calendar name + color; attachments (Coil thumbnails, tap to open).
+FR-2 **Rendered fields.** **Verified against the API (`EventOut`/`CalendarEvent`, `CalendarEventAttachment`):** name (the `name` field — there is no `title`); date/time range from `start_utc`/`end_utc` formatted in the effective display zone with an explicit zone label; all-day rendered from `all_day`/`all_day_date` as a date (no time); recurrence summary built from `recurrence_rule` (freq ∈ DAILY|WEEKLY|MONTHLY, optional `interval`/`byday`/`bymonthday`/`bysetpos`/`count`/`until_utc`); description (`description`, linkified plain text); status/category. **NOT backed by the current API — render only if/when the backend adds them (see §16 Open assumptions):** location with lat/lng + maps tap, organizer avatar/name, attendee list **with RSVP status**, source-calendar display name + color, and attachments with thumbnails. The DTO exposes `attendees` only as a `string[]` (sub identifiers, no RSVP/person/avatar), `calendar_id` (no `calendar_name`/`color`), and no organizer/location/attachment fields. Implement these UI rows behind a "field present?" guard so they no-op until the contract grows; do not block M6 on them.
 
-FR-3 **Actions.** (a) **Add to device calendar** via `Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI)` prefilled with title/time/location/description. (b) **Share public link** via `ACTION_SEND` with the canonical `https://<host>/event/{calendarId}/{eventId}` URL. (c) **Open location in maps** via `geo:` / maps query intent. (d) **Open organizer profile** if a `u-identifier` is present (delegates to public profile route, AND-073). All actions are no-ops/hidden when their backing data is absent.
+FR-3 **Actions.** (a) **Add to device calendar** via `Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI)` prefilled with name/time/description (location omitted unless the API later returns one). NB: this is an Android-specific affordance; the web equivalent on `PublicEventPage.tsx` is server-side (`createEvent`) plus a "Download .ics" link (`getPublicIcalUrl`) — see §16. (b) **Share public link** via `ACTION_SEND` with the canonical `https://<host>/event/{calendarId}/{eventId}` URL — verified to match the web route `/event/:calendarId/:eventId` (`src/App.tsx`). Optionally offer "Download .ics" mirroring web via `GET /calendar/public/event/{calendarId}/{eventId}/ical` (verified endpoint). (c) **Open location in maps** via `geo:` / maps query intent — **gated off until the API returns a location** (no location field exists today; see §16). (d) **Open organizer profile** — **gated off until the API returns an organizer/`u-identifier`** (no such field today; AND-073 integration is aspirational). All actions are no-ops/hidden when their backing data is absent.
 
 FR-4 **Public App Link (cold/warm start).** An `https` App Link for path `/event/{calendarId}/{eventId}` on the production/staging hosts opens the app directly (verified Digital Asset Links → no disambiguation dialog) to the same `EventDetail` destination. From a cold start the deep link rebuilds a sensible back stack: `EventDetail` with the calendar root as parent so Back returns into the app rather than exiting.
 
-FR-5 **Public (unauthenticated/limited) event.** When the event is public, the backend may return a reduced payload (no attendee PII) and may not require a session. The screen renders whatever fields are returned and hides absent ones. If the event requires auth and the user is unauthenticated, the screen routes through the existing auth gate (AND-025) preserving the deep link as a post-login redirect, then returns to the event.
+FR-5 **Public (unauthenticated/limited) event.** **Verified:** the public endpoint `GET /calendar/public/event/{calendar_id}/{event_id}` requires no session and returns the reduced `CalendarEventAttachment` shape — `event_id, calendar_id, name, start_utc?, end_utc?, all_day, all_day_date?, timezone, description?, owner` only (no attendees, organizer, location, color, recurrence, or attachments). **Correction:** there is NO `is_public` flag in any payload; "public" is determined by which endpoint succeeds, not by a response field. The detail UI must distinguish public vs. authenticated by the endpoint/path used, not by parsing `is_public`. The screen renders whatever fields are returned and hides absent ones. If the event requires auth and the user is unauthenticated, the screen routes through the existing auth gate (AND-025) preserving the deep link as a post-login redirect, then returns to the event.
 
-FR-6 **Not-found / forbidden.** A `404` (event/calendar missing or expired public link) shows a dedicated "Event unavailable" state with a Back action. A `403` (private event, insufficient visibility) shows a "You don't have access" state. Neither shows a raw error.
+FR-6 **Not-found / forbidden.** A `404` (event/calendar missing or expired public link) shows a dedicated "Event unavailable" state with a Back action. A `403` (private event, insufficient visibility) shows a "You don't have access" state. **Verified caveat:** the OpenAPI spec only documents `200` and `422` (`HTTPValidationError`) for both the public and single-event endpoints; `403`/`404` are FastAPI runtime responses with a `{ "detail": ... }` body and are not in the schema. Treat a `422` (malformed/invalid id) like `NOT_FOUND` for display, matching the web page which renders any error as "Event not found" (`PublicEventPage.tsx`, `retry:false`). Neither shows a raw error.
 
 FR-7 **Timezone handling.** Reuse AND-271's display-zone resolution (precedence: DataStore user override → `ZoneId.systemDefault()`). Show a zone-mismatch hint when the display zone differs from the device zone. All-day events are date-anchored and never shift across zones.
 
@@ -80,6 +81,8 @@ sealed interface EventDetailUiState {
 
 enum class EventDetailError { NETWORK, SERVER, NOT_FOUND, FORBIDDEN, AUTH_REQUIRED, UNKNOWN }
 ```
+
+> **Contract note (verified 2026-06-06):** several fields below (`location`, `organizer`, `attendees` with RSVP, `colorKey`, `calendarName`, `attachments`) are NOT present in the current API (`EventOut`/`CalendarEventAttachment`); `attendees` from the API is a bare `string[]` of sub identifiers. These model fields are retained as the *target* shape but must be populated defensively (null/empty) and their UI guarded until the backend grows the contract. The id/title/time fields map to `event_id`/`name`/`start_utc`/`end_utc`. See §16 Open assumptions.
 
 ```kotlin
 data class EventDetailModel(
@@ -162,54 +165,81 @@ fun NavGraphBuilder.eventDetailDestination(navController: NavController) {
 
 ## 5. API Contract
 
-This ticket adds a **single-event read** to the AND-270-owned `CalendarRepository`; it performs no direct Retrofit calls itself. Confirm exact paths against `/openapi.json` and `frontend/src/api/endpoints/calendar.ts` before build.
+This ticket adds a **single-event read** to the AND-270-owned `CalendarRepository`; it performs no direct Retrofit calls itself. Paths below were verified against `reference/openapi.index.txt`, `reference/openapi.pretty.json`, and `src/api/endpoints/calendar.ts` during this review (2026-06-06); corrections are flagged inline and audited in §16.
 
 ```kotlin
 interface CalendarRepository {
     fun events(window: DateWindow, zone: ZoneId): Flow<ApiResult<CachedList<CalendarEvent>>>   // AND-271/270
-    // Added by this ticket (idempotent GET: bounded backoff retry + cache per project policy):
+    // Added by this ticket (idempotent GET: bounded backoff retry + cache per project policy).
+    // Maps EventOut/CalendarEvent (auth) or CalendarEventAttachment (public) → domain model.
+    // occurrenceStart is a client-only hint for which occurrence to format; it is NOT sent to the
+    // server (no such query param exists — see §5/§16).
     fun event(calendarId: String, eventId: String, occurrenceStart: Instant?, zone: ZoneId)
-        : Flow<ApiResult<Cached<CalendarEventDetail>>>
+        : Flow<ApiResult<Cached<CalendarEventDetail>>>   // CalendarEventDetail is an AND-270 domain type mapped from the DTOs above
 }
 ```
 
-**Authenticated single event** (occurrence resolved via optional query param):
+**Authenticated single event.** **Corrected path** (spec previously had `/ui/calendar/{calendarId}/events/{eventId}` — wrong: singular `calendar`, and the occurrence/tz query params do not exist):
 
 ```
-GET /ui/calendar/{calendarId}/events/{eventId}?occurrence_start=2026-06-08T13:30:00Z&tz=America/New_York
+GET /ui/calendars/{calendar_id}/events/{event_id}
 ```
 
-**Public event** (no session required; reduced payload):
+> **Verification caveat (important):** `src/api/endpoints/calendar.ts: getEvent` calls exactly this path with NO query params and returns `CalendarEvent`. However, the **OpenAPI spec does NOT document a GET on `/ui/calendars/{calendar_id}/events/{event_id}`** — only `DELETE`, `PATCH`, and a `/ical` GET sub-path are present. So the authenticated single-event GET is *frontend-attested but undocumented*. **Plan:** call this GET; if the deployed backend returns 404/405 for it, fall back to the list endpoint `GET /ui/calendars/{calendar_id}/events?start_utc=..&end_utc=..` (verified, returns `EventsPageOut` of `EventOut`) and filter by `event_id` client-side. There is **no** `occurrence_start` or `tz` query param on any single-event GET; recurring-occurrence resolution and zone formatting are entirely client-side from `recurrence_rule` + `timezone`.
+
+**Public event** (no session required; reduced payload). **Corrected path** (spec previously had `/ui/calendar/public/{calendarId}/events/{eventId}` — wrong host prefix and shape):
 
 ```
-GET /ui/calendar/public/{calendarId}/events/{eventId}
+GET /calendar/public/event/{calendar_id}/{event_id}
 ```
+Verified in `openapi.index.txt` (op `get_public_event_...`), `openapi.pretty.json`, and `src/api/endpoints/calendar.ts: getPublicEvent`. Path params only; no query params. Optional companion: `GET /calendar/public/event/{calendar_id}/{event_id}/ical` (verified) for the "Download .ics" action.
 
-Expected response shape (superset; public variant omits `attendees`/private fields):
+**Actual authenticated response shape** — `EventOut` (≡ frontend `CalendarEvent`), verified field-by-field against `openapi.pretty.json` and `src/api/types.ts`. Field names differ substantially from the previous spec draft (see §16 Corrections):
 
 ```json
 {
-  "id": "evt_01H...",
+  "event_id": "evt_01H...",
   "calendar_id": "cal_main",
-  "calendar_name": "Team",
-  "title": "Standup",
-  "start": "2026-06-08T13:30:00Z",
-  "end": "2026-06-08T14:00:00Z",
-  "timezone": "America/New_York",
-  "all_day": false,
-  "color": "blue",
+  "name": "Standup",
   "description": "Daily sync",
-  "location": { "label": "HQ Room 4", "lat": 40.7128, "lng": -74.0060 },
-  "recurrence": { "freq": "WEEKLY", "interval": 1, "byday": ["MO"] },
-  "occurrence_start": "2026-06-08T13:30:00Z",
-  "organizer": { "display_name": "Sam", "u_identifier": "u-sam", "avatar_url": "https://.../a.jpg" },
-  "attendees": [ { "person": { "display_name": "Lee", "u_identifier": "u-lee" }, "rsvp": "accepted" } ],
-  "attachments": [ { "id": "att_1", "name": "agenda.pdf", "url": "https://.../agenda.pdf", "thumbnail_url": null, "mime_type": "application/pdf" } ],
-  "is_public": true
+  "timezone": "America/New_York",
+  "start_utc": "2026-06-08T13:30:00Z",
+  "end_utc": "2026-06-08T14:00:00Z",
+  "all_day": false,
+  "all_day_date": null,
+  "attendees": ["u-lee", "u-sam"],
+  "booking_enabled": false,
+  "approval_required": false,
+  "status": "confirmed",
+  "category": null,
+  "recurrence_rule": { "freq": "WEEKLY", "interval": 1, "byday": ["MO"] },
+  "exdates_utc": [],
+  "recurrence_overrides": {},
+  "created_at_utc": "2026-06-01T00:00:00Z",
+  "sync_state": null
 }
 ```
 
-The repository chooses the public vs. authenticated endpoint based on session state and a `404→403` fallback (try authenticated; on `404` for a known public link, retry public). FastAPI `detail` (`string | [{msg}] | {code,...}`) is mapped by `core-network` to `ApiResult.Failure`; this ticket maps `Failure` → `EventDetailError` (HTTP `404`→`NOT_FOUND`, `403`→`FORBIDDEN`, terminal `401`→`AUTH_REQUIRED`, `5xx`→`SERVER`, IO/timeout→`NETWORK`).
+Notes on the corrected shape: the id field is **`event_id`** (not `id`); the title field is **`name`** (not `title`); the times are **`start_utc`/`end_utc`** (both optional/nullable, not `start`/`end`); recurrence is **`recurrence_rule`** (not `recurrence`), with `freq ∈ {DAILY, WEEKLY, MONTHLY}` only; **`attendees` is `string[]`** of sub identifiers (NO RSVP, person, or avatar objects); and there is **no** `color`, `calendar_name`, `location`, `organizer`, `attachments`, `occurrence_start`, or `is_public` field. Any of those rendered by the UI (FR-2/FR-3) must be guarded as "not yet in contract" (see §16 Open assumptions).
+
+**Actual public response shape** — `CalendarEventAttachment` (per `getPublicEvent`'s return type; the OpenAPI 200 schema is untyped `{}`), verified in `src/api/types.ts`:
+
+```json
+{
+  "event_id": "evt_01H...",
+  "calendar_id": "cal_main",
+  "name": "Standup",
+  "start_utc": "2026-06-08T13:30:00Z",
+  "end_utc": "2026-06-08T14:00:00Z",
+  "all_day": false,
+  "all_day_date": null,
+  "timezone": "America/New_York",
+  "description": "Daily sync",
+  "owner": "u-sam"
+}
+```
+
+The repository chooses the public vs. authenticated endpoint based on session state (public path when unauthenticated or when the in-app GET 404s for a known public link). FastAPI documents only `200`/`422` (`HTTPValidationError`, shape `{ "detail": [ { "loc": [...], "msg": "...", "type": "..." } ] }`) for these endpoints; `401`/`403`/`404`/`5xx` are runtime FastAPI errors with a `{ "detail": ... }` body. `core-network` maps these to `ApiResult.Failure`; this ticket maps `Failure` → `EventDetailError` (HTTP `404`→`NOT_FOUND`, `403`→`FORBIDDEN`, `422`→`NOT_FOUND` for display, terminal `401`→`AUTH_REQUIRED`, `5xx`→`SERVER`, IO/timeout→`NETWORK`).
 
 ## 6. Data & State Management
 
@@ -233,7 +263,7 @@ The repository chooses the public vs. authenticated endpoint based on session st
 
 ## 8. Security & Privacy
 
-- **Public-link exposure:** the public endpoint is intentionally unauthenticated and returns a **reduced** payload; the client must never request or display attendee PII for `is_public` events even if a field is present — gate attendee rendering on `!isPublic`.
+- **Public-link exposure:** the public endpoint (`GET /calendar/public/event/{calendar_id}/{event_id}`, verified) is intentionally unauthenticated and returns the **reduced** `CalendarEventAttachment` shape, which already omits attendees/organizer entirely. The client must never display attendee PII on the public path; gate attendee rendering on "loaded via the public endpoint" (there is no `is_public` response flag — public vs. authenticated is known from which endpoint was called, see §5). The `owner` field IS present in the public payload — treat it as an opaque identifier, do not surface it as PII unless the backend later attaches profile data.
 - **Canonical share URL** is always `https` on the prod/staging web host; the plaintext dev host (`18.222.237.167:8000`) is never placed in a shareable/exported link.
 - **App Link verification:** `autoVerify="true"` + a published `assetlinks.json` (release signing SHA-256) prevents link hijacking and the disambiguation dialog. Staging uses a separate host/asset-links entry.
 - **Intent hardening:** the single-Activity host is `exported="true"` only for the declared `https` `intent-filter`; deep-link args are treated as untrusted and validated before use. No implicit intent carries credentials/cookies; outbound `ACTION_SEND`/maps intents contain only the public URL or location label.
@@ -288,9 +318,9 @@ The repository chooses the public vs. authenticated endpoint based on session st
 ## 13. Risks & Open Questions
 
 - **R1 (asset-links publication):** App Link auto-verification requires `/.well-known/assetlinks.json` on the prod/staging hosts with the correct release cert SHA-256. If unpublished, links open via the disambiguation dialog. **OQ:** who owns asset-links deployment, and is staging's host verifiable? Until verified, accept the chooser dialog as a known gap.
-- **R2 (public endpoint shape):** §5 assumes a distinct `/ui/calendar/public/...` route returning `is_public` and a reduced payload. **OQ:** confirm the public endpoint exists and its exact field omissions against `/openapi.json` and `calendar.ts`; if there is no public endpoint, the public-link path collapses to "auth required" and FR-5 narrows.
-- **R3 (occurrence resolution on public links):** public URLs carry no `occurrence_start`; behavior for recurring public events (next vs. base occurrence) is server-defined. **OQ:** confirm which occurrence the backend returns.
-- **R4 (timezone field semantics):** as in AND-271, whether `timezone` is the authoring vs. viewing zone; spec assumes authoring zone + separate display zone.
+- **R2 (public endpoint shape):** **RESOLVED (verified 2026-06-06).** The public endpoint exists at `GET /calendar/public/event/{calendar_id}/{event_id}` (NOT the `/ui/calendar/public/...` the draft assumed) and returns the reduced `CalendarEventAttachment` (name, times, all-day, timezone, description, owner) with NO `is_public` flag. FR-5 is correct in spirit but corrected for path/shape; the public path does not collapse. Remaining gap: the **authenticated** single-event GET (`/ui/calendars/{id}/events/{eventId}`) is used by the web client but is NOT in OpenAPI — see §16 Open assumptions and the §5 list-endpoint fallback.
+- **R3 (occurrence resolution on public links):** **PARTIALLY RESOLVED.** Verified that neither the public nor the authenticated single-event GET accepts an `occurrence_start` query param, so the backend returns the base event (`recurrence_rule` + base `start_utc`); per-occurrence selection is client-side from the rule. The web `PublicEventPage` formats only the base `start_utc`/`end_utc`. **OQ remaining:** whether the backend ever expands occurrences server-side for recurring public events (no evidence it does).
+- **R4 (timezone field semantics):** as in AND-271, whether `timezone` is the authoring vs. viewing zone; the web `PublicEventPage.formatEventTime` formats `start_utc` *in the event's `timezone`* (treats `timezone` as the display zone for the public view). Spec assumes authoring zone + separate user display-zone override; reconcile with AND-271. **Unverified** beyond the web behavior just cited.
 - **R5 (dev backend instability):** flaky plaintext host makes live deep-link verification unreliable; tests use fakes and `handleDeepLink`, manual verification uses cached/stale paths.
 - **OQ:** does add-to-device-calendar need recurrence (RRULE → `CalendarContract` rule) in M6, or single-occurrence insert only? Spec ships single-occurrence insert; recurring insert deferred.
 
@@ -319,3 +349,75 @@ AC-7 No event PII appears in logs; all interactive elements expose content descr
 - Lint and detekt clean; no hardcoded strings/date formats; desugaring reused; builds on `android-port` with AGP 8.7.3 / Gradle 8.9 / JDK 17.
 - Telemetry events emitted; no event PII logged; accessibility semantics verified by test.
 - Code reviewed and merged; spec status moved from `draft` to `accepted` once AC-1–AC-7 are demonstrated.
+
+## 16. Citations & Assumption Audit
+
+Reviewed 2026-06-06 against `reference/openapi.index.txt`, `reference/openapi.pretty.json`, and `reference/src/`. Each key technical claim with VERDICT and exact SOURCE pointer.
+
+1. **Public-event endpoint is `GET /calendar/public/event/{calendar_id}/{event_id}` (no session, path params only).** VERDICT: **Corrected** (draft said `GET /ui/calendar/public/{calendarId}/events/{eventId}`). SOURCE: OpenAPI `GET /calendar/public/event/{calendar_id}/{event_id}` (op `get_public_event_...`, params=calendar_id,event_id, resp 200/422); `src/api/endpoints/calendar.ts: getPublicEvent`.
+2. **Public-event response is the reduced `CalendarEventAttachment` (event_id, calendar_id, name, start_utc?, end_utc?, all_day, all_day_date?, timezone, description?, owner).** VERDICT: **Corrected** (draft invented a superset with attendees/organizer/location/is_public). SOURCE: `src/api/types.ts: CalendarEventAttachment` (return type of `getPublicEvent`); OpenAPI 200 schema is untyped `{}`.
+3. **There is no `is_public` flag in any payload; public vs. authenticated is determined by endpoint.** VERDICT: **Corrected** (draft keyed UI/cache/security on `is_public`). SOURCE: `EventOut` required/properties (`openapi.pretty.json` ll.32224–32403) and `CalendarEventAttachment` — neither has the field.
+4. **Authenticated single-event read path is `GET /ui/calendars/{calendar_id}/events/{event_id}` (plural `calendars`).** VERDICT: **Corrected** (draft said singular `/ui/calendar/...`). SOURCE: `src/api/endpoints/calendar.ts: getEvent`.
+5. **The authenticated single-event GET is NOT documented in OpenAPI (only DELETE + PATCH on that path, plus a `/ical` GET).** VERDICT: **Unverified-assumption** (frontend-attested only; endpoint may not exist on the deployed backend). SOURCE: `openapi.pretty.json` ll.192167–192460 — methods on `/ui/calendars/{calendar_id}/events/{event_id}` are `delete` (op `delete_event_...`) and `patch` (op `update_event_...`) only; the only GET in that block is `download_event_ical_...` on the `/ical` sub-path. Mitigation: list-endpoint fallback (claim 6).
+6. **List endpoint `GET /ui/calendars/{calendar_id}/events` returns `EventsPageOut` of `EventOut` and is a valid fallback.** VERDICT: **Verified**. SOURCE: OpenAPI `GET /ui/calendars/{calendar_id}/events` (op `list_events_...`, resp 200:EventsPageOut, params=calendar_id,start_utc,end_utc,limit,cursor,...); `EventsPageOut` (`openapi.pretty.json` l.32647); `src/api/endpoints/calendar.ts: getEvents`.
+7. **No `occurrence_start` or `tz` query param on any single-event GET.** VERDICT: **Corrected** (draft put `?occurrence_start=..&tz=..` on the auth GET). SOURCE: `getEvent` sends none (`calendar.ts:59`); OpenAPI documents no GET on the bare path; occurrence params exist only on the `/occurrences/{occurrence_start}` sub-routes (POST exclude/override, DELETE clear).
+8. **Authenticated event DTO field names: `event_id`, `name`, `start_utc`/`end_utc`, `all_day`/`all_day_date`, `timezone`, `description`, `attendees` (string[]), `recurrence_rule`, `status`, `category`, `booking_enabled`, `approval_required`, `created_at_utc`.** VERDICT: **Corrected** (draft used `id`/`title`/`start`/`end`/`recurrence`). SOURCE: `EventOut` (`openapi.pretty.json` ll.32224–32401, required list ll.32389–32401); `src/api/types.ts: CalendarEvent` (ll.1788–1810).
+9. **`attendees` is `string[]` with no RSVP/person/avatar.** VERDICT: **Corrected** (draft modeled attendee objects with `rsvp`). SOURCE: `EventOut.attendees` items type string (`openapi.pretty.json` ll.32245–32251); `CalendarEvent.attendees: string[]` (`types.ts` l.1798).
+10. **No `color`/`calendar_name`/`location`/`organizer`/`attachments`/`occurrence_start` fields on the event DTO.** VERDICT: **Corrected** (draft's FR-2/§5/§4 model and example JSON included all of these). SOURCE: full `EventOut` property list (`openapi.pretty.json` ll.32225–32387) — absent.
+11. **`recurrence_rule.freq ∈ {DAILY, WEEKLY, MONTHLY}`; optional `interval` (default 1), `byday` (MO..SU), `bymonthday`, `bysetpos`, `count`, `until_utc`.** VERDICT: **Verified** (and key corrected from `recurrence` → `recurrence_rule`). SOURCE: `RecurrenceRule` (`openapi.pretty.json` ll.62855–62951); `types.ts: RecurrenceRule` (ll.1740–1748).
+12. **Public-event iCal companion endpoint `GET /calendar/public/event/{calendar_id}/{event_id}/ical` exists.** VERDICT: **Verified**. SOURCE: OpenAPI `download_public_ical_...`; `src/api/endpoints/calendar.ts: getPublicIcalUrl`.
+13. **Web public URL route is `/event/:calendarId/:eventId`; Android App Link/share URL should mirror it.** VERDICT: **Verified**. SOURCE: `src/App.tsx:280` `<Route path="/event/:calendarId/:eventId" ...>`.
+14. **Auth/transport: cookie session + CSRF via `ui_csrf` cookie → `X-CSRF-Token` header; one `POST /ui/session/refresh` + retry on 401; unauthenticated 401 is NOT refreshed.** VERDICT: **Verified**. SOURCE: `src/api/client.ts` (CSRF ll.167–170, `refreshSession` POST `/ui/session/refresh` ll.121–128, 401-once-refresh ll.191–224, `credentials:"include"`).
+15. **Error envelope for documented failures is `422 HTTPValidationError` = `{ "detail": [ {loc,msg,type} ] }`; 401/403/404/5xx are runtime FastAPI `{ "detail": ... }` not in schema.** VERDICT: **Verified** (documented part) / **Unverified-assumption** (runtime 403/404 bodies). SOURCE: `HTTPValidationError`/`ValidationError` (`openapi.pretty.json` ll.37133–37145); endpoint `responses` blocks list only 200/422.
+16. **Web `PublicEventPage` renders only name + formatted time + description, has "Download .ics" and a server-side "Add to my Calendar" (`createEvent`), and shows a generic "Event not found" on any error (`retry:false`).** VERDICT: **Verified**. SOURCE: `src/pages/calendar/PublicEventPage.tsx` (render ll.104–149, `handleAddToCalendar` ll.65–81, error ll.91–100, query `retry:false` l.57).
+17. **Web app has no authenticated single-event detail screen; `getEvent` is defined but unused.** VERDICT: **Verified**. SOURCE: repo grep — `getEvent` referenced only at its definition (`calendar.ts:59`); the lone single-event consumer is `getPublicEvent` in `PublicEventPage.tsx`.
+18. **App Link auto-verification requires `/.well-known/assetlinks.json` with the release SHA-256; `autoVerify="true"` + `BROWSABLE`/`DEFAULT` + `pathPrefix` intent-filter.** VERDICT: **Verified (framework ref)**. SOURCE: Android docs — Verify Android App Links (https://developer.android.com/training/app-links/verify-android-applinks) and App Links / Digital Asset Links (https://developer.android.com/training/app-links).
+19. **Single-Activity deep-link routing via `onNewIntent` → `navController.handleDeepLink(intent)` and `navDeepLink { uriPattern = ... }`.** VERDICT: **Verified (framework ref)**. SOURCE: Navigation-Compose deep links (https://developer.android.com/jetpack/compose/navigation#deeplinks).
+20. **Add-to-device-calendar via `Intent(ACTION_INSERT, CalendarContract.Events.CONTENT_URI)`.** VERDICT: **Verified (framework ref)**. SOURCE: Android Calendar provider intents (https://developer.android.com/guide/topics/providers/calendar-provider#intents).
+
+### Corrections made
+- §2/§5: public endpoint path `→ GET /calendar/public/event/{calendar_id}/{event_id}` (was `/ui/calendar/public/{calendarId}/events/{eventId}`).
+- §5: authenticated path `→ GET /ui/calendars/{calendar_id}/events/{event_id}` (was singular `/ui/calendar/...`); removed the non-existent `?occurrence_start=..&tz=..` query params.
+- §5/§3/§4: rewrote the example response to the real `EventOut` field names (`event_id`/`name`/`start_utc`/`end_utc`/`recurrence_rule`) and removed invented fields (`id`,`title`,`start`,`end`,`color`,`calendar_name`,`location{lat,lng}`,`organizer`,`attendees[].rsvp`,`attachments`,`occurrence_start`,`is_public`); documented the reduced public `CalendarEventAttachment`.
+- §3 FR-2/FR-3, §4 model: flagged location/organizer/attendee-RSVP/color/attachments as not-in-contract and to be UI-guarded; corrected `attendees` to `string[]`.
+- §5/§8: removed `is_public`-flag-based logic; public vs auth is determined by endpoint; `owner` is the only identifier in the public payload.
+- §5: error mapping adds `422 → NOT_FOUND` for display, mirroring the web page.
+- §13 R2/R3/R4: resolved/updated with verified findings.
+- Frontmatter: removed duplicate `status`, set `status: reviewed`, added `reviewed_on: 2026-06-06`.
+
+### Open assumptions (unverifiable from sources / deferred)
+- **Authenticated GET single-event endpoint existence** (claim 5): used by the web client but absent from OpenAPI. Cannot confirm the deployed backend serves a GET there. Build MUST implement the list-endpoint fallback (claim 6) and treat 404/405 on the GET as "use list filter."
+- **Runtime 403/404 response bodies** (claim 15): not in OpenAPI; assumed `{ "detail": ... }` per FastAPI convention. Confirm against a live response once the flaky dev host is reachable.
+- **Recurring public-event occurrence expansion** (R3): no `occurrence_start` param exists; assumed the server returns the base event and the client formats occurrences from `recurrence_rule`. Unconfirmed whether the server ever expands occurrences.
+- **`timezone` field semantics** (R4): web treats it as the display zone for the public view; spec assumes authoring zone + user override. Unverified beyond observed web behavior.
+- **Rich detail fields** (location/lat-lng, organizer/avatar, attendee profile + RSVP, calendar color/name, attachments): not in the current contract; all corresponding UI/actions are aspirational and gated. Revisit if/when the backend extends `EventOut`.
+- **Staging host + `assetlinks.json` ownership** (R1): an ops dependency, not verifiable from these sources.
+
+## 17. Test Plan
+
+Test targets: **JVM** = JVM unit/Robolectric (local, no device); **AVD test35** = headless emulator, API 35/x86_64 (CI UI/instrumented); **A15** = physical Samsung Galaxy A15 5G (SM-A156U, serial R5CX821TA9R), API 34/arm64-v8a (real hardware). MockWebServer runs on JVM. Cases note when the physical device is required.
+
+- **TC-AND-272-01** — Type: unit (JVM, Turbine). Target: JVM. Preconditions: `FakeCalendarRepository` returns an authenticated `EventOut` (name, start_utc/end_utc, recurrence_rule WEEKLY/MO, timezone). Steps: collect `EventDetailViewModel.uiState`. Expected: `Loading → Content` with mapped name/time/recurrence summary; `isStale=false`, `isPublic=false`. Traces: AC-1.
+- **TC-AND-272-02** — Type: unit (JVM). Target: JVM. Preconditions: cached `Cached<CalendarEventDetail>(isStale=true)` then a fresh network value. Steps: subscribe. Expected: emits `Content(isStale=true)` immediately, then `Content(isStale=false)` after refresh; `retry()` re-emits. Traces: AC-5.
+- **TC-AND-272-03** — Type: unit (JVM). Target: JVM. Preconditions: error mapping fixtures. Steps: feed `Failure` with HTTP 404, 403, 422, terminal 401, 500, and an IOException. Expected: `NOT_FOUND`, `FORBIDDEN`, `NOT_FOUND` (422 display rule), `AUTH_REQUIRED`, `SERVER`, `NETWORK` respectively (per §5/§16 claim 15). Traces: AC-5, AC-6.
+- **TC-AND-272-04** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: MockWebServer scripted to return the real `CalendarEventAttachment` JSON on `GET /calendar/public/event/{cal}/{evt}` (no auth headers required). Steps: repository fetches the public event. Expected: request path is exactly `/calendar/public/event/{cal}/{evt}` with no query params and no Cookie/CSRF header; response parses into the reduced model (name/time/description/timezone/owner only); attendees/organizer/location empty. Traces: AC-2, AC-6. (§16 claims 1,2.)
+- **TC-AND-272-05** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: MockWebServer returns 404 for `GET /ui/calendars/{cal}/events/{evt}` then a 200 `EventsPageOut` for `GET /ui/calendars/{cal}/events?start_utc&end_utc`. Steps: repository fetches the authenticated event. Expected: on the GET 404/405 it falls back to the list endpoint and filters by `event_id`, returning the matching `EventOut`; verifies the undocumented-GET mitigation (§16 claims 5,6). Traces: AC-1.
+- **TC-AND-272-06** — Type: contract/MockWebServer (JVM). Target: JVM. Preconditions: an authenticated request after a 401. Steps: server returns 401 once, expects a `POST /ui/session/refresh`, then 200 on retry. Expected: exactly one refresh + one retry; `X-CSRF-Token` taken from the `ui_csrf` cookie is present on mutating/auth requests; an unauthenticated 401 (no prior session) is NOT refreshed → `AUTH_REQUIRED`. Traces: AC-6. (§16 claim 14.)
+- **TC-AND-272-07** — Type: unit (JVM, fixed `Clock`/`ZoneId`). Target: JVM. Preconditions: event `start_utc=2026-06-08T13:30:00Z`. Steps: format in `America/New_York` and `Asia/Tokyo`; format an all-day event (`all_day=true`, `all_day_date` set); format a DST-boundary date. Expected: 09:30 (NY), 22:30 (Tokyo); all-day shows the date with no time and no zone shift; DST date correct; zone-mismatch flag set when display ≠ device zone. Traces: AC-3.
+- **TC-AND-272-08** — Type: unit (JVM). Target: JVM. Preconditions: `PublicEventUrlBuilder` with prod + staging hosts. Steps: build a share URL. Expected: `https://<prod-host>/event/{cal}/{evt}` mirroring the web route; never the plaintext dev host `18.222.237.167:8000`. Traces: AC-4. (§16 claim 13.)
+- **TC-AND-272-09** — Type: unit (JVM). Target: JVM. Preconditions: route args. Steps: decode `occurrenceStart == -1L` and malformed/empty `calendarId`/`eventId`. Expected: `-1L → null` (no occurrence query is ever sent regardless); malformed args → `NOT_FOUND` with NO network call. Traces: AC-5. (§16 claim 7.)
+- **TC-AND-272-10** — Type: Compose-UI (instrumented, Hilt + fake repo). Target: AVD test35. Preconditions: seeded `Content` event. Steps: render `EventDetailScreen`; assert via semantics name, zoned time range, recurrence summary, description, calendar id. Expected: all present fields render; absent-in-contract rows (organizer/attendees-RSVP/location/attachments) are hidden, not blank-crashing. Traces: AC-1, AC-7.
+- **TC-AND-272-11** — Type: Compose-UI / Espresso-Intents (instrumented). Target: AVD test35. Preconditions: seeded event; `Intents.init()`. Steps: tap Share, tap Add-to-calendar, simulate no handler app for Add-to-calendar. Expected: `ACTION_SEND` carries the canonical `https` public URL (never dev host); Add-to-calendar fires `ACTION_INSERT` on `CalendarContract.Events.CONTENT_URI`; missing handler → Snackbar, no `ActivityNotFoundException`. Traces: AC-4. (§16 claims 13,20.)
+- **TC-AND-272-12** — Type: instrumented deep-link (AndroidJUnit4). Target: AVD test35. Preconditions: NavHost with the `EventDetail` destination + `navDeepLink`. Steps: `navController.handleDeepLink(Intent(ACTION_VIEW, Uri.parse("https://<host>/event/cal_main/evt_1")))`. Expected: resolves `EventDetail` with `calendarId=cal_main`,`eventId=evt_1`, back stack returns into the app (not exit); a malformed path (`/event/`) routes to in-app 404 with no crash. Traces: AC-2, AC-5.
+- **TC-AND-272-13** — Type: instrumented/e2e cold-start App Link (Espresso-Intents). Target: **A15 (physical device required)**. Preconditions: app installed; assetlinks reachable (or accept chooser per R1); MockWebServer or stub backing the public fetch. Steps: from a cold start, `adb shell am start -a android.intent.action.VIEW -d "https://<host>/event/cal_main/evt_1"`. Expected: with verified Digital Asset Links the app opens directly (no disambiguation dialog) to the event; Back returns into the app. MUST run on the physical device to exercise real App Link auto-verification and the system chooser behavior (emulator verification differs). Traces: AC-2. (§16 claims 18,19.)
+- **TC-AND-272-14** — Type: Compose-UI accessibility (instrumented). Target: AVD test35. Preconditions: seeded event + error/forbidden/not-found states. Steps: assert content descriptions on Back/overflow/action buttons/rows; touch targets ≥ 48dp; the when-row is a single semantics node announcing range + zone + all-day; verify the `NOT_FOUND`/`FORBIDDEN`/stale-badge/retry-banner states render and that no event title/description/identity is emitted to logs (capture Logcat). Expected: all assertions pass; log capture contains only `EventDetailError` + HTTP status. Traces: AC-5, AC-7.
+- **TC-AND-272-15** — Type: manual (flaky-dev-host / offline). Target: **A15** (real network). Preconditions: airplane mode or the unreliable dev host. Steps: open a previously-cached event offline, then trigger a failed refresh. Expected: cached `Content` stays visible with a stale badge and a dismissible Retry banner (stale-while-error); going fully offline on a never-cached event → `NETWORK` error with Retry, no crash. Traces: AC-5.
+
+### Coverage matrix
+- **AC-1** (in-app detail renders): TC-01, TC-05, TC-10.
+- **AC-2** (public link works): TC-04, TC-12, TC-13.
+- **AC-3** (time/zone correctness): TC-07.
+- **AC-4** (actions + missing-handler Snackbar): TC-08, TC-11.
+- **AC-5** (error/edge/stale/malformed): TC-02, TC-03, TC-09, TC-12, TC-14, TC-15.
+- **AC-6** (public/limited payload + auth redirect): TC-03, TC-04, TC-06.
+- **AC-7** (no PII logs + a11y/48dp): TC-10, TC-14.

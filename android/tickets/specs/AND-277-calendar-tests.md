@@ -5,7 +5,8 @@ milestone: M6
 epic: E37
 priority: P2
 size: M
-status: draft
+status: reviewed
+reviewed_on: 2026-06-06
 depends_on: [AND-271, AND-270]
 blocks: []
 ---
@@ -25,8 +26,9 @@ testable.
 The goal is regression protection at the JVM and instrumented layers so that the
 hard-won timezone-slotting math (`13:30Z` → 09:30 New York / 22:30 Tokyo,
 midnight-crossing, DST, all-day non-shift) and recurrence handling
-(RRULE-expanded occurrences rendered in correct slots, parent/instance linkage,
-exception dates) cannot silently break. Tests are **hermetic and deterministic**:
+(client-side-expanded occurrences from a structured `recurrence_rule` rendered in
+correct slots, with `exdates_utc`/`recurrence_overrides` honored) cannot silently
+break. Tests are **hermetic and deterministic**:
 no live backend, no emulator-network access, fixed `Clock`/`ZoneId` injection,
 `MockWebServer` for transport and fakes for UI.
 
@@ -69,20 +71,38 @@ Compose UI).
 
 FR-1 **Repository/transport coverage (AND-270).** Contract tests exercise the
 production `CalendarApi` + Retrofit/Moshi/OkHttp stack against `MockWebServer`,
-asserting (a) the request path/query (`GET /ui/calendar/events?start=…&end=…&tz=…`),
-(b) DTO→domain mapping for every field, and (c) FastAPI `detail` error mapping to
-`ApiResult.Failure`.
+asserting (a) the request path/query — **CORRECTED**: the real endpoint is
+`GET /ui/calendars/{calendar_id}/events` with query params
+`start_utc`/`end_utc`/`limit`/`cursor` (cursor-based pagination); there is **no
+`tz` query param** and no `/ui/calendar/events` path (verified against OpenAPI
+`GET /ui/calendars/{calendar_id}/events` op `list_events…` and
+`src/api/endpoints/calendar.ts: getEvents`) — (b) DTO→domain mapping for every
+field, and (c) FastAPI `detail` error mapping to `ApiResult.Failure`.
 
 FR-2 **Mapper unit coverage (AND-270).** Pure `CalendarMappers` tests cover
 timestamp parsing to `Instant`, all-day `LocalDate` population, IANA `timezone`
 preservation, unknown-enum → `UNKNOWN`/`PENDING` fallback (never throws), and
 absent-optional tolerance via defaults.
 
-FR-3 **Recurrence coverage.** Tests assert `RecurrenceDto.toDomain()` maps
-`rrule` verbatim, `freq`/`interval`/`until`/`count`/`byDay`/`exDates`; that
-expanded instances carry `recurringEventId`/`recurrence_id`; and that the UI
-renders **each expanded occurrence** in its own slot (the feature does not
-re-expand RRULEs — verify it does not collapse/duplicate occurrences).
+FR-3 **Recurrence coverage. CORRECTED — recurrence is structured + client-side
+expanded, not server-expanded.** The backend returns a single `EventOut` per
+recurring series carrying a structured `recurrence_rule` object — fields
+`freq` (`DAILY`/`WEEKLY`/`MONTHLY`), `interval`, `until_utc`, `count`, `byday`
+(`MO`..`SU`), `bymonthday`, `bysetpos` — plus `exdates_utc: string[]` and a
+`recurrence_overrides` map keyed by occurrence-start ISO string. There is **no
+verbatim `rrule` string, no camelCase `byDay`/`exDates`, and no
+`recurrence_id`/`occurrence_start` field** on the event; the web reference
+(`src/pages/calendar/CalendarView.tsx`) detects a series via
+`!!ev.recurrence_rule` and renders by the event's single `start_utc`. Tests
+therefore assert that `RecurrenceDto.toDomain()` maps the structured rule
+fields, `exdates_utc`, and the overrides map; and — **because the server does
+NOT pre-expand** — that whichever component AND-271 designates as the expander
+produces individual occurrences in their own slots with no collapse/duplication,
+honoring `exdates_utc` and `recurrence_overrides`. (If AND-271 does not actually
+expand client-side, see R1 — the recurrence-rendering tests move to the owner of
+expansion.) Verified against OpenAPI schema `RecurrenceRule` and `EventOut`,
+`src/api/types.ts: RecurrenceRule`/`CalendarEvent`,
+`src/pages/calendar/CalendarView.tsx: isRecurring`.
 
 FR-4 **Timezone slotting coverage (AND-271).** `EventSlotter` unit tests assert
 correct day/time placement across display zones, midnight-crossing after
@@ -149,13 +169,19 @@ package com.testlogon.android.core.testing.calendar
 
 object CalendarFixtures {
     const val EVENTS_NY_STANDUP_JSON: String          // 13:30Z, tz America/New_York
-    const val EVENTS_RECURRING_WEEKLY_JSON: String     // 3 expanded MO/WE/FR instances
-    const val EVENTS_ALL_DAY_JSON: String              // date-only, spanning DST
-    const val EVENTS_DETAIL_ERROR_JSON: String         // {"detail":"not_found"}
+    // CORRECTED: server returns ONE event carrying recurrence_rule (freq=WEEKLY,
+    // byday=[MO,WE,FR]); occurrences are expanded client-side, not pre-expanded.
+    const val EVENTS_RECURRING_WEEKLY_JSON: String     // 1 event + WEEKLY MO/WE/FR rule
+    const val EVENTS_ALL_DAY_JSON: String              // all_day_date set, spanning DST
+    const val EVENTS_DETAIL_ERROR_JSON: String         // {"detail":"calendar_not_found"}
+    // CORRECTED fields to real EventOut shape (event_id/name/start_utc/all_day_date).
     fun event(
-        id: String = "evt_1", calendarId: String = "cal_main",
-        start: Instant, end: Instant?, allDay: Boolean = false,
-        timezone: String? = null, recurringEventId: String? = null,
+        eventId: String = "evt_1", calendarId: String = "cal_main",
+        name: String = "Standup",
+        startUtc: Instant?, endUtc: Instant?, allDay: Boolean = false,
+        allDayDate: LocalDate? = null,
+        timezone: String = "America/New_York",
+        recurrenceRule: RecurrenceRule? = null,
     ): CalendarEvent
     fun slotted(/* SlottedEvent builder mirroring AND-271 */): SlottedEvent
 }
@@ -191,57 +217,96 @@ This ticket defines no new endpoint; it **asserts** the AND-270 contract. The
 `CalendarApiContractTest` enqueues fixtures on `MockWebServer`, points the shared
 Retrofit at the mock base URL, and verifies request and response handling.
 
-Request asserted (idempotent GET):
+Request asserted (idempotent GET). **CORRECTED** — real path is
+`/ui/calendars/{calendar_id}/events` with `start_utc`/`end_utc`/`limit`/`cursor`
+query params (no `tz`):
 
 ```
-GET /ui/calendar/events?start=2026-06-01T00:00:00Z&end=2026-07-01T00:00:00Z&tz=America/New_York
+GET /ui/calendars/cal_main/events?start_utc=2026-06-01T00:00:00Z&end_utc=2026-07-01T00:00:00Z&limit=200
 ```
 
-- `RecordedRequest.path` matches the path + encoded query params in order.
-- Cookie/CSRF headers are injected globally (AND-011/AND-012); the contract test
-  asserts the calendar call carries `X-CSRF-Token` when a `ui_csrf` cookie is
-  present in the jar (negative test: absent when no session) but does **not**
-  re-test the interceptor internals (owned by AND-012).
+(Verified: OpenAPI `GET /ui/calendars/{calendar_id}/events` op
+`list_events_ui_calendars__calendar_id__events_get`, params
+`calendar_id,start_utc,end_utc,limit,cursor`; `src/api/endpoints/calendar.ts:
+getEvents`, which sends only `{ cursor }` and relies on path-scoped calendar id.)
 
-Success response fixture (occurrences RRULE-expanded server-side):
+- `RecordedRequest.path` matches the path + encoded query params (the contract
+  test asserts the `start_utc`/`end_utc` window and the `calendar_id` path
+  segment; param ordering is not asserted since the web client emits only a
+  subset).
+- **Auth/CSRF (verified against `src/api/client.ts`):** the primary auth is an
+  `Authorization: Bearer <accessToken>` header plus cookies sent with
+  `credentials: include`; in addition, when a `ui_csrf` cookie is present the
+  client sets `X-CSRF-Token` to that value. The contract test asserts the
+  calendar call carries `X-CSRF-Token` when a `ui_csrf` cookie is present in the
+  jar (negative test: absent when no cookie) but does **not** re-test the
+  interceptor internals (owned by AND-012). A 401 on a previously-authenticated
+  session triggers a single `POST /ui/session/refresh` + one retry; this
+  behavior is owned by AND-012 and only smoke-checked at the boundary here.
+
+Success response fixture. **CORRECTED to the real `EventsPageOut`/`EventOut`
+shape** (verified against OpenAPI schemas `EventsPageOut`+`EventOut` and
+`src/api/types.ts: EventsPage`/`CalendarEvent`). The page is
+`{ events: EventOut[], next_cursor?: string }` (cursor pagination, **no `range`
+object**). Each event uses snake_case fields: `event_id` (not `id`), `name` (not
+`title`), `start_utc`/`end_utc` (both optional/nullable strings, not
+`start`/`end`), a single `all_day_date` (not `startDate`/`endDate`), `timezone`
+(IANA, the event's authoring zone), and structured `recurrence_rule` /
+`exdates_utc` / `recurrence_overrides`. **There is no `color`, no
+`recurrence_id`, and no `occurrence_start` field.**
 
 ```json
 {
   "events": [
     {
-      "id": "evt_01H...",
+      "event_id": "evt_01H...",
       "calendar_id": "cal_main",
-      "title": "Standup",
-      "start": "2026-06-08T13:30:00Z",
-      "end": "2026-06-08T14:00:00Z",
+      "name": "Standup",
+      "description": "",
       "timezone": "America/New_York",
+      "start_utc": "2026-06-08T13:30:00Z",
+      "end_utc": "2026-06-08T14:00:00Z",
       "all_day": false,
-      "color": "blue",
-      "recurrence_id": "rec_abc",
-      "occurrence_start": "2026-06-08T13:30:00Z"
+      "attendees": [],
+      "booking_enabled": false,
+      "approval_required": false,
+      "status": "confirmed",
+      "recurrence_rule": { "freq": "WEEKLY", "interval": 1, "byday": ["MO","WE","FR"] },
+      "exdates_utc": [],
+      "created_at_utc": "2026-05-01T00:00:00Z"
     }
   ],
-  "range": { "start": "2026-06-01T00:00:00Z", "end": "2026-07-01T00:00:00Z" }
+  "next_cursor": null
 }
 ```
 
-Mapping assertions: `start`/`end` → `Instant`; `timezone` preserved verbatim;
-`recurrence_id`/`occurrence_start` → `recurringEventId` + occurrence instant;
-`all_day:true` fixture → `allDay=true` with populated `startDate`/`endDate` and no
-zone shift.
+Mapping assertions: `start_utc`/`end_utc` → nullable `Instant` (absent → null,
+handled by default); `timezone` preserved verbatim; `recurrence_rule` →
+structured domain rule, `recurrence_overrides` → map keyed by occurrence-start;
+`all_day:true` fixture (`all_day_date` populated, `start_utc`/`end_utc` null) →
+`allDay=true` with the date populated and no zone shift. `event_id`/`name` map to
+the domain id/title fields chosen by AND-270.
 
-Error envelope assertions (FastAPI `detail`, three shapes):
+Error envelope assertions (FastAPI `detail`, three shapes). **Verified** against
+`src/api/client.ts: normalizeErrorDetail`, which handles exactly these three
+forms (plain string; array of `{msg}` items; object with a `code` field):
 
 ```json
 { "detail": "calendar_not_found" }
-{ "detail": [ { "msg": "invalid range" } ] }
+{ "detail": [ { "msg": "invalid range", "loc": ["query","start_utc"], "type": "value_error" } ] }
 { "detail": { "code": "rate_limited" } }
 ```
 
+The array form is the FastAPI `422 HTTPValidationError` shape (verified: OpenAPI
+`HTTPValidationError.detail` = array of `ValidationError{loc,msg,type}`); every
+`/ui/calendars/{calendar_id}/events` response documents `422:HTTPValidationError`.
 Each maps to `ApiResult.Failure` and, in the ViewModel, to the correct
 `CalendarError` (`Server`/`Network`/`Auth`/`Unknown`). A `503` fixture maps to
-`Server`; a simulated `SocketTimeoutException` (MockWebServer
-`SocketPolicy.NO_RESPONSE` with a short client read timeout) maps to `Network`.
+`Server`; a `401` maps to `Auth` (the web client attempts one
+`POST /ui/session/refresh` + retry — see §5); a simulated
+`SocketTimeoutException` (MockWebServer `SocketPolicy.NO_RESPONSE` with a short
+client read timeout) maps to `Network` (mirrors `ApiError(0, "Network error")`
+in `client.ts`).
 
 ## 6. Data & State Management
 
@@ -270,11 +335,18 @@ Each maps to `ApiResult.Failure` and, in the ViewModel, to the correct
 The suite verifies the feature's error contract rather than introducing new
 handling:
 
-- **Mapper robustness:** unknown enum strings (`visibility:"weird"`,
-  `permission:"x"`, `rsvp:"foo"`, `freq:"bar"`) map to `UNKNOWN`/`PENDING`; absent
-  optionals (no `end`, no `timezone`, no `recurrence`) use Kotlin defaults; a
-  malformed timestamp surfaces as a mapping failure (not a crash) — asserted with
-  `assertFailsWith`/`ApiResult.Failure`, never an uncaught exception.
+- **Mapper robustness. CORRECTED — the event schema has no `visibility`/`rsvp`
+  fields.** `EventOut` exposes `status` (free string), `category` (nullable
+  string), and `recurrence_rule.freq` (enum `DAILY`/`WEEKLY`/`MONTHLY`); the only
+  enum on the calendar surface is `CalendarShare.permission` (`read`/`write`).
+  Tests therefore assert: unknown `recurrence_rule.freq` (e.g. `freq:"bar"`) and
+  unknown `permission` strings map to the AND-270 fallback (`UNKNOWN`/`PENDING`)
+  rather than throwing; `status`/`category` pass through as raw strings (no enum);
+  absent optionals (`end_utc`, `start_utc`, `recurrence_rule`, `category`,
+  `next_cursor`) use Kotlin defaults/nulls; a malformed timestamp surfaces as a
+  mapping failure (not a crash) — asserted with `assertFailsWith`/
+  `ApiResult.Failure`, never an uncaught exception. (Verified: OpenAPI `EventOut`,
+  `RecurrenceRule`, `CalendarShare`; `src/api/types.ts: CalendarEvent`.)
 - **Boundary safety (slotter):** `end <= start` clamped to a 1-minute block;
   events fully outside the post-conversion window dropped; a `DateTimeException`
   path (e.g., invalid zone id) does not crash and yields an empty/skipped slot.
@@ -344,9 +416,12 @@ This *is* the testing ticket; the strategy is the deliverable.
   - DST forward (2026-03-08 US) and backward (2026-11-01 US) transition days slot
     correctly; a fixed-instant event has no duplicate/missing hour;
   - all-day event does not shift across `NY`/`Tokyo`/`UTC`.
-- `EventSlotterRecurrenceTest` — three expanded weekly instances each slot on
-  their own day; each carries `recurringEventId`; no collapse/duplication;
-  `has_recurrence` derivation correct.
+- `EventSlotterRecurrenceTest` — a single WEEKLY `recurrence_rule`
+  (`byday=[MO,WE,FR]`) expands (client-side, per the corrected model in FR-3) into
+  three occurrences that each slot on their own day; `exdates_utc` drops an
+  occurrence; a `recurrence_overrides` entry shifts/edits one occurrence; no
+  collapse/duplication; `has_recurrence` derivation (`recurrence_rule != null`,
+  per `CalendarView.tsx: isRecurring`) correct.
 - `EventSlotterLaneTest` — overlapping events split lanes; back-to-back
   (touching) events do not overlap; ≥3-way overlap assigns distinct lanes.
 - `CalendarViewModelTest` — Loading→Content→Error(cached); stale badge;
@@ -394,15 +469,23 @@ server (AND-008/AND-050 harness).
 
 ## 13. Risks & Open Questions
 
-- **R1 (server-side expansion assumption):** the recurrence tests assume AND-270
-  returns RRULE-expanded occurrences with `occurrence_start` (AND-271 §5/R1). If
-  expansion is actually client-side, recurrence-rendering tests must move to
-  whichever component expands. **OQ:** confirm against `/openapi.json` and
-  `calendar.ts` before writing recurrence fixtures.
-- **R2 (tz field semantics):** whether `timezone` is the event's authoring zone or
-  the user's display zone affects expected slot values. Tests encode the AND-271
-  assumption (per-event authoring zone + separate display zone); if wrong, the
-  timezone matrix expected values change. **OQ:** verify with web reference.
+- **R1 (recurrence expansion) — RESOLVED by this review:** the backend does **not**
+  return RRULE-expanded occurrences. `EventOut` carries a structured
+  `recurrence_rule` + `exdates_utc` + `recurrence_overrides`, and the web client
+  expands per event (`CalendarView.tsx: isRecurring` → `!!ev.recurrence_rule`).
+  Recurrence-rendering tests therefore target the **client-side expander** that
+  AND-271 owns. Residual risk: AND-271's exact expander component/API is not in
+  this review's sources — confirm its name before writing the expansion tests.
+  (Verified against OpenAPI `RecurrenceRule`/`EventOut`,
+  `src/api/types.ts`, `src/pages/calendar/CalendarView.tsx`.)
+- **R2 (tz field semantics) — partly resolved:** `EventOut.timezone` is the
+  event's authoring/IANA zone (per `CalendarCreateIn.timezone` and `EventCreateIn`,
+  which set the calendar/event zone). The display zone is a separate client
+  concern: the web reference renders by converting `start_utc` through the
+  **browser local zone** (`new Date(start_utc)`) and sends **no `tz` query param**.
+  Tests encode per-event authoring zone + an explicitly-injected display `ZoneId`.
+  **OQ:** AND-271's chosen default display zone (device zone vs a picker) is not
+  verifiable from these sources.
 - **R3 (DST data correctness):** assertions depend on the JDK/desugared tz
   database matching the dates used (2026-03-08, 2026-11-01). Pin via
   core-library-desugaring tzdb; if the desugared tzdb diverges from device tzdb,
@@ -427,10 +510,11 @@ AC-2 **Timezone matrix proven:** `13:30Z` slots at 09:30 `America/New_York` and
 DST forward and backward transition days slot correctly; all-day events do not
 shift across zones — each by a passing assertion.
 
-AC-3 **Recurrence proven:** RRULE-expanded occurrences render as individual
-occurrences in correct slots with no collapse or duplication; each instance
-carries `recurringEventId`; `has_recurrence` telemetry distinguishes instances
-from one-offs.
+AC-3 **Recurrence proven:** a structured `recurrence_rule` (expanded client-side,
+per FR-3) yields individual occurrences in correct slots with no collapse or
+duplication; `exdates_utc` and `recurrence_overrides` are honored; instances
+derive from the same parent `event_id`; `has_recurrence` telemetry
+(`recurrence_rule != null`) distinguishes recurring events from one-offs.
 
 AC-4 **Mapping/transport proven:** `CalendarApiContractTest` asserts the exact
 request path/query and maps the success payload; all three FastAPI `detail`
@@ -473,3 +557,259 @@ asserted; no event PII appears in captured logs.
   session secrets.
 - Code reviewed and merged; spec status moved from `draft` to `accepted` once
   AC-1–AC-8 are demonstrated green in CI.
+
+## 16. Citations & Assumption Audit
+
+Each key technical claim, its verdict, and the authoritative source.
+
+1. **Calendar events are fetched at `GET /ui/calendars/{calendar_id}/events`.**
+   VERDICT: Corrected (spec said `GET /ui/calendar/events`). SOURCE: OpenAPI
+   `GET /ui/calendars/{calendar_id}/events` (op
+   `list_events_ui_calendars__calendar_id__events_get`);
+   `src/api/endpoints/calendar.ts: getEvents`.
+2. **Query params are `start_utc`/`end_utc`/`limit`/`cursor`; there is no `tz`
+   param.** VERDICT: Corrected (spec said `start`/`end`/`tz`). SOURCE: OpenAPI
+   index params `calendar_id,start_utc,end_utc,limit,cursor`;
+   `src/api/endpoints/calendar.ts: getEvents` (sends only `{ cursor }`),
+   `getOpenings` (uses `start_utc`/`end_utc`).
+3. **Pagination is cursor-based; the page is `{ events, next_cursor }` — there is
+   no `range` object.** VERDICT: Corrected. SOURCE: OpenAPI schema `EventsPageOut`
+   (`events`, `next_cursor`); `src/api/types.ts: EventsPage`.
+4. **Event field names are `event_id`, `name`, `start_utc`, `end_utc`,
+   `all_day`, `all_day_date`, `timezone`, `description`, `attendees`, `status`,
+   `category`, `recurrence_rule`, `exdates_utc`, `recurrence_overrides`,
+   `created_at_utc` — NOT `id`/`title`/`start`/`end`/`startDate`/`endDate`.**
+   VERDICT: Corrected. SOURCE: OpenAPI schema `EventOut`;
+   `src/api/types.ts: CalendarEvent`.
+5. **There is no `color` field on events.** VERDICT: Corrected (spec fixture had
+   `"color":"blue"`). SOURCE: OpenAPI `EventOut` (no color property);
+   `src/api/types.ts: CalendarEvent`.
+6. **Recurrence is a structured `recurrence_rule` object
+   (`freq`∈{DAILY,WEEKLY,MONTHLY}, `interval`, `until_utc`, `count`, `byday`,
+   `bymonthday`, `bysetpos`), not a verbatim `rrule` string and not camelCase
+   `byDay`/`exDates`.** VERDICT: Corrected. SOURCE: OpenAPI schema
+   `RecurrenceRule`; `src/api/types.ts: RecurrenceRule`.
+7. **The server does NOT pre-expand RRULEs; there is no `recurrence_id` or
+   `occurrence_start` field. One event per series carries the rule +
+   `exdates_utc` + `recurrence_overrides` (map keyed by occurrence-start);
+   expansion is client-side.** VERDICT: Corrected. SOURCE: OpenAPI `EventOut`;
+   `src/pages/calendar/CalendarView.tsx: isRecurring` (`!!ev.recurrence_rule`),
+   `isOverridden` (keys of `recurrence_overrides`).
+8. **`has_recurrence` is derived as `recurrence_rule != null`.** VERDICT:
+   Verified. SOURCE: `src/pages/calendar/CalendarView.tsx: isRecurring`.
+9. **`timezone` is the event's authoring IANA zone; display conversion is a
+   separate client concern.** VERDICT: Verified (server side) / Unverified-
+   assumption (Android display-zone default). SOURCE: OpenAPI
+   `EventOut.timezone` + `CalendarCreateIn`/`EventCreateIn.timezone`;
+   `src/pages/calendar/CalendarView.tsx` converts via browser-local `new Date()`.
+10. **All-day events use a single `all_day_date` (date-only) with
+    `start_utc`/`end_utc` null — not separate `startDate`/`endDate`.** VERDICT:
+    Corrected. SOURCE: OpenAPI `EventOut.all_day`/`all_day_date`;
+    `src/pages/calendar/CalendarView.tsx: eventOnDay` (matches `all_day_date`).
+11. **CSRF: client sends `X-CSRF-Token` from the `ui_csrf` cookie when present.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts` (`getCookie("ui_csrf")` →
+    `headers.set("X-CSRF-Token", csrf)`).
+12. **Primary auth is `Authorization: Bearer <accessToken>` + cookies
+    (`credentials: include`), in addition to CSRF.** VERDICT: Verified
+    (clarifies spec, which mentioned only cookie/CSRF). SOURCE:
+    `src/api/client.ts` (Authorization header + `credentials: "include"`).
+13. **A 401 on an authenticated session triggers one
+    `POST /ui/session/refresh` + a single retry.** VERDICT: Verified. SOURCE:
+    `src/api/client.ts: refreshSession` and the 401 branch.
+14. **FastAPI error `detail` has three handled shapes: string; array of
+    `{msg,loc,type}` (=422 `HTTPValidationError`); object with a `code` field.**
+    VERDICT: Verified. SOURCE: `src/api/client.ts: normalizeErrorDetail`; OpenAPI
+    schemas `HTTPValidationError`/`ValidationError`; every events response
+    documents `422:HTTPValidationError`.
+15. **A transport/offline failure surfaces as a network error
+    (`ApiError(0,"Network error")` in the web client).** VERDICT: Verified.
+    SOURCE: `src/api/client.ts` (catch around `fetch`).
+16. **Occurrence override/exclude endpoints exist
+    (`POST …/events/{event_id}/occurrences/{occurrence_start}/override` and
+    `/exclude`, `DELETE …/occurrences/{occurrence_start}`).** VERDICT: Verified
+    (supports the override/exdate test model). SOURCE: OpenAPI index lines for
+    `override_event_occurrence…`, `exclude_event_occurrence…`,
+    `clear_event_occurrence_exception…`; `src/api/endpoints/calendar.ts:
+    overrideOccurrence`/`excludeOccurrence`/`clearOccurrenceOverride`.
+17. **Android test framework choices (Robolectric/JVM, MockWebServer, Turbine,
+    Compose UI test, Paging `AsyncPagingDataDiffer`, Hilt testing, fixed
+    `Clock`/`ZoneId`, core-library desugaring tzdb).** VERDICT:
+    Unverified-assumption (project-internal tooling, not in the API/web sources)
+    — but each is a standard AndroidX/library API (framework refs:
+    https://developer.android.com/jetpack/compose/testing ;
+    https://developer.android.com/topic/libraries/architecture/paging/test ;
+    https://developer.android.com/studio/write/java8-support-table for
+    core-library desugaring tzdb).
+18. **AND-271 internals under test (`EventSlotter`, `CalendarViewModel`,
+    `CalendarPagingSource`, `windowFor`, ±1-day UTC window widening, telemetry
+    event names, `CalendarError` taxonomy).** VERDICT: Unverified-assumption —
+    AND-271/AND-270 source/spec are not provided to this review; these are
+    consumed as given by the upstream tickets.
+
+### Corrections made
+
+- §FR-1, §5: endpoint path `GET /ui/calendar/events` → `GET
+  /ui/calendars/{calendar_id}/events`; query params `start/end/tz` →
+  `start_utc/end_utc/limit/cursor` (no `tz`).
+- §5: success fixture rewritten to the real `EventsPageOut`/`EventOut` shape
+  (`event_id`/`name`/`start_utc`/`end_utc`/`all_day_date`, structured
+  `recurrence_rule`, `next_cursor`); removed nonexistent
+  `color`/`recurrence_id`/`occurrence_start` and the fake `range` object.
+- §FR-3, §Overview, §11, §AC-3, §R1: recurrence model corrected from
+  "server-side RRULE-expanded occurrences with `occurrence_start`" to "structured
+  `recurrence_rule` + `exdates_utc` + `recurrence_overrides`, expanded
+  client-side"; `rrule`/`byDay`/`exDates` corrected to
+  `recurrence_rule`/`byday`/`exdates_utc`.
+- §7: removed nonexistent `visibility`/`rsvp` enum-fallback claims; scoped enum
+  fallback to `recurrence_rule.freq` and `CalendarShare.permission`; `status`/
+  `category` clarified as raw strings.
+- §5: clarified auth = Bearer token + cookies + `X-CSRF-Token`; added the
+  401→refresh→retry behavior; annotated the three `detail` shapes as verified and
+  added the 401→`Auth` mapping.
+- §4: fixture builder signature/consts updated to real field names; recurring
+  fixture changed from "3 expanded instances" to "1 event + WEEKLY rule".
+
+### Open assumptions
+
+- **Display-zone default on Android** (device zone vs. an in-app picker) — not
+  determinable from the API/web sources; the web uses browser-local. Tests inject
+  an explicit display `ZoneId`. (Ties to §R2/§13 OQ.)
+- **AND-271/AND-270 component surface** (`EventSlotter`/`CalendarViewModel`/
+  `CalendarPagingSource` APIs, the client-side recurrence expander, window-widening
+  math, telemetry event names, `CalendarError` enum) — owned upstream, not in this
+  review's sources; consumed as given.
+- **`±1-day UTC window widening then client re-clip`** (§6) — an AND-271 design
+  claim, not verifiable here.
+- **Test tooling/versions** (Kotlin 2.0.21, AGP 8.7.3, Gradle 8.9, OkHttp 4.12,
+  Moshi 1.15, desugared tzdb DST data for 2026-03-08/2026-11-01) — build-config
+  assumptions, not in the API/web sources; DST dates should be re-confirmed
+  against the pinned tzdb at implementation time (§R3).
+
+## 17. Test Plan
+
+IDs `TC-AND-277-NN`. "Traces" link to §14 Acceptance Criteria. Device targets:
+JVM = local Robolectric/unit; **test35** = headless API-35 emulator;
+**A15** = physical Samsung Galaxy A15 5G (SM-A156U, API 34, arm64). Most cases are
+hermetic JVM/MockWebServer; instrumented cases run on **test35**, with the
+arm64/API-34 differential case pinned to **A15**.
+
+- **TC-AND-277-01 — Contract: events request shape.** Type: contract/MockWebServer
+  (JVM). Target: `CalendarApiContractTest`. Preconditions: MockWebServer enqueues
+  `EVENTS_NY_STANDUP_JSON` (200). Steps: call the production `CalendarApi` for
+  `cal_main` over window 2026-06-01..2026-07-01. Expected: `RecordedRequest`
+  method = GET, path = `/ui/calendars/cal_main/events`, query contains
+  `start_utc`/`end_utc` (and `limit`/`cursor` when paging) and **no `tz`**.
+  Traces: AC-4.
+- **TC-AND-277-02 — Contract/mapper: success payload → domain.** Type:
+  contract/MockWebServer (JVM). Target: `CalendarApiContractTest` +
+  `CalendarMappersTest`. Preconditions: 200 with the §5 `EventsPageOut` fixture.
+  Steps: fetch + map. Expected: `event_id`/`name`/`start_utc`/`end_utc`→Instant,
+  `timezone` verbatim, structured `recurrence_rule` mapped; `next_cursor` honored;
+  no `range`/`color`/`occurrence_start` referenced. Traces: AC-4.
+- **TC-AND-277-03 — Mapper robustness: enums, optionals, malformed.** Type: unit
+  (JVM). Target: `CalendarMappersTest`. Preconditions: fixtures with unknown
+  `recurrence_rule.freq`/`permission`, absent `end_utc`/`recurrence_rule`/
+  `category`/`next_cursor`, and a malformed timestamp. Steps: map each. Expected:
+  unknown enums → `UNKNOWN`/`PENDING` (no throw); absent optionals → Kotlin
+  defaults/null; malformed timestamp → `ApiResult.Failure` via `assertFailsWith`,
+  never an uncaught exception. Traces: AC-4.
+- **TC-AND-277-04 — Contract: error `detail` shapes → CalendarError.** Type:
+  contract/MockWebServer (JVM). Target: `CalendarApiContractTest`. Preconditions:
+  enqueue `{"detail":"calendar_not_found"}` (404), a 422 array-of-`{msg,loc,type}`,
+  `{"detail":{"code":"rate_limited"}}` (429), and a 503. Steps: fetch each.
+  Expected: all → `ApiResult.Failure`; ViewModel maps to `Server`/`Unknown`/
+  `Server` appropriately; 503 → `Server`. Traces: AC-4.
+- **TC-AND-277-05 — Auth/CSRF header at the boundary.** Type:
+  contract/MockWebServer (JVM). Target: `CalendarApiContractTest`. Preconditions:
+  (a) jar holds a `ui_csrf` cookie; (b) jar empty. Steps: issue the events GET in
+  each state. Expected: (a) request carries `X-CSRF-Token` = cookie value (and
+  `Authorization: Bearer …` when a session token is set); (b) no `X-CSRF-Token`.
+  Security check: no real session secret in fixtures. Traces: AC-4, AC-8.
+- **TC-AND-277-06 — Timezone slotting matrix.** Type: unit (JVM, **critical**).
+  Target: `EventSlotterTimezoneTest`. Preconditions: fixed `Clock`; display zones
+  NY/Tokyo/UTC. Steps: slot a `13:30Z` event in each zone; slot a `23:00Z` event
+  in `America/Los_Angeles`; slot events on 2026-03-08 (DST forward) and
+  2026-11-01 (DST backward). Expected: 09:30 NY, 22:30 Tokyo; LA event lands on
+  the previous local day; DST days have no duplicate/missing hour. Traces: AC-2.
+- **TC-AND-277-07 — All-day non-shift.** Type: unit (JVM). Target:
+  `EventSlotterTimezoneTest`. Preconditions: `all_day=true`, `all_day_date` set,
+  `start_utc`/`end_utc` null. Steps: slot in NY/Tokyo/UTC. Expected: same calendar
+  day in all zones; no time-of-day rendered. Traces: AC-2.
+- **TC-AND-277-08 — Recurrence expansion (client-side).** Type: unit (JVM).
+  Target: `EventSlotterRecurrenceTest`. Preconditions: one event,
+  `recurrence_rule{freq:WEEKLY,byday:[MO,WE,FR]}` within a one-week window.
+  Steps: expand + slot. Expected: 3 occurrences on Mon/Wed/Fri, no
+  collapse/duplication; an `exdates_utc` entry removes one occurrence; a
+  `recurrence_overrides` entry shifts/edits one; `has_recurrence` = true for
+  instances, false for a one-off. Traces: AC-3.
+- **TC-AND-277-09 — ViewModel state machine + retry.** Type: unit (JVM, Turbine).
+  Target: `CalendarViewModelTest`. Preconditions: `FakeCalendarRepository` queued
+  with cache-hit then refresh, then a failure-with-prior-content, then a
+  retry-success. Steps: collect `uiState`. Expected:
+  Loading→Content(stale=true)→Content(stale=false); failure →
+  Error(cached=lastContent); `flatMapLatest` cancels a superseded window (only the
+  latest window recorded); `retry()` recovers to Content. Traces: AC-5, AC-7.
+- **TC-AND-277-10 — Paging keys + de-duplication.** Type: unit (JVM). Target:
+  `CalendarPagingSourceTest`. Preconditions: fixtures with `next_cursor` across two
+  pages sharing one duplicate `(event_id, occurrenceStart)`. Steps: `load`
+  Refresh/Append/Prepend. Expected: `LoadResult.Page` with correct
+  `prevKey`/`nextKey`; the duplicate appears once. Traces: AC-5.
+- **TC-AND-277-11 — Offline/timeout → Network then recover.** Type:
+  contract/MockWebServer (JVM). Target: `CalendarViewModelTest` +
+  `CalendarApiContractTest`. Preconditions: `SocketPolicy.NO_RESPONSE` + short read
+  timeout, then a queued success. Steps: load (times out), then `retry()`.
+  Expected: first load → `Network` error preserving any prior content; retry →
+  Content. (Hermetic simulation of the flaky dev host; the live host is never
+  contacted.) Traces: AC-5, AC-7.
+- **TC-AND-277-12 — UI render in correct slot (Month/Week/Agenda).** Type:
+  Compose-UI / instrumented (**test35**). Target: `CalendarScreenRenderTest`.
+  Preconditions: Hilt binds `FakeCalendarRepository` (seeded canonical events) +
+  fixed `Clock`, fixed display zone, `Locale.US`. Steps: render each view. Expected:
+  the standup renders in the correct Month cell / Week block / Agenda row, asserted
+  via `onNodeWithContentDescription`/`assertExists`. (Literal source-ticket
+  acceptance.) Traces: AC-6.
+- **TC-AND-277-13 — Navigation persistence + re-query.** Type: instrumented
+  (**test35**). Target: `CalendarNavigationTest`. Preconditions: as TC-12. Steps:
+  toggle view, `recreate()` the activity, tap prev/next/Today. Expected: selected
+  view survives recreation; each nav records the expected new `DateWindow` in
+  `FakeCalendarRepository.recordedWindows`. Traces: AC-6.
+- **TC-AND-277-14 — States: skeleton / stale / error+retry / empty.** Type:
+  instrumented (**test35**). Target: `CalendarStatesTest`. Preconditions: fakes
+  queued for each state. Steps: drive load→cache-hit→failure→empty. Expected:
+  skeleton on load; stale badge on cache hit; dismissible error banner with a
+  working Retry that preserves last-good content; empty placeholder (never the
+  error UI) for an empty 200 window. Traces: AC-7.
+- **TC-AND-277-15 — Accessibility, i18n, RTL.** Type: instrumented/Compose-UI
+  (**test35**). Target: `CalendarAccessibilityTest`. Preconditions: `Locale.US`,
+  then a flipped locale/`WeekFields` and `LayoutDirection.Rtl`. Steps: inspect
+  semantics. Expected: every interactive node has a non-empty
+  `contentDescription`; event blocks announce title + localized start–end +
+  all-day/multi-day; touch targets ≥48dp; custom day-cell/overflow actions present
+  and invokable; week-start changes the Month grid; RTL mirrors without crashing.
+  Traces: AC-8.
+- **TC-AND-277-16 — Log-privacy (no PII).** Type: unit (JVM, log-capturing rule).
+  Target: `CalendarViewModelTest`. Preconditions: a logging capture rule; a load
+  failure. Steps: trigger error logging. Expected: logs contain only
+  `CalendarError` type + HTTP status; **no** event titles or payload bodies.
+  Security check. Traces: AC-8.
+- **TC-AND-277-17 — DST + ABI/API-34 differential on real hardware.** Type:
+  instrumented/e2e (**A15 — MUST run on the physical device**). Target:
+  `EventSlotterTimezoneTest` (instrumented variant) + render check. Preconditions:
+  device set to a fixed zone; DST fixtures (2026-03-08/2026-11-01). Steps: run the
+  DST slotting + render assertions on arm64/API-34. Expected: results match the
+  JVM/`test35` (API-35) layer; the desugared tzdb on the device produces identical
+  DST placement. Rationale: catches arm64-vs-x86 ABI and API-34-vs-35 / device-tzdb
+  divergence (§R3) that emulator-only runs would miss. Traces: AC-1, AC-2.
+
+### Coverage matrix
+
+| AC (§14) | Test case(s) |
+|----------|--------------|
+| AC-1 Suite passes / deterministic | all; explicitly TC-01..17, hardware: TC-17 |
+| AC-2 Timezone matrix (incl. DST, midnight-cross, all-day) | TC-06, TC-07, TC-17 |
+| AC-3 Recurrence (rule expand, exdates, overrides, has_recurrence) | TC-08 |
+| AC-4 Mapping/transport (path/query, payload, error shapes, enums) | TC-01, TC-02, TC-03, TC-04, TC-05 |
+| AC-5 ViewModel/paging (states, cancellation, retry, paging+dedup) | TC-09, TC-10, TC-11 |
+| AC-6 UI rendering (Month/Week/Agenda, persistence, re-query) | TC-12, TC-13 |
+| AC-7 States (skeleton/stale/error+retry/empty) | TC-09, TC-11, TC-14 |
+| AC-8 A11y/i18n/privacy (CSRF, descriptions, 48dp, RTL, no-PII) | TC-05, TC-15, TC-16 |
