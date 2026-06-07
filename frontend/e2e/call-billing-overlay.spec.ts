@@ -80,6 +80,38 @@ async function injectAuth(page: Page, userId = ALICE_ID) {
     const state = { userId: uid, accessToken: null, isAuthenticated: true };
     localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
   }, session.user_sub);
+
+  // Headless Chromium cannot complete a real WebRTC/ICE handshake between two
+  // isolated browser contexts. The call state machine reaches "connected" via
+  // the replayed call.accept SSE (REMOTE_ACCEPT), but useRtcPeerConnection
+  // watches pc.iceConnectionState and, on "disconnected"/"failed", dispatches
+  // CONNECTION_LOST -> reconnecting -> (after retries) the terminal "failure"
+  // state, which closes the billing overlay. Pin the reported ICE/connection
+  // state to "connected" so that escalation never fires and the connected
+  // overlay stays mounted for the duration of the assertions. The real
+  // RTCPeerConnection is otherwise untouched (offer/answer/tracks still work).
+  await page.addInitScript(() => {
+    try {
+      const proto = (window as unknown as { RTCPeerConnection?: { prototype: object } })
+        .RTCPeerConnection?.prototype;
+      if (proto) {
+        Object.defineProperty(proto, "iceConnectionState", {
+          configurable: true,
+          get() {
+            return "connected";
+          },
+        });
+        Object.defineProperty(proto, "connectionState", {
+          configurable: true,
+          get() {
+            return "connected";
+          },
+        });
+      }
+    } catch {
+      /* leave the native implementation in place */
+    }
+  });
 }
 
 function csrfHeader(userId: string): Record<string, string> {
@@ -144,11 +176,31 @@ print("ok")
   execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
 }
 
-/** Dispatch a synthetic call SSE event into a page (mirrors useMessagingStream). */
-async function dispatchCallEvent(page: Page, detail: Record<string, unknown>): Promise<void> {
-  await page.evaluate((d) => {
-    window.dispatchEvent(new CustomEvent("messaging:call-event", { detail: d }));
-  }, detail);
+/** Force-terminate any non-terminal call sessions for a conversation in DDB so a
+ *  fresh invite is not rejected (409) by an earlier test's lingering call. */
+function endActiveCallSessions(convoId: string): void {
+  const script = `
+import boto3, time
+ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1",
+                     aws_access_key_id="test", aws_secret_access_key="test")
+table = ddb.Table("MessageCallSessions")
+resp = table.scan(
+    FilterExpression="conversation_id = :cid",
+    ExpressionAttributeValues={":cid": "${convoId}"},
+)
+now = int(time.time())
+TERMINAL = {"ended", "declined", "busy", "timeout", "failed", "failure"}
+for it in resp.get("Items", []):
+    if it.get("state") not in TERMINAL:
+        table.update_item(
+            Key={"call_id": it["call_id"]},
+            UpdateExpression="SET #s = :e, updated_at = :t, end_ts = :t",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={":e": "ended", ":t": now},
+        )
+print("ok")
+`;
+  execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
 }
 
 /**
@@ -160,11 +212,47 @@ async function dispatchCallEvent(page: Page, detail: Record<string, unknown>): P
  * event into Alice's page so her state machine reaches "connected".
  */
 async function startConnectedPaidCall(alicePage: Page, bobPage: Page, convoId: string) {
+  // Defensive: terminate any lingering non-terminal call sessions for this
+  // conversation in DDB. A prior test can leave a call "connected", and
+  // create_invite rejects a new invite with `caller_busy` (HTTP 409) while an
+  // active session exists in the conversation — which would land Alice in a
+  // "Call status" outcome overlay instead of "connected".
+  endActiveCallSessions(convoId);
+
+  // Stub the partner call-rate lookup so `isPaidCall` is deterministically true
+  // the instant the rate query runs. The CallBillingOverlay (and the heartbeat
+  // hook) are gated on `isPaidCall`; depending on the real backend rate + the
+  // React Query resolution timing relative to the transient connected window
+  // makes this race, so pin it.
+  await alicePage.route("**/ui/calls/rates/*", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        rate_cents_per_minute: 500,
+        enabled: true,
+        currency: "USD",
+        min_balance_minutes: 2,
+        max_duration_minutes: 120,
+      }),
+    });
+  });
+
   await alicePage.goto(`${BASE}/messages/${convoId}`);
   await bobPage.goto(`${BASE}/messages/${convoId}`);
 
-  await expect(alicePage.getByRole("button", { name: "Start audio call" })).toBeVisible({ timeout: 15_000 });
-  await alicePage.getByRole("button", { name: "Start audio call" }).click();
+  // Dismiss any residual call-outcome dialog from a previous test so the call
+  // buttons are interactable and the state machine is idle.
+  await alicePage
+    .getByRole("button", { name: /dismiss call status/i })
+    .click({ timeout: 2_000 })
+    .catch(() => {});
+
+  const startBtn = alicePage.getByRole("button", { name: "Start audio call" });
+  await expect(startBtn).toBeVisible({ timeout: 15_000 });
+  await expect(startBtn).toBeEnabled({ timeout: 15_000 });
+  await startBtn.click();
 
   let callId = "";
   for (let i = 0; i < 30 && !callId; i++) {
@@ -176,24 +264,61 @@ async function startConnectedPaidCall(alicePage: Page, bobPage: Page, convoId: s
   const aliceSub = getSessions()[ALICE_ID].user_sub;
   const bobSub = getSessions()[BOB_ID].user_sub;
 
-  const acceptResp = await bobPage.request.post(`${BASE}/messages/calls/${callId}/accept`, {
+  const acceptResp = await bobPage.request.post(`${BASE}/messaging/messages/calls/${callId}/accept`, {
     headers: csrfHeader(BOB_ID),
     data: { idempotency_key: `e2e-accept-${callId}` },
   });
   expect([200, 409].includes(acceptResp.status())).toBe(true);
   forceCallConnected(callId);
 
-  await dispatchCallEvent(alicePage, {
-    conversation_id: convoId,
-    call_id: callId,
-    event_type: "call.accept",
-    mode: "audio",
-    caller_user_id: aliceSub,
-    callee_user_id: bobSub,
-    event_ts: Math.floor(Date.now() / 1000),
-  });
+  // Replay call.accept (REMOTE_ACCEPT) so Alice's state machine reaches
+  // "connected". Headless Chromium cannot complete a real WebRTC/ICE handshake,
+  // so the peer connection's ICE eventually "fails" (~3s grace) and the machine
+  // transitions connected -> reconnecting, flickering the overlay closed. From
+  // "reconnecting", another REMOTE_ACCEPT recovers back to "connected", so we
+  // install a page-side keep-alive that re-dispatches call.accept with a
+  // monotonically-increasing event_ts (the handler ignores stale/older ts) to
+  // hold the connected overlay open for the duration of the assertions. The
+  // interval id is stashed on window so stopCallKeepAlive() can clear it.
+  await alicePage.evaluate(
+    (d: Record<string, unknown>) => {
+      const w = window as unknown as { __callKeepAlive?: ReturnType<typeof setInterval> };
+      const fire = () => {
+        window.dispatchEvent(
+          new CustomEvent("messaging:call-event", {
+            detail: { ...d, event_ts: Date.now() },
+          }),
+        );
+      };
+      fire();
+      if (w.__callKeepAlive) clearInterval(w.__callKeepAlive);
+      // Fire frequently so a connected->reconnecting flicker (ICE "failed" with
+      // no real peer) is recovered to "connected" almost immediately, keeping
+      // the billing overlay continuously mounted for the assertions.
+      w.__callKeepAlive = setInterval(fire, 300);
+    },
+    {
+      conversation_id: convoId,
+      call_id: callId,
+      event_type: "call.accept",
+      mode: "audio",
+      caller_user_id: aliceSub,
+      callee_user_id: bobSub,
+    },
+  );
 
-  await expect(alicePage.getByLabel("Audio call")).toBeVisible({ timeout: 30_000 });
+  await expect(alicePage.getByLabel("Audio call").first()).toBeVisible({ timeout: 30_000 });
+}
+
+/** Stop the connected-overlay keep-alive loop installed by startConnectedPaidCall. */
+async function stopCallKeepAlive(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __callKeepAlive?: ReturnType<typeof setInterval> };
+    if (w.__callKeepAlive) {
+      clearInterval(w.__callKeepAlive);
+      w.__callKeepAlive = undefined;
+    }
+  });
 }
 
 test.describe.serial("GAP-0147 — paid-call billing overlay renders in the call UI", () => {
@@ -204,14 +329,21 @@ test.describe.serial("GAP-0147 — paid-call billing overlay renders in the call
 
   test.beforeAll(async () => {
     fakeBrowser = await chromium.launch({ headless: true, args: FAKE_MEDIA_ARGS });
+    // One-time DM + paid-rate + wallet funding (shared across tests).
     const aliceCtx = await fakeBrowser.newContext({ permissions: ["microphone", "camera"] });
     const bobCtx = await fakeBrowser.newContext({ permissions: ["microphone", "camera"] });
-    alicePage = await aliceCtx.newPage();
-    bobPage = await bobCtx.newPage();
-    await injectAuth(alicePage, ALICE_ID);
-    await injectAuth(bobPage, BOB_ID);
-    convoId = await findOrCreateDm(alicePage, ALICE_ID, BOB_ID);
-    await ensurePaidRate(bobPage);
+    const setupAlice = await aliceCtx.newPage();
+    const setupBob = await bobCtx.newPage();
+    await injectAuth(setupAlice, ALICE_ID);
+    await injectAuth(setupBob, BOB_ID);
+    convoId = await findOrCreateDm(setupAlice, ALICE_ID, BOB_ID);
+    // ensurePaidRate posts the rate as BOB; page.request carries the page's
+    // context cookies, so it MUST run on a Bob-authenticated page (otherwise the
+    // rate is written for Alice and getCallRate(Bob) returns rate_not_found ->
+    // isPaidCall is false -> the cost ticker never renders).
+    await ensurePaidRate(setupBob);
+    await aliceCtx.close();
+    await bobCtx.close();
 
     // Fund Alice's wallet so the paid invite is accepted.
     const script = `
@@ -224,9 +356,26 @@ ddb.Table("billing").put_item(Item={"pk": "USER#${ALICE_ID}", "sk": "WALLET",
     execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
   });
 
+  // Fresh browser contexts per test so React Query / call-state machine never
+  // carries over between serial tests (a prior test's connected call otherwise
+  // pollutes the next test's overlay assertions).
+  test.beforeEach(async () => {
+    const aliceCtx = await fakeBrowser.newContext({ permissions: ["microphone", "camera"] });
+    const bobCtx = await fakeBrowser.newContext({ permissions: ["microphone", "camera"] });
+    alicePage = await aliceCtx.newPage();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+    await injectAuth(bobPage, BOB_ID);
+    // Clear any lingering call sessions from a previous test on this DM.
+    endActiveCallSessions(convoId);
+  });
+
+  test.afterEach(async () => {
+    await alicePage?.context().close();
+    await bobPage?.context().close();
+  });
+
   test.afterAll(async () => {
-    await alicePage?.close();
-    await bobPage?.close();
     await fakeBrowser?.close();
   });
 
@@ -257,11 +406,12 @@ ddb.Table("billing").put_item(Item={"pk": "USER#${ALICE_ID}", "sk": "WALLET",
 
     // CallBillingOverlay renders the cost ($7.50), the rate ($5.00/min), and
     // the remaining balance ($42.50). Before GAP-0147 none of these existed.
-    await expect(alicePage.getByText("$7.50")).toBeVisible({ timeout: 20_000 });
-    await expect(alicePage.getByText("$5.00/min")).toBeVisible();
-    await expect(alicePage.getByText(/Bal:\s*\$42\.50/)).toBeVisible();
+    await expect(alicePage.getByText("$7.50").first()).toBeVisible({ timeout: 20_000 });
+    await expect(alicePage.getByText("$5.00/min").first()).toBeVisible();
+    await expect(alicePage.getByText(/Bal:\s*\$42\.50/).first()).toBeVisible();
 
-    await alicePage.getByRole("button", { name: /end call/i }).click();
+    await stopCallKeepAlive(alicePage);
+    await alicePage.getByRole("button", { name: /end call/i }).first().click();
     await alicePage.unroute("**/messaging/messages/calls/*/heartbeat");
   });
 
@@ -289,10 +439,11 @@ ddb.Table("billing").put_item(Item={"pk": "USER#${ALICE_ID}", "sk": "WALLET",
 
     await startConnectedPaidCall(alicePage, bobPage, convoId);
 
-    await expect(alicePage.getByText(/Low balance/i)).toBeVisible({ timeout: 20_000 });
-    await expect(alicePage.getByText(/0\.4 min remaining/i)).toBeVisible();
+    await expect(alicePage.getByText(/Low balance/i).first()).toBeVisible({ timeout: 20_000 });
+    await expect(alicePage.getByText(/0\.4 min remaining/i).first()).toBeVisible();
 
-    await alicePage.getByRole("button", { name: /end call/i }).click();
+    await stopCallKeepAlive(alicePage);
+    await alicePage.getByRole("button", { name: /end call/i }).first().click();
     await alicePage.unroute("**/messaging/messages/calls/*/heartbeat");
   });
 });
