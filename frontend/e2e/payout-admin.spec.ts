@@ -20,6 +20,37 @@ const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice";
 const CHARLIE_KEY = "charlie_admin";
 const TS = Date.now();
+const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+
+// Seed a settled (past-hold) billing credit so Alice has payout balance, and
+// clear any leftover per-user payout sentinel (GAP-0309) so /payouts/request
+// can mint a fresh requested payout for admin-queue tests.
+function seedAliceBalanceForPayout(): void {
+  const userSub = "e2e_alice@test.local";
+  execSync(
+    `${PYTHON} -c "
+import boto3, os, time, uuid
+from pathlib import Path
+env = Path('/home/ubuntu/testlogon/.env.local')
+for line in env.read_text().splitlines():
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        k, v = line.split('=', 1)
+        os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+b = ddb.Table('billing')
+ts = int(time.time()) - 700000
+eid = uuid.uuid4().hex
+b.put_item(Item={'pk': 'USER#${userSub}', 'sk': f'LEDGER#{ts}#{eid}', 'entry_id': eid, 'ts': ts, 'type': 'credit', 'amount_cents': 50000, 'currency': 'USD', 'state': 'settled', 'reason': 'admin queue seed', 'meta': {'content_type': 'message', 'content_id': 'admin_seed_${TS}'}})
+try:
+    ddb.Table('CreatorPayouts').delete_item(Key={'payout_id': 'PAYOUT_STATE#${userSub}'})
+except Exception:
+    pass
+print('seeded')
+"`,
+    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+  );
+}
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────────
 
@@ -190,9 +221,11 @@ test.describe("Section 221: Admin Queue tab", () => {
   test("221.3 admin reject dialog enforces a min-length reason", async ({ browser }) => {
     const page = await newIdentityPage(browser, CHARLIE_KEY);
 
-    // Seed a requested payout for Alice so the queue is non-empty.
+    // Seed a requested payout for Alice so the queue is non-empty. Needs
+    // balance + a valid amount (>= $10 minimum); seed a settled credit first.
+    seedAliceBalanceForPayout();
     await apiPost(page, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 100,
+      amount_cents: 2000,
       method: "bank_transfer",
       notes: `admin-test ${TS}`,
     });

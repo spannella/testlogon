@@ -478,6 +478,11 @@ test.describe("111. Density", () => {
   });
 
   test("111.7 Comfortable is default", async () => {
+    // Prior density tests in this block persist non-default values (e.g.
+    // "spacious") to the SERVER. On reload uiStore.loadServerPreferences()
+    // hydrates from the server and overrides the localStorage reset, so we
+    // must also clear server prefs to observe the true default.
+    await resetServerPreferences(page);
     await resetUiStore(page);
     await page.reload({ waitUntil: "load" });
     await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });

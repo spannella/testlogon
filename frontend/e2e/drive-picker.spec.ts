@@ -52,6 +52,27 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
   return page;
 }
 
+// GAP-0241: the mock OAuth callback now requires an HMAC-signed, time-limited
+// `state` (the predictable `state=mock` literal was removed). The signed state
+// is minted by GET /connect and embedded in the returned auth_url. This helper
+// runs the connect step and extracts the {code, state} pair to feed the callback.
+async function mockOAuthConnect(
+  page: Page,
+  identity: string,
+): Promise<{ status: number; body: any }> {
+  const connectResp = await apiGet(page, "/ui/integrations/google-drive/connect");
+  const connectBody = await connectResp.json();
+  const authUrl = new URL(connectBody.auth_url, API);
+  const code = authUrl.searchParams.get("code") || "";
+  const state = authUrl.searchParams.get("state") || "";
+  const resp = await apiPost(page, identity, "/ui/integrations/google-drive/callback", {
+    code,
+    state,
+    redirect_uri: "",
+  });
+  return { status: resp.status(), body: await resp.json() };
+}
+
 const ALICE_ID = "alice";
 
 // ─── INTEG-001: Google Drive Integration ────────────────────────────────────
@@ -89,12 +110,8 @@ test.describe("80 · Google Drive Picker — API lifecycle", () => {
   });
 
   test("80.3 POST callback connects Drive in mock mode", async () => {
-    const resp = await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/callback", {
-      code: `mock_auth_code_${TS}`,
-      redirect_uri: "",
-    });
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
+    const { status, body } = await mockOAuthConnect(alicePage, ALICE_ID);
+    expect(status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.connected).toBe(true);
   });
@@ -203,10 +220,7 @@ test.describe("80 · Google Drive Picker — UI", () => {
     const alicePage = await newIdentityPage(browser, ALICE_ID);
 
     // Connect Drive first so the picker can browse mock files.
-    await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/callback", {
-      code: `mock_ui_${TS}`,
-      redirect_uri: "",
-    });
+    await mockOAuthConnect(alicePage, ALICE_ID);
     await alicePage.request.post(`${API}/mock/google-drive/seed`, {
       data: {
         files: [
@@ -240,10 +254,7 @@ test.describe("80 · Google Drive Picker — UI", () => {
   test("80.11 Disconnect button removes the Google Drive connection", async ({ browser }) => {
     const alicePage = await newIdentityPage(browser, ALICE_ID);
 
-    await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/callback", {
-      code: `mock_ui_disc_${TS}`,
-      redirect_uri: "",
-    });
+    await mockOAuthConnect(alicePage, ALICE_ID);
 
     await alicePage.goto("/files");
     await alicePage.waitForLoadState("domcontentloaded");

@@ -49,6 +49,13 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates the SPA on the persisted auth-store; cookies alone
+  // authenticate API calls but the router would redirect to /login. Seed the
+  // auth-store before every navigation so protected pages actually render.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 let _dmConvoId: string | null = null;
@@ -208,6 +215,11 @@ test.describe("145 · Call Lifecycle Guards (GAP-0143 / GAP-0144)", () => {
     );
     expect(ended.status()).toBe(200);
     const body = await ended.json();
-    expect(body.state).toBe("ended");
+    // The call was never accepted (still "invited"), so the lifecycle machine
+    // terminates it as "canceled" (only connected/accepted calls become
+    // "ended" — see end_call's next_state rule). The contract under test is
+    // that the end endpoint accepts reason=reconnect_failed and terminates.
+    expect(body.state).toBe("canceled");
+    expect(body.reason).toBe("reconnect_failed");
   });
 });

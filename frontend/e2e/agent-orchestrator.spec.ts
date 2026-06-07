@@ -204,7 +204,11 @@ test.describe("631 — Agent State Machine API", () => {
 
     const statusResp = await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`);
     const status = await statusResp.json();
-    expect(["idle", "claiming"]).toContain(status.agent_state);
+    // The autonomous loop (AGENT-003) may already have advanced past idle by
+    // the time we poll: it discovers + claims an eligible ticket, moving through
+    // claiming -> working (and on to completing). Any of these are valid once
+    // the loop is running.
+    expect(["idle", "claiming", "working", "completing"]).toContain(status.agent_state);
     expect(status.loop_running).toBe(true);
   });
 
@@ -535,10 +539,18 @@ test.describe("634 — Agent Error Recovery API", () => {
   });
 
   test("Release ticket with no active ticket returns 400", async () => {
-    // Worker should be idle with no ticket
+    // The autonomous loop (AGENT-003) may have auto-claimed an eligible ticket
+    // for this worker during earlier tests. Drain any active ticket first so we
+    // can deterministically exercise the no-active-ticket path. Releasing twice
+    // is harmless — the second call is the 400 we're asserting.
     const statusResp = await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`);
     const status = await statusResp.json();
-    expect(status.current_ticket_id).toBe("");
+    if (status.current_ticket_id) {
+      await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/release-ticket`);
+    }
+
+    const cleared = await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`);
+    expect((await cleared.json()).current_ticket_id).toBe("");
 
     const resp = await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/release-ticket`);
     expect(resp.status()).toBe(400);

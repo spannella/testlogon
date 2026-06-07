@@ -130,7 +130,9 @@ test.describe("Section 800 — KycMetricsDashboard UI", () => {
 
   test("800.7 stale queue alert renders when stale_queue_count > 0", async ({ page }) => {
     // Mock the metrics API so the stale-queue branch is exercised deterministically.
-    await page.route("**/admin/kyc/metrics**", (route) =>
+    // The metrics API lives at /v1/kyc/cases/admin/metrics; match any KYC
+    // admin metrics endpoint so the stale-queue branch is forced deterministically.
+    await page.route("**/kyc/**/metrics**", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",

@@ -715,6 +715,14 @@ test.describe("Section 106 - Broadcast Price Editor (GAP-0293)", () => {
     });
     priceSessionId = (await sessResp.json()).id;
 
+    // The broadcast price is only "active" (is_broadcast_price / discount_pct /
+    // effective_price_cents reflect the discount) when the session status is
+    // "live" — see resolve_effective_price(). Start the session so 105.1/105.2
+    // observe the active broadcast price.
+    await apiPost(rootPage, "root", `/broadcast/sessions/${priceSessionId}/start`, {
+      reason: "e2e-price-editor",
+    });
+
     // Catalog item at $20.00 so a $10.00 broadcast price is exactly 50% off.
     const catResp = await apiPost(rootPage, "root", "/ui/catalog/categories", {
       name: `price-editor-cat-${TS}`,

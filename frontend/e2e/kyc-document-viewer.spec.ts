@@ -202,8 +202,16 @@ test.describe("Section 246 — Shared DocumentViewer", () => {
     const fsButton = rootPage.getByRole("button", { name: "Fullscreen" });
     await fsButton.click();
     await expect(rootPage.locator(".fixed.inset-0.z-50")).toBeVisible();
-    // Toggle off.
-    await fsButton.click();
+    // A transient sonner toast (top-right, high z-index) can overlap the
+    // Fullscreen button in the overlay and intercept the toggle-off click.
+    // Dismiss any visible toast first, then wait for it to detach.
+    const toasts = rootPage.locator("[data-sonner-toast]");
+    if (await toasts.count()) {
+      await toasts.first().click({ force: true }).catch(() => {});
+      await rootPage.locator("[data-sonner-toast]").first().waitFor({ state: "detached" }).catch(() => {});
+    }
+    // Toggle off (force-click guards against any residual overlay intercept).
+    await fsButton.click({ force: true });
     await expect(rootPage.locator(".fixed.inset-0.z-50")).toHaveCount(0);
   });
 

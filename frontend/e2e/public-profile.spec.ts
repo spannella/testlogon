@@ -129,20 +129,24 @@ for sub, name in [('${ALICE_SUB}', 'Alice Test'), ('${BOB_SUB}', 'Bob Test')]:
     if not users_tbl.get_item(Key={'user_sub': sub}).get('Item'):
         users_tbl.put_item(Item={'user_sub': sub, 'created_at': int(time.time()) - 86400})
 
-    # Ensure profile record with display_name
+    # Ensure profile record with display_name. Always (re)set the display_name so
+    # the test is self-contained: other specs that run earlier in the suite mutate
+    # Alice/Bob profile rows (e.g. creator-storefront writes nested 'profile',
+    # while older seeds wrote a top-level 'display_name'), and the public-profile
+    # endpoint only reads the nested 'profile' map. Unconditionally normalising the
+    # nested form here guarantees the page renders the expected display name.
     prof = prof_tbl.get_item(Key={'user_sub': sub}).get('Item')
     profile_data = (prof.get('profile') or {}) if prof else {}
-    if not profile_data.get('display_name'):
-        profile_data['display_name'] = name
-        profile_data.setdefault('description', 'E2E test profile')
-        profile_data.setdefault('follower_count', 0)
-        profile_data.setdefault('following_count', 0)
-        profile_data.setdefault('post_count', 0)
-        prof_tbl.put_item(Item={
-            'user_sub': sub,
-            'profile': profile_data,
-            'updated_at': int(time.time()),
-        })
+    profile_data['display_name'] = name
+    profile_data.setdefault('description', 'E2E test profile')
+    profile_data.setdefault('follower_count', 0)
+    profile_data.setdefault('following_count', 0)
+    profile_data.setdefault('post_count', 0)
+    prof_tbl.put_item(Item={
+        'user_sub': sub,
+        'profile': profile_data,
+        'updated_at': int(time.time()),
+    })
 
 print('done')
 "`,

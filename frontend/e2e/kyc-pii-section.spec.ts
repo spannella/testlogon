@@ -247,16 +247,23 @@ test.describe("Section 288 — Sensitive PII tab", () => {
     await expect(charliePage.getByTestId("kyc-pii-rotate")).toHaveCount(0);
   });
 
-  test("288.6 non-assigned admin sees masked values but no Reveal buttons", async () => {
+  test("288.6 non-assigned admin is denied case access (reviewer-scope gate)", async () => {
+    // KYC-023 reviewer-scope: a non-root admin who is NOT the case's assigned
+    // reviewer can no longer view the case detail at all (the admin case-detail
+    // API now enforces _is_scoped_admin_for_case → kyc_access_forbidden). The
+    // detail page therefore never loads, so the PII tab + Reveal buttons are
+    // absent rather than rendered-but-masked.
+    const apiResp = await charliePage.request.get(
+      `${API}/v1/kyc/cases/admin/cases/${unassignedCase.kyc_case_id}`,
+    );
+    expect(apiResp.status()).toBe(403);
+
     await charliePage.goto(`${BASE}/admin/kyc/cases/${unassignedCase.kyc_case_id}`, {
       waitUntil: "domcontentloaded",
     });
-    await charliePage.getByTestId("tab-pii").click();
-    await expect(charliePage.getByTestId("kyc-pii-section")).toBeVisible({ timeout: 10_000 });
-
-    await expect(charliePage.getByTestId("pii-field-document_number")).toBeVisible();
-    await expect(
-      charliePage.locator("[data-testid^='pii-reveal-']"),
-    ).toHaveCount(0);
+    // Access denied → page falls back to the "Case not found." state; no tabs.
+    await expect(charliePage.getByText("Case not found.")).toBeVisible({ timeout: 10_000 });
+    await expect(charliePage.getByTestId("tab-pii")).toHaveCount(0);
+    await expect(charliePage.locator("[data-testid^='pii-reveal-']")).toHaveCount(0);
   });
 });

@@ -357,7 +357,29 @@ test.describe("454 — Group Page UI", () => {
   });
 
   test("454.4 Pin badge displayed", async () => {
-    // pinnedPostId was pinned in section 452.4
+    // Pin a fresh post here rather than relying on pinnedPostId staying pinned
+    // across earlier sections. Make room first if the group is already at the
+    // 3-pin cap (backend rejects a 4th pin with 409).
+    const feedResp = await apiGet(alicePage, `/ui/groups/${groupId}/feed`);
+    const feedData = await feedResp.json();
+    const pinnedNow: string[] = (feedData.posts || [])
+      .filter((p: any) => p.pinned)
+      .map((p: any) => p.post_id);
+    if (pinnedNow.length >= 3) {
+      await apiDelete(alicePage, ALICE_ID, `/ui/groups/${groupId}/posts/${pinnedNow[0]}/pin`);
+    }
+    const createResp = await apiPost(alicePage, ALICE_ID, `/ui/groups/${groupId}/posts`, {
+      text: `Badge pin post ${TS}`,
+      audience: "public",
+    });
+    const badgePostId = (await createResp.json()).post_id;
+    const pinResp = await apiPost(
+      alicePage,
+      ALICE_ID,
+      `/ui/groups/${groupId}/posts/${badgePostId}/pin`,
+    );
+    expect(pinResp.status()).toBe(200);
+
     await alicePage.goto(`${BASE}/groups/${groupId}`);
     await expect(alicePage.getByText("Pinned").first()).toBeVisible();
   });
@@ -375,9 +397,22 @@ test.describe("455 — Edge Cases & Negative Tests", () => {
   });
 
   test("455.2 Pin more than 3 posts fails", async () => {
-    // Already have pinnedPostId pinned. Create and pin 2 more.
+    // Make this self-contained instead of relying on a specific pin count
+    // carried over from earlier sections (cross-section pin state is fragile):
+    // first unpin everything currently pinned, then pin exactly 3, then assert
+    // the 4th is rejected with 409 (backend cap is 3 — see _MAX_PINNED).
+    const feedResp = await apiGet(alicePage, `/ui/groups/${groupId}/feed`);
+    const feedData = await feedResp.json();
+    const alreadyPinned: string[] = (feedData.posts || [])
+      .filter((p: any) => p.pinned)
+      .map((p: any) => p.post_id);
+    for (const id of alreadyPinned) {
+      await apiDelete(alicePage, ALICE_ID, `/ui/groups/${groupId}/posts/${id}/pin`);
+    }
+
+    // Create and pin exactly 3 posts (each must succeed).
     const ids: string[] = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const createResp = await apiPost(alicePage, ALICE_ID, `/ui/groups/${groupId}/posts`, {
         text: `Extra pin post ${i} ${TS}`,
         audience: "public",

@@ -314,7 +314,11 @@ test.describe("SHOP-003 — Section 2: Abandonment Detection API", () => {
     );
     expect(abandonAlert).toBeDefined();
     const details = abandonAlert.details as Record<string, unknown>;
-    expect(details.link).toBe(`/cart?cartId=${abandonCartId}`);
+    // FIN-003 / GAP-0190: the reminder now embeds a signed, one-time-use cart
+    // recovery link (.../ui/shoppingcart/recover/<token>) instead of a plain
+    // /cart?cartId=... link. The cart_id is encoded inside the signed token, so
+    // assert on the recovery endpoint path rather than the raw cart id.
+    expect(String(details.link)).toContain("/ui/shoppingcart/recover/");
     expect(details.cart_id).toBe(abandonCartId);
   });
 });

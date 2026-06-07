@@ -597,7 +597,9 @@ test.describe("Section C — Promo Redemption API", () => {
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.valid).toBe(false);
-    expect(data.message).toBe("Code not found");
+    // A deactivated (but still-present) code now returns a distinct message from
+    // a missing code ("Code not found").
+    expect(data.message).toBe("This promo code is no longer active");
   });
 });
 

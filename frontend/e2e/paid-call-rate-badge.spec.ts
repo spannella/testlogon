@@ -58,6 +58,13 @@ async function injectAuth(page: Page, userId: string) {
   const session = getSessions()[userId];
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates the SPA on the persisted auth-store; cookies alone
+  // authenticate API calls but the router would redirect to /login. Seed the
+  // auth-store before every navigation so protected pages actually render.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 function csrfHeader(userId: string): Record<string, string> {

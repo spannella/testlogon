@@ -199,6 +199,13 @@ test.describe("Section 111 - ShelfProductPicker (GAP-0290)", () => {
   let broadPage: Page;
 
   test.beforeAll(async ({ browser }) => {
+    // On a retry, Playwright may spawn a fresh worker where Section 110's
+    // beforeAll (which calls setupSessions) never ran, leaving the module-level
+    // liveSessionId/shelfItemId undefined. Re-run setup when that happens.
+    if (!liveSessionId || !shelfItemId) {
+      await setupSessions(browser);
+    }
+
     const ctx = await browser.newContext();
     broadPage = await ctx.newPage();
     await injectAuthForUI(broadPage, "root");
@@ -227,6 +234,12 @@ test.describe("Section 111 - ShelfProductPicker (GAP-0290)", () => {
     await broadPage.getByTestId(`shelf-product-${shelfItemId}`).click();
     const shareBtn = broadPage.getByTestId("shelf-share-btn");
     await expect(shareBtn).toBeEnabled();
+
+    // The backend rate-limits product-link shares to 1 per 5s per session+user
+    // (BROADCAST_PRODUCT_LINK_RATE_LIMITED). Section 110 shares the same product
+    // into the same session, so wait out the window before the UI share to avoid
+    // a 429 that would leave the share mutation rejected and the dialog open.
+    await broadPage.waitForTimeout(5_500);
     await shareBtn.click();
 
     // Dialog closes after a successful share.
