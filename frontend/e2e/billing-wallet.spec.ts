@@ -429,8 +429,20 @@ test.describe("Section 70: Wallet UI", () => {
     const depositMarker = seedWalletLedgerEntry(aliceSub, "wallet_deposit");
     const withdrawalMarker = seedWalletLedgerEntry(aliceSub, "wallet_withdrawal");
 
-    await alicePage.goto(`${BASE}/billing?tab=ledger`, { waitUntil: "load" });
-    await alicePage.waitForTimeout(800);
+    // Under full-suite load a background query can 401 and bounce the page to
+    // /login (clearing the auth store). Re-inject auth and retry the navigation
+    // until the Ledger tab actually renders the seeded marker (not login).
+    let rendered = false;
+    for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
+      await injectAuth(alicePage);
+      await alicePage.goto(`${BASE}/billing?tab=ledger`, { waitUntil: "load" });
+      await alicePage.waitForTimeout(800);
+      rendered = await alicePage
+        .getByText(depositMarker)
+        .first()
+        .isVisible({ timeout: 12000 })
+        .catch(() => false);
+    }
 
     await expect(alicePage.getByText(depositMarker).first()).toBeVisible({ timeout: 15000 });
     await expect(alicePage.getByText(withdrawalMarker).first()).toBeVisible({ timeout: 15000 });

@@ -138,16 +138,31 @@ def build_pre_roll(session, viewer_id: str) -> Dict[str, Any]:
         # client still knows ads *could* have shown (matches VOD semantics).
         return {"pre_roll": None, "ad_free": False}
 
+    # The ADS-004 serving engine returns tracking URLs for real campaign fills,
+    # but the house-ad fallback (no paid inventory) does not. Synthesize the
+    # broadcast tracking URLs in that case so the pre-roll payload is always
+    # complete (matches the deterministic house-creative path above).
+    creative_id = ad["creative_id"]
+    impression_url = ad.get("impression_url") or (
+        f"/broadcast/sessions/{session.id}/ads/{creative_id}/track?event=impression"
+    )
+    click_url = ad.get("click_url") or (
+        f"/broadcast/sessions/{session.id}/ads/{creative_id}/track?event=click"
+    )
+    skip_url = ad.get("skip_url") or (
+        f"/broadcast/sessions/{session.id}/ads/{creative_id}/track?event=skip"
+    )
+
     pre_roll = {
-        "creative_id": ad["creative_id"],
+        "creative_id": creative_id,
         "format": ad["format"],
         "video_url": ad.get("video_url"),
         "image_url": ad.get("image_url"),
         "cta_url": ad.get("cta_url"),
         "skip_after_seconds": PRE_ROLL_SKIP_AFTER_SECONDS,
-        "impression_url": ad["impression_url"],
-        "click_url": ad["click_url"],
-        "skip_url": ad["skip_url"],
+        "impression_url": impression_url,
+        "click_url": click_url,
+        "skip_url": skip_url,
     }
     return {"pre_roll": pre_roll, "ad_free": False}
 

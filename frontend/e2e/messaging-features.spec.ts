@@ -265,38 +265,43 @@ async function getOrCreateDm(page: Page): Promise<string> {
 }
 
 /**
- * Navigate Alice to /messages and click on the "E2E Bob" DM row so the
- * conversation view + ComposeBar become visible.
+ * Open a specific conversation directly via the deep-link route
+ * (/messages/:conversationId) and wait for the ComposeBar.
+ *
+ * This is FULL-SUITE-SAFE: it does NOT depend on the conversation appearing
+ * (or being first) in the sidebar list. Under full-suite accumulation many
+ * Alice↔Bob DMs and hundreds of messages exist, so the sidebar list is large
+ * and may paginate or be slow to render the right "E2E Bob" row. Navigating
+ * directly to the conversation by id sidesteps all of that — MessagesPage's
+ * deep-link support (useParams + getConversation) auto-opens it.
+ *
+ * Caller must have injected auth first.
+ */
+async function openDmDirect(page: Page, convoId: string) {
+  await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
+  await expect(
+    page.getByPlaceholder("Type a message...").or(
+      page.getByPlaceholder("Type an encrypted message..."),
+    ),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+/**
+ * Navigate Alice to her DM with Bob so the conversation view + ComposeBar
+ * become visible.
  *
  * Auth is injected first so that getOrCreateDm (and subsequent API helpers)
- * have valid cookies in the browser context.
+ * have valid cookies in the browser context. The conversation is opened via
+ * the deep-link route (by id) rather than by clicking a sidebar row, which is
+ * robust against full-suite DM/message accumulation.
  */
 async function openDmWithBob(page: Page) {
   // 1. Inject Alice's auth (sets cookies, navigates to /login)
   await injectAuth(page, ALICE_ID);
   // 2. Create / retrieve the DM (cookies are now in place)
   const convoId = await getOrCreateDm(page);
-  // 3. Send a "touch" message so _dmConvoId is the most-recently-active
-  //    conversation and appears as the FIRST "E2E Bob" row in the sidebar.
-  //    This is needed when multiple E2E DMs from past runs exist.
-  const session = getSessions()[ALICE_ID];
-  await page.request.post(`${API}/messaging/conversations/${convoId}/messages`, {
-    data: { text: `__touch__${Date.now()}` },
-    headers: { "x-csrf-token": session.csrf_token },
-  }).catch(() => {});
-  // 4. Navigate to /messages and wait for the conversations list to load.
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(600);
-  // 5. Click on the "E2E Bob" conversation row
-  const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 12000 });
-  await row.click();
-  // 6. Wait for ComposeBar
-  await expect(
-    page.getByPlaceholder("Type a message...").or(
-      page.getByPlaceholder("Type an encrypted message..."),
-    ),
-  ).toBeVisible({ timeout: 5000 });
+  // 3. Open the conversation directly by id (suite-accumulation-safe).
+  await openDmDirect(page, convoId);
 }
 
 // ─── 1. Messaging page structure ──────────────────────────────────────────────
@@ -441,23 +446,8 @@ test.describe("4. View-once text — recipient sees 'Tap to view once'", () => {
       throw new Error(`Bob's message send failed: HTTP ${resp.status()} — ${body}`);
     }
 
-    // Alice opens the conversation (already authed, just navigate)
-    const sec5ConvsLoaded2 = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec5ConvsLoaded2;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    // Alice opens the conversation directly by id (suite-accumulation-safe).
+    await openDmDirect(page, convoId);
     // Small wait for messages to finish loading
     await page.waitForTimeout(500);
   });
@@ -522,23 +512,8 @@ test.describe("5. View-once text — sender sees text normally", () => {
       throw new Error(`Alice's message send failed: HTTP ${resp.status()} — ${body}`);
     }
 
-    // Alice opens the conversation
-    const sec5ConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec5ConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    // Alice opens the conversation directly by id (suite-accumulation-safe).
+    await openDmDirect(page, convoId);
     await page.waitForTimeout(500);
   });
 
@@ -908,24 +883,10 @@ test.describe("9. Message display order — oldest first, newest last", () => {
     await page.waitForTimeout(1100);
     await apiPost(page, `/messaging/conversations/${_dmConvoId}/messages`, { text: MSG3 });
 
-    // Open the conversation in the browser.  ConversationView auto-scrolls
-    // to the bottom on mount, so MSG3 (newest) should be immediately visible.
-    const sec9ConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec9ConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    // Open the conversation in the browser directly by id (suite-safe).
+    // ConversationView auto-scrolls to the bottom on mount, so MSG3 (newest)
+    // should be immediately visible.
+    await openDmDirect(page, _dmConvoId!);
     // Wait until the message bubble <p> for MSG3 is rendered.
     // Using locator("p") avoids matching the sidebar <span> preview, which
     // would satisfy getByText too early (before the conversation view loads).
@@ -1028,18 +989,8 @@ test.describe("9. Message display order — oldest first, newest last", () => {
   });
 
   test("Order is preserved after the page reloads (re-fetch from server)", async () => {
-    // Hard-navigate to /messages and re-open the DM to force a fresh API fetch.
-    const sec9ReloadConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec9ReloadConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
+    // Hard-navigate to the DM by id to force a fresh API fetch (suite-safe).
+    await openDmDirect(page, _dmConvoId!);
     // Wait for the message bubble <p> (not the sidebar span) to confirm the
     // conversation view has finished loading before querying DOM order.
     await expect(page.locator("p").filter({ hasText: MSG3 })).toBeVisible({ timeout: 8000 });
@@ -1092,23 +1043,9 @@ test.describe("10. Scheduled send", () => {
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
-    await getOrCreateDm(page);
-    const sec10ConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec10ConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    const convoId = await getOrCreateDm(page);
+    // Open the DM directly by id (suite-accumulation-safe).
+    await openDmDirect(page, convoId);
   });
 
   test.afterAll(async () => page?.close());
@@ -1348,25 +1285,17 @@ test.describe("11. Tips and locked messages", () => {
     bobMsgId = ((await r.json()) as { message_id: string }).message_id;
 
     // ── Bob's page ──
+    // Open the SAME DM directly by id (suite-accumulation-safe) instead of
+    // hunting for an "Alice" sidebar row, which is unreliable when many DMs
+    // and messages exist by the time this spec runs in the full suite.
     bobPage = await browser.newPage();
     await injectAuth(bobPage, BOB_ID);
-    const sec11BobConvsLoaded = bobPage.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec11BobConvsLoaded;
-    await bobPage.waitForTimeout(300);
-    // Bob's DM shows Alice's name (may be "E2E Alice" or changed by profile tests)
-    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(bobRow).toBeVisible({ timeout: 10000 });
-    await bobRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
     await expect(
       bobPage
         .getByPlaceholder("Type a message...")
         .or(bobPage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15000 });
   });
 
   test.afterAll(async () => {
@@ -1645,23 +1574,14 @@ test.describe("11. Tips and locked messages", () => {
   });
 
   test("UI: Bob's page shows 'Lock ·' badge and 'Unlock for' button", async () => {
-    // Reload Bob's page so the new locked message is fetched
-    const sec11BobReloadConvsLoaded = bobPage.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await bobPage.reload({ waitUntil: "load" });
-    await sec11BobReloadConvsLoaded;
-    await bobPage.waitForTimeout(300);
-    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(bobRow).toBeVisible({ timeout: 10000 });
-    await bobRow.evaluate((el) => (el as HTMLElement).click());
+    // Re-open Bob's DM directly by id so the new locked message is fetched
+    // (suite-safe; the deep-link auto-opens the conversation).
+    await bobPage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
     await expect(
       bobPage
         .getByPlaceholder("Type a message...")
         .or(bobPage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15000 });
     // The lock description is shown even when locked — use it to identify the correct bubble.
     // This avoids strict-mode failures when the DM contains locked messages from prior runs.
     const lockedBubble = bobPage.locator("div.group").filter({ hasText: UI_LOCK_DESC }).last();
@@ -1770,30 +1690,18 @@ test.describe("11. Tips and locked messages", () => {
     const body = await resp.json() as { tip_amount_cents: number };
     expect(body.tip_amount_cents).toBe(100);
 
-    // Reload Alice's page so the tipped message is fetched fresh from the server.
-    // The apiPost updated last_message_at, so the DM is the most-recent conversation
-    // and "E2E Bob" will appear at the top of the sidebar.
-    // Register the conversations-list listener BEFORE reload to avoid missing it.
-    const convsLoaded = alicePage.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET",
-      { timeout: 20_000 },
-    );
-    await alicePage.reload({ waitUntil: "load" });
-    await convsLoaded; // wait for sidebar conversations query to finish loading
-
-    // Re-open the DM conversation.
-    const dmRow = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(dmRow).toBeVisible({ timeout: 15_000 });
+    // Re-open the DM directly by id so the tipped message is fetched fresh from
+    // the server (suite-safe; does not depend on sidebar ordering/pagination).
     const msgsLoaded = alicePage.waitForResponse(
       (r) => r.url().includes(`/conversations/${_dmConvoId}/messages`) && r.request().method() === "GET",
       { timeout: 15_000 },
     );
-    await dmRow.click();
+    await alicePage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
     await expect(
       alicePage
         .getByPlaceholder("Type a message...")
         .or(alicePage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     await msgsLoaded;
 
     // "Tip: $1.00" badge should now appear on the sent bubble.
@@ -1823,30 +1731,19 @@ test.describe("11. Tips and locked messages", () => {
         throw new Error(`Bob fresh msg failed: ${r.status()}`);
       }
 
-      // Reload Alice's page so the new message is fetched fresh.
-      // Register the conversations-list listener BEFORE reload to avoid missing it.
-      const convsLoaded = alicePage.waitForResponse(
-        (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET",
-        { timeout: 20_000 },
-      );
-      await alicePage.reload({ waitUntil: "load" });
-      await convsLoaded; // wait for sidebar conversations query to complete
-
-      // Re-open the E2E Bob DM (it's at the top of the list as the most-recent).
-      const dmRow = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-      await expect(dmRow).toBeVisible({ timeout: 15_000 });
-
-      // Register the messages response listener BEFORE clicking to avoid a race.
+      // Re-open the DM directly by id so the new message is fetched fresh
+      // (suite-safe; does not depend on sidebar ordering/pagination).
+      // Register the messages response listener BEFORE navigating to avoid a race.
       const msgsLoaded = alicePage.waitForResponse(
         (res) => res.url().includes(`/conversations/${_dmConvoId}/messages`) && res.request().method() === "GET",
         { timeout: 15000 },
       );
-      await dmRow.click();
+      await alicePage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
       await expect(
         alicePage
           .getByPlaceholder("Type a message...")
           .or(alicePage.getByPlaceholder("Type an encrypted message...")),
-      ).toBeVisible({ timeout: 5000 });
+      ).toBeVisible({ timeout: 15000 });
       await msgsLoaded; // wait for messages query to complete
 
       // Bob's fresh message should now be visible at the bottom of the conversation.

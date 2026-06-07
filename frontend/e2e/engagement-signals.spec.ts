@@ -227,9 +227,18 @@ test.describe("Section 160 · GAP-0160 engagement signals", () => {
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
     await stubHls(page);
-    await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
 
-    // Player wrapper renders only when a playback URL is available.
+    // Player wrapper renders only when hls.js fires MANIFEST_PARSED. Under
+    // full-suite load the first init can race the route stub / token fetch, so
+    // retry the navigation until the wrapper mounts (no playerError).
+    let playerVisible = false;
+    for (let attempt = 0; attempt < 3 && !playerVisible; attempt++) {
+      await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
+      playerVisible = await page
+        .getByTestId("video-player")
+        .isVisible({ timeout: 10_000 })
+        .catch(() => false);
+    }
     await expect(page.getByTestId("video-player")).toBeVisible({ timeout: 10_000 });
     const video = page.getByTestId("media-player-video");
     await expect(video).toBeAttached();

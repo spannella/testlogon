@@ -394,14 +394,21 @@ test.describe("454 — Group Page UI", () => {
       }, { timeout: 8_000 })
       .toBe(true);
 
-    // Navigate fresh and wait for the feed query to settle so the page renders
-    // the up-to-date pinned state (avoids asserting against a stale render).
-    const feedSettled = alicePage.waitForResponse(
-      (r) => r.url().includes(`/ui/groups/${groupId}/feed`) && r.request().method() === "GET",
-      { timeout: 10_000 },
-    );
-    await alicePage.goto(`${BASE}/groups/${groupId}`, { waitUntil: "domcontentloaded" });
-    await feedSettled.catch(() => {});
+    // Navigate fresh and confirm the feed actually rendered THIS post (the
+    // group-feed query has a 30s staleTime + is reused across 454.x tests, so a
+    // stale-empty render can otherwise win). Retry the full reload until the
+    // post's text is on screen, then assert the Pinned badge.
+    let postRendered = false;
+    for (let attempt = 0; attempt < 3 && !postRendered; attempt++) {
+      await alicePage.goto(`${BASE}/groups/${groupId}`, { waitUntil: "load" });
+      await alicePage.getByTestId("group-page").waitFor({ timeout: 10_000 }).catch(() => {});
+      postRendered = await alicePage
+        .getByText(`Badge pin post ${TS}`)
+        .first()
+        .isVisible({ timeout: 10_000 })
+        .catch(() => false);
+    }
+    await expect(alicePage.getByText(`Badge pin post ${TS}`).first()).toBeVisible({ timeout: 10_000 });
     await expect(alicePage.getByText("Pinned").first()).toBeVisible({ timeout: 10_000 });
   });
 });

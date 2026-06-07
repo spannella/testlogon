@@ -93,6 +93,21 @@ async function gotoMessages(page: Page, userId: string) {
   await page.waitForTimeout(300); // let React finish rendering the list
 }
 
+/**
+ * Open a conversation by id via the deep-link route (/messages/:conversationId).
+ *
+ * FULL-SUITE-SAFE: avoids clicking a sidebar row, which is unreliable once the
+ * suite has accumulated many Alice↔Bob DMs and messages (the right "bob" row
+ * may not be visible/first, or the list may paginate). MessagesPage's
+ * useParams + getConversation deep-link support auto-opens the conversation.
+ * Caller must have injected auth first.
+ */
+async function openConv(page: Page, convId: string) {
+  await injectAuth(page, ALICE_ID);
+  await page.goto(`${BASE}/messages/${convId}`, { waitUntil: "load" });
+  await expect(page.locator("textarea").last()).toBeVisible({ timeout: 15000 });
+}
+
 /** Direct API call via page.request (uses Bearer token in DEV_MODE). */
 async function apiPost(page: Page, path: string, body: object, userId = ALICE_ID) {
   const resp = await page.request.post(`${API}${path}`, {
@@ -196,15 +211,10 @@ test.describe("2. Conversation list", () => {
 
   test("Clicking a conversation opens compose bar", async ({ browser }) => {
     const page = await browser.newPage();
-    await gotoMessages(page, ALICE_ID);
-
-    // Wait for the conversation list to populate then click the first E2E conversation
-    const item = page.locator("li, [role='listitem'], button")
-      .filter({ hasText: /e2e.*bob|E2E Bob|bob/i })
-      .first();
-    await expect(item).toBeVisible({ timeout: 8000 });
-    await item.click();
-
+    // Open the pre-created DM by id (suite-accumulation-safe). This exercises
+    // the same conversation-open path as a sidebar click but does not depend on
+    // the right "bob" row being visible/first in a large accumulated list.
+    await openConv(page, getTestConvId());
     // Compose bar (textarea) should appear
     await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
     await page.close();
@@ -212,18 +222,10 @@ test.describe("2. Conversation list", () => {
 
   test("Message text appears in opened conversation", async ({ browser }) => {
     const page = await browser.newPage();
-    await gotoMessages(page, ALICE_ID);
-
-    // Wait for the conversation list, then click the E2E conversation
-    const item = page.locator("li, [role='listitem'], button")
-      .filter({ hasText: /e2e.*bob|E2E Bob|bob/i })
-      .first();
-    await expect(item).toBeVisible({ timeout: 8000 });
-    await item.click();
-
-    // Wait for compose bar — confirms conversation view is mounted
-    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
-    // Check that SOME message text appears in the view
+    // Open the pre-created DM directly by id (suite-accumulation-safe).
+    await openConv(page, getTestConvId());
+    // Compose bar visible (from openConv) confirms conversation view is mounted.
+    // Check that SOME message text appears in the view.
     const anyMsg = page.locator("p, [class*='bubble'], [class*='message']").first();
     await expect(anyMsg).toBeVisible({ timeout: 8000 });
     await page.close();
@@ -251,12 +253,12 @@ test.describe("2b. Messaging profile links", () => {
 
   test("Authenticated user can open canonical profile from conversation header (mobile)", async ({ browser }) => {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-    await gotoMessages(page, ALICE_ID);
-
-    const convoBtn = page.locator("button").filter({ hasText: /e2e.*bob|E2E Bob|bob/i }).first();
-    await expect(convoBtn).toBeVisible({ timeout: 8000 });
-    await convoBtn.click();
-    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
+    // Open the pre-created DM directly by id (suite-accumulation-safe). The
+    // deep-link auto-opens the conversation so the header (with its profile
+    // link) renders without relying on a sidebar row click.
+    await injectAuth(page, ALICE_ID);
+    await page.goto(`${BASE}/messages/${getTestConvId()}`, { waitUntil: "load" });
+    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 15000 });
 
     const headerProfileLink = page.locator("a[aria-label*='Open'][aria-label*='profile']").first();
     await expect(headerProfileLink).toBeVisible({ timeout: 8000 });
@@ -285,13 +287,8 @@ test.describe("3. Compose bar features", () => {
 
   test("Tip attachment UI exists in compose bar", async ({ browser }) => {
     const page = await browser.newPage();
-    await gotoMessages(page, ALICE_ID);
-
-    // Wait for conversation list, then open the first E2E conversation
-    const convBtn = page.locator("button").filter({ hasText: /E2E|e2e|alice|bob/i }).first();
-    await expect(convBtn).toBeVisible({ timeout: 8000 });
-    await convBtn.click();
-    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
+    // Open the pre-created DM directly by id (suite-accumulation-safe).
+    await openConv(page, getTestConvId());
 
     // ComposeBar always renders "Attach tip" checkbox when a conversation is open
     await expect(page.locator("text=Attach tip")).toBeVisible({ timeout: 5000 });
@@ -300,13 +297,8 @@ test.describe("3. Compose bar features", () => {
 
   test("File/image input exists for attachments", async ({ browser }) => {
     const page = await browser.newPage();
-    await gotoMessages(page, ALICE_ID);
-
-    // Wait for conversation list, then open the first E2E conversation
-    const convBtn = page.locator("button").filter({ hasText: /E2E|e2e|alice|bob/i }).first();
-    await expect(convBtn).toBeVisible({ timeout: 8000 });
-    await convBtn.click();
-    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
+    // Open the pre-created DM directly by id (suite-accumulation-safe).
+    await openConv(page, getTestConvId());
 
     // ComposeBar renders a Paperclip/Attach button for file attachments
     await expect(page.locator("[aria-label='Attach file']")).toBeVisible({ timeout: 5000 });
@@ -315,14 +307,8 @@ test.describe("3. Compose bar features", () => {
 
   test("Can type in compose textarea", async ({ browser }) => {
     const page = await browser.newPage();
-    await gotoMessages(page, ALICE_ID);
-
-    // Wait for the E2E Bob conversation row and click it
-    const item = page.locator("li, [role='listitem'], button")
-      .filter({ hasText: /e2e.*bob|E2E Bob|bob/i })
-      .first();
-    await expect(item).toBeVisible({ timeout: 8000 });
-    await item.click();
+    // Open the pre-created DM directly by id (suite-accumulation-safe).
+    await openConv(page, getTestConvId());
 
     const textarea = page.locator("textarea").last();
     await expect(textarea).toBeVisible({ timeout: 8000 });

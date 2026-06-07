@@ -260,26 +260,18 @@ test.describe("76 — Ctrl+Enter send in ComposeBar", () => {
       },
     );
 
-    // Trigger React Query refetch so the new DM appears in the sidebar
-    await page.evaluate(() => window.dispatchEvent(new Event("online")));
-    await page.waitForTimeout(500);
-
-    // If conversations still don't appear, reload the page
-    const bobRow = page.getByRole("button").filter({ hasText: /bob/i }).first();
-    const isVisible = await bobRow.isVisible().catch(() => false);
-    if (!isVisible) {
-      await page.reload({ waitUntil: "load" });
-    }
-
-    // Click the first conversation in the sidebar (the DM with Bob we just touched)
-    const convoRow = page.getByRole("button").filter({ hasText: /bob/i }).first();
-    await expect(convoRow).toBeVisible({ timeout: 10_000 });
-    await convoRow.click();
-
-    // Wait for the compose bar textarea to appear
+    // Open the conversation directly via the deep-link route rather than
+    // hunting for it in the (heavily accumulated) sidebar — far more robust
+    // under full-suite load where many DMs share "bob" in their preview.
     const textarea = page.getByPlaceholder("Type a message...").or(
       page.getByPlaceholder("Type an encrypted message..."),
     );
+    let composeReady = false;
+    for (let attempt = 0; attempt < 3 && !composeReady; attempt++) {
+      await page.goto(`${BASE}/messages/${dmConvoId}`, { waitUntil: "load" });
+      await page.waitForSelector("header").catch(() => {});
+      composeReady = await textarea.isVisible({ timeout: 10_000 }).catch(() => false);
+    }
     await expect(textarea).toBeVisible({ timeout: 10_000 });
 
     const msgText = `ctrl-enter-test-${Date.now()}`;

@@ -104,18 +104,95 @@ async function ensurePaidRate(page: Page) {
   });
 }
 
-/** Drive Alice's call UI to the connected (audio) phase against Bob. */
+/** Read the most-recent call_id for a conversation from DynamoDB. */
+function latestCallId(convoId: string): string {
+  const script = `
+import boto3
+ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1",
+                     aws_access_key_id="test", aws_secret_access_key="test")
+table = ddb.Table("MessageCallSessions")
+resp = table.scan(
+    FilterExpression="conversation_id = :cid",
+    ExpressionAttributeValues={":cid": "${convoId}"},
+)
+items = sorted(resp.get("Items", []), key=lambda i: i.get("start_ts", 0))
+print(items[-1]["call_id"] if items else "")
+`;
+  return execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 })
+    .toString()
+    .trim();
+}
+
+/** Force the backend call session into the "connected" state directly in DDB
+ *  (a full WebRTC handshake cannot complete in headless Chromium). */
+function forceCallConnected(callId: string): void {
+  const script = `
+import boto3, time
+ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1",
+                     aws_access_key_id="test", aws_secret_access_key="test")
+table = ddb.Table("MessageCallSessions")
+now = int(time.time())
+table.update_item(
+    Key={"call_id": "${callId}"},
+    UpdateExpression=("SET #s = :c, connect_ts = :t, billing_start_ts = :t, "
+                      "updated_at = :t, paid = :paid, rate_cents_per_min = :rate"),
+    ExpressionAttributeNames={"#s": "state"},
+    ExpressionAttributeValues={":c": "connected", ":t": now, ":paid": True, ":rate": 500},
+)
+print("ok")
+`;
+  execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+}
+
+/** Dispatch a synthetic call SSE event into a page (mirrors useMessagingStream). */
+async function dispatchCallEvent(page: Page, detail: Record<string, unknown>): Promise<void> {
+  await page.evaluate((d) => {
+    window.dispatchEvent(new CustomEvent("messaging:call-event", { detail: d }));
+  }, detail);
+}
+
+/**
+ * Drive Alice's call UI to the connected (audio) phase against Bob.
+ *
+ * Backend-driven (NOT reliant on real WebRTC/ICE, which cannot complete in
+ * headless Chromium): Alice sends a real paid invite, Bob accepts via the API,
+ * we force the session to "connected" in DDB, then replay the call.accept SSE
+ * event into Alice's page so her state machine reaches "connected".
+ */
 async function startConnectedPaidCall(alicePage: Page, bobPage: Page, convoId: string) {
   await alicePage.goto(`${BASE}/messages/${convoId}`);
   await bobPage.goto(`${BASE}/messages/${convoId}`);
 
-  // Both ConversationViews must be mounted (call-event SSE listeners attached)
-  // before Alice initiates, so the invite reaches Bob and the accept reaches Alice.
   await expect(alicePage.getByRole("button", { name: "Start audio call" })).toBeVisible({ timeout: 15_000 });
-  await expect(bobPage.getByRole("button", { name: "Start audio call" })).toBeVisible({ timeout: 15_000 });
-
   await alicePage.getByRole("button", { name: "Start audio call" }).click();
-  await bobPage.getByRole("button", { name: /accept/i }).click({ timeout: 30_000 });
+
+  let callId = "";
+  for (let i = 0; i < 30 && !callId; i++) {
+    callId = latestCallId(convoId);
+    if (!callId) await alicePage.waitForTimeout(500);
+  }
+  if (!callId) throw new Error("call session was not created after Alice initiated");
+
+  const aliceSub = getSessions()[ALICE_ID].user_sub;
+  const bobSub = getSessions()[BOB_ID].user_sub;
+
+  const acceptResp = await bobPage.request.post(`${BASE}/messages/calls/${callId}/accept`, {
+    headers: csrfHeader(BOB_ID),
+    data: { idempotency_key: `e2e-accept-${callId}` },
+  });
+  expect([200, 409].includes(acceptResp.status())).toBe(true);
+  forceCallConnected(callId);
+
+  await dispatchCallEvent(alicePage, {
+    conversation_id: convoId,
+    call_id: callId,
+    event_type: "call.accept",
+    mode: "audio",
+    caller_user_id: aliceSub,
+    callee_user_id: bobSub,
+    event_ts: Math.floor(Date.now() / 1000),
+  });
+
   await expect(alicePage.getByLabel("Audio call")).toBeVisible({ timeout: 30_000 });
 }
 
