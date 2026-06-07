@@ -385,6 +385,55 @@ async def complete_recording_upload(
     if updated and updated.status == "ready":
         download_url, download_expires_at = _make_download_url(updated)
 
+        # GAP-0145: insert a timeline system message so both participants can
+        # discover the recording from the conversation view (not just a panel).
+        # Best-effort: a failure here must not break upload completion.
+        try:
+            from app.services.messaging_call_timeline import emit_call_timeline_event
+
+            emit_call_timeline_event(
+                call_id=updated.call_id,
+                conversation_id=updated.conversation_id,
+                actor_user_id=user_id,
+                event_type="call.recording_available",
+                call_state="ready",
+                extra_payload={
+                    "recording_id": updated.recording_id,
+                    "duration_seconds": updated.duration_seconds,
+                    "initiated_by": updated.initiated_by,
+                },
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "call_recording_timeline_event_failed recording_id=%s",
+                updated.recording_id,
+            )
+
+        # GAP-0145: SSE fanout so the remote peer refreshes the recordings UI.
+        try:
+            from app.routers.messaging import fanout_event_to_conversation
+
+            fanout_event_to_conversation(
+                conversation_id=updated.conversation_id,
+                sender_id=user_id,
+                event_type="call.recording_available",
+                payload={
+                    "call_id": updated.call_id,
+                    "recording_id": updated.recording_id,
+                    "duration_seconds": updated.duration_seconds,
+                },
+                respect_mute=False,
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "call_recording_fanout_failed recording_id=%s",
+                updated.recording_id,
+            )
+
     return RecordingUploadCompleteOut(
         recording_id=updated.recording_id if updated else body.recording_id,
         status=updated.status if updated else "failed",

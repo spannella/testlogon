@@ -23,6 +23,7 @@ from uuid import uuid4
 from boto3.dynamodb.conditions import Key
 from fastapi import HTTPException
 
+from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services import group_treasury
@@ -32,7 +33,15 @@ logger = logging.getLogger(__name__)
 
 # Auto-confirm donations synchronously in dev/test so the treasury credit is
 # deterministic (stripe-mock cannot complete off-session Checkout Sessions).
-_AUTO_CONFIRM_DONATIONS = True
+#
+# GAP-0218: this MUST be gated on dev_mode. In production a donation must only be
+# confirmed (and the treasury credited) by a real Stripe ``payment_intent.succeeded``
+# webhook (or the ROOT break-glass endpoint) proving the money actually cleared.
+# Auto-confirming in prod would credit the treasury for declined / fraudulent
+# payments. Read dynamically (via the helper below) so tests can flip ``S.dev_mode``
+# without re-importing the module.
+def _auto_confirm_donations() -> bool:
+    return bool(S.dev_mode)
 
 
 def _group_pk(group_id: str) -> str:
@@ -302,9 +311,21 @@ def create_donation(
         },
     )
 
-    if _AUTO_CONFIRM_DONATIONS:
+    if _auto_confirm_donations():
         confirm_donation(fundraiser_id, donation_id, pi_id)
         donation["status"] = "completed"
+    else:
+        # Production: leave the donation pending until a real Stripe
+        # ``payment_intent.succeeded`` webhook (or the ROOT break-glass endpoint)
+        # confirms the charge actually cleared. Treasury is NOT credited here.
+        logger.info(
+            "group_fundraising.auto_confirm_skipped",
+            extra={
+                "fundraiser_id": fundraiser_id,
+                "donation_id": donation_id,
+                "stripe_payment_intent_id": pi_id,
+            },
+        )
 
     out = _donation_out(donation, checkout_url=checkout_url)
     return out
@@ -388,6 +409,36 @@ def confirm_donation(
         },
     )
     return {"ok": True, "raised_cents": new_raised}
+
+
+def confirm_donation_by_payment_intent(
+    fundraiser_id: str,
+    donation_id: str,
+    stripe_pi_id: str,
+) -> Dict[str, Any]:
+    """Confirm a donation from a verified Stripe ``payment_intent.succeeded`` event.
+
+    GAP-0218: this is the production confirmation path. The caller (Stripe webhook
+    handler) has already verified the event signature, so reaching here means the
+    charge actually cleared. We additionally check that the donation's stored
+    ``stripe_payment_intent_id`` matches the event's payment-intent id, so a webhook
+    for one donation can never confirm a different one. ``confirm_donation`` itself
+    is idempotent (returns ``already_confirmed`` for completed donations), so Stripe
+    retries are safe.
+    """
+    resp = T.group_fundraising_campaigns.get_item(
+        Key={"pk": _fundraiser_pk(fundraiser_id), "sk": f"DONATION#{donation_id}"}
+    )
+    donation = resp.get("Item")
+    if not donation:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    stored_pi = donation.get("stripe_payment_intent_id")
+    if stored_pi and stripe_pi_id and stored_pi != stripe_pi_id:
+        raise HTTPException(
+            status_code=409,
+            detail="payment_intent does not match this donation",
+        )
+    return confirm_donation(fundraiser_id, donation_id, stripe_pi_id=stripe_pi_id)
 
 
 def list_donations(

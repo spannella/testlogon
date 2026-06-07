@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.services import kyc_partner_api as svc
 from app.services.api_key_auth_dependency import require_api_key_principal
+from app.services.rate_limit import rate_limit_kyc_partner_api
 
 kyc_partner_api_router = APIRouter(prefix="/api/v1/kyc", tags=["KYC Partner API"])
 
@@ -66,8 +67,9 @@ async def create_application(
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     svc.require_scope(principal, "kyc:submit")
-    idem = _require_idempotency(idempotency_key)
     api_key_id = str(principal.get("api_key_id") or "")
+    rate_limit_kyc_partner_api(api_key_id, "applications")
+    idem = _require_idempotency(idempotency_key)
     payload = body.model_dump()
     fingerprint = svc._body_fingerprint(payload)
 
@@ -118,6 +120,7 @@ async def list_or_lookup_applications(
     principal: Dict[str, Any] = Depends(require_api_key_principal),
 ):
     svc.require_scope(principal, "kyc:read")
+    rate_limit_kyc_partner_api(str(principal.get("api_key_id") or ""), "read")
     if external_id:
         return svc.get_application_by_external_id(principal, external_id)
     items = svc.list_applications(principal, limit=limit)
@@ -130,6 +133,7 @@ async def get_application(
     principal: Dict[str, Any] = Depends(require_api_key_principal),
 ):
     svc.require_scope(principal, "kyc:read")
+    rate_limit_kyc_partner_api(str(principal.get("api_key_id") or ""), "read")
     return svc.get_application(principal, application_id)
 
 
@@ -139,6 +143,7 @@ async def get_application_result(
     principal: Dict[str, Any] = Depends(require_api_key_principal),
 ):
     svc.require_scope(principal, "kyc:read")
+    rate_limit_kyc_partner_api(str(principal.get("api_key_id") or ""), "read")
     return svc.get_application_result(principal, application_id)
 
 
@@ -149,8 +154,9 @@ async def submit_application(
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     svc.require_scope(principal, "kyc:submit")
-    idem = _require_idempotency(idempotency_key)
     api_key_id = str(principal.get("api_key_id") or "")
+    rate_limit_kyc_partner_api(api_key_id, "applications")
+    idem = _require_idempotency(idempotency_key)
     fingerprint = svc._body_fingerprint({"application_id": application_id, "op": "submit"})
 
     cached = svc.check_idempotency(
@@ -181,8 +187,9 @@ async def upload_document(
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     svc.require_scope(principal, "kyc:upload")
-    idem = _require_idempotency(idempotency_key)
     api_key_id = str(principal.get("api_key_id") or "")
+    rate_limit_kyc_partner_api(api_key_id, "documents")
+    idem = _require_idempotency(idempotency_key)
     fingerprint = svc._body_fingerprint(
         {"application_id": application_id, "document_type": document_type, "filename": file.filename}
     )
@@ -201,6 +208,7 @@ async def upload_document(
         file_type=str(file.content_type or "application/octet-stream"),
         filename=str(file.filename or ""),
         size_bytes=len(contents),
+        contents=contents,
     )
     svc.store_idempotency(
         api_key_id=api_key_id,
@@ -210,6 +218,17 @@ async def upload_document(
         response_body=result,
     )
     return result
+
+
+@kyc_partner_api_router.get("/applications/{application_id}/documents/{document_id}")
+async def download_document(
+    application_id: str,
+    document_id: str,
+    principal: Dict[str, Any] = Depends(require_api_key_principal),
+):
+    svc.require_scope(principal, "kyc:read")
+    rate_limit_kyc_partner_api(str(principal.get("api_key_id") or ""), "read")
+    return svc.get_document_download(principal, application_id, document_id)
 
 
 # ── Webhook management ───────────────────────────────────────────────
@@ -230,6 +249,7 @@ async def list_webhooks(
     principal: Dict[str, Any] = Depends(require_api_key_principal),
 ):
     svc.require_scope(principal, "kyc:webhook")
+    rate_limit_kyc_partner_api(str(principal.get("api_key_id") or ""), "read")
     items = svc.list_webhooks(principal)
     return {"data": items, "count": len(items)}
 
@@ -249,4 +269,5 @@ async def test_webhook(
     principal: Dict[str, Any] = Depends(require_api_key_principal),
 ):
     svc.require_scope(principal, "kyc:webhook")
+    rate_limit_kyc_partner_api(str(principal.get("api_key_id") or ""), "webhook_test")
     return svc.test_webhook(principal, webhook_id)

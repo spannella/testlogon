@@ -7,6 +7,7 @@
  *   Section 422 — Creative moderation API (4 tests)
  *   Section 423 — Platform metrics API (3 tests)
  *   Section 424 — Admin Ad Platform dashboard UI (3 tests)
+ *   Section 425 — Emergency Controls / kill-switch UI (GAP-0070) (4 tests)
  *
  * Auth:
  *   Alice (USER)         — advertiser who creates accounts/campaigns/creatives
@@ -329,5 +330,63 @@ test.describe("424 — Admin Ad Platform dashboard UI", () => {
     await rootPage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
     await rootPage.getByRole("tab", { name: "Accounts" }).click();
     await expect(rootPage.getByText("Advertiser Accounts", { exact: true })).toBeVisible();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Section 425: Emergency Controls / kill-switch UI (GAP-0070)
+//
+// The ROOT-only "Emergency Controls" tab exposes the platform-wide ad kill switch
+// (GAP-0068 backend). These tests assert the UI surface only; the live toggle
+// round-trip depends on the GAP-0068 endpoints landing.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+test.describe("425 — Emergency Controls / kill-switch UI", () => {
+  test("425.1 Emergency Controls tab is present for ROOT", async () => {
+    await injectAuth(rootPage, ROOT_ID);
+    await rootPage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
+    await expect(
+      rootPage.getByRole("tab", { name: /emergency controls/i }),
+    ).toBeVisible();
+  });
+
+  test("425.2 Kill-switch panel renders with a status badge", async () => {
+    await injectAuth(rootPage, ROOT_ID);
+    await rootPage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("tab", { name: /emergency controls/i }).click();
+    await expect(rootPage.getByTestId("ks-panel")).toBeVisible();
+    await expect(rootPage.getByTestId("ks-status")).toBeVisible();
+  });
+
+  test("425.3 Halt button reveals a reason-gated confirmation", async () => {
+    await injectAuth(rootPage, ROOT_ID);
+    await rootPage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("tab", { name: /emergency controls/i }).click();
+
+    // Only exercise the halt flow when the switch is currently inactive.
+    const statusText = (await rootPage.getByTestId("ks-status").textContent()) ?? "";
+    if (/inactive/i.test(statusText)) {
+      await rootPage.getByTestId("ks-toggle-btn").click();
+      await expect(rootPage.getByTestId("ks-reason-input")).toBeVisible();
+      // Confirm is disabled until a reason is supplied.
+      await expect(rootPage.getByTestId("ks-confirm-btn")).toBeDisabled();
+      await rootPage.getByTestId("ks-reason-input").fill("QA test halt");
+      await expect(rootPage.getByTestId("ks-confirm-btn")).toBeEnabled();
+    } else {
+      // Active: resume flow needs no reason → confirm immediately enabled.
+      await rootPage.getByTestId("ks-toggle-btn").click();
+      await expect(rootPage.getByTestId("ks-confirm-btn")).toBeEnabled();
+    }
+  });
+
+  test("425.4 Emergency Controls tab is hidden for non-ROOT admin", async () => {
+    await injectAuth(charliePage, CHARLIE_ID);
+    await charliePage.goto(`${BASE}/admin/ad-platform`, { waitUntil: "domcontentloaded" });
+    await expect(
+      charliePage.getByRole("heading", { name: "Ad Platform Management" }),
+    ).toBeVisible();
+    await expect(
+      charliePage.getByRole("tab", { name: /emergency controls/i }),
+    ).toHaveCount(0);
   });
 });

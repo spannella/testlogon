@@ -107,14 +107,19 @@ async def calculate_split_preview(
 @router.post("/register-license")
 async def register_license(
     body: dict,
-    ctx: dict = Depends(require_ui_session),
+    admin: AuthenticatedUser = Depends(require_admin_or_root),
 ):
-    """Register a content license mapping (used for testing and integration)."""
-    user_id = ctx["user_sub"]
+    """Register a content license mapping (admin/internal use only).
+
+    GAP-0295: This endpoint is restricted to admin/root. The ``licensor_id``
+    is no longer trusted from the request body for non-privileged callers; an
+    admin may explicitly register a license on behalf of a licensor, otherwise
+    the authenticated admin's own sub is recorded.
+    """
     result = svc.register_content_license(
         issued_license_id=body.get("issued_license_id", ""),
         content_id=body.get("content_id", ""),
-        licensor_id=body.get("licensor_id", user_id),
+        licensor_id=body.get("licensor_id") or admin.sub,
         licensee_id=body.get("licensee_id", ""),
         revenue_share_pct=int(body.get("revenue_share_pct", 0)),
         profit_share_pct=int(body.get("profit_share_pct", 0)),
@@ -127,9 +132,13 @@ async def register_license(
 @router.post("/revoke-license")
 async def revoke_license(
     body: dict,
-    ctx: dict = Depends(require_ui_session),
+    admin: AuthenticatedUser = Depends(require_admin_or_root),
 ):
-    """Revoke a content license mapping."""
+    """Revoke a content license mapping (admin/internal use only).
+
+    GAP-0296: This endpoint is restricted to admin/root; previously any
+    authenticated user could revoke another creator's license.
+    """
     svc.revoke_content_license(
         content_id=body["content_id"],
         issued_license_id=body["issued_license_id"],
@@ -140,16 +149,20 @@ async def revoke_license(
 @router.post("/process-split")
 async def process_split(
     body: dict,
-    ctx: dict = Depends(require_ui_session),
+    admin: AuthenticatedUser = Depends(require_admin_or_root),
 ):
     """Trigger revenue split processing for a content item.
 
     This endpoint allows testing the split engine without going through
     the full tip/unlock flow.
+
+    GAP-0296: Restricted to admin/root. Previously any authenticated user
+    could fire arbitrary revenue splits, writing real billing-ledger entries
+    and applying wallet deltas without an underlying transaction.
     """
     splits = svc.process_revenue_split(
         content_id=body["content_id"],
-        licensee_id=body.get("licensee_id", ctx["user_sub"]),
+        licensee_id=body.get("licensee_id", admin.sub),
         source_type=body.get("source_type", "tip"),
         source_amount_cents=int(body["source_amount_cents"]),
         source_txn_id=body.get("source_txn_id", "test_txn"),

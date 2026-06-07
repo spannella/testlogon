@@ -4,6 +4,8 @@ import type {
   AdminAdAccountDetail,
   AdminAdCampaign,
   AdminAdCreative,
+  AdminAdKillSwitchState,
+  AdminAdKillSwitchToggleIn,
   AdminAdModerationAction,
   AdminAdModerationEvent,
   AdminAdModerationQueue,
@@ -73,3 +75,12 @@ export const getTopSpenders = (limit?: number) => {
   if (limit) params["limit"] = String(limit);
   return api.get<AdminAdTopSpender[]>(`${BASE}/metrics/top-spenders`, params);
 };
+
+// ── Emergency controls: platform-wide ad serving kill switch ─────────────────
+// GET is readable by ADMIN/ROOT; POST toggle is ROOT-only (enforced server-side).
+
+export const getKillSwitchState = () =>
+  api.get<AdminAdKillSwitchState>(`${BASE}/kill-switch`);
+
+export const toggleKillSwitch = (data: AdminAdKillSwitchToggleIn) =>
+  api.post<AdminAdKillSwitchState>(`${BASE}/kill-switch`, data);

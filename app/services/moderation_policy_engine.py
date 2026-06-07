@@ -17,7 +17,7 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def issue_warning_notification(*, offender_user_id: str, ticket_id: str, note: str, policy_category: str = "unspecified") -> None:
+def issue_warning_notification(*, offender_user_id: str, ticket_id: str, note: str, policy_category: str = "unspecified", enforcement_id: str | None = None) -> None:
     if not offender_user_id:
         return
     write_alert(
@@ -30,6 +30,7 @@ def issue_warning_notification(*, offender_user_id: str, ticket_id: str, note: s
             "action": "warn",
             "policy_category": str(policy_category or "unspecified"),
             "note": (note or "")[:500],
+            **({"enforcement_id": enforcement_id} if enforcement_id else {}),
         },
     )
 
@@ -64,6 +65,7 @@ def apply_ban(
     note: str,
     duration_days: int | None,
     policy_category: str = "unspecified",
+    enforcement_id: str | None = None,
 ) -> dict[str, Any]:
     if not offender_user_id:
         return {"status": "skipped"}
@@ -100,6 +102,7 @@ def apply_ban(
             "effective_duration": _ban_duration_label(duration),
             "ban_until": banned_until,
             "note": (note or "")[:500],
+            **({"enforcement_id": enforcement_id} if enforcement_id else {}),
         },
     )
 

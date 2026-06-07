@@ -22,6 +22,10 @@ from app.models import (
     InstanceMetricSeriesOut,
     InstanceMonitoringIngestOut,
     InstanceMonitoringSeedIn,
+    InstanceTimelineOut,
+    RestartPolicyIn,
+    RestartPolicyOut,
+    TimelineEventOut,
 )
 from app.services.sessions import require_ui_session
 from app.services import instance_monitoring as svc
@@ -172,3 +176,53 @@ async def instance_health(
     except svc.InstanceNotOwned:
         raise HTTPException(status_code=404, detail="Instance not found")
     return InstanceHealthOut(**summary)
+
+
+# ─── Auto-restart policy (GAP-0230) ──────────────────────────────
+@instance_monitoring_router.patch(
+    "/instances/{instance_id}/restart-policy",
+    response_model=RestartPolicyOut,
+)
+async def update_restart_policy(
+    instance_id: str,
+    body: RestartPolicyIn,
+    session: Dict = Depends(require_ui_session),
+):
+    _enabled_guard()
+    user_sub = session["user_sub"]
+    try:
+        result = svc.update_restart_policy(
+            user_sub,
+            instance_id,
+            auto_restart_enabled=body.auto_restart_enabled,
+            max_restarts=body.max_restarts,
+        )
+    except svc.InstanceNotOwned:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RestartPolicyOut(**result)
+
+
+# ─── Lifecycle event timeline (GAP-0231) ─────────────────────────
+@instance_monitoring_router.get(
+    "/instances/{instance_id}/timeline",
+    response_model=InstanceTimelineOut,
+)
+async def instance_timeline(
+    instance_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Dict = Depends(require_ui_session),
+):
+    _enabled_guard()
+    user_sub = session["user_sub"]
+    try:
+        events = svc.list_timeline_events(user_sub, instance_id, limit=limit)
+        _, resource_type = svc.resolve_owned_resource(user_sub, instance_id)
+    except svc.InstanceNotOwned:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    return InstanceTimelineOut(
+        instance_id=instance_id,
+        resource_type=resource_type,
+        events=[TimelineEventOut(**e) for e in events],
+    )

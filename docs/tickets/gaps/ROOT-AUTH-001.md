@@ -1,0 +1,1 @@
+- [UNBUILT] feature not implemented — see writeups/ROOT-AUTH-001.md

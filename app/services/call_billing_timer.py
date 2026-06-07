@@ -18,6 +18,7 @@ from typing import Any, Dict, Literal, Optional
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.billing_config import get_fee_bps
 from app.services.billing_shared import (
     apply_wallet_delta,
     get_wallet_balance,
@@ -180,7 +181,10 @@ def start_call_billing(
         return
 
     ts = now_ts()
-    platform_fee_bps = S.call_billing_platform_fee_percent * 100  # percent -> bps
+    # Read the live platform fee from billing config (FIN-018 / GAP-0215),
+    # falling back to the env-var default. Locked into the session record so
+    # the rate is stable for the lifetime of the call.
+    platform_fee_bps = get_fee_bps("call")
 
     table = _call_table()
     table.update_item(
@@ -293,8 +297,9 @@ def process_heartbeat(call_id: str, user_id: str) -> BillingTickResult:
         )
         return BillingTickResult(action="end_call", reason="balance_depleted")
 
-    # Calculate platform fee and creator credit
-    platform_fee_bps = session.platform_fee_bps or (S.call_billing_platform_fee_percent * 100)
+    # Calculate platform fee and creator credit. Prefer the rate locked into
+    # the session at call-start; fall back to live billing config (GAP-0215).
+    platform_fee_bps = session.platform_fee_bps or get_fee_bps("call")
     platform_fee_cents = (amount_cents * platform_fee_bps) // 10000
     creator_net_cents = amount_cents - platform_fee_cents
     new_cycle = session.billing_cycle_count + 1
@@ -409,8 +414,9 @@ def finalize_call_billing(call_id: str) -> FinalBillingResult:
             actual_charge = 0
 
     if actual_charge > 0:
-        # Credit creator (minus platform fee)
-        platform_fee_bps = session.platform_fee_bps or (S.call_billing_platform_fee_percent * 100)
+        # Credit creator (minus platform fee). Prefer the session-locked rate;
+        # fall back to live billing config (GAP-0215).
+        platform_fee_bps = session.platform_fee_bps or get_fee_bps("call")
         platform_fee = (actual_charge * platform_fee_bps) // 10000
         creator_net = actual_charge - platform_fee
         _write_creator_credit(

@@ -39,26 +39,39 @@ def get_creator_ad_settings(creator_sub: str) -> Dict[str, Any]:
 
 
 def update_creator_ad_settings(creator_sub: str, data: CreatorAdSettingsIn) -> Dict[str, Any]:
-    """Update ad settings for a creator."""
-    updates: Dict[str, Any] = {}
-    if data.allow_ads is not None:
-        updates["allow_ads"] = data.allow_ads
-    if data.allowed_ad_categories is not None:
-        updates["allowed_ad_categories"] = data.allowed_ad_categories
-    if data.min_cpm_cents is not None:
-        updates["min_cpm_cents"] = data.min_cpm_cents
-    updates["updated_at"] = now_ts()
+    """Update ad settings for a creator using atomic UpdateExpression (no read-then-write race)."""
+    set_parts: List[str] = []
+    expr_names: Dict[str, str] = {}
+    expr_values: Dict[str, Any] = {}
 
-    # Read existing to merge
-    existing = T.billing.get_item(
-        Key={"pk": f"USER#{creator_sub}", "sk": "AD_SETTINGS"}
-    ).get("Item", {})
+    field_map = {
+        "allow_ads": data.allow_ads,
+        "allowed_ad_categories": data.allowed_ad_categories,
+        "min_cpm_cents": data.min_cpm_cents,
+    }
+    for idx, (field, value) in enumerate(field_map.items()):
+        if value is None:
+            continue
+        name_alias = f"#f{idx}"
+        val_alias = f":v{idx}"
+        expr_names[name_alias] = field
+        expr_values[val_alias] = value
+        set_parts.append(f"{name_alias} = {val_alias}")
 
-    merged = {**existing, **updates}
-    merged["pk"] = f"USER#{creator_sub}"
-    merged["sk"] = "AD_SETTINGS"
+    if not set_parts:
+        return {"ok": True}  # Nothing to update; avoid empty UpdateExpression error
 
-    T.billing.put_item(Item=merged)
+    # Always stamp updated_at
+    expr_names["#ua"] = "updated_at"
+    expr_values[":ua"] = now_ts()
+    set_parts.append("#ua = :ua")
+
+    T.billing.update_item(
+        Key={"pk": f"USER#{creator_sub}", "sk": "AD_SETTINGS"},
+        UpdateExpression="SET " + ", ".join(set_parts),
+        ExpressionAttributeNames=expr_names,
+        ExpressionAttributeValues=expr_values,
+    )
     return {"ok": True}
 
 

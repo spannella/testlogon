@@ -165,11 +165,54 @@ def is_real_ui_session_id(session_id: str) -> bool:
         return False
     return len(session_id) == 36 and session_id.count("-") == 4
 
+# Bridge from rootctl `admin_capabilities` (DDB) to enforced `AdminScope` values.
+# Without this map an admin user's stored capabilities never reach the JWT, so
+# `normalize_admin_profile(None)` falls back to GENERAL (full access) — GAP-0037.
+_CAPABILITY_TO_SCOPE = {
+    "billing_ops": "billing_support",
+    "billing_read": "billing_support",
+    "user_support": "auth_support",
+    "impersonation": "auth_support",
+    "file_content": "content_moderation",
+    "file_metadata": "content_moderation",
+}
+
+
+def _build_admin_profile_claim(user_sub: str, user_item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the admin_profile JWT claim for admin users, or None for root/user.
+
+    - Root and non-admin users get no claim (root bypasses scope checks; users
+      have no admin profile).
+    - Admins with no capabilities set keep the historical GENERAL (full-access)
+      behavior so existing accounts are unaffected.
+    - Admins with capabilities receive a SCOPED profile mapped to canonical
+      AdminScope values, making the rootctl capability system actually enforced.
+    """
+    if _is_root_user(user_sub):
+        return None
+    role = normalize_role(user_item.get("role"))
+    if role is not Role.ADMIN:
+        return None
+    caps = user_item.get("admin_capabilities") or []
+    if not isinstance(caps, (list, tuple, set)):
+        caps = []
+    scopes = sorted({_CAPABILITY_TO_SCOPE[c] for c in caps if c in _CAPABILITY_TO_SCOPE})
+    if not scopes:
+        # No (recognized) capabilities → general admin (full access).
+        return {"type": "general"}
+    return {"type": "scoped", "scopes": scopes}
+
+
 def mint_access_token(user_sub: str, session_id: str) -> str:
     if not S.ui_access_token_secret:
         return ""
     access_ttl = _access_ttl_seconds_for_user(user_sub)
-    role = "root" if _is_root_user(user_sub) else "user"
+    try:
+        user_item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+    except Exception:
+        user_item = {}
+    role_str = (user_item.get("role") or "").strip().lower()
+    role = "root" if _is_root_user(user_sub) else (role_str if role_str in ("admin", "user") else "user")
     auth_level = "high" if role == "root" else "standard"
     payload = {
         "sub": user_sub,
@@ -179,6 +222,9 @@ def mint_access_token(user_sub: str, session_id: str) -> str:
         "exp": now_ts() + access_ttl,
         "iat": now_ts(),
     }
+    admin_profile = _build_admin_profile_claim(user_sub, user_item)
+    if admin_profile is not None:
+        payload["admin_profile"] = admin_profile
     return jwt.encode(payload, S.ui_access_token_secret, algorithm="HS256")
 
 def _issue_refresh_token(response: Response, session_id: str, user_sub: str, *, refresh_ttl_seconds: Optional[int] = None) -> None:
@@ -248,7 +294,7 @@ def _resolve_impersonation_context(request: Request, actor_sub: str, token: str)
         "impersonation": "true",
     }
 
-def rotate_refresh_token(response: Response, user_sub: str, session_id: str, refresh_token: str) -> None:
+def rotate_refresh_token(response: Response, user_sub: str, session_id: str, refresh_token: str) -> Optional[str]:
     if not refresh_token:
         raise HTTPException(400, "Missing refresh token")
     it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item") or {}
@@ -279,6 +325,7 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
             secure=S.ui_cookie_secure,
             samesite=S.ui_cookie_samesite,
         )
+    return access
 
 async def require_ui_session(
     request: Request,
@@ -299,6 +346,7 @@ async def require_ui_session(
                 "session_id": f"api_key:{str(principal.get('api_key_id') or '').strip()}",
                 "role": role.value,
                 "ip": "",
+                "tenant_id": str(getattr(getattr(request, "state", None), "tenant_id", None) or "default"),
             }
 
     resolved_user_sub = user_sub or (auth_user.sub if auth_user else "")
@@ -334,6 +382,18 @@ async def require_ui_session(
         raise HTTPException(401, "Session revoked")
     if it.get("pending_auth", False):
         raise HTTPException(401, "Session not finalized")
+
+    # Cross-tenant session-replay defence (GAP-0171 / ENTERPRISE-001).
+    # Only enforced when multi-tenancy is enabled AND both the stored session
+    # tenant and the request's resolved tenant are present and differ. Legacy
+    # sessions without a stored tenant_id, and single-tenant requests where the
+    # middleware did not set request.state.tenant_id, are treated as "default"
+    # and pass through unchanged — so existing sessions/JWTs keep working.
+    if getattr(S, "multi_tenancy_enabled", False):
+        session_tenant = it.get("tenant_id")
+        request_tenant = getattr(getattr(request, "state", None), "tenant_id", None)
+        if session_tenant and request_tenant and str(session_tenant) != str(request_tenant):
+            raise HTTPException(403, "Session tenant mismatch")
 
     ts = now_ts()
     ttl_attr = getattr(S, "ddb_ttl_attr", "")
@@ -396,16 +456,26 @@ async def require_ui_session(
         "session_id": session_id,
         "role": role.value,
         "ip": str(it.get("ip") or ""),
+        "tenant_id": str(it.get("tenant_id") or "default"),
     }
     out.update(impersonation_ctx)
     return out
 
-def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None, risk_score: int = 0, refresh_ttl_seconds: Optional[int] = None) -> SessionInfo:
+def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None, risk_score: int = 0, refresh_ttl_seconds: Optional[int] = None, tenant_id: Optional[str] = None) -> SessionInfo:
     session_id = str(uuid.uuid4())
     csrf_token = secrets.token_urlsafe(32)
     ts = now_ts()
     ttl = ts + _session_ttl_seconds_for_user(user_sub)
     is_new_user = _is_new_user(user_sub)
+    # Bind the session to the tenant it was created under (GAP-0171 /
+    # ENTERPRISE-001) so require_ui_session can reject cross-tenant replay.
+    # Prefer an explicit override, else read the request's resolved tenant,
+    # falling back to "default" for single-tenant / legacy flows.
+    resolved_tenant = str(
+        tenant_id
+        or getattr(getattr(req, "state", None), "tenant_id", None)
+        or "default"
+    )
     item: Dict[str, Any] = {
         "user_sub": user_sub,
         "session_id": session_id,
@@ -414,6 +484,7 @@ def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optiona
         "last_seen_at": ts,
         "ip": client_ip_from_request(req),
         "user_agent": (req.headers.get("user-agent", "")[:512]),
+        "tenant_id": resolved_tenant,
         "revoked": False,
         "pending_auth": False,
     }

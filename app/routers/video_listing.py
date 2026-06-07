@@ -21,6 +21,7 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.sessions import require_ui_session
+from app.services.rate_limit import _bucket_limit
 from app.services.video_metadata_store import (
     get_video,
     list_videos_by_creator_public,
@@ -202,7 +203,8 @@ def _video_to_detail(
         try:
             from app.services.vod_drm_keys import get_key_uri
 
-            drm_key_uri = get_key_uri(video.id)
+            # GAP-0372: key derivation is tenant-scoped; the owner is the tenant.
+            drm_key_uri = get_key_uri(video.id, video.owner_user_id)
         except Exception:
             pass
 
@@ -808,6 +810,30 @@ def download_video_endpoint(
 
     if not video.download_mp4_key or video.download_mp4_status != "ready":
         raise HTTPException(status_code=404, detail="download mp4 not ready")
+
+    # GAP-0375 / VOD-012 §1.4: throttle presigned-URL minting per user per video
+    # to prevent download-URL farming. Uses the shared DDB-backed bucket counter
+    # (same code path dev + prod, SECOPS-007 parity). Limit/window are config-driven.
+    _dl_rate_window = 600  # 10 minutes
+    _dl_rate_max = int(getattr(S, "video_download_rate_limit_per_10m", 5) or 0)
+    if _dl_rate_max > 0 and not _bucket_limit(
+        user_sub,
+        f"viddl:{video_id}",
+        _dl_rate_max,
+        _dl_rate_window,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "download_rate_limit_exceeded",
+                "message": (
+                    f"Download rate limit of {_dl_rate_max} per 10 minutes exceeded"
+                ),
+                "limit": _dl_rate_max,
+                "window_seconds": _dl_rate_window,
+            },
+            headers={"Retry-After": str(_dl_rate_window)},
+        )
 
     from app.services.vod_mp4_generator import mint_video_download_url
     from app.services.video_metadata_store import increment_download_count
@@ -1427,11 +1453,14 @@ class AdImpressionIn(BaseModel):
     slot_index: int = Field(ge=0)
     creative_id: str = ""
     event_type: str = Field(default="impression", pattern=r"^(impression|complete|skip)$")
+    # Fraud-signal: actual view duration reported by the player (GAP-0006).
+    view_time_ms: int = Field(default=0, ge=0)
 
 
 class AdImpressionOut(BaseModel):
     ok: bool
     event_id: str
+    blocked: bool = False
 
 
 class AdRevenueOut(BaseModel):
@@ -1471,6 +1500,7 @@ def get_video_ad_config(
 def record_ad_impression_endpoint(
     video_id: str,
     body: AdImpressionIn,
+    request: Request,
     user=Depends(require_ui_session),
 ):
     """Record an ad impression event (impression/complete/skip)."""
@@ -1487,8 +1517,16 @@ def record_ad_impression_endpoint(
         slot_index=body.slot_index,
         creative_id=body.creative_id,
         event_type=body.event_type,
+        # Fraud signals forwarded to the fraud gate (GAP-0006).
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+        view_time_ms=body.view_time_ms,
     )
-    return AdImpressionOut(ok=result["ok"], event_id=result["event_id"])
+    return AdImpressionOut(
+        ok=result["ok"],
+        event_id=result["event_id"],
+        blocked=result.get("blocked", False),
+    )
 
 
 @router.get("/{video_id}/ad-stats", response_model=AdRevenueOut)

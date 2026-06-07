@@ -451,6 +451,18 @@ class KycResidencyStore:
             items.sort(key=lambda i: _coerce_int(i.get("created_at")), reverse=True)
             return items
 
+    def get_verified_docs_for_case(self, case_id: str) -> list[dict[str, Any]]:
+        """Return all residency documents with status=verified for the given case.
+
+        Queries the ByCase GSI (O(docs per case), typically 1-3 items) and
+        filters in Python for status=verified. This is intentionally NOT
+        implemented via the ByStatus GSI + FilterExpression, which would scan
+        the entire 'verified' partition (potentially tens of thousands of items)
+        to find the one or two documents for a specific case.
+        """
+        docs = self.list_documents_for_case(case_id)
+        return [d for d in docs if str(d.get("status") or "") == STATUS_VERIFIED]
+
     def list_by_status(self, status: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """List documents by status via the ByStatus GSI (PK=status, SK=created_at)."""
         st = str(status or "").strip()
@@ -565,6 +577,48 @@ class KycResidencyStore:
             reviewer_sub,
         )
         return {**item, **update}
+
+    def expire_stale_submissions(
+        self, *, now: Any = None, limit: int = 500
+    ) -> list[str]:
+        """Expire verified residency documents whose ``document_date`` has aged
+        out of the recency window (KYC-005 / GAP-0255).
+
+        Iterates the ByStatus GSI ``verified`` partition (paginated internally
+        via ``list_by_status`` -> ``LastEvaluatedKey``) and re-applies the
+        recency check. Any document that is no longer recent is transitioned to
+        :data:`STATUS_EXPIRED` so it stops satisfying readiness gates forever.
+
+        ``now`` is injectable for deterministic tests. Processes at most
+        ``limit`` verified documents per invocation. Returns the list of
+        expired ``document_id`` values.
+        """
+        expired_ids: list[str] = []
+        items = self.list_by_status(STATUS_VERIFIED, limit=limit)
+        ts = now_ts()
+        for item in items:
+            recency_valid, _ = self._check_recency(
+                str(item.get("document_date") or ""), now=now
+            )
+            if recency_valid:
+                continue
+            document_id = str(item.get("document_id") or "")
+            if not document_id:
+                continue
+            self._apply_update(
+                document_id,
+                {
+                    "status": STATUS_EXPIRED,
+                    "updated_at": ts,
+                },
+            )
+            logger.info(
+                "kyc.residency.expired document_id=%s document_date=%s",
+                document_id,
+                item.get("document_date"),
+            )
+            expired_ids.append(document_id)
+        return expired_ids
 
     # -- internals ---------------------------------------------------------
 
@@ -690,3 +744,40 @@ def public_document_view(item: dict[str, Any], *, include_match: bool = True) ->
         am = item.get("address_match") or {}
         out["address_match"] = am if am else None
     return out
+
+
+# -- background expiry task (GAP-0255 / KYC-005) ---------------------------
+
+_RESIDENCY_EXPIRY_INTERVAL_SECONDS = 6 * 3600  # run every 6 hours
+
+
+async def kyc_residency_expiry_loop(
+    interval_seconds: int = _RESIDENCY_EXPIRY_INTERVAL_SECONDS,
+) -> None:
+    """Every ``interval_seconds``: expire verified residency documents whose
+    ``document_date`` has aged out of the recency window so a stale submission
+    stops satisfying readiness gates forever (and the ByStatus ``verified``
+    partition stays pruned). Never raises out of the loop."""
+    import asyncio
+
+    while True:
+        try:
+            expired = STORE.expire_stale_submissions()
+            if expired:
+                logger.info(
+                    "kyc.residency.expiry_loop.expired count=%d document_ids=%s",
+                    len(expired),
+                    expired[:10],
+                )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("kyc.residency.expiry_loop.error")
+        await asyncio.sleep(max(5, int(interval_seconds)))
+
+
+def start_kyc_residency_expiry_task() -> None:
+    """Register the KYC residency submission-expiry background task at startup."""
+    import asyncio
+
+    if S.kyc_residency_enabled and S.kyc_residency_expiry_enabled:
+        asyncio.ensure_future(kyc_residency_expiry_loop())
+        logger.info("KYC residency submission-expiry task started")

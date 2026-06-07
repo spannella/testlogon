@@ -10,9 +10,36 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.models import AdAccountCreateIn
 
+# Maximum number of (non-terminal) ad accounts a single user may own (ADS-001).
+MAX_ACCOUNTS_PER_USER = 5
+
+# Account statuses that no longer count toward a user's active-account quota.
+_TERMINAL_ACCOUNT_STATUSES = {"deleted", "permanently_suspended"}
+
+
+def _count_active_accounts_by_owner(owner_sub: str) -> int:
+    """Count accounts owned by ``owner_sub`` that are not in a terminal state."""
+    items = list_accounts_by_owner(owner_sub)
+    return sum(
+        1 for acct in items if acct.get("status") not in _TERMINAL_ACCOUNT_STATUSES
+    )
+
 
 def create_ad_account(owner_sub: str, data: AdAccountCreateIn) -> dict:
-    """Create a new advertiser account in pending_review status."""
+    """Create a new advertiser account in pending_review status.
+
+    Raises ``ValueError`` if the owner already has ``MAX_ACCOUNTS_PER_USER``
+    non-terminal ad accounts. Note: this count check is not transactional, so a
+    narrow TOCTOU race under high concurrency could allow a user to briefly
+    exceed the limit by the number of concurrent requests. This is acceptable
+    for a per-user rate limit (not a security invariant).
+    """
+    if _count_active_accounts_by_owner(owner_sub) >= MAX_ACCOUNTS_PER_USER:
+        raise ValueError(
+            f"Account limit reached: a user may own at most "
+            f"{MAX_ACCOUNTS_PER_USER} ad accounts"
+        )
+
     account_id = f"adacct_{uuid.uuid4().hex[:12]}"
     ts = now_ts()
     item = {

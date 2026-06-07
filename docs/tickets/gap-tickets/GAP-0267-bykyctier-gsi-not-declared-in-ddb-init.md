@@ -1,0 +1,23 @@
+# GAP-0267: `ByKycTier` GSI not declared in DDB init
+
+**Status**: Open · **Severity**: HIGH (High) · **Source ticket**: KYC-009 · **Effort**: S
+**From**: gap audit (`docs/tickets/gaps/KYC-009.md`); see also `docs/tickets/writeups/KYC-009.md`
+
+## Location
+`ByKycTier`
+
+## Problem / Impact
+`ByKycTier` GSI not declared in DDB init
+
+## Fix
+add the GSI and `attr_types` to the users `TableDef`
+
+## Notes
+This gap was identified by the second-pass as-built review of KYC-009. Apply the dev/prod
+parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
+(pytest offline / Playwright) that fails before the fix and passes after.
+
+
+## Resolved — already implemented (verified 2026-06-06)
+
+SKIP/already-built: ByKycTier GSI already declared on users TableDef in scripts/local-ddb-init.py (partition kyc_tier, sort kyc_tier_updated_at, attr_types both N), and kyc_tiers.list_users_by_tier already queries it (not scan). Regression guard added (tests/test_gap_0267_bykyctier_gsi.py). No code change needed.

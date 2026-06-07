@@ -613,8 +613,38 @@ def _write_private_chat_billing(
 ) -> Tuple[str, str]:
     """Write paired debit/credit billing ledger entries.
 
+    The viewer debit and creator credit are committed atomically via DynamoDB
+    ``TransactWriteItems`` so that either both ledger rows are written or neither
+    is. On failure a ``RuntimeError`` is raised so the caller does not silently
+    treat a half-completed (or failed) billing write as success — preventing a
+    viewer debit with no matching creator credit (GAP-0126).
+
     Returns (debit_entry_id, credit_entry_id).
     """
+    # Imported at function scope to keep module-level imports minimal. The
+    # low-level DynamoDB client is built using the SAME endpoint / region /
+    # credential resolution as the table handles, so dev (DynamoDB Local) and
+    # prod (AWS) behave identically (SECOPS-007 parity). TransactWriteItems is
+    # only available on the low-level client, not on the resource Table API.
+    import boto3
+    from boto3.dynamodb.types import TypeSerializer
+    from botocore.exceptions import ClientError
+
+    from app.core.aws_clients import (
+        _aws_region,
+        _ddb_endpoint_url,
+        _local_credentials_kwargs,
+    )
+    from app.core.settings import S
+
+    endpoint_url = _ddb_endpoint_url()
+    client = boto3.client(
+        "dynamodb",
+        region_name=_aws_region(),
+        endpoint_url=endpoint_url,
+        **_local_credentials_kwargs(endpoint_url),
+    )
+
     ts = now_ts()
     debit_id = uuid.uuid4().hex
     credit_id = uuid.uuid4().hex
@@ -630,37 +660,54 @@ def _write_private_chat_billing(
         "payment_method_id": payment_method_id,
     }
 
-    try:
-        T.billing.put_item(Item={
-            "pk": f"USER#{viewer_id}",
-            "sk": f"LEDGER#{ts}#{debit_id}",
-            "entry_id": debit_id,
-            "ts": ts,
-            "type": "debit",
-            "amount_cents": total_cents,
-            "currency": "USD",
-            "state": "settled",
-            "reason": reason,
-            "meta": meta,
-        })
-    except Exception:
-        logger.warning("private_chat_billing_debit_failed viewer=%s amount=%d", viewer_id, total_cents)
+    debit_row: Dict[str, Any] = {
+        "pk": f"USER#{viewer_id}",
+        "sk": f"LEDGER#{ts}#{debit_id}",
+        "entry_id": debit_id,
+        "ts": ts,
+        "type": "debit",
+        "amount_cents": total_cents,
+        "currency": "USD",
+        "state": "settled",
+        "reason": reason,
+        "meta": meta,
+    }
+    credit_row: Dict[str, Any] = {
+        "pk": f"USER#{creator_id}",
+        "sk": f"LEDGER#{ts}#{credit_id}",
+        "entry_id": credit_id,
+        "ts": ts,
+        "type": "credit",
+        "amount_cents": creator_earnings_cents,
+        "currency": "USD",
+        "state": "settled",
+        "reason": reason,
+        "meta": meta,
+    }
+
+    serializer = TypeSerializer()
+    table_name = S.billing_table_name
+
+    def _serialize(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: serializer.serialize(v) for k, v in row.items()}
 
     try:
-        T.billing.put_item(Item={
-            "pk": f"USER#{creator_id}",
-            "sk": f"LEDGER#{ts}#{credit_id}",
-            "entry_id": credit_id,
-            "ts": ts,
-            "type": "credit",
-            "amount_cents": creator_earnings_cents,
-            "currency": "USD",
-            "state": "settled",
-            "reason": reason,
-            "meta": meta,
-        })
-    except Exception:
-        logger.warning("private_chat_billing_credit_failed creator=%s amount=%d", creator_id, creator_earnings_cents)
+        client.transact_write_items(
+            TransactItems=[
+                {"Put": {"TableName": table_name, "Item": _serialize(debit_row)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(credit_row)}},
+            ]
+        )
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+        logger.error(
+            "private_chat_billing_transact_failed viewer=%s creator=%s total=%d error=%s",
+            viewer_id, creator_id, total_cents, error_code,
+        )
+        raise RuntimeError(
+            f"Private chat billing transaction failed ({error_code}): "
+            f"viewer={viewer_id} creator={creator_id} total={total_cents}"
+        ) from exc
 
     return debit_id, credit_id
 

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.auth.deps import require_root_session
+from app.auth.deps import require_root_session, AuthenticatedUser
 from app.services.sessions import require_ui_session
 from app.core.settings import S
 
@@ -275,9 +275,9 @@ async def get_my_rank_endpoint(
 # ---------------------------------------------------------------------------
 
 @router.post("/ui/achievements/admin/advance")
-async def admin_advance_progress(req: AdvanceProgressIn, ctx: dict = Depends(require_ui_session)):
-    """Advance progress for the authenticated user (dev/test helper)."""
-    user_sub = ctx["user_sub"]
+async def admin_advance_progress(req: AdvanceProgressIn, ctx: AuthenticatedUser = Depends(require_root_session)):
+    """Advance progress for a user. ROOT access only."""
+    user_sub = ctx.sub
     from app.services.achievement_progress import advance_progress
     unlocked = advance_progress(user_sub, req.metric_key, delta=req.delta)
     return {"ok": True, "newly_unlocked": unlocked}

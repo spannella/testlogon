@@ -30,6 +30,9 @@ class Settings:
     root_login_allowed_ips: str = os.environ.get("ROOT_LOGIN_ALLOWED_IPS", "")
     root_login_local_only: bool = os.environ.get("ROOT_LOGIN_LOCAL_ONLY", "false").lower() in ("1", "true", "yes", "on")
     trusted_proxy_cidrs: str = os.environ.get("TRUSTED_PROXY_CIDRS", "")
+    # Break-glass secret for rootctl mutating CLI commands (prod: from Secrets Manager
+    # injected into env; dev: well-known value in .env.local). Same code path either way.
+    rootctl_break_glass_secret: str = os.environ.get("ROOTCTL_BREAK_GLASS_SECRET", "")
 
     # DynamoDB tables
     ddb_sessions_table: str = os.environ.get("DDB_SESSIONS_TABLE", "")
@@ -80,6 +83,13 @@ class Settings:
 
     # TTL
     ddb_ttl_attr: str = os.environ.get("DDB_TTL_ATTR", "ttl_epoch")
+    registration_pending_ttl_days: int = int(os.environ.get("REGISTRATION_PENDING_TTL_DAYS", "7"))
+    # When True, POST /ui/register/start re-issues a verification challenge for a
+    # pending_verification account instead of silently returning a fake success
+    # (GAP-0108). Default on — the no-resume behaviour is the bug, not desired.
+    registration_allow_resume_unverified: bool = os.environ.get(
+        "REGISTRATION_ALLOW_RESUME_UNVERIFIED", "1"
+    ) not in ("0", "false", "False")
 
     # Sessions
     ui_session_ttl_seconds: int = int(os.environ.get("UI_SESSION_TTL_SECONDS", str(30 * 24 * 3600)))
@@ -201,6 +211,11 @@ class Settings:
     sms_daily_limit_per_number: int = int(os.environ.get("SMS_DAILY_LIMIT_PER_NUMBER", "10"))
     sms_suppression_enabled: bool = os.environ.get("SMS_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
     sms_cost_per_segment_usd: float = float(os.environ.get("SMS_COST_PER_SEGMENT_USD", "0.00645"))
+    # Global platform-wide daily SMS spend cap in USD (SEC-014 / GAP-0326).
+    # 0 = disabled (default; backward compatible — no behaviour change). When set
+    # to a positive value, send_sms() returns status="rate_limited" for all
+    # outbound SMS once the estimated cumulative daily segment cost reaches it.
+    sms_daily_cost_cap_usd: float = float(os.environ.get("SMS_DAILY_COST_CAP_USD", "0"))
 
     alerts_webhook_url: str = os.environ.get("ALERTS_WEBHOOK_URL", "")
     alerts_webhook_secret: str = os.environ.get("ALERTS_WEBHOOK_SECRET", "")
@@ -213,6 +228,12 @@ class Settings:
     # Email Delivery Tracking (PLATFORM-006)
     email_delivery_table_name: str = os.environ.get("EMAIL_DELIVERY_TABLE_NAME", "email_delivery")
     email_suppression_enabled: bool = os.environ.get("EMAIL_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
+    # SES/SNS notification signature verification (PLATFORM-002 / GAP-0319).
+    # Default ON (secure). Same verification code runs in dev and prod; the flag
+    # exists only so tests/dev can opt out deterministically.
+    ses_sns_signature_verification_enabled: bool = os.environ.get(
+        "SES_SNS_SIGNATURE_VERIFICATION_ENABLED", "1"
+    ) not in ("0", "false", "False")
 
     # Admin Email/SMS Dashboards (ADMIN-002)
     admin_messaging_templates_table_name: str = os.environ.get(
@@ -315,6 +336,10 @@ class Settings:
     ups_client_id: str = os.environ.get("UPS_CLIENT_ID", "")
     ups_client_secret: str = os.environ.get("UPS_CLIENT_SECRET", "")
     ups_webhook_secret: str = os.environ.get("UPS_WEBHOOK_SECRET", "")
+    # UPS webhook replay protection (GAP-0350): timestamp tolerance window (seconds)
+    ups_webhook_timestamp_tolerance_seconds: int = int(
+        os.environ.get("UPS_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", "300")
+    )
     # Carrier tracking (SHOP-004)
     carrier_tracking_poll_enabled: bool = os.environ.get("CARRIER_TRACKING_POLL_ENABLED", "false").lower() not in ("0", "false", "")
     carrier_tracking_poll_interval_minutes: int = int(os.environ.get("CARRIER_TRACKING_POLL_INTERVAL_MINUTES", "30"))
@@ -535,6 +560,10 @@ class Settings:
     broadcast_preroll_enabled: bool = os.environ.get("BROADCAST_PREROLL_ENABLED", "1") not in ("0", "false", "False")
     broadcast_midroll_enabled: bool = os.environ.get("BROADCAST_MIDROLL_ENABLED", "1") not in ("0", "false", "False")
     broadcast_ad_events_table_name: str = os.environ.get("DDB_BROADCAST_AD_EVENTS", "BroadcastAdEvents")
+    # Broadcast ad billing (ADS-020) — guards charge_impression + creator revenue
+    # split for broadcast ad events. Default off (money-moving code; keeps dev/test
+    # deterministic). Enable explicitly in production after smoke testing.
+    broadcast_ads_billing_enabled: bool = os.environ.get("BROADCAST_ADS_BILLING_ENABLED", "0") not in ("0", "false", "False")
     # Broadcast Q&A (ENGAGE-003)
     broadcast_qa_enabled: bool = os.environ.get("BROADCAST_QA_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     broadcast_qa_questions_table_name: str = os.environ.get("DDB_BROADCAST_QA_QUESTIONS", "broadcast_qa_questions")
@@ -784,6 +813,17 @@ class Settings:
     cart_abandonment_reminder_cooldown_hours: int = int(os.environ.get("CART_ABANDONMENT_REMINDER_COOLDOWN_HOURS", "48"))
     cart_abandonment_expire_hours: int = int(os.environ.get("CART_ABANDONMENT_EXPIRE_HOURS", "720"))
     cart_ttl_days: int = int(os.environ.get("CART_TTL_DAYS", "30"))
+    # Multi-stage cart reminders (GAP-0189 / FIN-003)
+    cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "1") not in ("0", "false", "False")
+    cart_reminder_config_table_name: str = os.environ.get("CART_REMINDER_CONFIG_TABLE", "cart_reminder_config")
+    # Cart recovery one-time link signing (GAP-0190 / FIN-003). Defaults to the
+    # UI access-token secret so dev (no extra env) and prod (set via env) both
+    # produce verifiable signed tokens — dev/prod parity (SECOPS-007).
+    cart_recovery_link_secret: str = (
+        os.environ.get("CART_RECOVERY_LINK_SECRET")
+        or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
+    )
+    cart_recovery_link_ttl_days: int = int(os.environ.get("CART_RECOVERY_LINK_TTL_DAYS", "7"))
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
@@ -908,6 +948,11 @@ class Settings:
     )
     github_api_base_url: str = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
     github_token: str = os.environ.get("GITHUB_TOKEN", "")
+    # Name/ARN of an AWS Secrets Manager secret holding the GitHub token (GAP-0102).
+    # In prod the raw token is resolved from Secrets Manager by name; in dev the
+    # ``github_token`` env var is used as a fallback. The raw token is never stored
+    # in DynamoDB config nor returned in API responses.
+    github_token_secret_name: str = os.environ.get("GITHUB_TOKEN_SECRET_NAME", "")
     github_webhook_secret: str = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
     gitlab_api_base_url: str = os.environ.get("GITLAB_API_BASE_URL", "https://gitlab.com/api/v4").rstrip("/")
     google_oauth_client_id: str = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
@@ -953,6 +998,15 @@ class Settings:
     filemgr_preview_worker_concurrency: int = int(os.environ.get("FILEMGR_PREVIEW_WORKER_CONCURRENCY", "4"))
     filemgr_preview_job_max_attempts: int = int(os.environ.get("FILEMGR_PREVIEW_JOB_MAX_ATTEMPTS", "3"))
     filemgr_media_preview_cdn_base_url: str = os.environ.get("FILEMGR_MEDIA_PREVIEW_CDN_BASE_URL", "")
+    # GAP-0182: comma-separated allowlist of GIF CDN domains accepted for newsfeed gif comments.
+    gif_cdn_allowed_domains: str = os.environ.get(
+        "GIF_CDN_ALLOWED_DOMAINS",
+        "media.giphy.com,media0.giphy.com,media1.giphy.com,media2.giphy.com,"
+        "media3.giphy.com,media4.giphy.com,media.tenor.com,c.tenor.com",
+    )
+    # GAP-0183: comma-separated allowlist of additional platform sticker URL prefixes
+    # (relative paths or absolute CDN origins) accepted for newsfeed sticker comments.
+    sticker_cdn_allowed_prefixes: str = os.environ.get("STICKER_CDN_ALLOWED_PREFIXES", "")
     filemgr_media_preview_url_ttl_seconds: int = int(os.environ.get("FILEMGR_MEDIA_PREVIEW_URL_TTL_SECONDS", "900"))
     filemgr_media_preview_private: bool = os.environ.get("FILEMGR_MEDIA_PREVIEW_PRIVATE", "true").lower() == "true"
     filemgr_usage_upload_limit_bytes: int = int(os.environ.get("FILEMGR_USAGE_UPLOAD_LIMIT_BYTES", "0"))
@@ -1108,6 +1162,15 @@ class Settings:
     sticker_messages_enabled: bool = os.environ.get("STICKER_MESSAGES_ENABLED", "true").lower() == "true"
     ddb_sticker_collections_table: str = os.environ.get("DDB_STICKER_COLLECTIONS_TABLE", "sticker_collections")
     gif_provider: str = os.environ.get("GIF_PROVIDER", "mock")
+    # GAP-0316: comma-separated allowlist of GIF CDN hostnames accepted by the
+    # messaging GIF endpoint. Relative dev mock URLs (/mock/gifs/...) are always
+    # allowed in send_gif_message regardless of this list. Empty default keeps
+    # only relative mock URLs valid until prod sets the real CDN domains.
+    gif_allowed_domains: str = os.environ.get(
+        "GIF_ALLOWED_DOMAINS",
+        "media.giphy.com,media0.giphy.com,media1.giphy.com,media2.giphy.com,"
+        "media3.giphy.com,media4.giphy.com,media.tenor.com,media1.tenor.com,c.tenor.com",
+    )
     sticker_max_file_size_bytes: int = int(os.environ.get("STICKER_MAX_FILE_SIZE", "524288"))
     sticker_max_per_collection: int = int(os.environ.get("STICKER_MAX_PER_COLLECTION", "100"))
     # Custom emojis (MSG-007)
@@ -1164,6 +1227,14 @@ class Settings:
     kyc_cases_table_name: str = os.environ.get("KYC_CASES_TABLE_NAME", "kyc_cases")
     kyc_cases_owner_index_name: str = os.environ.get("KYC_CASES_OWNER_INDEX_NAME", "owner-updated-index")
     kyc_cases_status_index_name: str = os.environ.get("KYC_CASES_STATUS_INDEX_NAME", "status-updated-index")
+    # GAP-0282 (KYC-019): sparse GSI on entity_type+admin_sub so admin availability
+    # records are fetched with a targeted Query instead of a full-table Scan.
+    kyc_cases_entity_type_index_name: str = os.environ.get("KYC_CASES_ENTITY_TYPE_INDEX_NAME", "entity-type-index")
+    # GAP-0283 (KYC-019): sparse GSI keyed on the top-level denormalized
+    # ``assigned_admin_sub`` (PK) + ``gsi_status_pk`` (SK). Only cases that carry
+    # an assignment project into this index, so per-admin active-case counts use a
+    # targeted ``Select=COUNT`` Query instead of scanning every active case.
+    kyc_cases_assigned_admin_index_name: str = os.environ.get("KYC_CASES_ASSIGNED_ADMIN_INDEX_NAME", "assigned-admin-index")
     # KYC-023: PII field-level encryption & audited decryption
     kyc_encryption_enabled: bool = os.environ.get("KYC_ENCRYPTION_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     kyc_encryption_audit_enabled: bool = os.environ.get("KYC_ENCRYPTION_AUDIT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
@@ -1196,11 +1267,20 @@ class Settings:
     kyc_risk_scores_table_name: str = os.environ.get("KYC_RISK_SCORES_TABLE_NAME", "kyc_risk_scores")
     kyc_risk_auto_approve_enabled: bool = os.environ.get("KYC_RISK_AUTO_APPROVE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     kyc_risk_auto_approve_max_score: int = int(os.environ.get("KYC_RISK_AUTO_APPROVE_MAX_SCORE", "20"))
+    kyc_risk_auto_escalate_enabled: bool = os.environ.get("KYC_RISK_AUTO_ESCALATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     kyc_risk_auto_escalate_min_score: int = int(os.environ.get("KYC_RISK_AUTO_ESCALATE_MIN_SCORE", "81"))
     kyc_risk_scoring_model_version: str = os.environ.get("KYC_RISK_SCORING_MODEL_VERSION", "v1.0")
     risk_high_threshold: int = int(os.environ.get("RISK_HIGH_THRESHOLD", "70"))
     # KYC tiered verification levels (KYC-009)
     kyc_tier_gating_enabled: bool = os.environ.get("KYC_TIER_GATING_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    # KYC-009 / GAP-0268: router-level enforcement of require_kyc_tier() gates.
+    # Defaults OFF so existing tier-0 users (dev/E2E) are never blocked. When False,
+    # require_kyc_tier is a pure pass-through. Must be explicitly enabled (and accounts
+    # pre-seeded at the right tier) before turning on per the Phase 2-4 rollout plan.
+    kyc_tier_enforcement_enabled: bool = os.environ.get("KYC_TIER_ENFORCEMENT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+
+    # KYC enhanced/high-risk residency readiness gate (KYC-004 / GAP-0252)
+    kyc_residency_gate_enabled: bool = os.environ.get("KYC_RESIDENCY_GATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
     # KYC Ongoing Monitoring & Periodic Review (KYC-016)
     kyc_review_schedule_table_name: str = os.environ.get("KYC_REVIEW_SCHEDULE_TABLE_NAME", "kyc_review_schedule")
@@ -1213,6 +1293,29 @@ class Settings:
     kyc_documents_status_index_name: str = os.environ.get("KYC_DOCUMENTS_STATUS_INDEX_NAME", "ByStatus")
     kyc_documents_bucket: str = os.environ.get("KYC_DOCUMENTS_BUCKET", "local-uploads")
     kyc_documents_s3_prefix: str = os.environ.get("KYC_DOCUMENTS_S3_PREFIX", "kyc-documents/")
+
+    # KYC Partner API (KYC-021) — per-API-key rate limits (GAP-0286) and the
+    # S3 storage location for partner-uploaded documents (GAP-0287). Same code
+    # path dev (in-process moto / DynamoDB Local) + prod (real S3/DDB) per
+    # SECOPS-007 — no dev_mode bypass; limits/bucket are env-configurable.
+    kyc_partner_api_docs_bucket: str = os.environ.get(
+        "KYC_PARTNER_API_DOCS_BUCKET", os.environ.get("KYC_DOCUMENTS_BUCKET", "local-uploads")
+    )
+    kyc_partner_api_docs_s3_prefix: str = os.environ.get(
+        "KYC_PARTNER_API_DOCS_S3_PREFIX", "kyc-api-docs/"
+    )
+    kyc_partner_api_rl_applications_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_APPLICATIONS_PER_HOUR", "100")
+    )
+    kyc_partner_api_rl_documents_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_DOCUMENTS_PER_HOUR", "200")
+    )
+    kyc_partner_api_rl_read_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_READ_PER_HOUR", "1000")
+    )
+    kyc_partner_api_rl_webhook_test_per_hour: int = int(
+        os.environ.get("KYC_PARTNER_API_RL_WEBHOOK_TEST_PER_HOUR", "10")
+    )
     kyc_documents_verification_enabled: bool = os.environ.get(
         "KYC_DOCUMENTS_VERIFICATION_ENABLED", "true"
     ).lower() in ("1", "true", "yes", "on")
@@ -1251,6 +1354,12 @@ class Settings:
     ).lower() in ("1", "true", "yes", "on")
     kyc_face_auto_compare: bool = os.environ.get(
         "KYC_FACE_AUTO_COMPARE", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    # When True, uses the deterministic mock comparison even in non-dev mode
+    # (safety valve for staging environments where AWS Rekognition is not yet
+    # provisioned). MUST be False in production. See GAP-0275 / SECOPS-007.
+    kyc_face_comparison_use_mock: bool = os.environ.get(
+        "KYC_FACE_COMPARISON_USE_MOCK", "false"
     ).lower() in ("1", "true", "yes", "on")
 
     # KYC Electronic Identity Verification / eIDV (KYC-022)
@@ -1292,6 +1401,14 @@ class Settings:
     kyc_residency_recency_days: int = int(
         os.environ.get("KYC_RESIDENCY_RECENCY_DAYS", "90")
     )
+    # KYC-005 / GAP-0255: periodic background task that transitions verified
+    # residency documents whose document_date has aged out of the recency
+    # window to ``expired`` so a stale submission stops satisfying readiness
+    # gates forever. Default on (compliance requirement); flag exists only for
+    # emergency rollback without a code deploy.
+    kyc_residency_expiry_enabled: bool = os.environ.get(
+        "KYC_RESIDENCY_EXPIRY_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
 
     # KYC-018: Address Verification Service
     # Master switch for the address verification feature.
@@ -1437,6 +1554,8 @@ class Settings:
     vod_drm_enabled: bool = os.environ.get("VOD_DRM_ENABLED", "1") not in ("0", "false", "False")
     vod_drm_key_root: str = os.environ.get("VOD_DRM_KEY_ROOT", "dev-vod-drm-root-key-change-me")
     vod_drm_key_server_base_url: str = os.environ.get("VOD_DRM_KEY_SERVER_BASE_URL", "http://localhost:8000/v1/vod/drm")
+    # ContentKeys table (VOD-010 §4.2 / GAP-0374): DRM key revocation records + audit trail
+    content_keys_table_name: str = os.environ.get("DDB_CONTENT_KEYS", "ContentKeys")
 
     # VOD Download (VOD-012)
     video_download_enabled: bool = os.environ.get("VIDEO_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
@@ -1477,6 +1596,15 @@ class Settings:
     # DMCA (MOD-002)
     dmca_strike_threshold: int = int(os.environ.get("DMCA_STRIKE_THRESHOLD", "3"))
     dmca_strike_lookback_days: int = int(os.environ.get("DMCA_STRIKE_LOOKBACK_DAYS", "365"))
+    dmca_timer_enabled: bool = os.environ.get(
+        "DMCA_TIMER_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    dmca_timer_interval_seconds: int = int(
+        os.environ.get("DMCA_TIMER_INTERVAL_SECONDS", "3600")
+    )
+    dmca_max_claims_per_claimant_per_day: int = int(
+        os.environ.get("DMCA_MAX_CLAIMS_PER_CLAIMANT_PER_DAY", "20")
+    )
 
     # Appeals (MOD-003)
     appeals_table_name: str = os.environ.get("DDB_APPEALS", "Appeals")
@@ -1485,6 +1613,8 @@ class Settings:
     creator_payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
     payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
     payout_hold_period_seconds: int = int(os.environ.get("PAYOUT_HOLD_PERIOD_SECONDS", "604800"))
+    # Messaging: editable window after send (MSG-001 / GAP-0310). 0 = unlimited.
+    message_edit_window_seconds: int = int(os.environ.get("MESSAGE_EDIT_WINDOW_SECONDS", str(15 * 60)))
     payout_hold_days: int = int(os.environ.get("PAYOUT_HOLD_DAYS", "7"))
     payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
     payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
@@ -1552,6 +1682,7 @@ class Settings:
     # Video Gallery (VOD-017)
     video_gallery_enabled: bool = os.environ.get("VIDEO_GALLERY_ENABLED", "1") not in ("0", "false", "False")
     video_views_table_name: str = os.environ.get("DDB_VIDEO_VIEWS", "VideoViews")
+    video_comments_table_name: str = os.environ.get("DDB_VIDEO_COMMENTS", "VideoComments")
     video_likes_table_name: str = os.environ.get("DDB_VIDEO_LIKES", "VideoLikes")
     video_gallery_trending_decay_hours: int = int(os.environ.get("VIDEO_GALLERY_TRENDING_DECAY_HOURS", "72"))
     video_gallery_page_size: int = int(os.environ.get("VIDEO_GALLERY_PAGE_SIZE", "24"))
@@ -1576,6 +1707,11 @@ class Settings:
     ad_frequency_cap_hourly: int = int(os.environ.get("AD_FREQUENCY_CAP_HOURLY", "3"))
     ad_frequency_cap_daily: int = int(os.environ.get("AD_FREQUENCY_CAP_DAILY", "10"))
     ad_frequency_caps_table_name: str = os.environ.get("DDB_AD_FREQUENCY_CAPS", "AdFrequencyCaps")
+    # Minutes between ad-analytics hourly-rollup ticks. Default 60 (top of each
+    # clock hour); set lower in dev to see rollup data populate quickly.
+    ad_analytics_rollup_interval_minutes: int = int(
+        os.environ.get("AD_ANALYTICS_ROLLUP_INTERVAL_MINUTES", "60")
+    )
 
     # Subscription-Gated VOD (MON-005)
     vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")
@@ -1748,6 +1884,8 @@ class Settings:
 
     # Creator Analytics Dashboard (ANALYTICS-001)
     analytics_rollups_table_name: str = os.environ.get("DDB_ANALYTICS_ROLLUPS", "AnalyticsRollups")
+    # GAP-0333 / PLATFORM-019: raw analytics events table (feeds the rollup job).
+    analytics_events_table_name: str = os.environ.get("DDB_ANALYTICS_EVENTS", "AnalyticsEvents")
     analytics_rollup_enabled: bool = os.environ.get("ANALYTICS_ROLLUP_ENABLED", "1") not in ("0", "false", "False")
     analytics_rollup_interval_seconds: int = int(os.environ.get("ANALYTICS_ROLLUP_INTERVAL_SECONDS", "900"))
     analytics_rollup_lookback_days: int = int(os.environ.get("ANALYTICS_ROLLUP_LOOKBACK_DAYS", "3"))
@@ -1760,6 +1898,12 @@ class Settings:
     # Geo-blocking (GEO-001)
     geo_blocking_enabled: bool = os.environ.get("GEO_BLOCKING_ENABLED", "1") not in ("0", "false", "False")
     geo_platform_block_countries: str = os.environ.get("GEO_PLATFORM_BLOCK_COUNTRIES", "")
+    # GAP-0217 (GEO-001): DDB-backed, hot-reloadable platform block list. The env-var
+    # above stays as a bootstrap override and is unioned with the DDB record. The table
+    # holds a single record (pk="PLATFORM", sk="GEO_BLOCK"); the in-process cache below
+    # bounds DDB reads so check_geo_access stays fast.
+    geo_rules_table_name: str = os.environ.get("GEO_RULES_TABLE_NAME", "geo_rules")
+    geo_platform_block_cache_ttl_seconds: int = int(os.environ.get("GEO_PLATFORM_BLOCK_CACHE_TTL_SECONDS", "60"))
     geo_maxmind_db_path: str = os.environ.get("GEO_MAXMIND_DB_PATH", "")
     geo_cache_ttl_seconds: int = int(os.environ.get("GEO_CACHE_TTL_SECONDS", "3600"))
     geo_cache_max_size: int = int(os.environ.get("GEO_CACHE_MAX_SIZE", "50000"))
@@ -1898,6 +2042,10 @@ class Settings:
     ad_creative_affiliate_enabled: bool = os.environ.get("AD_CREATIVE_AFFILIATE_ENABLED", "1") not in ("0", "false", "False")
     ad_creative_affiliate_promo_cookie_max_age: int = int(os.environ.get("AD_CREATIVE_AFFILIATE_PROMO_COOKIE_MAX_AGE", "86400"))
     ad_creative_affiliates_table_name: str = os.environ.get("DDB_AD_CREATIVE_AFFILIATES", "AdCreativeAffiliates")
+    # When enabled, ad_analytics.get_summary enriches campaign summaries with a
+    # real ROAS value (from conversion attribution) so optimization alerts stop
+    # reading roas=0 (GAP-0062 / ADS-015).
+    roas_in_summary_enabled: bool = os.environ.get("ROAS_IN_SUMMARY_ENABLED", "1") not in ("0", "false", "False")
 
     # Achievements & Gamification (ENGAGE-001)
     achievements_enabled: bool = os.environ.get("ACHIEVEMENTS_ENABLED", "0") not in ("0", "false", "False")
@@ -1924,6 +2072,9 @@ class Settings:
     audit_export_worker_enabled: bool = os.environ.get("AUDIT_EXPORT_WORKER_ENABLED", "1") not in ("0", "false", "False")
     audit_export_worker_poll_interval_seconds: int = int(os.environ.get("AUDIT_EXPORT_WORKER_POLL_INTERVAL_SECONDS", "10"))
     audit_export_worker_max_concurrent: int = int(os.environ.get("AUDIT_EXPORT_WORKER_MAX_CONCURRENT", "3"))
+    # GAP-0210: scheduled (recurring) audit export reports (FIN-016).
+    audit_export_scheduler_enabled: bool = os.environ.get("AUDIT_EXPORT_SCHEDULER_ENABLED", "1") not in ("0", "false", "False")
+    audit_export_scheduler_poll_interval_seconds: int = int(os.environ.get("AUDIT_EXPORT_SCHEDULER_POLL_INTERVAL_SECONDS", "3600"))
 
     # Broadcast Clips (ENGAGE-005)
     broadcast_clips_table_name: str = os.environ.get("BROADCAST_CLIPS_TABLE_NAME", "broadcast_clips")
@@ -2043,6 +2194,11 @@ class Settings:
     ec2_mock_enabled: bool = os.environ.get("EC2_MOCK_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
     ec2_max_instances_per_user: int = int(os.environ.get("EC2_MAX_INSTANCES_PER_USER", "5"))
     ec2_auto_terminate_enabled: bool = os.environ.get("EC2_AUTO_TERMINATE_ENABLED", "1") not in ("0", "false", "False")
+    # Real AWS AMI IDs per platform alias — required only when ec2_mock_enabled is False (prod).
+    ec2_real_ami_ubuntu_2204: str = os.environ.get("EC2_REAL_AMI_UBUNTU_2204", "")
+    ec2_real_ami_ubuntu_2404: str = os.environ.get("EC2_REAL_AMI_UBUNTU_2404", "")
+    ec2_real_ami_amzn2: str = os.environ.get("EC2_REAL_AMI_AMZN2", "")
+    ec2_real_ami_windows_2022: str = os.environ.get("EC2_REAL_AMI_WINDOWS_2022", "")
 
     # Instance Monitoring & Health (INFRA-008)
     instance_monitoring_enabled: bool = os.environ.get("INSTANCE_MONITORING_ENABLED", "true").lower() not in ("0", "false", "no")
@@ -2051,6 +2207,11 @@ class Settings:
     instance_monitoring_max_query_points: int = int(os.environ.get("INSTANCE_MONITORING_MAX_QUERY_POINTS", "200"))
     instance_monitoring_ttl_seconds: int = int(os.environ.get("INSTANCE_MONITORING_TTL_SECONDS", "604800"))
     instance_monitoring_alerts_enabled: bool = os.environ.get("INSTANCE_MONITORING_ALERTS_ENABLED", "true").lower() not in ("0", "false", "no")
+    # Auto-restart policy (GAP-0230). Default OFF so dev/test never auto-restarts;
+    # must be explicitly enabled in prod (SECOPS-007).
+    instance_monitoring_auto_restart_enabled: bool = os.environ.get(
+        "INSTANCE_MONITORING_AUTO_RESTART_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
     # Health thresholds (percent). At-or-above warning -> warning; at-or-above critical -> critical.
     instance_monitoring_cpu_warning_pct: int = int(os.environ.get("INSTANCE_MONITORING_CPU_WARNING_PCT", "75"))
     instance_monitoring_cpu_critical_pct: int = int(os.environ.get("INSTANCE_MONITORING_CPU_CRITICAL_PCT", "90"))
@@ -2073,6 +2234,10 @@ class Settings:
     ssh_session_recording_retention_days: int = int(os.environ.get("SSH_SESSION_RECORDING_RETENTION_DAYS", "90"))
     ssh_session_recording_max_events: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_EVENTS", "50000"))
     ssh_session_recording_max_bytes: int = int(os.environ.get("SSH_SESSION_RECORDING_MAX_BYTES", "5242880"))
+    # INFRA-010 / GAP-0234: optional global override — record EVERY browser SSH
+    # session regardless of the per-host record_sessions flag. Defaults False so
+    # per-host opt-in remains the controlling mechanism.
+    ssh_session_recording_always_record: bool = os.environ.get("SSH_SESSION_RECORDING_ALWAYS_RECORD", "false").lower() not in ("0", "false", "no")
 
     # Multi-Hop SSH Bastion (INFRA-011)
     ssh_bastion_paths_table_name: str = os.environ.get("SSH_BASTION_PATHS_TABLE_NAME", "ssh_bastion_paths")
@@ -2329,6 +2494,12 @@ class Settings:
     tax_form_1099_min_reportable_cents: int = int(
         os.environ.get("TAX_FORM_1099_MIN_REPORTABLE_CENTS", "60000")
     )
+    # GAP-0020 / FIN-008: W-9 / TIN collection table (KMS-encrypted TIN storage).
+    # Records: pk=USER#{user_sub} sk=TAX_INFO. All access by user PK; no GSI.
+    tax_info_table_name: str = os.environ.get("TAX_INFO_TABLE_NAME", "tax_info")
+    # Platform's own EIN, printed as the Payer TIN on every 1099-NEC. Populated
+    # from prod secrets; never logged. Empty in dev unless set in .env.local.
+    platform_ein: str = os.environ.get("PLATFORM_EIN", "")
     # FIN-014: Payment Provider Health monitoring. Records per-provider
     # success/failure/latency of payment operations, computes health status,
     # error rates, and a recent-incident timeline.
@@ -2402,6 +2573,14 @@ class Settings:
     kyc_document_templates_max_pdf_bytes: int = int(
         os.environ.get("KYC_DOCUMENT_TEMPLATES_MAX_PDF_BYTES", str(10 * 1024 * 1024))
     )
+    # GAP-0279 (KYC-017 §3.6): gate KYC case submission on all tier-required
+    # document templates being signed. Defaults ON for dev/prod parity
+    # (SECOPS-007); when no active templates exist the gate is a no-op, so it
+    # does not block dev/e2e. Set KYC_TEMPLATE_READINESS_GATE=false for an
+    # emergency rollback (e.g. retroactively unblocking in-progress cases).
+    kyc_template_readiness_gate_enabled: bool = os.environ.get(
+        "KYC_TEMPLATE_READINESS_GATE", "true"
+    ).lower() in ("1", "true", "yes", "on")
 
     # INFRA-001: Host Inventory Management
     ddb_host_inventory_table: str = os.environ.get(

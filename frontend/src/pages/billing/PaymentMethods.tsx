@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { detectCardNetwork, formatCardNumber } from "@/lib/cardNetwork";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -76,6 +77,7 @@ const BRAND_COLORS: Record<string, string> = {
   mastercard: "text-orange-600",
   amex: "text-blue-800",
   discover: "text-orange-500",
+  ath: "text-emerald-600",
 };
 
 function brandLabel(brand?: string): string {
@@ -594,15 +596,32 @@ export function PaymentMethods() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="card-number">Card Number</Label>
-              <Input
-                id="card-number"
-                placeholder="4242 4242 4242 4242"
-                autoComplete="cc-number"
-                inputMode="numeric"
-                value={cardNumber}
-                onChange={(e) => setCardNumber(e.target.value)}
-                required
-              />
+              <div className="relative">
+                <Input
+                  id="card-number"
+                  placeholder="4242 4242 4242 4242"
+                  autoComplete="cc-number"
+                  inputMode="numeric"
+                  value={cardNumber}
+                  onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
+                  className="pr-20"
+                  required
+                />
+                {(() => {
+                  const net = detectCardNetwork(cardNumber);
+                  if (!cardNumber.trim()) return null;
+                  return (
+                    <span
+                      data-testid="card-network-badge"
+                      className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold ${
+                        BRAND_COLORS[net.id] ?? "text-muted-foreground"
+                      }`}
+                    >
+                      {net.label}
+                    </span>
+                  );
+                })()}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">

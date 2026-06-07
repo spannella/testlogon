@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from app.auth.deps import AuthenticatedUser, require_root_session
 from app.auth.policy import require_admin_or_root
@@ -162,6 +163,48 @@ async def moderate_creative(
     return AdminAdModerationResult(
         item_type="creative", item_id=creative_id, status=result["status"]
     )
+
+
+# ── Platform kill switch (GAP-0068) ──────────────────────────────────────────
+
+
+class KillSwitchToggleIn(BaseModel):
+    enabled: bool
+    reason: str = ""
+
+
+class KillSwitchStateOut(BaseModel):
+    active: bool
+    toggled_by: str = ""
+    reason: str = ""
+    updated_at: int = 0
+
+
+@admin_ad_platform_router.post(
+    "/kill-switch", response_model=KillSwitchStateOut,
+    summary="Enable or disable the platform-wide ad kill switch (ROOT only)",
+)
+async def toggle_kill_switch(
+    body: KillSwitchToggleIn,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_root_session),
+):
+    if body.enabled and not body.reason:
+        raise HTTPException(422, "reason is required when enabling the kill switch")
+    return svc.toggle_kill_switch(
+        enabled=body.enabled, admin_sub=user.sub,
+        reason=body.reason, request=request,
+    )
+
+
+@admin_ad_platform_router.get(
+    "/kill-switch", response_model=KillSwitchStateOut,
+    summary="Read the current platform-wide ad kill switch state",
+)
+async def get_kill_switch(
+    _user: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    return svc.get_kill_switch_state()
 
 
 # ── Platform metrics ─────────────────────────────────────────────────────────

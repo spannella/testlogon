@@ -42,6 +42,28 @@ def tenant_pk(entity_prefix: str, entity_id: str) -> str:
     return f"{entity_prefix}#{entity_id}"
 
 
+def tenant_pk_for(bare_key: str) -> str:
+    """Scope an already-assembled bare partition key to the current tenant.
+
+    Convenience wrapper for the common pattern where the caller already has
+    a fully assembled bare key (e.g. ``f"USER#{user_sub}"``) and wants to
+    scope it to the active tenant without restructuring the call site.
+
+    When ``multi_tenancy_enabled`` is ``True``:
+        ``TENANT#<tid>#<bare_key>``
+    Otherwise (the default, single-tenant deployments):
+        ``<bare_key>`` (unchanged — identical behaviour to today)
+
+    Example:
+        bare = f"USER#{user_sub}"     # "USER#abc"
+        scoped = tenant_pk_for(bare)  # "TENANT#tid#USER#abc" when enabled
+    """
+    if S.multi_tenancy_enabled:
+        tid = get_current_tenant()
+        return f"TENANT#{tid}#{bare_key}"
+    return bare_key
+
+
 class TenantSettings:
     """Per-request settings overlay.
 

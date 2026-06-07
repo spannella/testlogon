@@ -236,6 +236,29 @@ def _require_operator_role(ctx: dict) -> None:
         )
 
 
+def _require_operator_and_owner(session_id: str, ctx: dict):
+    """Fetch and return the session; raise unless caller owns it or is root.
+
+    Lifecycle operations (start/stop/delete) must be restricted to the session
+    owner, with root permitted as an emergency super-user. General admin role
+    is NOT sufficient to act on another broadcaster's session — preventing the
+    SEC-025 IDOR where any admin could control any session. Call this AFTER
+    _require_operator_role so the role gate (admin/root) is still enforced.
+    """
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if ctx["user_sub"] != session.created_by and ctx.get("role") != "root":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "BROADCAST_OWNERSHIP_FORBIDDEN",
+                "detail": "You can only perform lifecycle operations on your own sessions.",
+            },
+        )
+    return session
+
+
 def _correlation_id(request: Request) -> str:
     cid = request.headers.get("x-correlation-id", "").strip()
     return cid or str(uuid4())
@@ -312,11 +335,20 @@ def list_sessions_route(
     limit: int = Query(default=50, ge=1, le=200),
     ctx: dict = Depends(_ctx),
 ):
-    if status_filter:
+    is_operator = ctx.get("role") in {"admin", "root"}
+    if status_filter and is_operator:
+        # Admin/root may query the platform-wide status feed.
         result = list_sessions_by_status(status_filter, limit=limit)
-    else:
-        result = list_sessions_by_creator(ctx["user_sub"], limit=limit)
-    items = [_to_session_out(s) for s in result["items"]]
+        items = [_to_session_out(s) for s in result["items"]]
+        return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
+
+    # Non-operators are always scoped to their own sessions (SEC: prevent
+    # cross-creator session enumeration via the status filter, GAP-0111).
+    result = list_sessions_by_creator(ctx["user_sub"], limit=limit)
+    sessions = result["items"]
+    if status_filter:
+        sessions = [s for s in sessions if s.status == status_filter]
+    items = [_to_session_out(s) for s in sessions]
     return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
 
 
@@ -367,6 +399,7 @@ def start_session_route(
     ctx: dict = Depends(_ctx),
 ):
     _require_operator_role(ctx)
+    _require_operator_and_owner(session_id, ctx)
     cid = (x_correlation_id or "").strip() or _correlation_id(request)
     idem = (x_idempotency_key or "").strip() or request.headers.get("x-idempotency-key", "").strip()
     try:
@@ -409,6 +442,7 @@ def stop_session_route(
     ctx: dict = Depends(_ctx),
 ):
     _require_operator_role(ctx)
+    _require_operator_and_owner(session_id, ctx)
     cid = (x_correlation_id or "").strip() or _correlation_id(request)
     idem = (x_idempotency_key or "").strip() or request.headers.get("x-idempotency-key", "").strip()
     try:
@@ -453,6 +487,7 @@ def stop_session_route(
 @router.delete("/sessions/{session_id}", response_model=BroadcastDeleteOut)
 def delete_session_route(session_id: str, request: Request, ctx: dict = Depends(_ctx)):
     _require_operator_role(ctx)
+    _require_operator_and_owner(session_id, ctx)
     cid = _correlation_id(request)
     try:
         out = delete_session_with_provider(session_id=session_id)
@@ -597,10 +632,22 @@ def viewer_join_route(
 def viewer_heartbeat_route(
     session_id: str,
     viewer_id: str = Query(...),
+    invite_token: Optional[str] = Query(default=None),
     ctx: dict = Depends(_ctx),
 ):
     """Heartbeat to keep viewer session alive. Call every 30s."""
-    _ = ctx
+    session = get_session(session_id)  # 404 if session doesn't exist
+    # Access gate (GAP-0115): a heartbeat keeps a viewer counted as live, so a
+    # non-member could otherwise inflate / poison a private session's viewer
+    # count with an arbitrary viewer_id. Mirror the viewers/join gating.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
     count = touch_viewer(session_id, viewer_id)
     return ViewerHeartbeatOut(ok=True, viewer_count=count)
 
@@ -662,8 +709,13 @@ def report_session_health_route(
     ctx: dict = Depends(_ctx),
 ):
     """Accept health metrics from the broadcaster client or ingest probe."""
-    _ = ctx
     session = get_session(session_id)
+    # Ownership gate (GAP-0115): health metrics may only be reported by the
+    # broadcaster (session owner) or an operator. Without this, any
+    # authenticated user could poison the health snapshot stream observed on
+    # the creator's dashboard. Mirrors configure_chat_tiers_route.
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
     if session.status != "live":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -715,10 +767,25 @@ def get_session_health_history_route(
 
 
 @router.get("/sessions/{session_id}/stream")
-async def broadcast_event_stream_route(session_id: str, ctx: dict = Depends(_ctx)):
+async def broadcast_event_stream_route(
+    session_id: str,
+    invite_token: Optional[str] = Query(default=None),
+    ctx: dict = Depends(_ctx),
+):
     """SSE stream for real-time broadcast events (viewer count, health updates)."""
-    _ = ctx
-    _ = get_session(session_id)  # 404 if session doesn't exist
+    session = get_session(session_id)  # 404 if session doesn't exist
+    # Go-Private access gating (GAP-0112): an authenticated user may only
+    # subscribe to a private session's event stream if they are the creator,
+    # are allowlisted, or present a valid invite token. Mirrors the gating on
+    # the playback-url and viewers/join endpoints.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
     q = broadcast_sse_subscribe(session_id)
 
     async def gen():
@@ -1096,17 +1163,39 @@ def accept_private_request_route(
     # Accept the private request in DDB
     result = accept_private_request(session_id, request_id, body.behavior, call_id)
 
-    # Transition broadcast to private status
-    transition_session_status(
-        session_id=session_id,
-        to_status="private",
-        reason="go_private",
-        actor=ctx["user_sub"],
-        extra_fields={
-            "private_session_id": request_id,
-            "private_behavior": body.behavior,
-        },
-    )
+    if body.behavior == "end":
+        # GAP-0124: tear down the public stream immediately. This must happen
+        # while the session is still in "ready"/"live" status, before any
+        # transition to "private" — stop_session_with_provider() guards on
+        # status in {"ready","live"} and would short-circuit otherwise.
+        try:
+            stop_session_with_provider(
+                session_id=session_id,
+                actor=ctx["user_sub"],
+                reason="go_private_end",
+                correlation_id=_correlation_id(request),
+            )
+        except Exception:
+            # Non-fatal: the private session itself must still proceed even if
+            # the provider stop fails; an operator alert will fire on the
+            # lingering session.
+            import logging
+            logging.getLogger(__name__).exception(
+                "go_private_end: stop_session_with_provider failed for session %s", session_id
+            )
+    else:
+        # Transition broadcast to private status (pause/continue keep the
+        # public stream resources; only the application-layer state changes).
+        transition_session_status(
+            session_id=session_id,
+            to_status="private",
+            reason="go_private",
+            actor=ctx["user_sub"],
+            extra_fields={
+                "private_session_id": request_id,
+                "private_behavior": body.behavior,
+            },
+        )
 
     # Record audit event
     record_broadcast_action(
@@ -1131,6 +1220,12 @@ def accept_private_request_route(
             "_type": "private:broadcast_paused",
             "session_id": session_id,
             "message": "Creator is in a private session",
+        })
+    elif body.behavior == "end":
+        broadcast_sse_publish(session_id, {
+            "_type": "private:broadcast_ended",
+            "session_id": session_id,
+            "message": "Broadcast has ended for private session",
         })
 
     return PrivateAcceptOut(
@@ -1559,6 +1654,20 @@ def send_chat_message_route(session_id: str, body: BroadcastChatSendIn, ctx: dic
             detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat is only available while the broadcast is live"},
         )
 
+    # Go-Private access gating (GAP-0117): mirror the gating on the chat
+    # stream / playback-url / viewers/join endpoints. Without this, any
+    # authenticated user could post into a private session's live chat
+    # (and have it fanned out to legitimate viewers via SSE). The mute /
+    # rate-limit checks in _store_send_chat run afterwards, so excluded
+    # users receive a privacy denial rather than a mute-specific error.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+    )
+
     user_id = ctx["user_sub"]
 
     # Broadcaster-only features (BCAST-015 Phase C + D)
@@ -1765,16 +1874,30 @@ async def broadcast_chat_stream_route(
     session_id: str,
     after: Optional[str] = Query(default=None),
     poll_ms: int = Query(default=500, ge=200, le=3000),
+    invite_token: Optional[str] = Query(default=None),
     ctx: dict = Depends(_ctx),
 ):
     """SSE stream for real-time broadcast chat messages."""
-    _ = ctx
     session = get_session(session_id)
     if session.status not in ("live", "ready"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat stream is only available for live broadcasts"},
         )
+    # Go-Private access gating (GAP-0113): mirror the gating on the event
+    # stream / playback-url / viewers/join endpoints. Without this, any
+    # authenticated user could subscribe to a private session's live chat.
+    from app.services.broadcast_privacy import check_viewer_access
+    check_viewer_access(
+        session_id,
+        ctx["user_sub"],
+        creator_id=session.created_by,
+        visibility=session.broadcast_privacy_visibility,
+        invite_token=invite_token,
+    )
+    # Capture once before entering the generator. Per-viewer redaction rules
+    # (locked content, expiry, reactions) depend on this (GAP-0114).
+    viewer_user_id = ctx["user_sub"]
 
     import anyio
 
@@ -1803,7 +1926,7 @@ async def broadcast_chat_stream_route(
                         payload = json.dumps({"message_id": msg["message_id"]}, separators=(",", ":"))
                         yield f"event: chat:delete\ndata: {payload}\n\n"
                     else:
-                        out = _chat_msg_out(msg)
+                        out = _chat_msg_out(msg, viewer_user_id=viewer_user_id)
                         payload = json.dumps(out, separators=(",", ":"), default=str)
                         if out.get("kind") == "product_link":
                             event_type = "chat:product_link"

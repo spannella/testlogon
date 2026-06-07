@@ -178,6 +178,30 @@ async def budget_recommendation_endpoint(
     )
 
 
+# ── ROAS (Return on Ad Spend) ──────────────────────────────────────────
+
+
+@ad_optimization_router.get("/campaigns/{campaign_id}/roas")
+async def campaign_roas_endpoint(
+    campaign_id: str,
+    days: int = Query(default=30, ge=1, le=365),
+    ctx=Depends(require_ui_session),
+):
+    """Return ROAS metrics (conversion revenue / spend) for a campaign.
+
+    Sources conversion revenue from affiliate redemption rows and spend from
+    the analytics rollups. Advertiser must own the campaign (GAP-0062).
+    """
+    from app.services.ad_roas import calculate_campaign_roas
+
+    camp = _require_campaign_owner(campaign_id, ctx["user_sub"])
+    return calculate_campaign_roas(
+        account_id=camp["account_id"],
+        campaign_id=campaign_id,
+        days=days,
+    )
+
+
 # ── Optimization config ───────────────────────────────────────────────
 
 

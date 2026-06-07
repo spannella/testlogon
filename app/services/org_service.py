@@ -118,9 +118,40 @@ def list_user_orgs(user_sub: str, status: Optional[str] = None) -> List[Dict[str
     if status:
         memberships = [m for m in memberships if m.get("status") == status]
 
+    if not memberships:
+        return []
+
+    # Build a membership lookup keyed by org_id, then fetch all org #META
+    # records with BatchGetItem instead of one GetItem per membership (the
+    # previous N+1 pattern: 1 query + N GetItems per org-list page load).
+    membership_by_org: Dict[str, Any] = {m["org_id"]: m for m in memberships}
+    org_ids = list(membership_by_org.keys())
+
+    table_name = T.organizations.name
+    client = T.organizations.meta.client
+    all_org_metas: Dict[str, Any] = {}
+    # BatchGetItem accepts at most 100 keys per call — chunk for users at/above
+    # the org_max_per_user limit.
+    for chunk_start in range(0, len(org_ids), 100):
+        chunk = org_ids[chunk_start:chunk_start + 100]
+        keys = [{"org_id": oid, "sk": "#META"} for oid in chunk]
+        batch_resp = client.batch_get_item(
+            RequestItems={table_name: {"Keys": keys}}
+        )
+        for item in batch_resp.get("Responses", {}).get(table_name, []):
+            all_org_metas[item["org_id"]] = item
+        # DynamoDB may return partial results under throttling — re-fetch the
+        # unprocessed keys (standard AWS-recommended retry loop).
+        unprocessed = batch_resp.get("UnprocessedKeys", {})
+        while unprocessed:
+            retry_resp = client.batch_get_item(RequestItems=unprocessed)
+            for item in retry_resp.get("Responses", {}).get(table_name, []):
+                all_org_metas[item["org_id"]] = item
+            unprocessed = retry_resp.get("UnprocessedKeys", {})
+
     result = []
-    for m in memberships:
-        org = get_org(m["org_id"])
+    for org_id, m in membership_by_org.items():
+        org = all_org_metas.get(org_id)
         if org and (not status or org.get("status") == status):
             result.append({**org, "org_role": m["org_role"], "membership_status": m["status"]})
     return result
@@ -414,10 +445,17 @@ def _get_membership_by_email(org_id: str, email: str) -> Optional[Dict[str, Any]
 
 
 def _find_invite(invite_id: str) -> Optional[Dict[str, Any]]:
-    resp = T.organizations.scan(
-        FilterExpression="sk = :sk",
-        ExpressionAttributeValues={":sk": f"INVITE#{invite_id}"},
-        Limit=100,
+    """Look up an invite item by invite_id using the invite-id-index GSI.
+
+    Previously this did a full table scan with ``Limit=100`` — a pre-filter cap
+    that could silently miss invites beyond the first 100 scanned items (a
+    correctness bug, not just a perf one) and an O(N) cost across all orgs.
+    The ``invite-id-index`` GSI (PK: ``invite_id``) gives an O(1) lookup.
+    """
+    resp = T.organizations.query(
+        IndexName="invite-id-index",
+        KeyConditionExpression=Key("invite_id").eq(invite_id),
+        Limit=1,
     )
     items = resp.get("Items", [])
     return items[0] if items else None

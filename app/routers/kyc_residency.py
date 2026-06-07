@@ -125,6 +125,19 @@ async def admin_get_residency_document(
     return _out(item, include_match=True)
 
 
+@kyc_residency_router.get("/admin/case/{case_id}", response_model=KycResidencyListResponse)
+async def admin_list_residency_for_case(
+    case_id: str,
+    _user: AuthenticatedUser = Depends(require_admin_or_root),
+) -> KycResidencyListResponse:
+    """List all residency documents for a specific case (admin/root), including
+    extracted address and per-field address-match data for the comparison UI."""
+    items = STORE.list_documents_for_case(case_id)
+    return KycResidencyListResponse(
+        documents=[_out(i, include_match=True) for i in items]
+    )
+
+
 @kyc_residency_router.post("/admin/{document_id}/review", response_model=KycResidencyDocumentOut)
 async def admin_review_residency_document(
     document_id: str,

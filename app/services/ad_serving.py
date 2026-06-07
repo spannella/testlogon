@@ -64,6 +64,14 @@ def serve_ad(
         "creator_id": creator_id,
     })
 
+    # 0. Platform-wide kill switch (admin emergency halt, GAP-0068). Checked
+    #    before any per-campaign logic so an incident can stop all paid serving
+    #    within one cache-TTL window. Lazy import avoids a circular import
+    #    (admin_ad_platform does not import ad_serving).
+    from app.services.admin_ad_platform import is_kill_switch_active
+    if is_kill_switch_active():
+        return _empty_response("platform_kill_switch_active")
+
     # 1. Check creator allows ads
     creator_settings = get_creator_ad_settings(creator_id)
     if not creator_settings.get("allow_ads", True):
@@ -91,6 +99,23 @@ def serve_ad(
         if is_advertiser_blocked(creator_id, account_id):
             continue
 
+        # Category whitelist check (ADS-003): when the creator has configured
+        # an allowed_ad_categories whitelist, skip campaigns whose category is
+        # not in it. An empty list means "no restriction" (the default).
+        allowed_categories = creator_settings.get("allowed_ad_categories") or []
+        if allowed_categories:
+            campaign_category = campaign.get("category", "general")
+            if campaign_category not in allowed_categories:
+                continue
+
+        # Min CPM floor check (ADS-003): skip campaigns bidding below the
+        # creator's configured minimum CPM.
+        creator_min_cpm = int(creator_settings.get("min_cpm_cents", 0) or 0)
+        if creator_min_cpm > 0:
+            campaign_bid = int(campaign.get("bid_cpm_cents", 500))
+            if campaign_bid < creator_min_cpm:
+                continue
+
         # Budget check
         if not _has_budget(campaign):
             continue
@@ -116,6 +141,14 @@ def serve_ad(
             continue
 
         # Score: bid_cpm * relevance (mock relevance = 1.0)
+        # GAP-0044: campaigns now persist bid_cpm_cents at creation. The 500
+        # fallback is a last-resort guard for legacy items written before the
+        # attribute existed; warn so these can be back-filled.
+        if campaign.get("bid_cpm_cents") is None:
+            logger.warning(
+                "ad_serve_missing_bid_cpm campaign_id=%s; using default 500",
+                campaign.get("campaign_id"),
+            )
         bid_cpm = int(campaign.get("bid_cpm_cents", 500))
         score = bid_cpm * 1.0
 
@@ -132,8 +165,12 @@ def serve_ad(
     candidates.sort(key=lambda c: c["score"], reverse=True)
     winner = candidates[0]
 
-    # 5. Select creative (weighted random by rotation_weight)
-    creative = _weighted_random_creative(winner["creatives"])
+    # 5. Select creative — prefer campaign-level creative_weights (set by
+    # reallocate_budget recommendations) then fall back to per-creative
+    # rotation_weight.
+    creative = _weighted_random_creative(
+        winner["creatives"], campaign_weights=winner["campaign"].get("creative_weights") or {}
+    )
 
     # 6. Build tracking URLs
     tracking_base = "/ui/ads/track"
@@ -392,10 +429,32 @@ def _increment_frequency_cap(user_id: str, campaign_id: str) -> None:
                            user_id, campaign_id, window)
 
 
-def _weighted_random_creative(creatives: list[dict]) -> dict:
+def _weighted_random_creative(
+    creatives: list[dict],
+    campaign_weights: dict | None = None,
+) -> dict:
+    """Select a creative using weighted random sampling.
+
+    If the campaign has a ``creative_weights`` dict (written by a
+    ``reallocate_budget`` optimisation recommendation), those values take
+    precedence over the per-creative ``rotation_weight`` field.
+
+    Args:
+        creatives: list of approved creative dicts for the winning campaign.
+        campaign_weights: optional ``{creative_id: int}`` map from the campaign
+            record (``campaign.get("creative_weights")``). A missing entry falls
+            back to the creative's own ``rotation_weight``.
+    """
     if len(creatives) == 1:
         return creatives[0]
-    weights = [int(c.get("rotation_weight", 50)) for c in creatives]
+    cw = campaign_weights or {}
+    weights: list[int] = []
+    for c in creatives:
+        cid = c.get("creative_id", "")
+        if cid in cw:
+            weights.append(max(1, int(cw[cid])))  # campaign-level override
+        else:
+            weights.append(int(c.get("rotation_weight", 50)))
     total = sum(weights)
     if total == 0:
         return random.choice(creatives)

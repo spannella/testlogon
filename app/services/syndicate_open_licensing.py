@@ -345,12 +345,47 @@ def _auto_license_content_to_members(
 
 
 def _list_registered_content(syndicate_id: str) -> List[Dict[str, Any]]:
-    """All CONTENT# records registered under a syndicate."""
-    resp = T.syndicate_open_licensing.query(
-        KeyConditionExpression=Key("pk").eq(f"SYND#{syndicate_id}")
+    """All CONTENT# records registered under a syndicate.
+
+    Paginates via LastEvaluatedKey so busy syndicates (whose content registry
+    exceeds a single 1 MB DynamoDB page) are not silently truncated.
+    """
+    items: List[Dict[str, Any]] = []
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("pk").eq(f"SYND#{syndicate_id}")
         & Key("sk").begins_with("CONTENT#"),
-    )
-    return resp.get("Items", [])
+    }
+    while True:
+        resp = T.syndicate_open_licensing.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
+
+
+def _list_content_by_creator(syndicate_id: str, creator_id: str) -> List[Dict[str, Any]]:
+    """Query GSI1 for content registered by a specific creator in a syndicate.
+
+    Uses the GSI1PK = ``SYND_CREATOR#{syndicate_id}#{creator_id}`` index so
+    DynamoDB returns only that creator's items, rather than scanning the whole
+    syndicate partition and filtering in Python. Paginated via LastEvaluatedKey.
+    """
+    gsi_pk = f"SYND_CREATOR#{syndicate_id}#{creator_id}"
+    items: List[Dict[str, Any]] = []
+    kwargs: Dict[str, Any] = {
+        "IndexName": "GSI1",
+        "KeyConditionExpression": Key("GSI1PK").eq(gsi_pk),
+    }
+    while True:
+        resp = T.syndicate_open_licensing.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
 
 
 def _reconcile_all_content(syndicate_id: str, *, terms: Dict[str, Any]) -> int:
@@ -514,12 +549,18 @@ def list_syndicate_content(
     creator_id: Optional[str] = None,
     include_exempt: bool = True,
 ) -> List[Dict[str, Any]]:
-    """List content registered under syndicate open licensing."""
-    items = _list_registered_content(syndicate_id)
+    """List content registered under syndicate open licensing.
+
+    When ``creator_id`` is provided, queries GSI1 directly for efficient
+    creator-scoped retrieval. Otherwise performs a paginated full-partition
+    scan of all registered content.
+    """
+    if creator_id:
+        items = _list_content_by_creator(syndicate_id, creator_id)
+    else:
+        items = _list_registered_content(syndicate_id)
     out: List[Dict[str, Any]] = []
     for item in items:
-        if creator_id and item.get("creator_id") != creator_id:
-            continue
         if not include_exempt and item.get("exempt"):
             continue
         out.append({

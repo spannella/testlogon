@@ -6,7 +6,7 @@ import importlib.util
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 
@@ -147,7 +147,7 @@ def web_push_send(
     tag: str = "default",
     alert_id: str = "",
     alert_type: str = "",
-) -> bool:
+) -> Tuple[bool, Optional[str]]:
     """Send push via Web Push protocol (RFC 8030 + RFC 8291).
 
     Uses the pywebpush library for encryption and VAPID signing.
@@ -155,11 +155,21 @@ def web_push_send(
     In dev mode, logs the push payload instead of delivering (push
     services won't work with localhost).
 
-    Returns True if push was accepted (or logged in dev mode), False otherwise.
+    Returns a ``(success, reason)`` tuple:
+
+    - ``(True, None)`` on success (or logged in dev mode).
+    - ``(False, "permanent")`` when the subscription is definitively gone
+      (HTTP 410 Gone or 404 Not Found, whether via status code or
+      ``WebPushException``). The caller SHOULD revoke the device.
+    - ``(False, "transient")`` for every other failure (non-2xx that isn't
+      410/404, timeouts, network blips, other exceptions). The caller MUST
+      NOT revoke — the subscription is likely still valid.
+    - ``(False, "config")`` / ``(False, "invalid")`` for configuration or
+      malformed-subscription problems (also non-revoking).
     """
     if not (S.vapid_private_key and S.vapid_public_key):
         logger.debug("Web push skipped: VAPID keys not configured")
-        return False
+        return (False, "config")
 
     # Parse subscription JSON
     try:
@@ -171,10 +181,10 @@ def web_push_send(
 
         if not (endpoint and p256dh and auth):
             logger.warning("Web push: invalid subscription (missing fields)")
-            return False
+            return (False, "invalid")
     except (json.JSONDecodeError, AttributeError, TypeError):
         logger.warning("Web push: invalid subscription JSON")
-        return False
+        return (False, "invalid")
 
     # Build payload
     payload = json.dumps({
@@ -195,7 +205,7 @@ def web_push_send(
             endpoint[:80],
             payload,
         )
-        return True
+        return (True, None)
 
     # Send using pywebpush
     try:
@@ -216,23 +226,37 @@ def web_push_send(
         status = response.status_code if hasattr(response, "status_code") else 201
         if status in (200, 201, 202):
             logger.info("Web push sent: endpoint=%s", endpoint[:80])
-            return True
-        else:
-            logger.warning("Web push failed: status=%s, endpoint=%s", status, endpoint[:80])
-            return False
+            return (True, None)
+        # 410 Gone / 404 Not Found via status code = subscription is gone.
+        if status in (404, 410):
+            logger.info(
+                "Web push subscription gone (status=%s): endpoint=%s",
+                status, endpoint[:80],
+            )
+            return (False, "permanent")
+        # Any other non-2xx (5xx, 429, etc.) is transient — do NOT revoke.
+        logger.warning(
+            "Web push transient failure: status=%s, endpoint=%s",
+            status, endpoint[:80],
+        )
+        return (False, "transient")
 
     except Exception as exc:
         exc_str = str(exc)
         # 410 Gone = subscription expired
         if "410" in exc_str or "Gone" in exc_str:
             logger.info("Web push subscription expired (410): endpoint=%s", endpoint[:80])
-            return False  # Caller should revoke device
+            return (False, "permanent")  # Caller should revoke device
         # 404 Not Found = subscription invalid
         if "404" in exc_str:
             logger.info("Web push subscription not found (404): endpoint=%s", endpoint[:80])
-            return False
-        logger.exception("Web push send error: endpoint=%s", endpoint[:80])
-        return False
+            return (False, "permanent")  # Caller should revoke device
+        # Timeouts, connection errors, and all other exceptions are transient.
+        logger.exception(
+            "Web push transient send error (not revoking): endpoint=%s",
+            endpoint[:80],
+        )
+        return (False, "transient")
 
 
 def _alert_url(alert_type: str, alert_id: str) -> str:
@@ -290,7 +314,7 @@ def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, a
                 continue
 
             if platform == "web" and S.web_push_enabled:
-                success = web_push_send(
+                success, reason = web_push_send(
                     tok, title, body,
                     url=url,
                     tag=alert_type,
@@ -298,18 +322,27 @@ def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, a
                     alert_type=alert_type,
                 )
                 if not success and not S.dev_mode:
-                    # Check if subscription is likely expired -- attempt revoke
-                    try:
-                        sub = json.loads(tok)
-                        if "endpoint" in sub:
-                            revoke_push_device(user_sub, device_id)
-                            logger.info(
-                                "Auto-revoked stale push device: user=%s, device=%s",
-                                user_sub, device_id,
-                            )
-                    except (json.JSONDecodeError, TypeError):
-                        # Placeholder token -- ignore
-                        pass
+                    if reason == "permanent":
+                        # Subscription is definitively gone (410/404) -- revoke.
+                        try:
+                            sub = json.loads(tok)
+                            if "endpoint" in sub:
+                                revoke_push_device(user_sub, device_id)
+                                logger.info(
+                                    "Auto-revoked stale push device: user=%s, device=%s",
+                                    user_sub, device_id,
+                                )
+                        except (json.JSONDecodeError, TypeError):
+                            # Placeholder token -- ignore
+                            pass
+                    else:
+                        # Transient/config/invalid failure -- do NOT revoke a
+                        # legitimate subscription over a timeout or 5xx blip.
+                        logger.warning(
+                            "Web push failed (reason=%s, keeping device): "
+                            "user=%s, device=%s",
+                            reason, user_sub, device_id,
+                        )
 
             elif platform != "web" and S.fcm_enabled:
                 fcm_send(

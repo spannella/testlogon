@@ -17,9 +17,12 @@ DynamoDB layout (table ``ssh_bastion_paths``):
 
 from __future__ import annotations
 
+import io
 import ipaddress
 import logging
 import re
+import threading
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -52,6 +55,20 @@ class ChainValidationError(Exception):
     """Raised when the resolved chain fails validation (too long, duplicate, etc.)."""
 
 
+class BastionConnectError(Exception):
+    """Raised when a multi-hop SSH dial-out through a bastion chain fails.
+
+    Carries a stable ``code`` (for client-side handling) alongside the human
+    message, mirroring ``BrowserSshError`` in
+    ``app/routers/browser_ssh_terminal.py``.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 # ---------------------------------------------------------------------------
 # Host / IP validation (reuses ipaddress; falls back to hostname regex)
 # ---------------------------------------------------------------------------
@@ -61,12 +78,31 @@ _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$"
 )
 
+# Private/reserved IP ranges that must not be used as bastion hops (SSRF guard,
+# GAP-0022). Mirrors the denylist in ``app/services/webhook_ssrf.py`` so that a
+# hop cannot target the AWS instance metadata endpoint (169.254.169.254),
+# loopback, or any internal RFC-1918 / CGNAT / link-local address.
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS IMDS metadata
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),   # CGNAT / shared address space
+    ipaddress.ip_network("::1/128"),          # IPv6 loopback
+    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+    ipaddress.ip_network("fc00::/7"),         # IPv6 unique local
+]
+
 
 def validate_host(host: str) -> str:
     """Validate and normalize a hop hostname or IP address.
 
     Accepts IPv4 / IPv6 literals (normalized via ``ipaddress``) and RFC-1123
-    hostnames. Raises :class:`InvalidHop` for anything else.
+    hostnames. Rejects IP literals in private / loopback / link-local / CGNAT /
+    metadata ranges to prevent SSRF (GAP-0022). Raises :class:`InvalidHop` for
+    anything else.
     """
     host = (host or "").strip()
     if not host:
@@ -75,9 +111,16 @@ def validate_host(host: str) -> str:
         raise InvalidHop("hostname too long")
     # Try IP literal first.
     try:
-        return str(ipaddress.ip_address(host))
+        addr = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        addr = None
+    if addr is not None:
+        for net in _BLOCKED_NETWORKS:
+            if addr in net:
+                raise InvalidHop(
+                    f"hop targets a private or reserved address: {host}"
+                )
+        return str(addr)
     if _HOSTNAME_RE.match(host):
         return host.lower()
     raise InvalidHop(f"invalid hostname or IP: {host}")
@@ -413,3 +456,318 @@ def resolve_path(user_sub: str, path_id: str) -> Dict[str, Any]:
         "ssh_command": ssh_command,
         "ssh_config": ssh_config,
     }
+
+
+# ---------------------------------------------------------------------------
+# Programmatic connection-chain resolution (GAP-0236)
+# ---------------------------------------------------------------------------
+
+def resolve_connection_chain(
+    user_sub: str,
+    path_id: str,
+    *,
+    include_keys: bool = True,
+) -> List[Dict[str, Any]]:
+    """Resolve a bastion path into a hop list ready for programmatic dial-out.
+
+    Unlike :func:`resolve_path` (which produces a ProxyJump / ssh_config text
+    representation for end-users), this returns a list of hop dicts ordered
+    outermost-bastion-first with the target last. Each hop dict extends the
+    base hop fields (``hostname``, ``port``, ``username``, ``ssh_key_id``,
+    ``label``, ``is_bastion``, ``hop_number``) with:
+
+        ``private_key_pem``:  decrypted PEM string if ``include_keys`` is True
+                              and a key is stored for this hop, else ``None``.
+
+    The function re-uses the validation logic of :func:`resolve_path` and
+    inherits its :class:`BastionPathNotFound` / :class:`ChainValidationError`
+    error contract.
+
+    SECURITY: the returned dicts contain plaintext private key material when
+    ``include_keys`` is True. They are *server-internal only* and must never be
+    returned to the API layer / browser. Pass ``include_keys=False`` for
+    topology-only callers (e.g. admin audit endpoints) to avoid triggering KMS
+    decryption.
+    """
+    resolved = resolve_path(user_sub, path_id)  # raises BastionPathNotFound / ChainValidationError
+    chain: List[Dict[str, Any]] = []
+
+    for hop in resolved["chain"]:
+        hop_out = dict(hop)  # copy: hostname, port, username, ssh_key_id, label, ...
+        pem: Optional[str] = None
+
+        if include_keys and hop.get("ssh_key_id"):
+            # Local import avoids a circular dependency with ssh_key_manager.
+            from app.services.ssh_key_manager import get_decrypted_private_key
+
+            pem = get_decrypted_private_key(user_sub, hop["ssh_key_id"])
+            if pem is None:
+                logger.warning(
+                    "ssh_bastion.key_not_found path_id=%s ssh_key_id=%s",
+                    path_id, hop["ssh_key_id"],
+                )
+
+        hop_out["private_key_pem"] = pem
+        chain.append(hop_out)
+
+    logger.info(
+        "ssh_bastion.chain_resolved path_id=%s user_sub=%s hops=%d",
+        path_id, user_sub, len(chain),
+    )
+    return chain
+
+
+# ---------------------------------------------------------------------------
+# Multi-hop SSH bridge (GAP-0235)
+# ---------------------------------------------------------------------------
+
+class MultiHopSshBridge:
+    """SSH bridge that tunnels through one or more bastion hosts using
+    Paramiko ``direct-tcpip`` channel forwarding.
+
+    ``hops`` is an ordered list of dicts (outermost bastion first, target
+    last), each with:
+        ``hostname``, ``port``, ``username`` and credentials --
+        ``private_key_pem`` (preferred) and/or ``password``.
+
+    The flow:
+      1. Connect a Paramiko client directly to hop 0.
+      2. For each subsequent hop, open a ``direct-tcpip`` channel through the
+         *previous* hop's transport to the next hop's address, wrap it in a
+         fresh Paramiko ``Transport``, and authenticate.
+      3. Invoke an interactive shell on the final transport.
+
+    The public surface (``connect``, ``poll_output``, ``send_input``,
+    ``resize``, ``close``) mirrors ``ParamikoSshBridge`` so the WebSocket
+    handler can use either bridge interchangeably.
+    """
+
+    def __init__(self, *, hops: List[Dict[str, Any]], cols: int, rows: int) -> None:
+        if len(hops) < 2:
+            raise BastionConnectError(
+                "invalid_chain",
+                "MultiHopSshBridge requires at least 2 hops (one bastion + target).",
+            )
+        self._hops = hops
+        self._cols = max(cols, 80)
+        self._rows = max(rows, 24)
+        self._clients: List[Any] = []          # paramiko.SSHClient per hop
+        self._transports: List[Any] = []       # paramiko.Transport per hop
+        self._channel: Any | None = None       # interactive shell channel
+        self._closed = False
+        self._output_chunks: List[str] = []
+        self._lock = threading.Lock()
+        self._reader_thread: threading.Thread | None = None
+
+    @staticmethod
+    def _load_private_key(pem: str, passphrase: Optional[str], paramiko: Any) -> Any:
+        """Load a PEM private key, trying each supported key type in turn."""
+        key_text = (pem or "").strip()
+        if not key_text:
+            raise BastionConnectError(
+                "invalid_private_key", "Private key is required for private key auth."
+            )
+        loaders = [
+            paramiko.RSAKey.from_private_key,
+            paramiko.Ed25519Key.from_private_key,
+            paramiko.ECDSAKey.from_private_key,
+            paramiko.DSSKey.from_private_key,
+        ]
+        last_exc: Exception | None = None
+        for loader in loaders:
+            try:
+                return loader(io.StringIO(key_text), password=passphrase or None)
+            except Exception as exc:  # pragma: no cover - aggregate error below
+                last_exc = exc
+        raise BastionConnectError(
+            "invalid_private_key_format",
+            "Unsupported private key format or invalid passphrase.",
+        ) from last_exc
+
+    @staticmethod
+    def _has_key(hop: Dict[str, Any]) -> bool:
+        return bool(hop.get("private_key_pem") or hop.get("private_key"))
+
+    @classmethod
+    def _hop_pem(cls, hop: Dict[str, Any]) -> str:
+        return hop.get("private_key_pem") or hop.get("private_key") or ""
+
+    def connect(self) -> None:
+        try:
+            import paramiko
+        except ImportError as exc:  # pragma: no cover - dependency protection
+            raise BastionConnectError(
+                "ssh_unavailable", "SSH support is unavailable on this server."
+            ) from exc
+
+        try:
+            # Hop 0: direct connection.
+            first = self._hops[0]
+            client0 = paramiko.SSHClient()
+            client0.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            connect_kwargs: Dict[str, Any] = {
+                "hostname": first["hostname"],
+                "port": int(first["port"]),
+                "username": first["username"],
+                "look_for_keys": False,
+                "allow_agent": False,
+                "timeout": 10,
+                "banner_timeout": 10,
+                "auth_timeout": 10,
+            }
+            if self._has_key(first):
+                connect_kwargs["pkey"] = self._load_private_key(
+                    self._hop_pem(first), first.get("passphrase"), paramiko
+                )
+            else:
+                connect_kwargs["password"] = first.get("password")
+            client0.connect(**connect_kwargs)
+            self._clients.append(client0)
+            self._transports.append(client0.get_transport())
+
+            # Each subsequent hop: tunnel via direct-tcpip through the previous
+            # hop's transport, then start a fresh client transport and auth.
+            for i in range(1, len(self._hops)):
+                hop = self._hops[i]
+                prev_transport = self._transports[-1]
+                dest_addr = (hop["hostname"], int(hop["port"]))
+                local_addr = ("127.0.0.1", 0)
+                channel = prev_transport.open_channel(
+                    "direct-tcpip", dest_addr, local_addr, timeout=10
+                )
+                transport = paramiko.Transport(channel)
+                transport.start_client(timeout=10)
+                if self._has_key(hop):
+                    key = self._load_private_key(
+                        self._hop_pem(hop), hop.get("passphrase"), paramiko
+                    )
+                    transport.auth_publickey(hop["username"], key)
+                else:
+                    transport.auth_password(hop["username"], hop.get("password") or "")
+                self._transports.append(transport)
+
+            # Interactive shell on the final transport.
+            final_transport = self._transports[-1]
+            shell = final_transport.open_session(timeout=10)
+            shell.get_pty(term="xterm-256color", width=self._cols, height=self._rows)
+            shell.invoke_shell()
+            shell.settimeout(0.0)
+            self._channel = shell
+            self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+            self._reader_thread.start()
+            logger.info(
+                "ssh_bastion.multihop_connect hops=%d target=%s:%s",
+                len(self._hops), self._hops[-1]["hostname"], self._hops[-1]["port"],
+            )
+        except BastionConnectError:
+            self.close()
+            raise
+        except paramiko.AuthenticationException as exc:
+            self.close()
+            raise BastionConnectError(
+                "auth_failed", "Authentication failed on a bastion hop."
+            ) from exc
+        except Exception as exc:  # pragma: no cover - network/paramiko failure modes
+            self.close()
+            raise BastionConnectError(
+                "connect_failed", f"Multi-hop SSH connection failed: {exc}"
+            ) from exc
+
+    def _reader_loop(self) -> None:
+        while not self._closed:
+            try:
+                if not self._channel:
+                    return
+                if self._channel.recv_ready():
+                    chunk = self._channel.recv(4096)
+                    if not chunk:
+                        return
+                    with self._lock:
+                        self._output_chunks.append(chunk.decode("utf-8", errors="replace"))
+                    continue
+            except Exception:
+                return
+            time.sleep(0.01)
+
+    def poll_output(self) -> str:
+        with self._lock:
+            if not self._output_chunks:
+                return ""
+            output = "".join(self._output_chunks)
+            self._output_chunks.clear()
+            return output
+
+    def send_input(self, data: str) -> None:
+        if not self._channel:
+            raise BastionConnectError("not_connected", "SSH session is not connected.")
+        try:
+            self._channel.send(data)
+        except Exception as exc:
+            raise BastionConnectError("io_error", "SSH channel is unavailable.") from exc
+
+    def resize(self, cols: int, rows: int) -> None:
+        if not self._channel:
+            raise BastionConnectError("not_connected", "SSH session is not connected.")
+        try:
+            self._channel.resize_pty(width=cols, height=rows)
+        except Exception as exc:
+            raise BastionConnectError("resize_failed", "Failed to resize terminal session.") from exc
+
+    def close(self) -> None:
+        self._closed = True
+        try:
+            if self._channel:
+                self._channel.close()
+        finally:
+            self._channel = None
+        # Close transports / clients in reverse (innermost hop first).
+        for transport in reversed(self._transports):
+            try:
+                transport.close()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+        self._transports = []
+        for client in reversed(self._clients):
+            try:
+                client.close()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+        self._clients = []
+
+
+def build_multihop_bridge(
+    user_sub: str,
+    path_id: str,
+    *,
+    cols: int = 80,
+    rows: int = 24,
+) -> "MultiHopSshBridge":
+    """Resolve a stored bastion path and build a connect-ready
+    :class:`MultiHopSshBridge`.
+
+    Resolves the full credentialled chain via :func:`resolve_connection_chain`
+    (which decrypts per-hop SSH keys) and maps it into the bridge hop format.
+    The chain must have at least 2 hops (one bastion + the target); a
+    single-hop path should use the direct ``ParamikoSshBridge`` instead.
+
+    Raises :class:`BastionPathNotFound` / :class:`ChainValidationError` from the
+    underlying resolver, or :class:`BastionConnectError` for a too-short chain.
+    """
+    chain = resolve_connection_chain(user_sub, path_id, include_keys=True)
+    if len(chain) < 2:
+        raise BastionConnectError(
+            "invalid_chain",
+            "Bastion path must have at least 2 hops for a multi-hop connection.",
+        )
+    hops = [
+        {
+            "hostname": hop["hostname"],
+            "port": hop["port"],
+            "username": hop["username"],
+            "private_key_pem": hop.get("private_key_pem"),
+            "passphrase": hop.get("passphrase"),
+            "password": hop.get("password"),
+        }
+        for hop in chain
+    ]
+    return MultiHopSshBridge(hops=hops, cols=cols, rows=rows)

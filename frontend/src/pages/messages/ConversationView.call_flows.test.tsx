@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/api/client";
 import { ConversationView } from "./ConversationView";
 
@@ -137,6 +137,46 @@ describe("ConversationView call flows", () => {
     });
   });
 
+  it("GAP-0144 — failure phase signals backend end with reason=reconnect_failed", async () => {
+    createCallInvite.mockResolvedValue({ call_id: "call-fail" });
+    endCall.mockResolvedValue({ ok: true, state: "ended" });
+    vi.useFakeTimers();
+    try {
+      renderView();
+
+      // Start an outgoing call and let it reach `connected`.
+      const startBtn = await screen.findByRole("button", { name: "Start audio call" });
+      await act(async () => {
+        startBtn.click();
+        await vi.runOnlyPendingTimersAsync();
+      });
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      // Drop the network: connected -> reconnecting (NETWORK_OFFLINE).
+      await act(async () => {
+        window.dispatchEvent(new Event("offline"));
+      });
+
+      // The reconnecting effect fires RECONNECT_ATTEMPT after 1s; with isOnline=false
+      // the state machine transitions straight to `failure`, which triggers the
+      // GAP-0144 effect -> endCall(..., reason: "reconnect_failed").
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_200);
+      });
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      expect(endCall).toHaveBeenCalled();
+      const lastArgs = endCall.mock.calls[endCall.mock.calls.length - 1];
+      expect(lastArgs?.[1]).toMatchObject({ reason: "reconnect_failed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores delayed stale call events after a newer event has been applied", async () => {
     renderView();
 
@@ -185,5 +225,96 @@ describe("ConversationView call flows", () => {
     });
 
     expect(screen.queryByText("U2 is calling you.")).not.toBeInTheDocument();
+  });
+});
+
+describe("ConversationView callee ring guard (GAP-0143)", () => {
+  beforeEach(() => {
+    getMessages.mockReset();
+    endCall.mockReset();
+    getMessages.mockResolvedValue({ messages: [], next_cursor: undefined });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("auto-dismisses the ringing overlay after the 32s guard when no call.missed arrives", async () => {
+    renderView();
+
+    // Incoming invite -> incoming_ringing (Bob/"u1" is the callee).
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("messaging:call-event", {
+          detail: {
+            event_type: "call.invite",
+            conversation_id: "c1",
+            call_id: "guard-1",
+            caller_user_id: "u2",
+            callee_user_id: "u1",
+            mode: "audio",
+          },
+        }),
+      );
+    });
+    expect(screen.getByText("U2 is calling you.")).toBeInTheDocument();
+
+    // Just before the guard fires (32s): still ringing.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_900);
+    });
+    expect(screen.getByText("U2 is calling you.")).toBeInTheDocument();
+    expect(screen.queryByText("Call timed out with no answer.")).not.toBeInTheDocument();
+
+    // After the guard fires: REMOTE_DECLINE(timeout) -> `timeout` outcome.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(screen.getByText("Call timed out with no answer.")).toBeInTheDocument();
+    expect(screen.queryByText("U2 is calling you.")).not.toBeInTheDocument();
+  });
+
+  it("cancels the guard when call.missed SSE arrives before the 32s window", async () => {
+    renderView();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("messaging:call-event", {
+          detail: {
+            event_type: "call.invite",
+            conversation_id: "c1",
+            call_id: "guard-2",
+            caller_user_id: "u2",
+            callee_user_id: "u1",
+            mode: "audio",
+          },
+        }),
+      );
+    });
+    expect(screen.getByText("U2 is calling you.")).toBeInTheDocument();
+
+    // call.missed at 5s dismisses immediately (single transition to `timeout`).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("messaging:call-event", {
+          detail: {
+            event_type: "call.missed",
+            conversation_id: "c1",
+            callee_user_id: "u1",
+          },
+        }),
+      );
+    });
+    expect(screen.getByText("Call timed out with no answer.")).toBeInTheDocument();
+
+    // Advancing past the original guard window must not re-fire or throw.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.getByText("Call timed out with no answer.")).toBeInTheDocument();
   });
 });

@@ -1,12 +1,14 @@
 /**
- * Group Call Overlay (CALL-012)
+ * Group Call Overlay (CALL-012, GAP-0017)
  *
  * Full-screen overlay for group video/audio calls.
  * Renders participant grid, call controls (mute/camera/leave/end),
  * and an active call banner for non-participants.
  *
- * NOTE: No actual WebRTC peer connections — this is the call state
- * management UI only. WebRTC media is a separate concern.
+ * WebRTC media flow is owned by the `useGroupCall` hook, which reads the
+ * topology `mode` ("mesh" | "sfu") and ICE servers from the join response and
+ * drives the peer connection setup accordingly. This component is the
+ * presentation layer for that hook.
  */
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -31,13 +33,9 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import {
   createGroupCall,
-  joinGroupCall,
-  leaveGroupCall,
-  endGroupCall,
-  getGroupCall,
   getActiveGroupCall,
-  updateGroupCallMedia,
 } from "@/api/endpoints/groupCalls";
+import { useGroupCall } from "@/hooks/useGroupCall";
 import type {
   GroupCallParticipant,
   GroupCallMediaStatus,
@@ -55,6 +53,8 @@ interface GroupCallOverlayProps {
   callId: string;
   userId: string;
   conversationId: string;
+  /** "audio" | "video" — controls whether a camera track is acquired. */
+  mode?: "audio" | "video";
   onClose: () => void;
 }
 
@@ -86,6 +86,8 @@ export function GroupCallButton({ conversationId, userId, isGroup }: GroupCallBu
     mutationFn: () => createGroupCall({ conversation_id: conversationId, mode: "video" }),
     onSuccess: (data) => {
       setActiveCallId(data.call_id);
+      // Mount the overlay; useGroupCall performs the actual join (reading the
+      // topology mode + ICE servers from the join response).
       setInCall(true);
       queryClient.invalidateQueries({ queryKey: ["group-call-active", conversationId] });
       toast.success("Group call started");
@@ -95,16 +97,12 @@ export function GroupCallButton({ conversationId, userId, isGroup }: GroupCallBu
     },
   });
 
-  const joinMut = useMutation({
-    mutationFn: (callId: string) => joinGroupCall(callId),
-    onSuccess: () => {
-      setInCall(true);
-      toast.success("Joined group call");
-    },
-    onError: (err: Error & { response?: { data?: { detail?: string } } }) => {
-      toast.error(err.response?.data?.detail || "Failed to join call");
-    },
-  });
+  // Joining simply mounts the overlay; the useGroupCall hook drives the join +
+  // WebRTC setup so the join response's `mode`/`ice_servers` are not discarded.
+  const handleJoin = () => {
+    setInCall(true);
+    toast.success("Joined group call");
+  };
 
   if (!isGroup) return null;
 
@@ -128,8 +126,7 @@ export function GroupCallButton({ conversationId, userId, isGroup }: GroupCallBu
           variant="default"
           size="sm"
           className="shrink-0 bg-green-600 hover:bg-green-700 text-white"
-          onClick={() => joinMut.mutate(activeCallId)}
-          disabled={joinMut.isPending}
+          onClick={handleJoin}
           aria-label="Join group call"
           data-testid="join-group-call"
         >
@@ -154,8 +151,7 @@ export function GroupCallButton({ conversationId, userId, isGroup }: GroupCallBu
             variant="ghost"
             size="sm"
             className="text-white hover:bg-green-700"
-            onClick={() => joinMut.mutate(activeCallId)}
-            disabled={joinMut.isPending}
+            onClick={handleJoin}
           >
             Join
           </Button>
@@ -168,6 +164,7 @@ export function GroupCallButton({ conversationId, userId, isGroup }: GroupCallBu
           callId={activeCallId}
           userId={userId}
           conversationId={conversationId}
+          mode="video"
           onClose={() => {
             setInCall(false);
             queryClient.invalidateQueries({ queryKey: ["group-call-active", conversationId] });
@@ -181,7 +178,7 @@ export function GroupCallButton({ conversationId, userId, isGroup }: GroupCallBu
 
 // ─── Call Overlay ─────────────────────────────────────────────────
 
-function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCallOverlayProps) {
+function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onClose }: GroupCallOverlayProps) {
   const queryClient = useQueryClient();
   const [layout, setLayout] = React.useState<"grid" | "speaker">("grid");
   const [localMedia, setLocalMedia] = React.useState<GroupCallMediaStatus>({
@@ -190,59 +187,73 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
     screen: false,
   });
 
-  // Poll call state
-  const { data: callData } = useQuery({
-    queryKey: ["group-call", callId],
-    queryFn: () => getGroupCall(callId),
-    refetchInterval: 3000,
+  const handleEnded = React.useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["group-call-active", conversationId] });
+    onClose();
+  }, [queryClient, conversationId, onClose]);
+
+  // Lifecycle + WebRTC media driven by the hook. It reads the topology `mode`
+  // and ICE servers from the join response and sets up the peer connection(s).
+  const {
+    callData,
+    mode,
+    isCreator,
+    activeParticipants,
+    join,
+    leave,
+    end,
+    updateMedia,
+    isLeaving,
+    isEnding,
+  } = useGroupCall({
+    callId,
+    userId,
+    callMode: callKind,
+    onEnded: handleEnded,
   });
 
-  // Auto-close if call ended
+  // Join when the overlay mounts (the button only flips `inCall` to render us).
+  const joinedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (joinedRef.current) return;
+    joinedRef.current = true;
+    join();
+  }, [join]);
+
+  // Toast on natural end (creator ended for all).
   React.useEffect(() => {
     if (callData?.state === "ended") {
       toast.info("Group call ended");
-      onClose();
     }
-  }, [callData?.state, onClose]);
+  }, [callData?.state]);
 
-  const leaveMut = useMutation({
-    mutationFn: () => leaveGroupCall(callId),
-    onSuccess: () => {
+  const leaveMut = {
+    mutate: () => {
       toast.info("Left group call");
-      queryClient.invalidateQueries({ queryKey: ["group-call-active", conversationId] });
-      onClose();
+      leave();
     },
-  });
+    isPending: isLeaving,
+  };
 
-  const endMut = useMutation({
-    mutationFn: () => endGroupCall(callId),
-    onSuccess: (data) => {
-      toast.info(`Call ended (${data.duration_seconds}s, ${data.total_participants} participants)`);
-      queryClient.invalidateQueries({ queryKey: ["group-call-active", conversationId] });
-      onClose();
-    },
-    onError: (err: Error & { response?: { data?: { detail?: string } } }) => {
-      toast.error(err.response?.data?.detail || "Failed to end call");
-    },
-  });
+  const endMut = {
+    mutate: () => end(),
+    isPending: isEnding,
+  };
 
-  const mediaMut = useMutation({
-    mutationFn: (params: { audio?: boolean; video?: boolean; screen?: boolean }) =>
-      updateGroupCallMedia(callId, params),
-    onSuccess: (data) => {
-      setLocalMedia(data.media_status);
-    },
-  });
-
-  const participants = callData?.participants ?? [];
-  const activeParticipants = participants.filter((p) => p.state === "active");
-  const isCreator = callData?.creator_user_id === userId;
-
-  const toggleAudio = () => mediaMut.mutate({ audio: !localMedia.audio });
-  const toggleVideo = () => mediaMut.mutate({ video: !localMedia.video });
+  const toggleAudio = () => {
+    const next = !localMedia.audio;
+    setLocalMedia((m) => ({ ...m, audio: next }));
+    updateMedia({ audio: next });
+  };
+  const toggleVideo = () => {
+    const next = !localMedia.video;
+    setLocalMedia((m) => ({ ...m, video: next }));
+    updateMedia({ video: next });
+  };
   const toggleScreenShare = () => {
     if (localMedia.screen) {
-      mediaMut.mutate({ screen: false });
+      setLocalMedia((m) => ({ ...m, screen: false }));
+      updateMedia({ screen: false });
     } else {
       // Check if someone else is already sharing
       const sharer = activeParticipants.find((p) => p.media_status.screen && p.user_id !== userId);
@@ -250,7 +261,8 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
         toast.error(`${sharer.display_name || sharer.user_id} is already sharing their screen`);
         return;
       }
-      mediaMut.mutate({ screen: true });
+      setLocalMedia((m) => ({ ...m, screen: true }));
+      updateMedia({ screen: true });
     }
   };
 
@@ -281,6 +293,14 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
             Group Call - {activeParticipants.length} participant{activeParticipants.length !== 1 ? "s" : ""}
           </span>
           <span className="text-xs text-gray-400">({callData?.mode ?? "video"})</span>
+          {mode && (
+            <span
+              className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-300"
+              data-testid="call-mode-indicator"
+            >
+              {mode}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -394,7 +414,6 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
             localMedia.screen ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-700 text-white hover:bg-gray-600",
           )}
           onClick={toggleScreenShare}
-          disabled={mediaMut.isPending}
           aria-label={localMedia.screen ? "Stop sharing" : "Share screen"}
           data-testid="toggle-screen-share"
         >

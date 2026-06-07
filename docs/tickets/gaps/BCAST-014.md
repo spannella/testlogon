@@ -1,0 +1,7 @@
+# BCAST-014 Gap List
+
+- [HIGH] Self-entry check executes after fee charge — `broadcast_lottery.py:~420` — broadcaster attempting to enter own lottery is charged the entry fee before `BROADCASTER_CANNOT_ENTER` 403 is raised; fee write succeeds with no entry record — Fix: move `user_id == config["broadcaster_id"]` check before `_charge_entry_fee()` — Effort: S
+- [HIGH] Entry fee billing atomicity gap — `broadcast_lottery.py:484` — debit and credit `put_item` calls in separate `try/except`; credit failure after debit = entrant charged, broadcaster not credited — Fix: use `TransactWriteItems` for atomic debit+credit (same pattern as BCAST-011/012) — Effort: S
+- [MED] Max-entries race condition — `broadcast_lottery.py:~398` — pre-read `entry_count >= max_entries` check is stale; two concurrent entries near max can both pass and both increment — Fix: replace pre-check with conditional `update_item` `ConditionExpression=Attr("entry_count").lt(max_entries)` — Effort: S
+- [LOW] `_list_entries()` pagination exit at exact limit — `broadcast_lottery.py:425` — loop exits when `len(entries) >= limit` even if `LastEvaluatedKey` is set; draw fires with truncated entry list at exactly 1000 entries — Fix: change exit condition to only break on `not last_key`; log warning when capped — Effort: S
+- [LOW] `billing_tbl` reference inconsistency — `broadcast_lottery.py:~484` — uses `ddb.Table(S.billing_table_name)` directly instead of `T.billing`; inconsistent with rest of codebase — Fix: replace with `T.billing` — Effort: S

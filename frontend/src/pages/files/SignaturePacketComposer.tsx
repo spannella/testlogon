@@ -1,10 +1,14 @@
 import * as React from "react";
 import { FilePen } from "lucide-react";
 import { toast } from "sonner";
+import { Document, Page, pdfjs } from "react-pdf";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SignatureDrawCanvas } from "@/components/SignatureDrawCanvas";
 import {
   Select,
   SelectContent,
@@ -29,7 +33,29 @@ import {
   type SignatureInputMode,
 } from "@/api/endpoints/signaturePackets";
 
+// Configure the pdf.js worker for react-pdf. Vite's `new URL(..., import.meta.url)`
+// pattern bundles the worker file and serves it from the same origin (avoids CORS).
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString();
+
 const FIELD_TYPES: SignatureFieldType[] = ["signature", "initials", "date", "text"];
+
+// Rendered width (px) of each PDF page in the editor canvas. Field coordinates are
+// stored as normalized 0..1 floats, so overlays are positioned with CSS percentages
+// and remain correct regardless of the actual rendered pixel size.
+const PDF_PAGE_WIDTH = 640;
+
+// Build a fetch-able URL for a source PDF path. In dev the backend serves files via
+// the `/mock/s3/` proxy (same pattern used for image messages); already-absolute
+// http(s) URLs are passed through unchanged.
+function buildSourcePdfUrl(sourcePath: string | undefined): string | null {
+  const trimmed = (sourcePath ?? "").trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("/mock/s3/")) return trimmed;
+  return `/mock/s3/${trimmed.replace(/^\/+/, "")}`;
+}
 
 type ValidationError = string | null;
 const SIGNATURE_MODE_PREF_KEY = "signature_packet_capture_mode_default";
@@ -124,6 +150,13 @@ export function SignaturePacketComposer() {
   const [defaultCaptureMode, setDefaultCaptureMode] = React.useState<SignatureInputMode>((localStorage.getItem(SIGNATURE_MODE_PREF_KEY) as SignatureInputMode) || "typed");
 
   const canvasRef = React.useRef<HTMLDivElement | null>(null);
+  const [numPages, setNumPages] = React.useState<number>(0);
+  const [currentPage, setCurrentPage] = React.useState<number>(1);
+
+  const pdfUrl = React.useMemo(
+    () => buildSourcePdfUrl(packet?.source_path),
+    [packet?.source_path],
+  );
 
   const signerFields = React.useMemo(() => {
     if (!packet) return [];
@@ -211,7 +244,7 @@ export function SignaturePacketComposer() {
   }, [loadPacket, packet]);
 
   const onCanvasClick = React.useCallback(
-    async (ev: React.MouseEvent<HTMLDivElement>) => {
+    async (ev: React.MouseEvent<HTMLDivElement>, page = 1) => {
       if (!packet) {
         toast.error("Load a draft packet first");
         return;
@@ -224,9 +257,11 @@ export function SignaturePacketComposer() {
         toast.error("You are not allowed to edit fields for this packet");
         return;
       }
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
+      // Coordinates are normalized 0..1 relative to the clicked page element so they
+      // map correctly onto the rendered PDF page (or the placeholder fallback).
+      const target = ev.currentTarget ?? canvasRef.current;
+      if (!target) return;
+      const rect = target.getBoundingClientRect();
       const x = Math.max(0, Math.min(0.98, (ev.clientX - rect.left) / Math.max(1, rect.width)));
       const y = Math.max(0, Math.min(0.98, (ev.clientY - rect.top) / Math.max(1, rect.height)));
       const dims = getDefaultDimensions(fieldType);
@@ -235,7 +270,7 @@ export function SignaturePacketComposer() {
       try {
         await createSignaturePacketField(packet.packet_id, {
           action: "create",
-          page: 1,
+          page,
           x,
           y,
           width: dims.width,
@@ -553,17 +588,14 @@ export function SignaturePacketComposer() {
                             data-testid={`field-input-${field.field_id}`}
                           />
                         ) : (
-                          <Input
-                            value={drawnValues[field.field_id] ?? ""}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              setDrawnValues((prev) => ({ ...prev, [field.field_id]: value }));
+                          <SignatureDrawCanvas
+                            testId={`field-drawn-${field.field_id}`}
+                            onChange={(serialized) => {
+                              setDrawnValues((prev) => ({ ...prev, [field.field_id]: serialized }));
                               const mode = captureModes[field.field_id] ?? defaultCaptureMode;
-                              const err = validateFieldInput(field, currentValue, mode, value);
+                              const err = validateFieldInput(field, currentValue, mode, serialized);
                               setFillErrors((prev) => ({ ...prev, [field.field_id]: err ?? "" }));
                             }}
-                            placeholder="Drawn JSON points, e.g. [[0.1,0.2],[0.2,0.3]]"
-                            data-testid={`field-drawn-${field.field_id}`}
                           />
                         )}
                         {fillErrors[field.field_id] && (
@@ -608,24 +640,84 @@ export function SignaturePacketComposer() {
           </div>
           <div
             ref={canvasRef}
-            onClick={(ev) => void onCanvasClick(ev)}
-            className="relative h-[520px] rounded-md border border-dashed bg-slate-50"
             data-testid="signature-canvas"
+            className="relative max-h-[640px] overflow-auto rounded-md border bg-slate-100"
           >
-            {(packet?.fields ?? []).map((field) => (
-              <div
-                key={field.field_id}
-                className="absolute rounded border border-blue-600 bg-blue-100/60 px-1 text-[10px] text-blue-900"
-                style={{
-                  left: `${Math.max(0, field.x) * 100}%`,
-                  top: `${Math.max(0, field.y) * 100}%`,
-                  width: `${Math.max(0.05, field.width) * 100}%`,
-                  height: `${Math.max(0.03, field.height) * 100}%`,
-                }}
+            {pdfUrl ? (
+              <Document
+                file={pdfUrl}
+                onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+                onLoadError={(err) =>
+                  toast.error(`Failed to load PDF: ${err?.message ?? "unknown error"}`)
+                }
+                loading={
+                  <div className="flex h-[520px] items-center justify-center text-xs text-muted-foreground">
+                    Loading PDF…
+                  </div>
+                }
+                error={
+                  <div className="flex h-[520px] items-center justify-center text-xs text-destructive">
+                    Unable to display this PDF.
+                  </div>
+                }
+                className="flex flex-col items-center gap-3 p-2"
               >
-                {field.field_type}
+                {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => (
+                  <div
+                    key={pageNum}
+                    className="relative shadow-sm"
+                    onMouseEnter={() => setCurrentPage(pageNum)}
+                    onClick={(ev) => void onCanvasClick(ev, pageNum)}
+                  >
+                    <Page
+                      pageNumber={pageNum}
+                      width={PDF_PAGE_WIDTH}
+                      renderAnnotationLayer={false}
+                      renderTextLayer={false}
+                    />
+                    {(packet?.fields ?? [])
+                      .filter((field) => (field.page ?? 1) === pageNum)
+                      .map((field) => (
+                        <div
+                          key={field.field_id}
+                          className="absolute rounded border border-blue-600 bg-blue-100/60 px-1 text-[10px] text-blue-900"
+                          style={{
+                            left: `${Math.max(0, field.x) * 100}%`,
+                            top: `${Math.max(0, field.y) * 100}%`,
+                            width: `${Math.max(0.05, field.width) * 100}%`,
+                            height: `${Math.max(0.03, field.height) * 100}%`,
+                          }}
+                        >
+                          {field.field_type}
+                        </div>
+                      ))}
+                  </div>
+                ))}
+              </Document>
+            ) : (
+              <div
+                onClick={(ev) => void onCanvasClick(ev, currentPage)}
+                className="relative h-[520px] rounded-md border border-dashed bg-slate-50"
+              >
+                <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                  {packet ? "No source PDF to display" : "Load a packet to see the document"}
+                </span>
+                {(packet?.fields ?? []).map((field) => (
+                  <div
+                    key={field.field_id}
+                    className="absolute rounded border border-blue-600 bg-blue-100/60 px-1 text-[10px] text-blue-900"
+                    style={{
+                      left: `${Math.max(0, field.x) * 100}%`,
+                      top: `${Math.max(0, field.y) * 100}%`,
+                      width: `${Math.max(0.05, field.width) * 100}%`,
+                      height: `${Math.max(0.03, field.height) * 100}%`,
+                    }}
+                  >
+                    {field.field_type}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         </div>
       </div>

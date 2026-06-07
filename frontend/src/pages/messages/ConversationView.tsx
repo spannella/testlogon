@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -35,6 +35,7 @@ import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendC
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
+import { PaidCallRateBadge } from "./PaidCallRateBadge";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
@@ -44,6 +45,7 @@ import { ScheduledMessages } from "./ScheduledMessages";
 import { HiddenMessagesPanel } from "./HiddenMessagesPanel";
 import { PinnedMessageBanner } from "./PinnedMessageBanner";
 import { PinnedMessagesPanel } from "./PinnedMessagesPanel";
+import { RecordingsPanel } from "./RecordingsPanel";
 import { ThreadPanel } from "./ThreadPanel";
 import { useMessageJump } from "./useMessageJump";
 import { CallSessionOverlay, type CallSessionUi, type CallUiState } from "./CallSessionOverlay";
@@ -51,6 +53,8 @@ import { callStateReducer, createInitialCallMachineState, teardownCallResources,
 import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
 import { useMediaCapture } from "@/hooks/useMediaCapture";
 import { useCallRecording } from "@/hooks/useCallRecording";
+import { useCallBillingHeartbeat } from "@/hooks/useCallBillingHeartbeat";
+import { getCallRate } from "@/api/endpoints/callBilling";
 import { isCallRecordingEnabled, isGroupCallsEnabled } from "@/lib/featureFlags";
 import {
   DropdownMenu,
@@ -83,6 +87,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [scheduledOpen, setScheduledOpen] = React.useState(false);
   const [hiddenOpen, setHiddenOpen] = React.useState(false);
   const [pinsOpen, setPinsOpen] = React.useState(false);
+  const [recordingsOpen, setRecordingsOpen] = React.useState(false);
   const galleryEnabled = isMessagingGalleryEnabled();
   const dmLotteryEnabled = isMessagingDmLotteryEnabled();
   const [dismissedPinnedMessageId, setDismissedPinnedMessageId] = React.useState<string | null>(null);
@@ -92,6 +97,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [threadAnchorMessage, setThreadAnchorMessage] = React.useState<Message | null>(null);
   const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
   const callTimeoutRef = React.useRef<number | null>(null);
+  // GAP-0143: callee-side guard timer (separate ref to avoid colliding with the caller-side callTimeoutRef).
+  const calleeRingTimerRef = React.useRef<number | null>(null);
   const callResourcesRef = React.useRef<CallRuntimeResources | null>(null);
   const lastCallEventTsRef = React.useRef<number>(0);
   const mediaCapture = useMediaCapture();
@@ -736,6 +743,17 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     }
   }, [callRecording.recordingState, callRecording.error]);
 
+  // ── Paid-call billing heartbeat (GAP-0016) ─────────────────────
+  // Look up the DM partner's call rate so we know whether this is a paid call.
+  const callPartnerId = dmPartner?.user_id;
+  const { data: callRate } = useQuery({
+    queryKey: ["call-rate", callPartnerId],
+    queryFn: () => getCallRate(callPartnerId as string),
+    enabled: callsEnabled && !!callPartnerId,
+    staleTime: 5 * 60_000,
+  });
+  const isPaidCall = !!callRate?.enabled && (callRate?.rate_cents_per_minute ?? 0) > 0;
+
   const clearCallTimeout = React.useCallback(() => {
     if (callTimeoutRef.current) {
       window.clearTimeout(callTimeoutRef.current);
@@ -755,8 +773,50 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     }
   }, [callMachine.phase]);
 
+  // GAP-0143: callee-side guard — auto-dismiss the ringing overlay if the
+  // `call.missed` SSE event is lost/delayed. Mirrors the caller-side 30s timer
+  // (line ~856). Fires at ringing_timeout (30s, MESSAGING_WEBRTC_CALL_RINGING_TIMEOUT_SECONDS)
+  // + 2s grace, giving the SSE event time to arrive before the local guard fires.
+  React.useEffect(() => {
+    if (callMachine.phase !== "incoming_ringing") return;
+    const CALLEE_RING_GUARD_MS = 32_000;
+    calleeRingTimerRef.current = window.setTimeout(() => {
+      // SSE event was never received — dismiss locally. REMOTE_DECLINE on
+      // incoming_ringing transitions to `timeout` (callStateMachine REMOTE_DECLINE).
+      dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+      calleeRingTimerRef.current = null;
+    }, CALLEE_RING_GUARD_MS);
+    return () => {
+      if (calleeRingTimerRef.current) {
+        window.clearTimeout(calleeRingTimerRef.current);
+        calleeRingTimerRef.current = null;
+      }
+    };
+  }, [callMachine.phase]);
+
+  // GAP-0144: on the `failure` phase, signal the backend so the remote peer is
+  // notified (call.end SSE → END_REMOTE on the remote side). Local teardown
+  // already ran in the effect above; this sends the missing `end` action.
+  React.useEffect(() => {
+    if (callMachine.phase !== "failure") return;
+    const cid = callMachine.callId;
+    if (!cid) return;
+    // Best-effort: the idempotency key guards against React strict-mode double
+    // fire; a failed POST is swallowed (the stale-session backstop is the fallback).
+    callActionMutation.mutate(
+      { action: "end", callId: cid, reason: "reconnect_failed" },
+      { onError: () => {} },
+    );
+    // callActionMutation is a stable useMutation ref; intentionally omitted from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callMachine.phase, callMachine.callId]);
+
   React.useEffect(() => () => {
     clearCallTimeout();
+    if (calleeRingTimerRef.current) {
+      window.clearTimeout(calleeRingTimerRef.current);
+      calleeRingTimerRef.current = null;
+    }
     teardownCallResources(callResourcesRef.current);
   }, [clearCallTimeout]);
 
@@ -770,11 +830,35 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   });
 
   const callActionMutation = useMutation({
-    mutationFn: async (args: { action: "accept" | "decline" | "end"; callId: string }) => {
+    mutationFn: async (args: { action: "accept" | "decline" | "end"; callId: string; reason?: string }) => {
       if (args.action === "accept") return acceptCallInvite(args.callId, `ui-accept-${Date.now()}`);
       if (args.action === "decline") return declineCallInvite(args.callId, { reason: "declined", idempotency_key: `ui-decline-${Date.now()}` });
-      return endCall(args.callId, { reason: "ended", idempotency_key: `ui-end-${Date.now()}` });
+      return endCall(args.callId, { reason: args.reason ?? "ended", idempotency_key: `ui-end-${Date.now()}` });
     },
+  });
+
+  // Drive billing heartbeats while a paid call is connected (GAP-0016).
+  // GAP-0147: capture the latest heartbeat so the in-call billing overlay can
+  // render the running cost ticker, balance, and low-balance warning.
+  const callBilling = useCallBillingHeartbeat({
+    callId: callMachine.callId,
+    enabled: callMachine.phase === "connected" && isPaidCall,
+    onEndCall: () => {
+      if (!callMachine.callId) {
+        dispatchCall({ type: "END_LOCAL" });
+        return;
+      }
+      callActionMutation.mutate(
+        { action: "end", callId: callMachine.callId },
+        {
+          onSuccess: () => dispatchCall({ type: "END_REMOTE" }),
+          onError: () => dispatchCall({ type: "FAIL" }),
+        },
+      );
+      toast.error("Call ended: insufficient balance.");
+    },
+    onLowBalance: (mins) =>
+      toast.warning(`Low balance — about ${mins} minute(s) of call time remaining.`),
   });
 
   const extractCallErrorCode = (err: unknown): string => {
@@ -1030,6 +1114,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         )}
         {callsEnabled && (
           <>
+            {callPartnerId && <PaidCallRateBadge partnerUserId={callPartnerId} />}
             <Button
               variant="ghost"
               size="icon"
@@ -1083,6 +1168,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
               <EyeOff className="mr-2 h-4 w-4" />
               Hidden messages
             </DropdownMenuItem>
+            {callRecordingEnabled && (
+              <DropdownMenuItem onClick={() => setRecordingsOpen(true)}>
+                <Video className="mr-2 h-4 w-4" />
+                Recordings
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {isGroup && (
@@ -1322,6 +1413,14 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         }}
       />
 
+      {callRecordingEnabled && (
+        <RecordingsPanel
+          open={recordingsOpen}
+          onOpenChange={setRecordingsOpen}
+          conversationId={convoId}
+        />
+      )}
+
       <ThreadPanel
         open={threadPanelOpen}
         onOpenChange={setThreadPanelOpen}
@@ -1444,6 +1543,13 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         showRecordingConsent={callRecording.recordingState === "consent_pending" && !!callRecording.consentPendingFrom}
         recordingConsentFrom={callRecording.consentPendingFrom}
         onConsentRecording={(accept: boolean) => callRecording.respondToRequest(accept)}
+        isPaidCall={isPaidCall}
+        billingTotalCostCents={callBilling?.total_cost_cents}
+        billingRateCentsPerMinute={callBilling?.rate_cents_per_minute}
+        billingElapsedSeconds={callBilling?.elapsed_seconds}
+        billingBalanceRemainingCents={callBilling?.balance_remaining_cents}
+        billingWarnLowBalance={callBilling?.warn_low_balance}
+        billingMinutesRemaining={callBilling?.minutes_remaining}
       />
     </div>
   );

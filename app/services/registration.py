@@ -55,6 +55,48 @@ def is_email_available(email: str) -> bool:
     return not _user_exists(normalized)
 
 
+def check_email_status(email: str) -> Dict[str, bool]:
+    """Return availability plus a pending-verification hint for an email address.
+
+    Distinguishes the two "unavailable" states so the frontend can offer a
+    recovery (resend) path for abandoned registrations instead of a dead-end
+    error (GAP-0107):
+      - unknown email          -> {"available": True,  "unverified": False}
+      - active account         -> {"available": False, "unverified": False}
+      - pending_verification   -> {"available": False, "unverified": True}
+
+    The account_state lookup only runs when the user record exists, so the extra
+    DynamoDB read is avoided for all "available" responses.
+    """
+    # Imported lazily to keep the module import graph identical to before and to
+    # avoid any import-order coupling with app.services.account_state.
+    from app.services.account_state import get_account_state
+
+    normalized = normalize_email(email)
+    if not _user_exists(normalized):
+        return {"available": True, "unverified": False}
+    state = get_account_state(normalized)
+    if state.get("status") == "pending_verification":
+        return {"available": False, "unverified": True}
+    return {"available": False, "unverified": False}
+
+
+def get_pending_user(email: str) -> bool:
+    """Return True if the email exists and is in pending_verification state.
+
+    Used by the /register/start resume path (GAP-0108) to decide whether to
+    re-issue a verification challenge instead of raising the duplicate-email
+    409. Returns False for active accounts so an active account owner can never
+    trigger a fresh verification code via /start.
+    """
+    from app.services.account_state import get_account_state
+
+    normalized = normalize_email(email)
+    if not _user_exists(normalized):
+        return False
+    return get_account_state(normalized).get("status") == "pending_verification"
+
+
 def create_user_record(
     *,
     email: str,
@@ -68,6 +110,7 @@ def create_user_record(
 
     password_hash = _hash_password(password)
     created_at = now_ts()
+    pending_ttl = created_at + S.registration_pending_ttl_days * 86400
     item = {
         "user_sub": user_sub,
         "email": user_sub,
@@ -75,6 +118,10 @@ def create_user_record(
         "password_hash": password_hash,
         "created_at": created_at,
     }
+    # Attach a TTL to unverified records so abandoned registrations self-clean
+    # and never permanently block re-use of the email address.
+    if verification_required:
+        item = with_ttl(item, ttl_epoch=pending_ttl)
     try:
         T.users.put_item(
             Item=item,
@@ -91,7 +138,13 @@ def create_user_record(
     save_profile(user_sub, profile, audit_entries=[{"event": "register_start", "at": created_at}])
 
     status = "pending_verification" if verification_required else "active"
-    set_account_state(user_sub, status, reason="initial_registration", requested_by=user_sub)
+    set_account_state(
+        user_sub,
+        status,
+        reason="initial_registration",
+        requested_by=user_sub,
+        ttl_epoch=pending_ttl if verification_required else None,
+    )
     return {"user_sub": user_sub}
 
 
@@ -201,5 +254,15 @@ def mark_user_verified(user_sub: str) -> Dict[str, str]:
     normalized = normalize_email(user_sub)
     if not _user_exists(normalized):
         raise HTTPException(404, "User not found")
+    # Clear the pending-registration TTL so a verified account never expires.
+    # set_account_state below rewrites the account_state item without a TTL
+    # attribute; the users item needs an explicit REMOVE.
+    try:
+        T.users.update_item(
+            Key={"user_sub": normalized},
+            UpdateExpression=f"REMOVE {S.ddb_ttl_attr}",
+        )
+    except Exception:
+        pass
     set_account_state(normalized, "active", reason="email_verified", requested_by=normalized)
     return {"user_sub": normalized}

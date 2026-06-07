@@ -356,6 +356,254 @@ def _refund_wallet(user_sub: str) -> int:
         return 0
 
 
+_ANON_NAME = "Deleted User"
+_ANON_TEXT = "[This message was deleted]"
+_ANON_SENDER_ID = "deleted_user"
+
+
+def _messages_table():
+    """boto3 handle for the messaging Messages table (env ``DDB_MESSAGES``)."""
+    import os
+
+    from app.core.aws import ddb
+    return ddb.Table(os.environ.get("DDB_MESSAGES", "Messages"))
+
+
+def _participants_table():
+    """boto3 handle for the messaging Participants table (env ``DDB_PARTICIPANTS``)."""
+    import os
+
+    from app.core.aws import ddb
+    return ddb.Table(os.environ.get("DDB_PARTICIPANTS", "Participants"))
+
+
+def _posts_table():
+    """boto3 handle for the newsfeed single table (env ``APP_TABLE``)."""
+    import os
+
+    from app.core.aws import ddb
+    return ddb.Table(os.environ.get("APP_TABLE", "app_single_table"))
+
+
+def _anonymize_messages(user_sub: str) -> int:
+    """Overwrite sender-identifying fields + body on every message authored by
+    ``user_sub``.
+
+    Gated behind ``S.account_deletion_destructive``: when that flag is off (the
+    dev/test default) this is a no-op that returns ``0`` so shared seed data is
+    never mutated. When on, it tombstones the user's messages so deleted-user
+    identity is purged (GDPR Art. 17 erasure).
+
+    Messages live in the ``Messages`` table (PK ``conversation_id``,
+    SK ``message_id``, attr ``sender_id``). There is no GSI on ``sender_id``, so
+    we enumerate the conversations the user participated in via the
+    ``Participants`` table (PK ``user_id``, SK ``conversation_id``) and then,
+    per conversation, query + filter the user's own messages. Every page is
+    drained via ``LastEvaluatedKey``.
+    """
+    if not S.account_deletion_destructive:
+        return 0
+    from boto3.dynamodb.conditions import Attr
+
+    parts = _participants_table()
+    msgs = _messages_table()
+
+    # Step 1: conversations the user participated in.
+    conv_ids: List[str] = []
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("user_id").eq(user_sub),
+            "ProjectionExpression": "conversation_id",
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = parts.query(**kwargs)
+        conv_ids.extend(
+            str(it["conversation_id"]) for it in resp.get("Items", [])
+            if it.get("conversation_id")
+        )
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    # Step 2: per conversation, overwrite this user's messages.
+    anonymized = 0
+    ts = now_ts()
+    for conv_id in conv_ids:
+        last_key = None
+        while True:
+            kwargs = {
+                "KeyConditionExpression": Key("conversation_id").eq(conv_id),
+                "FilterExpression": Attr("sender_id").eq(user_sub),
+                "ProjectionExpression": "conversation_id, message_id",
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = msgs.query(**kwargs)
+            for it in resp.get("Items", []):
+                msgs.update_item(
+                    Key={
+                        "conversation_id": it["conversation_id"],
+                        "message_id": it["message_id"],
+                    },
+                    UpdateExpression=(
+                        "SET sender_id = :sid, sender_display_name = :name, "
+                        "#txt = :txt, anonymized = :t, anonymized_at = :ts"
+                    ),
+                    ExpressionAttributeNames={"#txt": "text"},
+                    ExpressionAttributeValues={
+                        ":sid": _ANON_SENDER_ID,
+                        ":name": _ANON_NAME,
+                        ":txt": _ANON_TEXT,
+                        ":t": True,
+                        ":ts": ts,
+                    },
+                )
+                anonymized += 1
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+    if anonymized:
+        logger.info("privacy.anonymize_messages user=%s count=%d", user_sub, anonymized)
+    return anonymized
+
+
+def _anonymize_posts(user_sub: str) -> int:
+    """Overwrite author identity + content on every newsfeed post by ``user_sub``.
+
+    Gated behind ``S.account_deletion_destructive`` (no-op returning ``0`` when
+    off, mirroring ``_anonymize_messages``).
+
+    Posts live in ``app_single_table`` (env ``APP_TABLE``), PK ``POST#{post_id}``
+    / SK ``META``. Author lookups go through GSI2 (``GSI2PK =
+    POST_AUTHOR#{user_id}``). We query GSI2 to enumerate the user's posts and
+    overwrite ``user_id`` (surfaced as ``author_id``) and the body/content
+    fields. Paginated to exhaustion via ``LastEvaluatedKey``.
+    """
+    if not S.account_deletion_destructive:
+        return 0
+
+    posts = _posts_table()
+    anonymized = 0
+    ts = now_ts()
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "GSI2",
+            "KeyConditionExpression": Key("GSI2PK").eq(f"POST_AUTHOR#{user_sub}"),
+            "ProjectionExpression": "pk, sk",
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = posts.query(**kwargs)
+        for it in resp.get("Items", []):
+            posts.update_item(
+                Key={"pk": it["pk"], "sk": it["sk"]},
+                UpdateExpression=(
+                    "SET user_id = :name, body = :txt, body_plain = :txt, "
+                    "body_markdown = :n, body_markdown_html = :n, body_rich = :n, "
+                    "body_format = :fmt, anonymized = :t, anonymized_at = :ts"
+                ),
+                ExpressionAttributeValues={
+                    ":name": _ANON_NAME,
+                    ":txt": _ANON_TEXT,
+                    ":n": None,
+                    ":fmt": "plain",
+                    ":t": True,
+                    ":ts": ts,
+                },
+            )
+            anonymized += 1
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    if anonymized:
+        logger.info("privacy.anonymize_posts user=%s count=%d", user_sub, anonymized)
+    return anonymized
+
+
+def _cancel_active_subscriptions(user_sub: str) -> int:
+    """Cancel the user's active subscriptions (as subscriber *and* as creator).
+
+    Gated behind ``S.account_deletion_destructive`` (no-op returning ``0`` when
+    off, mirroring the anonymization helpers).
+
+    Subscriptions live in ``T.subscriptions`` with a fan-out layout: per-sub
+    record PK ``SUB#{subscription_id}`` / SK ``META``; subscriber index PK
+    ``SUBSCRIBER#{subscriber_id}``; creator index PK ``CREATOR#{creator_id}``.
+    We list the user's subscription ids from both index partitions, then set
+    each active META record to ``status="canceled"`` (immediate — the account is
+    gone). Paginated via ``LastEvaluatedKey``.
+    """
+    if not S.account_deletion_destructive:
+        return 0
+
+    active_statuses = {"active", "trialing", "past_due", "canceling"}
+    cancelled = 0
+    ts = now_ts()
+
+    def _sub_ids_for_pk(pk_value: str) -> List[str]:
+        ids: List[str] = []
+        last_key = None
+        while True:
+            kwargs: Dict[str, Any] = {"KeyConditionExpression": Key("pk").eq(pk_value)}
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = T.subscriptions.query(**kwargs)
+            for it in resp.get("Items", []):
+                sk = str(it.get("sk", ""))
+                if sk.startswith("SUB#"):
+                    ids.append(sk[4:])
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        return ids
+
+    def _cancel_one(subscription_id: str) -> bool:
+        meta = T.subscriptions.get_item(
+            Key={"pk": f"SUB#{subscription_id}", "sk": "META"}
+        ).get("Item")
+        if not meta:
+            return False
+        if str(meta.get("status", "")) not in active_statuses:
+            return False
+        T.subscriptions.update_item(
+            Key={"pk": f"SUB#{subscription_id}", "sk": "META"},
+            UpdateExpression=(
+                "SET #s = :canceled, auto_renew = :f, cancel_at_period_end = :f, "
+                "updated_at = :t, cancelled_at = :t, cancelled_reason = :reason"
+            ),
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":canceled": "canceled",
+                ":f": False,
+                ":t": ts,
+                ":reason": "account_deleted",
+            },
+        )
+        logger.info(
+            "privacy.subscription_cancelled subscription=%s user=%s",
+            subscription_id, user_sub,
+        )
+        return True
+
+    seen: set[str] = set()
+    for pk_value in (f"SUBSCRIBER#{user_sub}", f"CREATOR#{user_sub}"):
+        for sub_id in _sub_ids_for_pk(pk_value):
+            if sub_id in seen:
+                continue
+            seen.add(sub_id)
+            if _cancel_one(sub_id):
+                cancelled += 1
+
+    if cancelled:
+        logger.info(
+            "privacy.subscriptions_cancelled_total user=%s count=%d", user_sub, cancelled
+        )
+    return cancelled
+
+
 def finalize_deletion(user_sub: str, request_id: str) -> Dict[str, Any]:
     """Execute the deletion cascade for a request and mark it completed.
 
@@ -387,11 +635,11 @@ def finalize_deletion(user_sub: str, request_id: str) -> Dict[str, Any]:
         "wallet_refunded_cents": _refund_wallet(user_sub),
         "destructive": bool(S.account_deletion_destructive),
         "profile_deleted": False,
-        "messages_anonymized": 0,
-        "posts_anonymized": 0,
+        "messages_anonymized": _anonymize_messages(user_sub),
+        "posts_anonymized": _anonymize_posts(user_sub),
         "files_deleted": 0,
         "push_devices_deleted": 0,
-        "subscriptions_cancelled": 0,
+        "subscriptions_cancelled": _cancel_active_subscriptions(user_sub),
     }
 
     if S.account_deletion_destructive:

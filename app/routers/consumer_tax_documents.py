@@ -171,6 +171,47 @@ def download_document_pdf(
     )
 
 
+@consumer_tax_documents_router.get("/receipts/zip")
+def export_receipts_zip(
+    year: Optional[int] = Query(default=None),
+    date_from: Optional[int] = Query(default=None),
+    date_to: Optional[int] = Query(default=None),
+    session: Dict[str, str] = Depends(require_ui_session),
+) -> Response:
+    """Download all of the caller's receipt PDFs for a range as a ZIP archive.
+
+    Accepts either ``year`` or both ``date_from`` + ``date_to``. Scoped to the
+    caller's own transactions; max ``MAX_ZIP_RECEIPTS`` receipts per request.
+    """
+    _ensure_enabled()
+    resolved_year, df, dt = _resolve_range(year, date_from, date_to)
+    try:
+        zip_bytes = svc.export_receipts_zip(
+            user_sub=session["user_sub"], date_from=df, date_to=dt
+        )
+    except ValueError as exc:
+        code, _, message = str(exc).partition(":")
+        raise HTTPException(
+            status_code=422, detail={"code": code, "message": message or code}
+        )
+
+    if resolved_year is not None:
+        filename = f"receipts-{resolved_year}.zip"
+    else:
+        from_dt = datetime.fromtimestamp(df, tz=timezone.utc).strftime("%Y%m%d")
+        to_dt = datetime.fromtimestamp(dt, tz=timezone.utc).strftime("%Y%m%d")
+        filename = f"receipts-{from_dt}-to-{to_dt}.zip"
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------

@@ -243,9 +243,20 @@ async def execute_concat(job: Dict[str, Any]) -> None:
         s3 = boto3.client("s3", endpoint_url=S.s3_endpoint_url or None)
         input_paths: List[Path] = []
 
+        scratch_dir_resolved = scratch_dir.resolve()
         for i, key in enumerate(s3_keys):
             ext = Path(key).suffix or ".mp4"
             local_path = scratch_dir / f"input_{i}{ext}"
+            # SEC-012: ensure the computed download path cannot traverse outside
+            # the scratch dir even if the S3 key suffix is attacker-influenced.
+            if not local_path.resolve().is_relative_to(scratch_dir_resolved):
+                logger.warning(
+                    "concat_download_path_escape_blocked: path=%s scratch=%s",
+                    local_path, scratch_dir,
+                )
+                raise ConcatError(
+                    f"Computed download path escapes scratch dir: {local_path}"
+                )
             s3.download_file(bucket, key, str(local_path))
             input_paths.append(local_path)
 
@@ -305,8 +316,16 @@ async def execute_concat(job: Dict[str, Any]) -> None:
 
         logger.info("Concat job %s completed: method=%s", job_id, method)
 
-    except Exception:
+    except Exception as e:
         logger.exception("Concat job %s failed", job_id)
+        # Transition the job out of "running" so it can retry or surface the
+        # error; a bookkeeping failure here must never mask the original error.
+        try:
+            from app.services.transcode_job_store import fail_job
+
+            fail_job(job_id, str(e)[:4096], int(job.get("attempt", 0)))
+        except Exception:
+            logger.exception("fail_job itself failed for concat job %s", job_id)
         raise
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -321,10 +340,27 @@ async def _run_concat_demuxer(
     timeout_seconds: int = 600,
 ) -> None:
     """Concatenate via the concat demuxer (stream copy, fast)."""
-    filelist_path = output_path.parent / "filelist.txt"
+    work_dir = output_path.parent
+    work_dir_resolved = work_dir.resolve()
+    filelist_path = work_dir / "filelist.txt"
+
+    # SEC-012: validate every input path is contained inside the owned scratch
+    # (work) directory BEFORE writing it to filelist.txt. Combined with
+    # "-safe", "1" below (which rejects absolute paths / ".." components), this
+    # ensures no path outside scratch_dir can ever be read by the concat demuxer.
+    for p in input_paths:
+        resolved = p.resolve()
+        if not resolved.is_relative_to(work_dir_resolved):
+            logger.warning(
+                "concat_path_escape_blocked: path=%s scratch=%s", p, work_dir
+            )
+            raise ConcatError(f"Input path escapes scratch directory: {p}")
+
     with open(filelist_path, "w") as f:
         for p in input_paths:
-            escaped = str(p).replace("'", "'\\''")
+            # Write paths relative to work_dir so "-safe 1" accepts them.
+            rel = p.resolve().relative_to(work_dir_resolved)
+            escaped = str(rel).replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
 
     try:
@@ -335,17 +371,18 @@ async def _run_concat_demuxer(
 
     cmd = [
         ffmpeg_bin, "-hide_banner", "-loglevel", "warning", "-y",
-        "-f", "concat", "-safe", "0",
-        "-i", str(filelist_path),
+        "-f", "concat", "-safe", "1",
+        "-i", filelist_path.name,
         "-c", "copy",
         "-movflags", "+faststart",
-        str(output_path),
+        output_path.name,
     ]
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=str(work_dir),
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
     if proc.returncode != 0:

@@ -24,8 +24,11 @@ from app.metrics import (
     record_browser_ssh_session_lifecycle,
     set_browser_ssh_active_sessions,
 )
+from app.services import terminal_monitor
 from app.services.alerts import audit_event
+from app.services.host_inventory import _should_record, record_connection
 from app.services.sessions import require_ui_session
+from app.services.ssh_key_manager import get_decrypted_private_key, get_key_metadata
 
 router = APIRouter(prefix="/api/browser-ssh", tags=["browser-ssh-terminal"])
 logger = logging.getLogger(__name__)
@@ -520,7 +523,7 @@ def browser_ssh_terminal_protocol() -> dict[str, object]:
         "client_messages": {
             "connect": {
                 "required": ["host", "port", "username", "authType"],
-                "authType": ["password", "private_key"],
+                "authType": ["password", "private_key", "stored_key"],
                 "example": {
                     "type": "connect",
                     "payload": {
@@ -529,6 +532,16 @@ def browser_ssh_terminal_protocol() -> dict[str, object]:
                         "username": "alice",
                         "authType": "password",
                         "password": "***",
+                    },
+                },
+                "example_stored_key": {
+                    "type": "connect",
+                    "payload": {
+                        "host": "example.internal",
+                        "port": 22,
+                        "username": "alice",
+                        "authType": "stored_key",
+                        "keyId": "key_abc123",
                     },
                 },
             },
@@ -584,6 +597,9 @@ def _redact_connect_payload(payload: dict[str, Any]) -> dict[str, Any]:
         redacted["privateKey"] = f"***REDACTED***({len(key_text)} chars)"
     if "passphrase" in redacted:
         redacted["passphrase"] = "***REDACTED***"
+    if "keyId" in redacted and redacted.get("keyId"):
+        key_id = str(redacted.get("keyId") or "")
+        redacted["keyId"] = f"***REDACTED***({len(key_id)} chars)"
     return redacted
 
 
@@ -663,10 +679,10 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
             message="username is required",
             request_type="connect",
         )
-    if auth_type not in {"password", "private_key"}:
+    if auth_type not in {"password", "private_key", "stored_key"}:
         return False, None, _error_payload(
             code="invalid_auth_type",
-            message="authType must be one of: password, private_key",
+            message="authType must be one of: password, private_key, stored_key",
             request_type="connect",
         )
 
@@ -676,6 +692,17 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
             return False, None, _error_payload(
                 code="invalid_password",
                 message="password is required for password auth",
+                request_type="connect",
+            )
+    elif auth_type == "stored_key":
+        # The browser sends only an opaque keyId; the private key never leaves
+        # the server. The PEM is resolved server-side in the connect handler via
+        # ssh_key_manager.get_decrypted_private_key.
+        key_id = payload.get("keyId")
+        if not isinstance(key_id, str) or not key_id.strip():
+            return False, None, _error_payload(
+                code="invalid_key_id",
+                message="keyId is required for stored_key auth",
                 request_type="connect",
             )
     else:
@@ -708,8 +735,66 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
         "authType": auth_type,
         "password": payload.get("password"),
         "privateKey": payload.get("privateKey"),
+        "keyId": payload.get("keyId"),
         "passphrase": passphrase,
+        # Optional registered host reference (host inventory). Used post-connect
+        # to resolve the per-host record_sessions flag (INFRA-010 / GAP-0234).
+        "host_id": str(payload.get("host_id") or "").strip(),
     }, None
+
+
+async def _dispatch_terminal_signal(
+    *,
+    signal: dict[str, Any],
+    worker_id: str,
+    user_id: str | None,
+    websocket: WebSocket,
+) -> None:
+    """Dispatch an agent terminal signal detected in the SSH output stream.
+
+    Creates a feedback request on ``feedback_needed`` and notifies the browser
+    for completion/error signals. Best-effort: any failure is logged and
+    swallowed so terminal forwarding is never interrupted.
+    """
+    category = signal.get("signal")
+    match_text = signal.get("match", "")
+    detected_pattern = signal.get("pattern", "")
+    buf = terminal_monitor.get_or_create_buffer(worker_id)
+    context = buf.get_recent(2000)
+
+    if category == "feedback_needed":
+        try:
+            req = terminal_monitor.create_feedback_request(
+                user_id=user_id or "",
+                worker_id=worker_id,
+                ticket_id="",
+                question=match_text,
+                terminal_context=context,
+                detected_pattern=detected_pattern,
+            )
+            await websocket.send_json(
+                {
+                    "type": "feedback_request",
+                    "payload": {"request_id": req["request_id"], "question": match_text},
+                }
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "Failed to create feedback request for worker %s: %s",
+                worker_id, exc,
+            )
+    elif category == "completion":
+        try:
+            await websocket.send_json({"type": "agent_complete", "payload": {}})
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to send agent_complete for worker %s: %s", worker_id, exc)
+    elif category == "error":
+        try:
+            await websocket.send_json(
+                {"type": "agent_error", "payload": {"match": match_text}}
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to send agent_error for worker %s: %s", worker_id, exc)
 
 
 @router.websocket("/ws")
@@ -738,6 +823,10 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
     connected_started_at: float | None = None
     session_host: str | None = None
     session_port: int | None = None
+    session_worker_id: str | None = None
+    # INFRA-010 (GAP-0233/GAP-0234): server-side SSH session recording state.
+    recording_id: str | None = None
+    recording_start_time: float | None = None
     end_outcome = "disconnected"
     end_reason = "websocket_closed"
 
@@ -776,6 +865,40 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                 if output:
                     session_last_activity_at = now
                     await websocket.send_json({"type": "output", "payload": {"data": output}})
+                    # INFRA-010 (GAP-0233): server-side recording capture. Append
+                    # each output chunk in asciicast [elapsed, "o", data] form.
+                    # Best-effort: a recording failure must NEVER interrupt the
+                    # live terminal stream.
+                    if recording_id is not None and recording_start_time is not None:
+                        elapsed = round(time.time() - recording_start_time, 6)
+                        try:
+                            from app.services.ssh_session_recording import append_events
+
+                            append_events(
+                                session_user_sub,
+                                recording_id,
+                                [[elapsed, "o", output]],
+                            )
+                        except Exception:
+                            logger.exception(
+                                "browser_ssh recording_append_failed recording_id=%s",
+                                recording_id,
+                            )
+                    # Tap into the monitoring pipeline only for agent-tracked
+                    # sessions (worker_id present in the connect payload). Normal
+                    # interactive terminals leave session_worker_id None and are
+                    # entirely unaffected.
+                    if session_worker_id:
+                        signal = terminal_monitor.process_terminal_output(
+                            session_worker_id, output
+                        )
+                        if signal:
+                            await _dispatch_terminal_signal(
+                                signal=signal,
+                                worker_id=session_worker_id,
+                                user_id=session_user_sub,
+                                websocket=websocket,
+                            )
 
             try:
                 raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=0.05)
@@ -833,6 +956,11 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
 
                 session_host = str(normalized["host"])
                 session_port = int(normalized["port"])
+                # Optional agent linkage: when the Worker Fleet UI launches an
+                # agent terminal it includes a worker_id so output flows into
+                # the monitoring pipeline. Absent for normal terminals.
+                wid = payload.get("worker_id") if isinstance(payload, dict) else None
+                session_worker_id = wid.strip() if isinstance(wid, str) and wid.strip() else None
                 now = time.time()
                 if not _consume_connect_rate_limit(session_user_sub, now):
                     record_browser_ssh_connect_throttled(reason="connect_rate_limit")
@@ -874,6 +1002,36 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                         _release_user_session_slot(session_user_sub)
                         session_slot_acquired = False
                     continue
+
+                # stored_key auth: the browser only sent an opaque keyId. Resolve
+                # the KMS-encrypted private key server-side so the PEM never
+                # reaches the browser. We preserve the original auth type + keyId
+                # for post-connect host bookkeeping, then normalise to the
+                # existing private_key bridge path.
+                session_stored_key_auth = normalized["authType"] == "stored_key"
+                session_stored_key_id = ""
+                if session_stored_key_auth:
+                    session_stored_key_id = str(normalized.get("keyId") or "")
+                    pem = get_decrypted_private_key(session_user_sub, session_stored_key_id)
+                    if pem is None:
+                        record_browser_ssh_connect_denied(reason="key_not_found")
+                        record_browser_ssh_session_lifecycle(event="connect", outcome="failure")
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "payload": _error_payload(
+                                    code="key_not_found",
+                                    message="SSH key not found or access denied.",
+                                    request_type="connect",
+                                ),
+                            }
+                        )
+                        if session_slot_acquired:
+                            _release_user_session_slot(session_user_sub)
+                            session_slot_acquired = False
+                        continue
+                    normalized["privateKey"] = pem
+                    normalized["authType"] = "private_key"
 
                 if ssh_bridge:
                     ssh_bridge.close()
@@ -941,6 +1099,70 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                     started_at=session_started_at,
                     outcome="success",
                 )
+                # For stored_key connections against managed hosts, record the
+                # connection so the host inventory's last_connected_at / history
+                # audit trail stays accurate. Best-effort: never break the session.
+                if session_stored_key_auth and session_stored_key_id:
+                    try:
+                        key_meta = get_key_metadata(session_user_sub, session_stored_key_id)
+                        for associated_host_id in (key_meta or {}).get("associated_hosts", []) or []:
+                            record_connection(session_user_sub, associated_host_id)
+                    except Exception:
+                        logger.warning(
+                            "browser_ssh stored_key record_connection failed",
+                            extra=_session_log_context(
+                                session_id=ws_session_id,
+                                user_sub=session_user_sub,
+                                host=session_host,
+                                port=session_port,
+                            ),
+                        )
+                # INFRA-010 (GAP-0233/GAP-0234): start server-side session
+                # recording when the global flag is on AND either the per-host
+                # record_sessions flag is set or the always-record override is
+                # enabled. Best-effort: recording failures never abort the
+                # session (recording_id stays None → output loop skips capture).
+                connect_host_id = str(normalized.get("host_id") or "").strip()
+                auto_record = (
+                    _should_record(session_user_sub, connect_host_id)
+                    or S.ssh_session_recording_always_record
+                )
+                logger.info(
+                    "browser_ssh auto_record_decision auto_record=%s host_id=%s",
+                    auto_record, connect_host_id or "(none)",
+                )
+                if auto_record and S.ssh_session_recording_enabled:
+                    try:
+                        from app.services.ssh_session_recording import start_recording
+
+                        rec = start_recording(
+                            session_user_sub,
+                            hostname=str(session_host or ""),
+                            port=int(session_port or 0),
+                            username=str(normalized.get("username") or ""),
+                            terminal_cols=int(session_size.get("cols") or 80),
+                            terminal_rows=int(session_size.get("rows") or 24),
+                            host_id=connect_host_id,
+                            session_id=ws_session_id,
+                        )
+                        recording_id = rec["recording_id"]
+                        recording_start_time = time.time()
+                        logger.info(
+                            "browser_ssh recording_started recording_id=%s",
+                            recording_id,
+                            extra=_session_log_context(
+                                session_id=ws_session_id,
+                                user_sub=session_user_sub,
+                                host=session_host,
+                                port=session_port,
+                            ),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "browser_ssh recording_start_failed session_id=%s",
+                            ws_session_id,
+                        )
+                        recording_id = None
                 logger.info(
                     "browser_ssh connect success",
                     extra=_session_log_context(
@@ -1093,6 +1315,20 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
     finally:
         if ssh_bridge:
             ssh_bridge.close()
+        # INFRA-010 (GAP-0233): finalize the server-side recording. Best-effort.
+        if recording_id is not None:
+            try:
+                from app.services.ssh_session_recording import stop_recording
+
+                stop_recording(session_user_sub, recording_id)
+                logger.info(
+                    "browser_ssh recording_finished recording_id=%s", recording_id
+                )
+            except Exception:
+                logger.exception(
+                    "browser_ssh recording_finish_failed recording_id=%s",
+                    recording_id,
+                )
         if connected_started_at is not None:
             elapsed = time.time() - connected_started_at
             record_browser_ssh_session_duration(outcome=end_outcome, elapsed_seconds=elapsed)

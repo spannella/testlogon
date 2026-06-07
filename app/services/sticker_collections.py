@@ -24,11 +24,34 @@ from app.core.time import now_ts
 
 S3_BUCKET_IMAGES = "my-chat-images"
 
+# Allowed MIME types (validated against magic bytes, not just the declared header).
+# image/svg+xml removed: SVG is text-based, has no reliable magic bytes, and can
+# carry executable JavaScript (XSS). PNG + WebP only. (GAP-0315)
 _ALLOWED_MIME = {
     "image/png": "png",
     "image/webp": "webp",
-    "image/svg+xml": "svg",
 }
+
+# Magic-byte signatures.
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_WEBP_RIFF = b"RIFF"
+_WEBP_MARKER = b"WEBP"
+
+
+def _detect_content_type(data: bytes) -> Optional[str]:
+    """Sniff the real content type from magic bytes.
+
+    Mirrors ``app/services/custom_emojis.py:_detect_content_type``: the declared
+    header is ignored entirely and the actual bytes determine the MIME. Returns
+    the detected MIME string, or ``None`` if unrecognised. SVG is text-based and
+    intentionally not detectable here.
+    """
+    if data[:8] == _PNG_MAGIC:
+        return "image/png"
+    # WebP: "RIFF" at offset 0, "WEBP" at offset 8.
+    if len(data) >= 12 and data[:4] == _WEBP_RIFF and data[8:12] == _WEBP_MARKER:
+        return "image/webp"
+    return None
 
 
 def _new_collection_id() -> str:
@@ -157,9 +180,14 @@ def create_collection(
     stickers_out: List[Dict[str, Any]] = []
     thumbnail_url: Optional[str] = None
     for idx, (data, content_type, alt_text) in enumerate(files, start=1):
-        ext = _ALLOWED_MIME.get((content_type or "").lower())
+        # Determine the MIME from the ACTUAL bytes, not the client-controlled
+        # declared header (GAP-0315). Mirrors custom_emojis: the sniffed type is
+        # authoritative; reject if it isn't an allowed image type.
+        sniffed_ct = _detect_content_type(data)
+        ext = _ALLOWED_MIME.get(sniffed_ct) if sniffed_ct else None
         if ext is None:
             raise ValueError("invalid_file_type")
+        content_type = sniffed_ct
         if len(data) > S.sticker_max_file_size_bytes:
             raise ValueError("file_too_large")
         sticker_id = _new_sticker_id()

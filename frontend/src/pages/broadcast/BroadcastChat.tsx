@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { MessageCircle, Trash2, VolumeX, Send, Reply, Clock, Lock, Ticket } from "lucide-react";
+import { MessageCircle, Trash2, VolumeX, Send, Reply, Clock, Lock, Ticket, Package } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,8 @@ import { ChatLockedCard } from "./ChatLockedCard";
 import { BroadcastLotteryCard } from "@/components/broadcast/BroadcastLotteryCard";
 import { BroadcastLotteryCreator } from "@/components/broadcast/BroadcastLotteryCreator";
 import { LotteryResultOverlay } from "@/components/broadcast/LotteryResultOverlay";
+import { ProductLinkCard } from "./ProductLinkCard";
+import { ShelfProductPicker } from "./ShelfProductPicker";
 import type { BroadcastLotteryResultEntry } from "@/api/types";
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -43,6 +45,8 @@ export function BroadcastChat({ sessionId, isBroadcaster }: BroadcastChatProps) 
   // Lottery state (BCAST-014)
   const [showLotteryCreator, setShowLotteryCreator] = useState(false);
   const [lotteryResult, setLotteryResult] = useState<BroadcastLotteryResultEntry | null>(null);
+  // Product share state (LCOM-002 / GAP-0290)
+  const [showProductPicker, setShowProductPicker] = useState(false);
   const queryClient = useQueryClient();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -114,6 +118,15 @@ export function BroadcastChat({ sessionId, isBroadcaster }: BroadcastChatProps) 
 
       // Lottery SSE events (BCAST-014)
       es.addEventListener("chat:lottery", (event) => {
+        const msg: ChatMessage = JSON.parse(event.data);
+        setMessages((prev) => {
+          if (prev.some((m) => m.message_id === msg.message_id)) return prev;
+          return [...prev, msg].slice(-500);
+        });
+      });
+
+      // Product link SSE events (LCOM-002 / GAP-0289)
+      es.addEventListener("chat:product_link", (event) => {
         const msg: ChatMessage = JSON.parse(event.data);
         setMessages((prev) => {
           if (prev.some((m) => m.message_id === msg.message_id)) return prev;
@@ -252,6 +265,13 @@ export function BroadcastChat({ sessionId, isBroadcaster }: BroadcastChatProps) 
             );
           }}
         />
+      );
+    }
+
+    // LCOM-002 / GAP-0289 — Product link card
+    if (msg.kind === "product_link" && msg.product_link) {
+      return (
+        <ProductLinkCard sessionId={sessionId} productLink={msg.product_link} />
       );
     }
 
@@ -460,7 +480,29 @@ export function BroadcastChat({ sessionId, isBroadcaster }: BroadcastChatProps) 
           >
             <Ticket className="h-3 w-3" />
           </button>
+          {/* Share product (LCOM-002 / GAP-0290) */}
+          <button
+            onClick={() => setShowProductPicker(true)}
+            className="p-1 rounded text-[10px] text-muted-foreground hover:bg-muted"
+            title="Share product"
+            data-testid="toggle-product-share"
+          >
+            <Package className="h-3 w-3" />
+          </button>
         </div>
+      )}
+
+      {/* Shelf product picker (LCOM-002 / GAP-0290) */}
+      {isBroadcaster && (
+        <ShelfProductPicker
+          sessionId={sessionId}
+          open={showProductPicker}
+          onClose={() => setShowProductPicker(false)}
+          onSent={() => {
+            // The SSE chat:product_link event delivers the message to the
+            // broadcaster's own stream, so no manual state update is needed.
+          }}
+        />
       )}
 
       {/* Input */}

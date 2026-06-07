@@ -289,6 +289,10 @@ export interface RegisterEmailCheckReq {
 export interface RegisterEmailCheckResp {
   status: string;
   available: boolean;
+  // True when the email is taken by an account that has not yet completed
+  // verification (pending_verification). Present after the GAP-0107 backend
+  // change; absent (undefined/falsy) against the older response shape.
+  unverified?: boolean;
 }
 
 // ─── Passwordless ────────────────────────────────────────────────
@@ -336,6 +340,7 @@ export interface ApiKey {
   prefix?: string;
   allow_cidrs?: string[];
   deny_cidrs?: string[];
+  capabilities?: string[];
 }
 
 export interface ApiKeyCreated extends ApiKey {
@@ -345,6 +350,7 @@ export interface ApiKeyCreated extends ApiKey {
 export interface CreateApiKeyReq {
   label?: string;
   expires_in_days?: number;
+  capabilities?: string[];
 }
 
 export interface RevokeApiKeyReq {
@@ -1261,6 +1267,9 @@ export interface SendTextMessageReq {
   expires_in_seconds?: number;
   tip_amount_cents?: number;
   tip_payment_method_id?: string;
+  // GAP-0344: stable per-action ID for idempotent retries (PWA offline-queue
+  // action id). Same key = the backend deduplicates the send.
+  client_request_id?: string;
 }
 
 export interface SendImageMessageReq {
@@ -1568,6 +1577,18 @@ export interface FileEntry {
   waveform_url?: string | null;
   preview_supported?: boolean;
   preview_reason?: string | null;
+  // VOD ↔ File Manager bridge (VOD-014). Populated on file nodes that have been
+  // imported into / linked to the VOD pipeline. All optional + additive.
+  vod_linked?: boolean;
+  vod_video_id?: string | null;
+  vod_status?: string | null;
+  vod_hls_manifest_url?: string | null;
+  vod_thumbnail_url?: string | null;
+  vod_duration_seconds?: number | null;
+  vod_width?: number | null;
+  vod_height?: number | null;
+  vod_imported_at?: number | null;
+  vod_linked_at?: number | null;
 }
 
 export interface FileListResp {
@@ -4182,6 +4203,44 @@ export interface EarningsTransaction {
 export interface EarningsTransactionsResp {
   items: EarningsTransaction[];
   next_cursor: string | null;
+}
+
+// ─── Payout Methods (GAP-0195 / FIN-009) ────────────────────────
+
+export type PayoutMethodType = "bank_ach" | "bank_wire" | "paypal" | "check";
+
+export interface PayoutMethod {
+  method_id: string;
+  method_type: PayoutMethodType;
+  account_last4: string;
+  routing_last4: string;
+  paypal_email: string;
+  nickname: string;
+  is_default: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PayoutMethodListResp {
+  methods: PayoutMethod[];
+}
+
+export interface PayoutMethodCreate {
+  method_type: PayoutMethodType;
+  account_last4?: string;
+  routing_last4?: string;
+  paypal_email?: string;
+  nickname?: string;
+  set_as_default?: boolean;
+}
+
+// ─── Admin Payout Queue (GAP-0196 / FIN-009) ────────────────────
+
+export interface PayoutStats {
+  total_requested: number;
+  total_requested_amount_cents: number;
+  total_approved: number;
+  total_processing: number;
 }
 
 // ─── Video Subtitles (VOD-021) ─────────────────────────────────────
@@ -9632,6 +9691,19 @@ export interface AdminAdModerationQueue {
   creatives: AdminAdCreative[];
   account_count: number;
   creative_count: number;
+}
+
+// Platform-wide ad serving kill switch (GAP-0068 backend / GAP-0070 UI).
+export interface AdminAdKillSwitchState {
+  active: boolean;
+  toggled_by: string;
+  reason: string;
+  updated_at: number;
+}
+
+export interface AdminAdKillSwitchToggleIn {
+  enabled: boolean;
+  reason: string;
 }
 
 // ── Multi-Hop SSH Bastion (INFRA-011) ──────────────────────────────

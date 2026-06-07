@@ -221,7 +221,7 @@ async def get_config(session=Depends(require_ui_session)):
     config = svc.get_security_config(agent_type_id=_config_type_id(user_id))
     if config is None:
         config = svc.get_effective_config(user_id=user_id)
-    return SecurityAgentConfigOut(**config)
+    return SecurityAgentConfigOut(**svc.config_response_dict(config))
 
 
 @agent_compliance_router.put("/config", response_model=SecurityAgentConfigOut)
@@ -238,7 +238,7 @@ async def update_config(
     result = svc.update_security_config(
         agent_type_id=_config_type_id(user_id), owner_sub=user_id, config=patch
     )
-    return SecurityAgentConfigOut(**result)
+    return SecurityAgentConfigOut(**svc.config_response_dict(result))
 
 
 # ---------------------------------------------------------------------------

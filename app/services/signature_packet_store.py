@@ -6,9 +6,11 @@ from typing import Any, Dict, List, Optional
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
+from app.core.aws_clients import s3_client
+from app.core.settings import S
 from app.core.tables import T
 from app.metrics import record_signature_packet_event
 from app.services.signature_packet_domain import (
@@ -21,6 +23,54 @@ from app.services.signature_packet_flags import require_signature_pdf_enabled
 
 OWNER_CREATED_INDEX = "OWNER_CREATED_INDEX"
 SIGNER_STATUS_INDEX = "SIGNER_STATUS_INDEX"
+
+# Bucket for notary stamp images (KYC high-risk cases). Defaults to the shared
+# KYC documents bucket; moto-backed in dev, real S3 in prod (SECOPS-007 parity).
+STAMP_IMAGE_BUCKET = S.kyc_documents_bucket or "local-uploads"
+
+# Lazily-initialised S3 client. Tests monkeypatch this module-level handle so no
+# real AWS call is ever made (moto intercepts in-process in dev).
+_s3 = None
+
+
+def _get_s3():
+    global _s3
+    if _s3 is None:
+        _s3 = s3_client()
+    return _s3
+
+
+def _validate_stamp_expiry(stamp_expiry: str) -> None:
+    """Validate ``stamp_expiry`` is an ISO date that is not in the past."""
+    try:
+        expiry_date = date.fromisoformat(stamp_expiry)
+    except ValueError as exc:
+        raise ValueError(f"Invalid stamp_expiry: {exc}") from exc
+    if expiry_date < date.today():
+        raise ValueError("stamp_expiry is in the past")
+
+
+def upload_stamp_image(
+    *,
+    packet_id: str,
+    field_id: str,
+    image_bytes: bytes,
+    content_type: str = "image/png",
+) -> str:
+    """Upload a notary stamp image to S3 and return the stored key.
+
+    Uses the shared ``app.core.aws_clients.s3_client()`` factory so the same code
+    path targets moto in dev and real S3 in prod (SECOPS-007 parity).
+    """
+    require_signature_pdf_enabled()
+    key = f"kyc/stamps/{packet_id}/{field_id}/stamp.png"
+    _get_s3().put_object(
+        Bucket=STAMP_IMAGE_BUCKET,
+        Key=key,
+        Body=image_bytes,
+        ContentType=content_type,
+    )
+    return key
 
 
 def list_packets_by_sender(owner_user_id: str, *, limit: int = 100) -> List[Dict[str, Any]]:
@@ -142,6 +192,9 @@ def upsert_packet_field(
     field_type: SignatureFieldType,
     assigned_signer_id: Optional[str],
     required: bool,
+    stamp_image_ref: Optional[str] = None,
+    stamp_number: Optional[str] = None,
+    stamp_expiry: Optional[str] = None,
 ) -> Dict[str, Any]:
     require_signature_pdf_enabled()
     _ensure_packet_draft(packet_id)
@@ -162,6 +215,15 @@ def upsert_packet_field(
     item["created_at"] = (existing or {}).get("created_at", now)
     if assigned_signer_id:
         item["assigned_signer_id"] = assigned_signer_id
+    # Notary stamp metadata — only persisted for notary_stamp fields (KYC-007).
+    if field_type == SignatureFieldType.NOTARY_STAMP:
+        if stamp_expiry:
+            _validate_stamp_expiry(stamp_expiry)
+            item["stamp_expiry"] = stamp_expiry
+        if stamp_number:
+            item["stamp_number"] = stamp_number
+        if stamp_image_ref:
+            item["stamp_image_ref"] = stamp_image_ref
     T.signature_packet_fields.put_item(Item=item)
     return item
 
@@ -255,6 +317,9 @@ def fill_packet_field(
     filled_by_signer_id: str,
     capture_mode: str | None = None,
     render_payload: Dict[str, Any] | None = None,
+    stamp_image_ref: str | None = None,
+    stamp_number: str | None = None,
+    stamp_expiry: str | None = None,
 ) -> Dict[str, Any]:
     require_signature_pdf_enabled()
     _ensure_packet_not_completed(packet_id)
@@ -272,6 +337,24 @@ def fill_packet_field(
     if render_payload is not None:
         expression += ", render_payload = :render_payload"
         values[":render_payload"] = render_payload
+
+    # Notary stamp metadata — only written when the field being filled is a
+    # notary_stamp field (KYC-007). Reads the stored field to gate the branch so
+    # non-notary callers are completely unaffected.
+    field = get_packet_field(packet_id, field_id) or {}
+    if str(field.get("field_type") or "") == SignatureFieldType.NOTARY_STAMP.value:
+        if stamp_expiry:
+            _validate_stamp_expiry(stamp_expiry)
+        expression += (
+            ", stamp_image_ref = :stamp_image_ref"
+            ", stamp_number = :stamp_number"
+            ", stamp_expiry = :stamp_expiry"
+            ", stamped_at = :stamped_at"
+        )
+        values[":stamp_image_ref"] = stamp_image_ref or ""
+        values[":stamp_number"] = stamp_number or ""
+        values[":stamp_expiry"] = stamp_expiry or ""
+        values[":stamped_at"] = now
 
     response = T.signature_packet_fields.update_item(
         Key={"packet_id": packet_id, "field_id": field_id},
@@ -397,6 +480,43 @@ def are_required_signers_completed(packet_id: str) -> bool:
     signers = list_packet_signers(packet_id)
     required_signers = [signer for signer in signers if bool(signer.get("required", True))]
     return all(str(signer.get("status") or "") == SignatureSignerStatus.COMPLETED.value for signer in required_signers)
+
+
+def add_packet_signer(
+    *,
+    packet_id: str,
+    signer_id: str,
+    email: Optional[str] = None,
+    required: bool = True,
+) -> Dict[str, Any]:
+    """Add a signer record to a DRAFT packet.
+
+    Raises ``ValueError`` ("packet_not_found" / "packet_not_draft" / "packet_immutable")
+    via ``_ensure_packet_draft`` when the packet is missing or no longer editable.
+    """
+    require_signature_pdf_enabled()
+    _ensure_packet_draft(packet_id)
+    now = datetime.now(timezone.utc).isoformat()
+    item: Dict[str, Any] = {
+        "packet_id": packet_id,
+        "signer_id": signer_id,
+        "status": SignatureSignerStatus.PENDING.value,
+        "status_key": signer_status_sort_key(SignatureSignerStatus.PENDING, packet_id),
+        "required": bool(required),
+        "added_at": now,
+        "updated_at": now,
+    }
+    if email:
+        item["email"] = email
+    T.signature_packet_signers.put_item(Item=item)
+    return item
+
+
+def remove_packet_signer(*, packet_id: str, signer_id: str) -> None:
+    """Remove a signer record from a DRAFT packet."""
+    require_signature_pdf_enabled()
+    _ensure_packet_draft(packet_id)
+    T.signature_packet_signers.delete_item(Key={"packet_id": packet_id, "signer_id": signer_id})
 
 
 def mark_packet_completed(packet_id: str) -> Optional[Dict[str, Any]]:

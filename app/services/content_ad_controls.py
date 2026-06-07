@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 # Revenue share stored in basis points (bps). 7000 bps = 70% to creator.
 DEFAULT_REVENUE_SHARE_BPS = 7000
 
+# Platform ceiling for creator self-service revenue share. A creator can never
+# set their own share above 70% — the platform retains at least a 30% floor.
+MAX_CREATOR_REVENUE_SHARE_BPS = 7000
+
 # Valid per-content ad density values and the multiplier they apply to a video's
 # default mid-roll cadence. "low" thins out mid-rolls, "high" packs more in.
 AD_DENSITY_VALUES = {"low", "standard", "high"}
@@ -83,13 +87,13 @@ def get_creator_revenue_share_bps(creator_sub: str) -> int:
 
 
 def set_creator_revenue_share_bps(creator_sub: str, revenue_share_bps: int) -> Dict[str, Any]:
-    """Set the creator's negotiated revenue share (basis points).
+    """Set the creator's revenue share (basis points).
 
-    Per the ticket, the revenue share is an admin-controlled / negotiated rate and
-    is therefore NOT exposed on the creator-facing PATCH settings endpoint; it is
-    set via a dedicated admin/owner path. Clamped to [0, 10000].
+    Creator self-service path: clamped to [0, MAX_CREATOR_REVENUE_SHARE_BPS] so a
+    creator can never set their own share above the platform ceiling (70%), which
+    would zero out the platform's margin on their ad revenue.
     """
-    bps = max(0, min(10000, int(revenue_share_bps)))
+    bps = max(0, min(MAX_CREATOR_REVENUE_SHARE_BPS, int(revenue_share_bps)))
     T.billing.update_item(
         Key={"pk": f"USER#{creator_sub}", "sk": "AD_SETTINGS"},
         UpdateExpression="SET revenue_share_bps = :b, updated_at = :ts",

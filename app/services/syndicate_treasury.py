@@ -249,6 +249,14 @@ def disburse(
     # Admin-only.
     syndicate_svc._require_admin(syndicate_id, admin_sub)
 
+    # SECURITY: No-withdrawal constraint (SYND-004 / GAP-0032).
+    # The admin must not be able to disburse treasury funds to themselves.
+    if admin_sub == recipient_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Admin cannot disburse treasury funds to themselves",
+        )
+
     if amount_cents <= 0:
         raise HTTPException(status_code=400, detail="Disbursement amount must be positive")
 
@@ -449,6 +457,234 @@ def refund_advertising(
         "ledger_entry_id": entry_id,
         "new_treasury_balance_cents": balance["balance_cents"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Refunds (treasury → member) — member departure / syndicate dissolution
+#
+# SYND-004 §3.3: when a member leaves they receive their proportional share of
+# the *current* treasury balance, computed from their net (unspent) contribution
+# vs the total net contributions. When the syndicate dissolves (last member
+# leaves), all remaining funds are returned proportionally to every contributor
+# and the treasury is zeroed.
+# ---------------------------------------------------------------------------
+
+
+def _bump_contrib_refund(syndicate_id: str, user_id: str, refund_cents: int, ts: int) -> None:
+    """Atomically increment a member's contribution-tracker refund total."""
+    T.syndicate_treasury.update_item(
+        Key={"pk": _treasury_pk(syndicate_id), "sk": f"CONTRIB#{user_id}"},
+        UpdateExpression=(
+            "SET user_id = if_not_exists(user_id, :uid), "
+            "total_refunded_cents = if_not_exists(total_refunded_cents, :z) + :amt, "
+            "last_refunded_at = :t"
+        ),
+        ExpressionAttributeValues={
+            ":uid": user_id,
+            ":z": 0,
+            ":amt": int(refund_cents),
+            ":t": ts,
+        },
+    )
+
+
+def _debit_treasury_for_refund(syndicate_id: str, amount_cents: int, ts: int) -> None:
+    """Atomically debit the treasury balance for a refund (conditional, no overdraw).
+
+    Mirrors the conditional-debit pattern in ``disburse``. Also bumps a lifetime
+    ``total_refunded_cents`` counter on the BALANCE row.
+    """
+    pk_treasury = _treasury_pk(syndicate_id)
+    try:
+        T.syndicate_treasury.update_item(
+            Key={"pk": pk_treasury, "sk": BALANCE_SK},
+            UpdateExpression=(
+                "SET balance_cents = balance_cents - :amt, "
+                "total_refunded_cents = if_not_exists(total_refunded_cents, :z) + :amt, "
+                "updated_at = :t"
+            ),
+            ConditionExpression="attribute_exists(balance_cents) AND balance_cents >= :amt",
+            ExpressionAttributeValues={":amt": int(amount_cents), ":z": 0, ":t": ts},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            # Balance moved underneath us (concurrent leave/spend). Surface so the
+            # caller does NOT credit the member wallet against funds that no longer
+            # exist — refund integrity over best-effort.
+            raise HTTPException(status_code=409, detail="Insufficient treasury balance for refund")
+        raise
+
+
+def refund_on_member_leave(syndicate_id: str, user_id: str) -> Dict[str, Any]:
+    """Refund a leaving member their proportional share of the treasury.
+
+    refund = floor(current_balance * member_net / total_net)
+
+    Where ``member_net`` is the member's net (contributed - refunded) contribution
+    and ``total_net`` is the sum of net contributions across all members. The
+    treasury is debited and the member's personal wallet credited atomically;
+    the member's contribution tracker ``total_refunded_cents`` is bumped so a
+    later dissolution refund doesn't double-pay them.
+
+    Returns ``{"refunded_cents": int}``. A member who never contributed (or whose
+    net contribution is already fully refunded) gets ``0``.
+    """
+    current_balance = get_treasury_balance(syndicate_id)["balance_cents"]
+    if current_balance <= 0:
+        return {"refunded_cents": 0}
+
+    contributors = list_contributions(syndicate_id)
+    total_net = sum(c["net_contributed_cents"] for c in contributors)
+    if total_net <= 0:
+        return {"refunded_cents": 0}
+
+    member = next((c for c in contributors if c["user_id"] == user_id), None)
+    member_net = member["net_contributed_cents"] if member else 0
+    if member_net <= 0:
+        return {"refunded_cents": 0}
+
+    refund_cents = (current_balance * member_net) // total_net
+    # Never refund more than the balance (defensive — floor() guarantees this,
+    # but clamp against rounding/concurrency).
+    refund_cents = min(refund_cents, current_balance)
+    if refund_cents <= 0:
+        return {"refunded_cents": 0}
+
+    ts = now_ts()
+
+    # 1. Debit treasury balance (conditional, raises 409 if insufficient).
+    _debit_treasury_for_refund(syndicate_id, refund_cents, ts)
+
+    # 2. Credit member's personal wallet.
+    new_member_balance = apply_wallet_delta(T.billing, user_pk(user_id), refund_cents)
+
+    # 3. Update contribution tracker so net_contributed reflects the refund.
+    _bump_contrib_refund(syndicate_id, user_id, refund_cents, ts)
+
+    # 4. Treasury-side ledger entry (debit).
+    self_entry_id = _write_treasury_ledger(
+        syndicate_id,
+        direction="debit",
+        amount_cents=refund_cents,
+        reason=f"Treasury refund to {user_id}: member departure",
+        actor_user_id=user_id,
+        counterparty_user_id=user_id,
+        ts=ts,
+    )
+
+    # 5. Member-side billing ledger entry (credit).
+    user_entry_id = ulidish()
+    T.billing.put_item(Item={
+        "pk": user_pk(user_id),
+        "sk": ledger_sk(ts, user_entry_id),
+        "entry_id": user_entry_id,
+        "ts": ts,
+        "type": "syndicate_treasury_refund",
+        "amount_cents": refund_cents,
+        "state": "settled",
+        "reason": "Syndicate treasury refund: departure",
+        "direction": "credit",
+        "category": "syndicate_treasury",
+        "syndicate_id": syndicate_id,
+        "currency": "usd",
+        "created_at": ts,
+    })
+
+    logger.info(
+        "syndicate_treasury.refund_on_member_leave",
+        extra={"syndicate_id": syndicate_id, "user_id": user_id, "refunded_cents": refund_cents},
+    )
+    return {
+        "refunded_cents": refund_cents,
+        "new_member_balance_cents": new_member_balance,
+        "treasury_entry_id": self_entry_id,
+        "user_entry_id": user_entry_id,
+    }
+
+
+def refund_on_dissolution(syndicate_id: str) -> Dict[str, Any]:
+    """Refund ALL remaining treasury funds proportionally to contributors, then zero.
+
+    Each contributor with a positive net contribution receives
+    ``floor(current_balance * net / total_net)``; the largest contributor absorbs
+    any rounding remainder so the treasury ends at exactly zero. Returns
+    ``{"total_refunded": int, "refunds": [{"user_id", "refunded_cents"}, ...]}``.
+    """
+    current_balance = get_treasury_balance(syndicate_id)["balance_cents"]
+    if current_balance <= 0:
+        return {"total_refunded": 0, "refunds": []}
+
+    contributors = [c for c in list_contributions(syndicate_id) if c["net_contributed_cents"] > 0]
+    total_net = sum(c["net_contributed_cents"] for c in contributors)
+    if total_net <= 0:
+        return {"total_refunded": 0, "refunds": []}
+
+    # Largest net contribution first → last one in the loop gets the remainder.
+    contributors.sort(key=lambda c: (c["net_contributed_cents"], c["user_id"]), reverse=True)
+
+    ts = now_ts()
+    refunds: List[Dict[str, Any]] = []
+    remaining = current_balance
+
+    for i, contrib in enumerate(contributors):
+        if i == len(contributors) - 1:
+            refund = remaining  # last contributor absorbs the rounding remainder
+        else:
+            refund = (current_balance * contrib["net_contributed_cents"]) // total_net
+        refund = min(refund, remaining)
+        if refund <= 0:
+            continue
+        remaining -= refund
+        uid = contrib["user_id"]
+
+        apply_wallet_delta(T.billing, user_pk(uid), refund)
+        _bump_contrib_refund(syndicate_id, uid, refund, ts)
+        _write_treasury_ledger(
+            syndicate_id,
+            direction="debit",
+            amount_cents=refund,
+            reason=f"Treasury refund to {uid}: syndicate dissolved",
+            actor_user_id=uid,
+            counterparty_user_id=uid,
+            ts=ts,
+        )
+        user_entry_id = ulidish()
+        T.billing.put_item(Item={
+            "pk": user_pk(uid),
+            "sk": ledger_sk(ts, user_entry_id),
+            "entry_id": user_entry_id,
+            "ts": ts,
+            "type": "syndicate_treasury_refund",
+            "amount_cents": refund,
+            "state": "settled",
+            "reason": "Syndicate treasury refund: syndicate dissolved",
+            "direction": "credit",
+            "category": "syndicate_treasury",
+            "syndicate_id": syndicate_id,
+            "currency": "usd",
+            "created_at": ts,
+        })
+        refunds.append({"user_id": uid, "refunded_cents": refund})
+
+    # Zero out the treasury balance (whatever distributed; remaining should be 0).
+    distributed = current_balance - remaining
+    if distributed > 0:
+        T.syndicate_treasury.update_item(
+            Key={"pk": _treasury_pk(syndicate_id), "sk": BALANCE_SK},
+            UpdateExpression=(
+                "SET balance_cents = balance_cents - :amt, "
+                "total_refunded_cents = if_not_exists(total_refunded_cents, :z) + :amt, "
+                "updated_at = :t"
+            ),
+            ExpressionAttributeValues={":amt": distributed, ":z": 0, ":t": ts},
+        )
+
+    total = sum(r["refunded_cents"] for r in refunds)
+    logger.info(
+        "syndicate_treasury.refund_on_dissolution",
+        extra={"syndicate_id": syndicate_id, "total_refunded": total, "count": len(refunds)},
+    )
+    return {"total_refunded": total, "refunds": refunds}
 
 
 # ---------------------------------------------------------------------------

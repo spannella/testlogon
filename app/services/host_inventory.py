@@ -174,6 +174,10 @@ def _item_to_host(item: Dict[str, Any]) -> Dict[str, Any]:
         "status": item.get("status", "unknown"),
         "is_pinned": bool(item.get("is_pinned", False)),
         "source": item.get("source", "manual"),
+        # INFRA-010 / GAP-0234: per-host automatic SSH session recording flag.
+        # Defaults False so pre-existing host records (which lack the attribute)
+        # do not auto-record until explicitly opted in.
+        "record_sessions": bool(item.get("record_sessions", False)),
     }
 
 
@@ -194,6 +198,7 @@ def create_host(
     group: str = "",
     os_type: str = "unknown",
     source: str = "manual",
+    record_sessions: bool = False,
 ) -> Dict[str, Any]:
     """Create a new host entry in the user's inventory."""
     label = (label or "").strip()
@@ -234,6 +239,7 @@ def create_host(
         "status": "unknown",
         "is_pinned": False,
         "source": source,
+        "record_sessions": bool(record_sessions),
         "history": [],
     }
     T.host_inventory.put_item(Item=item)
@@ -257,6 +263,26 @@ def get_host(user_sub: str, host_id: str) -> Optional[Dict[str, Any]]:
 def _get_raw(user_sub: str, host_id: str) -> Optional[Dict[str, Any]]:
     resp = T.host_inventory.get_item(Key={"user_sub": user_sub, "sk": _sk(host_id)})
     return resp.get("Item")
+
+
+def _should_record(user_sub: str, host_id: Optional[str]) -> bool:
+    """Return True if the host requires automatic SSH session recording.
+
+    INFRA-010 / GAP-0234. Called from the hot Browser SSH WebSocket connect
+    path. Falls back to False when ``host_id`` is absent, the global recording
+    feature flag is off, the host is not found, or any lookup error occurs —
+    this function must NEVER raise.
+    """
+    if not host_id:
+        return False
+    if not S.ssh_session_recording_enabled:
+        return False
+    try:
+        raw = _get_raw(user_sub, host_id)
+        return bool((raw or {}).get("record_sessions", False))
+    except Exception:
+        logger.exception("_should_record lookup failed host_id=%s", host_id)
+        return False
 
 
 def update_host(user_sub: str, host_id: str, **updates: Any) -> Dict[str, Any]:
@@ -307,6 +333,8 @@ def update_host(user_sub: str, host_id: str, **updates: Any) -> Dict[str, Any]:
         _set("os_type", _validate_os_type(updates["os_type"]))
     if updates.get("is_pinned") is not None:
         _set("is_pinned", bool(updates["is_pinned"]))
+    if updates.get("record_sessions") is not None:
+        _set("record_sessions", bool(updates["record_sessions"]))
 
     _set("updated_at", now_ts())
 

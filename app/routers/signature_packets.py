@@ -15,12 +15,18 @@ from pydantic import BaseModel, Field
 from app.core.settings import S
 from app.services.filemanager import get_node
 from app.services.sessions import require_ui_session
-from app.services.signature_packet_domain import SignatureFieldType, SignaturePacketStatus
+from app.services.signature_packet_domain import (
+    SignatureFieldType,
+    SignaturePacketStatus,
+    SignatureSignerStatus,
+)
 from app.services.signature_packet_store import (
+    add_packet_signer,
     append_packet_event,
     are_required_signers_completed,
     mark_packet_completed,
     create_draft_packet,
+    remove_packet_signer,
     delete_packet_field,
     fill_packet_field,
     get_packet_field,
@@ -201,6 +207,20 @@ class SignaturePacketEventsOut(BaseModel):
     events: list[SignaturePacketEventOut]
 
 
+class AddSignerIn(BaseModel):
+    signer_id: str = Field(..., min_length=1, max_length=256)
+    email: Optional[str] = Field(default=None, max_length=256)
+    required: bool = True
+
+
+class AddSignerOut(BaseModel):
+    packet_id: str
+    signer_id: str
+    status: str
+    required: bool
+    added_at: str
+
+
 def _emit_completion_notices_once(packet_id: str, owner_user_id: str, signers: list[Dict[str, Any]], actor_user_id: str) -> bool:
     recipients = [owner_user_id] + [str(s.get("signer_id") or "") for s in signers]
     if not mark_completion_notices_sent(packet_id, recipient_user_ids=recipients):
@@ -296,6 +316,51 @@ def _validate_packet_owner_and_draft(packet_id: str, user_sub: str) -> Dict[str,
             extra={"status": str(packet.get("status") or "")},
         )
     return packet
+
+
+@router.post("/{packet_id}/signers", response_model=AddSignerOut)
+def add_signer(
+    packet_id: str,
+    inp: AddSignerIn,
+    user_sub: str = Depends(_current_user),
+) -> Dict[str, Any]:
+    _validate_packet_owner_and_draft(packet_id, user_sub)
+    signer = add_packet_signer(
+        packet_id=packet_id,
+        signer_id=inp.signer_id,
+        email=inp.email,
+        required=inp.required,
+    )
+    append_packet_event(
+        packet_id=packet_id,
+        actor_user_id=user_sub,
+        event_type="signer_added",
+        event_payload={"signer_id": inp.signer_id, "required": bool(inp.required)},
+    )
+    return {
+        "packet_id": packet_id,
+        "signer_id": inp.signer_id,
+        "status": str(signer.get("status") or SignatureSignerStatus.PENDING.value),
+        "required": bool(inp.required),
+        "added_at": str(signer.get("added_at") or ""),
+    }
+
+
+@router.delete("/{packet_id}/signers/{signer_id}", status_code=204)
+def remove_signer(
+    packet_id: str,
+    signer_id: str,
+    user_sub: str = Depends(_current_user),
+) -> Response:
+    _validate_packet_owner_and_draft(packet_id, user_sub)
+    remove_packet_signer(packet_id=packet_id, signer_id=signer_id)
+    append_packet_event(
+        packet_id=packet_id,
+        actor_user_id=user_sub,
+        event_type="signer_removed",
+        event_payload={"signer_id": signer_id},
+    )
+    return Response(status_code=204)
 
 
 def _validate_field_geometry(inp: SignaturePacketFieldMutationIn) -> None:
@@ -682,6 +747,8 @@ def fill_signature_packet_field(
         _raise_packet_error(status_code=403, code="signature_packet_field_not_assigned_to_signer", packet_id=packet_id, user_sub=user_sub, category="authorization", extra={"field_id": field_id})
 
     normalized = _normalize_field_value(str(field.get("field_type") or ""), inp)
+    stamp_payload = normalized.get("render_payload") or {}
+    is_notary = str(field.get("field_type") or "") == SignatureFieldType.NOTARY_STAMP.value
     try:
         updated = fill_packet_field(
             packet_id=packet_id,
@@ -690,6 +757,9 @@ def fill_signature_packet_field(
             filled_by_signer_id=user_sub,
             capture_mode=normalized.get("capture_mode"),
             render_payload=normalized.get("render_payload"),
+            stamp_image_ref=str(stamp_payload.get("stamp_image_ref") or "") if is_notary else None,
+            stamp_number=str(stamp_payload.get("stamp_number") or "") if is_notary else None,
+            stamp_expiry=str(stamp_payload.get("stamp_expiry") or "") if is_notary else None,
         )
     except ValueError as exc:
         if str(exc) == "packet_immutable":

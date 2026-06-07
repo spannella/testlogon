@@ -9,11 +9,17 @@ import json
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
+from app.core.settings import S
 from app.services.email_delivery import (
     record_email_bounce,
     record_email_complaint,
+)
+from app.services.sns_signature import (
+    SnsSignatureError,
+    confirm_subscription,
+    verify_sns_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,12 +28,38 @@ router = APIRouter(tags=["ses-notifications"])
 
 @router.post("/internal/ses/notifications")
 async def ses_notification(request: Request) -> Response:
-    """Receive SES delivery notifications via SNS HTTPS subscription."""
+    """Receive SES delivery notifications via SNS HTTPS subscription.
+
+    SECURITY (PLATFORM-002 / GAP-0319): every SNS message is cryptographically
+    signed. We verify that signature (SSRF-guarding the SigningCertURL) before
+    acting on any payload, so a network peer cannot forge bounce/complaint
+    notifications to suppress email delivery. Verification is gated by
+    ``S.ses_sns_signature_verification_enabled`` (default True); the SAME code
+    runs in dev and prod — the flag only allows opt-out for tests/dev where no
+    real SNS infrastructure exists. SNS only calls this endpoint in prod.
+    """
     try:
         body = await request.json()
     except Exception:
         logger.warning("SES notification: invalid JSON body")
         return Response(status_code=400)
+
+    if S.ses_sns_signature_verification_enabled:
+        try:
+            verify_sns_message(body)
+        except SnsSignatureError as exc:
+            logger.warning(
+                "SNS: rejected unverified message type=%s topic=%s: %s",
+                body.get("Type", "?"),
+                str(body.get("TopicArn", "?"))[:80],
+                exc,
+            )
+            raise HTTPException(status_code=403, detail="invalid SNS signature")
+    else:
+        logger.debug(
+            "SNS signature verification skipped "
+            "(ses_sns_signature_verification_enabled=False)"
+        )
 
     msg_type = body.get("Type", "")
 
@@ -38,7 +70,13 @@ async def ses_notification(request: Request) -> Response:
             "SNS subscription confirmation: topic=%s, url=%s",
             topic_arn, subscribe_url[:100] if subscribe_url else "",
         )
-        # In production, auto-confirm by fetching SubscribeURL
+        # Auto-confirm the subscription by fetching SubscribeURL (best-effort).
+        # SSRF-guarded inside confirm_subscription (must be an AWS SNS https URL).
+        try:
+            confirm_subscription(subscribe_url)
+            logger.info("SNS subscription confirmed: topic=%s", topic_arn)
+        except Exception:
+            logger.exception("SNS: failed to auto-confirm subscription")
         return Response(status_code=200)
 
     if msg_type == "UnsubscribeConfirmation":

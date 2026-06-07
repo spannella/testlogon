@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models import (
     AdsApiBudgetUpdate,
@@ -29,6 +29,7 @@ from app.models import (
     AdsApiCampaignUpdate,
     AdsApiCreativeCreate,
     AdsApiCreativeUpdate,
+    WebhookEndpointCreateReq,
 )
 from app.services import advertiser_api as svc
 from app.services.api_key_auth_dependency import require_api_key_principal
@@ -211,3 +212,106 @@ async def analytics_breakdown(
     account = svc.resolve_account(principal)
     rows = svc.analytics_breakdown(account["account_id"], campaign_id, dimension, days)
     return {"data": rows, "count": len(rows)}
+
+
+# ── Webhooks (ADS-011 / GAP-0055) ────────────────────────────────────
+#
+# Reuse the general-purpose webhook_service for delivery. Advertiser webhook
+# endpoints are restricted to ``ad.*`` event types so a key with ads scope can
+# only subscribe to ad-platform events. Authentication is API-key only; CSRF
+# does not apply to programmatic requests.
+
+@advertiser_api_router.get("/webhooks/event-types")
+async def list_ad_webhook_event_types(
+    principal: Dict[str, Any] = Depends(require_api_key_principal),
+):
+    svc.require_scope(principal, "ads:read")
+    from app.services.ad_webhooks import list_ad_event_types
+    types = list_ad_event_types()
+    return {"data": types, "count": len(types)}
+
+
+@advertiser_api_router.post("/webhooks", status_code=201)
+async def create_ad_webhook(
+    body: WebhookEndpointCreateReq,
+    principal: Dict[str, Any] = Depends(require_api_key_principal),
+):
+    svc.require_scope(principal, "ads:manage")
+    account = svc.resolve_account(principal)
+    from app.services.ad_webhooks import is_ad_event_type
+    from app.services.webhook_service import register_endpoint
+
+    # Restrict advertiser webhook subscriptions to ad.* event types only.
+    allowed_events = [e for e in (body.event_types or []) if is_ad_event_type(e)]
+    if not allowed_events:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "no_ad_event_types",
+                "message": "At least one ad.* event type is required",
+            },
+        )
+    try:
+        return register_endpoint(
+            account["owner_sub"],
+            body.url,
+            allowed_events,
+            body.description or "",
+            retry_policy=body.retry_policy,
+            signature_version=body.signature_version,
+            circuit_failure_threshold=body.circuit_failure_threshold,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OverflowError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@advertiser_api_router.get("/webhooks")
+async def list_ad_webhooks(
+    principal: Dict[str, Any] = Depends(require_api_key_principal),
+):
+    svc.require_scope(principal, "ads:read")
+    account = svc.resolve_account(principal)
+    from app.services.webhook_service import list_endpoints
+
+    endpoints = list_endpoints(account["owner_sub"])
+    ad_endpoints = [
+        e
+        for e in endpoints
+        if any(str(ev).startswith("ad.") for ev in (e.get("event_types") or []))
+    ]
+    return {"data": ad_endpoints, "count": len(ad_endpoints)}
+
+
+@advertiser_api_router.delete("/webhooks/{endpoint_id}", status_code=204)
+async def delete_ad_webhook(
+    endpoint_id: str,
+    principal: Dict[str, Any] = Depends(require_api_key_principal),
+):
+    svc.require_scope(principal, "ads:manage")
+    account = svc.resolve_account(principal)
+    from app.services.webhook_service import delete_endpoint
+
+    if not delete_endpoint(account["owner_sub"], endpoint_id):
+        raise HTTPException(status_code=404, detail="Webhook endpoint not found")
+
+
+@advertiser_api_router.post("/webhooks/{endpoint_id}/test", status_code=200)
+async def test_ad_webhook(
+    endpoint_id: str,
+    principal: Dict[str, Any] = Depends(require_api_key_principal),
+):
+    svc.require_scope(principal, "ads:manage")
+    account = svc.resolve_account(principal)
+    from app.services.ad_webhooks import emit_ad_event
+    from app.services.webhook_service import get_endpoint
+
+    if not get_endpoint(account["owner_sub"], endpoint_id):
+        raise HTTPException(status_code=404, detail="Webhook endpoint not found")
+    delivery_ids = emit_ad_event(
+        "ad.webhook.test",
+        account["owner_sub"],
+        {"endpoint_id": endpoint_id, "message": "Test event from advertiser API"},
+    )
+    return {"ok": True, "delivery_ids": delivery_ids}

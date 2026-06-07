@@ -19,6 +19,7 @@ creator share.
 from __future__ import annotations
 
 import logging
+import time as _time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -199,6 +200,156 @@ def get_moderation_history(item_type: str, item_id: str) -> List[Dict[str, Any]]
     return resp.get("Items", [])
 
 
+# ---------------------------------------------------------------------------
+# Platform-level kill switch (GAP-0068)
+# ---------------------------------------------------------------------------
+
+_KILL_SWITCH_PK = "PLATFORM_CONFIG"
+_KILL_SWITCH_SK = "AD_KILL_SWITCH"
+_KS_CACHE: Dict[str, Any] = {}   # {"active": bool, "expires": float}
+_KS_TTL_SECONDS = 5              # cache lifespan to cap DDB read latency impact
+
+
+def is_kill_switch_active() -> bool:
+    """Return True if the platform-wide ad kill switch is currently on.
+
+    Result is cached for _KS_TTL_SECONDS to limit DynamoDB reads to at most
+    once per 5 seconds per worker, while still reacting to a toggle within that
+    window. Failures fail open (return False) so a DDB outage does not
+    accidentally halt all ad serving.
+    """
+    now = _time.monotonic()
+    if _KS_CACHE.get("expires", 0) > now:
+        return bool(_KS_CACHE.get("active", False))
+    try:
+        resp = T.ad_accounts.get_item(
+            Key={"pk": _KILL_SWITCH_PK, "sk": _KILL_SWITCH_SK}
+        )
+        item = resp.get("Item") or {}
+        active = bool(item.get("active", False))
+    except Exception:
+        logger.warning("ad_kill_switch_read_failed — failing open")
+        active = False
+    _KS_CACHE.update({"active": active, "expires": now + _KS_TTL_SECONDS})
+    return active
+
+
+def toggle_kill_switch(
+    *, enabled: bool, admin_sub: str, reason: str = "", request=None
+) -> Dict[str, Any]:
+    """Enable or disable the platform-wide ad kill switch.
+
+    Requires ROOT role (enforced at the router layer). Writes state to DynamoDB
+    and an immutable audit/moderation log entry. Invalidates the in-process
+    cache so the change takes effect within _KS_TTL_SECONDS on this worker.
+    """
+    ts = now_ts()
+    T.ad_accounts.put_item(
+        Item={
+            "pk": _KILL_SWITCH_PK,
+            "sk": _KILL_SWITCH_SK,
+            "active": enabled,
+            "toggled_by": admin_sub,
+            "reason": reason or "",
+            "updated_at": ts,
+        }
+    )
+    # Invalidate cache so this worker picks up the change immediately.
+    _KS_CACHE.clear()
+    _log_moderation(
+        item_type="platform",
+        item_id="ad_kill_switch",
+        action="enable" if enabled else "disable",
+        admin_sub=admin_sub,
+        reason=reason,
+        prev_status="inactive" if enabled else "active",
+        new_status="active" if enabled else "inactive",
+        request=request,
+    )
+    logger.warning(
+        "ad_kill_switch_toggled enabled=%s admin_sub=%s reason=%s",
+        enabled, admin_sub, reason,
+    )
+    return {
+        "active": enabled,
+        "toggled_by": admin_sub,
+        "reason": reason or "",
+        "updated_at": ts,
+    }
+
+
+def get_kill_switch_state() -> Dict[str, Any]:
+    """Return the current kill switch state from DynamoDB (bypasses cache)."""
+    try:
+        resp = T.ad_accounts.get_item(
+            Key={"pk": _KILL_SWITCH_PK, "sk": _KILL_SWITCH_SK}
+        )
+        item = resp.get("Item") or {}
+        return {
+            "active": bool(item.get("active", False)),
+            "toggled_by": item.get("toggled_by", ""),
+            "reason": item.get("reason", ""),
+            "updated_at": int(item.get("updated_at", 0)),
+        }
+    except Exception:
+        return {"active": False, "toggled_by": "", "reason": "", "updated_at": 0}
+
+
+def _pause_account_campaigns(
+    *, account_id: str, admin_sub: str, reason: str = ""
+) -> List[str]:
+    """Set all active campaigns for account_id to status='paused' (GAP-0069).
+
+    Uses a direct DynamoDB update rather than update_campaign() to bypass the
+    user-facing status-machine validation. The transition active→paused is
+    valid per _CAMPAIGN_TRANSITIONS; only the validation layer is bypassed. The
+    ConditionExpression makes the update idempotent: a campaign that was paused
+    or completed between the list and the update is skipped silently.
+
+    Returns the list of campaign_ids that were paused.
+    """
+    ts = now_ts()
+    paused: List[str] = []
+
+    campaigns = list_all_campaigns(account_id=account_id, status="active", limit=1000)
+    cond_failed = T.ad_campaigns.meta.client.exceptions.ConditionalCheckFailedException
+
+    for camp in campaigns:
+        try:
+            T.ad_campaigns.update_item(
+                Key={"pk": camp["pk"], "sk": camp["sk"]},
+                UpdateExpression=(
+                    "SET #s = :paused, admin_paused_by = :admin, "
+                    "admin_pause_reason = :reason, admin_paused_at = :ts, "
+                    "updated_at = :ts"
+                ),
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":paused": "paused",
+                    ":admin": admin_sub,
+                    ":reason": reason or "account suspended",
+                    ":ts": ts,
+                    ":active": "active",
+                },
+                ConditionExpression="#s = :active",
+            )
+            paused.append(camp["campaign_id"])
+            logger.info(
+                "ad_campaign_suspended_cascade account_id=%s campaign_id=%s",
+                account_id, camp["campaign_id"],
+            )
+        except cond_failed:
+            # Campaign was already paused/completed between list and update.
+            pass
+        except Exception:
+            logger.error(
+                "ad_campaign_suspend_cascade_failed account_id=%s campaign_id=%s",
+                account_id, camp.get("campaign_id"),
+            )
+
+    return paused
+
+
 def moderate_account(
     *, account_id: str, action: str, admin_sub: str,
     reason: str = "", notes: str = "", request=None,
@@ -206,6 +357,10 @@ def moderate_account(
     """Approve / reject / suspend an advertiser account.
 
     action ∈ {approve, reject, suspend}. Returns None if account not found.
+
+    For action="suspend", all active campaigns belonging to the account are
+    immediately paused (GAP-0069 fix). The paused campaign IDs are returned and
+    can be surfaced for audit / potential reversal.
     """
     acct = get_ad_account(account_id)
     if not acct:
@@ -216,12 +371,27 @@ def moderate_account(
     if result is None:
         return None
     new_status = result["status"]
+
+    paused_campaign_ids: List[str] = []
+    if action == "suspend":
+        # Cascade: pause all active campaigns for this account.
+        paused_campaign_ids = _pause_account_campaigns(
+            account_id=account_id,
+            admin_sub=admin_sub,
+            reason=reason or notes,
+        )
+
     _log_moderation(
         item_type="account", item_id=account_id, action=action,
         admin_sub=admin_sub, reason=reason, notes=notes,
         prev_status=prev_status, new_status=new_status, request=request,
     )
-    return {"account_id": account_id, "admin_status": new_status, "status": new_status}
+    return {
+        "account_id": account_id,
+        "admin_status": new_status,
+        "status": new_status,
+        "paused_campaign_ids": paused_campaign_ids,
+    }
 
 
 def moderate_creative(

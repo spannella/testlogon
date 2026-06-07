@@ -27,6 +27,7 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.services.api_keys import api_key_hash, new_api_key_secret, parse_api_key
 from app.services.delegates import get_delegate, require_delegate_permission
+from app.services.moderation_policy_engine import is_user_currently_banned
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,16 @@ def authenticate_key(
     delegate = get_delegate(item.get("creator_id", ""), item.get("owner_sub", ""))
     if not delegate or delegate.get("status") != "active":
         raise HTTPException(403, "Delegation relationship is no longer active")
+
+    # GAP-0158: reject if the key holder (delegate) is platform-banned. The
+    # delegation API key path runs outside require_ui_session, which is where
+    # the normal session path enforces account bans, so the same ban lookup
+    # must be applied here.
+    owner_sub = item.get("owner_sub", "")
+    if is_user_currently_banned(owner_sub):
+        raise HTTPException(
+            403, "Delegation API key owner account is suspended"
+        )
 
     if required_permission not in item.get("permissions", []):
         raise HTTPException(

@@ -141,6 +141,12 @@ _ALLOWLIST: Dict[str, Dict[str, Any]] = {
         "default": lambda: int(_env_default("platform_fee_bps", 2000)),
         "validate": lambda k, v: _validate_bps(k, v),
     },
+    "fee_call_bps": {
+        "kind": "int",
+        # CALL_BILLING_PLATFORM_FEE_PERCENT is a percent integer; store as BPS.
+        "default": lambda: int(_env_default("call_billing_platform_fee_percent", 20)) * 100,
+        "validate": lambda k, v: _validate_bps(k, v),
+    },
     "min_payout_cents": {
         "kind": "int",
         "default": lambda: int(_env_default("payout_minimum_cents", 1000)),
@@ -424,6 +430,7 @@ _FEE_FIELD_BY_ENTRY_TYPE = {
     "subscription": "fee_subscriptions_bps",
     "catalog_purchase": "fee_catalog_bps",
     "ad_revenue": "fee_ad_revenue_bps",
+    "call": "fee_call_bps",
 }
 
 
@@ -432,6 +439,33 @@ def get_fee_bps(entry_type: str) -> int:
     config = get_billing_config()
     field = _FEE_FIELD_BY_ENTRY_TYPE.get(entry_type, "fee_tips_bps")
     return int(config.get(field, _ALLOWLIST[field]["default"]()))
+
+
+def split_fee(entry_type: str, amount_cents: int) -> Tuple[int, int, int]:
+    """Split a gross transaction amount into (platform_fee, net, fee_bps).
+
+    GAP-0214 (FIN-018): the runtime-configurable fee BPS settings were defined
+    but never applied to live billing. This is the single canonical place that
+    turns a configured BPS value into a concrete fee/net split, so every billing
+    handler (tips, unlocks, subscriptions, catalog) deducts the *same*
+    admin-configured fee.
+
+    Args:
+        entry_type: One of the keys in ``_FEE_FIELD_BY_ENTRY_TYPE``. Unknown
+            types fall back to the tips fee (matches ``get_fee_bps``).
+        amount_cents: Gross amount charged to the buyer. Negative values are
+            clamped to 0.
+
+    Returns:
+        ``(platform_fee_cents, net_cents, fee_bps)`` where
+        ``platform_fee_cents + net_cents == max(amount_cents, 0)``. The fee is
+        truncated (floor) so rounding always favours the creator's net.
+    """
+    gross = max(0, int(amount_cents))
+    fee_bps = get_fee_bps(entry_type)
+    platform_fee_cents = (gross * fee_bps) // 10000
+    net_cents = gross - platform_fee_cents
+    return platform_fee_cents, net_cents, fee_bps
 
 
 def get_min_payout_cents() -> int:

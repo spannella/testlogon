@@ -1068,7 +1068,7 @@ export async function fetchTurnCredentials(callId: string): Promise<TurnCredenti
 
 // ─── Call Recording ───────────────────────────────────────────────────
 
-export async function getConversationRecordings(conversationId: string): Promise<{ items: Array<{
+export interface RecordingMetadataOut {
   recording_id: string;
   call_id: string;
   conversation_id: string;
@@ -1077,22 +1077,20 @@ export async function getConversationRecordings(conversationId: string): Promise
   file_size_bytes: number | null;
   created_at: number;
   download_url: string | null;
-}> }> {
-  return api.get<{ items: Array<{
-    recording_id: string;
-    call_id: string;
-    conversation_id: string;
-    status: string;
-    duration_seconds: number | null;
-    file_size_bytes: number | null;
-    created_at: number;
-    download_url: string | null;
-  }> }>(`/ui/messaging/messages/recordings`, { conversation_id: conversationId });
+  download_expires_at?: number | null;
+}
+
+export async function getConversationRecordings(
+  conversationId: string,
+): Promise<{ items: RecordingMetadataOut[] }> {
+  return api.get<{ items: RecordingMetadataOut[] }>(`/messages/recordings`, {
+    conversation_id: conversationId,
+  });
 }
 
 export async function getRecordingDownloadUrl(recordingId: string): Promise<{ download_url: string; expires_at: number }> {
   return api.get<{ download_url: string; expires_at: number }>(
-    `/ui/messaging/messages/recordings/${recordingId}/download`,
+    `/messages/recordings/${recordingId}/download`,
   );
 }
 

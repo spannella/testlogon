@@ -90,11 +90,39 @@ export interface VideoListItem {
   file_size_bytes: number | null;
   review_status: string | null;
   owner_user_id: string | null;
+  // VOD ↔ File Manager bridge (VOD-014): set when this video originated from a
+  // file-manager node. Used to render the "In Files" badge on video cards.
+  source_file_node_id?: string | null;
 }
 
 export interface VideoListResponse {
   items: VideoListItem[];
   cursor: string | null;
+}
+
+// ─── VOD ↔ File Manager bridge (VOD-014) ─────────────────────────────────────
+
+export interface VodImportToVodIn {
+  file_path: string;
+  title?: string;
+  visibility?: "private" | "unlisted" | "public";
+}
+
+export interface VodImportToVodOut {
+  video_id: string;
+  status: string;
+  file_path: string;
+}
+
+export interface VodBridgeStatusOut {
+  video_id: string;
+  vod_status: string;
+  file_path?: string | null;
+  hls_manifest_url?: string | null;
+  thumbnail_url?: string | null;
+  duration_seconds?: number | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 // ─── API calls ──────────────────────────────────────────────────────────────
@@ -135,3 +163,17 @@ export const listPublicVideos = (params?: {
   if (params?.cursor) p.cursor = params.cursor;
   return api.get<VideoListResponse>("/ui/videos/public", p);
 };
+
+// ─── VOD ↔ File Manager bridge (VOD-014) ─────────────────────────────────────
+
+/** Import a file-manager video file into the VOD pipeline. */
+export const importFileToVod = (body: VodImportToVodIn): Promise<VodImportToVodOut> =>
+  api.post<VodImportToVodOut>("/ui/vod-bridge/import", body);
+
+/** Fetch the VOD bridge / encoding status for a previously imported video. */
+export const getVodBridgeStatus = (videoId: string): Promise<VodBridgeStatusOut> =>
+  api.get<VodBridgeStatusOut>(`/ui/vod-bridge/status/${videoId}`);
+
+/** Unlink a VOD video from its source file-manager node. */
+export const unlinkVodBridge = (videoId: string): Promise<unknown> =>
+  api.del(`/ui/vod-bridge/${videoId}/link`);

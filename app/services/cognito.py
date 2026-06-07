@@ -130,3 +130,35 @@ def cognito_admin_confirm_sign_up(username: str) -> Dict[str, Any]:
         raise HTTPException(404, "User not found") from exc
     except client.exceptions.NotAuthorizedException as exc:  # type: ignore[attr-defined]
         raise HTTPException(403, "Not authorized to confirm user") from exc
+
+
+def cognito_admin_disable_user(username: str) -> None:
+    """Disable a Cognito user, blocking new logins and token refresh.
+
+    Used by GDPR account deletion (GAP-0341). Builds the cognito-idp client the
+    same way ``cognito_admin_confirm_sign_up`` does. A missing user is not an
+    error (already deleted / never registered via Cognito).
+    """
+    client = cognito_client()
+    try:
+        client.admin_disable_user(
+            UserPoolId=_cognito_user_pool_id(),
+            Username=username,
+        )
+    except client.exceptions.UserNotFoundException:  # type: ignore[attr-defined]
+        pass
+
+
+def cognito_admin_delete_user(username: str) -> None:
+    """Permanently delete a Cognito user record (GAP-0341).
+
+    A missing user is not an error (idempotent with ``cognito_admin_disable_user``).
+    """
+    client = cognito_client()
+    try:
+        client.admin_delete_user(
+            UserPoolId=_cognito_user_pool_id(),
+            Username=username,
+        )
+    except client.exceptions.UserNotFoundException:  # type: ignore[attr-defined]
+        pass

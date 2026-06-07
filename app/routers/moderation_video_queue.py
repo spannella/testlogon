@@ -44,6 +44,29 @@ def _ensure_enabled() -> None:
 
 def _to_item(raw: dict) -> VideoReviewQueueItemOut:
     duration = raw.get("duration_seconds")
+
+    thumbnail_url = raw.get("thumbnail_url")
+    hls_manifest_url = raw.get("hls_manifest_url")
+
+    # GAP-0302: In DEV_MODE (moto S3, no real FFmpeg transcode) the ABR pipeline
+    # never populates these URLs, so the moderation review UI shows a blank
+    # preview. Synthesise a /mock/s3/... URL from the stored S3 keys (same
+    # pattern as the messaging router). Prod path is untouched (SECOPS-007
+    # parity); real transcode-populated URLs pass through unchanged.
+    if S.dev_mode:
+        from urllib.parse import quote as _url_quote
+
+        if not thumbnail_url and raw.get("thumbnail_s3_key"):
+            thumbnail_url = (
+                f"/mock/s3/{S.video_upload_bucket}/"
+                f"{_url_quote(raw['thumbnail_s3_key'], safe='/')}"
+            )
+        if not hls_manifest_url and raw.get("hls_manifest_s3_key"):
+            hls_manifest_url = (
+                f"/mock/s3/{S.video_upload_bucket}/"
+                f"{_url_quote(raw['hls_manifest_s3_key'], safe='/')}"
+            )
+
     return VideoReviewQueueItemOut(
         entry_id=raw.get("entry_id", ""),
         video_id=raw.get("video_id", ""),
@@ -63,8 +86,8 @@ def _to_item(raw: dict) -> VideoReviewQueueItemOut:
         review_notes=raw.get("review_notes", "") or "",
         decision=raw.get("decision", "") or "",
         escalated=bool(raw.get("escalated", False)),
-        thumbnail_url=raw.get("thumbnail_url"),
-        hls_manifest_url=raw.get("hls_manifest_url"),
+        thumbnail_url=thumbnail_url,
+        hls_manifest_url=hls_manifest_url,
         duration_seconds=float(duration) if duration not in (None, "") else None,
         flag_reason=raw.get("flag_reason"),
     )

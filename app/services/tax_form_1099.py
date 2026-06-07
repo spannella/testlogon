@@ -42,6 +42,7 @@ from app.services.consumer_tax_documents import (
     compute_earnings_summary,
     year_bounds,
 )
+from app.services import tax_info_w9
 from app.services.profile import get_profile
 from app.services.receipts import _render_pdf
 
@@ -52,7 +53,18 @@ _PLATFORM_LAUNCH_YEAR = 2024
 
 # Display-only payer identity printed on every generated 1099.
 _PAYER_NAME = "Platform Payments, Inc."
-_PAYER_TIN_LAST4 = "0000"
+# Fallback when no PLATFORM_EIN is configured (renders an obviously-invalid TIN).
+_PAYER_TIN_FALLBACK_LAST4 = "0000"
+
+
+def _payer_tin_last4() -> str:
+    """Last 4 of the platform's own EIN (Box: Payer's TIN) from settings.
+
+    GAP-0020: previously hardcoded to ``"0000"`` on every form. Now derived from
+    the ``PLATFORM_EIN`` setting; falls back to ``"0000"`` only when unset.
+    """
+    ein = (getattr(S, "platform_ein", "") or "").replace("-", "").replace(" ", "")
+    return ein[-4:] if len(ein) >= 4 else _PAYER_TIN_FALLBACK_LAST4
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +148,7 @@ def _form_out(item: Dict[str, Any]) -> Dict[str, Any]:
         "generated_at": _to_int(item.get("generated_at", 0)),
         "updated_at": _to_int(item.get("updated_at", 0)),
         "payer_name": str(item.get("payer_name", _PAYER_NAME)),
-        "payer_tin_last4": str(item.get("payer_tin_last4", _PAYER_TIN_LAST4)),
+        "payer_tin_last4": str(item.get("payer_tin_last4") or _payer_tin_last4()),
         "download_url": _pdf_url(s3_key) if s3_key else None,
     }
 
@@ -159,8 +171,21 @@ def _render_1099_pdf(
     corrected: bool,
 ) -> bytes:
     profile = get_profile(user_sub)
-    recipient = profile.get("display_name") or user_sub
     email = profile.get("displayed_email") or ""
+
+    # GAP-0020: read the recipient's KMS-encrypted, certified TIN. The raw TIN is
+    # decrypted only for last-4 display; it is NEVER printed in full nor logged.
+    tax_info = tax_info_w9.get_tax_info(user_sub)
+    if tax_info and tax_info.get("tin_last4"):
+        recipient = tax_info.get("legal_name") or profile.get("display_name") or user_sub
+        recipient_tin_display = f"***-**-{tax_info['tin_last4']}"
+        logger.info(
+            "tin_viewed",
+            extra={"user_sub": user_sub, "context": "1099_generation"},
+        )
+    else:
+        recipient = profile.get("display_name") or user_sub
+        recipient_tin_display = "TIN NOT COLLECTED - FORM INVALID"
 
     lines: List[str] = [
         "FORM 1099-NEC  -  NONEMPLOYEE COMPENSATION",
@@ -170,10 +195,11 @@ def _render_1099_pdf(
         "",
         "PAYER",
         f"  Name         : {_PAYER_NAME}",
-        f"  TIN          : ***-**-{_PAYER_TIN_LAST4}",
+        f"  TIN          : ***-**-{_payer_tin_last4()}",
         "",
         "RECIPIENT",
         f"  Name         : {recipient}",
+        f"  TIN          : {recipient_tin_display}",
     ]
     if email:
         lines.append(f"  Email        : {email}")
@@ -230,7 +256,7 @@ def _persist_form(
         "correction_count": int(correction_count),
         "pdf_s3_key": s3_key,
         "payer_name": _PAYER_NAME,
-        "payer_tin_last4": _PAYER_TIN_LAST4,
+        "payer_tin_last4": _payer_tin_last4(),
         "generated_at": _to_int((existing or {}).get("generated_at", ts)),
         "updated_at": ts,
         # GSI ByTaxYear: list all forms issued for a tax year.

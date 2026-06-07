@@ -33,6 +33,11 @@ from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
+# DynamoDB partition key for the platform-wide daily segment counter
+# (SEC-014 / GAP-0326). Lives in the same `sms_delivery` table as the
+# per-number DAILY#{phone} counters; SK = DAY#{day_key}.
+_GLOBAL_DAILY_PK = "DAILY#GLOBAL"
+
 # ──────────────────────────────────────────────────────────────────────
 # Record helpers
 # ──────────────────────────────────────────────────────────────────────
@@ -76,6 +81,9 @@ def record_sms_sent(phone: str, body: str, message_id: str) -> None:
     except Exception:
         logger.exception("Failed to increment daily SMS counter for %s", phone)
 
+    # Increment the platform-wide daily segment counter (SEC-014 / GAP-0326).
+    _increment_global_daily_segments(_estimate_segments(body), ts)
+
 
 def record_sms_failure(phone: str, body: str, error: str) -> None:
     """Record a failed SMS send attempt."""
@@ -112,6 +120,31 @@ def record_sms_dev_logged(phone: str, body: str) -> None:
         })
     except Exception:
         logger.exception("Failed to record dev SMS for %s", phone)
+
+    # Increment the platform-wide daily segment counter (SEC-014 / GAP-0326) so
+    # dev mode faithfully exercises the global cost-cap logic.
+    _increment_global_daily_segments(_estimate_segments(body), ts)
+
+
+def _increment_global_daily_segments(segments: int, ts: int) -> None:
+    """Atomically add ``segments`` to today's platform-wide segment counter."""
+    if segments <= 0:
+        return
+    day_key = ts // 86400
+    try:
+        T.sms_delivery.update_item(
+            Key={"pk": _GLOBAL_DAILY_PK, "sk": f"DAY#{day_key}"},
+            UpdateExpression="SET #c = if_not_exists(#c, :z) + :segs, #ts = :ts, ttl_epoch = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ts": "updated_at"},
+            ExpressionAttributeValues={
+                ":segs": segments,
+                ":z": 0,
+                ":ts": ts,
+                ":ttl": ts + 7 * 86400,  # Counter expires after 7 days
+            },
+        )
+    except Exception:
+        logger.exception("Failed to increment global SMS segment counter")
 
 
 def _estimate_segments(body: str) -> int:
@@ -214,6 +247,22 @@ def send_sms(phone: str, body: str, *, check_suppression: bool = True,
                 return {"number": phone, "message_id": None, "status": "rate_limited"}
         except Exception:
             logger.exception("Daily-limit check failed for %s", phone)
+
+    # Global platform-wide daily cost cap (SEC-014 / GAP-0326). Disabled by
+    # default (cap=0). Runs in dev and prod for parity; uses the same DDB
+    # counter path. Checked before the dev-mode short-circuit AND the real send
+    # so it halts all outbound SMS once the estimated daily spend hits the cap.
+    if S.sms_daily_cost_cap_usd and S.sms_daily_cost_cap_usd > 0:
+        try:
+            if sms_global_cost_cap_exceeded(_estimate_segments(body)):
+                SMS_RATE_LIMITED.inc()
+                logger.warning(
+                    "SMS blocked: global daily cost cap exceeded (cap=%.4f USD)",
+                    S.sms_daily_cost_cap_usd,
+                )
+                return {"number": phone, "message_id": None, "status": "rate_limited"}
+        except Exception:
+            logger.exception("Global cost cap check failed; proceeding")
 
     # Dev mode: log + record, never hit AWS.
     if S.dev_mode:
@@ -331,6 +380,37 @@ def sms_daily_count(phone: str) -> int:
 def sms_daily_limit_exceeded(phone: str) -> bool:
     """Check if phone has exceeded daily SMS limit."""
     return sms_daily_count(phone) >= S.sms_daily_limit_per_number
+
+
+def _global_daily_segments() -> int:
+    """Return today's total platform-wide SMS segment count (SEC-014 / GAP-0326)."""
+    day_key = now_ts() // 86400
+    try:
+        resp = T.sms_delivery.get_item(
+            Key={"pk": _GLOBAL_DAILY_PK, "sk": f"DAY#{day_key}"},
+            ProjectionExpression="#c",
+            ExpressionAttributeNames={"#c": "count"},
+        )
+        item = resp.get("Item")
+        return int(item.get("count", 0)) if item else 0
+    except Exception:
+        # Fail open: don't block sends on a counter read failure.
+        return 0
+
+
+def sms_global_cost_cap_exceeded(extra_segments: int = 0) -> bool:
+    """Return True if the platform-wide daily SMS cost estimate has hit the cap.
+
+    SEC-014 / GAP-0326. A cap of ``0`` (the default) means disabled. The
+    estimate includes ``extra_segments`` (this message's segments) so the cap
+    is enforced inclusively before the message is published.
+    """
+    cap = S.sms_daily_cost_cap_usd
+    if not cap or cap <= 0:
+        return False
+    segments = _global_daily_segments() + max(extra_segments, 0)
+    estimated = segments * S.sms_cost_per_segment_usd
+    return estimated >= cap
 
 
 def check_sms_rate_limit(user_id: str) -> bool:

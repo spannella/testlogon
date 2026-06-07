@@ -941,6 +941,7 @@ def resolve_moderation_ticket(
             ticket_id=ticket_id,
             note=note,
             policy_category=policy_category,
+            enforcement_id=enforcement_id,
         )
         write_moderation_audit_event(
             action="enforcement_warned",
@@ -957,6 +958,7 @@ def resolve_moderation_ticket(
             note=note,
             duration_days=inp.enforcement_duration_days,
             policy_category=policy_category,
+            enforcement_id=enforcement_id,
         )
         write_moderation_audit_event(
             action="enforcement_banned",

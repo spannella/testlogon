@@ -12,11 +12,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.services.csv_export import generate_csv_rows
+from app.services.rate_limit import _bucket_limit
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui", tags=["export"])
 
 VALID_SOURCES = {"billing_ledger", "contacts", "questionnaire_responses"}
+
+# Rate limit: 5 exports per 60 seconds per user (PLATFORM-009 §9.5, SEC-007).
+_CSV_EXPORT_MAX = 5
+_CSV_EXPORT_WINDOW = 60  # seconds
 
 
 @router.get("/export/csv")
@@ -54,6 +59,16 @@ async def export_csv(
     per RFC 4180.
     """
     user_sub = ctx["user_sub"]
+
+    # Rate limit before any data access to prevent bulk exfiltration / DDB
+    # read storms (PLATFORM-009 §9.5, SEC-007). Uses the shared DDB-backed
+    # token-bucket primitive so the same code path runs in dev and prod.
+    if not _bucket_limit(user_sub, "rl#csv_export", _CSV_EXPORT_MAX, _CSV_EXPORT_WINDOW):
+        raise HTTPException(
+            status_code=429,
+            detail="Export rate limit exceeded; maximum 5 exports per minute.",
+            headers={"Retry-After": str(_CSV_EXPORT_WINDOW)},
+        )
 
     # Validate questionnaire ownership if needed
     if source == "questionnaire_responses":

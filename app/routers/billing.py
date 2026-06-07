@@ -21,7 +21,7 @@ else:  # pragma: no cover
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.deps import AuthenticatedUser, get_authenticated_user, require_kyc_tier
 from app.auth.policy import require_admin_scope, require_role_value
 from app.auth.roles import AdminScope, Role, admin_profile_has_scope, normalize_role
 from app.core.settings import S
@@ -71,6 +71,8 @@ from app.services.billing_dunning import (
     schedule_dunning,
 )
 from app.services.ttl import with_ttl
+from app.services.payment_provider_health import is_provider_enabled
+from app.services import fraud_detection as fd
 from app.services.payment_incident_providers import (
     DEFAULT_PROVIDER_REGISTRY,
     resolve_provider_adapter,
@@ -93,6 +95,127 @@ from app.services.payment_incident_metrics import (
 
 router = APIRouter(tags=["billing"])
 logger = logging.getLogger(__name__)
+
+
+def _require_provider_enabled(provider: str) -> None:
+    """GAP-0206 / FIN-014: gate the charge path on the admin provider toggle.
+
+    Raises 503 when an operator has explicitly disabled ``provider`` via the
+    payment-provider-health admin toggle. Defaults to enabled when no CONFIG
+    row exists, so dev/prod behaviour is identical (SECOPS-007).
+    """
+    if not is_provider_enabled(provider):
+        logger.info(
+            "payment_provider_disabled_rejected", extra={"provider": provider}
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Payment provider '{provider}' is currently disabled. "
+            "Please try again later or contact support.",
+        )
+
+
+def _fraud_gate(
+    user_id: str,
+    amount_cents: int,
+    entry_type: str,
+    tx_id: str = "",
+    req: Optional[Request] = None,
+    *,
+    enforce_block: bool = True,
+) -> None:
+    """GAP-0207 / FIN-015: run fraud evaluation + freeze check on the charge path.
+
+    Always runs the synchronous freeze check (a single DDB read). Then runs
+    ``evaluate_transaction`` which short-circuits to ``allow`` when fraud
+    detection is disabled. A ``block`` action raises 403 (when ``enforce_block``);
+    a ``flag`` action is logged and allowed through (review queue).
+    """
+    if fd.is_frozen(user_id):
+        logger.warning("fraud_gate_frozen", extra={"user_id": user_id})
+        raise HTTPException(
+            status_code=403,
+            detail="Account is frozen. Contact support.",
+        )
+
+    ip = req.client.host if req is not None and req.client else None
+    result = fd.evaluate_transaction(
+        user_id=user_id,
+        amount_cents=int(amount_cents),
+        entry_type=entry_type,
+        tx_id=tx_id,
+        ip_address=ip,
+    )
+    action = result.get("action", "allow")
+    if action == "block":
+        logger.warning(
+            "fraud_gate_blocked",
+            extra={
+                "user_id": user_id,
+                "amount_cents": int(amount_cents),
+                "triggered_rules": result.get("triggered_rules"),
+                "risk_score": result.get("risk_score"),
+            },
+        )
+        if enforce_block:
+            raise HTTPException(
+                status_code=403,
+                detail="Transaction blocked by fraud prevention. Contact support.",
+            )
+    elif action == "flag":
+        logger.info(
+            "fraud_gate_flagged",
+            extra={
+                "user_id": user_id,
+                "amount_cents": int(amount_cents),
+                "triggered_rules": result.get("triggered_rules"),
+                "risk_score": result.get("risk_score"),
+            },
+        )
+
+
+def _maybe_fire_large_transaction_trigger(
+    user_id: str,
+    amount_cents: int,
+    *,
+    purpose: str = "",
+    currency: str = "",
+    payment_intent_id: str = "",
+) -> None:
+    """Fire a KYC ``large_transaction`` trigger when a charge exceeds the threshold.
+
+    GAP-0277 / KYC-016: AML continuous monitoring requires recording a review
+    trigger when a settled payment meets or exceeds
+    ``S.kyc_large_transaction_threshold_cents``. Called on the success path of
+    the charge endpoints (after the payment is confirmed) so failed/declined
+    charges never produce a spurious trigger. Best-effort and fully wrapped in
+    try/except so a monitoring failure can never break the billing request. Same
+    in-process code path in dev and prod (SECOPS-007 parity).
+    """
+    try:
+        threshold = int(getattr(S, "kyc_large_transaction_threshold_cents", 0) or 0)
+        if threshold <= 0 or int(amount_cents) < threshold:
+            return
+        from app.services.kyc_monitoring import create_trigger_event
+
+        create_trigger_event(
+            user_sub=user_id,
+            trigger_type="large_transaction",
+            details={
+                "amount_cents": int(amount_cents),
+                "threshold_cents": threshold,
+                "purpose": purpose,
+                "currency": currency,
+                "payment_intent_id": payment_intent_id,
+            },
+            actor_sub="system",
+        )
+    except Exception:
+        logger.exception(
+            "kyc.monitoring.large_transaction_trigger_hook_failed user_id=%s", user_id
+        )
+
+
 _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE: "OrderedDict[str, float]" = OrderedDict()
 _PAYMENT_INCIDENT_WEBHOOK_REPLAY_LOCK = threading.Lock()
 
@@ -759,7 +882,7 @@ def create_us_bank_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, st
 
 
 @dual_route("POST", "/billing/payment-methods/card")
-def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_session), _kyc: object = Depends(require_kyc_tier(2))) -> Dict[str, Any]:  # GAP-0268 (inert unless enforcement flag on)
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     customer_id = get_or_create_customer(user_id)
@@ -945,6 +1068,7 @@ def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depen
 @dual_route("POST", "/billing/pay-balance")
 def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, str]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
     pk = user_pk(user_id)
 
@@ -957,6 +1081,8 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
     amount = due if body.amount_cents is None else min(int(body.amount_cents), due)
     if amount <= 0:
         return {"status": "no_settled_balance_due"}
+
+    _fraud_gate(user_id, amount, "credit", req=req)  # GAP-0207
 
     billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
     default_pm = billing.get("default_payment_method_id")
@@ -1005,7 +1131,7 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
         state="pending" if pi.get("status") in ("processing", "requires_action") else ("settled" if pi.get("status") == "succeeded" else "pending"),
         reason="payment",
         meta={"idempotency_key": idem},
-        extra={"stripe_payment_intent_id": pi["id"]},
+        extra={"stripe_payment_intent_id": pi["id"], "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1039,13 +1165,22 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
         purchase_txn_id=purchase_txn_id,
         **admin_tags,
     )
+    _maybe_fire_large_transaction_trigger(  # GAP-0277
+        user_id,
+        amount,
+        purpose="pay_balance",
+        currency=billing.get("currency", "usd"),
+        payment_intent_id=pi.get("id", ""),
+    )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
 @dual_route("POST", "/billing/charge-once")
 def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    _fraud_gate(user_id, int(body.amount_cents), "credit", req=req)  # GAP-0207
     pk = user_pk(user_id)
 
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
@@ -1104,7 +1239,7 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
         state=state,
         reason="charge_once",
         meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
-        extra={"stripe_payment_intent_id": pi["id"]},
+        extra={"stripe_payment_intent_id": pi["id"], "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1138,6 +1273,13 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
         purchase_txn_id=purchase_txn_id,
         **admin_tags,
     )
+    _maybe_fire_large_transaction_trigger(  # GAP-0277
+        user_id,
+        int(body.amount_cents),
+        purpose="charge_once",
+        currency=billing.get("currency", "usd"),
+        payment_intent_id=pi.get("id", ""),
+    )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
@@ -1169,7 +1311,7 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         state="settled",
         reason="refund",
         meta={"reason": body.reason},
-        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id")},
+        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id"), "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1205,9 +1347,13 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
 @dual_route("POST", "/billing/checkout_session")
 def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, str]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     target_user_sub, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
     if body.amount_cents <= 0:
         raise HTTPException(400, "amount_cents must be greater than zero")
+    # GAP-0207: redirect/async flow — freeze still blocks, but a fraud "block"
+    # is observe-only here since the real charge settles later via webhook.
+    _fraud_gate(target_user_sub, int(body.amount_cents), "credit", req=req, enforce_block=False)
     currency = (body.currency or S.stripe_default_currency or "usd").lower()
     description = body.description or "Security Control Panel charge"
 
@@ -1487,7 +1633,35 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
         pk = user_pk(user_id)
         ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
-        if event_type == "charge.dispute.funds_withdrawn":
+        if event_type == "charge.dispute.created":
+            # GAP-0208 (FIN-015): record the chargeback for fraud-detection risk
+            # scoring so the chargeback_threshold auto-flag fires on real Stripe
+            # events, not only on manual admin POSTs. A failure here must never
+            # cause a non-2xx response (Stripe would retry and double-count).
+            try:
+                fd.record_chargeback(
+                    user_id=user_id,
+                    amount_cents=amount,
+                    tx_id=pi_id or charge_id or "",
+                )
+                audit_event(
+                    "billing_chargeback_recorded_from_webhook",
+                    user_id,
+                    None,
+                    outcome="info",
+                    charge_id=charge_id,
+                    payment_intent_id=pi_id,
+                    amount_cents=amount,
+                    currency=currency,
+                    dispute_id=dispute.get("id"),
+                )
+            except Exception:
+                logger.exception(
+                    "record_chargeback_failed",
+                    extra={"user_id": user_id, "charge_id": charge_id},
+                )
+
+        elif event_type == "charge.dispute.funds_withdrawn":
             pay = ddb_get(T.billing, pk, pay_sk(pi_id)) if pi_id else None
             led_sk_value, led_item = new_ledger_entry(
                 key_name="pk",
@@ -1497,7 +1671,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 state="settled",
                 reason="dispute_funds_withdrawn",
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
-                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id},
+                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id, "provider": "stripe"},
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": amount}, currency=currency)
@@ -1526,7 +1700,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 state="settled",
                 reason="dispute_funds_reinstated",
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
-                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id},
+                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id, "provider": "stripe"},
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": -amount}, currency=currency)
@@ -2315,7 +2489,9 @@ def get_wallet_endpoint(ctx=Depends(require_ui_session), actor: AuthenticatedUse
 @dual_route("POST", "/billing/wallet/deposit")
 def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
+    _require_provider_enabled("stripe")  # GAP-0206
     user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    _fraud_gate(user_id, int(body.amount_cents), "credit", req=req)  # GAP-0207
     pk = user_pk(user_id)
 
     billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
@@ -2351,7 +2527,7 @@ def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(requ
         state=state,
         reason="wallet_deposit",
         meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
-        extra={"stripe_payment_intent_id": pi["id"]},
+        extra={"stripe_payment_intent_id": pi["id"], "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -2390,6 +2566,13 @@ def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(requ
         status=pi.get("status"),
         ledger_sk=led_sk,
         **admin_tags,
+    )
+    _maybe_fire_large_transaction_trigger(  # GAP-0277
+        user_id,
+        int(body.amount_cents),
+        purpose="wallet_deposit",
+        currency=currency,
+        payment_intent_id=pi.get("id", ""),
     )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"], "wallet_balance_cents": wallet_balance_cents}
 

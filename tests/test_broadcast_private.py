@@ -1,15 +1,44 @@
 """Unit tests for broadcast private session service (BCAST-011)."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import boto3
 import pytest
 from boto3.dynamodb.conditions import Key
 from fastapi import HTTPException
 
+try:
+    from moto import mock_aws
+except ImportError:  # pragma: no cover
+    mock_aws = None
+
+from app.core.settings import S
 from app.services import broadcast_private
+
+
+@contextmanager
+def _moto_billing_table():
+    """Provide a moto-backed `billing` table for the atomic TransactWriteItems
+    path in ``_write_private_billing`` (GAP-0123). Offline only — no real AWS."""
+    with mock_aws():
+        ddb = boto3.resource("dynamodb", region_name="us-east-1")
+        table = ddb.create_table(
+            TableName=S.billing_table_name,
+            KeySchema=[
+                {"AttributeName": "pk", "KeyType": "HASH"},
+                {"AttributeName": "sk", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "pk", "AttributeType": "S"},
+                {"AttributeName": "sk", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        yield table
 
 
 class _FakeTable:
@@ -344,12 +373,13 @@ class TestCancelPrivateRequest:
 
 
 class TestEndPrivateSession:
+    @pytest.mark.skipif(mock_aws is None, reason="moto is not installed")
     def test_calculates_billing(self):
         sessions_table = _make_session_table_with_session("sess_1", "creator_1")
         billing_table = _FakeTable()
         tables = _make_tables(billing_table=billing_table, sessions_table=sessions_table)
 
-        with patch.object(broadcast_private, "T", tables):
+        with _moto_billing_table(), patch.object(broadcast_private, "T", tables):
             # Also patch the get_session call used by _get_session_creator
             from app.services import broadcast_store
             with patch.object(broadcast_store, "T", SimpleNamespace(
@@ -408,12 +438,15 @@ class TestEndPrivateSession:
                 )
         assert exc_info.value.status_code == 404
 
+    @pytest.mark.skipif(mock_aws is None, reason="moto is not installed")
     def test_writes_billing_ledger_entries(self):
         sessions_table = _make_session_table_with_session("sess_1", "creator_1")
         billing_table = _FakeTable()
         tables = _make_tables(billing_table=billing_table, sessions_table=sessions_table)
 
-        with patch.object(broadcast_private, "T", tables):
+        # Billing rows are now written atomically via TransactWriteItems to the
+        # real billing table (GAP-0123), not via T.billing — assert against moto.
+        with _moto_billing_table() as moto_billing, patch.object(broadcast_private, "T", tables):
             from app.services import broadcast_store
             with patch.object(broadcast_store, "T", SimpleNamespace(
                 broadcast_sessions=sessions_table,
@@ -438,16 +471,16 @@ class TestEndPrivateSession:
                     "sess_1", req["private_session_id"], "creator"
                 )
 
-        # Check billing table has debit and credit entries
-        billing_items = list(billing_table.items.values())
-        debits = [i for i in billing_items if i.get("type") == "debit"]
-        credits = [i for i in billing_items if i.get("type") == "credit"]
-        assert len(debits) >= 1
-        assert len(credits) >= 1
-        assert debits[0]["pk"] == "USER#alice"
-        assert credits[0]["pk"] == "USER#creator_1"
-        assert debits[0]["reason"] == "Private session"
-        assert credits[0]["meta"]["content_type"] == "private_call"
+                # Check billing table has debit and credit entries
+                billing_items = moto_billing.scan()["Items"]
+                debits = [i for i in billing_items if i.get("type") == "debit"]
+                credits = [i for i in billing_items if i.get("type") == "credit"]
+                assert len(debits) >= 1
+                assert len(credits) >= 1
+                assert debits[0]["pk"] == "USER#alice"
+                assert credits[0]["pk"] == "USER#creator_1"
+                assert debits[0]["reason"] == "Private session"
+                assert credits[0]["meta"]["content_type"] == "private_call"
 
 
 class TestGetPrivateStatus:

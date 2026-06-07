@@ -47,6 +47,7 @@ class EncryptionParams:
 
 def prepare_encryption_params(
     asset_id: str,
+    tenant_id: str,
     *,
     key_slot: int = 0,
     scratch_dir: Optional[Path] = None,
@@ -59,6 +60,9 @@ def prepare_encryption_params(
 
     Args:
         asset_id: The video asset identifier.
+        tenant_id: The owning tenant (video.owner_user_id) — used to derive a
+            tenant-scoped key so two tenants sharing an asset_id never collide
+            (GAP-0372).
         key_slot: Key rotation slot (default 0).
         scratch_dir: Directory to write temp files into. Defaults to system temp.
 
@@ -72,11 +76,15 @@ def prepare_encryption_params(
         logger.warning("prepare_encryption_params called with empty asset_id")
         return None
 
+    if not tenant_id or not tenant_id.strip():
+        logger.warning("prepare_encryption_params called with empty tenant_id")
+        return None
+
     try:
-        key_bytes = derive_content_key(asset_id, key_slot)
-        key_id = derive_key_id(asset_id, key_slot)
-        iv_bytes = derive_iv(asset_id, key_slot)
-        key_uri = get_key_uri(asset_id, key_slot)
+        key_bytes = derive_content_key(asset_id, tenant_id, key_slot)
+        key_id = derive_key_id(asset_id, tenant_id, key_slot)
+        iv_bytes = derive_iv(asset_id, tenant_id, key_slot)
+        key_uri = get_key_uri(asset_id, tenant_id, key_slot)
     except VodDrmKeyError as exc:
         logger.error("DRM key derivation failed for asset %s: %s", asset_id, exc.message)
         return None
@@ -143,6 +151,7 @@ def cleanup_encryption_files(params: EncryptionParams) -> None:
 
 def build_encrypted_manifest_ext_x_key(
     asset_id: str,
+    tenant_id: str,
     *,
     key_slot: int = 0,
     token_placeholder: str = "{TOKEN}",
@@ -153,16 +162,18 @@ def build_encrypted_manifest_ext_x_key(
 
     Args:
         asset_id: The video asset identifier.
+        tenant_id: The owning tenant — used for tenant-scoped key derivation
+            (GAP-0372).
         key_slot: Key rotation slot.
         token_placeholder: Placeholder for the entitlement token in the URI.
 
     Returns:
         The full #EXT-X-KEY tag line.
     """
-    key_id = derive_key_id(asset_id, key_slot)
-    iv_bytes = derive_iv(asset_id, key_slot)
+    key_id = derive_key_id(asset_id, tenant_id, key_slot)
+    iv_bytes = derive_iv(asset_id, tenant_id, key_slot)
     base_url = (S.vod_drm_key_server_base_url or "http://localhost:8000/v1/vod/drm").rstrip("/")
-    uri = f"{base_url}/key/{key_id}?asset={asset_id}&token={token_placeholder}"
+    uri = f"{base_url}/key/{key_id}?asset={asset_id}&tenant={tenant_id}&token={token_placeholder}"
     iv_hex = iv_bytes.hex().upper()
 
     return f'#EXT-X-KEY:METHOD=AES-128,URI="{uri}",IV=0x{iv_hex}'

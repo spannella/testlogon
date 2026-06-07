@@ -212,6 +212,46 @@ class KycLivenessCallStore:
         items = self.list_calls_for_case(case_id)
         return items[0] if items else None
 
+    def get_call_for_case(self, case_id: str) -> dict[str, Any] | None:
+        """Return the most relevant liveness call for a case via the ByStatus GSI.
+
+        GAP-0251 (KYC-003): backs the admin ``GET /admin/case/{case_id}`` lookup so
+        reviewers no longer have to fan out a query per status partition and filter
+        client-side. Walks every status bucket of the ByStatus GSI
+        (``S.kyc_liveness_call_status_index_name``), keeps only rows for ``case_id``,
+        and returns the single most relevant call:
+
+        * an *active* (scheduled / in_progress) call wins over a terminal one, since
+          that is the call a reviewer needs to act on; among ties, the most recently
+          created row wins.
+        * if no active call exists, the most recently created terminal call is
+          returned (so panels still render the last outcome after pass/fail).
+
+        Returns ``None`` when no call exists for the case. Falls back to the
+        ``ByCase`` GSI / scan path (``list_calls_for_case``) only if the ByStatus
+        query path raises, preserving dev/prod parity (SECOPS-007).
+        """
+        cid = str(case_id or "").strip()
+        if not cid:
+            return None
+        try:
+            matches: list[dict[str, Any]] = []
+            for status in LISTABLE_STATUSES:
+                for item in self.list_by_status(status, limit=500):
+                    if str(item.get("case_id") or "") == cid:
+                        matches.append(item)
+        except Exception:  # pragma: no cover - degraded GSI fallback
+            matches = list(self.list_calls_for_case(cid))
+        if not matches:
+            return None
+
+        def _rank(item: dict[str, Any]) -> tuple[int, int]:
+            active = 1 if str(item.get("status") or "") in ACTIVE_STATUSES else 0
+            return (active, _coerce_int(item.get("created_at")))
+
+        matches.sort(key=_rank, reverse=True)
+        return matches[0]
+
     def list_calls_for_case(self, case_id: str) -> list[dict[str, Any]]:
         try:
             resp = self._table.query(
@@ -495,3 +535,37 @@ def owner_call_view(item: dict[str, Any], *, now: Any = None) -> dict[str, Any]:
         "created_at": _coerce_int(item.get("created_at")),
         "updated_at": _coerce_int(item.get("updated_at")),
     }
+
+
+# -- background expiry task (GAP-0249 / KYC-003) ---------------------------
+
+_EXPIRY_INTERVAL_SECONDS = 60  # run every minute
+
+
+async def kyc_liveness_expiry_loop(interval_seconds: int = _EXPIRY_INTERVAL_SECONDS) -> None:
+    """Every ``interval_seconds``: expire scheduled liveness calls past their
+    window so missed calls don't remain ``scheduled`` forever (which blocks
+    re-scheduling and grows the ByStatus GSI). Never raises out of the loop."""
+    import asyncio
+
+    while True:
+        try:
+            expired = STORE.expire_due_calls()
+            if expired:
+                logger.info(
+                    "kyc.liveness_call.expiry_loop.expired count=%d call_ids=%s",
+                    len(expired),
+                    expired[:10],
+                )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("kyc.liveness_call.expiry_loop.error")
+        await asyncio.sleep(max(5, int(interval_seconds)))
+
+
+def start_kyc_liveness_expiry_task() -> None:
+    """Register the KYC liveness-call expiry background task at app startup."""
+    import asyncio
+
+    if S.kyc_liveness_call_enabled:
+        asyncio.ensure_future(kyc_liveness_expiry_loop())
+        logger.info("KYC liveness-call expiry task started")

@@ -59,29 +59,54 @@ def _log_event_async(
         pass
 
 
-def _extract_user_from_request(request: Request) -> Tuple[str, str]:
+def _extract_api_key_id(request: Request) -> str:
     """
-    Lightweight user extraction from the access-token cookie.
+    Lightweight API-key id extraction from request headers for rate-limit
+    keying. Does **not** validate the key against DDB — it only parses the
+    public ``key_id`` portion (same wire format as ``parse_api_key``:
+    ``ak_<key_id>.<secret>`` via ``Authorization: ApiKey ...`` or ``X-API-Key``).
+    Returns "" when no API-key header is present or it is malformed.
+    """
+    try:
+        auth = (request.headers.get("authorization") or "").strip()
+        if auth.lower().startswith("apikey "):
+            raw = auth.split(" ", 1)[1].strip()
+        else:
+            raw = (request.headers.get("x-api-key") or request.headers.get("x-api_key") or "").strip()
+        if not raw or not raw.startswith("ak_") or "." not in raw:
+            return ""
+        kid = raw.split(".", 1)[0]
+        key_id = kid[len("ak_"):]
+        return key_id[:128]
+    except Exception:
+        return ""
 
-    Returns (user_sub, role).  Falls back to ("", "") when no valid cookie
-    is present.  This does **not** validate the session in DDB; it only
-    reads the signed JWT from the cookie for rate-limit keying purposes.
+
+def _extract_user_from_request(request: Request) -> Tuple[str, str, str]:
     """
+    Lightweight identity extraction from the access-token cookie and/or
+    API-key header.
+
+    Returns (user_sub, role, api_key_id).  Any field may be empty.  This does
+    **not** validate the session or API key in DDB; it only reads the signed
+    JWT cookie and parses the API-key id for rate-limit keying purposes.
+    """
+    api_key_id = _extract_api_key_id(request)
     try:
         access_cookie_name = getattr(S, "ui_access_token_cookie_name", "")
         access_secret = getattr(S, "ui_access_token_secret", "")
         if not access_cookie_name or not access_secret:
-            return ("", "")
+            return ("", "", api_key_id)
         cookies = getattr(request, "cookies", {}) or {}
         token = cookies.get(access_cookie_name)
         if not token:
-            return ("", "")
+            return ("", "", api_key_id)
         payload = jwt.decode(token, access_secret, algorithms=["HS256"])
         user_sub = str(payload.get("sub", ""))
         role = str(payload.get("role", "user")).lower()
-        return (user_sub, role)
+        return (user_sub, role, api_key_id)
     except Exception:
-        return ("", "")
+        return ("", "", api_key_id)
 
 
 # ---------------------------------------------------------------------------
@@ -174,12 +199,56 @@ def rate_limit_middleware_factory():
                     group_cfg = None
 
                 if group_cfg:
-                    user_sub, role = _extract_user_from_request(request)
+                    user_sub, role, api_key_id = _extract_user_from_request(request)
 
                     bypass_roles = [str(r).lower() for r in group_cfg.get("bypass_roles", [])]
                     skip = role in bypass_roles
 
                     if not skip:
+                        # Per-API-key check (for API-key-authenticated requests)
+                        if api_key_id and group_cfg.get("max_requests_per_api_key"):
+                            window = group_cfg.get("window_seconds", 60)
+                            max_per_key = group_cfg["max_requests_per_api_key"]
+                            try:
+                                k_allowed, k_remaining, k_reset = check_rate_limit(
+                                    pk=f"ENDPOINT#{group_name}#APIKEY#{api_key_id}",
+                                    window_seconds=window,
+                                    max_requests=max_per_key,
+                                )
+                            except Exception:
+                                if S.rate_limit_fail_open:
+                                    k_allowed, k_remaining, k_reset = True, -1, 0
+                                else:
+                                    return JSONResponse(
+                                        status_code=503,
+                                        content={"detail": "Rate limit service unavailable"},
+                                    )
+
+                            if not k_allowed:
+                                retry_after = max(1, k_reset - now_ts())
+                                _log_event_async(
+                                    group_name, "api_key", api_key_id,
+                                    request.url.path, request.method, "rejected",
+                                    count=max_per_key + 1, limit=max_per_key,
+                                )
+                                return JSONResponse(
+                                    status_code=429,
+                                    content={
+                                        "detail": {
+                                            "code": "rate_limited",
+                                            "group": group_name,
+                                            "retry_after": retry_after,
+                                            "message": f"Too many requests. Please wait {retry_after} seconds before retrying.",
+                                        }
+                                    },
+                                    headers={
+                                        "Retry-After": str(retry_after),
+                                        "X-RateLimit-Limit": str(max_per_key),
+                                        "X-RateLimit-Remaining": "0",
+                                        "X-RateLimit-Reset": str(k_reset),
+                                    },
+                                )
+
                         # Per-user check
                         if user_sub:
                             window = group_cfg.get("window_seconds", 60)

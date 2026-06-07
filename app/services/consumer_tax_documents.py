@@ -1,16 +1,23 @@
 """Consumer Tax Documents (FIN-004).
 
-Generates annual tax documents (earnings summary / 1099-style) for creators
-from their billing ledger *credit* (earnings) entries.
+Generates annual consumer SPENDING summaries for buyers from their billing
+ledger *debit* (spending) entries — money the user *spent* (subscriptions,
+tips sent, purchases, unlocks, deposits), NOT money they earned as a creator.
 
-This module does NOT recompute or duplicate the ledger / earnings logic:
-  - It reuses ``app.services.creator_earnings.classify_entry`` to categorize
-    each credited ledger entry (tips, subscriptions, unlocks, vod_purchases,
+This module does NOT recompute or duplicate the ledger logic:
+  - It categorizes each debited ledger entry via the local
+    ``classify_category`` (subscriptions, tips, purchases, unlocks, deposits,
     other).
   - It reuses ``app.services.receipts._render_pdf`` for text-based PDF
     rendering (no new PDF dependency).
   - It reads the billing ledger directly via a date-range KeyCondition on the
     ``LEDGER#{ts}#{entry_id}`` sort key.
+
+The credit-based helpers ``_query_credit_entries`` and
+``compute_earnings_summary`` are RETAINED here (queries credit/earnings
+entries, uses creator-earnings classification) solely for the creator 1099
+path in ``app.services.tax_form_1099`` — do not use them for consumer
+documents.
 
 Storage (``tax_documents`` table, single-table by user PK):
   - Document records: pk=USER#{user_sub} sk=DOC#{year}#{doc_id}
@@ -21,7 +28,9 @@ MONEY values are integer cents throughout.
 
 from __future__ import annotations
 
+import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -44,8 +53,38 @@ _s3 = s3_client()
 # Platform launch year — no data exists before this.
 _PLATFORM_LAUNCH_YEAR = 2024
 
-# Canonical earnings categories surfaced in tax documents.
-CATEGORIES = ("subscriptions", "tips", "unlocks", "vod_purchases", "other")
+# Cap the number of receipts bundled into a single ZIP to guard against runaway
+# memory / latency. Larger ranges must be narrowed by the caller (router → 422).
+MAX_ZIP_RECEIPTS = 500
+
+# Consumer SPENDING categories surfaced in consumer tax documents (FIN-004).
+CATEGORIES = ("subscriptions", "tips", "purchases", "unlocks", "deposits", "other")
+
+# Creator EARNINGS categories — retained ONLY for the credit-based 1099 path
+# (``compute_earnings_summary`` / ``tax_form_1099.py``).
+_CREDIT_CATEGORIES = ("subscriptions", "tips", "unlocks", "vod_purchases", "other")
+
+
+def classify_category(entry: Dict[str, Any]) -> str:
+    """Map a *debit* ledger entry's reason to a consumer spending category.
+
+    Credit (earnings) entries are explicitly excluded — they must never be
+    counted as consumer spending.
+    """
+    if entry.get("type") != "debit":
+        return "other"
+    reason = str(entry.get("reason", "")).lower()
+    if reason.startswith(("subscription", "plan")):
+        return "subscriptions"
+    if reason.startswith("tip"):
+        return "tips"
+    if reason.startswith(("purchase", "cart", "order")):
+        return "purchases"
+    if reason.startswith("unlock"):
+        return "unlocks"
+    if reason.startswith(("deposit", "wallet")):
+        return "deposits"
+    return "other"
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +143,38 @@ def _pdf_url(s3_key: str) -> Optional[str]:
 # Ledger query (credit/earnings entries within a date range)
 # ---------------------------------------------------------------------------
 
+def _query_debit_entries(*, user_sub: str, date_from: int, date_to: int) -> List[Dict[str, Any]]:
+    """Query billing ledger *debit* (consumer spending) entries within [date_from, date_to].
+
+    The ledger SK format is ``LEDGER#{ts}#{entry_id}``. Loops on
+    ``LastEvaluatedKey`` because DDB applies the type filter only after
+    fetching a 1MB page.
+    """
+    pk = user_pk(user_sub)
+    key_cond = Key("pk").eq(pk) & Key("sk").between(
+        f"LEDGER#{date_from}#", f"LEDGER#{date_to}#~"
+    )
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": key_cond,
+        "FilterExpression": Attr("type").eq("debit"),
+        "Limit": 500,
+    }
+    collected: List[Dict[str, Any]] = []
+    for _ in range(40):  # safety cap (~20k entries)
+        resp = T.billing.query(**query_kwargs)
+        collected.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_kwargs["ExclusiveStartKey"] = last_key
+    return collected
+
+
 def _query_credit_entries(*, user_sub: str, date_from: int, date_to: int) -> List[Dict[str, Any]]:
     """Query billing ledger *credit* entries for a user within [date_from, date_to].
+
+    RETAINED for the creator 1099 path (``tax_form_1099.py``). Do NOT use for
+    consumer spending documents — use ``_query_debit_entries`` instead.
 
     The ledger SK format is ``LEDGER#{ts}#{entry_id}``. The ``~`` upper-bound
     suffix ensures every entry within the ``date_to`` second is included
@@ -138,6 +207,66 @@ def _query_credit_entries(*, user_sub: str, date_from: int, date_to: int) -> Lis
 # Summary computation
 # ---------------------------------------------------------------------------
 
+def compute_spending_summary(
+    *,
+    user_sub: str,
+    date_from: int,
+    date_to: int,
+) -> Dict[str, Any]:
+    """Aggregate *debited* consumer spending by category for a date range.
+
+    Returns a dict matching ``SpendingSummaryOut`` (categories list of
+    {category, total_cents, transaction_count}, grand_total_cents,
+    transaction_count, currency, date_from, date_to).
+    """
+    entries = _query_debit_entries(user_sub=user_sub, date_from=date_from, date_to=date_to)
+
+    totals: Dict[str, int] = {c: 0 for c in CATEGORIES}
+    counts: Dict[str, int] = {c: 0 for c in CATEGORIES}
+    grand_total = 0
+    txn_count = 0
+    currency = "usd"
+
+    for entry in entries:
+        amount = _to_int(entry.get("amount_cents", 0))
+        category = classify_category(entry)
+        if category not in totals:
+            category = "other"
+        totals[category] += amount
+        counts[category] += 1
+        grand_total += amount
+        txn_count += 1
+        cur = entry.get("currency")
+        if cur:
+            currency = str(cur).lower()
+
+    categories = [
+        {"category": c, "total_cents": totals[c], "transaction_count": counts[c]}
+        for c in CATEGORIES
+    ]
+
+    logger.info(
+        "tax_spending_summary_computed",
+        extra={
+            "user_sub": user_sub,
+            "date_from": date_from,
+            "date_to": date_to,
+            "grand_total_cents": grand_total,
+            "transaction_count": txn_count,
+            "entry_type_queried": "debit",
+        },
+    )
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "categories": categories,
+        "grand_total_cents": grand_total,
+        "transaction_count": txn_count,
+        "currency": currency,
+    }
+
+
 def compute_earnings_summary(
     *,
     user_sub: str,
@@ -146,14 +275,13 @@ def compute_earnings_summary(
 ) -> Dict[str, Any]:
     """Aggregate credited earnings by category for a date range.
 
-    Returns a dict matching ``SpendingSummaryOut`` (categories list of
-    {category, total_cents, transaction_count}, grand_total_cents,
-    transaction_count, currency, date_from, date_to).
+    RETAINED for the creator 1099 path (``tax_form_1099.py``). Do NOT use for
+    consumer spending documents — use ``compute_spending_summary`` instead.
     """
     entries = _query_credit_entries(user_sub=user_sub, date_from=date_from, date_to=date_to)
 
-    totals: Dict[str, int] = {c: 0 for c in CATEGORIES}
-    counts: Dict[str, int] = {c: 0 for c in CATEGORIES}
+    totals: Dict[str, int] = {c: 0 for c in _CREDIT_CATEGORIES}
+    counts: Dict[str, int] = {c: 0 for c in _CREDIT_CATEGORIES}
     grand_total = 0
     txn_count = 0
     currency = "usd"
@@ -173,7 +301,7 @@ def compute_earnings_summary(
 
     categories = [
         {"category": c, "total_cents": totals[c], "transaction_count": counts[c]}
-        for c in CATEGORIES
+        for c in _CREDIT_CATEGORIES
     ]
 
     logger.info(
@@ -197,13 +325,20 @@ def compute_earnings_summary(
     }
 
 
+# Cache schema version. Bumped from 1 -> 2 when the consumer summary switched
+# from credit (earnings) to debit (spending) aggregation; any cache row without
+# this version was computed with the old wrong-direction data and must be
+# recomputed.
+_CACHE_VERSION = 2
+
+
 def get_annual_summary(
     *,
     user_sub: str,
     year: int,
     use_cache: bool = True,
 ) -> Dict[str, Any]:
-    """Get or compute the annual earnings summary for a year.
+    """Get or compute the annual consumer SPENDING summary for a year.
 
     Past years are immutable and cached in ``CACHE#{year}``; the current year
     is always computed fresh.
@@ -216,10 +351,14 @@ def get_annual_summary(
         cached = T.tax_documents.get_item(
             Key={"pk": user_pk(user_sub), "sk": f"CACHE#{year}"}
         ).get("Item")
-        if cached and cached.get("categories"):
+        if (
+            cached
+            and cached.get("categories")
+            and _to_int(cached.get("cache_version", 1)) >= _CACHE_VERSION
+        ):
             return _cache_to_summary(cached, date_from, date_to)
 
-    summary = compute_earnings_summary(
+    summary = compute_spending_summary(
         user_sub=user_sub, date_from=date_from, date_to=date_to
     )
 
@@ -268,6 +407,7 @@ def _write_cache(*, user_sub: str, year: int, summary: Dict[str, Any]) -> None:
             "grand_total_cents": int(summary["grand_total_cents"]),
             "transaction_count": int(summary["transaction_count"]),
             "currency": summary.get("currency", "usd"),
+            "cache_version": _CACHE_VERSION,
             "computed_at": now_ts(),
         }
     )
@@ -319,7 +459,7 @@ def generate_tax_summary_pdf(
     date_to = int(summary["date_to"])
 
     lines: List[str] = [
-        "ANNUAL EARNINGS TAX SUMMARY",
+        "ANNUAL SPENDING SUMMARY",
         "-" * 52,
     ]
     if year is not None:
@@ -335,9 +475,10 @@ def generate_tax_summary_pdf(
 
     label_map = {
         "subscriptions": "Subscriptions",
-        "tips": "Tips",
-        "unlocks": "Unlocks",
-        "vod_purchases": "VOD Purchases",
+        "tips": "Tips Sent",
+        "purchases": "Purchases",
+        "unlocks": "Content Unlocks",
+        "deposits": "Deposits",
         "other": "Other",
     }
     for cat in summary["categories"]:
@@ -350,9 +491,10 @@ def generate_tax_summary_pdf(
     grand = f"${int(summary['grand_total_cents']) / 100:.2f}"
     lines.append(f"{'GRAND TOTAL':<20}{int(summary['transaction_count']):>8}{grand:>14}")
     lines.append("")
-    lines.append("This document is for informational purposes only and does")
-    lines.append("not constitute tax advice. Consult a tax professional for")
-    lines.append("guidance on income reporting and deductibility.")
+    lines.append("This document summarizes your spending on the platform and")
+    lines.append("is for informational purposes only. It does not constitute")
+    lines.append("tax advice. Consult a tax professional for guidance on")
+    lines.append("deductibility of these expenses.")
 
     return _render_pdf(lines)
 
@@ -391,8 +533,8 @@ def generate_tax_document(
     min_cents = int(S.tax_documents_min_earnings_cents)
     if summary["grand_total_cents"] < min_cents:
         raise ValueError(
-            f"below_threshold:Earnings ${summary['grand_total_cents'] / 100:.2f} "
-            f"are below the ${min_cents / 100:.2f} minimum required to issue a tax document."
+            f"below_threshold:Spending ${summary['grand_total_cents'] / 100:.2f} "
+            f"is below the ${min_cents / 100:.2f} minimum required to issue a tax document."
         )
 
     date_from, date_to = year_bounds(year)
@@ -472,3 +614,124 @@ def download_tax_document_pdf(*, user_sub: str, year: int) -> bytes:
     """Return PDF bytes for the given year's tax document, generating fresh if needed."""
     summary = get_annual_summary(user_sub=user_sub, year=year)
     return generate_tax_summary_pdf(user_sub=user_sub, summary=summary, year=year)
+
+
+# ---------------------------------------------------------------------------
+# Bulk receipt ZIP export (FIN-004)
+# ---------------------------------------------------------------------------
+
+def _query_transactions_range(
+    *, user_sub: str, date_from: int, date_to: int
+) -> List[Dict[str, Any]]:
+    """Query the caller's own purchase transactions within [date_from, date_to].
+
+    The ``purchase_transactions`` table is keyed by ``user_sub`` (PK) with sort
+    key ``TXN#{created_at}#{txn_id}``, so a timestamp range maps to a ``between``
+    KeyCondition. The ``~`` upper-bound suffix sweeps every txn_id within the
+    ``date_to`` second (ASCII ``~`` sorts after any txn-id character). Loops on
+    ``LastEvaluatedKey`` so a busy table is not silently truncated.
+    """
+    key_cond = "user_sub = :u AND sk BETWEEN :lo AND :hi"
+    expr_vals: Dict[str, Any] = {
+        ":u": user_sub,
+        ":lo": f"TXN#{int(date_from)}#",
+        ":hi": f"TXN#{int(date_to)}#~",
+    }
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": key_cond,
+        "ExpressionAttributeValues": expr_vals,
+        "Limit": 500,
+    }
+    collected: List[Dict[str, Any]] = []
+    for _ in range(40):  # safety cap (~20k transactions)
+        resp = T.purchase_transactions.query(**query_kwargs)
+        collected.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_kwargs["ExclusiveStartKey"] = last_key
+    return collected
+
+
+def _fetch_receipt_pdf_bytes(*, user_sub: str, txn_id: str) -> bytes:
+    """Return the receipt PDF bytes for one transaction, fetched from S3.
+
+    Ensures a receipt exists (generating + uploading it on first request) and
+    then reads the object back through the shared ``s3_client`` helper. This is
+    the same boto3 path in dev (moto, intercepted in-process) and prod (real
+    S3), satisfying the SECOPS-007 dev/prod parity rule — no URL re-derivation
+    or HTTP round-trip.
+    """
+    from app.services import filemanager as fm
+    from app.services.receipts import get_or_create_receipt
+
+    receipt_path = fm.norm_path(f"/billing/receipts/{txn_id}.pdf", is_folder=False)
+    try:
+        node = fm.get_node(user_sub, receipt_path)
+    except Exception:
+        # Receipt not generated yet — create it (uploads PDF to S3), then read.
+        get_or_create_receipt(user_sub, txn_id)
+        node = fm.get_node(user_sub, receipt_path)
+
+    bucket = node.get("s3_bucket") or _bucket()
+    key = node["s3_key"]
+    resp = _s3.get_object(Bucket=bucket, Key=key)
+    return resp["Body"].read()
+
+
+def export_receipts_zip(*, user_sub: str, date_from: int, date_to: int) -> bytes:
+    """Bundle every receipt PDF in [date_from, date_to] for ``user_sub`` into a ZIP.
+
+    Only the caller's own transactions are included (scoped by the
+    ``purchase_transactions`` user PK). Returns the ZIP archive as bytes.
+
+    Raises ``ValueError("<code>:<message>")`` when:
+      - ``no_transactions`` — the range contains no transactions, or
+      - ``too_many_transactions`` — the range exceeds ``MAX_ZIP_RECEIPTS``.
+    """
+    txns = _query_transactions_range(
+        user_sub=user_sub, date_from=date_from, date_to=date_to
+    )
+    if not txns:
+        raise ValueError(
+            "no_transactions:No transactions found in the specified range"
+        )
+    if len(txns) > MAX_ZIP_RECEIPTS:
+        raise ValueError(
+            f"too_many_transactions:Date range contains {len(txns)} transactions "
+            f"(max {MAX_ZIP_RECEIPTS}). Please narrow the range."
+        )
+
+    written = 0
+    skipped = 0
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for txn in txns:
+            txn_id = str(txn.get("txn_id") or "")
+            if not txn_id:
+                skipped += 1
+                continue
+            try:
+                pdf_bytes = _fetch_receipt_pdf_bytes(user_sub=user_sub, txn_id=txn_id)
+            except Exception:
+                logger.warning(
+                    "export_receipts_zip: skipped txn %s", txn_id, exc_info=True
+                )
+                skipped += 1
+                continue
+            zf.writestr(f"receipt_{txn_id}.pdf", pdf_bytes)
+            written += 1
+
+    logger.info(
+        "export_receipts_zip",
+        extra={
+            "user_sub": user_sub,
+            "date_from": date_from,
+            "date_to": date_to,
+            "count": written,
+            "skipped": skipped,
+        },
+    )
+
+    buf.seek(0)
+    return buf.read()

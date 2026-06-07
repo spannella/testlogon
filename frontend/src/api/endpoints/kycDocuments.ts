@@ -29,6 +29,22 @@ export const listKycDocumentsByStatus = (status: KycDocumentStatus, limit = 100)
     limit: String(limit),
   });
 
+// List all documents for a single case (admin view, with match results).
+// Passes `case_id` to the by-status endpoint; the backend `case_id` filter is
+// added by GAP-0248. `status` is required by the route, so we request the
+// "extracted" status (the one carrying OCR fields/match results) when scoping
+// by case.
+export const listKycDocumentsForCase = (
+  caseId: string,
+  status: KycDocumentStatus = "extracted",
+  limit = 100,
+) =>
+  api.get<KycDocumentListResponse>("/ui/kyc/documents/admin/by-status", {
+    case_id: caseId,
+    status,
+    limit: String(limit),
+  });
+
 export const adminGetKycDocument = (documentId: string) =>
   api.get<KycDocumentOut>(`/ui/kyc/documents/admin/${documentId}`);
 

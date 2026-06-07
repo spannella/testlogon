@@ -96,3 +96,41 @@ For step-by-step break-glass execution guidance (including approvals/escalation 
 - `docs/root-cli-operator-runbook.md`
 
 Treat that runbook as the primary operational playbook for `rootctl` incident actions.
+
+## SES/SNS notification endpoint hardening (PLATFORM-002 / GAP-0319)
+
+The SES delivery-notification receiver `POST /internal/ses/notifications`
+(`app/routers/ses_notifications.py`) ingests AWS SNS push messages for email
+bounce/complaint/delivery events. A forged bounce/complaint can suppress all
+outbound email (password reset, MFA, alerts) to any address, so this endpoint
+requires **two** independent controls:
+
+1. **SNS signature verification (application layer, primary)** — every SNS
+   message is RSA-signed. The endpoint verifies the signature
+   (`app/services/sns_signature.py`) before acting on any payload. The
+   `SigningCertURL` is SSRF-guarded (must be `https://sns.<region>.amazonaws.com/...`)
+   and the certificate is fetched, cached, and used to verify SignatureVersion 1
+   (SHA1) and 2 (SHA256). Verification is gated by
+   `SES_SNS_SIGNATURE_VERIFICATION_ENABLED` (default **True/on**). Leave it ON
+   in all environments that receive real SNS traffic; only disable it in local
+   dev/test where no real SNS subscription exists. `SubscriptionConfirmation`
+   messages are auto-confirmed by fetching `SubscribeURL` (same AWS-host SSRF
+   guard) only after signature verification passes.
+
+2. **Network restriction (infrastructure, defence-in-depth)** — the
+   `/internal/*` path family must additionally be restricted to intra-VPC /
+   security-group traffic:
+   - ALB listener rule: route `/internal/*` only to a private target group; the
+     public listener must return 404 for `/internal/ses/notifications`.
+   - Security group on the FastAPI task: allow port 8000 only from the ALB SG
+     and the published AWS **SNS** IP ranges
+     (`https://ip-ranges.amazonaws.com/ip-ranges.json`, `service: SNS`). No
+     direct internet exposure of port 8000.
+   - Dev: gate/remove the `/internal` Vite proxy so the browser has no path to
+     `/internal/*` (does not affect backend-to-backend dev-stack calls).
+
+Both layers are required. Signature verification stops forged payloads from any
+peer (including a compromised internal service); network controls reduce the
+attack surface and stop probing. Alert if `403` responses to
+`/internal/ses/notifications` exceed ~5/min (misconfigured subscription or
+probing attack).

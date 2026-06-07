@@ -53,8 +53,10 @@ export function useMessagingStream(enabled = true) {
           queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
         }
 
-        // Refresh the specific conversation's message list
-        if (conversationId) {
+        // Refresh the specific conversation's message list.
+        // Exclude "message:viewed" — read receipts are patched surgically below
+        // (see the message:viewed handler) to avoid a full message-list refetch.
+        if (conversationId && eventType !== "message:viewed") {
           queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
         }
 
@@ -116,13 +118,50 @@ export function useMessagingStream(enabled = true) {
           }
         }
 
-        // Read receipts — update message delivery status in cache
+        // Read receipts — surgically patch the message in cache (no refetch)
         if (eventType === "message:viewed" && conversationId) {
           const messageId = typeof data.message_id === "string" ? data.message_id : undefined;
           const viewerId = typeof data.viewer_id === "string" ? data.viewer_id : undefined;
           if (messageId && viewerId) {
+            // Narrow per-message detail query — round-trip is acceptable here.
             queryClient.invalidateQueries({ queryKey: ["message-views", conversationId, messageId] });
-            queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+
+            // Surgically increment read_by_count / append viewer to read_by_user_ids
+            // on the matching message in the infinite-query pages cache, avoiding a
+            // full message-list refetch (and the resulting flicker).
+            queryClient.setQueriesData<{
+              pages: Array<{
+                messages: Array<{
+                  message_id?: string;
+                  read_by_count?: number;
+                  read_by_user_ids?: string[];
+                }>;
+                next_cursor?: string;
+              }>;
+              pageParams: unknown[];
+            }>({ queryKey: ["messages", conversationId] }, (prev) => {
+              if (!prev || !Array.isArray(prev.pages)) return prev;
+              return {
+                ...prev,
+                pages: prev.pages.map((page) => {
+                  if (!page || !Array.isArray(page.messages)) return page;
+                  return {
+                    ...page,
+                    messages: page.messages.map((msg) => {
+                      if (msg.message_id !== messageId) return msg;
+                      const existingIds = msg.read_by_user_ids ?? [];
+                      if (existingIds.includes(viewerId)) return msg;
+                      const updatedIds = [...existingIds, viewerId];
+                      return {
+                        ...msg,
+                        read_by_count: updatedIds.length,
+                        read_by_user_ids: updatedIds,
+                      };
+                    }),
+                  };
+                }),
+              };
+            });
           }
         }
 

@@ -18,6 +18,7 @@ import {
   Shield,
   Settings,
   Bell,
+  Gavel,
   LifeBuoy,
   Users,
   UsersRound,
@@ -195,6 +196,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Verification Call", i18nKey: "nav.kycLivenessCall", path: "/kyc/liveness-call", icon: <Video className="h-5 w-5" /> },
       { label: "Alerts", i18nKey: "nav.alerts", path: "/alerts", icon: <Bell className="h-5 w-5" /> },
       { label: "Notifications", i18nKey: "nav.notifications", path: "/notifications", icon: <Bell className="h-5 w-5" /> },
+      { label: "My Appeals", i18nKey: "nav.myAppeals", path: "/appeals", icon: <Scale className="h-5 w-5" /> },
       { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
@@ -220,6 +222,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Bulk Payouts", path: "/admin/bulk-payouts", icon: <Wallet className="h-5 w-5" /> },
       { label: "Dispute Queue", i18nKey: "nav.disputeQueue", path: "/admin/disputes", icon: <ShieldAlert className="h-5 w-5" /> },
+      { label: "Appeal Queue", i18nKey: "nav.appealQueue", path: "/admin/appeals", icon: <Gavel className="h-5 w-5" /> },
       { label: "Fraud Detection", i18nKey: "nav.fraudDetection", path: "/admin/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
@@ -301,6 +304,7 @@ export default function Sidebar() {
             if (item.path === "/admin/video-review") return showModerationBoard;
             if (item.path === "/admin/video-review-queue") return showModerationBoard;
             if (item.path === "/admin/dmca") return showModerationBoard;
+            if (item.path === "/admin/appeals") return showModerationBoard;
             if (item.path === "/admin/communications") return showModerationBoard;
             if (item.path === "/admin/rate-limits") return showRootRoleManagement;
             if (item.path === "/admin/jobs") return showModerationBoard;

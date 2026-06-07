@@ -31,7 +31,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 
-from app.auth.deps import AuthenticatedUser, extract_bearer_token, get_authenticated_user, get_authenticated_user_sub
+from app.auth.deps import AuthenticatedUser, extract_bearer_token, get_authenticated_user, get_authenticated_user_sub, require_kyc_tier
 from app.auth.policy import require_admin_scope
 from app.metrics import (
     record_helpdesk_alert_sent,
@@ -214,6 +214,10 @@ TYPING_TTL_SEC = int(os.getenv("TYPING_TTL_SEC", "10"))
 VIEWS_TTL_SEC = int(os.getenv("VIEWS_TTL_SEC", "2592000"))  # 30d
 EDITS_TTL_SEC = int(os.getenv("EDITS_TTL_SEC", "7776000"))  # 90d
 MESSAGE_REVOKE_WINDOW_SEC = int(os.getenv("MESSAGE_REVOKE_WINDOW_SEC", "300"))
+# MSG-002 / GAP-0312: TTL for voice-message presign bindings. Matches the 300s
+# presigned-URL expiry so create_voice_message can verify the submitted s3_key
+# against the one issued at presign time before the binding self-cleans.
+VOICE_PRESIGN_TTL_SEC = int(os.getenv("VOICE_PRESIGN_TTL_SEC", "300"))
 HELPDESK_GROUP_MEMBERS_JSON = os.getenv("HELPDESK_GROUP_MEMBERS_JSON", "").strip()
 
 s3 = s3_client()
@@ -1857,6 +1861,17 @@ class SendTextMessageIn(BaseModel):
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     lock_description: Optional[str] = Field(default=None, max_length=200)
+    # GAP-0344: client-generated idempotency key. Same key (for the same
+    # sender/conversation) deduplicates a retried/offline-replayed send so a
+    # dropped-response retry does NOT create a duplicate message. Permissive but
+    # bounded — mirrors the lottery endpoint's Idempotency-Key validation.
+    client_request_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"[A-Za-z0-9._:-]+",
+        description="Client-generated idempotency key. Same key = deduplicated send.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -4227,6 +4242,11 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         lock_price_cents=int(merged_item["lock_price_cents"]) if merged_item.get("lock_price_cents") else None,
         lock_description=merged_item.get("lock_description"),
         is_unlocked=is_unlocked,
+        sender_type=merged_item.get("sender_type"),
+        bot_id=merged_item.get("bot_id"),
+        bot_name=merged_item.get("bot_name"),
+        bot_avatar_url=merged_item.get("bot_avatar_url"),
+        quick_replies=merged_item.get("quick_replies") or None,
     )
 
 
@@ -5808,6 +5828,55 @@ def _message_key(conversation_id: str, message_id: str) -> str:
     return f"{conversation_id}#{message_id}"
 
 
+# MSG-002 / GAP-0312: voice-message presign binding. The presign step records the
+# (message_id -> s3_key, conversation_id, user_id, expiry) mapping in the existing
+# TTL-enabled MessageEdits table under a dedicated key namespace so the create step
+# can confirm the submitted s3_key is exactly the one we issued (and belongs to the
+# same caller/conversation). Prevents a client from substituting an arbitrary key.
+def _voice_presign_key(message_id: str) -> str:
+    return f"VMPRESIGN#{message_id}"
+
+
+def _store_voice_presign_binding(message_id: str, s3_key: str, conversation_id: str, user_id: str) -> None:
+    ts = now_ts()
+    tbl_edits.put_item(
+        Item={
+            "message_key": _voice_presign_key(message_id),
+            "edited_at": "presign",
+            "s3_key": s3_key,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "expires_at": ts + VOICE_PRESIGN_TTL_SEC,
+            "ttl": ts + VOICE_PRESIGN_TTL_SEC,
+        }
+    )
+
+
+def _verify_voice_presign_binding(message_id: str, s3_key: str, conversation_id: str, user_id: str) -> None:
+    """Confirm the submitted s3_key matches the one issued at presign time for this
+    caller + conversation. Raises HTTPException on any mismatch / missing / expired
+    binding. Also enforces the canonical key prefix as defense-in-depth."""
+    expected_prefix = f"voice-messages/{conversation_id}/"
+    if not isinstance(s3_key, str) or not s3_key.startswith(expected_prefix) or ".." in s3_key:
+        raise HTTPException(400, "voice_presign_invalid_key")
+    try:
+        item = tbl_edits.get_item(
+            Key={"message_key": _voice_presign_key(message_id), "edited_at": "presign"}
+        ).get("Item")
+    except Exception:
+        item = None
+    if not item:
+        raise HTTPException(400, "voice_presign_not_found")
+    if str(item.get("s3_key") or "") != s3_key:
+        raise HTTPException(400, "voice_presign_key_mismatch")
+    if str(item.get("user_id") or "") != user_id:
+        raise HTTPException(403, "voice_presign_owner_mismatch")
+    if str(item.get("conversation_id") or "") != conversation_id:
+        raise HTTPException(400, "voice_presign_conversation_mismatch")
+    if int(item.get("expires_at", 0) or 0) < now_ts():
+        raise HTTPException(400, "voice_presign_expired")
+
+
 # -------------------------
 # Contacts
 # -------------------------
@@ -5869,6 +5938,7 @@ def start_conversation(
     inp: StartConversationIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     cid = "c_" + new_id()
     created_at = now_ts()
@@ -6000,6 +6070,7 @@ def start_group_conversation(
     inp: StartGroupConversationIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     return start_conversation(
         StartConversationIn(
@@ -7848,12 +7919,73 @@ def search_messages_all_conversations(
     return out
 
 
+def _run_bot_trigger_evaluation(*, conversation_id: str, message_item: dict) -> None:
+    """Evaluate chat-bot triggers for a freshly delivered message and dispatch
+    any matching bot replies (GAP-0133).
+
+    Called best-effort after a non-scheduled, non-encrypted text message has been
+    persisted and fanned out. Any failure here must never break the user's send,
+    so the whole body is wrapped in a broad try/except. Bots cannot read
+    ciphertext, so encrypted messages are excluded by the caller.
+
+    Reuses the existing bot subsystem unchanged:
+      - chat_bot.get_bots_for_conversation: active bots assigned to the convo
+      - chat_bot.evaluate_triggers: returns the matching response_template_id
+      - bot_template.get_template / render_template: resolve the reply text
+      - chat_bot.send_bot_message: persists the bot reply (GAP-0015) + fan-out meta
+    """
+    try:
+        from app.services.chat_bot import (
+            evaluate_triggers,
+            get_bots_for_conversation,
+            send_bot_message,
+        )
+        from app.services.bot_template import get_template, render_template
+
+        bots = get_bots_for_conversation(conversation_id=conversation_id)
+        for bot in bots:
+            try:
+                template_id = evaluate_triggers(
+                    bot=bot,
+                    conversation_id=conversation_id,
+                    incoming_message=message_item,
+                    event_type="message",
+                )
+                if not template_id:
+                    continue
+                template = get_template(bot_id=bot["bot_id"], template_id=template_id)
+                if not template:
+                    continue
+                rendered = render_template(
+                    template=template,
+                    creator_id=bot.get("creator_id"),
+                    bot=bot,
+                    conversation_id=conversation_id,
+                )
+                send_bot_message(
+                    bot_id=bot["bot_id"],
+                    conversation_id=conversation_id,
+                    text=rendered["rendered_text"],
+                )
+            except Exception:  # noqa: BLE001 - one bot failing must not block others
+                logger.exception(
+                    "bot_trigger_evaluation_bot_failed conversation_id=%s bot_id=%s",
+                    conversation_id,
+                    bot.get("bot_id"),
+                )
+    except Exception:  # noqa: BLE001 - bot evaluation must never break the send path
+        logger.exception(
+            "bot_trigger_evaluation_failed conversation_id=%s", conversation_id
+        )
+
+
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageOut)
 def send_text_message(
     conversation_id: str,
     inp: SendTextMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     _enforce_messaging_internal_entitlement(
         user_id=user_id,
@@ -7894,6 +8026,35 @@ def send_text_message(
         deliver_at = inp.send_at
         is_scheduled = True
 
+    # GAP-0344: when a client supplies an idempotency key, derive a DETERMINISTIC
+    # message_id from (sender | conversation | client_request_id) so that a retried
+    # / offline-replayed send maps to the same row. Combined with the conditional
+    # put below, this makes the send idempotent. Absent the key, behavior is
+    # unchanged (a fresh random id). The early existence check short-circuits a
+    # replay BEFORE any billing/tip side effects run, so a retried tipped message
+    # is not charged twice.
+    if inp.client_request_id:
+        mid = _lottery_dedupe_message_id(
+            sender_id=user_id,
+            conversation_id=conversation_id,
+            idempotency_key=inp.client_request_id,
+        )
+        try:
+            existing = tbl_msgs.get_item(
+                Key={"conversation_id": conversation_id, "message_id": mid}
+            ).get("Item")
+        except Exception:
+            existing = None
+        if existing:
+            logger.debug(
+                "messaging.send_text idempotent_replay message_id=%s conv=%s",
+                mid,
+                conversation_id,
+            )
+            return _message_out_from_item(existing, user_id)
+    else:
+        mid = "m_" + new_id()
+
     # Process tip
     tip_amount_cents: Optional[int] = None
     tip_currency: Optional[str] = None
@@ -7903,8 +8064,6 @@ def send_text_message(
         tip_currency = "USD"
         # In dev mode, mock the payment; in production this would call a payment processor
         tip_payment_id = "tip_" + new_id()
-
-    mid = "m_" + new_id()
 
     is_encrypted = inp.encryption is not None
     message_text = inp.text or ""
@@ -7993,7 +8152,33 @@ def send_text_message(
         )
     )
 
-    tbl_msgs.put_item(Item=item)
+    if inp.client_request_id:
+        # GAP-0344: conditional put guards the concurrent-retry race. Two replays
+        # with the same deterministic message_id race here; the loser hits the
+        # condition and returns the already-written message (idempotent success),
+        # NOT a 409 and NOT a duplicate row.
+        try:
+            tbl_msgs.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(message_id)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                existing = tbl_msgs.get_item(
+                    Key={"conversation_id": conversation_id, "message_id": mid}
+                ).get("Item")
+                if existing:
+                    logger.debug(
+                        "messaging.send_text idempotent_replay message_id=%s conv=%s",
+                        mid,
+                        conversation_id,
+                    )
+                    return _message_out_from_item(existing, user_id)
+                # Rare race: condition failed but item vanished — surface a retryable error.
+                raise HTTPException(409, "Duplicate message detected; please retry")
+            raise
+    else:
+        tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
 
     preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
@@ -8052,6 +8237,13 @@ def send_text_message(
             respect_mute=False,
         )
 
+    # GAP-0133: evaluate chat-bot triggers for live (non-scheduled) plaintext
+    # messages and dispatch matching bot replies. Best-effort; never breaks the
+    # send. Scheduled messages fire triggers at delivery time, not queue time;
+    # encrypted messages are skipped because bots cannot read ciphertext.
+    if not is_scheduled and not is_encrypted:
+        _run_bot_trigger_evaluation(conversation_id=conversation_id, message_item=item)
+
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -8104,6 +8296,7 @@ def create_image_message(
     inp: CreateImageMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
@@ -8356,6 +8549,10 @@ def presign_voice_message(
             Params={"Bucket": S3_BUCKET_IMAGES, "Key": s3_key, "ContentType": body.content_type},
             ExpiresIn=300,
         )
+    # MSG-002 / GAP-0312: bind the issued (msg_id -> s3_key) mapping so the
+    # subsequent create_voice_message call can verify the client did not
+    # substitute a different / foreign s3_key.
+    _store_voice_presign_binding(msg_id, s3_key, conversation_id, user_id)
     return {"message_id": msg_id, "upload_url": upload_url, "s3_key": s3_key}
 
 
@@ -8383,6 +8580,10 @@ def create_voice_message(
             require_subscription_access(user_id, pid)
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, body.reply_to_message_id)
+
+    # MSG-002 / GAP-0312: the submitted s3_key MUST exactly match the key issued
+    # by presign_voice_message for this message_id, caller, and conversation.
+    _verify_voice_presign_binding(body.message_id, body.s3_key, conversation_id, user_id)
 
     ts = now_ts()
 
@@ -8896,6 +9097,7 @@ def create_file_share_message(
     inp: CreateFileShareMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(1)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
@@ -9622,6 +9824,40 @@ def create_countdown_message(
     return _message_out_from_item(item, user_id)
 
 
+def _validate_gif_url(url: str) -> None:
+    """GAP-0316: reject gif_url values whose host is not on the allowlist.
+
+    Allowed:
+      * Relative URLs (no netloc) whose path starts with "/" — covers the dev
+        mock GIF provider's "/mock/gifs/..." paths in any environment.
+      * Absolute http(s) URLs whose hostname exactly matches, or is a subdomain
+        of, an entry in S.gif_allowed_domains.
+
+    Rejected: data:/javascript:/file:/scheme-relative and any non-allowlisted
+    domain. Applied identically in dev and prod (SECOPS-007) — the allowlist is
+    the only knob.
+    """
+    raw = (url or "").strip()
+    parsed = urlparse(raw)
+    # Relative URLs (no scheme + no netloc): allowed when an absolute path.
+    if not parsed.netloc:
+        if not parsed.scheme and raw.startswith("/"):
+            return
+        raise HTTPException(400, "gif_url_not_allowed")
+    # Absolute URLs must use http(s) — blocks data:/javascript:/file:/etc.
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "gif_url_not_allowed")
+    host = (parsed.hostname or "").lower()
+    allowed_raw = getattr(S, "gif_allowed_domains", "") or ""
+    allowed = {d.strip().lower() for d in allowed_raw.split(",") if d.strip()}
+    if not host:
+        raise HTTPException(400, "gif_url_not_allowed")
+    for dom in allowed:
+        if host == dom or host.endswith("." + dom):
+            return
+    raise HTTPException(400, "gif_url_not_allowed")
+
+
 @router.post("/conversations/{conversation_id}/messages/gif", response_model=MessageOut, status_code=201)
 def send_gif_message(
     conversation_id: str,
@@ -9635,6 +9871,7 @@ def send_gif_message(
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
+    _validate_gif_url(inp.gif_url)
     try:
         resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
         participants = resp.get("Items", [])
@@ -10797,29 +11034,40 @@ def delete_message_for_me(
     return {"ok": True}
 
 
-@router.delete("/conversations/{conversation_id}/messages/{message_id}/revoke", response_model=MessageOut)
-def revoke_message_for_all(
+def _apply_message_revocation(
     conversation_id: str,
     message_id: str,
+    msg: dict,
+    actor_user_id: str,
     req: Request = None,
-    user_id: str = Depends(get_messaging_user_id),
-):
-    require_participant_active(user_id, conversation_id)
-    msg = _get_message_or_404(conversation_id, message_id)
-    _ensure_can_revoke_message(user_id, conversation_id, msg)
-
+    *,
+    audit_action: str = "messaging_message_revoked",
+    archive_mutation: str = "revoke",
+    archive_event_type: str = "message.revoked",
+    extra_audit: dict | None = None,
+    update_fields: dict | None = None,
+) -> MessageOut:
+    """Shared revoke mutation + fan-out used by both the participant revoke
+    endpoint and the admin moderation endpoint. Performs no authorization — the
+    caller is responsible for enforcing the appropriate guards first."""
     ts = now_ts()
+    update_expr = "SET revoked_at = :ts, revoked_by = :uid"
+    expr_values: dict = {":ts": ts, ":uid": actor_user_id}
+    for k, v in (update_fields or {}).items():
+        placeholder = f":{k}"
+        update_expr += f", {k} = {placeholder}"
+        expr_values[placeholder] = v
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
-        UpdateExpression="SET revoked_at = :ts, revoked_by = :uid",
-        ExpressionAttributeValues={":ts": ts, ":uid": user_id},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_values,
     )
     if _is_searchable_kind(msg.get("kind")):
         remove_message_search(conversation_id, message_id, _message_search_text(msg))
 
     revoked_item = dict(msg)
     revoked_item["revoked_at"] = ts
-    revoked_item["revoked_by"] = user_id
+    revoked_item["revoked_by"] = actor_user_id
     _sync_gallery_index_message(revoked_item)
 
     # If this was the last message, update conversation preview to show it was deleted
@@ -10833,31 +11081,79 @@ def revoke_message_for_all(
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
-        sender_id=user_id,
+        sender_id=actor_user_id,
         event_type="message:revoked",
-        payload={"message_id": message_id, "revoked_at": ts, "revoked_by": user_id},
+        payload={"message_id": message_id, "revoked_at": ts, "revoked_by": actor_user_id},
         respect_mute=False,
     )
     audit_event(
-        "messaging_message_revoked",
-        user_id,
+        audit_action,
+        actor_user_id,
         req,
         outcome="success",
         conversation_id=conversation_id,
         message_id=message_id,
         revoked_at=ts,
+        **(extra_audit or {}),
     )
     item = _get_message_or_404(conversation_id, message_id)
     _emit_message_lifecycle_archive_event_or_503(
-        mutation="revoke",
+        mutation=archive_mutation,
         event_ts=ts,
         conversation_id=conversation_id,
         message_id=message_id,
-        actor_user_id=user_id,
-        event_type="message.revoked",
-        payload={"mutation": "revoke", "message": _serialize_message_event_payload(item, user_id)},
+        actor_user_id=actor_user_id,
+        event_type=archive_event_type,
+        payload={"mutation": archive_mutation, "message": _serialize_message_event_payload(item, actor_user_id)},
     )
-    return _message_out_from_item(item, user_id)
+    return _message_out_from_item(item, actor_user_id)
+
+
+@router.delete("/conversations/{conversation_id}/messages/{message_id}/revoke", response_model=MessageOut)
+def revoke_message_for_all(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    _ensure_can_revoke_message(user_id, conversation_id, msg)
+    return _apply_message_revocation(conversation_id, message_id, msg, user_id, req)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/moderate-revoke",
+    response_model=MessageOut,
+    tags=["moderation"],
+)
+def moderate_revoke_message(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    actor: AuthenticatedUser = Depends(require_legal_hold_admin),
+):
+    """Platform admin/root content-moderation forced revocation (MSG-001 / GAP-0311).
+
+    Bypasses the participant-membership check, the sender-only restriction, and the
+    short self-revocation time window. Guarded by the content_moderation admin scope.
+    """
+    actor_user_id = str(actor.sub or "")
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Message already revoked")
+    return _apply_message_revocation(
+        conversation_id,
+        message_id,
+        msg,
+        actor_user_id,
+        req,
+        audit_action="messaging_message_admin_revoked",
+        archive_mutation="admin_revoke",
+        archive_event_type="message.admin_revoked",
+        extra_audit={"moderation": True},
+        update_fields={"moderated_by": actor_user_id},
+    )
 
 
 # -------------------------
@@ -11018,6 +11314,12 @@ def edit_message(
         raise HTTPException(403, "Only the sender can edit this message")
     if bool(msg.get("is_encrypted")):
         _raise_encrypted_edit_unsupported()
+    # MSG-001 / GAP-0310: enforce a time window after which messages can no longer
+    # be edited. 0 = unlimited (dev/test default escape hatch).
+    if S.message_edit_window_seconds > 0:
+        created_at = int(msg.get("created_at") or 0)
+        if now_ts() - created_at > S.message_edit_window_seconds:
+            raise HTTPException(400, "Edit window has expired")
 
     old_text = msg.get("text") or ""
     new_text = inp.text
@@ -12544,28 +12846,69 @@ def presence_heartbeat(
     )
     ts = now_ts()
     status = _normalize_presence_status(inp.status)
-
-    # Check previous heartbeat for cooldown-based SSE fanout
-    prev_item = None
-    try:
-        prev_resp = tbl_presence.get_item(Key={"user_id": user_id})
-        prev_item = prev_resp.get("Item")
-    except Exception:
-        pass
-    prev_last_seen = int(prev_item.get("last_seen_at", 0) or 0) if prev_item else 0
-
-    tbl_presence.put_item(
-        Item={
-            "user_id": user_id,
-            "last_seen_at": ts,
-            "device": inp.device or "",
-            "status": status,
-            "ttl": ts + PRESENCE_TTL_SEC,
-        }
-    )
-
     online = status in {"online", "available"}
-    if ts - prev_last_seen >= PRESENCE_SSE_COOLDOWN_SEC:
+
+    # GAP-0313: Gate the SSE fan-out on an *atomic* conditional UpdateItem so that
+    # only ONE writer per cooldown window fires the (expensive) fan-out. The
+    # read-then-put pattern previously used here was vulnerable to a cold-start /
+    # TTL-expired flood (a missing item yielded prev_last_seen=0 → fan-out always
+    # fired) and to a multi-worker burst (each worker read stale state and fired
+    # its own cooldown-less fan-out).
+    #
+    # `last_seen_at` keeps updating on every heartbeat to preserve presence/TTL
+    # freshness for all other readers. A dedicated `last_sse_at` attribute is the
+    # cooldown gate: the conditional update only succeeds (and we only fan out)
+    # when no prior SSE has fired within PRESENCE_SSE_COOLDOWN_SEC. Concurrent
+    # cold starts race on the same conditional write, so exactly one wins.
+    cutoff = ts - PRESENCE_SSE_COOLDOWN_SEC
+    should_fanout = False
+    try:
+        tbl_presence.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression=(
+                "SET last_seen_at = :ts, last_sse_at = :ts, "
+                "#device = :device, #status = :status, #ttl = :ttl"
+            ),
+            ConditionExpression=(
+                "attribute_not_exists(last_sse_at) OR last_sse_at <= :cutoff"
+            ),
+            ExpressionAttributeNames={
+                "#device": "device",
+                "#status": "status",
+                "#ttl": "ttl",
+            },
+            ExpressionAttributeValues={
+                ":ts": ts,
+                ":device": inp.device or "",
+                ":status": status,
+                ":ttl": ts + PRESENCE_TTL_SEC,
+                ":cutoff": cutoff,
+            },
+        )
+        should_fanout = True
+    except tbl_presence.meta.client.exceptions.ConditionalCheckFailedException:
+        # Cooldown still active (another worker/recent beat already fired the
+        # fan-out within this window) — keep presence/TTL fresh but do NOT fan out.
+        tbl_presence.update_item(
+            Key={"user_id": user_id},
+            UpdateExpression=(
+                "SET last_seen_at = :ts, #device = :device, "
+                "#status = :status, #ttl = :ttl"
+            ),
+            ExpressionAttributeNames={
+                "#device": "device",
+                "#status": "status",
+                "#ttl": "ttl",
+            },
+            ExpressionAttributeValues={
+                ":ts": ts,
+                ":device": inp.device or "",
+                ":status": status,
+                ":ttl": ts + PRESENCE_TTL_SEC,
+            },
+        )
+
+    if should_fanout:
         _fanout_presence_update(user_id, online, ts)
 
     routing = _handle_helpdesk_presence_event(user_id=user_id, status=status, ts=ts)
@@ -13332,10 +13675,27 @@ async def _expire_stale_invites() -> None:
             if not call_id:
                 continue
             try:
-                timeout_call(
+                updated, event = timeout_call(
                     call_id=call_id,
                     actor_user_id="system",
                     reason="server_timeout",
+                )
+                # GAP-0142: fan out call.missed from the backstop too, so the
+                # callee dismisses the ringing overlay even when the caller's
+                # client never sends the timeout request.
+                fanout_event_to_conversation(
+                    conversation_id=updated.conversation_id,
+                    sender_id="system",
+                    event_type="call.missed",
+                    payload={
+                        "call_id": updated.call_id,
+                        "caller_user_id": updated.caller_user_id,
+                        "callee_user_id": updated.callee_user_id,
+                        "from_state": event.from_state,
+                        "reason": event.reason,
+                        "event_ts": event.event_ts,
+                    },
+                    respect_mute=False,
                 )
                 logger.info("Server timeout expired stale invite call_id=%s", call_id)
             except CallLifecycleError:
@@ -13464,6 +13824,7 @@ def send_message_tip(
     inp: SendTipIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(2)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     """Send a monetary tip attached to a message."""
     require_participant_active(user_id, conversation_id)
@@ -13548,6 +13909,23 @@ def send_message_tip(
             currency=str(inp.currency or "usd").lower(),
         )
 
+    # GAP-0026: Best-effort license revenue split for tipped message.
+    # Wrapped in try/except so a split failure never breaks the tip transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=message_id,
+            licensee_id=user_id,
+            source_type="tip",
+            source_amount_cents=inp.amount_cents,
+            source_txn_id=tip_payment_id,
+            currency=str(inp.currency or "usd").lower(),
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for tip on message %s", message_id
+        )
+
     fanout_event_to_conversation(
         conversation_id=conversation_id,
         sender_id=user_id,
@@ -13571,6 +13949,29 @@ def send_message_tip(
         amount_cents=inp.amount_cents,
         currency=inp.currency,
     )
+    # GAP-0355: emit a social alert to the message author (alerts table + bell
+    # badge). Best-effort: never break the tip transaction.
+    if msg_author and msg_author != user_id:
+        try:
+            from app.services.social_alerts import emit_social_alert
+            from app.services.profile import get_profile_identity
+            actor_name = get_profile_identity(user_id).get("display_name") or user_id
+            emit_social_alert(
+                recipient_user_id=msg_author,
+                alert_type="message_tip",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                title=f"{actor_name} sent you a tip on your message",
+                details={
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "amount_cents": inp.amount_cents,
+                    "currency": inp.currency,
+                },
+                action_url=f"/messages/{conversation_id}",
+            )
+        except Exception:
+            logger.warning("message tip social alert failed msg=%s", message_id, exc_info=True)
     return TipOut(
         ok=True,
         conversation_id=conversation_id,
@@ -13595,6 +13996,7 @@ def unlock_message(
     inp: UnlockMessageIn,
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
+    _kyc: object = Depends(require_kyc_tier(2)),  # GAP-0268 (inert unless enforcement flag on)
 ):
     """Pay to unlock a locked (PPV) message."""
     require_participant_active(user_id, conversation_id)
@@ -13687,6 +14089,23 @@ def unlock_message(
             })
     except Exception:
         pass  # Best-effort ledger write
+
+    # GAP-0026: Best-effort license revenue split for unlocked message.
+    # Wrapped in try/except so a split failure never breaks the unlock transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=message_id,
+            licensee_id=user_id,
+            source_type="unlock",
+            source_amount_cents=amount_cents,
+            source_txn_id=unlock_payment_id,
+            currency="usd",
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for unlock on message %s", message_id
+        )
 
     # FIN-001: generate an invoice for the unlock (best-effort)
     try:
@@ -14039,6 +14458,22 @@ async def timeout_call_endpoint(
             actor_user_id=user_id,
             reason=body.reason,
             idempotency_key=body.idempotency_key,
+        )
+        # GAP-0142: fan out call.missed so the callee dismisses the ringing
+        # overlay in real time instead of waiting for the next SSE poll.
+        fanout_event_to_conversation(
+            conversation_id=record.conversation_id,
+            sender_id=user_id,
+            event_type="call.missed",
+            payload={
+                "call_id": record.call_id,
+                "caller_user_id": record.caller_user_id,
+                "callee_user_id": record.callee_user_id,
+                "from_state": event.from_state,
+                "reason": event.reason,
+                "event_ts": event.event_ts,
+            },
+            respect_mute=False,
         )
         _vm_eligible = (
             record.state in VOICEMAIL_ELIGIBLE_STATES

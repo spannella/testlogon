@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Upload,
@@ -76,6 +76,21 @@ import {
   rotateICloudMount,
   revokeICloudMount,
 } from "@/api/endpoints/files";
+import {
+  getGoogleDriveStatus,
+  initiateGoogleDriveConnect,
+  completeGoogleDriveConnect,
+  disconnectGoogleDrive,
+} from "@/api/endpoints/googleDrive";
+import { importFileToVod } from "@/api/endpoints/vod";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { GoogleDrivePickerDialog } from "@/components/shared/GoogleDrivePickerDialog";
 import { FileTable } from "./FileTable";
 import { ImageEditorDialog } from "./ImageEditorDialog";
 import { isEditableImageFile } from "./imageEdit";
@@ -168,6 +183,7 @@ function resolveMountForPath(
 
 export default function FilesPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const zipInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -202,6 +218,10 @@ export default function FilesPage() {
   const [shareTarget, setShareTarget] = React.useState<FileEntry | null>(null);
   const [shareLinkTarget, setShareLinkTarget] = React.useState<FileEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<FileEntry | null>(null);
+  // VOD ↔ File Manager bridge (VOD-014)
+  const [vodImportTarget, setVodImportTarget] = React.useState<FileEntry | null>(null);
+  const [vodImportTitle, setVodImportTitle] = React.useState("");
+  const [vodImportVisibility, setVodImportVisibility] = React.useState<"private" | "unlisted" | "public">("private");
 
   // iCloud onboarding wizard state
   const [icloudWizardOpen, setIcloudWizardOpen] = React.useState(false);
@@ -229,6 +249,11 @@ export default function FilesPage() {
   const [moveDialogOpen, setMoveDialogOpen] = React.useState(false);
   const [moveTarget, setMoveTarget] = React.useState<FileEntry | null>(null);
   const [imageEditTarget, setImageEditTarget] = React.useState<FileEntry | null>(null);
+
+  // ── Google Drive integration state ──────────────────────────────
+  const [drivePickerOpen, setDrivePickerOpen] = React.useState(false);
+  const [driveConnectBusy, setDriveConnectBusy] = React.useState(false);
+  const [driveConnectError, setDriveConnectError] = React.useState<string | null>(null);
 
   // ── Queries ─────────────────────────────────────────────────────
 
@@ -259,6 +284,64 @@ export default function FilesPage() {
     queryKey: ["file-mounts"],
     queryFn: () => listMounts(),
   });
+
+  const driveStatusQuery = useQuery({
+    queryKey: ["google-drive-status"],
+    queryFn: () => getGoogleDriveStatus(),
+    staleTime: 60_000,
+  });
+  const driveConnected = driveStatusQuery.data?.connected ?? false;
+  const driveEmail = driveStatusQuery.data?.email;
+
+  const driveDisconnectMut = useMutation({
+    mutationFn: () => disconnectGoogleDrive(),
+    onSuccess: () => {
+      toast.success("Google Drive disconnected.");
+      queryClient.invalidateQueries({ queryKey: ["google-drive-status"] });
+    },
+    onError: () => toast.error("Failed to disconnect Google Drive."),
+  });
+
+  const handleGoogleDriveConnect = React.useCallback(async () => {
+    if (driveConnected) {
+      setDrivePickerOpen(true);
+      return;
+    }
+    setDriveConnectBusy(true);
+    setDriveConnectError(null);
+    try {
+      const res = await initiateGoogleDriveConnect();
+      if (res.mock) {
+        // Dev mode: backend completes OAuth automatically; just refetch status.
+        await queryClient.invalidateQueries({ queryKey: ["google-drive-status"] });
+        setDrivePickerOpen(true);
+      } else {
+        // Production: redirect to Google OAuth.
+        window.location.href = res.auth_url;
+      }
+    } catch {
+      setDriveConnectError("Failed to start Google Drive connection. Try again.");
+      toast.error("Failed to initiate Google Drive connection.");
+    } finally {
+      setDriveConnectBusy(false);
+    }
+  }, [driveConnected, queryClient]);
+
+  // Handle OAuth callback redirect (production path: /files?code=...&state=...)
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    if (!code) return;
+    completeGoogleDriveConnect(code, window.location.origin + "/files", state || undefined)
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ["google-drive-status"] });
+        window.history.replaceState({}, "", "/files");
+        setDrivePickerOpen(true);
+      })
+      .catch(() => toast.error("Google Drive authorization failed."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const providerForPath = React.useCallback((path: string) => {
     return resolveMountForPath(mountsQuery.data, path)?.provider ?? null;
@@ -318,6 +401,31 @@ export default function FilesPage() {
     },
     onError: () => toast.error("Failed to rename"),
   });
+
+  // ── VOD ↔ File Manager bridge (VOD-014) ─────────────────────────
+  const vodImportMut = useMutation({
+    mutationFn: ({ file, title, visibility }: { file: FileEntry; title: string; visibility: "private" | "unlisted" | "public" }) =>
+      importFileToVod({ file_path: file.path, title: title.trim() || undefined, visibility }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
+      queryClient.invalidateQueries({ queryKey: ["vod", "videos"] });
+      setVodImportTarget(null);
+      toast.success(`Importing to VOD — video ${res.video_id}`);
+    },
+    onError: () => toast.error("Failed to import to VOD"),
+  });
+
+  const handleSendToVod = React.useCallback((file: FileEntry) => {
+    setVodImportTarget(file);
+    setVodImportTitle(file.name.replace(/\.[^.]+$/, ""));
+    setVodImportVisibility("private");
+  }, []);
+
+  const handleWatchVod = React.useCallback((file: FileEntry) => {
+    if (file.vod_video_id) {
+      navigate(`/videos/${file.vod_video_id}`);
+    }
+  }, [navigate]);
 
   const [moveLoading, setMoveLoading] = React.useState(false);
 
@@ -1042,6 +1150,19 @@ export default function FilesPage() {
               <span className="hidden sm:inline ml-1">Connect iCloud</span>
             </Button>
 
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleGoogleDriveConnect}
+              disabled={driveConnectBusy}
+              data-testid="connect-google-drive-button"
+            >
+              <HardDrive className="h-4 w-4" />
+              <span className="hidden sm:inline ml-1">
+                {driveConnected ? "Browse Drive" : "Connect Google Drive"}
+              </span>
+            </Button>
+
             <div className="flex-1" />
 
             {/* Upload dropdown */}
@@ -1171,6 +1292,41 @@ export default function FilesPage() {
                 ))}
               </div>
             )}
+
+            <div className="mt-3 rounded-md border p-2 text-xs" data-testid="google-drive-status-panel">
+              <div className="flex flex-wrap items-center gap-2">
+                <HardDrive className="h-3.5 w-3.5" />
+                <span className="font-medium">Google Drive</span>
+                {driveConnected ? (
+                  <>
+                    <Badge variant="default" data-testid="google-drive-connected-badge">connected</Badge>
+                    {driveEmail && <span className="text-muted-foreground">{driveEmail}</span>}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setDrivePickerOpen(true)}
+                      data-testid="google-drive-browse-button"
+                    >
+                      Browse
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => driveDisconnectMut.mutate()}
+                      disabled={driveDisconnectMut.isPending}
+                      data-testid="google-drive-disconnect-button"
+                    >
+                      Disconnect
+                    </Button>
+                  </>
+                ) : (
+                  <Badge variant="outline" data-testid="google-drive-disconnected-badge">not connected</Badge>
+                )}
+                {driveConnectError && (
+                  <p className="w-full text-red-600">{driveConnectError}</p>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Bulk actions toolbar */}
@@ -1208,6 +1364,8 @@ export default function FilesPage() {
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
                 onMove={handleMoveOpen}
                 onDelete={(f) => setDeleteTarget(f)}
+                onSendToVod={handleSendToVod}
+                onWatchVod={handleWatchVod}
                 pathProvider={providerForPath}
                 onMoveFile={handleDragMoveFile}
                 emptyState={
@@ -1283,6 +1441,71 @@ export default function FilesPage() {
               disabled={!renameName.trim() || renameMut.isPending}
             >
               {renameMut.isPending ? "Renaming..." : "Rename"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send to VOD dialog (VOD-014) */}
+      <Dialog
+        open={!!vodImportTarget}
+        onOpenChange={(open) => { if (!open && !vodImportMut.isPending) setVodImportTarget(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send to VOD</DialogTitle>
+            <DialogDescription>
+              Import this video into the VOD pipeline. It will be transcoded and appear in your Videos library.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="vod-import-title">Title</Label>
+              <Input
+                id="vod-import-title"
+                value={vodImportTitle}
+                onChange={(e) => setVodImportTitle(e.target.value)}
+                placeholder="Video title"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vod-import-visibility">Visibility</Label>
+              <Select
+                value={vodImportVisibility}
+                onValueChange={(v) => setVodImportVisibility(v as "private" | "unlisted" | "public")}
+              >
+                <SelectTrigger id="vod-import-visibility">
+                  <SelectValue placeholder="Select visibility" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="private">Private</SelectItem>
+                  <SelectItem value="unlisted">Unlisted</SelectItem>
+                  <SelectItem value="public">Public</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setVodImportTarget(null)}
+              disabled={vodImportMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                vodImportTarget &&
+                vodImportMut.mutate({
+                  file: vodImportTarget,
+                  title: vodImportTitle,
+                  visibility: vodImportVisibility,
+                })
+              }
+              disabled={vodImportMut.isPending}
+            >
+              {vodImportMut.isPending ? "Importing..." : "Import"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1541,6 +1764,15 @@ export default function FilesPage() {
         onOpenChange={(open) => { if (!open) setImageEditTarget(null); }}
         onSaved={() => {
           queryClient.invalidateQueries({ queryKey: ["files"] });
+        }}
+      />
+
+      <GoogleDrivePickerDialog
+        open={drivePickerOpen}
+        onOpenChange={setDrivePickerOpen}
+        currentPath={currentPath}
+        onImportComplete={() => {
+          queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
         }}
       />
 

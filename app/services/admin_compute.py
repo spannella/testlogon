@@ -75,6 +75,31 @@ def _scan_all(table, *, item_filter) -> List[Dict[str, Any]]:
     return out
 
 
+def _query_by_global_status(table, status: str, *, item_filter) -> List[Dict[str, Any]]:
+    """Query the ByGlobalStatus GSI for all items with a given status across
+    every user, paginating via LastEvaluatedKey. Returns items matching
+    item_filter. Reads only items with the requested status — no full-table
+    scan. Identical behaviour in dev (DynamoDB Local) and prod (SECOPS-007)."""
+    from boto3.dynamodb.conditions import Key
+
+    out: List[Dict[str, Any]] = []
+    kwargs: Dict[str, Any] = {
+        "IndexName": "ByGlobalStatus",
+        "KeyConditionExpression": Key("status").eq(status),
+        "ScanIndexForward": False,  # newest first via created_at sort key
+    }
+    while True:
+        resp = table.query(**kwargs)
+        for item in resp.get("Items", []):
+            if item_filter(item):
+                out.append(item)
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return out
+
+
 def list_all_instances(
     *,
     status: str | None = None,
@@ -85,18 +110,31 @@ def list_all_instances(
 ) -> Dict[str, Any]:
     """List all EC2 instances across all users with optional filters."""
 
-    def _keep(item: Dict[str, Any]) -> bool:
-        if "instance_id" not in item:
-            return False
-        if status and item.get("status") != status:
-            return False
-        if user_sub and item.get("user_sub") != user_sub:
-            return False
-        if instance_type and item.get("instance_type") != instance_type:
-            return False
-        return True
+    if status:
+        # Fast path: query the ByGlobalStatus GSI keyed on `status` across all
+        # users instead of a full-table scan. user_sub / instance_type remain
+        # Python-side filters on the (already status-narrowed) result set.
+        items = _query_by_global_status(
+            T.ec2_instances,
+            status,
+            item_filter=lambda item: (
+                "instance_id" in item
+                and (not user_sub or item.get("user_sub") == user_sub)
+                and (not instance_type or item.get("instance_type") == instance_type)
+            ),
+        )
+    else:
+        # No status filter: scan (admins rarely list every status at once).
+        def _keep(item: Dict[str, Any]) -> bool:
+            if "instance_id" not in item:
+                return False
+            if user_sub and item.get("user_sub") != user_sub:
+                return False
+            if instance_type and item.get("instance_type") != instance_type:
+                return False
+            return True
 
-    items = _scan_all(T.ec2_instances, item_filter=_keep)
+        items = _scan_all(T.ec2_instances, item_filter=_keep)
     items.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
 
     # In-memory pagination over the sorted result.
@@ -123,16 +161,26 @@ def list_all_pods(
 ) -> Dict[str, Any]:
     """List all K8s pods across all users with optional filters."""
 
-    def _keep(item: Dict[str, Any]) -> bool:
-        if "pod_id" not in item:
-            return False
-        if status and item.get("status") != status:
-            return False
-        if user_sub and item.get("user_sub") != user_sub:
-            return False
-        return True
+    if status:
+        # Fast path: query the ByGlobalStatus GSI keyed on `status` across all
+        # users instead of a full-table scan.
+        items = _query_by_global_status(
+            T.k8s_pods,
+            status,
+            item_filter=lambda item: (
+                "pod_id" in item
+                and (not user_sub or item.get("user_sub") == user_sub)
+            ),
+        )
+    else:
+        def _keep(item: Dict[str, Any]) -> bool:
+            if "pod_id" not in item:
+                return False
+            if user_sub and item.get("user_sub") != user_sub:
+                return False
+            return True
 
-    items = _scan_all(T.k8s_pods, item_filter=_keep)
+        items = _scan_all(T.k8s_pods, item_filter=_keep)
     items.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
 
     start = 0

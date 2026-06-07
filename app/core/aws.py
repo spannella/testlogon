@@ -39,3 +39,23 @@ def sns_client():
 
 def sqs_client():
     return aws_sqs_client()
+
+
+def ec2_client(region: str | None = None):
+    from boto3 import client as _boto3_client  # lazy import
+
+    return _boto3_client(
+        "ec2",
+        region_name=region or S.aws_region or "us-east-1",
+        endpoint_url=S.aws_endpoint_url or None,
+    )
+
+
+def rekognition_client(region: str | None = None):
+    from boto3 import client as _boto3_client  # lazy import
+
+    return _boto3_client(
+        "rekognition",
+        region_name=region or S.aws_region or "us-east-1",
+        endpoint_url=S.aws_endpoint_url or None,
+    )

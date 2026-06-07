@@ -84,29 +84,69 @@ def _require_campaign_owner(campaign_id: str, user_sub: str) -> dict:
     return camp
 
 
+# Magic-byte signatures: mime_type → list of allowed byte prefixes.
+# WebP is handled specially in _check_magic_bytes (RIFF at 0–3 + WEBP at 8–11).
+_ASSET_MAGIC_BYTES: dict[str, list[bytes]] = {
+    "image/jpeg": [b"\xff\xd8\xff"],            # JPEG SOI marker
+    "image/png": [b"\x89PNG\r\n\x1a\n"],        # PNG signature (8 bytes)
+    "image/webp": [b"RIFF"],                     # checked further below
+    "video/mp4": [
+        b"\x00\x00\x00\x18ftyp",
+        b"\x00\x00\x00\x1cftyp",
+        b"\x00\x00\x00\x20ftyp",
+        b"ftyp",
+    ],
+}
+
+_MIN_MAGIC_BYTES = 12  # longest signature window we inspect
+
+
+def _check_magic_bytes(data: bytes, content_type: str) -> bool:
+    """Return True if the file header matches the declared content_type."""
+    if len(data) < _MIN_MAGIC_BYTES:
+        return False
+    head = data[:_MIN_MAGIC_BYTES]
+    if content_type == "image/webp":
+        # WebP: RIFF at bytes 0–3 and WEBP fourcc at bytes 8–11.
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    sigs = _ASSET_MAGIC_BYTES.get(content_type)
+    if not sigs:
+        return False
+    return any(head.startswith(sig) for sig in sigs)
+
+
 def _validate_asset(data: bytes, content_type: str | None, asset_type: str) -> None:
     if asset_type == "image":
         if content_type not in ("image/jpeg", "image/png", "image/webp"):
             raise HTTPException(400, "Image must be JPEG, PNG, or WebP")
         if len(data) > 5 * 1024 * 1024:
             raise HTTPException(400, "Image must be under 5 MB")
+        if not _check_magic_bytes(data, content_type):
+            raise HTTPException(400, "File content does not match declared image type")
     elif asset_type == "video":
         if content_type != "video/mp4":
             raise HTTPException(400, "Video must be MP4")
         if len(data) > 50 * 1024 * 1024:
             raise HTTPException(400, "Video must be under 50 MB")
+        if not _check_magic_bytes(data, content_type):
+            raise HTTPException(400, "File content does not match declared video type")
     elif asset_type == "thumbnail":
         if content_type not in ("image/jpeg", "image/png"):
             raise HTTPException(400, "Thumbnail must be JPEG or PNG")
         if len(data) > 2 * 1024 * 1024:
             raise HTTPException(400, "Thumbnail must be under 2 MB")
+        if not _check_magic_bytes(data, content_type):
+            raise HTTPException(400, "File content does not match declared thumbnail type")
 
 
 # ── Advertiser Accounts ────────────────────────────────────────────
 
 @router.post("/accounts", status_code=201)
 async def create_account_endpoint(body: AdAccountCreateIn, ctx=Depends(require_ui_session)):
-    return create_ad_account(ctx["user_sub"], body)
+    try:
+        return create_ad_account(ctx["user_sub"], body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/accounts")
@@ -444,8 +484,11 @@ async def invoice_endpoint(account_id: str, month: str, ctx=Depends(require_ui_s
     return generate_invoice(account_id, month)
 
 
-@router.post("/internal/charge-impression")
-async def internal_charge_impression(body: dict, ctx=Depends(require_ui_session)):
+@admin_router.post("/internal/charge-impression")
+async def internal_charge_impression(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
     from app.services.ad_billing import charge_impression
     return charge_impression(
         account_id=body["account_id"],
@@ -457,8 +500,11 @@ async def internal_charge_impression(body: dict, ctx=Depends(require_ui_session)
     )
 
 
-@router.post("/internal/charge-click")
-async def internal_charge_click(body: dict, ctx=Depends(require_ui_session)):
+@admin_router.post("/internal/charge-click")
+async def internal_charge_click(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
     from app.services.ad_billing import charge_click
     return charge_click(
         account_id=body["account_id"],
@@ -470,8 +516,11 @@ async def internal_charge_click(body: dict, ctx=Depends(require_ui_session)):
     )
 
 
-@router.post("/internal/charge-conversion")
-async def internal_charge_conversion(body: dict, ctx=Depends(require_ui_session)):
+@admin_router.post("/internal/charge-conversion")
+async def internal_charge_conversion(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
     from app.services.ad_billing import charge_conversion
     return charge_conversion(
         account_id=body["account_id"],

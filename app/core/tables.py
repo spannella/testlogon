@@ -95,6 +95,7 @@ class Tables:
     purchase_transactions: Any
     purchase_events: Any
     shopping_cart: Any
+    cart_reminder_config: Any
     catalog: Any
     subscriptions: Any
     projects: Any
@@ -166,6 +167,7 @@ class Tables:
     broadcast_inputs: Any
     broadcast_tip_goals: Any
     video_views: Any
+    video_comments: Any
     video_likes: Any
     ad_impressions: Any
     ad_accounts: Any
@@ -184,6 +186,7 @@ class Tables:
     rate_limits: Any
     rate_limit_events: Any
     analytics_rollups: Any
+    analytics_events: Any
     data_requests: Any
     data_request_audit: Any
     account_deletion_requests: Any
@@ -194,6 +197,7 @@ class Tables:
     scheduled_actions: Any
     watermark_jobs: Any
     vod_watermark_downloads: Any
+    content_keys: Any
     recommendations: Any
     refund_requests: Any
     billing_disputes: Any
@@ -289,6 +293,7 @@ class Tables:
     invoices: Any
     tax_documents: Any
     tax_forms_1099: Any
+    tax_info: Any
     financial_rollups: Any
     payment_provider_health: Any
     ssh_session_recordings: Any
@@ -301,6 +306,7 @@ class Tables:
     image_optimizations: Any
     file_share_links: Any
     host_inventory: Any
+    geo_rules: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -331,6 +337,7 @@ T = Tables(
     purchase_transactions=_safe_table(S.purchase_transactions_table_name),
     purchase_events=_safe_table(S.purchase_events_table_name),
     shopping_cart=_safe_table(S.shopping_cart_table_name),
+    cart_reminder_config=_safe_table(S.cart_reminder_config_table_name),
     catalog=_safe_table(S.catalog_table_name),
     subscriptions=_safe_table(S.subscriptions_table_name),
     projects=_safe_table(S.projects_table_name),
@@ -402,6 +409,7 @@ T = Tables(
     broadcast_inputs=_safe_table(S.broadcast_inputs_table_name),
     broadcast_tip_goals=_safe_table(S.broadcast_tip_goals_table_name),
     video_views=_safe_table(S.video_views_table_name),
+    video_comments=_safe_table(S.video_comments_table_name),
     video_likes=_safe_table(S.video_likes_table_name),
     ad_impressions=_safe_table(S.ad_impressions_table_name),
     ad_accounts=_safe_table(S.ad_accounts_table_name),
@@ -420,6 +428,7 @@ T = Tables(
     rate_limits=_safe_table(S.rate_limits_table_name),
     rate_limit_events=_safe_table(S.rate_limit_events_table_name),
     analytics_rollups=_safe_table(S.analytics_rollups_table_name),
+    analytics_events=_safe_table(S.analytics_events_table_name),
     data_requests=_safe_table(S.data_requests_table_name),
     data_request_audit=_safe_table(S.data_request_audit_table_name),
     account_deletion_requests=_safe_table(S.account_deletion_requests_table_name),
@@ -430,6 +439,7 @@ T = Tables(
     scheduled_actions=_safe_table(S.scheduled_actions_table_name),
     watermark_jobs=_safe_table(S.watermark_jobs_table_name),
     vod_watermark_downloads=_safe_table(S.vod_watermark_downloads_table_name),
+    content_keys=_safe_table(S.content_keys_table_name),
     recommendations=_safe_table(S.recommendations_table_name),
     refund_requests=_safe_table(S.refund_requests_table_name),
     billing_disputes=_safe_table(S.billing_disputes_table_name),
@@ -524,6 +534,7 @@ T = Tables(
     invoices=_safe_table(S.invoices_table_name),
     tax_documents=_safe_table(S.tax_documents_table_name),
     tax_forms_1099=_safe_table(S.tax_forms_1099_table_name),
+    tax_info=_safe_table(S.tax_info_table_name),
     financial_rollups=_safe_table(S.platform_financial_dashboard_rollups_table_name),
     payment_provider_health=_safe_table(S.payment_provider_health_table_name),
     ssh_session_recordings=_safe_table(S.ssh_session_recordings_table_name),
@@ -537,4 +548,5 @@ T = Tables(
     file_share_links=_safe_table(S.ddb_file_share_links_table),
     host_inventory=_safe_table(S.ddb_host_inventory_table),
     kyc_document_templates=_safe_table(S.kyc_document_templates_table_name),
+    geo_rules=_safe_table(S.geo_rules_table_name),
 )

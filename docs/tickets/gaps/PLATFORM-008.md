@@ -1,0 +1,7 @@
+# PLATFORM-008: Background Job Dashboard — Gap Report
+
+- [MED] `/ui/admin/jobs/stats` endpoint (aggregate action stats by type) is missing — `app/routers/admin_jobs.py` — Ticket section 4.3 specifies `GET /ui/admin/jobs/stats?days=N` returning `{total_completed, total_failed, total_pending, success_rate, by_type}`. `query_action_stats()` is defined in `app/services/scheduled_actions.py:562+` but is never wired to an HTTP endpoint in either `admin_jobs.py` or `job_dashboard.py`. The frontend `JobDashboardPage.tsx` does not call a stats endpoint — Fix: add `GET /ui/admin/jobs/stats` to `admin_jobs.py` calling `query_action_stats(days)` — Effort: S
+
+- [LOW] Admin role check in `admin_jobs.py` uses fragile string comparison instead of `require_admin_session` — `app/routers/admin_jobs.py:14-17` — `_require_admin()` compares `str(role).lower() not in ("root", "admin")` inline, bypassing the standard `require_admin_session` dependency used by all other admin routers. The `job_dashboard.py` sibling correctly uses `Depends(require_admin_or_root)` — Fix: replace `_require_admin(ctx)` calls with `Depends(require_admin_or_root)` or `Depends(require_admin_session)` — Effort: S
+
+- [LOW] No E2E test file for PLATFORM-008 — `frontend/e2e/` — Job dashboard E2E tests (task health, failed jobs, retry, dashboard UI) described in ticket section 5 do not exist — Fix: create `frontend/e2e/admin-jobs.spec.ts` covering `/status`, `/failed`, retry, and dashboard rendering — Effort: M

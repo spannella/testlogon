@@ -74,6 +74,8 @@ async def create_connection_profile(
             port=body.port,
             username=body.username or "",
             auth_method=body.auth_method,
+            vnc_password=body.vnc_password or "",
+            ssh_password=body.ssh_password or "",
             ssh_key_id=body.ssh_key_id or "",
             bastion_path_id=body.bastion_path_id or "",
             terminal_cols=body.terminal_cols,
@@ -122,6 +124,9 @@ async def quick_connect_profile(
         raise HTTPException(status_code=404, detail=str(exc))
     except ProfileValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # SEC-022: the resolved plaintext password is for the in-process terminal
+    # layer only — strip it before serializing into the HTTP response.
+    result.pop("password_resolved", None)
     return QuickConnectOut(**result)
 
 
@@ -144,6 +149,8 @@ async def update_connection_profile(
             port=body.port,
             username=body.username,
             auth_method=body.auth_method,
+            password=body.password,
+            clear_password=body.clear_password,
             ssh_key_id=body.ssh_key_id,
             bastion_path_id=body.bastion_path_id,
             terminal_cols=body.terminal_cols,

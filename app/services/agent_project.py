@@ -687,19 +687,30 @@ def _scan_backlog_tickets(
 ) -> List[Dict[str, Any]]:
     seen: Dict[str, Dict[str, Any]] = {}
     for status in statuses:
-        try:
-            if space_id:
-                page = tickets_svc.STORE.list_space_tickets(
-                    space_id=space_id, status=status, limit=min(limit, 100)
-                )
-            else:
-                page = tickets_svc.STORE.list_tickets(status=status, limit=min(limit, 100))
-        except Exception:  # pragma: no cover - defensive
-            continue
-        for t in page.get("tickets", []):
-            tid = t.get("ticket_id")
-            if tid and tid not in seen:
-                seen[tid] = t
+        # Exhaust all pages for this status partition by following the
+        # store's ``next_cursor`` (DynamoDB ``LastEvaluatedKey``). A single
+        # page returns at most 100 items, so high-volume status buckets would
+        # otherwise silently drop tickets beyond the first page (GAP-0097).
+        cursor: Optional[str] = None
+        while len(seen) < limit:
+            try:
+                if space_id:
+                    page = tickets_svc.STORE.list_space_tickets(
+                        space_id=space_id, status=status, limit=100, cursor=cursor
+                    )
+                else:
+                    page = tickets_svc.STORE.list_tickets(
+                        status=status, limit=100, cursor=cursor
+                    )
+            except Exception:  # pragma: no cover - defensive
+                break
+            for t in page.get("tickets", []):
+                tid = t.get("ticket_id")
+                if tid and tid not in seen:
+                    seen[tid] = t
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
         if len(seen) >= limit:
             break
     return list(seen.values())[:limit]

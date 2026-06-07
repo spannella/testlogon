@@ -41,7 +41,8 @@ async def ui_create_file_bundle_sku(body: FileBundleSkuCreateIn, req: Request = 
 
 @router.post("/ui/checkout/session", response_model=UnifiedCheckoutSessionOut)
 async def ui_create_checkout_session(body: UnifiedCheckoutSessionIn, req: Request = None, ctx=Depends(require_ui_session)):
-    out = create_unified_checkout_session(ctx["user_sub"], body)
+    afl_ref = req.cookies.get("afl_ref") if req else None
+    out = create_unified_checkout_session(ctx["user_sub"], body, afl_ref=afl_ref)
     audit_event(
         "checkout_session_created",
         ctx["user_sub"],
@@ -51,12 +52,14 @@ async def ui_create_checkout_session(body: UnifiedCheckoutSessionIn, req: Reques
         checkout_session_id=out.get("checkout_session_id"),
         source=out.get("source"),
         line_item_count=len(out.get("line_items") or []),
+        afl_ref=afl_ref,
     )
     return out
 
 @router.post("/ui/checkout/session/file-bundle", response_model=FileBundleCheckoutSessionOut)
 async def ui_create_file_bundle_checkout_session(body: FileBundleCheckoutSessionIn, req: Request = None, ctx=Depends(require_ui_session)):
-    out = create_file_bundle_checkout_via_unified(ctx["user_sub"], body)
+    afl_ref = req.cookies.get("afl_ref") if req else None
+    out = create_file_bundle_checkout_via_unified(ctx["user_sub"], body, afl_ref=afl_ref)
     audit_event(
         "file_bundle_checkout_session_created",
         ctx["user_sub"],
@@ -65,6 +68,7 @@ async def ui_create_file_bundle_checkout_session(body: FileBundleCheckoutSession
         order_id=out.get("order_id"),
         checkout_session_id=out.get("checkout_session_id"),
         sku=out.get("sku"),
+        afl_ref=afl_ref,
     )
     return out
 

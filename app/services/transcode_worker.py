@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.settings import S
 from app.core.time import now_ts
+from app.services.vod_s3_downloader import download_source_to_scratch
 from app.services.transcode_job_store import (
     claim_job,
     complete_job,
@@ -93,6 +94,23 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         return
 
     logger.info("Claimed transcode job %s", job_id)
+
+    # GAP-0369: Advance video metadata status to "encoding" now that the job is
+    # claimed. The state machine requires pending_encoding -> encoding before the
+    # completion transition to pending_review can succeed.
+    try:
+        from app.services.video_metadata_store import (
+            transition_video_status as _transition_to_encoding,
+        )
+
+        _transition_to_encoding(video_id=job["video_id"], to_status="encoding")
+    except Exception:
+        logger.warning(
+            "Could not transition video %s to encoding after claim",
+            job["video_id"],
+            exc_info=True,
+        )
+
     scratch_dir = Path(S.transcode_scratch_dir) / job_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,6 +118,11 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         renditions: List[Dict[str, Any]] = job.get("renditions", [])
         source_uri = job.get("source_uri", "")
         watermark = job.get("watermark", {})
+
+        # Download source to local scratch before passing to FFmpeg.
+        # Standard FFmpeg builds do not support the s3:// protocol natively,
+        # so ffmpeg must receive a local file path as its -i input.
+        source_uri = str(download_source_to_scratch(source_uri, scratch_dir))
 
         completed_renditions: List[str] = []
         total = len(renditions)
@@ -121,6 +144,7 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
                 scratch_dir=scratch_dir,
                 rendition_idx=i,
                 total_renditions=total,
+                tenant_id=job.get("tenant_id", ""),
             )
             completed_renditions.append(rendition_name)
 
@@ -196,13 +220,51 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         )
         logger.info("Transcode job %s completed successfully", job_id)
 
-        # Transition video to published if video_metadata store is available
+        # GAP-0369: Transition video to pending_review on completion (NOT
+        # published — encoding -> published is an illegal transition and the
+        # video must pass the human review gate pending_review -> approved ->
+        # published before public distribution).
+        # GAP-0034: also persist the playback URL, thumbnail, and rendition
+        # metadata so the listing/playback APIs (which gate on hls_manifest_url)
+        # expose a playable video.
         try:
+            from app.models_video import VideoRendition
             from app.services.video_metadata_store import transition_video_status
 
-            transition_video_status(video_id=job["video_id"], to_status="published")
+            # Prefer the signed CDN playback URL over the raw s3:// manifest URI.
+            manifest_url = playback_url.url if playback_url else None
+            thumb_url = playback_url.thumbnail_url if playback_url else None
+            if not thumb_url and upload_result and upload_result.thumbnail_s3_keys:
+                thumb_url = upload_result.thumbnail_s3_keys[0]
+
+            # Build VideoRendition records from the completed job rendition profiles.
+            rendition_list: List[VideoRendition] = []
+            for r in renditions:
+                name = r.get("name")
+                if not name:
+                    continue
+                rendition_list.append(
+                    VideoRendition(
+                        label=str(name),
+                        width=int(r.get("width", 1)),
+                        height=int(r.get("height", 1)),
+                        bitrate_kbps=int(r.get("video_bitrate_kbps", 1)),
+                    )
+                )
+
+            transition_video_status(
+                video_id=job["video_id"],
+                to_status="pending_review",
+                hls_manifest_url=manifest_url,
+                thumbnail_url=thumb_url,
+                renditions=rendition_list or None,
+            )
         except Exception:
-            logger.warning("Could not transition video %s to published", job["video_id"])
+            logger.warning(
+                "Could not transition video %s to pending_review",
+                job["video_id"],
+                exc_info=True,
+            )
 
         # VOD-014: Auto-link to file manager
         try:
@@ -240,6 +302,7 @@ async def _run_ffmpeg_for_rendition(
     scratch_dir: Path,
     rendition_idx: int,
     total_renditions: int,
+    tenant_id: str = "",
     cancel_event: Optional[asyncio.Event] = None,
 ) -> None:
     """Run FFmpeg for a single rendition using the VOD-004 executor."""
@@ -282,7 +345,12 @@ async def _run_ffmpeg_for_rendition(
         )
 
         _asset_id = rendition.get("_asset_id", job_id)
-        _encryption_params = prepare_encryption_params(_asset_id, scratch_dir=scratch_dir)
+        # GAP-0372: derive a tenant-scoped key. Prefer the rendition-level
+        # tenant override, falling back to the job tenant_id.
+        _tenant_id = rendition.get("_tenant_id") or tenant_id
+        _encryption_params = prepare_encryption_params(
+            _asset_id, _tenant_id, scratch_dir=scratch_dir
+        )
         if _encryption_params:
             enc_args = get_ffmpeg_encryption_args(_encryption_params)
             # Insert encryption args before the output playlist path (last arg)

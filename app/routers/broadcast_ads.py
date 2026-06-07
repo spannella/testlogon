@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.settings import S
 from app.services.broadcast_store import get_session, update_session_fields
 from app.services.broadcast_ads import (
     ALLOWED_MIDROLL_DURATIONS,
@@ -30,6 +31,7 @@ from app.services.broadcast_ads import (
     start_ad_break,
 )
 from app.services.sessions import require_ui_session
+from app.auth.roles import Role
 
 router = APIRouter(prefix="/broadcast", tags=["broadcast-ads"])
 
@@ -95,6 +97,7 @@ class AdEventOut(BaseModel):
     ok: bool = True
     event_id: str
     event_type: str
+    fraud_flagged: bool = False
 
 
 def _config_out(session) -> BroadcastAdConfigOut:
@@ -124,10 +127,15 @@ def get_ad_config_route(session_id: str, ctx: dict = Depends(_ctx)):
 def update_ad_config_route(session_id: str, body: BroadcastAdConfigIn, ctx: dict = Depends(_ctx)):
     """Update ad configuration (broadcaster only)."""
     session = get_session(session_id)
-    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {"admin", "root"}:
+    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {Role.ADMIN, Role.ROOT}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can update ad config"},
+        )
+    if body.pre_roll_enabled is True and not S.broadcast_preroll_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PREROLL_DISABLED", "detail": "Pre-roll ads are not enabled on this platform"},
         )
     updates = {}
     if body.pre_roll_enabled is not None:
@@ -185,10 +193,17 @@ def ad_join_route(session_id: str, ctx: dict = Depends(_ctx)):
 async def trigger_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
     """Broadcaster triggers a mid-roll ad break for all viewers."""
     session = get_session(session_id)
-    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {"admin", "root"}:
+    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {Role.ADMIN, Role.ROOT}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can trigger ad breaks"},
+        )
+
+    # Global platform kill-switch for mid-roll (BROADCAST_MIDROLL_ENABLED).
+    if not S.broadcast_midroll_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "MIDROLL_DISABLED", "detail": "Mid-roll ad breaks are not enabled on this platform"},
         )
     if session.status != "live":
         raise HTTPException(
@@ -222,7 +237,7 @@ async def trigger_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
 def end_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
     """Broadcaster manually ends an ad break early."""
     session = get_session(session_id)
-    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {"admin", "root"}:
+    if session.created_by != ctx["user_sub"] and ctx.get("role") not in {Role.ADMIN, Role.ROOT}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_BROADCASTER", "detail": "Only the broadcaster can end ad breaks"},
@@ -238,16 +253,34 @@ def end_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
 def track_ad_event_route(
     session_id: str,
     creative_id: str,
+    request: Request,
     event: str = Query(default="impression"),
     slot_type: str = Query(default=""),
+    account_id: str = Query(default=""),
+    campaign_id: str = Query(default=""),
+    creator_id: str = Query(default=""),
+    bid_cpm_cents: int = Query(default=0),
+    view_time_ms: int = Query(default=0),
     ctx: dict = Depends(_ctx),
 ):
-    """Record an ad event (impression/skip/complete/click) for a broadcast creative."""
+    """Record an ad event (impression/skip/complete/click) for a broadcast creative.
+
+    Billing context (``account_id`` / ``campaign_id`` / ``creator_id`` /
+    ``bid_cpm_cents``) drives advertiser charging + creator revenue split when
+    ``broadcast_ads_billing_enabled`` is on; fraud detection always runs.
+    """
     result = record_ad_event(
         session_id=session_id,
         creative_id=creative_id,
         user_id=ctx["user_sub"],
         event_type=event,
         slot_type=slot_type,
+        account_id=account_id,
+        campaign_id=campaign_id,
+        creator_id=creator_id,
+        bid_cpm_cents=bid_cpm_cents,
+        view_time_ms=view_time_ms,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
     )
     return AdEventOut(**result)

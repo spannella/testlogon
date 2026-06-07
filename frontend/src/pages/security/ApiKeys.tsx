@@ -28,6 +28,18 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { getApiKeys, createApiKey, revokeApiKey, setApiKeyIpRules, getApiKeyUsage } from "@/api/endpoints/account";
 import type { ApiKey } from "@/api/types";
 
+// ─── Capability scopes (mirrors app/services/api_key_capabilities.py) ──
+
+const SCOPE_GROUPS: { label: string; scopes: string[] }[] = [
+  { label: "Advertising", scopes: ["ads:manage", "ads:read", "ads:serve"] },
+  { label: "File Manager", scopes: ["filemanager:admin", "filemanager:read", "filemanager:share", "filemanager:write"] },
+  { label: "KYC", scopes: ["kyc:admin", "kyc:read", "kyc:submit", "kyc:upload", "kyc:webhook"] },
+  { label: "Messaging", scopes: ["messager:manage", "messager:read", "messager:write"] },
+  { label: "Newsfeed", scopes: ["newsfeed:moderate", "newsfeed:read", "newsfeed:write"] },
+  { label: "Shopping", scopes: ["shopping:cart:write", "shopping:catalog:read", "shopping:checkout:write", "shopping:orders:read"] },
+  { label: "Tickets", scopes: ["tickets:admin", "tickets:read", "tickets:write"] },
+];
+
 // ─── CIDR list editor ────────────────────────────────────────────
 
 function CidrList({
@@ -206,6 +218,25 @@ function KeyDetailsDialog({
             )}
           </div>
 
+          {/* Scopes */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+              <Shield className="h-4 w-4 text-muted-foreground" />
+              Scopes
+            </div>
+            {(keyData.capabilities ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground italic">All scopes (full access)</p>
+            ) : (
+              <div className="flex flex-wrap gap-1">
+                {(keyData.capabilities ?? []).map((scope) => (
+                  <Badge key={scope} variant="outline" className="text-[10px] font-mono">
+                    {scope}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Expiry */}
           {(keyData.expires_at ?? 0) > 0 && (
             <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
@@ -230,6 +261,7 @@ export function ApiKeys() {
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("none");
+  const [capabilities, setCapabilities] = useState<string[]>([]);
   const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string; label: string; expiresInDays: string } | null>(null);
   const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
@@ -250,12 +282,14 @@ export function ApiKeys() {
     mutationFn: () => createApiKey({
       label: label || undefined,
       expires_in_days: expiresInDays === "none" ? undefined : Number(expiresInDays),
+      capabilities: capabilities.length > 0 ? capabilities : undefined,
     }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
       setCreatedKey({ key_id: data.key_id, key_secret: data.key_secret, label, expiresInDays });
       setLabel("");
       setExpiresInDays("none");
+      setCapabilities([]);
     },
     onError: () => toast.error("Failed to create API key"),
   });
@@ -370,7 +404,7 @@ export function ApiKeys() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => { setCreateOpen(true); setCreatedKey(null); setCopiedField(null); setLabel(""); setExpiresInDays("none"); }}
+            onClick={() => { setCreateOpen(true); setCreatedKey(null); setCopiedField(null); setLabel(""); setExpiresInDays("none"); setCapabilities([]); }}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
             Create Key
@@ -533,6 +567,40 @@ export function ApiKeys() {
                     <SelectItem value="365">1 year</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <div>
+                <Label>
+                  Scopes <span className="text-xs font-normal text-muted-foreground">(leave empty for full access)</span>
+                </Label>
+                <div className="mt-1 max-h-60 space-y-3 overflow-y-auto rounded-md border p-3">
+                  {SCOPE_GROUPS.map((group) => (
+                    <div key={group.label}>
+                      <p className="mb-1 text-xs font-semibold text-muted-foreground">{group.label}</p>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+                        {group.scopes.map((scope) => (
+                          <label key={scope} className="flex cursor-pointer items-center gap-1.5 text-xs">
+                            <input
+                              type="checkbox"
+                              aria-label={scope}
+                              checked={capabilities.includes(scope)}
+                              onChange={(e) => {
+                                setCapabilities((prev) =>
+                                  e.target.checked ? [...prev, scope] : prev.filter((s) => s !== scope)
+                                );
+                              }}
+                            />
+                            <code className="text-xs">{scope}</code>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {capabilities.length > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {capabilities.length} scope{capabilities.length !== 1 ? "s" : ""} selected
+                  </p>
+                )}
               </div>
               <DialogFooter>
                 <Button type="submit" disabled={createMutation.isPending}>

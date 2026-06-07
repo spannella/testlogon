@@ -2,17 +2,26 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
+
+# Messages / Conversations table handles. These live in app/routers/messaging.py
+# (as tbl_msgs / tbl_convos) which would create a circular import if imported
+# here, so we resolve them directly from the boto3 resource using the same env
+# var names the messaging router uses (GAP-0015).
+_tbl_messages = ddb.Table(os.getenv("DDB_MESSAGES", "Messages"))
+_tbl_conversations = ddb.Table(os.getenv("DDB_CONVERSATIONS", "Conversations"))
 
 # ---------------------------------------------------------------------------
 # Bot CRUD
@@ -165,7 +174,7 @@ def update_bot_status(*, creator_id: str, bot_id: str, status: str) -> dict | No
 
 
 def delete_bot(*, creator_id: str, bot_id: str) -> bool:
-    """Delete a bot and all its assignments."""
+    """Delete a bot and all its assignments, auto-reply rules and scheduled sends."""
     bot = get_bot_for_owner(creator_id=creator_id, bot_id=bot_id)
     if not bot:
         return False
@@ -174,6 +183,29 @@ def delete_bot(*, creator_id: str, bot_id: str) -> bool:
     assignments = _query_all_assignments(bot_id=bot_id)
     for a in assignments:
         T.bot_assignments.delete_item(Key={"pk": a["pk"], "sk": a["sk"]})
+
+    # GAP-0138: cascade-delete auto-reply rules. These live in T.chat_bots under
+    # pk=BOT#{bot_id} / sk=RULE#{rule_id} (a different partition than the main bot
+    # record at CREATOR#{creator_id}/BOT#{bot_id}). Without this they were orphaned.
+    rules = _query_all_auto_reply_rules_raw(bot_id=bot_id)
+    for r in rules:
+        T.chat_bots.delete_item(Key={"pk": r["pk"], "sk": r["sk"]})
+    if rules:
+        logger.info(
+            "Bot deleted: cascade-deleted %d auto-reply rule(s) for bot_id=%s",
+            len(rules), bot_id,
+        )
+
+    # GAP-0138: cascade-delete scheduled sends (T.bot_scheduled_sends under
+    # pk=BOT#{bot_id} / sk=SCHED#{schedule_id}) so they are not left orphaned.
+    scheds = _query_all_scheduled_sends_raw(bot_id=bot_id)
+    for s in scheds:
+        T.bot_scheduled_sends.delete_item(Key={"pk": s["pk"], "sk": s["sk"]})
+    if scheds:
+        logger.info(
+            "Bot deleted: cascade-deleted %d scheduled send(s) for bot_id=%s",
+            len(scheds), bot_id,
+        )
 
     T.chat_bots.delete_item(Key={"pk": f"CREATOR#{creator_id}", "sk": f"BOT#{bot_id}"})
     logger.info("Bot deleted: bot_id=%s creator_id=%s", bot_id, creator_id)
@@ -248,13 +280,39 @@ def list_assignments(*, bot_id: str, creator_id: str) -> list[dict]:
     return [_assignment_dict(i) for i in items]
 
 
-def get_bots_for_conversation(*, conversation_id: str) -> list[dict]:
-    """Find all bots assigned to a conversation (direct assignment via GSI1)."""
+def get_bots_for_conversation(
+    *,
+    conversation_id: str,
+    conversation_type: str = "dm",
+) -> list[dict]:
+    """Find all bots that apply to a conversation.
+
+    Resolves both direct ``CONV#{conversation_id}`` assignments and wildcard
+    scope assignments (``all_dms`` / ``all_groups`` / ``all_broadcasts``) that
+    match the conversation kind. All assignments live on GSI1: direct ones under
+    the ``CONV#`` bucket and wildcard ones under their ``SCOPE#`` bucket, so each
+    is reachable with a single keyed query (GAP-0134).
+    """
+    bot_ids: set[str] = set()
+
+    # 1. Direct assignments.
     resp = T.bot_assignments.query(
         IndexName="GSI1",
         KeyConditionExpression=Key("GSI1PK").eq(f"CONV#{conversation_id}"),
     )
-    bot_ids = [item["bot_id"] for item in resp.get("Items", [])]
+    for item in resp.get("Items", []):
+        bot_ids.add(item["bot_id"])
+
+    # 2. Wildcard scope assignments matching this conversation kind.
+    scope_pk = _CONVO_KIND_TO_SCOPE_GSI1PK.get(conversation_type)
+    if scope_pk:
+        scope_resp = T.bot_assignments.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(scope_pk),
+        )
+        for item in scope_resp.get("Items", []):
+            bot_ids.add(item["bot_id"])
+
     bots = []
     for bid in bot_ids:
         b = get_bot(bot_id=bid)
@@ -287,29 +345,79 @@ def send_bot_message(
     text: str,
     kind: str = "text",
 ) -> dict | None:
-    """Send a message as a bot. Returns message dict or None if bot not active."""
+    """Send a message as a bot.
+
+    Writes the message to the Messages table so it actually appears in the
+    conversation, updates the conversation's last-message metadata (as ordinary
+    sends do), increments the bot's cosmetic message_count, and returns the full
+    stored item dict (including ``message_id``). Returns None if the bot is not
+    active. (GAP-0015)
+    """
     bot = get_bot(bot_id=bot_id)
     if not bot or bot["status"] != "active":
         return None
 
-    # Increment message count
+    ts = now_ts()
+    message_id = "m_" + uuid4().hex
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "sender_id": f"bot:{bot_id}",
+        "sender_type": "bot",
+        "bot_id": bot_id,
+        "bot_name": bot["name"],
+        "bot_avatar_url": bot.get("avatar_url"),
+        "text": text,
+        "kind": kind,
+        "created_at": ts,
+        "is_encrypted": False,
+        "reactions": {},
+    }
+    quick_replies = _bot_quick_replies(creator_id=bot["creator_id"], bot_id=bot_id)
+    if quick_replies:
+        item["quick_replies"] = quick_replies
+
+    # Write the message to the Messages table so it surfaces in the conversation.
+    _tbl_messages.put_item(Item=item)
+
+    # Update the conversation's last-message metadata (best-effort).
+    try:
+        _tbl_conversations.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression=(
+                "SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid"
+            ),
+            ExpressionAttributeValues={":ts": ts, ":p": text[:140], ":mid": message_id},
+        )
+    except ClientError:
+        pass  # Non-critical; conversation metadata is best-effort.
+
+    # Increment message count on the bot record (existing behaviour, preserved).
     try:
         T.chat_bots.update_item(
             Key={"pk": f"CREATOR#{bot['creator_id']}", "sk": f"BOT#{bot_id}"},
             UpdateExpression="SET message_count = if_not_exists(message_count, :zero) + :one, updated_at = :ua",
-            ExpressionAttributeValues={":zero": 0, ":one": 1, ":ua": now_ts()},
+            ExpressionAttributeValues={":zero": 0, ":one": 1, ":ua": ts},
         )
     except ClientError:
         pass  # Non-critical
 
-    return {
-        "bot_id": bot_id,
-        "bot_name": bot["name"],
-        "bot_avatar_url": bot.get("avatar_url"),
-        "sender_type": "bot",
-        "text": text,
-        "kind": kind,
-    }
+    return item
+
+
+def _bot_quick_replies(*, creator_id: str, bot_id: str) -> list | None:
+    """Read the bot's configured quick_replies from its raw record (best-effort).
+
+    ``_bot_dict`` drops quick_replies, so fetch the raw item directly.
+    """
+    try:
+        resp = T.chat_bots.get_item(Key={"pk": f"CREATOR#{creator_id}", "sk": f"BOT#{bot_id}"})
+    except ClientError:
+        return None
+    item = resp.get("Item") or {}
+    qr = item.get("quick_replies")
+    return qr if qr else None
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +488,46 @@ def _query_all_assignments(*, bot_id: str) -> list[dict]:
     return resp.get("Items", [])
 
 
+def _query_all_auto_reply_rules_raw(*, bot_id: str) -> list[dict]:
+    """Query T.chat_bots for all RULE# items for a bot (raw items with pk/sk).
+
+    Used by delete_bot() to cascade-delete auto-reply rules (GAP-0138).
+    Pages through LastEvaluatedKey so no rules are missed on busy tables.
+    """
+    items: list[dict] = []
+    kwargs: dict = {
+        "KeyConditionExpression": Key("pk").eq(f"BOT#{bot_id}") & Key("sk").begins_with("RULE#"),
+    }
+    while True:
+        resp = T.chat_bots.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
+
+
+def _query_all_scheduled_sends_raw(*, bot_id: str) -> list[dict]:
+    """Query T.bot_scheduled_sends for all SCHED# items for a bot (raw pk/sk).
+
+    Used by delete_bot() to cascade-delete scheduled sends (GAP-0138).
+    Pages through LastEvaluatedKey so none are missed on busy tables.
+    """
+    items: list[dict] = []
+    kwargs: dict = {
+        "KeyConditionExpression": Key("pk").eq(f"BOT#{bot_id}") & Key("sk").begins_with("SCHED#"),
+    }
+    while True:
+        resp = T.bot_scheduled_sends.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return items
+
+
 def _build_assignment_sk(target_type: str, target_id: str | None) -> str:
     if target_type == "conversation":
         return f"CONV#{target_id}"
@@ -399,7 +547,20 @@ def _build_assignment_gsi1pk(target_type: str, target_id: str | None) -> str | N
         return f"CONV#{target_id}"
     if target_type == "broadcast" and target_id:
         return f"BCAST#{target_id}"
+    # Wildcard scope assignments are stored on GSI1 under a scope bucket so that
+    # get_bots_for_conversation() can find them by querying the matching bucket
+    # for the conversation kind (GAP-0134). The scope sk is reused as GSI1PK.
+    if target_type in ("all_dms", "all_groups", "all_broadcasts"):
+        return _build_assignment_sk(target_type, target_id)
     return None
+
+
+# Maps a conversation kind to the wildcard scope bucket whose assignments apply.
+_CONVO_KIND_TO_SCOPE_GSI1PK = {
+    "dm": "SCOPE#ALL_DMS",
+    "group": "SCOPE#ALL_GROUPS",
+    "broadcast": "SCOPE#ALL_BROADCASTS",
+}
 
 
 def _bot_dict(item: dict) -> dict:

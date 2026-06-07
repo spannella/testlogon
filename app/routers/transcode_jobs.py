@@ -98,11 +98,13 @@ async def submit_transcode_job(
         priority=body.priority,
     )
 
-    # Transition video status to queued
+    # Transition video status to pending_encoding
     try:
-        transition_video_status(video_id=body.video_id, to_status="queued")
+        transition_video_status(video_id=body.video_id, to_status="pending_encoding")
     except Exception:
-        logger.warning("Could not transition video %s to queued", body.video_id)
+        logger.warning(
+            "Could not transition video %s to pending_encoding", body.video_id
+        )
 
     return _job_to_out(job)
 

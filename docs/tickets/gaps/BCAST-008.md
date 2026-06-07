@@ -1,0 +1,6 @@
+# BCAST-008 Gap List
+
+- [HIGH] MP4 never uploaded to S3 in production path — `broadcast_recording_worker.py:130` — FFmpeg runs successfully but comment `# Upload to S3 would happen here in production` means the file stays on local disk; download URLs return 403/404 — Fix: implement `_upload_to_s3(local_path, bucket, key)` and call it after FFmpeg in `generate_mp4` — Effort: S
+- [MED] `s3_concatenated_key` not persisted after concatenation — `broadcast_recording_worker.py` — `process_recording` passes `concat_path` as local filesystem path but never writes the S3 key to DDB; key is empty if MP4 re-generation is needed later — Fix: call `update_recording_status(recording_id, ..., s3_concatenated_key=concat_key)` after successful upload in `concatenate_segments` — Effort: S
+- [MED] `failed` recording status returns 202 not 5xx from download endpoint — `broadcast.py:857` — a `status="failed"` recording triggers the generic "processing" 202 response, misleading callers — Fix: add explicit `if recording.status == "failed": raise HTTPException(500, ...)` before the generic non-ready check — Effort: S
+- [LOW] No viewer-facing download UI — `frontend/src/pages/broadcast/` — viewers must use direct API endpoint; no button in `LivePlayer.tsx` when `allow_viewer_download=true` — Fix: add conditional "Download Recording" button to `LivePlayer.tsx` — Effort: S

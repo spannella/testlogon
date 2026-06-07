@@ -47,7 +47,8 @@ export function SessionExpiryWarning() {
   const [remainingMs, setRemainingMs] = React.useState<number>(INACTIVITY_MS);
   const [extending, setExtending] = React.useState(false);
   const hasLoggedOutRef = React.useRef(false);
-  const { logout, accessToken } = useAuthStore();
+  const autoRefreshingRef = React.useRef(false);
+  const { logout, accessToken, setAccessToken } = useAuthStore();
   const navigate = useNavigate();
 
   // Reset inactivity clock on any user interaction OR successful API call.
@@ -89,6 +90,27 @@ export function SessionExpiryWarning() {
       const effective = Math.min(inactivityRemaining, jwtRemaining);
       setRemainingMs(effective);
 
+      // Proactive refresh: if the user is still active (inactivity is NOT the
+      // binding constraint) but the access token is nearing expiry, silently
+      // re-mint it so an active user is never logged out mid-session. A truly
+      // idle user (inactivityRemaining <= jwtRemaining) is left to expire.
+      if (
+        jwtRemaining > 0 &&
+        jwtRemaining <= WARN_BANNER_MS &&
+        inactivityRemaining > jwtRemaining &&
+        !autoRefreshingRef.current
+      ) {
+        autoRefreshingRef.current = true;
+        void refreshSession()
+          .then((r) => {
+            if (r?.access_token) setAccessToken(r.access_token);
+          })
+          .catch(() => {})
+          .finally(() => {
+            autoRefreshingRef.current = false;
+          });
+      }
+
       // Force logout when timer hits 0
       if (effective === 0 && !hasLoggedOutRef.current) {
         hasLoggedOutRef.current = true;
@@ -100,12 +122,13 @@ export function SessionExpiryWarning() {
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, [accessToken, logout, navigate]);
+  }, [accessToken, logout, navigate, setAccessToken]);
 
   const handleStayLoggedIn = async () => {
     setExtending(true);
     try {
-      await refreshSession();
+      const r = await refreshSession();
+      if (r?.access_token) setAccessToken(r.access_token);
       // Reset local idle clock so the warning disappears immediately.
       lastActivityRef.current = Date.now();
       setRemainingMs(INACTIVITY_MS);

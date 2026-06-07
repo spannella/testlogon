@@ -25,6 +25,8 @@ from app.contracts.kyc_cases_contract import (
     KycReadinessEnvelope,
     KycSubmitCaseRequest,
     KycSignatureStatusEnvelope,
+    KycAddWitnessRequest,
+    KycTemplateStatusEnvelope,
     KycQuestionnaireStatusEnvelope,
     KycStartQuestionnaireRequest,
     PiiWriteRequest,
@@ -60,12 +62,23 @@ from app.services.signature_packet_store import (
     get_packet_artifact,
     list_packet_signers,
 )
+from app.services.kyc_signature_templates import (
+    KYC_TEMPLATE_TYPES,
+    kyc_signature_template_service as _TEMPLATE_SVC,
+)
 from app.routers.tickets import get_kyc_sync_snapshot
 from app.services.tickets import STORE as TICKET_STORE, TicketStateError
 from app.services.sessions import require_ui_session
+from app.services.kyc_translations import kyc_translation_service
+from app.services.kyc_sanctions_screening import (
+    STORE as SCREENING_STORE,
+    TRIGGER_SUBMISSION,
+)
 from uuid import uuid4
+import logging
 from app.core.settings import S
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/kyc/cases", tags=["kyc-cases"])
 QNR_REPO = DynamoQuestionnaireRepository()
 _KYC_REQUIRED_FILE_TYPES = ["selfie", "id_front", "id_back"]
@@ -205,7 +218,49 @@ def _validate_file_requirements(case: dict) -> dict:
 def _signature_status_for_case(case: dict) -> dict:
     sref = case.get("signature") or {}
     packet_id = str(sref.get("packet_id") or "").strip() or None
+    template_packets = list(sref.get("template_packets") or [])
     legal_notice_version = str(sref.get("legal_notice_version") or S.signature_packet_legal_notice_version).strip() or None
+
+    # GAP-0264: template-based KYC consent workflow. When a case has template
+    # packets (and no legacy single packet), the submit gate is satisfied only
+    # when every template packet is completed with a ready final PDF. The legacy
+    # single-packet path below is preserved byte-for-byte for backward compat.
+    if template_packets and not packet_id:
+        statuses: list[dict] = []
+        all_completed = True
+        all_final_ready = True
+        for tp in template_packets:
+            pid = str(tp.get("packet_id") or "").strip()
+            pkt = get_packet(pid) if pid else None
+            ps = str((pkt or {}).get("status") or "")
+            art = get_packet_artifact(pid) if pid else None
+            fr = bool(art and str(art.get("status") or "") == "ready")
+            statuses.append(
+                {
+                    "template_type": tp.get("template_type"),
+                    "packet_id": pid or None,
+                    "packet_status": ps or None,
+                    "completed": ps == "completed",
+                    "final_pdf_ready": fr,
+                }
+            )
+            if ps != "completed":
+                all_completed = False
+            if not fr:
+                all_final_ready = False
+        return {
+            "kyc_case_id": case.get("kyc_case_id"),
+            "packet_id": None,
+            "packet_status": None,
+            "completed": all_completed,
+            "final_pdf_ready": all_final_ready,
+            "final_pdf_ref": None,
+            "legal_notice_version": legal_notice_version,
+            "legal_notice_accepted": False,
+            "ready_for_submit_gate": bool(all_completed and all_final_ready),
+            "template_packets": statuses,
+        }
+
     if not packet_id:
         return {
             "kyc_case_id": case.get("kyc_case_id"),
@@ -217,6 +272,7 @@ def _signature_status_for_case(case: dict) -> dict:
             "legal_notice_version": legal_notice_version,
             "legal_notice_accepted": False,
             "ready_for_submit_gate": False,
+            "template_packets": [],
         }
     packet = get_packet(packet_id) or {}
     packet_status = str(packet.get("status") or "")
@@ -238,7 +294,69 @@ def _signature_status_for_case(case: dict) -> dict:
         "legal_notice_version": legal_notice_version,
         "legal_notice_accepted": accepted,
         "ready_for_submit_gate": bool(completed and final_ready),
+        "template_packets": [],
     }
+
+
+def _unsigned_required_template_slugs(case: dict) -> list[str]:
+    """Return tier-required document-template slugs (KYC-017) not yet signed.
+
+    GAP-0279: a case is only ready to submit once every document template that
+    is required for its target tier has a *completed* signature packet. The
+    required templates come from ``KycDocumentTemplateService`` (keyed by slug);
+    completion is determined from the case owner's signature packets, which are
+    created with ``origin_channel="kyc_document_template"`` and a deterministic
+    ``origin_ref`` of ``f"{case_id}:{slug}"`` (see
+    ``app/routers/kyc_document_templates.py``).
+
+    On any service/lookup error the gate fails open (returns ``[]``) so a
+    DynamoDB outage or template-table misconfiguration cannot lock applicants
+    out of submission — availability over strictness for the error path.
+    """
+    from app.services.kyc_document_templates import (
+        SERVICE as DOC_TEMPLATE_SERVICE,
+        template_tier_for_int,
+    )
+
+    case_id = str(case.get("kyc_case_id") or "")
+    owner_sub = str(case.get("user_sub") or "")
+
+    # Resolve target tier, mirroring app/routers/kyc_document_templates.py.
+    target_tier = case.get("target_tier")
+    if not (isinstance(target_tier, str) and target_tier.startswith("tier_")):
+        from app.services.kyc_tiers import get_user_kyc_tier
+
+        target_tier = template_tier_for_int(get_user_kyc_tier(owner_sub))
+
+    required = DOC_TEMPLATE_SERVICE.get_required_templates_for_tier(target_tier)
+    if not required:
+        return []
+
+    # Build the set of slugs that have a completed packet for this case.
+    signed_slugs: set[str] = set()
+    try:
+        from app.services.signature_packet_store import list_packets_by_sender
+
+        for packet in list_packets_by_sender(owner_sub, limit=200):
+            if str(packet.get("origin_channel") or "") != "kyc_document_template":
+                continue
+            origin_ref = str(packet.get("origin_ref") or "")
+            if not origin_ref.startswith(f"{case_id}:"):
+                continue
+            if str(packet.get("status") or "") != "completed":
+                continue
+            signed_slugs.add(origin_ref.split(":", 1)[1])
+    except Exception:
+        # If we cannot read packets we cannot prove anything is signed; treat
+        # all required templates as unsigned (gate stays closed) — handled by
+        # the caller's own try/except which fails the whole check open instead.
+        raise
+
+    return [
+        str(t.get("slug"))
+        for t in required
+        if str(t.get("slug")) not in signed_slugs
+    ]
 
 
 def _readiness_for_case(case: dict) -> dict:
@@ -246,15 +364,99 @@ def _readiness_for_case(case: dict) -> dict:
     files = _validate_file_requirements(case)
     signature = _signature_status_for_case(case)
 
+    # GAP-0279 (KYC-017 §3.6): all tier-required document templates must be
+    # signed before submission. Gated behind KYC_TEMPLATE_READINESS_GATE for
+    # emergency rollback; a no-op when no active templates exist (dev/e2e). The
+    # whole check fails open on service error so an outage cannot block submit.
+    unsigned_template_slugs: list[str] = []
+    require_templates = (
+        S.kyc_template_readiness_gate_enabled and S.kyc_document_templates_enabled
+    )
+    if require_templates:
+        try:
+            unsigned_template_slugs = _unsigned_required_template_slugs(case)
+        except Exception:
+            logger.exception(
+                "kyc.readiness.template_check_error kyc_case_id=%s",
+                case.get("kyc_case_id"),
+            )
+            unsigned_template_slugs = []
+    templates_signed = len(unsigned_template_slugs) == 0
+
+    # Enhanced/high-risk profiles require a verified proof-of-residency document
+    # before submission (AML/CDD enhanced due diligence). Standard/medium profiles
+    # are unaffected. Gated behind KYC_RESIDENCY_GATE_ENABLED for emergency rollback.
+    intake_profile = str(case.get("intake_profile") or "").strip().lower()
+    is_enhanced = intake_profile in {"enhanced", "high_risk"}
+    require_residency = is_enhanced and S.kyc_residency_gate_enabled
+    residency_verified = False
+    if require_residency:
+        from app.services.kyc_residency import STORE as RESIDENCY_STORE
+
+        verified_docs = RESIDENCY_STORE.get_verified_docs_for_case(
+            str(case.get("kyc_case_id") or "")
+        )
+        residency_verified = len(verified_docs) > 0
+
+    # GAP-0281 (KYC-018 §4.8): tier_2 and tier_3 cases must have a verified (or
+    # partial_match) address before submission. tier_for_case maps the coarse
+    # risk band (from intake_profile) to tier_1/tier_2/tier_3; only tier_2/tier_3
+    # require the address gate. Gated behind KYC_ADDRESS_VERIFICATION_ENABLED so
+    # dev/e2e (flag off, or no verification record) is unaffected. The whole
+    # check fails open on service/store error so an outage cannot block submit.
+    from app.services.kyc_case_assignment import tier_for_case as _tier_for_case
+
+    require_address = (
+        S.kyc_address_verification_enabled
+        and _tier_for_case(case) in {"tier_2", "tier_3"}
+    )
+    address_verified = False
+    if require_address:
+        try:
+            from app.services.kyc_address_verification import STORE as ADDRESS_STORE
+
+            latest_av = ADDRESS_STORE.get_latest(str(case.get("kyc_case_id") or ""))
+            av_status = str((latest_av or {}).get("status") or "").strip().lower()
+            address_verified = av_status in {"verified", "partial_match"}
+        except Exception:
+            logger.exception(
+                "kyc.readiness.address_check_error kyc_case_id=%s",
+                case.get("kyc_case_id"),
+            )
+            # Fail open: do not block submission on an address-store outage.
+            require_address = False
+            address_verified = False
+
     checks = {
         "questionnaire_submitted": bool(questionnaire.get("submitted")),
         "required_files": bool(files.get("ready_for_submit_gate")),
         "signature_completed": bool(signature.get("ready_for_submit_gate")),
     }
+    if require_residency:
+        checks["residency_verified"] = residency_verified
+    if require_templates:
+        checks["templates_signed"] = templates_signed
+    if require_address:
+        # check value is True-when-ready (gates all(checks.values())); the
+        # missing_requirements entry is surfaced as "address_not_verified".
+        checks["address_verified"] = address_verified
     hint_map = {
         "questionnaire_submitted": "Submit the linked questionnaire to continue.",
         "required_files": "Attach all required identity files: selfie, id_front, id_back.",
         "signature_completed": "Complete the consent signature packet and wait for final PDF generation.",
+        "residency_verified": (
+            "Your account type requires a verified proof-of-residency document "
+            "(utility bill, bank statement, or similar). "
+            "Upload and complete residency verification before submitting."
+        ),
+        "templates_signed": (
+            "Sign all required document templates: "
+            + (", ".join(unsigned_template_slugs) or "see admin for details")
+        ),
+        "address_not_verified": (
+            "Address verification is required for your account type. "
+            "Please complete address verification before submitting."
+        ),
     }
 
     requirements: list[dict] = [
@@ -293,8 +495,54 @@ def _readiness_for_case(case: dict) -> dict:
             },
         },
     ]
+    # Append residency check as index 3 only when required, preserving the
+    # positional indices (0/1/2) that submit_kyc_case relies on for evidence_snapshot.
+    if require_residency:
+        requirements.append(
+            {
+                "key": "residency_verified",
+                "ready": checks["residency_verified"],
+                "missing": ([] if checks["residency_verified"] else ["residency_document_verified"]),
+                "hint": hint_map["residency_verified"],
+                "refs": {},
+            }
+        )
+    # GAP-0279: template-signing check appended after the base (0..2) and the
+    # optional residency requirement, so submit_kyc_case's positional reads of
+    # requirements[0..2] for evidence_snapshot remain stable.
+    if require_templates:
+        requirements.append(
+            {
+                "key": "templates_signed",
+                "ready": templates_signed,
+                "missing": [f"unsigned_templates:{s}" for s in unsigned_template_slugs],
+                "hint": hint_map["templates_signed"],
+                "refs": {"unsigned_slugs": ",".join(unsigned_template_slugs)},
+            }
+        )
+    # GAP-0281: address-verification requirement appended after the base (0..2)
+    # and any optional residency/template requirements, so submit_kyc_case's
+    # positional reads of requirements[0..2] for evidence_snapshot stay stable.
+    # The requirement key is "address_not_verified" so missing_requirements
+    # surfaces exactly that token per KYC-018 §4.8.
+    if require_address:
+        requirements.append(
+            {
+                "key": "address_not_verified",
+                "ready": address_verified,
+                "missing": ([] if address_verified else ["address_not_verified"]),
+                "hint": hint_map["address_not_verified"],
+                "refs": {},
+            }
+        )
     missing_requirements = [item["key"] for item in requirements if not item["ready"]]
-    missing_hints = [hint_map[key] for key in missing_requirements]
+    # GAP-0279 (KYC-017 §3.6): surface each unsigned template slug as an explicit
+    # "unsigned_templates:<slug>" entry in missing_requirements (in addition to
+    # the "templates_signed" key) so callers can identify the specific slugs.
+    missing_requirements.extend(
+        f"unsigned_templates:{s}" for s in unsigned_template_slugs
+    )
+    missing_hints = [hint_map[key] for key in missing_requirements if key in hint_map]
 
     return {
         "kyc_case_id": case.get("kyc_case_id"),
@@ -536,6 +784,51 @@ def _ensure_decision_ticket_updates(case: dict, *, admin_sub: str, decision_hash
         pass
 
 
+def _send_kyc_notification_email(
+    *,
+    user_sub: str,
+    event: str,
+    variables: dict,
+    accept_language: str | None = None,
+) -> None:
+    """Dispatch a KYC case-status transition email in the user's locale.
+
+    GAP-0285 (KYC-020 §4.9): resolve the recipient's locale and run the email
+    subject/body through ``kyc_translation_service.localize_email`` before
+    dispatch. Entirely best-effort — any failure (locale resolution, translation
+    lookup, missing email, SES) is swallowed so it never blocks the admin
+    decision response. ``localize_email`` itself falls back to English / the
+    event key when no localized template is seeded (dev/prod parity, SECOPS-007).
+    """
+    if not user_sub:
+        return
+    try:
+        locale = kyc_translation_service.resolve_locale_for_user(
+            user_sub, accept_language=accept_language
+        )
+        subject, body = kyc_translation_service.localize_email(
+            event=event, language=locale, variables=variables
+        )
+        if not subject or not body:
+            return
+        from app.services.alerts import send_alert_email
+        from app.services.profile import get_profile
+
+        email = (get_profile(user_sub) or {}).get("email")
+        if not email:
+            return
+        send_alert_email([email], subject, body)
+        logger.info(
+            "kyc.notification_email_sent user_sub=%s event=%s locale=%s",
+            user_sub, event, locale,
+        )
+    except Exception:
+        logger.warning(
+            "kyc.notification_email_failed user_sub=%s event=%s",
+            user_sub, event, exc_info=True,
+        )
+
+
 @router.post("", response_model=KycCaseEnvelope)
 def create_kyc_case(
     body: KycCaseCreateRequest,
@@ -611,6 +904,27 @@ def get_estimated_wait_time(
             }
         }
     )
+
+
+@router.get("/templates")
+def list_kyc_signature_templates(
+    intake_profile: str | None = Query(default=None),
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """List available KYC signature templates (GAP-0262), optionally filtered by intake_profile.
+
+    Declared before ``/{case_id}`` so the literal ``templates`` segment is not
+    captured as a path parameter.
+    """
+    if intake_profile:
+        templates = _TEMPLATE_SVC.get_required_templates(intake_profile=intake_profile)
+    else:
+        templates = [
+            {"template_type": template_type, **config}
+            for template_type, config in KYC_TEMPLATE_TYPES.items()
+        ]
+    return {"templates": templates}
 
 
 @router.get("/{case_id}", response_model=KycCaseEnvelope)
@@ -692,6 +1006,7 @@ def start_kyc_questionnaire(
     case_id: str,
     body: KycStartQuestionnaireRequest,
     request: Request,
+    lang: str | None = Query(default=None, description="BCP-47 language code override for the KYC questionnaire locale"),
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
@@ -702,6 +1017,30 @@ def start_kyc_questionnaire(
     if case.get("user_sub") != user.sub:
         audit_event("kyc_questionnaire_start_denied", user.sub, request, outcome="failure", reason="forbidden", kyc_case_id=case_id)
         _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    # GAP-0285 (KYC-020 §4.9): resolve the user's KYC locale at questionnaire-start
+    # time so downstream rendering / PDF export pick up the correct language.
+    # ``?lang=`` is an explicit override (normalised against supported locales);
+    # otherwise we fall back to the profile locale → Accept-Language → English.
+    # Best-effort: any failure degrades gracefully to the default locale.
+    accept_lang = request.headers.get("accept-language")
+    try:
+        if lang:
+            resolved_locale = kyc_translation_service.normalize_locale(lang)
+        else:
+            resolved_locale = kyc_translation_service.resolve_locale_for_user(
+                user.sub, accept_language=accept_lang
+            )
+    except Exception:
+        resolved_locale = kyc_translation_service.default_locale()
+        logger.warning(
+            "kyc.questionnaire_locale_resolve_failed user_sub=%s case_id=%s",
+            user.sub, case_id, exc_info=True,
+        )
+    logger.info(
+        "kyc.questionnaire_locale_resolved locale=%s user_sub=%s case_id=%s",
+        resolved_locale, user.sub, case_id,
+    )
 
     qref = case.get("questionnaire") or {}
     existing_qid = str(qref.get("questionnaire_id") or "").strip()
@@ -716,6 +1055,24 @@ def start_kyc_questionnaire(
     if not version:
         audit_event("kyc_questionnaire_start_denied", user.sub, request, outcome="failure", reason="invalid_request", kyc_case_id=case_id)
         _raise_kyc_error("kyc_invalid_request", details={"published_slug": body.published_slug, "reason": "published_questionnaire_not_found"})
+
+    # GAP-0285: localize the published questionnaire content for the resolved
+    # locale. Best-effort — translation lookups fall back to English / the
+    # literal value, so a failure here never blocks questionnaire start.
+    try:
+        _localized_version, _fallback_keys = kyc_translation_service.localize_questionnaire(
+            questionnaire=dict(version), language=resolved_locale
+        )
+        if _fallback_keys:
+            logger.info(
+                "kyc.questionnaire_localize_fallbacks locale=%s case_id=%s count=%d",
+                resolved_locale, case_id, len(_fallback_keys),
+            )
+    except Exception:
+        logger.warning(
+            "kyc.questionnaire_localize_failed locale=%s user_sub=%s case_id=%s",
+            resolved_locale, user.sub, case_id, exc_info=True,
+        )
 
     response_session_id = f"resp_{uuid4().hex}"
     session = QNR_REPO.put_response_session(
@@ -734,6 +1091,9 @@ def start_kyc_questionnaire(
                 "version_id": str(version.get("version_id") or ""),
                 "response_session_id": str(session.get("response_session_id") or ""),
                 "response_pdf_ref": None,
+                # GAP-0285: persist the resolved locale on the questionnaire
+                # sub-object for downstream rendering / PDF export.
+                "locale": resolved_locale,
             },
         )
     except KycCaseConflictError:
@@ -957,6 +1317,35 @@ def submit_kyc_case(
     if not updated:
         _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
     updated = _ensure_review_ticket(updated)
+    # KYC-006 / GAP-0258: run sanctions/PEP screening on every submission.
+    # Best-effort: a screening failure must NEVER block the submission (fail open).
+    try:
+        SCREENING_STORE.screen_case(
+            case_id=case_id,
+            user_sub=user.sub,
+            trigger=TRIGGER_SUBMISSION,
+        )
+    except Exception:
+        logger.exception(
+            "kyc.screening.submission_hook_failed case_id=%s", case_id
+        )
+    # KYC-008 / GAP-0266: compute the risk score on every submission so the
+    # reviewer queue has a risk tier and auto-approve / auto-escalate can fire.
+    # Runs after screening above so the screening_result factor reflects the
+    # fresh screening summary. Best-effort: a scoring failure must NEVER block
+    # the submission (fail open), mirroring the screening hook pattern.
+    try:
+        from app.services.kyc_risk_scoring import KycRiskScoringService
+
+        KycRiskScoringService().compute_score(
+            case_id=case_id,
+            user_sub=user.sub,
+            trigger="submission",
+        )
+    except Exception:
+        logger.exception(
+            "kyc.risk.submission_hook_failed case_id=%s", case_id
+        )
     _audit_state_transition(
         event_name="kyc_submitted",
         actor_sub=user.sub,
@@ -1148,6 +1537,16 @@ def admin_request_more_info(
         )
     except TicketStateError:
         audit_event("kyc_admin_request_info_sync_failed", user.sub, request, outcome="failure", reason="ticket_message_conflict", kyc_case_id=case_id)
+    # GAP-0285: locale-aware needs-more-info email on the case-status transition.
+    _send_kyc_notification_email(
+        user_sub=str(updated.get("user_sub") or ""),
+        event="kyc.needs_more_info",
+        variables={
+            "case_id": case_id,
+            "requested_items": ", ".join(body.requested_items),
+            "note": body.note.strip(),
+        },
+    )
     _audit_state_transition(
         event_name="kyc_admin_request_info",
         actor_sub=user.sub,
@@ -1231,6 +1630,17 @@ def _admin_decide_case(
         reason_codes=list(body.reason_codes),
         note=body.note.strip(),
     )
+    # GAP-0285: locale-aware approve/reject email on the case-status transition.
+    _send_kyc_notification_email(
+        user_sub=str(updated.get("user_sub") or ""),
+        event=("kyc.approved" if decision == "approve" else "kyc.rejected"),
+        variables={
+            "case_id": case_id,
+            "decision": decision,
+            "note": body.note.strip(),
+            "reason_codes": ", ".join(body.reason_codes),
+        },
+    )
     _audit_state_transition(
         event_name="kyc_admin_decision",
         actor_sub=user.sub,
@@ -1257,6 +1667,17 @@ def _admin_decide_case(
             )
         except Exception:  # noqa: BLE001 — monitoring must never block approval
             pass
+
+        # KYC-009 / GAP-0269: auto-evaluate KYC tier after case approval.
+        # Best-effort; no-op when gating is disabled (get_user_kyc_tier returns max).
+        try:
+            from app.services.kyc_tiers import auto_evaluate_tier
+            auto_evaluate_tier(str(updated.get("user_sub") or ""), request=request)
+        except Exception:
+            logger.warning(
+                "kyc.tier.auto_evaluate_failed user_sub=%s case_id=%s",
+                updated.get("user_sub"), case_id, exc_info=True,
+            )
     return _wrap_case(updated)
 
 
@@ -1372,6 +1793,180 @@ def signature_completion_status(
             pass
     audit_event("kyc_signature_status", user.sub, request, outcome="success", kyc_case_id=case_id, ready=payload.get("ready_for_submit_gate"))
     return KycSignatureStatusEnvelope.model_validate({"signature": payload})
+
+
+# --- KYC-007 / GAP-0262: template-based signature workflow ------------------
+
+
+@router.post("/{case_id}/signature-templates/create-packets", response_model=KycCaseEnvelope)
+def create_signature_packets_from_templates(
+    case_id: str,
+    body: KycLinkSignaturePacketRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Create one signature packet per required template; auto-populates fields.
+
+    The new template summaries are merged into ``case["signature"]["template_packets"]``
+    (deduplicated by ``template_type``) so repeated calls never overwrite previously
+    created packets (GAP-0264).
+    """
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    intake_profile = str(case.get("intake_profile") or "standard").lower()
+    packets = _TEMPLATE_SVC.create_packets_for_case(
+        case_id=case_id,
+        user_sub=user.sub,
+        intake_profile=intake_profile,
+        source_pdf_path=body.source_path,
+    )
+    # GAP-0264: read-merge-write the whole signature map (update_case_links replaces
+    # it wholesale, so the caller assembles the merged map). Dedup by template_type.
+    signature = dict(case.get("signature") or {})
+    existing = list(signature.get("template_packets") or [])
+    existing_types = {p.get("template_type") for p in existing}
+    to_add = [
+        {
+            "template_type": p["template_type"],
+            "packet_id": p["packet_id"],
+            "version": p["version"],
+        }
+        for p in packets
+        if p["template_type"] not in existing_types
+    ]
+    signature["template_packets"] = existing + to_add
+
+    try:
+        updated = STORE.update_case_links(
+            case_id=case_id,
+            owner_sub=user.sub,
+            expected_version=body.expected_version,
+            signature=signature,
+        )
+    except KycCaseConflictError:
+        _raise_kyc_error("kyc_case_update_conflict", details={"kyc_case_id": case_id, "expected_version": body.expected_version})
+    if not updated:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    audit_event(
+        "kyc_template_packets_created",
+        user.sub,
+        request,
+        outcome="success",
+        kyc_case_id=case_id,
+        count=len(to_add),
+    )
+    return _wrap_case(updated)
+
+
+@router.get("/{case_id}/signature-templates/status", response_model=KycTemplateStatusEnvelope)
+def get_signature_templates_status(
+    case_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Return completion status for each required template packet."""
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    intake_profile = str(case.get("intake_profile") or "standard").lower()
+    required = _TEMPLATE_SVC.get_required_templates(intake_profile=intake_profile)
+    tp_map = {
+        p.get("template_type"): p
+        for p in list((case.get("signature") or {}).get("template_packets") or [])
+    }
+    stale = {s["template_type"] for s in _TEMPLATE_SVC.check_version_migration(case=case)}
+    items: list[dict] = []
+    for tmpl in required:
+        tt = tmpl["template_type"]
+        linked = tp_map.get(tt) or {}
+        packet_id = linked.get("packet_id")
+        packet = get_packet(packet_id) if packet_id else None
+        items.append(
+            {
+                "template_type": tt,
+                "display_name": tmpl["display_name"],
+                "version": tmpl["version"],
+                "packet_id": packet_id,
+                "packet_status": (packet or {}).get("status"),
+                "signed_by_applicant": bool(packet and str((packet or {}).get("status")) == "completed"),
+                "needs_version_migration": tt in stale,
+            }
+        )
+    audit_event(
+        "kyc_template_status_read",
+        user.sub,
+        request,
+        outcome="success",
+        kyc_case_id=case_id,
+        count=len(items),
+    )
+    return KycTemplateStatusEnvelope.model_validate(
+        {"templates": items, "version_migration_required": bool(stale)}
+    )
+
+
+@router.get("/{case_id}/signature-templates/version-check")
+def check_template_version_migration(
+    case_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Return template packets needing re-signing due to a version update."""
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+    stale = _TEMPLATE_SVC.check_version_migration(case=case)
+    audit_event(
+        "kyc_template_version_check",
+        user.sub,
+        request,
+        outcome="success",
+        kyc_case_id=case_id,
+        stale_count=len(stale),
+    )
+    return {"stale_templates": stale, "migration_required": bool(stale)}
+
+
+@router.post("/admin/cases/{case_id}/add-witness", response_model=KycCaseEnvelope)
+def admin_add_witness_to_packet(
+    case_id: str,
+    body: KycAddWitnessRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """Add an admin as a witness co-signer on a KYC packet (high-risk cases only)."""
+    if normalize_role(user.role) not in {Role.ADMIN, Role.ROOT}:
+        _raise_kyc_error("kyc_admin_role_required")
+    case = STORE.get_case(case_id)
+    if not case:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if str(case.get("intake_profile") or "").lower() != "high_risk":
+        _raise_kyc_error("kyc_invalid_request", details={"reason": "witness_only_for_high_risk"})
+    witness_sub = body.witness_sub or user.sub
+    _TEMPLATE_SVC.add_witness_signer(packet_id=body.packet_id, witness_sub=witness_sub)
+    audit_event(
+        "kyc_witness_added",
+        user.sub,
+        request,
+        outcome="success",
+        kyc_case_id=case_id,
+        witness_sub=witness_sub,
+        packet_id=body.packet_id,
+    )
+    return _wrap_case(STORE.get_case(case_id))
 
 
 # --- KYC-014: Facial Comparison endpoints ----------------------------------

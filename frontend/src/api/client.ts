@@ -127,6 +127,17 @@ async function refreshSession(): Promise<void> {
     useAuthStore.getState().logout("session_expired");
     throw new ApiError(res.status, "Session refresh failed");
   }
+  // Update the client-side access token so the session-expiry timer reflects the
+  // freshly re-minted token (otherwise it counts down the stale token and logs
+  // the user out despite a successful refresh).
+  try {
+    const body = (await res.json()) as { access_token?: string };
+    if (body?.access_token) {
+      useAuthStore.getState().setAccessToken(body.access_token);
+    }
+  } catch {
+    /* body optional */
+  }
 }
 
 /**

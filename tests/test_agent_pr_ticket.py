@@ -11,6 +11,8 @@ import hashlib
 import hmac
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import agent_pr_integration as svc
 
 
@@ -140,3 +142,110 @@ def test_create_pr_via_api_dev_mode_returns_mock(monkeypatch):
     assert result["html_url"].startswith("https://github.com/test/repo/pull/")
     assert result["number"] > 0
     assert result["state"] == "open"
+
+
+# --- GAP-0088: live GitHub API PR creation -------------------------------
+
+
+def test_create_pr_via_api_no_token_returns_mock(monkeypatch):
+    """Empty token => mock data, no outbound HTTP (dev/prod parity)."""
+    called = {"n": 0}
+    _patch_settings(monkeypatch, dev_mode=False, github_token="")
+    monkeypatch.setattr(
+        svc.httpx, "post",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = svc._create_pr_via_api(
+        repo_url="https://github.com/acme/backend",
+        branch="agent/ticket-1",
+        title="t",
+        description="d",
+        user_id="u1",
+    )
+    assert called["n"] == 0
+    assert "html_url" in result
+
+
+def test_create_pr_via_api_live_posts_to_github(monkeypatch):
+    """Fails before fix (NotImplementedError); passes after (httpx.post called)."""
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "html_url": "https://github.com/acme/backend/pull/99",
+                "number": 99,
+                "state": "open",
+            }
+
+    captured = {}
+
+    def _fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        return _Resp()
+
+    _patch_settings(
+        monkeypatch,
+        dev_mode=False,
+        github_token="ghp_test_token",
+        github_api_base_url="https://api.github.com",
+    )
+    monkeypatch.setattr(svc.httpx, "post", _fake_post)
+
+    result = svc._create_pr_via_api(
+        repo_url="https://github.com/acme/backend",
+        branch="agent/ticket-1",
+        title="Fix login bug",
+        description="Resolves #42",
+        user_id="u_test",
+    )
+
+    assert captured["url"] == (
+        "https://api.github.com/repos/acme/backend/pulls"
+    )
+    assert captured["json"]["title"] == "Fix login bug"
+    assert captured["json"]["head"] == "agent/ticket-1"
+    assert captured["json"]["base"] == "main"
+    assert captured["headers"]["Authorization"] == "Bearer ghp_test_token"
+    assert result["html_url"] == "https://github.com/acme/backend/pull/99"
+    assert result["number"] == 99
+
+
+def test_create_pr_via_api_rejects_unsafe_repo_url(monkeypatch):
+    """SSRF / command-injection-prone repo URLs are rejected before any POST."""
+    _patch_settings(
+        monkeypatch, dev_mode=False, github_token="ghp_test_token"
+    )
+    monkeypatch.setattr(
+        svc.httpx, "post",
+        lambda *a, **k: pytest.fail("httpx.post must not be called"),
+    )
+    with pytest.raises(ValueError):
+        svc._create_pr_via_api(
+            repo_url="https://github.com/acme/back end",  # space -> rejected
+            branch="b",
+            title="t",
+            description="d",
+            user_id="u",
+        )
+
+
+def test_parse_owner_repo_https():
+    assert svc._parse_owner_repo("https://github.com/acme/backend") == (
+        "acme", "backend",
+    )
+
+
+def test_parse_owner_repo_git_ssh_and_dotgit():
+    assert svc._parse_owner_repo("git@github.com:acme/backend.git") == (
+        "acme", "backend",
+    )
+
+
+def test_parse_owner_repo_invalid_raises():
+    with pytest.raises(ValueError, match="Cannot parse owner/repo"):
+        svc._parse_owner_repo("not-a-url")

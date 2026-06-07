@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -17,40 +18,162 @@ logger = logging.getLogger(__name__)
 
 MAX_SCHEDULES_PER_BOT = 20
 
+# Maximum number of conversations a single wildcard scheduled send may fan out to.
+WILDCARD_SCOPE_LIMIT = 500
+
 # ---------------------------------------------------------------------------
 # Cron helpers (simple 5-field cron parser)
 # ---------------------------------------------------------------------------
 
 
+# Inclusive (min, max) range for each of the 5 standard cron fields, in order:
+# minute, hour, day_of_month, month, day_of_week.
+_CRON_FIELD_BOUNDS = (
+    (0, 59),   # minute
+    (0, 23),   # hour
+    (1, 31),   # day of month
+    (1, 12),   # month
+    (0, 6),    # day of week (0 = Sunday)
+)
+_CRON_FIELD_NAMES = ("minute", "hour", "day_of_month", "month", "day_of_week")
+
+
+def _expand_cron_field(spec: str, lo: int, hi: int) -> set[int] | None:
+    """Expand a single cron field into the set of integers it matches.
+
+    Supports ``*``, ``*/step``, ``a-b``, ``a-b/step``, single values, and
+    comma-separated lists of any of these. Returns ``None`` if invalid.
+    """
+    values: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            return None
+        step = 1
+        if "/" in part:
+            base, _, step_str = part.partition("/")
+            if not step_str.isdigit() or int(step_str) <= 0:
+                return None
+            step = int(step_str)
+        else:
+            base = part
+        if base == "*":
+            start, end = lo, hi
+        elif "-" in base:
+            start_str, _, end_str = base.partition("-")
+            if not (start_str.isdigit() and end_str.isdigit()):
+                return None
+            start, end = int(start_str), int(end_str)
+        else:
+            if not base.isdigit():
+                return None
+            start = end = int(base)
+        if start < lo or end > hi or start > end:
+            return None
+        values.update(range(start, end + 1, step))
+    return values or None
+
+
 def _parse_cron(expression: str) -> dict | None:
-    """Parse a 5-field cron expression. Returns parsed dict or None if invalid."""
+    """Parse a 5-field cron expression into matched value sets.
+
+    Returns a dict mapping each field name to a ``set[int]`` of matching values,
+    or ``None`` if the expression is invalid. Frequencies higher than once per
+    hour (every-minute schedules) are rejected to bound dispatch volume.
+    """
     parts = expression.strip().split()
     if len(parts) != 5:
         return None
-    fields = ["minute", "hour", "day_of_month", "month", "day_of_week"]
-    result = {}
-    for field, val in zip(fields, parts):
-        result[field] = val
-    # Reject frequency higher than once per hour
+
+    # Reject frequency higher than once per hour (e.g. "* * * * *").
     if parts[0] == "*" and parts[1] == "*":
-        return None  # runs every minute — too frequent
+        return None
+
+    result: dict[str, set[int]] = {}
+    for name, raw, (lo, hi) in zip(_CRON_FIELD_NAMES, parts, _CRON_FIELD_BOUNDS):
+        expanded = _expand_cron_field(raw, lo, hi)
+        if expanded is None:
+            return None
+        result[name] = expanded
     return result
 
 
 def _next_run_from_cron(cron_expression: str, timezone: str = "UTC") -> int:
-    """Calculate next run timestamp from cron expression.
+    """Return the next Unix timestamp (integer seconds) at which the cron fires.
 
-    For simplicity, we compute a rough next-run based on current time + interval.
-    A full cron engine (like croniter) would be used in production.
+    Computes the next occurrence of a standard 5-field cron expression
+    (minute hour day-of-month month day-of-week) strictly after the current
+    time, evaluated in the supplied IANA timezone. The result is returned as a
+    UTC Unix timestamp. Self-contained — no external cron library required.
+
+    Args:
+        cron_expression: Standard 5-field cron, e.g. ``"0 14 * * *"``.
+        timezone: IANA timezone name (default ``"UTC"``).
+
+    Raises:
+        ValueError: If the cron expression or timezone is invalid, or no match
+            is found within a one-year search horizon.
     """
     parsed = _parse_cron(cron_expression)
     if not parsed:
-        raise ValueError("Invalid cron expression")
+        raise ValueError(f"Invalid cron expression: {cron_expression!r}")
 
-    ts = now_ts()
-    # Simple heuristic: next run = now + 3600 (1 hour) minimum
-    # This is a simplified implementation; production would use croniter
-    return ts + 3600
+    try:
+        import zoneinfo
+
+        tz: datetime.tzinfo = zoneinfo.ZoneInfo(timezone)
+    except Exception as exc:  # noqa: BLE001 — fall back / re-raise as ValueError
+        if timezone == "UTC":
+            tz = datetime.timezone.utc
+        else:
+            raise ValueError(f"Unknown timezone: {timezone!r}") from exc
+
+    # Base the search on the current wall-clock time, expressed in the target tz.
+    base_utc = datetime.datetime.fromtimestamp(now_ts(), tz=datetime.timezone.utc)
+    candidate = base_utc.astimezone(tz)
+
+    # Start strictly after "now": advance to the next whole minute boundary.
+    candidate = candidate.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
+
+    minutes = parsed["minute"]
+    hours = parsed["hour"]
+    doms = parsed["day_of_month"]
+    months = parsed["month"]
+    dows = parsed["day_of_week"]
+
+    # Standard cron day matching: if BOTH day-of-month and day-of-week are
+    # restricted (not "*"), a day matches if it satisfies EITHER field.
+    dom_restricted = doms != set(range(1, 32))
+    dow_restricted = dows != set(range(0, 7))
+
+    # Search up to one year ahead, one minute at a time. A year of minutes is the
+    # safe upper bound for any valid 5-field cron expression.
+    limit = 366 * 24 * 60
+    for _ in range(limit):
+        if (
+            candidate.month in months
+            and candidate.hour in hours
+            and candidate.minute in minutes
+        ):
+            # cron day-of-week: Sunday = 0; Python weekday(): Monday = 0.
+            cron_dow = (candidate.weekday() + 1) % 7
+            dom_ok = candidate.day in doms
+            dow_ok = cron_dow in dows
+            if dom_restricted and dow_restricted:
+                day_ok = dom_ok or dow_ok
+            elif dom_restricted:
+                day_ok = dom_ok
+            elif dow_restricted:
+                day_ok = dow_ok
+            else:
+                day_ok = True
+            if day_ok:
+                return int(candidate.astimezone(datetime.timezone.utc).timestamp())
+        candidate += datetime.timedelta(minutes=1)
+
+    raise ValueError(
+        f"No cron occurrence found within one year for: {cron_expression!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,14 +395,28 @@ def dispatch_due_scheduled_sends(*, now_ts_value: int | None = None, limit: int 
                 bot=bot,
             )
 
-            # Send bot message (for single conversation target)
-            if sched["target_type"] == "conversation" and sched.get("target_id"):
-                send_bot_message(
-                    bot_id=sched["bot_id"],
-                    conversation_id=sched["target_id"],
-                    text=rendered["rendered_text"],
+            # Resolve target conversation IDs (handles single + wildcard scopes).
+            target_conv_ids = _resolve_target_conversations(sched, bot=bot)
+            sent_count = 0
+            if not target_conv_ids:
+                logger.warning(
+                    "bot_scheduler: no target conversations resolved for "
+                    "schedule_id=%s target_type=%s — skipping send",
+                    sched.get("schedule_id"), sched["target_type"],
                 )
+            else:
+                for conv_id in target_conv_ids[:WILDCARD_SCOPE_LIMIT]:
+                    send_bot_message(
+                        bot_id=sched["bot_id"],
+                        conversation_id=conv_id,
+                        text=rendered["rendered_text"],
+                    )
+                    sent_count += 1
                 record_impression(bot_id=sched["bot_id"], template_id=sched["template_id"])
+                logger.info(
+                    "bot_scheduler: dispatched schedule_id=%s target_type=%s conv_count=%d",
+                    sched.get("schedule_id"), sched["target_type"], sent_count,
+                )
 
             # Update last_run_at and calculate next next_run_at
             next_run = _next_run_from_cron(sched["cron_expression"], sched.get("timezone", "UTC"))
@@ -291,7 +428,9 @@ def dispatch_due_scheduled_sends(*, now_ts_value: int | None = None, limit: int 
                     ":nra": next_run,
                 },
             )
-            dispatched += 1
+            # Only count schedules that actually delivered at least one message.
+            if sent_count > 0:
+                dispatched += 1
         except Exception:
             logger.exception("bot_scheduler: failed to dispatch schedule_id=%s", item.get("schedule_id"))
             failed += 1
@@ -309,8 +448,17 @@ async def run_bot_scheduler_loop() -> None:
         await asyncio.sleep(60)
 
 
-def start_bot_scheduler_task() -> None:
-    """Called from main.py startup to launch background scheduler."""
+async def start_bot_scheduler_task() -> None:
+    """Called from main.py startup to launch background scheduler.
+
+    Must be ``async`` so that ``asyncio.create_task()`` is always invoked from
+    within a running event loop. Starlette's startup machinery awaits async
+    handlers (``is_async_callable()`` returns ``True`` for coroutine functions),
+    guaranteeing a running loop. Keeping this synchronous would raise
+    ``RuntimeError: no running event loop`` when the function is called from a
+    sync/CLI/alternative-server context (GAP-0137). No change to the
+    registration in ``app/main.py`` is required.
+    """
     if not S.bot_scheduled_messages_enabled:
         logger.info("bot_scheduler: disabled by BOT_SCHEDULED_MESSAGES_ENABLED")
         return
@@ -321,6 +469,94 @@ def start_bot_scheduler_task() -> None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+# Maps a wildcard target_type to the conversation `type` value it fans out to.
+_WILDCARD_TARGET_TO_CONV_TYPE = {
+    "all_dms": "dm",
+    "all_groups": "group",
+    "all_broadcasts": "broadcast",
+}
+
+
+def _resolve_target_conversations(sched: dict, *, bot: dict | None = None) -> list[str]:
+    """Resolve a scheduled send's target into a list of conversation IDs.
+
+    - ``target_type="conversation"`` with a ``target_id`` resolves to that single
+      conversation.
+    - Wildcard scopes (``all_dms``, ``all_groups``, ``all_broadcasts``) fan out to
+      every matching conversation the bot's creator participates in, capped at
+      ``WILDCARD_SCOPE_LIMIT``.
+
+    Returns an empty list for unknown target types or when no conversations match.
+    """
+    target_type = sched.get("target_type", "")
+    target_id = sched.get("target_id")
+
+    if target_type == "conversation":
+        return [target_id] if target_id else []
+
+    conv_type = _WILDCARD_TARGET_TO_CONV_TYPE.get(target_type)
+    if conv_type is None:
+        logger.warning(
+            "bot_scheduler: unknown target_type=%s schedule_id=%s",
+            target_type, sched.get("schedule_id"),
+        )
+        return []
+
+    if bot is None:
+        from app.services.chat_bot import get_bot
+
+        bot = get_bot(bot_id=sched["bot_id"])
+    creator_id = (bot or {}).get("creator_id") or sched.get("creator_id")
+    if not creator_id:
+        return []
+
+    # Conversations are stored in the messaging tables: a Participants table keyed
+    # on user_id lists every conversation a user belongs to; the Conversations
+    # table carries the `type` field. Resolve the creator's matching conversations.
+    from app.core.aws import ddb
+    import os as _os
+
+    parts_table = ddb.Table(_os.getenv("DDB_PARTICIPANTS", "Participants"))
+    convos_table = ddb.Table(_os.getenv("DDB_CONVERSATIONS", "Conversations"))
+
+    conv_ids: list[str] = []
+    last_key = None
+    try:
+        while len(conv_ids) < WILDCARD_SCOPE_LIMIT:
+            kwargs: dict = {
+                "KeyConditionExpression": Key("user_id").eq(creator_id),
+                "Limit": 500,
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = parts_table.query(**kwargs)
+            for p in resp.get("Items", []):
+                cid = p.get("conversation_id")
+                if cid:
+                    conv_ids.append(cid)
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+    except Exception:
+        logger.exception(
+            "bot_scheduler: failed to list participant conversations for creator_id=%s",
+            creator_id,
+        )
+        return []
+
+    matched: list[str] = []
+    for cid in conv_ids:
+        if len(matched) >= WILDCARD_SCOPE_LIMIT:
+            break
+        try:
+            convo = convos_table.get_item(Key={"conversation_id": cid}).get("Item")
+        except Exception:
+            continue
+        if convo and convo.get("type") == conv_type:
+            matched.append(cid)
+    return matched
 
 
 def _get_schedule(*, bot_id: str, schedule_id: str) -> dict | None:

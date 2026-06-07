@@ -19,7 +19,10 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+import httpx
+
 from app.core.settings import S
+from app.core.validate_url import validate_repo_url
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.tickets import TicketStore
@@ -360,12 +363,46 @@ def _build_gh_pr_command(title: str, description: str, branch: str) -> str:
     )
 
 
-def _create_pr_via_api(
-    *, repo_url: str, branch: str, title: str, description: str, user_id: str,
-) -> Dict[str, Any]:
-    """Create a PR via the GitHub API.
+# Extract (owner, repo) from a GitHub HTTPS or SSH URL.
+_GITHUB_REPO_RE = re.compile(
+    r"(?:https?://[^/]+/|git@[^:]+:)([^/]+)/([^/]+?)(?:\.git)?$"
+)
 
-    In dev mode (or when no token is configured) returns mock data.
+
+def _parse_owner_repo(repo_url: str) -> tuple[str, str]:
+    """Extract (owner, repo) from a GitHub HTTPS or SSH URL.
+
+    Returns (owner, repo) or raises ValueError if the URL is not parseable.
+    """
+    m = _GITHUB_REPO_RE.match((repo_url or "").strip())
+    if not m:
+        raise ValueError(
+            f"Cannot parse owner/repo from repo_url: {repo_url!r}. "
+            "Expected format: https://github.com/owner/repo or "
+            "git@github.com:owner/repo"
+        )
+    return m.group(1), m.group(2)
+
+
+def _create_pr_via_api(
+    *,
+    repo_url: str,
+    branch: str,
+    title: str,
+    description: str,
+    user_id: str,
+    base_branch: str = "main",
+) -> Dict[str, Any]:
+    """Create a PR via the GitHub REST API.
+
+    In dev mode (or when no token is configured) returns mock data and makes
+    no outbound network call (dev/prod parity, SECOPS-007).
+
+    In production with a configured ``GITHUB_TOKEN`` this POSTs to
+    ``{github_api_base_url}/repos/{owner}/{repo}/pulls``.
+
+    Raises ``ValueError`` for malformed/unsafe repo URLs and
+    ``httpx.HTTPStatusError`` on non-2xx GitHub responses.
     """
     token = getattr(S, "github_token", "")
     if S.dev_mode or not token:
@@ -376,8 +413,38 @@ def _create_pr_via_api(
             "number": pr_number,
             "state": "open",
         }
-    # Real implementation would POST to {github_api_base_url}/repos/.../pulls.
-    raise NotImplementedError("Live GitHub API integration not enabled.")
+
+    # Reject shell-metacharacter / dangerous-protocol / SSRF-prone repo URLs
+    # (GAP-0079) before parsing owner/repo and building the API URL.
+    validate_repo_url(repo_url)
+    owner, repo = _parse_owner_repo(repo_url)
+    api_url = f"{S.github_api_base_url}/repos/{owner}/{repo}/pulls"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {
+        "title": title,
+        "body": description,
+        "head": branch,
+        "base": base_branch or "main",
+    }
+
+    resp = httpx.post(api_url, json=payload, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    logger.info(
+        "github_pr_created owner=%s repo=%s user_id=%s number=%s",
+        owner, repo, user_id, data.get("number"),
+    )
+    return {
+        "html_url": data["html_url"],
+        "number": data["number"],
+        "state": data["state"],
+    }
 
 
 # ---------------------------------------------------------------------------

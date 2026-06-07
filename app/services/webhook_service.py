@@ -160,12 +160,34 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     "kyc.id_scan.result": "An ID document scan produced a result",
     "kyc.sanctions.match": "A sanctions/PEP screening match was found",
     "kyc.sanctions.clear": "A sanctions/PEP screening came back clear",
+
+    # Advertiser / Ad platform (ADS-011 / GAP-0055)
+    "ad.campaign.created": "A new ad campaign was created",
+    "ad.campaign.updated": "An ad campaign was updated",
+    "ad.campaign.paused": "An ad campaign was paused",
+    "ad.campaign.completed": "An ad campaign budget was exhausted and it was auto-paused",
+    "ad.campaign.resumed": "A paused ad campaign was resumed",
+    "ad.creative.submitted": "An ad creative was submitted for moderation",
+    "ad.creative.approved": "An ad creative was approved",
+    "ad.creative.rejected": "An ad creative was rejected by moderation",
+    "ad.billing.budget_alert": "An ad campaign crossed a budget spend threshold",
+    "ad.billing.invoice_ready": "A monthly ad invoice is available",
+    "ad.account.approved": "An advertiser account was approved",
+    "ad.account.suspended": "An advertiser account was suspended for fraud",
+    "ad.webhook.test": "Test event for verifying advertiser webhook configuration",
 }
 
 # Canonical allowlist of KYC webhook event types (KYC-011).
 # These are also added to WEBHOOK_EVENT_TYPES_V2 above so subscriptions validate.
 KYC_WEBHOOK_EVENT_TYPES: Dict[str, str] = {
     k: v for k, v in WEBHOOK_EVENT_TYPES_V2.items() if k.startswith("kyc.")
+}
+
+# Canonical allowlist of advertiser/ad-platform webhook event types
+# (ADS-011 / GAP-0055). These are also present in WEBHOOK_EVENT_TYPES_V2 above
+# so endpoint subscriptions validate via is_valid_event_type().
+AD_WEBHOOK_EVENT_TYPES: Dict[str, str] = {
+    k: v for k, v in WEBHOOK_EVENT_TYPES_V2.items() if k.startswith("ad.")
 }
 
 

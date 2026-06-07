@@ -1,0 +1,9 @@
+# BCAST-005 Gap List
+
+- [HIGH] SEC-010 IDOR — chat SSE stream no `check_viewer_access` — `broadcast.py:1763` — any authenticated user subscribes to private session chat stream; `ctx` discarded (`_ = ctx`) — Fix: call `check_viewer_access` + pass `viewer_user_id=ctx["user_sub"]` to `_chat_msg_out` — Effort: S
+- [HIGH] SEC-010 — chat send endpoint no `check_viewer_access` — `broadcast.py:1548` — non-entitled users can POST messages to private session chat (write-path IDOR companion) — Fix: add `check_viewer_access` call after `session.status` check in `send_chat_message_route` — Effort: S
+- [HIGH] SEC-010 — `_chat_msg_out` missing `viewer_user_id` in SSE stream — `broadcast.py:1806` — locked message text delivered in clear to all stream subscribers; paywall bypassed — Fix: pass `viewer_user_id=ctx["user_sub"]` to `_chat_msg_out(msg, ...)` in the chat stream generator — Effort: S
+- [MED] `_CHAT_RATE_BUCKETS` memory leak — `broadcast.py` — module-level dict never pruned; grows unbounded over long broadcasts with many chatters — Fix: replace plain dict with `cachetools.TTLCache` or periodic cleanup task — Effort: S
+- [MED] Sort key N+1 for delete-by-message-id — `broadcast.py:1617` / `broadcast_chat_store.py` — `_store_find_sort_key` may be an O(n) scan across full chat history — Fix: add `ByMessageId` GSI to `BroadcastChatMessages` in `local-ddb-init.py` — Effort: S
+- [LOW] Chat TTL not updated on session stop — `broadcast.py:402` — messages keep 7-day default TTL regardless of when broadcast ended — Fix: call `expire_session_chat_messages(session_id, stopped_at)` in `stop_session_route` after stop completes — Effort: S
+- [LOW] Mute records have no TTL — `broadcast_chat_store.py` — expired mute items accumulate in `BroadcastChatMutes` indefinitely — Fix: add `ttl = now_ts() + duration_seconds + 60` to mute DDB items in `_store_set_mute` — Effort: S

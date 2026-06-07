@@ -21,6 +21,7 @@ from app.core.tables import T
 from app.services.alerts import audit_event
 from app.services.profile import (
     PROFILE_READ_NOT_FOUND_DETAIL,
+    SCREENING_SENSITIVE_PROFILE_FIELDS,
     apply_profile_update,
     get_audit_log,
     get_profile,
@@ -168,18 +169,131 @@ async def ui_get_profile_by_identifier(identifier: str, req: Request):
 async def ui_get_profile_audit(ctx=Depends(require_ui_session)):
     return {"audit": get_audit_log(ctx["user_sub"])}
 
+def _maybe_rescreen_after_profile_update(
+    user_sub: str,
+    previous: Dict[str, Any],
+    updated: Dict[str, Any],
+) -> None:
+    """Re-screen the user if an identity-sensitive profile field changed.
+
+    GAP-0259 / KYC-006: AML continuous monitoring requires re-screening when an
+    approved subject changes identity-relevant attributes (legal name, DOB, ...).
+    Best-effort: fully wrapped in try/except so screening problems can never
+    block or fail the profile update. Same in-process code path in dev and prod
+    (SECOPS-007 parity — no environment-specific branches).
+    """
+    try:
+        changed_sensitive = any(
+            previous.get(field) != updated.get(field)
+            for field in SCREENING_SENSITIVE_PROFILE_FIELDS
+        )
+        if not changed_sensitive:
+            return
+
+        from app.services.kyc_cases import STORE as KYC_CASE_STORE
+        from app.services.kyc_sanctions_screening import (
+            STORE as SCREENING_STORE,
+            TRIGGER_PROFILE_CHANGE,
+        )
+
+        cases = KYC_CASE_STORE.list_cases_by_owner(user_sub=user_sub)
+        approved = [c for c in cases if c.get("status") == "approved"]
+        if not approved:
+            return
+        # list_cases_by_owner returns most-recent-first; re-screen against the
+        # most recently approved case so results attach to the live case record.
+        case_id = approved[0].get("kyc_case_id")
+        if not case_id:
+            return
+        SCREENING_STORE.rescreen_user(
+            case_id=case_id,
+            user_sub=user_sub,
+            trigger=TRIGGER_PROFILE_CHANGE,
+        )
+    except Exception:
+        logger.exception(
+            "kyc.rescreen.profile_change_hook_failed user_sub=%s", user_sub
+        )
+
+
+_KYC_NAME_FIELDS = frozenset({"first_name", "last_name", "middle_name"})
+
+
+def _maybe_fire_profile_kyc_triggers(
+    user_sub: str,
+    previous: Dict[str, Any],
+    updated: Dict[str, Any],
+) -> None:
+    """Fire KYC ongoing-monitoring trigger events for material profile changes.
+
+    GAP-0277 / KYC-016: AML continuous monitoring requires recording a review
+    trigger when an approved subject changes their legal name or country of
+    residence. A ``name_change`` event fires when any of first/middle/last name
+    changes; a ``country_change`` event fires when ``mailing_address.country``
+    changes. Both are best-effort and fully wrapped in try/except so a
+    monitoring failure can never block or fail the profile update. Same
+    in-process code path in dev and prod (SECOPS-007 parity — no
+    environment-specific branches).
+    """
+    try:
+        from app.services.kyc_monitoring import create_trigger_event
+
+        changed_name_fields = sorted(
+            field
+            for field in _KYC_NAME_FIELDS
+            if previous.get(field) != updated.get(field)
+        )
+        if changed_name_fields:
+            create_trigger_event(
+                user_sub=user_sub,
+                trigger_type="name_change",
+                details={
+                    "changed_fields": changed_name_fields,
+                    "from_name": " ".join(
+                        str(previous.get(f) or "") for f in ("first_name", "middle_name", "last_name")
+                    ).strip(),
+                    "to_name": " ".join(
+                        str(updated.get(f) or "") for f in ("first_name", "middle_name", "last_name")
+                    ).strip(),
+                },
+                actor_sub=user_sub,
+            )
+
+        old_addr = previous.get("mailing_address") or {}
+        new_addr = updated.get("mailing_address") or {}
+        old_country = str(old_addr.get("country") or "").strip().upper()
+        new_country = str(new_addr.get("country") or "").strip().upper()
+        if new_country and new_country != old_country:
+            create_trigger_event(
+                user_sub=user_sub,
+                trigger_type="country_change",
+                details={"from_country": old_country, "to_country": new_country},
+                actor_sub=user_sub,
+            )
+    except Exception:
+        logger.exception(
+            "kyc.monitoring.profile_trigger_hook_failed user_sub=%s", user_sub
+        )
+
+
 @router.patch("/profile")
 async def ui_patch_profile(req: Request, body: ProfilePatchReq, ctx=Depends(require_ui_session)):
     updates = body.model_dump(exclude_unset=True)
+    previous = get_profile(ctx["user_sub"])
     profile = apply_profile_update(ctx["user_sub"], updates, replace=False)
     audit_event("profile_update", ctx["user_sub"], req, outcome="success", mode="patch")
+    _maybe_rescreen_after_profile_update(ctx["user_sub"], previous, profile)
+    _maybe_fire_profile_kyc_triggers(ctx["user_sub"], previous, profile)
     return {"profile": profile}
 
 @router.put("/profile")
 async def ui_put_profile(req: Request, body: ProfilePutReq, ctx=Depends(require_ui_session)):
     updates = body.model_dump()
+    previous = get_profile(ctx["user_sub"])
     profile = apply_profile_update(ctx["user_sub"], updates, replace=True)
     audit_event("profile_update", ctx["user_sub"], req, outcome="success", mode="replace")
+    _maybe_rescreen_after_profile_update(ctx["user_sub"], previous, profile)
+    _maybe_fire_profile_kyc_triggers(ctx["user_sub"], previous, profile)
     return {"profile": profile}
 
 async def ui_upload_profile_photo_unavailable(ctx=Depends(require_ui_session)):

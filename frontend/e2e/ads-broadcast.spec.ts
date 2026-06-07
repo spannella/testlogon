@@ -529,3 +529,88 @@ test.describe("Section 369: Ad Overlay UI", () => {
     });
   });
 });
+
+/* ================================================================== */
+/*  Section 369A — Ad-Join Decoupled From Session Fetch (GAP-0073)      */
+/*                                                                      */
+/*  Regression for GAP-0073: adJoinMutation (and playbackMutation)     */
+/*  must fire on [sessionId, isAuthenticated], NOT on [session] state.  */
+/*  Previously, a failed GET /broadcast/sessions/{id} left `session`    */
+/*  null, so the ad-join effect never ran and the pre-roll never        */
+/*  mounted — advertiser pays for a slot that delivers zero            */
+/*  impressions.                                                        */
+/* ================================================================== */
+
+test.describe("Section 369A: Ad-Join Decoupled From Session Fetch (GAP-0073)", () => {
+  let bobPage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    bobPage = await (await browser.newContext()).newPage();
+    await injectAuth(bobPage, BOB_ID);
+  });
+
+  test.afterAll(async () => {
+    await bobPage.context().close();
+  });
+
+  test("369A.1 ad-join fires even when session fetch returns 404", async () => {
+    const badSid = `gap0073-missing-${TS}`;
+    // Force the session-fetch GET to fail with 404. The ad-join POST must
+    // still fire because it depends on sessionId, not on session state.
+    await bobPage.route(
+      (url) =>
+        url.pathname.endsWith(`/broadcast/sessions/${badSid}`) &&
+        !url.pathname.includes("/ad-join"),
+      (route) => {
+        if (route.request().method() === "GET") {
+          route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: "Session not found" }),
+          });
+        } else {
+          route.continue();
+        }
+      },
+    );
+
+    const adJoinPromise = bobPage.waitForRequest(
+      (req) => req.url().includes(`/broadcast/sessions/${badSid}/ad-join`) && req.method() === "POST",
+      { timeout: 10_000 },
+    );
+
+    await bobPage.goto(`http://localhost:3000/live/${badSid}`);
+
+    // Pre-fix: this times out because adJoinMutation never fires after the 404.
+    // Post-fix: the ad-join POST fires from the [sessionId, isAuthenticated]
+    // effect regardless of the session fetch outcome.
+    const adJoinReq = await adJoinPromise;
+    expect(adJoinReq).toBeTruthy();
+
+    await bobPage.unroute(
+      (url) =>
+        url.pathname.endsWith(`/broadcast/sessions/${badSid}`) &&
+        !url.pathname.includes("/ad-join"),
+    );
+  });
+
+  test("369A.2 ad-join and session fetch fire concurrently on valid load", async () => {
+    const adJoinPromise = bobPage.waitForRequest(
+      (req) => req.url().includes("/ad-join") && req.method() === "POST",
+      { timeout: 12_000 },
+    );
+    const sessionGetPromise = bobPage.waitForRequest(
+      (req) =>
+        /\/broadcast\/sessions\/[^/]+$/.test(req.url().split("?")[0]) &&
+        !req.url().includes("/ad-join") &&
+        req.method() === "GET",
+      { timeout: 12_000 },
+    );
+
+    const sid = `gap0073-valid-${TS}`;
+    await bobPage.goto(`http://localhost:3000/live/${sid}`);
+
+    // Both requests fire — neither depends on the other completing.
+    await Promise.all([adJoinPromise, sessionGetPromise]);
+  });
+});

@@ -61,7 +61,20 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.alerts_table_name, "alerts"), "user_sub", "alert_id"),
         TableDef(_resolve_table_name(S.alert_prefs_table_name, "alert_prefs"), "user_sub"),
         TableDef(_resolve_table_name(S.push_devices_table_name, "push_devices"), "user_sub", "device_id"),
-        TableDef(_resolve_table_name(S.billing_table_name, "billing"), "pk", "sk"),
+        # GAP-0202 / FIN-013: GSI_LEDGER_DATE lets the platform financial
+        # dashboard query ledger entries by day instead of scanning the whole
+        # billing table (which also holds payment methods + balance rows).
+        TableDef(
+            _resolve_table_name(S.billing_table_name, "billing"),
+            "pk",
+            "sk",
+            gsi=[{
+                "index_name": "GSI_LEDGER_DATE",
+                "partition_key": "ledger_date",
+                "sort_key": "sk",
+            }],
+            attr_types={"ledger_date": "S"},
+        ),
         TableDef(_resolve_table_name(S.billing_config_table_name, "billing_config"), "pk", "sk"),
         TableDef(
             _resolve_table_name(S.ddb_sticker_collections_table, "sticker_collections"),
@@ -92,11 +105,23 @@ def _table_defs() -> List[TableDef]:
             gsi=[{"index_name": "ByStatusActivity", "partition_key": "status", "sort_key": "last_activity_at"}],
             attr_types={"last_activity_at": "N"},
         ),
+        # GAP-0189 / FIN-003: per-stage cart reminder configuration
+        TableDef(
+            _resolve_table_name(S.cart_reminder_config_table_name, "cart_reminder_config"),
+            "pk", "sk",
+        ),
+        # GAP-0348 / SHOP-001: ByItemId GSI lets adjust_stock + sibling endpoints
+        # resolve an item from a bare item_id with an O(1) query instead of a
+        # full-table scan (_find_item_by_id in app/routers/catalog.py). Catalog
+        # item rows already carry item_id as a top-level attribute.
         TableDef(
             _resolve_table_name(S.catalog_table_name, "shopping_catalog"),
             "PK",
             "SK",
-            gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByItemId", "partition_key": "item_id"},
+            ],
         ),
         TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
         TableDef(
@@ -119,8 +144,18 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": S.kyc_cases_status_index_name, "partition_key": "gsi_status_pk", "sort_key": "gsi_status_sk"},
                 # KYC-023: PII access audit log, queryable by accessor (newest first).
                 {"index_name": S.kyc_pii_audit_accessor_index_name, "partition_key": "gsi_pii_accessor_pk", "sort_key": "gsi_pii_accessor_sk"},
+                # GAP-0282 (KYC-019): sparse index over admin availability records
+                # (only items carrying both entity_type + admin_sub are projected),
+                # so workload lookups Query instead of full-table Scanning.
+                {"index_name": S.kyc_cases_entity_type_index_name, "partition_key": "entity_type", "sort_key": "admin_sub"},
+                # GAP-0283 (KYC-019): sparse index over the top-level denormalized
+                # ``assigned_admin_sub`` (written on assignment, removed on unclaim)
+                # + ``gsi_status_pk``. Only assigned cases project, so per-admin
+                # active-case counts run a targeted Select=COUNT Query per admin
+                # instead of loading every active case into memory.
+                {"index_name": S.kyc_cases_assigned_admin_index_name, "partition_key": "assigned_admin_sub", "sort_key": "gsi_status_pk"},
             ],
-            attr_types={"gsi_pii_accessor_sk": "N"},
+            attr_types={"gsi_pii_accessor_sk": "N", "entity_type": "S", "admin_sub": "S", "assigned_admin_sub": "S", "gsi_status_pk": "S"},
         ),
         TableDef(
             _resolve_table_name(S.kyc_business_cases_table_name, "kyc_business_cases"),
@@ -727,6 +762,7 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.broadcast_chat_messages_table_name, "BroadcastChatMessages"),
             "session_id",
             "sort_key",
+            gsi=[{"index_name": "MessageIdIndex", "partition_key": "message_id"}],
         ),
         TableDef(
             _resolve_table_name(S.broadcast_chat_mutes_table_name, "BroadcastChatMutes"),
@@ -1033,6 +1069,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"liked_at": "N"},
         ),
+        # Video Comments (VOD-017 / GAP-0380) — durable, NO TTL (moved out of VideoViews)
+        TableDef(
+            os.environ.get("DDB_VIDEO_COMMENTS", "VideoComments"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoCreatedAt", "partition_key": "video_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Ad Impressions (VOD-018)
         TableDef(
             os.environ.get("DDB_AD_IMPRESSIONS", "AdImpressions"),
@@ -1199,6 +1245,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Analytics Events (GAP-0333 / PLATFORM-019): raw event store that feeds
+        # the rollup job. TTL on "ttl_epoch" is enabled in main() via
+        # _enable_ttl_if_needed (default ddb_ttl_attr == "ttl_epoch").
+        TableDef(
+            _resolve_table_name(S.analytics_events_table_name, "AnalyticsEvents"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
         # Privacy / GDPR (PRIVACY-001)
         TableDef(
             _resolve_table_name(S.data_requests_table_name, "data_requests"),
@@ -1277,6 +1334,18 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
             attr_types={"GSI1SK": "N"},
+        ),
+        # ContentKeys (VOD-010 §4.2 / GAP-0374): DRM key revocation records + audit trail.
+        # pk=key_id (the revocation record key); GSI ByAssetCreatedAt / ByTenantCreatedAt
+        # let revocation/audit queries fetch all records for an asset or tenant.
+        TableDef(
+            _resolve_table_name(S.content_keys_table_name, "ContentKeys"),
+            "key_id",
+            gsi=[
+                {"index_name": "ByAssetCreatedAt", "partition_key": "asset_id", "sort_key": "created_at"},
+                {"index_name": "ByTenantCreatedAt", "partition_key": "tenant_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
         ),
         # Per-viewer Watermarked Download renders (VOD-020 — distinct pipeline)
         TableDef(
@@ -1381,8 +1450,9 @@ def _table_defs() -> List[TableDef]:
             "click_id",
             gsi=[
                 {"index_name": "ByVisitor", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByCreator", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
-            attr_types={"GSI1SK": "N"},
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
         # Achievements & Gamification (ENGAGE-001)
         TableDef(
@@ -1425,8 +1495,11 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "status-created-index", "partition_key": "status", "sort_key": "created_at"},
                 {"index_name": "user-created-index", "partition_key": "created_by", "sort_key": "created_at"},
+                # GAP-0210: scheduled (recurring) audit exports — time-ordered
+                # query for due schedules. GSI1SK (next_run_at) is numeric.
+                {"index_name": "schedules-due-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "GSI1SK": "N"},
         ),
         # Broadcast Q&A Questions (ENGAGE-003)
         TableDef(
@@ -1487,6 +1560,8 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "user-orgs-index", "partition_key": "user_sub", "sort_key": "org_id"},
                 {"index_name": "invite-email-index", "partition_key": "email", "sort_key": "org_id"},
                 {"index_name": "slug-index", "partition_key": "slug", "sort_key": "org_id"},
+                # GAP-0176: O(1) invite lookup by invite_id (replaces full table scan in _find_invite)
+                {"index_name": "invite-id-index", "partition_key": "invite_id", "sort_key": "org_id"},
             ],
         ),
         # User Groups (GROUP-001 / GROUP-002)
@@ -1776,8 +1851,9 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+                {"index_name": "ByGlobalStatus", "partition_key": "status", "sort_key": "created_at"},
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "status": "S"},
         ),
         # Instance Monitoring & Health (INFRA-008)
         # Time-series metric datapoints per instance. SK = TS#{ts}; numeric `ts`
@@ -1854,8 +1930,9 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByNamespace", "partition_key": "namespace", "sort_key": "created_at"},
                 {"index_name": "ByStatus", "partition_key": "user_sub", "sort_key": "status"},
                 {"index_name": "ByCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+                {"index_name": "ByGlobalStatus", "partition_key": "status", "sort_key": "created_at"},
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "status": "S"},
         ),
         # Activity Feed (SOC-003)
         TableDef(
@@ -2211,6 +2288,13 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # GAP-0020 / FIN-008: W-9 / TIN collection (KMS-encrypted TIN storage).
+        # Records: pk=USER#{user_sub} sk=TAX_INFO. All access by user PK; no GSI.
+        TableDef(
+            _resolve_table_name(S.tax_info_table_name, "tax_info"),
+            "pk",
+            "sk",
+        ),
         # Background Job Dashboard (PLATFORM-008): run history.
         # pk=job_name sk=RUN#{started_at}#{uuid}
         # GSI ByStartedAt: GSI_PK="JOBRUN" started_at(N) for cross-job recents.
@@ -2284,6 +2368,14 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
             attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # GAP-0217 (GEO-001): platform-level geo block list. Single record
+        # pk="PLATFORM", sk="GEO_BLOCK" holds the runtime-mutable blocked-country
+        # list so ROOT can update it without a backend restart (dev/prod parity).
+        TableDef(
+            _resolve_table_name(S.geo_rules_table_name, "geo_rules"),
+            "pk",
+            "sk",
         ),
     ]
 
@@ -2466,6 +2558,13 @@ def main() -> None:
     _wait_for_tables(ddb, created)
     _enable_ttl_if_needed(ddb, _resolve_table_name(S.api_usage_table_name, "api_usage_events"))
     _enable_ttl_if_needed(ddb, os.getenv("APP_TABLE", "app_single_table"))
+    # GAP-0333 / PLATFORM-019: analytics_events expires raw events via ttl_epoch.
+    _enable_ttl_if_needed(ddb, _resolve_table_name(S.analytics_events_table_name, "AnalyticsEvents"))
+    # GAP-0347 / SHOP-001: shopping_catalog carries per-item low-stock-alert
+    # sentinel rows (ttl_epoch = now+3600) for once-per-hour alert dedup. Only
+    # the sentinel rows write ttl_epoch; real catalog/item/review rows omit it
+    # and are unaffected by TTL enablement.
+    _enable_ttl_if_needed(ddb, _resolve_table_name(S.catalog_table_name, "shopping_catalog"))
     # SHOP-003: Enable TTL on shopping_cart table with attribute "ttl"
     _cart_table = _resolve_table_name(S.shopping_cart_table_name, "shopping_cart")
     try:
@@ -2474,6 +2573,20 @@ def main() -> None:
             client.update_time_to_live,
             TableName=_cart_table,
             TimeToLiveSpecification={"Enabled": True, "AttributeName": "ttl"},
+        )
+    except Exception:
+        pass
+    # ADS-005 / GAP-0045: Enable TTL on billing table for ad_feedback record expiry.
+    # The TTL attribute is "expires_at" (Unix epoch seconds), written only on
+    # AD_FEEDBACK# items. Other billing table item types do not write expires_at
+    # and are unaffected by TTL enablement.
+    _billing_table = _resolve_table_name(S.billing_table_name, "billing")
+    try:
+        client = ddb.meta.client
+        _retry_transient_ddb_call(
+            client.update_time_to_live,
+            TableName=_billing_table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
         )
     except Exception:
         pass

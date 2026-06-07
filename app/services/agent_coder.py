@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import ClientError
@@ -27,6 +28,7 @@ from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.core.validate_url import validate_repo_url
 from app.services import tickets as tickets_svc
 
 logger = logging.getLogger("app.agent_coder")
@@ -483,9 +485,17 @@ def build_pr_command(
     *, branch_name: str, base_branch: str, ticket_id: str, ticket_subject: str, template: str, summary: str
 ) -> str:
     body = render_pr_template(template=template, ticket_id=ticket_id, ticket_subject=ticket_subject, summary=summary)
-    title = ticket_subject.replace('"', "'")
-    body_escaped = body.replace('"', "'")
-    return f'gh pr create --title "{title}" --body "{body_escaped}" --base {base_branch} --head {branch_name}'
+    # GAP-0090 / SEC: ``.replace('"', "'")`` is NOT a shell escape — $(), backticks,
+    # `&&`, and embedded single quotes survive it. Use POSIX single-quote escaping
+    # (shlex.quote) on every interpolated argument so each becomes a single shell
+    # token regardless of its content. base_branch/branch_name are quoted too for
+    # defence in depth (parity with agent_pr_integration._build_gh_pr_command).
+    return (
+        f"gh pr create --title {shlex.quote(ticket_subject)} "
+        f"--body {shlex.quote(body)} "
+        f"--base {shlex.quote(base_branch)} "
+        f"--head {shlex.quote(branch_name)}"
+    )
 
 
 def render_pr_template(*, template: str, ticket_id: str, ticket_subject: str, summary: str) -> str:
@@ -535,7 +545,9 @@ def build_coder_workflow(
     safe to use for dry-run preview and as the basis for the mock state machine.
     """
     cfg = _normalize_config(config)
-    repo_url = cfg.get("repo_url", "")
+    # GAP-0079 / SEC-021: reject shell-injecting repo URLs before they are
+    # f-stringed into the clone_repo shell command below.
+    repo_url = validate_repo_url(cfg.get("repo_url", ""))
     base_branch = cfg.get("repo_branch_base", "main")
     pr_base = cfg.get("pr_base_branch", "main")
     ticket_id = ticket.get("ticket_id", "")
@@ -556,11 +568,17 @@ def build_coder_workflow(
     prompt = build_coding_prompt(
         ticket=ticket, coding_tool=coding_tool, model=model, file_exclude_patterns=file_excludes
     )
+    # GAP-0089 / SEC: the prompt embeds the user-controlled ticket subject. Embedding
+    # prompt[:200] inside a double-quoted shell arg allows ", $(), backticks, and `&&`
+    # to break out of the quotes when the command is executed via a shell/PTY. Pass
+    # the prompt (and the model flag value) through shlex.quote so each is a single,
+    # inert shell token.
+    prompt_arg = shlex.quote(prompt[:200] + "...")
     if coding_tool == "codex":
-        coding_cmd = f'codex -q "{prompt[:200]}..."'
+        coding_cmd = f"codex -q {prompt_arg}"
     else:
-        model_flag = f" --model {model}" if model else ""
-        coding_cmd = f'claude --dangerously-skip-permissions{model_flag} -p "{prompt[:200]}..."'
+        model_flag = f" --model {shlex.quote(model)}" if model else ""
+        coding_cmd = f"claude --dangerously-skip-permissions{model_flag} -p {prompt_arg}"
 
     pr_command = build_pr_command(
         branch_name=branch_name,
@@ -575,7 +593,7 @@ def build_coder_workflow(
         {
             "step_id": 1,
             "type": "clone_repo",
-            "command": f"git clone {repo_url} /workspace && cd /workspace && git fetch origin",
+            "command": f"git clone -- {shlex.quote(repo_url)} /workspace && cd /workspace && git fetch origin",
             "timeout_seconds": 120,
             "on_failure": "escalate",
         },

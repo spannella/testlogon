@@ -18,12 +18,21 @@ from app.models import (
     PayoutListOut,
     PayoutOut,
     PayoutRequestIn,
+    PayoutMethodIn,
+    PayoutMethodUpdateIn,
+    PayoutMethodOut,
+    PayoutMethodListOut,
 )
 from app.services.creator_payouts import (
     cancel_payout,
     get_available_balance,
     list_user_payouts,
     request_payout,
+    list_payout_methods,
+    add_payout_method,
+    update_payout_method,
+    delete_payout_method,
+    set_default_payout_method,
 )
 from app.core.settings import S
 
@@ -57,11 +66,14 @@ def create_payout_request(body: PayoutRequestIn, session=Depends(require_ui_sess
             amount_cents=body.amount_cents,
             method=body.method,
             notes=body.notes,
+            method_id=body.method_id,
         )
     except ValueError as exc:
         msg = str(exc)
         if "DUPLICATE_PAYOUT" in msg:
             raise HTTPException(status_code=409, detail="A payout request is already pending")
+        if "invalid_method_id" in msg:
+            raise HTTPException(status_code=400, detail=msg)
         if "Insufficient" in msg:
             raise HTTPException(status_code=400, detail=msg)
         if "at least" in msg:
@@ -103,3 +115,59 @@ def list_payouts(
     result = list_user_payouts(user_id, limit=limit, cursor=cursor)
     items = [PayoutOut(**item) for item in result["items"]]
     return PayoutListOut(items=items, next_cursor=result.get("next_cursor"))
+
+
+# ─── Payout Methods (GAP-0195 / FIN-009) ──────────────────────────────
+
+
+def _method_error(exc: ValueError) -> HTTPException:
+    code, _, msg = str(exc).partition(":")
+    return HTTPException(status_code=400, detail={"code": code, "message": msg or code})
+
+
+@router.get("/methods", response_model=PayoutMethodListOut)
+def list_methods(session=Depends(require_ui_session)):
+    """List the authenticated creator's payout methods."""
+    items = list_payout_methods(session["user_sub"])
+    return PayoutMethodListOut(methods=[PayoutMethodOut(**m) for m in items])
+
+
+@router.post("/methods", response_model=PayoutMethodOut, status_code=201)
+def add_method(body: PayoutMethodIn, session=Depends(require_ui_session)):
+    """Add a payout destination (bank/PayPal/check). Only last-4 digits are stored."""
+    try:
+        result = add_payout_method(session["user_sub"], **body.model_dump())
+    except ValueError as exc:
+        raise _method_error(exc)
+    return PayoutMethodOut(**result)
+
+
+@router.put("/methods/{method_id}", response_model=PayoutMethodOut)
+def update_method(method_id: str, body: PayoutMethodUpdateIn, session=Depends(require_ui_session)):
+    """Update mutable fields of a payout method (nickname)."""
+    try:
+        result = update_payout_method(session["user_sub"], method_id, nickname=body.nickname)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout method not found")
+    return PayoutMethodOut(**result)
+
+
+@router.delete("/methods/{method_id}", status_code=204)
+def delete_method(method_id: str, session=Depends(require_ui_session)):
+    """Delete a payout method (refuses the default while other methods remain)."""
+    try:
+        delete_payout_method(session["user_sub"], method_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout method not found")
+    except ValueError as exc:
+        raise _method_error(exc)
+
+
+@router.post("/methods/{method_id}/default", response_model=PayoutMethodOut)
+def set_default_method(method_id: str, session=Depends(require_ui_session)):
+    """Mark a payout method as the creator's default destination."""
+    try:
+        result = set_default_payout_method(session["user_sub"], method_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout method not found")
+    return PayoutMethodOut(**result)

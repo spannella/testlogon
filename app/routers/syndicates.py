@@ -266,8 +266,8 @@ def list_members(syndicate_id: str, session=Depends(require_ui_session)):
 
 @router.get("/{syndicate_id}/requests")
 def list_requests(syndicate_id: str, session=Depends(require_ui_session)):
-    # Admin-only check done in service
-    items = svc.list_pending_requests(syndicate_id)
+    # Admin-only check enforced in service via _require_admin
+    items = svc.list_pending_requests(syndicate_id, session["user_sub"])
     return [
         SyndicateRequestOut(
             syndicate_id=r.get("syndicate_id", syndicate_id),

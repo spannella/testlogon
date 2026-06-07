@@ -232,6 +232,10 @@ def new_ledger_entry(
     meta: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
+    # GAP-0203 / FIN-013: provider-originating transactions MUST pass
+    # ``extra={"provider": "stripe"|"paypal"|"ccbill"}`` so the platform
+    # financial dashboard provider breakdown can attribute the entry. The
+    # ``extra`` dict is a pass-through onto the persisted item (see below).
     ts = now_ts()
     entry_id = ulidish()
     sk = ledger_sk(ts, entry_id)

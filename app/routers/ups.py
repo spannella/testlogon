@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,6 +25,73 @@ def _mock_enabled() -> bool:
 
 def _ups_sig_secret() -> str:
     return (S.ups_webhook_secret or "local-ups-webhook-secret").strip()
+
+
+# GAP-0350: UPS webhook replay protection.
+_UPS_DEDUP_PK = "UPS_EVENT_PROCESSED"
+_UPS_DEDUP_TTL_SECONDS = 86400  # 24 hours
+
+
+def _extract_ups_event_id(payload: dict) -> Optional[str]:
+    """Read the UPS event identifier from a webhook payload.
+
+    UPS API v2 uses ``eventId``; v1 may use ``messageId`` / ``requestId``.
+    Falls back to ``event_id`` (snake_case) for parity with the dev emitter.
+    """
+    if not isinstance(payload, dict):
+        return None
+    val = (
+        payload.get("eventId")
+        or payload.get("event_id")
+        or payload.get("messageId")
+        or payload.get("requestId")
+    )
+    return str(val) if val else None
+
+
+def _check_ups_timestamp_tolerance(req: Request) -> None:
+    """Reject requests whose ``x-ups-timestamp`` is outside the tolerance window.
+
+    If the header is absent, the check is skipped (backward-compatible for
+    dev/mock and for UPS payload types that do not include it).
+    """
+    ts_header = req.headers.get("x-ups-timestamp", "").strip()
+    if not ts_header:
+        return
+    try:
+        event_ts = int(ts_header)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid X-UPS-Timestamp header")
+    tolerance = int(S.ups_webhook_timestamp_tolerance_seconds)
+    drift = abs(now_ts() - event_ts)
+    if drift > tolerance:
+        raise HTTPException(400, f"UPS webhook timestamp out of tolerance window ({drift}s)")
+
+
+def _check_and_mark_ups_event(event_id: str) -> bool:
+    """Claim exclusive processing rights for ``event_id`` via a conditional put.
+
+    Returns True if this is the first time the event is seen (proceed).
+    Returns False if the event was already processed (skip / idempotent ack).
+    """
+    sk = f"EID#{event_id}"
+    try:
+        T.billing.put_item(
+            Item={
+                "pk": _UPS_DEDUP_PK,
+                "sk": sk,
+                "event_id": event_id,
+                "created_at": now_ts(),
+                "ttl": now_ts() + _UPS_DEDUP_TTL_SECONDS,
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        name = type(exc).__name__
+        if "ConditionalCheckFailed" in name or "ConditionalCheckFailed" in str(exc):
+            return False
+        raise
 
 
 @router.post("/api/ups/quote")
@@ -95,15 +162,28 @@ async def ups_tracking_webhook(req: Request) -> Dict[str, Any]:
     if not verify_tracking_webhook_signature(raw, signature):
         raise HTTPException(403, "Invalid UPS webhook signature")
 
+    # GAP-0350: replay prevention — timestamp tolerance window (when header present).
+    _check_ups_timestamp_tolerance(req)
+
     payload = await req.json() if raw else {}
     tracking_number = payload.get("tracking_number") or payload.get("trackingNumber") or "unknown"
 
-    # 1. Audit log (existing behavior — preserved).
+    # GAP-0350: idempotency — dedup by event ID via a conditional DDB put.
+    event_id = _extract_ups_event_id(payload)
+    if event_id and not _check_and_mark_ups_event(event_id):
+        # Already processed — idempotent 200 ack, do NOT reprocess.
+        return {"received": True, "order_updated": False, "duplicate": True}
+
+    # 1. Audit log (existing behavior — preserved). SK uses the event ID when
+    #    available so identical events map to a single, idempotent audit row.
+    audit_sk = f"EID#{event_id}" if event_id else f"{now_ts()}#{tracking_number}"
     T.billing.put_item(
         Item={
             "pk": "UPS_TRACKING",
-            "sk": f"{now_ts()}#{tracking_number}",
+            "sk": audit_sk,
             "payload": payload,
+            "event_id": event_id,
+            "tracking_number": tracking_number,
             "created_at": now_ts(),
         }
     )
@@ -141,7 +221,7 @@ async def ups_tracking_webhook(req: Request) -> Dict[str, Any]:
         # Never fail the webhook on an order-update error; the audit row stands.
         pass
 
-    return {"received": True, "order_updated": order_updated}
+    return {"received": True, "order_updated": order_updated, "duplicate": False}
 
 
 def _decode_basic(auth_header: str) -> tuple[str, str]:
@@ -216,7 +296,12 @@ def emit_ups_tracking_webhook(body: Dict[str, Any]) -> Dict[str, Any]:
     sig = hmac.new(_ups_sig_secret().encode("utf-8"), raw, hashlib.sha256).hexdigest()
     resp = requests.post(
         target_url,
-        headers={"content-type": "application/json", "x-ups-signature": sig},
+        headers={
+            "content-type": "application/json",
+            "x-ups-signature": sig,
+            # GAP-0350: send timestamp so the dev emitter and the verifier agree.
+            "x-ups-timestamp": str(now_ts()),
+        },
         data=raw,
         timeout=10,
     )

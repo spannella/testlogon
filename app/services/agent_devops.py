@@ -26,6 +26,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import subprocess
+import urllib.parse
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -176,6 +179,12 @@ def validate_devops_config(config: Dict[str, Any]) -> List[str]:
         for url in env.get("health_check_urls") or []:
             if not _is_http_url(url):
                 errors.append("Health check URLs must be valid HTTP or HTTPS URLs")
+                break
+            # GAP-0092: reject shell-injectable URLs at config-write time too.
+            try:
+                _validate_health_check_url(url)
+            except ValueError as exc:
+                errors.append(f"Invalid health_check_url: {exc}")
                 break
 
         is_prod = "prod" in name.lower()
@@ -444,6 +453,165 @@ def claim_devops_ticket(*, ticket_id: str, agent_sub: str, operation_type: str) 
 
 
 # ---------------------------------------------------------------------------
+# Auto-deploy-on-QA-approved dispatch (GAP-0093)
+#
+# The ``auto_deploy_on_qa_approved`` config flag was stored and widened the
+# eligible-ticket statuses, but nothing ever dispatched a deployment when a
+# ticket reached ``qa_approved``. The functions below provide the dispatch
+# hooks. They are pure-DynamoDB (moto-friendly) and never run real shell
+# commands in dev (``S.agent_devops_execute_commands`` stays False), so the
+# whole QA-approve -> auto-deploy pipeline is exercisable offline.
+#
+# Wiring (outside this module): the event-driven hook
+# ``dispatch_auto_deploy_for_ticket`` is intended to be called from
+# ``agent_qa.mark_ticket_qa_approved`` (non-blocking), and ``poll_auto_deploy_once``
+# is intended as the body of a background catch-up loop in ``app/main.py``.
+# ---------------------------------------------------------------------------
+
+
+def _config_label_sets(config: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Build the {operation_type: [labels]} map used by find_devops_eligible_tickets."""
+    return {
+        "deployment": config.get("deploy_ticket_labels") or list(_DEFAULT_DEPLOY_LABELS),
+        "infrastructure": config.get("infra_ticket_labels") or list(_DEFAULT_INFRA_LABELS),
+        "incident_response": config.get("incident_ticket_labels") or list(_DEFAULT_INCIDENT_LABELS),
+    }
+
+
+def list_agent_types_with_auto_deploy() -> List[Dict[str, Any]]:
+    """Return all DevOps agent types with ``auto_deploy_on_qa_approved=True``.
+
+    Scans the shared ``agent_types`` table for CONFIG items of type ``devops``.
+    The number of agent types is small and this is only called from dispatch /
+    background paths, so a paginating scan is acceptable.
+    """
+    ensure_tables()
+    out: List[Dict[str, Any]] = []
+    scan_kwargs: Dict[str, Any] = {
+        "FilterExpression": "sk = :sk AND agent_type = :t",
+        "ExpressionAttributeValues": {":sk": "CONFIG", ":t": DEVOPS_AGENT_TYPE},
+    }
+    while True:
+        resp = T.agent_types.scan(**scan_kwargs)
+        for item in resp.get("Items", []):
+            cfg = item.get("devops_config") or {}
+            if cfg.get("auto_deploy_on_qa_approved"):
+                out.append(
+                    {
+                        "agent_type_id": item.get("agent_type_id", ""),
+                        "config": _coerce_numbers(cfg),
+                    }
+                )
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        scan_kwargs["ExclusiveStartKey"] = lek
+    return out
+
+
+def _dispatch_auto_deploy(
+    *, ticket: Dict[str, Any], agent_type_id: str, config: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Dispatch a deployment workflow for an eligible qa_approved ticket.
+
+    Runs the deterministic mock workflow (the same path manual deploys use).
+    Returns the persisted devops_output, or ``None`` if the ticket was already
+    claimed by another process. Never raises on already-claimed.
+    """
+    ticket_id = ticket.get("ticket_id", "")
+    agent_sub = f"auto_deploy@{agent_type_id}"
+    operation_type = classify_operation(ticket=ticket, config=config)
+    # Claim first so a concurrent dispatch/poll cannot double-deploy.
+    try:
+        claim_devops_ticket(
+            ticket_id=ticket_id, agent_sub=agent_sub, operation_type=operation_type
+        )
+    except ValueError:
+        # already_claimed — another dispatcher won the race.
+        logger.info("auto_deploy.skipped ticket=%s reason=already_claimed", ticket_id)
+        return None
+    except LookupError:
+        logger.info("auto_deploy.skipped ticket=%s reason=ticket_not_found", ticket_id)
+        return None
+    run_id = f"auto_{uuid.uuid4().hex[:12]}"
+    logger.info(
+        "auto_deploy.dispatched ticket=%s agent_type=%s run=%s",
+        ticket_id, agent_type_id, run_id,
+    )
+    return run_mock_workflow(
+        run_id=run_id,
+        agent_type_id=agent_type_id,
+        ticket=ticket,
+        config=config,
+        agent_sub=agent_sub,
+    )
+
+
+def dispatch_auto_deploy_for_ticket(*, ticket_id: str) -> Optional[Dict[str, Any]]:
+    """Event-driven auto-deploy hook for a single ticket.
+
+    Intended to be called (non-blocking, best-effort) from
+    ``agent_qa.mark_ticket_qa_approved`` right after a ticket is set to
+    ``qa_approved``. Finds the first DevOps agent type configured with
+    ``auto_deploy_on_qa_approved=True`` whose label sets match this ticket and
+    dispatches a deployment. Returns the devops_output of the dispatched run,
+    or ``None`` when no agent type matches / the ticket is not eligible.
+    """
+    ticket = tickets_svc.STORE.get_ticket(ticket_id)
+    if not ticket:
+        return None
+    for at in list_agent_types_with_auto_deploy():
+        config = at["config"]
+        eligible = find_devops_eligible_tickets(
+            label_sets=_config_label_sets(config),
+            auto_deploy_on_qa=True,
+            limit=100,
+        )
+        if any(t["ticket_id"] == ticket_id for t in eligible):
+            return _dispatch_auto_deploy(
+                ticket=ticket, agent_type_id=at["agent_type_id"], config=config
+            )
+    return None
+
+
+def poll_auto_deploy_once() -> List[Dict[str, Any]]:
+    """Catch-up pass: dispatch every currently-eligible qa_approved ticket.
+
+    Intended as the body of a background polling loop. For each DevOps agent
+    type with ``auto_deploy_on_qa_approved=True`` it dispatches all eligible,
+    unclaimed tickets. Best-effort: a failure dispatching one ticket is logged
+    and does not abort the rest. Returns the list of dispatched devops_outputs.
+    """
+    dispatched: List[Dict[str, Any]] = []
+    for at in list_agent_types_with_auto_deploy():
+        config = at["config"]
+        agent_type_id = at["agent_type_id"]
+        try:
+            eligible = find_devops_eligible_tickets(
+                label_sets=_config_label_sets(config),
+                auto_deploy_on_qa=True,
+                limit=100,
+            )
+        except Exception:  # noqa: BLE001 - background loop must not die
+            logger.exception("auto_deploy.error agent_type=%s during eligibility", agent_type_id)
+            continue
+        for t in eligible:
+            ticket = tickets_svc.STORE.get_ticket(t["ticket_id"])
+            if not ticket:
+                continue
+            try:
+                output = _dispatch_auto_deploy(
+                    ticket=ticket, agent_type_id=agent_type_id, config=config
+                )
+            except Exception:  # noqa: BLE001 - one bad ticket must not stop the loop
+                logger.exception("auto_deploy.error ticket=%s", t["ticket_id"])
+                continue
+            if output is not None:
+                dispatched.append(output)
+    return dispatched
+
+
+# ---------------------------------------------------------------------------
 # Deployment mutex (one active deployment per environment)
 # ---------------------------------------------------------------------------
 
@@ -655,6 +823,56 @@ def get_deployment_log(*, deployment_id: str) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+# Shell metacharacters (and control chars) that must never appear in a health
+# check URL. Mirrors app/core/validate_url._SHELL_META_RE but permits spaces are
+# still rejected (a URL must not contain whitespace).
+_HEALTH_URL_SHELL_META_RE = re.compile(r"[;&|`$<>(){}\[\]'\"\\\s]|[\x00-\x1f]")
+_HEALTH_URL_PCT_NEWLINE_RE = re.compile(r"%0[09adAD]", re.IGNORECASE)
+
+
+def _validate_health_check_url(url: str) -> str:
+    """Validate a health-check URL for safe use as a ``curl`` argument.
+
+    Allows only ``http://`` / ``https://`` URLs free of shell metacharacters,
+    control characters and percent-encoded newlines. Returns the URL unchanged
+    when valid; raises ``ValueError`` otherwise.
+
+    This is the GAP-0092 remediation: ``health_check_urls`` come from
+    admin-supplied deployment config and were previously interpolated verbatim
+    into a ``curl -sf {url}`` command string. Validation here (plus argv-style
+    execution / JSON-argv logging) closes the latent shell-injection path that
+    would open when ``S.agent_devops_execute_commands`` is enabled.
+    """
+    if not url or not isinstance(url, str):
+        raise ValueError("health_check_url must be a non-empty string")
+    if len(url) > 500:
+        raise ValueError("health_check_url too long (max 500)")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"health_check_url scheme must be http or https, got: {parsed.scheme!r}"
+        )
+    if _HEALTH_URL_PCT_NEWLINE_RE.search(url):
+        raise ValueError(
+            "health_check_url contains forbidden percent-encoded control characters"
+        )
+    if _HEALTH_URL_SHELL_META_RE.search(url):
+        raise ValueError(
+            f"health_check_url contains forbidden shell metacharacters: {url!r}"
+        )
+    return url
+
+
+def _health_check_argv(url: str) -> List[str]:
+    """Build the safe argv list for a health-check ``curl`` invocation.
+
+    Never used with ``shell=True``. The returned list is also what is recorded
+    (as JSON) in the deployment-step ``command`` field so the audit record is
+    always parseable and never shell-interpretable.
+    """
+    return ["curl", "--silent", "--fail", _validate_health_check_url(url)]
+
+
 def run_health_checks(
     *, health_check_urls: List[str], timeout_seconds: int = 120, force_unhealthy: bool = False
 ) -> List[Dict[str, Any]]:
@@ -662,10 +880,29 @@ def run_health_checks(
 
     Real HTTP execution is gated; in mock mode all checks pass (or all fail when
     ``force_unhealthy`` is set so rollback paths are testable).
+
+    Every URL is validated up front (GAP-0092): a URL containing shell
+    metacharacters raises ``ValueError`` before it can reach any execution or
+    logging path. When ``S.agent_devops_execute_commands`` is enabled the check
+    runs ``curl`` via an argv list with ``shell=False`` (no shell parsing).
     """
     results: List[Dict[str, Any]] = []
     for url in health_check_urls:
-        healthy = not force_unhealthy
+        argv = _health_check_argv(url)  # validates url; raises on shell metachars
+        if S.agent_devops_execute_commands:
+            try:
+                proc = subprocess.run(  # noqa: S603 - argv list, shell=False, validated url
+                    argv + ["--max-time", str(int(timeout_seconds))],
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=int(timeout_seconds) + 5,
+                )
+                healthy = proc.returncode == 0 and not force_unhealthy
+            except (subprocess.SubprocessError, OSError):
+                healthy = False
+        else:
+            healthy = not force_unhealthy
         results.append(
             {
                 "url": url,
@@ -1214,7 +1451,7 @@ def run_mock_workflow(
         log_deployment_step(
             deployment_id=deployment_id, agent_run_id=run_id, ticket_id=ticket_id,
             environment=env_name, step_number=step_no, step_type="health_check",
-            command=f"curl -sf {h['url']}", exit_code=0 if h["healthy"] else 1,
+            command=json.dumps(_health_check_argv(h["url"])), exit_code=0 if h["healthy"] else 1,
             stdout_tail=json.dumps({"status": "ok" if h["healthy"] else "fail"}),
             stderr_tail="", started_at=ts0, completed_at=ts0 + 1,
             status="success" if h["healthy"] else "failed",

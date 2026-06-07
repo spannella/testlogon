@@ -141,6 +141,35 @@ class MockSamlAuth:
         return redirect_url
 
 
+def get_saml_auth(request_data: Dict[str, Any], settings: Dict[str, Any]):
+    """Return the appropriate SAML auth implementation (GAP-0174 / ENTERPRISE-002).
+
+    Selection rules:
+    - **Dev/test** (``S.dev_mode`` is ``True``): return :class:`MockSamlAuth`. The mock
+      does *not* perform cryptographic signature validation and MUST never be used in
+      production. Dev/CI/E2E environments may not have ``python3-saml`` (and its native
+      ``xmlsec1`` dependency) installed, so we keep the mock here unchanged.
+    - **Production** (``S.dev_mode`` is ``False``): return the real
+      ``OneLogin_Saml2_Auth`` from ``python3-saml``, which verifies the XML/assertion
+      signature, conditions (NotBefore/NotOnOrAfter), audience restriction and
+      InResponseTo binding. If the library is not installed we raise a clear
+      ``RuntimeError`` at call time rather than silently downgrading to the insecure
+      mock — failing closed is the secure behaviour for an auth path.
+    """
+    if S.dev_mode:
+        return MockSamlAuth(request_data, settings)
+    try:
+        from onelogin.saml2.auth import OneLogin_Saml2_Auth
+    except ImportError as exc:  # pragma: no cover - depends on prod-only native deps
+        raise RuntimeError(
+            "python3-saml is required for production SAML authentication but is not "
+            "installed. Install it (and its xmlsec1 system libraries) before enabling "
+            "SSO with S.dev_mode=False. NEVER fall back to MockSamlAuth in production: "
+            "it skips signature validation and accepts forged assertions (GAP-0174)."
+        ) from exc
+    return OneLogin_Saml2_Auth(request_data, settings)
+
+
 def build_saml_settings(provider: Dict[str, Any], request_data: Dict[str, Any]) -> Dict[str, Any]:
     """Build SAML settings dict from our provider record."""
     sp_entity_id = provider.get("sp_entity_id", "")

@@ -375,11 +375,17 @@ def assign_content_to_collab(
             content_type=body.content_type,
             assigned_by=ctx["user_sub"],
             title=body.title,
+            skip_ownership_check=_is_admin(ctx),
         )
     except KeyError:
         raise HTTPException(404, "Collaboration not found")
-    except PermissionError:
-        raise HTTPException(403, "Not a collaboration participant")
+    except PermissionError as exc:
+        detail = (
+            "You do not own this content"
+            if "content_not_owned" in str(exc)
+            else "Not a collaboration participant"
+        )
+        raise HTTPException(403, detail)
     except cr.NotActiveError:
         raise HTTPException(400, "Collaboration is not active")
     except cr.AlreadyAssignedError:
@@ -531,3 +537,72 @@ def resolve_collab_dispute(
     except PermissionError:
         raise HTTPException(403, "Not a collaboration participant")
     return {"ok": True, "status": result.get("status", ""), "dispute": _dispute_out(result).model_dump()}
+
+
+# ---------------------------------------------------------------------------
+# Admin-global dispute arbitration (FIN-011 / GAP-0199)
+# ---------------------------------------------------------------------------
+
+admin_router = APIRouter(
+    prefix="/ui/admin/collaboration-disputes", tags=["admin-collaborations"]
+)
+
+
+def _require_admin(ctx: Dict) -> None:
+    if not _is_admin(ctx):
+        raise HTTPException(403, "Admin access required")
+
+
+@admin_router.get("", response_model=CollabDisputeListOut)
+def admin_list_all_disputes(
+    status: Optional[str] = Query("open"),
+    limit: int = Query(50, ge=1, le=200),
+    ctx: Dict = Depends(require_ui_session),
+):
+    """List all disputes across every collaboration (admin queue, GAP-0199)."""
+    _check_enabled()
+    _require_admin(ctx)
+    items = cr.list_disputes(collaboration_id=None, status=status, limit=limit)
+    return CollabDisputeListOut(items=[_dispute_out(i) for i in items])
+
+
+@admin_router.post("/{dispute_id}/arbitrate", status_code=200)
+def admin_arbitrate_dispute(
+    dispute_id: str,
+    body: CollabDisputeResolveIn,
+    ctx: Dict = Depends(require_ui_session),
+):
+    """Admin force-resolve any dispute by dispute_id without needing collab_id
+    (GAP-0199). Looks up the dispute's own collaboration_id from the record."""
+    _check_enabled()
+    _require_admin(ctx)
+
+    dispute = cr.get_dispute_global(dispute_id)
+    if not dispute:
+        raise HTTPException(404, "Dispute not found")
+    collab_id = dispute.get("collaboration_id")
+    if not collab_id:
+        raise HTTPException(500, "Dispute record missing collaboration_id")
+
+    logger.info(
+        "Admin arbitration: dispute=%s collab=%s admin=%s accept=%s",
+        dispute_id, collab_id, ctx.get("user_sub"), body.accept,
+    )
+    try:
+        result = cr.resolve_dispute(
+            dispute_id=dispute_id,
+            collaboration_id=collab_id,
+            resolved_by=ctx["user_sub"],
+            resolution=body.resolution,
+            accept=body.accept,
+            is_admin=True,
+        )
+    except KeyError as e:
+        if "dispute" in str(e):
+            raise HTTPException(404, "Dispute not found")
+        raise HTTPException(404, "Collaboration not found")
+    return {
+        "ok": True,
+        "status": result.get("status", ""),
+        "dispute": _dispute_out(result).model_dump(),
+    }

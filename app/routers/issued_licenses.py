@@ -93,6 +93,9 @@ def create_issued_license(
     session: dict = Depends(require_ui_session),
 ):
     user_sub = session["user_sub"]
+    # GAP-0294: ADMIN/ROOT may bypass content-ownership enforcement.
+    role = str(session.get("role") or "").strip().lower()
+    is_admin = role in ("admin", "root")
     try:
         item = svc.issue_license(
             licensor_sub=user_sub,
@@ -107,10 +110,13 @@ def create_issued_license(
             title=body.title,
             thumbnail_url=body.thumbnail_url,
             expires_at=body.expires_at,
+            skip_ownership_check=is_admin,
         )
         return _license_out(item)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 # ─── List licenses I've issued ────────────────────────────────────────────────

@@ -30,7 +30,15 @@ async def create_boost(
             budget_cents=body.budget_cents,
             duration_seconds=body.duration_seconds,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except svc.DuplicateBoostError as exc:
+        # GAP-0059: an active boost already exists for this content -> 409 Conflict
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
+        # "<content> not found" -> 404, anything else -> 400
+        if "not found" in str(exc):
+            raise HTTPException(status_code=404, detail=str(exc))
         raise HTTPException(status_code=400, detail=str(exc))
 
 

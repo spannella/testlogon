@@ -368,8 +368,18 @@ def transition_video_status(
     to_status: str,
     reason: str = "",
     actor: str = "",
+    hls_manifest_url: Optional[str] = None,
+    thumbnail_url: Optional[str] = None,
+    renditions: Optional[List[VideoRendition]] = None,
 ) -> VideoMetadataModel:
-    """Validate and apply a status transition. Raises 409 if illegal."""
+    """Validate and apply a status transition. Raises 409 if illegal.
+
+    The optional ``hls_manifest_url``, ``thumbnail_url``, and ``renditions``
+    parameters are persisted to ``video_metadata`` when provided. They are used
+    on the transcode-completion (→ published) transition so playback URLs and
+    rendition metadata are available to the listing/playback APIs. When not
+    supplied, any existing values are left unchanged.
+    """
     current = get_video(video_id)
     validation = validate_transition(current.status, to_status)  # type: ignore[arg-type]
     if not validation.legal:
@@ -393,6 +403,13 @@ def transition_video_status(
     # Set published_at when transitioning to published
     if to_status == "published" and current.published_at is None:
         update_data["published_at"] = ts
+    # Populate output URL / rendition fields when provided (transcode-completion path).
+    if hls_manifest_url is not None:
+        update_data["hls_manifest_url"] = hls_manifest_url
+    if thumbnail_url is not None:
+        update_data["thumbnail_url"] = thumbnail_url
+    if renditions is not None:
+        update_data["renditions"] = renditions
 
     updated = current.model_copy(update=update_data)
     T.video_metadata.put_item(Item=video_to_item(updated))

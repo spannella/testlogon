@@ -120,22 +120,111 @@ def validate_vtt(content: str) -> list[str]:
 
 # ─── Content sanitization ────────────────────────────────────────────────────
 
-_DISALLOWED_TAGS_RE = re.compile(
-    r"<\s*/?\s*(script|style|link|meta|object|embed|iframe|applet|form|input|textarea|select|button)\b[^>]*>",
+# Allowlist of WebVTT cue-payload tags (SEC-012 §4.4). Only these tags survive
+# sanitization; everything else is stripped. The voice tag `<v NAME>` carries a
+# speaker name that is preserved; all *other* attributes on permitted tags are
+# discarded. `<c>` and `<lang>` are intentionally excluded (they carry
+# class/attribute vectors and are rarely required for accessibility).
+#
+# Matches a single tag (with its angle brackets) and captures:
+#   group 1 ("close") — "/" for a closing tag, else empty
+#   group 2 ("name")  — the tag name
+#   group 3 ("rest")  — any trailing content (attributes / voice name)
+_VTT_ALLOWED_TAGS_RE = re.compile(
+    r"<\s*(?P<close>/?)\s*(?P<name>b|i|u|ruby|rt|v)(?P<rest>\b[^>]*)?>",
     re.IGNORECASE,
 )
-_EVENT_ATTRS_RE = re.compile(r"\s+on\w+\s*=", re.IGNORECASE)
+# Defense-in-depth: even though the allowlist removes every attribute, scrub any
+# javascript:/data: URIs that might appear in surviving (or escaped) cue text.
 _DATA_URI_RE = re.compile(r"data\s*:", re.IGNORECASE)
 _JAVASCRIPT_URI_RE = re.compile(r"javascript\s*:", re.IGNORECASE)
 
 
+def _normalize_allowed_tag(match: "re.Match[str]") -> str:
+    """Rewrite a permitted WebVTT tag, stripping every attribute.
+
+    For the voice tag `<v NAME>` the speaker name (the tag's leading text) is
+    preserved because it is semantically part of the tag, not an attribute.
+    All other tags collapse to their bare form (`<b onclick=x>` -> `<b>`).
+    """
+    close = match.group("close")
+    name = match.group("name").lower()
+    rest = (match.group("rest") or "").strip()
+
+    if close:
+        return f"</{name}>"
+
+    if name == "v" and rest:
+        # Preserve only the voice name: take the first whitespace-delimited
+        # token and reject anything containing attribute-like syntax (=, quotes).
+        candidate = rest.split()[0] if rest.split() else ""
+        if candidate and not any(c in candidate for c in "=\"'<>"):
+            return f"<v {candidate}>"
+        return "<v>"
+
+    return f"<{name}>"
+
+
+def _sanitize_vtt_line(line: str) -> str:
+    """Sanitize a single cue-payload line via the tag allowlist.
+
+    Allowed tags are normalized (attributes stripped); every other ``<...>``
+    construct has its angle brackets removed so no executable markup remains.
+    """
+    out: list[str] = []
+    pos = 0
+    length = len(line)
+    while pos < length:
+        ch = line[pos]
+        if ch == "<":
+            m = _VTT_ALLOWED_TAGS_RE.match(line, pos)
+            if m:
+                out.append(_normalize_allowed_tag(m))
+                pos = m.end()
+                continue
+            # Not an allowlisted tag: drop up to the closing '>' (or the rest of
+            # the line if unterminated), discarding the dangerous markup. The
+            # inner text of stripped container tags is preserved (only the
+            # angle-bracketed tag itself is removed).
+            close_idx = line.find(">", pos)
+            if close_idx == -1:
+                pos = length
+            else:
+                pos = close_idx + 1
+            continue
+        out.append(ch)
+        pos += 1
+    return "".join(out)
+
+
 def sanitize_vtt_content(content: str) -> str:
-    """Remove potentially dangerous HTML from VTT cue payloads."""
-    content = _DISALLOWED_TAGS_RE.sub("", content)
-    content = _EVENT_ATTRS_RE.sub(" ", content)
-    content = _DATA_URI_RE.sub("", content)
-    content = _JAVASCRIPT_URI_RE.sub("", content)
-    return content
+    """Strip dangerous HTML from VTT cue payloads using a strict allowlist.
+
+    Only the WebVTT-permitted tags (`<b>`, `<i>`, `<u>`, `<v NAME>`, `<ruby>`,
+    `<rt>` and their closing tags) survive; all attributes are removed and every
+    other tag is stripped (SEC-012 §4.4). Cue timestamp lines and plain text are
+    preserved unchanged. Signature and return type are unchanged from the
+    previous denylist implementation.
+    """
+    lines = content.split("\n")
+    in_cue = False
+    result: list[str] = []
+    for line in lines:
+        if _VTT_TIMESTAMP_RE.match(line.strip()):
+            in_cue = True
+            result.append(line)
+        elif in_cue and line.strip() == "":
+            in_cue = False
+            result.append(line)
+        elif in_cue:
+            result.append(_sanitize_vtt_line(line))
+        else:
+            result.append(line)
+    sanitized = "\n".join(result)
+    # Belt-and-suspenders URI scrubbing across the whole payload.
+    sanitized = _DATA_URI_RE.sub("", sanitized)
+    sanitized = _JAVASCRIPT_URI_RE.sub("", sanitized)
+    return sanitized
 
 
 # ─── S3 operations ───────────────────────────────────────────────────────────

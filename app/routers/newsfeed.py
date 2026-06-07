@@ -41,8 +41,18 @@ from app.services.newsfeed_feed_query import FeedFilterParams, parse_filter_wind
 from app.services.rate_limit import rate_limit_feed_query
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
+from app.auth.deps import require_kyc_tier
 from app.services import post_interesting as _post_interesting_svc
+from app.services.analytics_events import (
+    record_engagement_event,
+    record_revenue_event,
+)
 from app.services.subscription_access import can_access_creator
+from app.services.social_alerts import (
+    BATCH_KEY_PATTERNS,
+    emit_mention_alerts,
+    emit_social_alert,
+)
 from app.services.usage_metering import (
     build_usage_event,
     build_usage_source_idempotency_key,
@@ -1576,6 +1586,75 @@ class ScheduledPostsResponse(BaseModel):
     }
 
 
+def _gif_allowed_domains() -> frozenset:
+    """Resolve the GIF CDN domain allowlist from settings (GAP-0182)."""
+    raw = getattr(S, "gif_cdn_allowed_domains", "") or ""
+    return frozenset(d.strip().lower() for d in raw.split(",") if d.strip())
+
+
+def _validate_gif_url(url: str) -> str:
+    """GAP-0182: gif_url must be http(s) from an allowlisted GIF CDN domain.
+
+    Rejects data:, javascript:, file:, scheme-relative (//), and arbitrary
+    third-party domains. Applies identically in dev and prod (SECOPS-007).
+    """
+    url = (url or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        logger.warning("gif_url rejected (scheme)", extra={"scheme": parsed.scheme})
+        raise ValueError(
+            f"gif_url scheme '{parsed.scheme}' is not allowed; use https://"
+        )
+    host = (parsed.hostname or "").lower()
+    if host not in _gif_allowed_domains():
+        logger.warning("gif_url rejected (domain)", extra={"host": host})
+        raise ValueError(
+            f"gif_url domain '{host}' is not on the allowed GIF CDN list"
+        )
+    return url
+
+
+def _sticker_allowed_prefixes() -> tuple:
+    """Resolve allowed platform sticker URL prefixes (GAP-0183)."""
+    base = ["/mock/s3/stickers/", "/stickers/", "/media/stickers/"]
+    extra = getattr(S, "sticker_cdn_allowed_prefixes", "") or ""
+    base.extend(p.strip() for p in extra.split(",") if p.strip())
+    return tuple(base)
+
+
+def _validate_sticker_url(url: str) -> str:
+    """GAP-0183: sticker_url must reference platform-hosted content only.
+
+    Accepts platform-relative paths (e.g. /mock/s3/stickers/...) or absolute
+    URLs under the configured CDN base. Rejects arbitrary external URLs,
+    data:, javascript:, and scheme-relative (//) forms. Same logic in dev and
+    prod (SECOPS-007); prod must set FILEMGR_MEDIA_PREVIEW_CDN_BASE_URL.
+    """
+    url = (url or "").strip()
+    # Platform-relative paths served from the same origin as the API.
+    # A leading "//" is a scheme-relative URL (off-platform) — exclude it.
+    if url.startswith("/") and not url.startswith("//"):
+        if url.startswith(_sticker_allowed_prefixes()):
+            return url
+        logger.warning("sticker_url rejected (relative)", extra={"url_prefix": url[:64]})
+        raise ValueError(
+            "sticker_url relative path must start with a platform sticker prefix"
+        )
+    # Absolute CDN URLs when a CDN base is configured.
+    cdn_base = (getattr(S, "filemgr_media_preview_cdn_base_url", "") or "").rstrip("/")
+    if cdn_base and url.startswith(cdn_base + "/"):
+        return url
+    parsed = urlparse(url)
+    logger.warning(
+        "sticker_url rejected (origin)",
+        extra={"scheme": parsed.scheme, "host": parsed.hostname},
+    )
+    raise ValueError(
+        "sticker_url must be a platform-relative path or platform CDN URL; "
+        f"got scheme='{parsed.scheme}', host='{parsed.hostname}'"
+    )
+
+
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
@@ -1622,11 +1701,15 @@ class CreateCommentRequest(ContentFieldsMixin):
         if self.kind == "gif":
             if not (self.gif_url or "").strip():
                 raise ValueError("gif_url is required for gif comments")
+            # GAP-0182: enforce https + GIF CDN domain allowlist
+            self.gif_url = _validate_gif_url(self.gif_url)
         elif self.kind == "sticker":
             if not (self.sticker_id or "").strip():
                 raise ValueError("sticker_id is required for sticker comments")
             if not (self.sticker_url or "").strip():
                 raise ValueError("sticker_url is required for sticker comments")
+            # GAP-0183: enforce platform-only sticker origin
+            self.sticker_url = _validate_sticker_url(self.sticker_url)
         return self
 
 
@@ -2090,8 +2173,13 @@ def _poll_fields_for_post(post: Dict[str, Any], locked_body: bool, viewer_id: Op
     return serialize_poll_for_post(post, viewer_id)
 
 
-def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
-    """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
+def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None, bookmarked_ids: Optional[set] = None) -> Dict[str, Any]:
+    """Map a raw DDB post item to the FeedPost shape expected by the frontend.
+
+    GAP-0357 sub-gap 1: callers that have pre-loaded the viewer's bookmarked
+    post IDs may pass ``bookmarked_ids`` so each post carries an ``is_bookmarked``
+    flag. Optional for backward compatibility (defaults to not-bookmarked).
+    """
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
     status, publish_at, published_at, schedule_timezone, scheduled_at_local = _resolve_post_lifecycle_fields(post)
 
@@ -2201,6 +2289,8 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         # SOCIAL-002: repost count
         "repost_count": int(post.get("repost_count", 0)),
         "reposted_by_me": _check_reposted_by_me(viewer_id, post_id) if viewer_id else False,
+        # GAP-0357 sub-gap 1: per-viewer bookmark status
+        "is_bookmarked": post_id in bookmarked_ids if bookmarked_ids else False,
         # FEED-007: per-viewer "interesting" signal + public aggregate
         "interesting_count": int(post.get("interesting_count", 0)),
         "is_interesting": _is_post_interesting(viewer_id, post_id) if viewer_id else False,
@@ -3635,6 +3725,41 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         except Exception:
             logger.exception("Fan-out failed for post %s by %s", post_id, user_id)
         _meter_newsfeed_post_publish(user_id=user_id, post_id=post_id)
+        # GAP-0162: achievement progress hooks (no-op unless ACHIEVEMENTS_ENABLED)
+        try:
+            from app.services.achievement_progress import advance_progress, update_streak
+            advance_progress(user_id, "post_count")
+            update_streak(user_id, "posting_streak")
+        except Exception:
+            logger.debug("achievement hook: post_count/posting_streak", exc_info=True)
+        # GAP-0337: analytics instrumentation (engagement). Best-effort; the
+        # service swallows its own errors but we guard the call site too so an
+        # analytics failure can never break post creation.
+        try:
+            record_engagement_event(
+                creator_id=user_id,
+                content_id=post_id,
+                actor_id=user_id,
+                action="share",
+            )
+        except Exception:
+            logger.debug("analytics hook: create_post engagement", exc_info=True)
+        # GAP-0356: emit mention alerts for @mentions in the post body.
+        # Skipped for scheduled posts (handled above by the if not is_scheduled
+        # guard) and for empty bodies. Best-effort: a mention-alert failure must
+        # never break post creation.
+        if body_plain_text:
+            try:
+                emit_mention_alerts(
+                    text=body_plain_text,
+                    author_user_id=user_id,
+                    author_display_name=_post_fadt_display_name(user_id),
+                    context_type="post",
+                    context_id=post_id,
+                    post_id=post_id,
+                )
+            except Exception:
+                logger.warning("emit_mention_alerts failed for post %s", post_id, exc_info=True)
     else:
         record_newsfeed_schedule_operation(operation="create", outcome="success")
         _write_scheduled_post_ref(
@@ -4546,6 +4671,18 @@ def like_post(post_id: str, user_id: UserIdDep):
             expr_vals={":one": 1, ":z": 0},
             return_values="NONE",
         )
+        # GAP-0337: analytics instrumentation (engagement: reaction/like).
+        # Only fires on a genuinely new like (the conditional put above succeeded);
+        # best-effort so analytics can never break the like action.
+        try:
+            record_engagement_event(
+                creator_id=post.get("user_id") or "",
+                content_id=post_id,
+                actor_id=user_id,
+                action="reaction",
+            )
+        except Exception:
+            logger.debug("analytics hook: like_post engagement", exc_info=True)
     except ClientError as exc:
         if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
             raise HTTPException(
@@ -4586,7 +4723,7 @@ def unlike_post(post_id: str, user_id: UserIdDep):
 
 
 @router.post("/posts/{post_id}/tip")
-def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
+def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object = Depends(require_kyc_tier(2))):  # GAP-0268 (inert unless enforcement flag on)
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -4639,6 +4776,23 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
             extra_meta={"post_id": post_id},
         ))
 
+    # GAP-0026: Best-effort license revenue split for tipped post.
+    # Wrapped in try/except so a split failure never breaks the tip transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=post_id,
+            licensee_id=user_id,
+            source_type="post_tip",
+            source_amount_cents=req.amount_cents,
+            source_txn_id=pi["payment_intent_id"],
+            currency=str(req.currency or "usd").lower(),
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for post tip on post %s", post_id
+        )
+
     author = post.get("user_id")
     if author:
         put_notification(
@@ -4652,6 +4806,46 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
                 "created_at": now_iso(),
             },
         )
+        # GAP-0355: also emit a social alert (alerts table + bell badge).
+        # Best-effort: never break the tip transaction.
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=author,
+                alert_type="post_tip",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                batch_key=BATCH_KEY_PATTERNS["post_tip"].format(post_id=post_id),
+                title=f"{actor_name} sent you a tip",
+                details={
+                    "post_id": post_id,
+                    "amount_cents": req.amount_cents,
+                    "currency": req.currency,
+                },
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("post tip social alert failed post_id=%s", post_id, exc_info=True)
+
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "tip_count")
+    except Exception:
+        logger.debug("achievement hook: tip_count", exc_info=True)
+
+    # GAP-0337: analytics instrumentation (revenue: tip). Creator = post author,
+    # amount = tip amount, subscriber = tipper. Best-effort.
+    try:
+        record_revenue_event(
+            creator_id=post.get("user_id") or "",
+            revenue_type="tip",
+            amount_cents=req.amount_cents,
+            subscriber_id=user_id,
+            content_id=post_id,
+        )
+    except Exception:
+        logger.debug("analytics hook: tip_post revenue", exc_info=True)
 
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
 
@@ -4709,6 +4903,30 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
         expr_vals={":r": reactions},
         return_values="NONE",
     )
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "reaction_count")
+    except Exception:
+        logger.debug("achievement hook: reaction_count", exc_info=True)
+    # GAP-0355: notify the post owner of the new reaction via the social alert
+    # system (alerts table + bell badge). Best-effort: never break the reaction.
+    post_author = post.get("user_id")
+    if post_author and post_author != user_id:
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=post_author,
+                alert_type="post_reaction",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                batch_key=BATCH_KEY_PATTERNS["post_reaction"].format(post_id=post_id),
+                title=f"{actor_name} reacted to your post",
+                details={"post_id": post_id, "emoji": req.emoji},
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("reaction social alert failed post_id=%s", post_id, exc_info=True)
     return {"ok": True}
 
 
@@ -5067,6 +5285,20 @@ def view_feed(
             except ClientError:
                 pass
 
+            # GAP-0357 sub-gap 1: build the viewer's bookmarked-post-id set so each
+            # feed post carries an accurate is_bookmarked flag (survives refresh).
+            bookmarked_post_ids: set = set()
+            try:
+                bk_raw = ddb.batch_get_item(
+                    RequestItems={APP_TABLE: {"Keys": [{"pk": pk_bookmark_lookup(user_id), "sk": f"post#{pid}"} for pid in unique_post_ids]}}
+                )
+                bookmarked_post_ids = {
+                    item.get("content_id", "")
+                    for item in bk_raw.get("Responses", {}).get(APP_TABLE, [])
+                }
+            except (ClientError, Exception):
+                pass
+
             candidates: List[Dict[str, Any]] = []
             for post_id in unique_post_ids:
                 post = post_by_id.get(post_id)
@@ -5104,6 +5336,7 @@ def view_feed(
                     liked_by_me=post_id in liked_post_ids,
                     unlocked=viewer_unlocked,
                     viewer_id=user_id,
+                    bookmarked_ids=bookmarked_post_ids,
                 )
                 # SOCIAL-002: Attach repost attribution if this feed item came from a repost
                 repost_meta = _repost_meta_by_post.get(post_id) if not author_filter else None
@@ -5134,6 +5367,16 @@ def view_feed(
         feed_items = ordered[:limit]
         if not author_filter:  # Only inject in the main feed, not author-filtered views
             feed_items = _inject_sponsored_posts(feed_items, user_id)
+            # ADS-012 (GAP-0005): Elevate actively-boosted posts in the feed.
+            # CRITICAL: newsfeed post dicts carry the id as "post_id", not the
+            # default "content_id" — passing id_key explicitly is mandatory or
+            # elevation silently no-ops.
+            from app.services.content_boost import elevate_feed_items
+            feed_items = elevate_feed_items(
+                feed_items,
+                content_type="post",
+                id_key="post_id",
+            )
 
         out = {"items": feed_items, "next_cursor": encode_cursor(next_eks)}
         _emit_feed_filter_usage_metrics(mode=mode, q=normalized_q, from_ts=from_ts, to_ts=to_ts, has_media=has_media)
@@ -5394,12 +5637,47 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         expr_vals={":z": 0, ":one": 1},
     )
 
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "comment_count")
+    except Exception:
+        logger.debug("achievement hook: comment_count", exc_info=True)
+
+    # GAP-0337: analytics instrumentation (engagement: comment). Creator = post
+    # author, actor = commenter. Best-effort.
+    try:
+        record_engagement_event(
+            creator_id=post_author or "",
+            content_id=post_id,
+            actor_id=user_id,
+            action="comment",
+        )
+    except Exception:
+        logger.debug("analytics hook: create_comment engagement", exc_info=True)
+
     if post_author and post_author != user_id and parent is None:
         put_notification(
             recipient_user_id=post_author,
             notif_type="comment_on_post",
             payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
         )
+        # GAP-0355: also emit a social alert (alerts table + bell badge).
+        # Best-effort: never break comment creation.
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=post_author,
+                alert_type="post_comment",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                batch_key=BATCH_KEY_PATTERNS["post_comment"].format(post_id=post_id),
+                title=f"{actor_name} commented on your post",
+                details={"post_id": post_id, "comment_id": comment_id},
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("comment social alert failed post_id=%s", post_id, exc_info=True)
 
     if parent:
         q = ddb_query(
@@ -5425,6 +5703,40 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
                     "created_at": created_at,
                 },
             )
+            # GAP-0355: also emit a social alert (alerts table + bell badge).
+            # Best-effort: never break comment creation.
+            try:
+                actor_name = _post_fadt_display_name(user_id)
+                emit_social_alert(
+                    recipient_user_id=parent_user,
+                    alert_type="comment_reply",
+                    actor_user_id=user_id,
+                    actor_display_name=actor_name,
+                    title=f"{actor_name} replied to your comment",
+                    details={
+                        "post_id": post_id,
+                        "parent_comment_id": parent,
+                        "comment_id": comment_id,
+                    },
+                    action_url=f"/feed/posts/{post_id}",
+                )
+            except Exception:
+                logger.warning("reply social alert failed post_id=%s", post_id, exc_info=True)
+
+    # GAP-0356: emit mention alerts for @mentions in the comment body.
+    # Media (gif/sticker) comments have body_plain=None; guard avoids the cost.
+    if req.kind == "text" and content.get("body_plain"):
+        try:
+            emit_mention_alerts(
+                text=content["body_plain"],
+                author_user_id=user_id,
+                author_display_name=_post_fadt_display_name(user_id),
+                context_type="comment",
+                context_id=comment_id,
+                post_id=post_id,
+            )
+        except Exception:
+            logger.warning("emit_mention_alerts failed for comment %s", comment_id, exc_info=True)
 
     return CommentResponse(
         comment_id=comment_id,
@@ -5653,7 +5965,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
 # Unlock post via payment
 # -----------------------------
 @router.post("/posts/unlock", response_model=UnlockPostResponse)
-def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
+def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depends(require_kyc_tier(2))):  # GAP-0268 (inert unless enforcement flag on)
     post = ddb_get_item({"pk": pk_post(req.post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -5947,6 +6259,19 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
         payment_status=str(conf.get("status") or ""),
     )
 
+    # GAP-0337: analytics instrumentation (revenue: unlock). Creator = post
+    # author, amount = unlock price, subscriber = unlocking user. Best-effort.
+    try:
+        record_revenue_event(
+            creator_id=post.get("user_id") or "",
+            revenue_type="unlock",
+            amount_cents=price,
+            subscriber_id=user_id,
+            content_id=req.post_id,
+        )
+    except Exception:
+        logger.debug("analytics hook: unlock_post revenue", exc_info=True)
+
     # Write billing ledger debit entry (best-effort)
     if S.billing_table_name:
         try:
@@ -5974,6 +6299,23 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
         except Exception:
             pass  # Best-effort; do not fail the unlock if billing write fails
 
+    # GAP-0026: Best-effort license revenue split for unlocked post.
+    # Wrapped in try/except so a split failure never breaks the unlock transaction.
+    try:
+        from app.services import license_revenue as _lr_svc
+        _lr_svc.process_revenue_split(
+            content_id=req.post_id,
+            licensee_id=user_id,
+            source_type="post_unlock",
+            source_amount_cents=price,
+            source_txn_id=pi.get("payment_intent_id") or "",
+            currency="usd",
+        )
+    except Exception:
+        logger.warning(
+            "license revenue split failed for post unlock on post %s", req.post_id
+        )
+
     author = post.get("user_id")
     if author and author != user_id:
         put_notification(
@@ -5987,6 +6329,13 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
                 "created_at": now_iso(),
             },
         )
+
+    # GAP-0162: achievement progress hook (no-op unless ACHIEVEMENTS_ENABLED)
+    try:
+        from app.services.achievement_progress import advance_progress
+        advance_progress(user_id, "unlock_count")
+    except Exception:
+        logger.debug("achievement hook: unlock_count", exc_info=True)
 
     return UnlockPostResponse(post_id=req.post_id, payment_intent=pi)
 
@@ -6106,6 +6455,36 @@ def create_repost(post_id: str, req: RepostRequest, user_id: UserIdDep):
     if quote_text:
         repost_item["quote"] = quote_text
     ddb_put_item(repost_item)
+
+    # 7b. Notify the original author that their post was reposted.
+    # Skip self-reposts (already guarded above) and empty author_id.
+    # Best-effort: a notification failure must never fail the repost.
+    if author_id and author_id != user_id:
+        try:
+            put_notification(
+                recipient_user_id=author_id,
+                notif_type="post_shared",
+                payload={
+                    "post_id": post_id,
+                    "repost_id": repost_id,
+                    "from_user_id": user_id,
+                },
+            )
+        except Exception:
+            logger.warning("repost put_notification failed post_id=%s repost_id=%s", post_id, repost_id, exc_info=True)
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=author_id,
+                alert_type="post_shared",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                title=f"{actor_name} shared your post",
+                details={"post_id": post_id, "repost_id": repost_id},
+                action_url=f"/feed?post={post_id}",
+            )
+        except Exception:
+            logger.warning("repost social alert failed post_id=%s repost_id=%s", post_id, repost_id, exc_info=True)
 
     # 8. Atomically increment repost_count on the post
     updated = ddb_update_item(
@@ -6296,6 +6675,10 @@ class RenameCollectionRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
 
 
+class MoveBookmarkRequest(BaseModel):
+    collection_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
+
+
 @router.post("/ui/bookmarks", status_code=201)
 def create_bookmark(req: CreateBookmarkRequest, user_id: UserIdDep):
     content_type = req.content_type
@@ -6366,6 +6749,48 @@ def delete_bookmark(content_type: str, content_id: str, user_id: UserIdDep):
     return {"ok": True}
 
 
+@router.patch("/ui/bookmarks/{content_type}/{content_id}")
+def move_bookmark(content_type: str, content_id: str, req: MoveBookmarkRequest, user_id: UserIdDep):
+    """GAP-0357 sub-gap 2: move an existing bookmark to a different collection.
+
+    Owner-scoped: the bookmark is keyed by the caller's ``user_id`` partition,
+    so a user can only ever move their own bookmarks (a foreign / missing
+    bookmark yields 404).
+    """
+    sk = f"{content_type}#{content_id}"
+    # Owner-scoped existence check (also confirms the caller owns it).
+    existing = ddb_get_item({"pk": pk_bookmark(user_id), "sk": sk})
+    if not existing:
+        raise HTTPException(status_code=404, detail={"code": "bookmark_not_found", "message": "Bookmark not found"})
+
+    new_collection_id = req.collection_id
+
+    # Update the main bookmark item.
+    ddb_update_item(
+        key={"pk": pk_bookmark(user_id), "sk": sk},
+        update_expr="SET collection_id = :c",
+        expr_vals={":c": new_collection_id},
+        return_values="NONE",
+    )
+    # Keep the lookup item in sync (best-effort; it may not exist for legacy rows).
+    try:
+        ddb_update_item(
+            key={"pk": pk_bookmark_lookup(user_id), "sk": sk},
+            update_expr="SET collection_id = :c",
+            expr_vals={":c": new_collection_id},
+            return_values="NONE",
+        )
+    except Exception:
+        logger.warning("bookmark lookup collection sync failed for %s/%s", content_type, content_id, exc_info=True)
+
+    return {
+        "ok": True,
+        "content_type": content_type,
+        "content_id": content_id,
+        "collection_id": new_collection_id,
+    }
+
+
 @router.get("/ui/bookmarks")
 def list_bookmarks(
     user_id: UserIdDep,
@@ -6411,15 +6836,36 @@ def list_bookmarks(
             post = ddb_get_item({"pk": pk_post(cid), "sk": sk_post()})
             if post:
                 post_dict = _post_to_dict(post, viewer_id=user_id)
+                author_id = post_dict.get("author_id", "")
                 preview = {
-                    "author_id": post_dict.get("author_id", ""),
-                    "author_display_name": post_dict.get("author_id", ""),
+                    "author_id": author_id,
+                    # GAP-0357 sub-gap 3: resolve the human-readable display name
+                    # instead of copying the author UUID.
+                    "author_display_name": _post_fadt_display_name(author_id),
                     "body_snippet": (post_dict.get("body", "") or "")[:200],
                     "image_url": (post_dict.get("image_urls") or [None])[0],
                     "like_count": post_dict.get("like_count", 0),
                 }
             else:
                 preview = {"author_id": "", "body_snippet": "[Post removed]"}
+        elif ct == "video":
+            # GAP-0357 sub-gap 3: enrich video bookmarks with video metadata
+            # (mirrors the post branch). Previously these returned an empty
+            # content_preview and rendered as "[No content]" in the UI.
+            try:
+                from app.services.video_metadata_store import get_video as _bk_get_video
+                _vid = _bk_get_video(cid)
+                preview = {
+                    "video_id": cid,
+                    "title": _vid.title,
+                    "thumbnail_url": _vid.thumbnail_url,
+                    "creator_id": _vid.owner_user_id,
+                    "creator_display_name": _post_fadt_display_name(_vid.owner_user_id),
+                    "duration_seconds": _vid.duration_seconds,
+                    "view_count": _vid.view_count,
+                }
+            except Exception:
+                preview = {"video_id": cid, "title": "[Video removed]"}
 
         bookmarks.append({
             "content_type": ct,
@@ -6662,6 +7108,15 @@ def vote_on_poll(post_id: str, body: VoteIn, user_id: UserIdDep):
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    # ── GAP-0164 fix: enforce visibility/subscription gate ──────────────────
+    # Check access BEFORE revealing post type so a gated post does not become an
+    # enumeration oracle (400 "not a poll" vs 403 leaks classification).
+    post_author = str(post.get("user_id") or "").strip()
+    if post_author and post_author != user_id and not can_view_post(user_id, post):
+        raise HTTPException(status_code=403, detail="Not authorized to view this post")
+    # ────────────────────────────────────────────────────────────────────────
+
     if post.get("post_type") not in ("poll", "survey"):
         raise HTTPException(status_code=400, detail="Post is not a poll")
 
@@ -6691,6 +7146,28 @@ def vote_on_poll(post_id: str, body: VoteIn, user_id: UserIdDep):
         my_vote = get_user_vote_for_question(refreshed or post, body.question_id, user_id)
     else:
         my_votes = list(get_user_multi_votes(refreshed or post, body.question_id, user_id))
+
+    # ── GAP-0163 fix: publish real-time poll:vote SSE event to post author ───
+    # Mirrors the established put_notification pattern (sync handler runs in a
+    # threadpool with no running loop, so RuntimeError is caught and dropped;
+    # cross-worker delivery requires the SNS/SQS fan-out noted on SSEHub).
+    if post_author:
+        sse_payload = {
+            "type": "poll:vote",
+            "post_id": post_id,
+            "question_id": body.question_id,
+            "option_id": body.option_id,
+            "vote_counts": updated_counts,
+            "total_votes": total_votes,
+            "voter_sub": user_id,
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(sse_hub.publish(post_author, sse_payload))
+        except RuntimeError:
+            # Sync threadpool context — no running loop; SSE push not possible.
+            pass
+    # ────────────────────────────────────────────────────────────────────────
 
     return {
         "ok": True,

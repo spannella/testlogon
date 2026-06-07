@@ -156,7 +156,7 @@ def record_activity(
     when social events occur (follow, like, comment, etc.).
     """
     item = activity_feed_service.record_activity(
-        user_id=body.user_id,
+        user_id=session["user_sub"],
         actor_id=body.actor_id,
         activity_type=body.activity_type,
         target_type=body.target_type,

@@ -21,6 +21,79 @@ VALID_CONTENT_TYPES = {"video", "music", "image", "post", "broadcast", "clip"}
 MAX_PROFIT_SHARE_PCT = 100
 MAX_REVENUE_SHARE_PCT = 100
 
+# Map issued-license content_type values onto the content types understood by the
+# shared owner-resolution helper (GAP-0200 collaboration_revenue / DMCA).
+_CONTENT_TYPE_TO_RESOLVER = {
+    "clip": "video",
+    "post": "feed_post",
+    "image": "feed_media",
+    "music": "catalog_item",
+}
+
+
+def _resolve_owner(content_id: str, content_type: str) -> str:
+    """Resolve the owner user_id for licensable content. Returns "" if unknown.
+
+    Videos (and clips, which live in the same table) are resolved directly here
+    against ``T.video_metadata.owner_user_id`` — the authoritative field written
+    by ``video_metadata_store`` (GAP-0294). All other content types defer to the
+    shared GAP-0200 / SEC-004 helper in ``collaboration_revenue``, which wraps the
+    DMCA resolver and extends it to catalog items.
+    """
+    if not content_id:
+        return ""
+    if content_type in ("video", "clip"):
+        try:
+            item = T.video_metadata.get_item(
+                Key={"video_id": content_id}, ConsistentRead=True
+            ).get("Item")
+            if item:
+                return str(
+                    item.get("owner_user_id")
+                    or item.get("user_id")
+                    or item.get("owner_id")
+                    or ""
+                )
+        except Exception:
+            logger.warning(
+                "video owner lookup failed for %s", content_id, exc_info=True
+            )
+        return ""
+
+    from app.services.collaboration_revenue import _resolve_content_owner
+
+    resolver_type = _CONTENT_TYPE_TO_RESOLVER.get(content_type, content_type)
+    return _resolve_content_owner(resolver_type, content_id)
+
+
+def _validate_content_ownership(
+    licensor_sub: str,
+    content_id: str,
+    content_type: str,
+) -> None:
+    """Verify that ``licensor_sub`` owns ``content_id`` before a license is issued.
+
+    Resolves the content owner (videos/clips directly against
+    ``T.video_metadata``; everything else via the shared GAP-0200 /
+    collaboration_revenue helper). Raises ``PermissionError`` when the caller is
+    provably not the owner. Graceful degradation: when ownership is unverifiable
+    (unknown content type or lookup failure -> owner == ""), the license is
+    allowed but logged for monitoring, mirroring the collaboration
+    content-ownership behaviour (GAP-0294 / LICENSE-002). Runs identically in dev
+    and prod (SECOPS-007).
+    """
+    owner = _resolve_owner(content_id, content_type)
+    if owner == "":
+        logger.warning(
+            "issue_license: could not verify ownership for %s/%s by %s — allowing",
+            content_type, content_id, licensor_sub,
+        )
+        return
+    if owner != licensor_sub:
+        raise PermissionError(
+            f"User '{licensor_sub}' does not own {content_type} '{content_id}'"
+        )
+
 
 def issue_license(
     *,
@@ -37,8 +110,14 @@ def issue_license(
     thumbnail_url: str = "",
     expires_at: Optional[int] = None,
     syndicate_id: Optional[str] = None,
+    skip_ownership_check: bool = False,
 ) -> Dict[str, Any]:
-    """Issue a new license for content owned by the licensor."""
+    """Issue a new license for content owned by the licensor.
+
+    ``skip_ownership_check`` is an admin/root-only escape hatch (GAP-0294): when
+    True the content-ownership guard is bypassed. Routers must only set it for
+    ADMIN/ROOT sessions.
+    """
     if license_mode not in VALID_LICENSE_MODES:
         raise ValueError(f"Invalid license_mode: {license_mode}")
     if content_type not in VALID_CONTENT_TYPES:
@@ -55,6 +134,11 @@ def issue_license(
         raise ValueError("fixed_cost_cents must be >= 0")
     if licensee_id and licensee_id == licensor_sub:
         raise ValueError("Cannot license content to yourself")
+
+    # GAP-0294 / LICENSE-002: the licensor must own the content being licensed.
+    # Admin/root callers may bypass via skip_ownership_check.
+    if not skip_ownership_check:
+        _validate_content_ownership(licensor_sub, content_id, content_type)
 
     issued_license_id = f"il_{uuid4().hex}"
     ts = now_ts()

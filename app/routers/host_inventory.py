@@ -108,6 +108,7 @@ async def create_host_endpoint(
             group=body.group,
             os_type=body.os_type,
             source="manual",
+            record_sessions=body.record_sessions,
         )
     except HostLimitExceeded as exc:
         raise HTTPException(status_code=409, detail=str(exc))

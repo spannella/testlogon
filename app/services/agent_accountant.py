@@ -25,12 +25,14 @@ memory so the lifecycle is fully driveable/testable.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
 from app.core.aws import ddb
@@ -1106,3 +1108,83 @@ def collect_costs(*, user_id: str) -> Dict[str, Any]:
         "alerts": alerts,
         "collected_at": now_ts(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Automatic cost-collection background loop (GAP-0105)
+# ---------------------------------------------------------------------------
+
+# Poll interval for the cost-collection background loop, in seconds (1 hour).
+_COST_COLLECTION_INTERVAL_SECONDS = 3600
+
+
+def run_cost_collection_if_enabled() -> int:
+    """Platform-wide cost-collection sweep — the periodic loop body.
+
+    Evaluates budgets for every user that has an accountant config when either
+    ``accountant_agent_auto_alert`` or ``accountant_agent_execute_commands`` is
+    enabled. Real provider polling (Cost Explorer / usage APIs) is additionally
+    gated inside :func:`collect_costs` by ``accountant_agent_execute_commands``;
+    here we always run the deterministic budget re-evaluation for each user.
+
+    Accountant configs live on the ``agent_types`` table under
+    ``pk="ACCOUNTANT#{user_id}"`` / ``sk="CONFIG"`` with an explicit
+    ``owner_sub`` attribute. There is no fixed-partition GSI, so a scan with a
+    ``FilterExpression`` on ``sk="CONFIG"`` is used to enumerate users. This is a
+    no-op when both flags are off.
+
+    Returns the number of users whose budgets were evaluated.
+    """
+    if not S.accountant_agent_auto_alert and not S.accountant_agent_execute_commands:
+        return 0
+    ensure_tables()
+    config_items: List[Dict[str, Any]] = []
+    scan_kwargs: Dict[str, Any] = {
+        "FilterExpression": Attr("sk").eq("CONFIG")
+        & Attr("agent_type").eq(ACCOUNTANT_AGENT_TYPE),
+        "ProjectionExpression": "pk, owner_sub",
+    }
+    while True:
+        resp = T.agent_types.scan(**scan_kwargs)
+        config_items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        scan_kwargs["ExclusiveStartKey"] = lek
+
+    evaluated = 0
+    for item in config_items:
+        user_id = item.get("owner_sub") or str(item.get("pk", "")).replace(
+            "ACCOUNTANT#", ""
+        )
+        if not user_id:
+            continue
+        try:
+            collect_costs(user_id=user_id)
+            evaluated += 1
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Cost collection failed for user=%s: %s", user_id, exc)
+
+    logger.info("Cost collection loop completed: evaluated %d user(s)", evaluated)
+    return evaluated
+
+
+async def run_cost_collection_loop() -> None:
+    """Background coroutine: run cost collection every hour."""
+    while True:
+        try:
+            run_cost_collection_if_enabled()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Cost collection loop unhandled error: %s", exc)
+        await asyncio.sleep(_COST_COLLECTION_INTERVAL_SECONDS)
+
+
+def start_cost_collection_task() -> None:
+    """Register the hourly cost-collection background loop as an asyncio task."""
+    asyncio.create_task(run_cost_collection_loop())
+    logger.info(
+        "Cost collection background task started (interval=%ds, auto_alert=%s, execute=%s)",
+        _COST_COLLECTION_INTERVAL_SECONDS,
+        S.accountant_agent_auto_alert,
+        S.accountant_agent_execute_commands,
+    )

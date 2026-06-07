@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import uuid
 import zipfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -676,6 +677,16 @@ def process_deletion(user_sub: str, request_id: str) -> Dict[str, Any]:
     summary: Dict[str, Any] = {}
     ts = now_ts()
 
+    # Capture the Cognito username (email) BEFORE any deletion step removes the
+    # profile row (Step 3). Cognito uses the email as the Username (see
+    # app/routers/register.py: username = body.email). Needed for GAP-0341.
+    _deletion_email: Optional[str] = None
+    try:
+        _profile = T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+        _deletion_email = _profile.get("email")
+    except Exception as e:
+        logger.warning("Deletion: could not capture email for %s: %s", user_sub, e)
+
     # Update status to processing
     T.data_requests.update_item(
         Key={"pk": _user_pk(user_sub), "sk": _req_sk(request_id)},
@@ -796,6 +807,186 @@ def process_deletion(user_sub: str, request_id: str) -> Dict[str, Any]:
         summary["videos_deleted"] = len(vid_items)
     except Exception as e:
         logger.warning("Delete video_metadata error: %s", e)
+
+    # Step 11: Delete messaging data (GDPR Article 17) — GAP-0339.
+    # The messaging tables are separate string-named tables (not T.* handles),
+    # mirroring the export path (process_export). Find every conversation the
+    # user participates in via the Participants table (PK=user_id), delete the
+    # user's authored Messages (sender_id == user_sub), delete the user's
+    # Participant row, and — for DMs / now-empty conversations — delete the
+    # Conversation record when no participants remain.
+    try:
+        from app.core.aws import ddb as _ddb
+
+        msg_table = _ddb.Table(os.environ.get("DDB_MESSAGES", "Messages"))
+        conv_table = _ddb.Table(os.environ.get("DDB_CONVERSATIONS", "Conversations"))
+        part_table = _ddb.Table(os.environ.get("DDB_PARTICIPANTS", "Participants"))
+
+        part_items = _query_all(part_table, Key("user_id").eq(user_sub))
+        deleted_messages = 0
+        deleted_participants = 0
+        deleted_conversations = 0
+
+        for p in part_items:
+            cid = p.get("conversation_id")
+            if not cid:
+                continue
+
+            # (a) Delete this user's authored messages in the conversation.
+            #     The other party's messages are their own personal data and
+            #     are preserved (GDPR Art.17 erases only the requester's data).
+            try:
+                all_msgs = _query_all(msg_table, Key("conversation_id").eq(cid))
+                for msg in all_msgs:
+                    if msg.get("sender_id") == user_sub:
+                        msg_table.delete_item(
+                            Key={"conversation_id": cid, "message_id": msg["message_id"]}
+                        )
+                        deleted_messages += 1
+            except Exception as e:
+                logger.warning("Deletion message error for conv %s: %s", cid, e)
+
+            # (b) Delete the user's Participant row for this conversation.
+            try:
+                part_table.delete_item(Key={"user_id": user_sub, "conversation_id": cid})
+                deleted_participants += 1
+            except Exception as e:
+                logger.warning("Deletion participant error for conv %s: %s", cid, e)
+
+            # (c) If no participants remain (e.g. a DM where both sides are gone,
+            #     or a solo conversation), delete the Conversation record.
+            #     Best-effort: the Participants table has no by-conversation GSI
+            #     in every environment, so a lookup failure here is non-fatal.
+            try:
+                remaining = part_table.query(
+                    IndexName="ByConversation",
+                    KeyConditionExpression=Key("conversation_id").eq(cid),
+                    Limit=1,
+                )
+                if not remaining.get("Items"):
+                    conv_table.delete_item(Key={"conversation_id": cid})
+                    deleted_conversations += 1
+            except Exception as e:
+                logger.warning("Deletion conversation error for conv %s: %s", cid, e)
+
+        summary["messages_deleted"] = deleted_messages
+        summary["participants_deleted"] = deleted_participants
+        summary["conversations_deleted"] = deleted_conversations
+    except Exception as e:
+        logger.warning("Deletion messaging error: %s", e)
+        summary["messaging_error"] = str(e)
+
+    # Step 12: Delete file-manager DDB records and their S3 objects — GAP-0340.
+    # The file-manager table is a separate string-named table (S.filemgr_table_name),
+    # keyed PK="USER#{user_sub}" / SK="NODE#{path}" (UPPERCASE — see
+    # filemanager.py:node_key). Each node carries an S3 object under `s3_key` in
+    # bucket `s3_bucket` (defaults to S.filemgr_bucket). We collect every node's
+    # S3 key, batch-delete them (delete_objects, max 1000 keys/request), then
+    # delete the DDB rows. Both active and soft-deleted nodes hold real S3 objects.
+    if S.filemgr_table_name:
+        try:
+            import boto3 as _boto3
+            from app.core.aws import ddb as _ddb
+
+            filemgr_tbl = _ddb.Table(S.filemgr_table_name)
+            file_items = _query_all(filemgr_tbl, Key("PK").eq(f"USER#{user_sub}"))
+
+            # Group S3 keys by bucket so multi-bucket nodes are still erased.
+            s3_keys_by_bucket: Dict[str, List[str]] = {}
+            ddb_keys_to_delete: List[Dict[str, str]] = []
+            for node in file_items:
+                s3_key = node.get("s3_key")
+                if s3_key:
+                    bucket = node.get("s3_bucket") or S.filemgr_bucket
+                    if bucket:
+                        s3_keys_by_bucket.setdefault(bucket, []).append(s3_key)
+                pk = node.get("PK")
+                sk = node.get("SK")
+                if pk and sk:
+                    ddb_keys_to_delete.append({"PK": pk, "SK": sk})
+
+            # Batch-delete S3 objects (best-effort per request — a failure on one
+            # bucket/chunk must not abort the rest of the deletion).
+            deleted_s3 = 0
+            if s3_keys_by_bucket:
+                s3_client = _boto3.client(
+                    "s3",
+                    endpoint_url=S.s3_endpoint_url or None,
+                    region_name=S.aws_region,
+                )
+                for bucket, keys in s3_keys_by_bucket.items():
+                    for i in range(0, len(keys), 1000):
+                        chunk = keys[i : i + 1000]
+                        try:
+                            resp = s3_client.delete_objects(
+                                Bucket=bucket,
+                                Delete={"Objects": [{"Key": k} for k in chunk]},
+                            )
+                            deleted_s3 += len(resp.get("Deleted", []))
+                            errors = resp.get("Errors", [])
+                            if errors:
+                                logger.warning(
+                                    "Deletion: S3 delete_objects partial errors (%s): %s",
+                                    bucket, errors,
+                                )
+                                summary["filemgr_s3_error"] = str(errors)
+                        except Exception as e:
+                            logger.warning(
+                                "Deletion: S3 delete error (%s): %s", bucket, e
+                            )
+                            summary["filemgr_s3_error"] = str(e)
+
+            # Delete the file-manager DDB rows.
+            deleted_ddb = 0
+            for key in ddb_keys_to_delete:
+                try:
+                    filemgr_tbl.delete_item(Key=key)
+                    deleted_ddb += 1
+                except Exception as e:
+                    logger.warning(
+                        "Deletion: filemgr DDB delete error for %s: %s", key, e
+                    )
+
+            summary["files_deleted"] = deleted_ddb
+            summary["s3_objects_deleted"] = deleted_s3
+        except Exception as e:
+            logger.warning("Deletion filemgr error: %s", e)
+            summary["filemgr_error"] = str(e)
+    else:
+        summary["filemgr_skipped"] = "filemgr_table_name not configured"
+
+    # Step 13: Disable + delete the Cognito identity — GAP-0341.
+    # Guarded by _cognito_available() so dev (no Cognito) is a safe no-op.
+    # Best-effort: a Cognito failure must NOT abort the DDB deletion that has
+    # already happened. The username is the registration email (captured above
+    # before the profile row was deleted in Step 3).
+    try:
+        from app.routers.register import _cognito_available
+
+        if _cognito_available():
+            if _deletion_email:
+                from app.services.cognito import (
+                    cognito_admin_delete_user,
+                    cognito_admin_disable_user,
+                )
+
+                try:
+                    cognito_admin_disable_user(_deletion_email)
+                    cognito_admin_delete_user(_deletion_email)
+                    summary["cognito_deleted"] = True
+                except Exception as e:
+                    logger.warning(
+                        "Deletion: Cognito disable/delete error for %s: %s",
+                        user_sub, e,
+                    )
+                    summary["cognito_error"] = str(e)
+            else:
+                summary["cognito_skipped"] = "no_email"
+        else:
+            summary["cognito_skipped"] = "not_available"
+    except Exception as e:
+        logger.warning("Deletion Cognito step error: %s", e)
+        summary["cognito_error"] = str(e)
 
     # Finalize: update request to completed
     completed_ts = now_ts()

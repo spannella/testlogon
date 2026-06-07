@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ from app.services.purchase_history import record_billing_transaction
 from app.services.subscription_access import get_subscription_settings, set_subscription_settings
 from app.services.subscription_cycle_orders import emit_subscription_cycle_order
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["subscriptions"])
 FEE_BPS = int(os.environ.get("SUBSCRIPTION_FEE_BPS", "1000"))
 
@@ -37,6 +40,30 @@ def require_user(x_user_id: Optional[str], expected_user_id: Optional[str] = Non
     if expected_user_id and x_user_id != expected_user_id:
         raise HTTPException(status_code=403, detail="User does not match requested identity")
     return x_user_id
+
+
+def _enforce_kyc_tier(user_sub: str, minimum_tier: int) -> None:
+    """GAP-0268: Tier gate for the X-User-Id-authenticated subscription API.
+
+    Inert pass-through unless both the enforcement flag and the gating flag are on
+    (defaults OFF). Mirrors require_kyc_tier in app/auth/deps.py but works with this
+    router's header-based auth instead of session auth.
+    """
+    if not (S.kyc_tier_enforcement_enabled and S.kyc_tier_gating_enabled):
+        return
+    from app.services.kyc_tiers import get_user_kyc_tier, KYC_TIER_NAMES
+    tier = get_user_kyc_tier(user_sub)
+    if tier < minimum_tier:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "kyc_tier_insufficient",
+                "message": f"This action requires {KYC_TIER_NAMES.get(minimum_tier, f'Tier {minimum_tier}')} verification",
+                "current_tier": tier,
+                "required_tier": minimum_tier,
+                "upgrade_url": "/kyc",
+            },
+        )
 
 
 def interval_seconds(interval: str) -> int:
@@ -332,6 +359,11 @@ class SubscribeIn(BaseModel):
     subscriber_id: Optional[str] = None
     interval: Optional[Literal["month", "year"]] = None
     discount_code: Optional[str] = None
+    # GAP-0342: promo_code is the platform-wide promo/coupon system
+    # (app/services/promo_codes.py), distinct from the legacy per-creator
+    # discount_code lookup. If both are supplied, promo_code takes precedence
+    # and they do NOT stack.
+    promo_code: Optional[str] = None
     trial_days: Optional[conint(ge=1, le=365)] = None
 
 
@@ -519,6 +551,27 @@ def save_subscription(sub: Dict[str, Any]) -> None:
         ddb_put_item(item)
 
 
+_ACTIVE_SUBSCRIBER_STATUSES = {"active", "trialing", "past_due"}
+
+
+def count_active_subscribers(creator_id: str) -> int:
+    """Count a creator's currently active (non-cancelled/expired) subscriptions.
+
+    Reads the creator index (``CREATOR#{id}`` partition, ``SUB#`` items) which is
+    written by ``save_subscription``. Used to drive milestone detection
+    (GAP-0153) at signup time.
+    """
+    items = ddb_query(pk_creator(creator_id))
+    count = 0
+    for it in items:
+        if not it.get("sk", "").startswith("SUB#"):
+            continue
+        status = (it.get("status") or "").lower()
+        if status in _ACTIVE_SUBSCRIBER_STATUSES:
+            count += 1
+    return count
+
+
 def build_invoice_item(invoice: Dict[str, Any]) -> Dict[str, Any]:
     item = invoice.copy()
     item.update({"pk": pk_subscription(invoice["subscription_id"]), "sk": f"INV#{invoice['invoice_id']}", "entity": "invoice"})
@@ -585,6 +638,70 @@ def build_ledger_item(creator_id: str, entry: Dict[str, Any]) -> Dict[str, Any]:
 
 def save_ledger_entry(creator_id: str, entry: Dict[str, Any]) -> None:
     ddb_put_item(build_ledger_item(creator_id, entry))
+
+
+def _mirror_creator_credit_to_billing(
+    creator_id: str,
+    amount_cents: int,
+    *,
+    currency: str,
+    created_at: int,
+    subscription_id: str,
+    subscriber_id: str,
+    invoice_id: Optional[str] = None,
+) -> None:
+    """Mirror a subscription creator NET credit into ``T.billing`` (GAP-0307).
+
+    Subscription creator revenue is written to ``T.subscriptions`` under
+    ``PK=CREATOR#{creator_id}`` with field ``entry_type``, but the creator
+    earnings dashboard (``creator_earnings._query_credit_entries``) and the
+    payout balance (``creator_payouts.get_available_balance``) query
+    ``T.billing`` under ``PK=USER#{creator_id}`` with ``Attr("type").eq("credit")``.
+    Without this mirror, subscription revenue is invisible to both.
+
+    The mirrored item matches the EXACT shape those queries expect:
+    ``pk=USER#{creator_id}``, ``sk=LEDGER#{ts}#{entry_id}``, ``type="credit"``,
+    ``amount_cents`` (creator NET, after platform fee), ``currency``, ``ts``,
+    ``reason`` containing ``"subscription"`` (so ``classify_entry`` buckets it
+    under ``subscriptions``), and a ``created_at`` field.
+
+    Best-effort: a billing-table write failure must NOT roll back the
+    subscription charge, but it is logged. Same DDB path in dev and prod
+    (no ``dev_mode`` branch) — ``T.billing`` is the same table in both.
+    """
+    try:
+        if amount_cents <= 0:
+            return
+        entry_id = new_id("biled")
+        item = {
+            "pk": f"USER#{creator_id}",
+            "sk": f"LEDGER#{created_at}#{entry_id}",
+            "type": "credit",
+            "amount_cents": int(amount_cents),
+            "currency": currency,
+            "reason": "subscription_charge",
+            "ts": int(created_at),
+            "created_at": int(created_at),
+            "entry_id": entry_id,
+            "subscription_id": subscription_id,
+            "subscriber_id": subscriber_id,
+            "meta": {"content_type": "subscription"},
+        }
+        if invoice_id:
+            item["invoice_id"] = invoice_id
+        T.billing.put_item(Item=item)
+        logger.info(
+            "creator_billing_credit_written creator_id=%s amount_cents=%s subscription_id=%s",
+            creator_id,
+            amount_cents,
+            subscription_id,
+        )
+    except Exception:  # pragma: no cover - best-effort mirror, never block charge
+        logger.exception(
+            "creator_billing_credit_mirror_failed creator_id=%s subscription_id=%s",
+            creator_id,
+            subscription_id,
+        )
 
 
 def _calendar_meta(calendar_id: str) -> Optional[Dict[str, Any]]:
@@ -824,6 +941,7 @@ async def subscribe(
     subscriber_id = require_user(x_user_id)
     if body.subscriber_id and body.subscriber_id != subscriber_id:
         raise HTTPException(status_code=403, detail="subscriber_id must match X-User-Id")
+    _enforce_kyc_tier(subscriber_id, 2)  # GAP-0268 (inert unless enforcement flag on)
     plan = ddb_get_item(pk_plan(plan_id), "META")
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -839,7 +957,32 @@ async def subscribe(
     period_end = ts + interval_seconds(interval)
     base_price = _select_plan_price(plan, interval)
     applied_discount = None
-    if body.discount_code:
+    # GAP-0342: platform promo-code system (app/services/promo_codes.py).
+    # When a promo_code is supplied it takes precedence over the legacy
+    # creator discount_code (the two do NOT stack). We validate the code
+    # *before* charging (TOCTOU guard) and atomically redeem it *after* the
+    # charge succeeds — promo_codes.redeem_promo_code's conditional
+    # current_uses increment is the real double-use guard.
+    promo_validation = None
+    promo_trial_days = 0
+    if body.promo_code:
+        from app.services import promo_codes as _promo_codes
+
+        promo_validation = _promo_codes.validate_promo_code(
+            code=body.promo_code,
+            user_id=subscriber_id,
+            checkout_type="subscription",
+            item_price_cents=base_price,
+            creator_user_id=plan["creator_id"],
+        )
+        if not promo_validation.get("valid"):
+            raise HTTPException(
+                status_code=400,
+                detail=promo_validation.get("message") or "Invalid or expired promo code",
+            )
+        price_cents = int(promo_validation["final_price_cents"])
+        promo_trial_days = int(promo_validation.get("free_trial_days") or 0)
+    elif body.discount_code:
         discount = _get_discount(plan["creator_id"], body.discount_code)
         if not discount or not _is_discount_active(discount):
             raise HTTPException(status_code=400, detail="Invalid or inactive discount code")
@@ -849,10 +992,19 @@ async def subscribe(
             "duration": discount.get("duration"),
             "duration_months": discount.get("duration_months"),
         }
-    price_cents = _apply_discount(base_price, discount) if applied_discount else base_price
+        price_cents = _apply_discount(base_price, discount)
+    else:
+        price_cents = base_price
     trial_end = None
     trial_start = None
     status = "active"
+    # GAP-0342: a free_trial promo grants trial days when the customer did
+    # not request their own trial.
+    if promo_trial_days and not body.trial_days:
+        trial_start = ts
+        trial_end = ts + promo_trial_days * 86400
+        period_end = trial_end
+        status = "trialing"
     if body.trial_days:
         trial_start = ts
         trial_end = ts + int(body.trial_days) * 86400
@@ -946,6 +1098,40 @@ async def subscribe(
         }
         save_ledger_entry(plan["creator_id"], charge_entry)
         save_ledger_entry(plan["creator_id"], fee_entry)
+        _mirror_creator_credit_to_billing(
+            plan["creator_id"],
+            int(invoice["amount_cents"]) - fee_cents,
+            currency=invoice["currency"],
+            created_at=ts,
+            subscription_id=subscription_id,
+            subscriber_id=subscriber_id,
+            invoice_id=invoice_id,
+        )
+
+    # GAP-0342: record the promo redemption AFTER the subscription is
+    # committed (and any charge has settled above). redeem_promo_code does an
+    # atomic conditional current_uses increment — if the code was exhausted
+    # between validate and now (TOCTOU), it fails and we reject the request.
+    if promo_validation is not None:
+        from app.services import promo_codes as _promo_codes
+
+        _redeem_item, _redeem_err = _promo_codes.redeem_promo_code(
+            code_id=promo_validation["code_id"],
+            user_id=subscriber_id,
+            original_price_cents=int(promo_validation["original_price_cents"]),
+            final_price_cents=int(promo_validation["final_price_cents"]),
+            checkout_type="subscription",
+            checkout_item_id=subscription_id,
+        )
+        if _redeem_err:
+            raise HTTPException(status_code=400, detail=_redeem_err)
+        sub["promo_code"] = {
+            "code_id": promo_validation["code_id"],
+            "discount_type": promo_validation.get("discount_type"),
+            "discount_cents": int(promo_validation.get("discount_cents") or 0),
+            "free_trial_days": int(promo_validation.get("free_trial_days") or 0),
+        }
+        save_subscription(sub)
 
     put_notification(
         recipient_user_id=plan["creator_id"],
@@ -957,6 +1143,23 @@ async def subscribe(
         notif_type="subscription_started",
         payload={"subscription_id": subscription_id, "plan_id": plan_id, "creator_id": plan["creator_id"]},
     )
+    # GAP-0355: emit a social alert to the creator that a new subscriber joined
+    # (alerts table + bell badge). Best-effort: never break subscription create.
+    try:
+        from app.services.social_alerts import emit_social_alert
+        from app.services.profile import get_profile_identity
+        actor_name = get_profile_identity(subscriber_id).get("display_name") or subscriber_id
+        emit_social_alert(
+            recipient_user_id=plan["creator_id"],
+            alert_type="subscription_started",
+            actor_user_id=subscriber_id,
+            actor_display_name=actor_name,
+            title=f"{actor_name} subscribed to you",
+            details={"plan_id": plan_id, "subscriber_id": subscriber_id, "subscription_id": subscription_id},
+            action_url="/subscriptions",
+        )
+    except Exception:
+        logger.warning("subscription social alert failed creator=%s", plan["creator_id"], exc_info=True)
     audit_event(
         "subscription_started",
         subscriber_id,
@@ -976,6 +1179,15 @@ async def subscribe(
         plan_id=plan_id,
         subscriber_id=subscriber_id,
     )
+
+    # GAP-0153: detect subscriber-count milestones in real time at signup.
+    try:
+        from app.services.milestones import check_milestone
+
+        new_count = count_active_subscribers(plan["creator_id"])
+        check_milestone(plan["creator_id"], "subscribers", new_count)
+    except Exception:
+        logger.warning("check_milestone failed on subscription signup", exc_info=True)
 
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
@@ -1330,6 +1542,15 @@ async def convert_trial(
     }
     save_ledger_entry(sub["creator_id"], charge_entry)
     save_ledger_entry(sub["creator_id"], fee_entry)
+    _mirror_creator_credit_to_billing(
+        sub["creator_id"],
+        int(invoice["amount_cents"]) - fee_cents,
+        currency=invoice["currency"],
+        created_at=ts,
+        subscription_id=subscription_id,
+        subscriber_id=sub["subscriber_id"],
+        invoice_id=invoice_id,
+    )
 
     audit_event(
         "subscription_trial_converted",

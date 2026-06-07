@@ -82,6 +82,17 @@ ENDPOINT_GROUPS: Dict[str, Dict[str, Any]] = {
         "max_requests_per_ip": 600,
         "bypass_roles": ["root", "admin"],
     },
+    # NOTE: `ads_api` must precede `api_public` because `api_public` matches the
+    # superset path `/api/*`. `match_path_to_group` iterates this dict in insertion
+    # order, so the more-specific `/api/v1/ads/*` pattern wins (GAP-0056 / ADS-011).
+    "ads_api": {
+        "description": "Advertiser programmatic API (/api/v1/ads/*) — per-API-key throttle",
+        "paths": ["/api/v1/ads/*"],
+        "window_seconds": 60,
+        "max_requests_per_api_key": 1000,   # 1 000 req/min per key (ADS-011 spec)
+        "max_requests_per_ip": 2000,
+        "bypass_roles": ["root"],
+    },
     "api_public": {
         "description": "Public API endpoints accessed via API keys",
         "paths": ["/api/*"],
@@ -115,6 +126,7 @@ def _load_override(group: str) -> Optional[Dict[str, Any]]:
             "window_seconds": int(item.get("window_seconds", 0)) or None,
             "max_requests_per_user": int(item.get("max_requests_per_user", 0)) or None,
             "max_requests_per_ip": int(item.get("max_requests_per_ip", 0)) or None,
+            "max_requests_per_api_key": int(item.get("max_requests_per_api_key", 0)) or None,
             "bypass_roles": item.get("bypass_roles") or None,
             "max_requests": int(item.get("max_requests", 0)) or None,
         }
@@ -151,7 +163,7 @@ def get_group_config(group: str) -> Dict[str, Any]:
 
     if override:
         config["is_override"] = True
-        for key in ("window_seconds", "max_requests_per_user", "max_requests_per_ip", "bypass_roles", "max_requests"):
+        for key in ("window_seconds", "max_requests_per_user", "max_requests_per_ip", "max_requests_per_api_key", "bypass_roles", "max_requests"):
             val = override.get(key)
             if val is not None:
                 config[key] = val
@@ -165,7 +177,7 @@ def get_group_config(group: str) -> Dict[str, Any]:
         try:
             from app.core.settings import S as _S
             if getattr(_S, "dev_mode", False):
-                for _k in ("max_requests_per_user", "max_requests_per_ip"):
+                for _k in ("max_requests_per_user", "max_requests_per_ip", "max_requests_per_api_key"):
                     if isinstance(config.get(_k), int):
                         config[_k] = config[_k] * 1000
         except Exception:

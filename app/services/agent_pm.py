@@ -710,12 +710,73 @@ def get_review_context(*, user_id: str, agent_id: str) -> Dict[str, Any]:
     }
 
 
-# Module-level guard so a manual trigger can't double-run for a user (E2E 675.4).
-_RUNNING_REVIEWS: set[str] = set()
+# Distributed guard so a manual trigger can't double-run for a user, even across
+# multiple uvicorn workers / horizontally-scaled instances (GAP-0098). The previous
+# module-level ``set`` was process-local and gave zero protection in multi-worker
+# (UVICORN_WORKERS > 1) or multi-instance production deployments. The lock is a
+# short-lived item in the agent_feature_ideas table acquired via a conditional
+# put_item (atomic at the DynamoDB layer; identical behavior dev vs prod, SECOPS-007).
+_LOCK_SK_PREFIX = "REVIEW_LOCK#"
+_LOCK_TTL_SECONDS = 300  # 5 minutes: covers worst-case review duration; TTL reclaims on crash.
+
+
+def _lock_sk(agent_id: str) -> str:
+    return f"{_LOCK_SK_PREFIX}{agent_id}"
+
+
+def _acquire_review_lock(*, user_id: str, agent_id: str) -> bool:
+    """Atomically acquire a per-user-agent review lock in DynamoDB.
+
+    Returns True if the lock was acquired (no concurrent review running). Returns
+    False if the lock is already held (ConditionalCheckFailedException). Raises on
+    any other DynamoDB error.
+    """
+    expires_at = now_ts() + _LOCK_TTL_SECONDS
+    try:
+        T.agent_feature_ideas.put_item(
+            Item={
+                "pk": _user_pk(user_id),
+                "sk": _lock_sk(agent_id),
+                "lock_type": "review_running",
+                "locked_at": now_ts(),
+                "expires_at": expires_at,
+                "ttl": expires_at,
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            logger.warning(
+                "review_lock_contention user_id=%s agent_id=%s", user_id, agent_id
+            )
+            return False
+        raise
+
+
+def _release_review_lock(*, user_id: str, agent_id: str) -> None:
+    """Release the review lock. Best-effort; TTL reclaims it if this fails (crash)."""
+    try:
+        T.agent_feature_ideas.delete_item(
+            Key={"pk": _user_pk(user_id), "sk": _lock_sk(agent_id)}
+        )
+    except Exception:  # pragma: no cover - best-effort cleanup; TTL is the backstop
+        logger.warning(
+            "review_lock_release_failed user_id=%s agent_id=%s", user_id, agent_id
+        )
 
 
 def is_review_running(*, user_id: str, agent_id: str) -> bool:
-    return f"{user_id}:{agent_id}" in _RUNNING_REVIEWS
+    """Whether a review lock is currently held for this user+agent (distributed)."""
+    ensure_tables()
+    resp = T.agent_feature_ideas.get_item(
+        Key={"pk": _user_pk(user_id), "sk": _lock_sk(agent_id)}
+    )
+    item = resp.get("Item")
+    if not item:
+        return False
+    # Treat expired locks as not-running: DynamoDB TTL deletion may lag up to ~48h.
+    return int(item.get("expires_at", 0)) > now_ts()
 
 
 def trigger_review(*, user_id: str, agent_id: str, count: int = 3) -> Dict[str, Any]:
@@ -726,10 +787,8 @@ def trigger_review(*, user_id: str, agent_id: str, count: int = 3) -> Dict[str, 
     only path so the lifecycle is fully driveable/testable.
     """
     ensure_tables()
-    key = f"{user_id}:{agent_id}"
-    if key in _RUNNING_REVIEWS:
+    if not _acquire_review_lock(user_id=user_id, agent_id=agent_id):
         raise PmValidationError("REVIEW_IN_PROGRESS", "A review session is already running")
-    _RUNNING_REVIEWS.add(key)
     try:
         config = get_pm_config(user_id=user_id)
         max_ideas = _to_int(config.get("max_ideas_per_review"), 5)
@@ -759,7 +818,7 @@ def trigger_review(*, user_id: str, agent_id: str, count: int = 3) -> Dict[str, 
             "completed_at": now_ts(),
         }
     finally:
-        _RUNNING_REVIEWS.discard(key)
+        _release_review_lock(user_id=user_id, agent_id=agent_id)
 
 
 # ---------------------------------------------------------------------------

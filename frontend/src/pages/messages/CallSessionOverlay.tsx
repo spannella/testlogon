@@ -15,6 +15,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import type { DirectCallMode } from "@/api/endpoints/messaging";
 import { useConnectionQuality, type ConnectionQuality } from "@/hooks/useConnectionQuality";
+import { CallBillingOverlay } from "@/components/calls/CallBillingOverlay";
 
 export type CallUiState =
   | "idle"
@@ -67,6 +68,14 @@ interface Props {
   onToggleScreenShare?: () => void;
   screenShareSupported?: boolean;
   peerIsScreenSharing?: boolean;
+  // GAP-0147: paid-call billing overlay props (driven by useCallBillingHeartbeat)
+  isPaidCall?: boolean;
+  billingTotalCostCents?: number;
+  billingRateCentsPerMinute?: number;
+  billingElapsedSeconds?: number;
+  billingBalanceRemainingCents?: number;
+  billingWarnLowBalance?: boolean;
+  billingMinutesRemaining?: number;
 }
 
 const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" | "ended" | "failure">, string> = {
@@ -321,6 +330,13 @@ export function CallSessionOverlay({
   onToggleScreenShare,
   screenShareSupported,
   peerIsScreenSharing,
+  isPaidCall = false,
+  billingTotalCostCents = 0,
+  billingRateCentsPerMinute = 0,
+  billingElapsedSeconds = 0,
+  billingBalanceRemainingCents = 0,
+  billingWarnLowBalance = false,
+  billingMinutesRemaining = 0,
 }: Props) {
   const isIncoming = session.state === "incoming_ringing";
   const isOutgoing = ["outgoing_inviting", "outgoing_ringing", "outgoing_connecting", "reconnecting"].includes(session.state);
@@ -378,6 +394,17 @@ export function CallSessionOverlay({
 
           {/* Remote video (full area) */}
           <div className="relative w-full aspect-video bg-black">
+            {/* GAP-0147: paid-call billing cost ticker + low-balance warning */}
+            {isPaidCall && (
+              <CallBillingOverlay
+                totalCostCents={billingTotalCostCents}
+                rateCentsPerMinute={billingRateCentsPerMinute}
+                elapsedSeconds={billingElapsedSeconds}
+                balanceRemainingCents={billingBalanceRemainingCents}
+                warnLowBalance={billingWarnLowBalance}
+                minutesRemaining={billingMinutesRemaining}
+              />
+            )}
             {hasRemoteVideo ? (
               <VideoRenderer
                 stream={remoteStream}
@@ -409,8 +436,12 @@ export function CallSessionOverlay({
               )}
             </div>
 
-            {/* Peer name + timer + quality overlay */}
-            <div className="absolute top-4 left-4 flex items-center gap-2 rounded-lg bg-black/50 px-3 py-1.5 text-white backdrop-blur-sm">
+            {/* Peer name + timer + quality overlay (shifted down when the paid-call
+                billing ticker occupies the top-left corner) */}
+            <div className={cn(
+              "absolute left-4 flex items-center gap-2 rounded-lg bg-black/50 px-3 py-1.5 text-white backdrop-blur-sm",
+              isPaidCall ? "top-20" : "top-4",
+            )}>
               <ConnectionQualityIndicator
                 quality={connectionQuality.quality}
                 rtt={connectionQuality.rtt}
@@ -497,9 +528,21 @@ export function CallSessionOverlay({
   if (isConnected && session.mode === "audio") {
     return (
       <Dialog open onOpenChange={(open) => !open && onDismiss()}>
-        <DialogContent className="sm:max-w-md" aria-label="Audio call">
+        <DialogContent className="sm:max-w-md relative" aria-label="Audio call">
           {/* Remote audio playback */}
           <AudioRenderer stream={remoteStream} />
+
+          {/* GAP-0147: paid-call billing cost ticker + low-balance warning */}
+          {isPaidCall && (
+            <CallBillingOverlay
+              totalCostCents={billingTotalCostCents}
+              rateCentsPerMinute={billingRateCentsPerMinute}
+              elapsedSeconds={billingElapsedSeconds}
+              balanceRemainingCents={billingBalanceRemainingCents}
+              warnLowBalance={billingWarnLowBalance}
+              minutesRemaining={billingMinutesRemaining}
+            />
+          )}
 
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">

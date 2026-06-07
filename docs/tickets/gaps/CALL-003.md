@@ -1,0 +1,6 @@
+# CALL-003 Gaps
+
+- [MED] Unit test files missing for media hooks — `frontend/src/hooks/useMediaCapture.test.ts` and `frontend/src/hooks/useMediaDevices.test.ts` do not exist — permission tracking, error categorization, `switchCamera` flow, and `devicechange` handling have no unit coverage — Fix: create both test files (~400 lines total) per §4.1/4.2 — Effort: S
+- [MED] `OverconstrainedError` retry not implemented — `frontend/src/hooks/useMediaCapture.ts:72` — `OverconstrainedError` is mapped to `type:"error"` and aborts instead of retrying with relaxed constraints; breaks compatibility with low-end webcams — Fix: add retry with `{audio:true, video:true}` on `OverconstrainedError` per §4.3 — Effort: S
+- [LOW] Echo cancellation constraints not explicit — `useMediaCapture.ts:50` uses `audio: true` (browser defaults) instead of explicitly setting `echoCancellation`, `noiseSuppression`, `autoGainControl`; Safari may apply different defaults — Fix: use `{ideal: true}` modifiers per §4.4 and §5.1 — Effort: S
+- [LOW] `permissionState` not queried proactively — `useMediaCapture.ts` always shows `"requesting"` status during `getUserMedia` even when permission is already `"granted"`; UX shows incorrect "Requesting permissions..." text on repeat calls — Fix: query `navigator.permissions.query` before calling `getUserMedia` per §5.2 — Effort: S

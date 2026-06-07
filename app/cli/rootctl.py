@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hmac
 import json
 import os
 import re
@@ -1267,6 +1268,207 @@ def _user_delete_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _user_reactivate_command(args: argparse.Namespace) -> Dict[str, Any]:
+    shared = _shared_opts(args)
+    root_sub = str(getattr(args, "root_sub", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    target_user_sub = str(getattr(args, "target_user_sub", "") or "").strip()
+
+    _require_existing_non_root_user(target_user_sub, root_sub=root_sub)
+
+    # Must currently be deactivated (not deleted — use undelete for that).
+    state = T.account_state.get_item(Key={"user_sub": target_user_sub}).get("Item") or {}
+    current_status = _normalize_status(str(state.get("status") or "active"))
+    if current_status != "deactivated":
+        raise CliPolicyError(
+            "reactivate requires account status to be 'deactivated'",
+            details={
+                "code": "invalid_state_transition",
+                "current_status": current_status,
+                "target_user_sub": target_user_sub,
+            },
+        )
+
+    if bool(shared.dry_run):
+        return {
+            "ok": True,
+            "group": str(args.group),
+            "command": str(args.command),
+            "dry_run": True,
+            "actor_sub": actor_sub,
+            "target_user_sub": target_user_sub,
+            "previous_status": current_status,
+            "new_status": "active",
+            "reason": reason,
+            "ticket": ticket,
+            "request_id": shared.request_id,
+            "correlation_id": shared.correlation_id,
+            "message": "dry-run: user would be reactivated",
+        }
+
+    ts = now_ts()
+    T.account_state.put_item(
+        Item={
+            "user_sub": target_user_sub,
+            "status": "active",
+            "updated_at": ts,
+            "reason": reason,
+            "requested_by": actor_sub,
+        }
+    )
+    T.users.update_item(
+        Key={"user_sub": target_user_sub},
+        UpdateExpression=(
+            "SET reactivated_at=:ts, reactivated_by=:actor, "
+            "reactivation_reason=:reason, reactivation_ticket=:ticket"
+        ),
+        ExpressionAttributeValues={
+            ":ts": ts,
+            ":actor": actor_sub,
+            ":reason": reason,
+            ":ticket": ticket,
+        },
+    )
+
+    # Sessions and API keys were intentionally revoked on deactivate and are NOT
+    # restored here — the user obtains fresh sessions on next login.
+    audit_event(
+        "user_reactivated_cli",
+        target_user_sub,
+        None,
+        outcome="success",
+        actor_sub=actor_sub,
+        target_user_sub=target_user_sub,
+        previous_status=current_status,
+        new_status="active",
+        reason=reason,
+        ticket_id=ticket,
+        request_id=shared.request_id,
+        correlation_id=shared.correlation_id,
+        cli=True,
+    )
+
+    return {
+        "ok": True,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": False,
+        "actor_sub": actor_sub,
+        "target_user_sub": target_user_sub,
+        "previous_status": current_status,
+        "new_status": "active",
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": shared.correlation_id,
+        "audit_event": "user_reactivated_cli",
+    }
+
+
+def _user_undelete_command(args: argparse.Namespace) -> Dict[str, Any]:
+    shared = _shared_opts(args)
+    root_sub = str(getattr(args, "root_sub", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    target_user_sub = str(getattr(args, "target_user_sub", "") or "").strip()
+
+    # The user record must still exist; a HARD delete removes it and is
+    # irreversible. _require_existing_non_root_user raises "target user not found"
+    # for that case.
+    _require_existing_non_root_user(target_user_sub, root_sub=root_sub)
+
+    state = T.account_state.get_item(Key={"user_sub": target_user_sub}).get("Item") or {}
+    current_status = _normalize_status(str(state.get("status") or "active"))
+    if current_status != "deleted":
+        raise CliPolicyError(
+            "undelete requires account status to be 'deleted'",
+            details={
+                "code": "invalid_state_transition",
+                "current_status": current_status,
+                "target_user_sub": target_user_sub,
+            },
+        )
+
+    if bool(shared.dry_run):
+        return {
+            "ok": True,
+            "group": str(args.group),
+            "command": str(args.command),
+            "dry_run": True,
+            "actor_sub": actor_sub,
+            "target_user_sub": target_user_sub,
+            "previous_status": current_status,
+            "new_status": "active",
+            "reason": reason,
+            "ticket": ticket,
+            "request_id": shared.request_id,
+            "correlation_id": shared.correlation_id,
+            "message": "dry-run: soft-deleted user would be restored to active",
+        }
+
+    ts = now_ts()
+    T.account_state.put_item(
+        Item={
+            "user_sub": target_user_sub,
+            "status": "active",
+            "updated_at": ts,
+            "reason": reason,
+            "requested_by": actor_sub,
+        }
+    )
+    T.users.update_item(
+        Key={"user_sub": target_user_sub},
+        UpdateExpression=(
+            "SET undeleted_at=:ts, undeleted_by=:actor, "
+            "undeletion_reason=:reason, undeletion_ticket=:ticket"
+        ),
+        ExpressionAttributeValues={
+            ":ts": ts,
+            ":actor": actor_sub,
+            ":reason": reason,
+            ":ticket": ticket,
+        },
+    )
+
+    # Sessions and API keys were intentionally revoked on delete and are NOT
+    # restored here — the user obtains fresh sessions on next login.
+    audit_event(
+        "user_undeleted_cli",
+        target_user_sub,
+        None,
+        outcome="success",
+        severity="high",
+        actor_sub=actor_sub,
+        target_user_sub=target_user_sub,
+        previous_status=current_status,
+        new_status="active",
+        reason=reason,
+        ticket_id=ticket,
+        request_id=shared.request_id,
+        correlation_id=shared.correlation_id,
+        cli=True,
+    )
+
+    return {
+        "ok": True,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": False,
+        "actor_sub": actor_sub,
+        "target_user_sub": target_user_sub,
+        "previous_status": current_status,
+        "new_status": "active",
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": shared.correlation_id,
+        "audit_event": "user_undeleted_cli",
+    }
+
+
 def _persist_role_assignment_event_cli(
     *,
     actor_sub: str,
@@ -1328,6 +1530,8 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
             details={"code": "root_immutable", "target_user_sub": target_user_sub},
         )
 
+    new_caps = _parse_capabilities(list(getattr(args, "capability", []) or []))
+
     if bool(shared.dry_run):
         return {
             "ok": True,
@@ -1339,23 +1543,48 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
             "previous_role": current_role.value,
             "new_role": Role.ADMIN.value,
             "reason": reason,
+            "new_capabilities": new_caps,
             "request_id": shared.request_id,
             "correlation_id": shared.correlation_id,
-            "message": "dry-run: user would be granted admin role",
+            "message": (
+                "dry-run: user would be granted admin role (general)"
+                if not new_caps
+                else f"dry-run: user would be granted admin role (scoped: {new_caps})"
+            ),
         }
 
     ts = now_ts()
-    T.users.update_item(
-        Key={"user_sub": target_user_sub},
-        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
-        ExpressionAttributeNames={"#role": "role"},
-        ExpressionAttributeValues={
-            ":role": Role.ADMIN.value,
-            ":ts": ts,
-            ":by": actor_sub,
-            ":reason": reason,
-        },
-    )
+    if new_caps:
+        # Scoped admin: persist the capability list so the token-minting layer
+        # (GAP-0037 bridge) can build a restricted admin_profile.
+        T.users.update_item(
+            Key={"user_sub": target_user_sub},
+            UpdateExpression=(
+                "SET #role=:role, role_updated_at=:ts, role_updated_by=:by, "
+                "role_reason=:reason, admin_capabilities=:caps"
+            ),
+            ExpressionAttributeNames={"#role": "role"},
+            ExpressionAttributeValues={
+                ":role": Role.ADMIN.value,
+                ":ts": ts,
+                ":by": actor_sub,
+                ":reason": reason,
+                ":caps": new_caps,
+            },
+        )
+    else:
+        # General admin: write role only (no admin_capabilities = GENERAL profile).
+        T.users.update_item(
+            Key={"user_sub": target_user_sub},
+            UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+            ExpressionAttributeNames={"#role": "role"},
+            ExpressionAttributeValues={
+                ":role": Role.ADMIN.value,
+                ":ts": ts,
+                ":by": actor_sub,
+                ":reason": reason,
+            },
+        )
     event = _persist_role_assignment_event_cli(
         actor_sub=actor_sub,
         target_user_sub=target_user_sub,
@@ -1376,6 +1605,7 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
         role=Role.ADMIN.value,
         previous_role=current_role.value,
         reason=reason,
+        new_capabilities=new_caps,
         role_audit_event_id=event["event_id"],
         request_id=shared.request_id,
         correlation_id=shared.correlation_id,
@@ -1391,6 +1621,7 @@ def _admin_grant_command(args: argparse.Namespace) -> Dict[str, Any]:
         "previous_role": current_role.value,
         "new_role": Role.ADMIN.value,
         "reason": reason,
+        "new_capabilities": new_caps,
         "event_id": event["event_id"],
         "request_id": shared.request_id,
         "correlation_id": shared.correlation_id,
@@ -1445,7 +1676,10 @@ def _admin_revoke_command(args: argparse.Namespace) -> Dict[str, Any]:
     ts = now_ts()
     T.users.update_item(
         Key={"user_sub": target_user_sub},
-        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+        UpdateExpression=(
+            "SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason "
+            "REMOVE admin_capabilities"
+        ),
         ExpressionAttributeNames={"#role": "role"},
         ExpressionAttributeValues={
             ":role": Role.USER.value,
@@ -1977,6 +2211,184 @@ def _placeholder_mutation_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _rotate_secrets_command(args: argparse.Namespace) -> Dict[str, Any]:
+    """Rotate signing secrets (UI_ACCESS_TOKEN_SECRET, API_KEY_PEPPER,
+    WS_TOKEN_SECRET) and the KMS break-glass key (GAP-0345).
+
+    Generates new cryptographically-strong values, persists them to the active
+    secret store (``.env.local`` in dev, AWS Secrets Manager in prod), rotates
+    the KMS break-glass key best-effort, revokes all active root sessions/API
+    keys, and writes an immutable audit record. SECURITY: never returns or logs
+    the raw secret values — only the rotated secret NAMES and identifiers.
+    """
+    from app.services import secret_rotation
+
+    shared = _shared_opts(args)
+    root_sub = _validate_preflight(args)
+
+    scope = str(getattr(args, "scope", "all") or "all").strip() or "all"
+    if scope not in secret_rotation.VALID_SCOPES:
+        raise ValueError(
+            "invalid scope; choose from: "
+            + ", ".join(sorted(secret_rotation.VALID_SCOPES))
+        )
+
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+
+    new_values = secret_rotation.generate_new_secrets(scope)
+    rotated_env_keys = sorted(new_values.keys())
+
+    if shared.dry_run:
+        kms_descr = {"rotated": False, "reason": "dry_run"}
+        return {
+            "ok": True,
+            "group": str(args.group),
+            "command": str(args.command),
+            "dry_run": True,
+            "scope": scope,
+            "would_rotate": rotated_env_keys,
+            "kms": kms_descr,
+            "actor_sub": actor_sub,
+            "request_id": shared.request_id,
+            "correlation_id": shared.correlation_id,
+        }
+
+    # Persist the new secret values to the active store (env file / SM).
+    persistence = secret_rotation.persist_secrets(new_values)
+
+    # Rotate the KMS break-glass key (best-effort).
+    kms_result = secret_rotation.rotate_kms_break_glass_key()
+
+    rotated: Dict[str, Any] = {"secrets": rotated_env_keys}
+    if "API_KEY_PEPPER" in new_values:
+        rotated["api_keys_invalidated"] = (
+            "All API key hashes are now stale; keys must be re-issued."
+        )
+
+    # Invalidate active root sessions/API keys so the old secret can't be used.
+    sessions_revoked = False
+    api_keys_revoked = False
+    if "UI_ACCESS_TOKEN_SECRET" in new_values:
+        try:
+            revoke_all_sessions(root_sub)
+            sessions_revoked = True
+        except Exception:
+            sessions_revoked = False
+    if "API_KEY_PEPPER" in new_values:
+        try:
+            revoke_all_api_keys(root_sub)
+            api_keys_revoked = True
+        except Exception:
+            api_keys_revoked = False
+
+    ts = now_ts()
+    audit_event(
+        "rotate_secrets",
+        root_sub,
+        None,
+        outcome="success",
+        actor_sub=actor_sub,
+        scope=scope,
+        rotated_secrets=rotated_env_keys,
+        kms_rotated=bool(kms_result.get("rotated", False)),
+        kms_key_id=str(kms_result.get("key_id", "") or ""),
+        persistence_backend=str(persistence.get("backend", "") or ""),
+        sessions_revoked=sessions_revoked,
+        api_keys_revoked=api_keys_revoked,
+        reason=reason,
+        ticket_id=ticket,
+        request_id=shared.request_id,
+        correlation_id=shared.correlation_id,
+        cli=True,
+    )
+
+    return {
+        "ok": True,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": False,
+        "scope": scope,
+        "rotated": rotated,
+        "rotated_secrets": rotated_env_keys,
+        "kms": kms_result,
+        "persistence_backend": str(persistence.get("backend", "") or ""),
+        "sessions_revoked": sessions_revoked,
+        "api_keys_revoked": api_keys_revoked,
+        "actor_sub": actor_sub,
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": shared.correlation_id,
+        "audit_event": "rotate_secrets",
+        "ts": ts,
+        "note": "Backend processes must be restarted to pick up the new secret values.",
+    }
+
+
+_BREAK_GLASS_ENV = "ROOTCTL_BREAK_GLASS_SECRET"
+_BREAK_GLASS_TOKEN_ENV = "ROOTCTL_BREAK_GLASS_TOKEN"
+
+
+def _break_glass_expected_secret() -> str:
+    """Resolve the configured break-glass secret.
+
+    Prefers the live environment variable (prod injects it from Secrets Manager
+    immediately before the command; same code path applies in dev where it is a
+    well-known value in .env.local). Falls back to the Settings singleton so
+    callers that load config through Settings stay consistent.
+    """
+    value = (os.environ.get(_BREAK_GLASS_ENV, "") or "").strip()
+    if value:
+        return value
+    try:
+        from app.core.settings import S
+
+        return (getattr(S, "rootctl_break_glass_secret", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _require_break_glass_auth() -> None:
+    """Verify the break-glass secret before any mutating CLI command.
+
+    The expected secret is read from ROOTCTL_BREAK_GLASS_SECRET (env/settings).
+    The operator-supplied token is read from ROOTCTL_BREAK_GLASS_TOKEN (env, for
+    non-interactive CI/CD) or prompted interactively via getpass. Comparison uses
+    hmac.compare_digest to avoid timing leaks. This is additive: it runs in
+    addition to (not instead of) the existing reason/ticket/confirm/actor guards.
+    """
+    expected = _break_glass_expected_secret()
+    if not expected:
+        raise CliPolicyError(
+            f"{_BREAK_GLASS_ENV} is not configured; CLI mutations are disabled. "
+            "Set the environment variable to enable break-glass operations.",
+            details={"code": "break_glass_unconfigured"},
+        )
+
+    provided = (os.environ.get(_BREAK_GLASS_TOKEN_ENV, "") or "").strip()
+    if not provided:
+        try:
+            provided = getpass.getpass(
+                "Break-glass secret (or set ROOTCTL_BREAK_GLASS_TOKEN): "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            provided = ""
+
+    if not provided:
+        raise CliPolicyError(
+            "break-glass authentication failed: no token provided",
+            details={"code": "break_glass_no_token"},
+        )
+
+    if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        raise CliPolicyError(
+            "break-glass authentication failed: invalid token",
+            details={"code": "break_glass_auth_failed"},
+        )
+
+
 def _validate_preflight(args: argparse.Namespace) -> str:
     try:
         root_sub = validate_root_user_sub_config()
@@ -1985,6 +2397,8 @@ def _validate_preflight(args: argparse.Namespace) -> str:
 
     if not bool(getattr(args, "mutating", False)):
         return root_sub
+
+    _require_break_glass_auth()
 
     reason = str(getattr(args, "reason", "") or "").strip()
     if not reason:
@@ -2131,11 +2545,17 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
             requires_confirm=False,
         )
 
-        rotate = commands.add_parser("rotate-secrets", help="Placeholder root mutation command")
+        rotate = commands.add_parser("rotate-secrets", help="Rotate signing secrets and KMS break-glass key")
         _add_shared_options(rotate)
         _add_mutation_guard_options(rotate)
+        rotate.add_argument(
+            "--scope",
+            default="all",
+            choices=("all", "ui_access_token", "api_key_pepper", "ws_token"),
+            help="Which secrets to rotate (default: all)",
+        )
         rotate.set_defaults(
-            handler=_placeholder_mutation_command,
+            handler=_rotate_secrets_command,
             group=group_name,
             mutating=True,
             requires_root=True,
@@ -2260,6 +2680,38 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
             requires_confirm=True,
         )
 
+        reactivate = commands.add_parser(
+            "reactivate",
+            help="Restore a deactivated user account to active status",
+        )
+        _add_shared_options(reactivate)
+        _add_mutation_guard_options(reactivate)
+        reactivate.add_argument("--target-user-sub", required=True, help="Target user subject")
+        reactivate.set_defaults(
+            handler=_user_reactivate_command,
+            group=group_name,
+            mutating=True,
+            requires_root=True,
+            requires_ticket=True,
+            requires_confirm=False,
+        )
+
+        undelete = commands.add_parser(
+            "undelete",
+            help="Restore a soft-deleted user account to active status",
+        )
+        _add_shared_options(undelete)
+        _add_mutation_guard_options(undelete)
+        undelete.add_argument("--target-user-sub", required=True, help="Target user subject")
+        undelete.set_defaults(
+            handler=_user_undelete_command,
+            group=group_name,
+            mutating=True,
+            requires_root=True,
+            requires_ticket=True,
+            requires_confirm=True,
+        )
+
     if group_name == "admin":
         create = commands.add_parser("create", help="Create a new admin user in one controlled flow")
         _add_shared_options(create)
@@ -2287,6 +2739,17 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
         _add_mutation_guard_options(grant)
         grant.add_argument("--target-user-sub", required=True, help="Target user subject")
         grant.add_argument("--role", default="admin", choices=("admin", "root"), help="Role to grant")
+        grant.add_argument(
+            "--capability",
+            action="append",
+            default=[],
+            metavar="CAPABILITY",
+            help=(
+                "Admin capability to assign (repeatable). Allowed: "
+                + ", ".join(sorted(ADMIN_CAPABILITIES))
+                + ". Omit to create a general (full-access) admin."
+            ),
+        )
         grant.set_defaults(
             handler=_admin_grant_command,
             group=group_name,

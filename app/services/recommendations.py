@@ -13,13 +13,14 @@ Data layout (all in the ``recommendations`` table):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 from app.core.settings import S
@@ -512,3 +513,72 @@ def refresh_user_recommendations(user_id: str) -> Dict[str, Any]:
         "creator_count": len(creators),
         "duration_seconds": round(duration, 2),
     }
+
+
+def _list_all_signal_users() -> List[str]:
+    """Return the set of user_ids that have at least one engagement signal."""
+    user_ids: Set[str] = set()
+    kwargs: Dict[str, Any] = {
+        "FilterExpression": Attr("pk").begins_with("SIGNAL#"),
+        "ProjectionExpression": "pk",
+    }
+    while True:
+        resp = T.recommendations.scan(**kwargs)
+        for item in resp.get("Items", []):
+            pk = item.get("pk", "")
+            if pk.startswith("SIGNAL#"):
+                user_ids.add(pk[len("SIGNAL#"):])
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return list(user_ids)
+
+
+def refresh_all_users() -> Dict[str, Any]:
+    """Recompute recommendations for every user that has engagement signals."""
+    user_ids = _list_all_signal_users()
+    t0 = time.time()
+    processed = 0
+    errors = 0
+    for uid in user_ids:
+        try:
+            refresh_user_recommendations(uid)
+            processed += 1
+        except Exception:
+            logger.exception("reco: refresh_all_users: error for user %s", uid)
+            errors += 1
+    duration = time.time() - t0
+    logger.info(
+        "reco: refresh_all_users complete: %d users, %d errors, %.1fs",
+        processed, errors, duration,
+    )
+    return {
+        "users_processed": processed,
+        "errors": errors,
+        "duration_seconds": round(duration, 2),
+    }
+
+
+async def _reco_refresh_loop() -> None:
+    """Background loop: periodically recompute recommendations for all users."""
+    interval_seconds = max(1, S.reco_refresh_interval_hours * 3600)
+    await asyncio.sleep(60)  # brief startup delay past the boot window
+    while True:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, refresh_all_users)
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            break
+        except Exception:
+            logger.exception("reco: background refresh loop error")
+        await asyncio.sleep(interval_seconds)
+
+
+def start_reco_refresh_task() -> None:
+    """Startup handler: schedule the recommendation refresh background loop."""
+    if not S.recommendations_enabled:
+        logger.info(
+            "reco refresh disabled (recommendations_enabled=False)"
+        )
+        return
+    asyncio.ensure_future(_reco_refresh_loop())

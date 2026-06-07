@@ -4,17 +4,16 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowLeft,
-  ZoomIn,
-  ZoomOut,
-  RotateCw,
-  RotateCcw,
-  Maximize,
   CheckCircle,
   XCircle,
   MessageSquare,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/PageHeader";
+import { DocumentViewer } from "@/components/shared/DocumentViewer";
+import { ExtractionResultsPanel } from "@/components/shared/ExtractionResultsPanel";
+import { VerificationCallPanel } from "@/components/shared/VerificationCallPanel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
   CardContent,
@@ -34,7 +33,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   fetchKycCaseDetail,
   approveKycCase,
@@ -42,9 +40,13 @@ import {
   requestKycInfo,
   type KycCaseDetail,
   type KycTimelineEvent,
-  type KycFileRef,
 } from "@/api/endpoints/kyc-admin";
 import { KycFacialComparisonReview } from "@/pages/admin/KycFacialComparisonReview";
+import { ResidencyVerificationTab } from "@/pages/admin/ResidencyVerificationTab";
+import { KycFinancialVerificationPanel } from "@/pages/admin/KycFinancialVerificationPanel";
+import { KycPiiSection } from "@/components/shared/KycPiiSection";
+import { useAuthStore } from "@/stores/authStore";
+import { getRoleFromAccessToken } from "@/lib/adminCapabilities";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,143 +95,6 @@ const REQUEST_INFO_ITEMS = [
   { value: "proof_of_address", label: "Proof of Address" },
 ];
 
-const FILE_TYPE_LABELS: Record<string, string> = {
-  selfie: "Selfie",
-  id_front: "ID Front",
-  id_back: "ID Back",
-  proof_of_address: "Proof of Address",
-};
-
-// ─── Document Viewer ──────────────────────────────────────────────────────────
-
-function DocumentViewer({ files }: { files: KycFileRef[] }) {
-  const [activeTab, setActiveTab] = useState(files[0]?.type ?? "");
-  const [scale, setScale] = useState(1);
-  const [rotation, setRotation] = useState(0);
-  const [fullscreen, setFullscreen] = useState(false);
-
-  const activeFile = files.find((f) => f.type === activeTab);
-
-  function handleZoomIn() {
-    setScale((s) => Math.min(s + 0.25, 5));
-  }
-
-  function handleZoomOut() {
-    setScale((s) => Math.max(s - 0.25, 0.25));
-  }
-
-  function handleRotateCw() {
-    setRotation((r) => (r + 90) % 360);
-  }
-
-  function handleRotateCcw() {
-    setRotation((r) => (r - 90 + 360) % 360);
-  }
-
-  function handleWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    if (e.deltaY < 0) {
-      handleZoomIn();
-    } else {
-      handleZoomOut();
-    }
-  }
-
-  if (files.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          No documents attached to this case.
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const viewer = (
-    <div className={fullscreen ? "fixed inset-0 z-50 bg-background flex flex-col" : ""}>
-      <Tabs
-        value={activeTab}
-        onValueChange={(val) => {
-          setActiveTab(val);
-          setScale(1);
-          setRotation(0);
-        }}
-      >
-        <div className="flex items-center justify-between border-b px-4 py-2">
-          <TabsList>
-            {files.map((file) => (
-              <TabsTrigger key={file.type} value={file.type} data-testid={`doc-tab-${file.type}`}>
-                {FILE_TYPE_LABELS[file.type] ?? file.type}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" onClick={handleZoomIn} aria-label="Zoom In">
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleZoomOut} aria-label="Zoom Out">
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleRotateCw} aria-label="Rotate CW">
-              <RotateCw className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleRotateCcw} aria-label="Rotate CCW">
-              <RotateCcw className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setFullscreen(!fullscreen)}
-              aria-label="Fullscreen"
-            >
-              <Maximize className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-
-        {files.map((file) => (
-          <TabsContent key={file.type} value={file.type} className="mt-0">
-            <div
-              className="relative flex items-center justify-center overflow-auto bg-muted/30"
-              style={{ minHeight: fullscreen ? "calc(100vh - 60px)" : "400px" }}
-              onWheel={handleWheel}
-            >
-              {activeFile && (
-                <>
-                  <img
-                    src={`/ui/files/download?path=${encodeURIComponent(file.path)}`}
-                    alt={FILE_TYPE_LABELS[file.type] ?? file.type}
-                    className="max-w-full transition-transform"
-                    style={{
-                      transform: `scale(${scale}) rotate(${rotation}deg)`,
-                    }}
-                    data-testid="doc-image"
-                  />
-                  <Badge
-                    variant={
-                      file.verification_state === "verified"
-                        ? "default"
-                        : file.verification_state === "rejected"
-                        ? "destructive"
-                        : "outline"
-                    }
-                    className="absolute bottom-3 right-3"
-                    data-testid="verification-badge"
-                  >
-                    {file.verification_state}
-                  </Badge>
-                </>
-              )}
-            </div>
-          </TabsContent>
-        ))}
-      </Tabs>
-    </div>
-  );
-
-  return <Card className="overflow-hidden">{viewer}</Card>;
-}
-
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 
 function CaseTimeline({ events }: { events: KycTimelineEvent[] }) {
@@ -276,6 +141,11 @@ export default function KycCaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // KYC-023 / GAP-0288: viewer identity + role drive PII reveal/key-management.
+  const viewerSub = useAuthStore((s) => s.userId);
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const isRoot = getRoleFromAccessToken(accessToken) === "root";
 
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
@@ -409,6 +279,12 @@ export default function KycCaseDetailPage() {
 
   const isActionable = ["submitted", "under_review", "needs_more_info"].includes(caseData.status);
 
+  // KYC-023 / GAP-0288: assigned admin (or root) may decrypt PII fields.
+  const canReveal =
+    isRoot ||
+    (!!caseData.decision_state?.assigned_admin_sub &&
+      caseData.decision_state.assigned_admin_sub === viewerSub);
+
   return (
     <div className="container mx-auto max-w-7xl space-y-6 px-4 py-6">
       <div className="flex items-center gap-4">
@@ -427,6 +303,26 @@ export default function KycCaseDetailPage() {
         </Badge>
       </div>
 
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList>
+          <TabsTrigger value="overview" data-testid="tab-overview">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="extraction" data-testid="tab-extraction">
+            Document Extraction
+          </TabsTrigger>
+          <TabsTrigger value="residency" data-testid="tab-residency">
+            Residency
+          </TabsTrigger>
+          <TabsTrigger value="financial" data-testid="tab-financial">
+            Financial Verification
+          </TabsTrigger>
+          <TabsTrigger value="pii" data-testid="tab-pii">
+            Sensitive PII
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview">
       {/* Two-column layout */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* Left: Document Viewer (60%) */}
@@ -521,10 +417,37 @@ export default function KycCaseDetailPage() {
             </Card>
           )}
 
+          {/* Verification Call (KYC-003 / GAP-0250) */}
+          <VerificationCallPanel caseId={caseData.kyc_case_id} />
+
           {/* Timeline */}
           <CaseTimeline events={caseData.timeline} />
         </div>
       </div>
+        </TabsContent>
+
+        <TabsContent value="extraction">
+          <ExtractionResultsPanel caseId={caseData.kyc_case_id} />
+        </TabsContent>
+
+        <TabsContent value="residency">
+          <ResidencyVerificationTab caseId={caseData.kyc_case_id} />
+        </TabsContent>
+
+        <TabsContent value="financial">
+          <KycFinancialVerificationPanel userSub={caseData.user_sub} />
+        </TabsContent>
+
+        <TabsContent value="pii">
+          {/* PII -- masked fields, reveal, root key management + audit (KYC-023 / GAP-0288) */}
+          <KycPiiSection
+            caseId={caseData.kyc_case_id}
+            userSub={caseData.user_sub}
+            canReveal={canReveal}
+            isRoot={isRoot}
+          />
+        </TabsContent>
+      </Tabs>
 
       {/* Approve Dialog */}
       <Dialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>

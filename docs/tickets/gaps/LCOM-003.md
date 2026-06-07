@@ -1,0 +1,1 @@
+- [UNBUILT] broadcast quick-buy checkout not implemented — see writeups/LCOM-003.md

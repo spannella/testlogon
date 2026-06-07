@@ -114,6 +114,29 @@ def set_mute(session_id: str, user_id: str, duration_seconds: int, actor: str) -
     }
 
 
+def _enforce_chat_ban(session_id: str, user_id: str) -> None:
+    """Raise 403 if the viewer is banned from this broadcast session (GAP-0157).
+
+    The per-session ban is written by ``ban_viewer`` in
+    ``app/services/delegate_broadcast.py`` to ``T.broadcast_moderation`` keyed by
+    ``SESSION#{session_id}`` / ``BAN#{user_id}``. It is consulted here so that a
+    banned viewer cannot continue posting chat messages. The import is deferred
+    to avoid a circular import (``delegate_broadcast`` imports from this module).
+    """
+    from app.services.delegate_broadcast import is_viewer_banned
+
+    if is_viewer_banned(session_id, user_id):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "BROADCAST_CHAT_BANNED",
+                "message": "You have been banned from this broadcast.",
+            },
+        )
+
+
 def _enforce_chat_mute(session_id: str, user_id: str) -> None:
     """Raise 403 if user is muted."""
     muted_until = get_mute_status(session_id, user_id)
@@ -155,6 +178,7 @@ def send_chat_message(
     """
     from fastapi import HTTPException
 
+    _enforce_chat_ban(session_id, user_id)
     _enforce_chat_mute(session_id, user_id)
     if not skip_rate_limit:
         _enforce_chat_rate_limit(session_id, user_id)
@@ -223,6 +247,7 @@ def send_product_link_message(
     product_link: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Send a product link card into broadcast chat. Enforces separate rate limit."""
+    _enforce_chat_ban(session_id, user_id)
     _enforce_chat_mute(session_id, user_id)
     _enforce_product_link_rate_limit(session_id, user_id)
 
@@ -263,7 +288,10 @@ def get_chat_history(
         "KeyConditionExpression": Key("session_id").eq(session_id),
         "Limit": limit,
         "ScanIndexForward": False,  # newest first for fetch
-        "FilterExpression": Attr("deleted").ne(True),
+        # Exclude soft-deleted items and private-chat messages (GAP-0125):
+        # private_chat-kind messages share this table but must never appear
+        # in the public chat history.
+        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat"),
     }
     if before_sort_key:
         kwargs["KeyConditionExpression"] = (
@@ -295,6 +323,10 @@ def fetch_chat_messages_after(
         "KeyConditionExpression": Key("session_id").eq(session_id),
         "Limit": limit,
         "ScanIndexForward": True,
+        # Exclude soft-deleted items and private-chat messages (GAP-0125):
+        # the SSE polling path must never leak private_chat-kind messages
+        # into the public chat stream.
+        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat"),
     }
     if after_sort_key:
         kwargs["KeyConditionExpression"] = (
@@ -328,16 +360,18 @@ def delete_chat_message(session_id: str, message_id: str, actor_sub: str) -> boo
 
 
 def _find_sort_key(session_id: str, message_id: str) -> Optional[str]:
-    """Find sort_key by message_id via a filter on the partition."""
+    """Find sort_key by message_id using the MessageIdIndex GSI (O(1))."""
     resp = T.broadcast_chat_messages.query(
-        KeyConditionExpression=Key("session_id").eq(session_id),
-        FilterExpression=Attr("message_id").eq(message_id),
-        Limit=200,
-        ScanIndexForward=False,
+        IndexName="MessageIdIndex",
+        KeyConditionExpression=Key("message_id").eq(message_id),
     )
     items = resp.get("Items", [])
-    if items:
-        return items[0]["sort_key"]
+    if not items:
+        return None
+    # Confirm the message belongs to the requested session (partition ownership).
+    for item in items:
+        if item.get("session_id") == session_id:
+            return item["sort_key"]
     return None
 
 

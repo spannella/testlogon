@@ -7,9 +7,10 @@ memories. Assembles full context injection payloads for the agent loop.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 from uuid import uuid4
 
+from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
@@ -18,6 +19,48 @@ logger = logging.getLogger(__name__)
 MAX_MEMORY_ENTRIES = 200
 MAX_MEMORY_TOKEN_COUNT = 100_000  # Approximate context window budget for memories
 SUMMARIZE_THRESHOLD = 80_000      # Trigger summarization when total tokens exceed this
+
+# ---------------------------------------------------------------------------
+# Agent control-signal sanitization (GAP-0084)
+# ---------------------------------------------------------------------------
+#
+# Memory entries (title/content/summary) and identity/project fields are
+# user- or agent-writable and are concatenated verbatim into the context that
+# is pasted into the agent terminal. The terminal monitor watches for control
+# signal tokens such as [AGENT_COMPLETE] / [AGENT_FEEDBACK_NEEDED]; if those
+# tokens appear in stored memory they cause persistent prompt injection (a
+# false state transition on every future ticket run). We neutralize the tokens
+# (Unicode fullwidth-bracket substitution keeps the text human-readable but no
+# longer matched by the monitor) and cap field length before assembly.
+
+_SIGNAL_TOKENS = (
+    "[AGENT_COMPLETE]",
+    "[AGENT_FEEDBACK_NEEDED]",
+)
+
+# Hard cap on any single field interpolated into the context payload. Defense
+# against a single oversized memory entry blowing the budget / terminal paste.
+_MAX_FIELD_CHARS = 8_000
+
+
+def _sanitize_agent_field(value: Any) -> str:
+    """Neutralize agent control-signal tokens and cap length of a context field.
+
+    Pure string manipulation with no AWS/network dependency, so it behaves
+    identically in dev and prod (SECOPS-007). Non-string input is coerced to
+    the empty string so callers can pass DynamoDB values directly.
+    """
+    if not isinstance(value, str):
+        return "" if value is None else str(value)
+    sanitized = value
+    for token in _SIGNAL_TOKENS:
+        if token in sanitized:
+            safe = token.replace("[", "［").replace("]", "］")
+            sanitized = sanitized.replace(token, safe)
+            logger.warning("agent_memory.sanitized_signal_token token=%s", token)
+    if len(sanitized) > _MAX_FIELD_CHARS:
+        sanitized = sanitized[:_MAX_FIELD_CHARS] + "…[truncated]"
+    return sanitized
 
 # ---------------------------------------------------------------------------
 # Default Identity Templates
@@ -411,8 +454,8 @@ def assemble_full_context(
     # 1. Identity
     identity = get_identity(worker_id)
     if identity:
-        text = identity.get("identity_text", "")
-        custom = identity.get("custom_instructions", "")
+        text = _sanitize_agent_field(identity.get("identity_text", ""))
+        custom = _sanitize_agent_field(identity.get("custom_instructions", ""))
         sections.append(f"=== AGENT IDENTITY ===\n{text}")
         if custom:
             sections.append(f"\n=== CUSTOM INSTRUCTIONS ===\n{custom}")
@@ -422,15 +465,15 @@ def assemble_full_context(
     if project:
         parts = []
         if project.get("repo_url"):
-            parts.append(f"Repository: {project['repo_url']}")
+            parts.append(f"Repository: {_sanitize_agent_field(project['repo_url'])}")
         if project.get("branch_convention"):
-            parts.append(f"Branch convention: {project['branch_convention']}")
+            parts.append(f"Branch convention: {_sanitize_agent_field(project['branch_convention'])}")
         if project.get("coding_standards"):
-            parts.append(f"Coding standards:\n{project['coding_standards']}")
+            parts.append(f"Coding standards:\n{_sanitize_agent_field(project['coding_standards'])}")
         if project.get("test_framework"):
-            parts.append(f"Test framework: {project['test_framework']}")
+            parts.append(f"Test framework: {_sanitize_agent_field(project['test_framework'])}")
         if project.get("ci_commands"):
-            parts.append(f"CI commands: {project['ci_commands']}")
+            parts.append(f"CI commands: {_sanitize_agent_field(project['ci_commands'])}")
         if parts:
             sections.append(f"\n=== PROJECT CONTEXT ===\n" + "\n".join(parts))
 
@@ -449,7 +492,9 @@ def assemble_full_context(
                 break
             # Use summary if available and original is large
             text = mem.get("summary") if mem.get("summarized") else mem.get("content", "")
-            included.append(f"- [{mem.get('category', 'note')}] {mem.get('title', '')}: {text}")
+            safe_title = _sanitize_agent_field(mem.get("title", ""))
+            safe_text = _sanitize_agent_field(text or "")
+            included.append(f"- [{mem.get('category', 'note')}] {safe_title}: {safe_text}")
             budget -= cost
 
         if included:
@@ -532,16 +577,122 @@ def list_templates() -> List[Dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 
+_SUMMARY_TRUNCATE_CHARS = 200
+
+
+def _truncate_summary(content: str) -> str:
+    """Deterministic truncation fallback used by both dev and prod paths."""
+    if len(content) > _SUMMARY_TRUNCATE_CHARS:
+        return content[:_SUMMARY_TRUNCATE_CHARS] + "..."
+    return content
+
+
+class SummarizationClient(Protocol):
+    """Protocol for memory summarization backends.
+
+    A single call site (`_maybe_trigger_summarization`) invokes
+    `summarize(...)`; the concrete implementation is selected per environment
+    by `_get_summarization_client()`. Same code path in dev and prod, only the
+    backing object differs (SECOPS-007).
+    """
+
+    def summarize(self, content: str, title: str, category: str) -> str:
+        ...
+
+
+class MockSummarizationClient:
+    """Dev-mode summarization: deterministic truncation.
+
+    Has no network/AWS/LLM dependency, so it is safe for local dev and for
+    offline unit tests. Selected when ``S.dev_mode`` is True.
+    """
+
+    def summarize(self, content: str, title: str, category: str) -> str:
+        return _truncate_summary(content)
+
+
+class AnthropicSummarizationClient:
+    """Prod-mode summarization via the Anthropic Messages API.
+
+    Reads ``ANTHROPIC_API_KEY`` from the environment (the ``anthropic`` SDK's
+    default lookup). On any failure it falls back to deterministic truncation
+    so an API outage degrades gracefully rather than crashing the memory store.
+    LLM output is passed through ``_sanitize_agent_field`` because the model may
+    reproduce control-signal tokens from the source content (GAP-0084).
+    """
+
+    _MODEL = "claude-haiku-4-5"
+    _SYSTEM = (
+        "You are a memory summarizer for an AI coding agent. "
+        "Summarize the provided memory entry into a concise, semantically "
+        "complete summary of at most 150 words. Preserve key facts, decisions, "
+        "file names, and instructions. Output only the summary text."
+    )
+
+    def __init__(self) -> None:
+        import anthropic  # imported lazily so dev/tests never need the SDK
+
+        self._client = anthropic.Anthropic()
+
+    def summarize(self, content: str, title: str, category: str) -> str:
+        try:
+            resp = self._client.messages.create(
+                model=self._MODEL,
+                max_tokens=256,
+                system=[
+                    {
+                        "type": "text",
+                        "text": self._SYSTEM,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Category: {category}\nTitle: {title}\n\n"
+                            f"Content:\n{content}"
+                        ),
+                    }
+                ],
+            )
+            summary = resp.content[0].text.strip()
+            return _sanitize_agent_field(summary)
+        except Exception as exc:  # noqa: BLE001 - degrade gracefully
+            logger.warning(
+                "agent_memory.summarization_llm_failed error=%s — falling back to truncation",
+                exc,
+            )
+            return _truncate_summary(content)
+
+
+def _get_summarization_client() -> SummarizationClient:
+    """Select the summarization backend for the current environment.
+
+    Dev (``S.dev_mode`` True) -> MockSummarizationClient (deterministic, offline).
+    Prod -> AnthropicSummarizationClient (real LLM, truncation fallback).
+    """
+    if S.dev_mode:
+        return MockSummarizationClient()
+    return AnthropicSummarizationClient()
+
+
 def _maybe_trigger_summarization(worker_id: str) -> None:
     """Check if total memory tokens exceed threshold and summarize old entries.
 
-    In dev mode: simple truncation instead of LLM-based summarization.
+    In dev mode (``S.dev_mode`` True): MockSummarizationClient — deterministic
+    truncation, no network. In production: AnthropicSummarizationClient — real
+    LLM summarization with a truncation fallback on failure. The backend is
+    selected by ``_get_summarization_client()`` (SECOPS-007: one code path,
+    environment-selected implementation).
     """
     memories = list_memories(worker_id, limit=MAX_MEMORY_ENTRIES)
     total_tokens = sum(int(m.get("token_count", 0)) for m in memories)
 
     if total_tokens <= SUMMARIZE_THRESHOLD:
         return
+
+    client = _get_summarization_client()
 
     # Sort by importance (ascending) then age (oldest first)
     candidates = sorted(
@@ -555,11 +706,13 @@ def _maybe_trigger_summarization(worker_id: str) -> None:
         if mem.get("summarized"):
             continue
 
-        # Simple summarization: truncate to first 200 chars
         content = mem.get("content", "")
-        summary = content[:200] + "..." if len(content) > 200 else content
+        title = mem.get("title", "")
+        category = mem.get("category", "note")
+
+        summary = client.summarize(content, title, category)
         old_tokens = int(mem.get("token_count", 0))
-        new_tokens = len(summary) // 4
+        new_tokens = max(len(summary) // 4, 1)
 
         T.agent_memory.update_item(
             Key={"pk": f"WORKER#{worker_id}", "sk": f"MEM#{mem['memory_id']}"},
@@ -567,3 +720,7 @@ def _maybe_trigger_summarization(worker_id: str) -> None:
             ExpressionAttributeValues={":s": True, ":sm": summary, ":tc": new_tokens},
         )
         total_tokens -= (old_tokens - new_tokens)
+        logger.info(
+            "agent_memory.summarized worker_id=%s memory_id=%s old_tokens=%d new_tokens=%d",
+            worker_id, mem["memory_id"], old_tokens, new_tokens,
+        )

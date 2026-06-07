@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,7 @@ from app.models import (
 )
 from app.services.filemanager import download_file, upload_catalog_image
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
+from app.services.geo_check import check_geo_access
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
 
@@ -124,6 +125,25 @@ def _catalog_item_out(item: dict) -> CatalogItemOut:
         stock_updated_at=item.get("stock_updated_at"),
         position=int(pos) if pos is not None else None,
     )
+
+
+def _item_geo_blocked(request: Request, item: dict) -> bool:
+    """Return True if the viewer's resolved country is blocked from this item.
+
+    Reads the per-item ``geo_mode``/``geo_countries`` stored inline on the
+    catalog item record (GEO-001 stores catalog geo rules on the item itself,
+    not a separate table). Delegates the allow/block decision to the shared
+    ``check_geo_access`` helper used by video/broadcast endpoints. Items with no
+    geo rule (``geo_mode`` absent) are never blocked.
+    """
+    geo_mode = item.get("geo_mode")
+    if not geo_mode:
+        return False
+    try:
+        check_geo_access(request, geo_mode, item.get("geo_countries"))
+    except HTTPException:
+        return True
+    return False
 
 
 def _b64e(raw: bytes) -> str:
@@ -374,6 +394,7 @@ async def create_item(
 @router.get("/categories/{category_id}/items", response_model=CatalogItemListOut)
 async def list_items(
     category_id: str,
+    request: Request,
     ctx=Depends(require_ui_session),
     page_size: int = Query(default=50, ge=1, le=200),
     next_token: Optional[str] = Query(default=None),
@@ -387,6 +408,9 @@ async def list_items(
     out: List[CatalogItemOut] = []
     for item in items:
         if item.get("entity") != "item":
+            continue
+        # GEO-001 (GAP-0216): drop items the viewer's region is blocked from.
+        if _item_geo_blocked(request, item):
             continue
         out.append(_catalog_item_out(item))
     # Sort by position (items without position sorted to end)
@@ -440,6 +464,7 @@ async def reorder_catalog_items(
 
 @router.get("/items/search", response_model=CatalogItemListOut)
 async def search_items(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     ctx=Depends(require_ui_session),
     page_size: int = Query(default=50, ge=1, le=200),
@@ -458,6 +483,9 @@ async def search_items(
         items = resp.get("Items", [])
         for item in items:
             if item.get("entity") != "item":
+                continue
+            # GEO-001 (GAP-0216): silently exclude geo-blocked items from search.
+            if _item_geo_blocked(request, item):
                 continue
             if _catalog_matches(query_tokens, item):
                 matches.append(_catalog_item_out(item))
@@ -608,49 +636,86 @@ else:
     router.post("/categories/{category_id}/items/{item_id}/images/upload")(_catalog_upload_unavailable)
 
 
+# GAP-0347 / SHOP-001: once-per-hour low-stock alert dedup window.
+_LOW_STOCK_SENTINEL_TTL_SECONDS = 3600  # 1 hour
+
+
 def _check_low_stock_alert(item: dict, new_stock: int) -> None:
     if not S.catalog_stock_alerts_enabled:
         return
     threshold = int(item.get("low_stock_threshold") or S.catalog_default_low_stock_threshold)
-    if new_stock <= threshold and new_stock >= 0:
-        try:
-            from app.services.alerts import write_alert
-        except Exception:
+    if new_stock > threshold or new_stock < 0:
+        return
+    creator_id = item.get("creator_id")
+    if not creator_id:
+        return
+
+    # GAP-0347: per-item once-per-hour dedup. A conditional put of a sparse
+    # sentinel row (no GSI1PK/GSI1SK/item_id so it never pollutes listings or
+    # the ByItemId GSI) acts as an atomic test-and-set. If the put succeeds the
+    # window is fresh → fire the alert; ConditionalCheckFailed means a recent
+    # alert already fired within the TTL window → suppress. The sentinel carries
+    # ttl_epoch (= now+3600) so DynamoDB TTL reclaims it after the window.
+    item_id = str(item.get("item_id") or "unknown")
+    sentinel_pk = f"LOWSTOCK_ALERT_SENTINEL#{creator_id}"
+    sentinel_sk = f"LOWSTOCK#{item_id}"
+    try:
+        T.catalog.put_item(
+            Item={
+                "PK": sentinel_pk,
+                "SK": sentinel_sk,
+                "entity": "lowstock_alert_sentinel",
+                "ttl_epoch": int(time.time()) + _LOW_STOCK_SENTINEL_TTL_SECONDS,
+            },
+            ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # A recent alert already fired in this window — suppress.
             return
-        creator_id = item.get("creator_id")
-        if creator_id:
-            try:
-                write_alert(
-                    creator_id,
-                    event="catalog.low_stock",
-                    outcome="warning",
-                    title=f"Low stock: {item.get('name', 'Unknown item')} ({new_stock} remaining)",
-                    details={
-                        "item_id": item.get("item_id"),
-                        "item_name": item.get("name"),
-                        "stock_count": new_stock,
-                        "threshold": threshold,
-                    },
-                )
-            except Exception:
-                pass
+        # Unexpected DDB error: suppress to avoid breaking the stock adjustment.
+        return
+    except Exception:
+        return
+
+    try:
+        from app.services.alerts import write_alert
+    except Exception:
+        return
+    try:
+        write_alert(
+            creator_id,
+            event="catalog.low_stock",
+            outcome="warning",
+            title=f"Low stock: {item.get('name', 'Unknown item')} ({new_stock} remaining)",
+            details={
+                "item_id": item.get("item_id"),
+                "item_name": item.get("name"),
+                "stock_count": new_stock,
+                "threshold": threshold,
+            },
+        )
+    except Exception:
+        pass
 
 
 def _find_item_by_id(item_id: str) -> Optional[Dict[str, Any]]:
-    """Scan catalog table for an item by item_id (paginated scan)."""
-    kwargs: Dict[str, Any] = {
-        "FilterExpression": "item_id = :iid AND entity = :ent",
-        "ExpressionAttributeValues": {":iid": item_id, ":ent": "item"},
-    }
-    while True:
-        resp = T.catalog.scan(**kwargs)
-        items = resp.get("Items", [])
-        if items:
-            return items[0]
-        lek = resp.get("LastEvaluatedKey")
-        if not lek:
-            return None
-        kwargs["ExclusiveStartKey"] = lek
+    """Find a catalog item by item_id via the ByItemId GSI (O(1) query).
+
+    GAP-0348 / SHOP-001: replaces a full-table scan. Catalog item rows carry
+    item_id as a top-level attribute, so they are indexed by the ByItemId GSI.
+    Review rows also carry item_id, hence the FilterExpression on entity="item".
+    """
+    resp = T.catalog.query(
+        IndexName="ByItemId",
+        KeyConditionExpression=Key("item_id").eq(item_id),
+        FilterExpression="entity = :ent",
+        ExpressionAttributeValues={":ent": "item"},
+    )
+    items = resp.get("Items", [])
+    if items:
+        return items[0]
+    return None
 
 
 @router.patch("/items/{item_id}/stock", response_model=CatalogStockOut)

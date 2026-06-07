@@ -9,6 +9,7 @@ from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.policy import require_admin_or_root
 from app.core.aws import ddb
 from app.services.discovery import (
     search_users,
@@ -16,6 +17,7 @@ from app.services.discovery import (
     get_trending_creators,
     get_discovery_profile,
     index_user_for_discovery,
+    reindex_all_users,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,15 @@ async def discover_reindex_user(
 ):
     count = index_user_for_discovery(user.sub)
     return {"ok": True, "tokens_indexed": count}
+
+
+@router.post("/admin/reindex-all")
+async def discover_reindex_all(
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Admin/root-gated bulk reindex of ALL users for discovery."""
+    summary = reindex_all_users()
+    return {"ok": True, **summary}
 
 
 # ─── SOCIAL-006: Hashtag/Tag Discovery ────────────────────���───────────────────

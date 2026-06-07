@@ -9,6 +9,7 @@ import { getPublicProfile, getProfileByIdentifier } from "@/api/endpoints/profil
 import { addContact } from "@/api/endpoints/contacts";
 import { findOrCreateDm } from "@/api/endpoints/messaging";
 import { ErrorPage } from "@/components/shared/ErrorPage";
+import { BlockButton } from "@/components/shared/BlockButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -232,13 +233,16 @@ export default function PublicUserProfilePage() {
           {/* Action buttons */}
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             {isAuthenticated && !isOwnProfile && (
-              <FollowButton
-                userId={pub.user_id}
-                isFollowing={isFollowing}
-                onToggle={() => {
-                  void queryClient.invalidateQueries({ queryKey: ["profile", "public", identifier] });
-                }}
-              />
+              <>
+                <FollowButton
+                  userId={pub.user_id}
+                  isFollowing={isFollowing}
+                  onToggle={() => {
+                    void queryClient.invalidateQueries({ queryKey: ["profile", "public", identifier] });
+                  }}
+                />
+                <BlockButton targetUserId={pub.user_id} targetDisplayName={displayName} />
+              </>
             )}
             <Button onClick={handleMessage} className="w-full sm:w-auto" disabled={!canUseMemberActions}>
               {canUseMemberActions ? <MessageSquare className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}

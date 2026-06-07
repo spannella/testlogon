@@ -57,7 +57,7 @@ export const logout = () =>
   api.post<StatusResp>("/ui/session/logout");
 
 export const refreshSession = () =>
-  api.post<StatusResp>("/ui/session/refresh");
+  api.post<StatusResp & { access_token?: string }>("/ui/session/refresh");
 
 // ─── Registration ───────────────────────────────────────────────
 

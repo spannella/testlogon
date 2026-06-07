@@ -23,7 +23,13 @@ from pydantic import BaseModel
 from app.core.aws import ddb
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.rate_limit import _bucket_limit
 from app.services.sessions import require_ui_session
+
+# Global search fan-out is expensive (ThreadPoolExecutor across up to 9 backend
+# search modules → CPU + DDB read amplification). Cap per-user request rate.
+_GLOBAL_SEARCH_MAX_PER_WINDOW = 30
+_GLOBAL_SEARCH_WINDOW_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -277,17 +283,38 @@ def _search_messages(q: str, user_id: str, limit: int) -> Dict[str, Any]:
         if not tokens:
             return _empty_section()
 
-        # Step 1: Get the user's conversation IDs for authorization
+        # Step 1: Get the user's conversation IDs for authorization.
+        # GAP-0329: paginate until DynamoDB is exhausted so the COMPLETE
+        # allowed_conv_ids set is built before filtering. A premature
+        # len(parts) >= 500 early-exit previously dropped all conversations
+        # beyond the first page, so users in >500 conversations got no search
+        # results for conversations 501+. Per the DDB FilterExpression/page
+        # caveat, loop on LastEvaluatedKey until it is falsy. A generous
+        # page-count safety bound prevents unbounded memory; if it is ever hit
+        # we LOG rather than silently truncate.
+        _MAX_PARTICIPANT_PAGES = 50  # 50 x 500 = 25,000 conversations
         parts: list[dict] = []
         last_key = None
+        page_count = 0
         while True:
             kw: dict = {"KeyConditionExpression": Key("user_id").eq(user_id), "Limit": 500}
             if last_key:
                 kw["ExclusiveStartKey"] = last_key
             resp = tbl_parts.query(**kw)
             parts.extend(resp.get("Items", []))
+            page_count += 1
             last_key = resp.get("LastEvaluatedKey")
-            if not last_key or len(parts) >= 500:
+            if not last_key:
+                break
+            if page_count >= _MAX_PARTICIPANT_PAGES:
+                logger.warning(
+                    "search: participant pagination hit safety cap of %d pages "
+                    "(%d records) for user_id=%s; allowed_conv_ids may be "
+                    "truncated",
+                    _MAX_PARTICIPANT_PAGES,
+                    len(parts),
+                    user_id,
+                )
                 break
 
         allowed_conv_ids: set[str] = {p["conversation_id"] for p in parts}
@@ -802,6 +829,25 @@ def global_search(
     session=Depends(require_ui_session),
 ):
     user_id = session["user_sub"]
+
+    # Rate limit the expensive multi-module fan-out per authenticated user.
+    if not _bucket_limit(
+        user_id,
+        "rl#global_search",
+        _GLOBAL_SEARCH_MAX_PER_WINDOW,
+        _GLOBAL_SEARCH_WINDOW_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "global_search_rate_limited",
+                "message": "Too many search requests; try again later",
+                "limit": _GLOBAL_SEARCH_MAX_PER_WINDOW,
+                "window_seconds": _GLOBAL_SEARCH_WINDOW_SECONDS,
+            },
+            headers={"Retry-After": str(_GLOBAL_SEARCH_WINDOW_SECONDS)},
+        )
+
     q = _sanitize_query(q)
     if not q:
         raise HTTPException(status_code=400, detail="Query is empty")

@@ -69,7 +69,7 @@ class VideoUploadPresignIn(BaseModel):
     file_size_bytes: int = Field(
         ..., ge=1, le=MAX_SIZE_BYTES, validation_alias=AliasChoices("file_size_bytes", "size_bytes")
     )
-    title: Optional[str] = Field(default=None, max_length=500)
+    title: Optional[str] = Field(default=None, max_length=256)
     description: Optional[str] = Field(default=None, max_length=5000)
     folder_path: Optional[str] = Field(default=None, max_length=1024)
 

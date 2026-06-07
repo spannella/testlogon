@@ -202,22 +202,38 @@ def get_overview(user_id: str, from_date: str, to_date: str) -> Dict[str, Any]:
         # Use the latest day's total_subscribers if available
         total_subscribers = max(total_subscribers, _to_int(items[-1].get("total_subscribers", 0)))
 
-    # Collect top content IDs across the period
-    content_scores: Dict[str, Dict[str, int]] = defaultdict(lambda: {"views": 0, "revenue_cents": 0})
+    # GAP-0106: collect deduplicated content IDs and resolve per-content live
+    # view counts rather than crediting every ID the day's aggregate total_views
+    # (which inflated each item's views by the number of IDs per rollup row).
+    # Revenue is distributed evenly across the day's top_content_ids as a
+    # best-effort approximation (no per-content revenue is stored in rollups).
+    seen: set = set()
+    ordered_ids: List[str] = []
+    revenue_by_cid: Dict[str, int] = defaultdict(int)
     for item in items:
-        for cid in (item.get("top_content_ids") or []):
-            content_scores[cid]["views"] += _to_int(item.get("total_views", 0))
+        day_ids = item.get("top_content_ids") or []
+        share = _to_int(item.get("revenue_cents", 0)) // max(1, len(day_ids))
+        for cid in day_ids:
+            if cid not in seen:
+                seen.add(cid)
+                ordered_ids.append(cid)
+            revenue_by_cid[cid] += share
+
+    details = _resolve_content_details(ordered_ids)
+    sorted_ids = sorted(
+        ordered_ids, key=lambda c: _to_int(details.get(c, {}).get("views", 0)), reverse=True
+    )[:5]
 
     top_content = []
-    sorted_content = sorted(content_scores.items(), key=lambda x: x[1]["views"], reverse=True)[:5]
-    for cid, scores in sorted_content:
+    for cid in sorted_ids:
         content_type = "vod" if cid.startswith("vid_") else "post"
+        d = details.get(cid, {})
         top_content.append({
             "content_id": cid,
             "content_type": content_type,
-            "title": cid,
-            "views": scores["views"],
-            "revenue_cents": scores["revenue_cents"],
+            "title": d.get("title", cid),
+            "views": _to_int(d.get("views", 0)),
+            "revenue_cents": revenue_by_cid.get(cid, 0),
         })
 
     return {
@@ -431,33 +447,52 @@ def get_top_content(
     """Get top content items ranked by views or revenue."""
     items = _query_rollups(user_id, from_date, to_date)
 
-    # Aggregate content_ids from rollup items
-    content_scores: Dict[str, Dict[str, Any]] = defaultdict(
-        lambda: {"views": 0, "revenue_cents": 0}
-    )
+    # GAP-0106: rollup rows store only the day's AGGREGATE total_views, not a
+    # per-content breakdown. Crediting every content ID the full day total
+    # inflates each item's views by the number of IDs in top_content_ids.
+    # Instead, collect the deduplicated content IDs (preserving first-seen
+    # order) and resolve per-content live view counts from the source-of-truth
+    # metadata tables before ranking.
+    #
+    # Revenue (revenue_cents) is also stored per-day, not per-content, so it is
+    # distributed evenly across the day's top_content_ids as a best-effort
+    # approximation. This is NOT accurate per-content revenue; an exact figure
+    # requires a per-content rollup schema (ANALYTICS-002 / Option B).
+    seen: set = set()
+    ordered_ids: List[str] = []
+    revenue_by_cid: Dict[str, int] = defaultdict(int)
     for item in items:
-        for cid in (item.get("top_content_ids") or []):
-            content_scores[cid]["views"] += _to_int(item.get("total_views", 0))
-            content_scores[cid]["revenue_cents"] += _to_int(item.get("revenue_cents", 0))
+        day_ids = item.get("top_content_ids") or []
+        day_revenue = _to_int(item.get("revenue_cents", 0))
+        share = day_revenue // max(1, len(day_ids))
+        for cid in day_ids:
+            if cid not in seen:
+                seen.add(cid)
+                ordered_ids.append(cid)
+            revenue_by_cid[cid] += share
+
+    total_items = len(ordered_ids)
+
+    # Resolve titles and per-content view/engagement metrics BEFORE ranking so
+    # the sort order reflects real per-content view counts, not inflated totals.
+    details = _resolve_content_details(ordered_ids)
 
     sort_key = "revenue_cents" if sort_by == "revenue" else "views"
-    sorted_content = sorted(
-        content_scores.items(), key=lambda x: x[1][sort_key], reverse=True
-    )
 
-    total_items = len(sorted_content)
-    sorted_content = sorted_content[:limit]
+    def _score(cid: str) -> int:
+        if sort_key == "views":
+            return _to_int(details.get(cid, {}).get("views", 0))
+        return revenue_by_cid.get(cid, 0)
 
-    # Resolve titles and engagement metrics from content metadata tables
-    details = _resolve_content_details([cid for cid, _ in sorted_content])
+    sorted_ids = sorted(ordered_ids, key=_score, reverse=True)[:limit]
 
     result_items = []
-    for cid, scores in sorted_content:
+    for cid in sorted_ids:
         content_type = "vod" if cid.startswith("vid_") else "post"
         d = details.get(cid, {})
-        views = d.get("views") if d.get("views") is not None else scores["views"]
-        likes = d.get("likes", 0)
-        comments = d.get("comments", 0)
+        views = _to_int(d.get("views", 0))
+        likes = _to_int(d.get("likes", 0))
+        comments = _to_int(d.get("comments", 0))
         engagement = (likes + comments) / views if views > 0 else 0.0
 
         result_items.append({
@@ -465,7 +500,7 @@ def get_top_content(
             "content_type": content_type,
             "title": d.get("title", cid),
             "views": views,
-            "revenue_cents": scores["revenue_cents"],
+            "revenue_cents": revenue_by_cid.get(cid, 0),
             "engagement_rate": round(engagement, 4),
         })
 

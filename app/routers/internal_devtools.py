@@ -12,6 +12,7 @@ from app.models import (
     DevtoolsBillingLedgerOut,
     DevtoolsBillingLedgerSummaryOut,
     DevtoolsEmailMessagesOut,
+    DevtoolsFfmpegHealthOut,
     DevtoolsSmsConversationsOut,
 )
 from app.services.devtools.read_service import (
@@ -20,6 +21,7 @@ from app.services.devtools.read_service import (
     get_email_messages,
     get_sms_conversations,
 )
+from app.services.ffmpeg_manager import validate_ffmpeg
 
 router = APIRouter(prefix="/internal/dev-tools", tags=["internal-dev-tools"])
 logger = logging.getLogger(__name__)
@@ -158,3 +160,12 @@ def get_devtools_billing_summary(
         from_ts=from_ts,
         to_ts=to_ts,
     )
+
+
+@router.get("/ffmpeg-health", response_model=DevtoolsFfmpegHealthOut)
+def get_devtools_ffmpeg_health() -> DevtoolsFfmpegHealthOut:
+    """Return FFmpeg binary status and codec availability (dev mode only)."""
+    _require_devtools_enabled()
+    _audit_devtools_access("ffmpeg-health")
+    result = validate_ffmpeg()
+    return DevtoolsFfmpegHealthOut(**result)

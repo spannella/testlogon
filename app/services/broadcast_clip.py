@@ -267,19 +267,30 @@ def list_gallery(
     return items, next_cursor
 
 
-def delete_clip(clip_id: str, actor: str) -> Dict[str, Any]:
+def delete_clip(clip_id: str, actor: str, role: Any = None) -> Dict[str, Any]:
     """Delete a clip (soft delete).
 
-    Authorized for: clip creator, broadcaster, or admin.
+    Authorized for: clip creator, broadcaster, or platform admin/root.
+
+    GAP-0169: previously the authorization check only compared ``actor`` against
+    the stored creator/broadcaster IDs, so platform admins/root operators could
+    not moderate clips. ``role`` is normalized (accepts a ``Role`` enum or its
+    string value) and ADMIN/ROOT callers are permitted to delete any clip. The
+    parameter defaults to ``None`` (treated as USER) so existing callers that do
+    not pass a role remain restricted to creator/broadcaster.
     """
+    from app.auth.roles import Role, normalize_role
+
     resp = T.broadcast_clips.get_item(Key={"clip_id": clip_id})
     item = resp.get("Item")
     if not item:
         raise HTTPException(404, "Clip not found")
 
-    # Authorization
+    # Authorization: creator, broadcaster, or platform admin/root
+    is_admin = normalize_role(role) in (Role.ADMIN, Role.ROOT)
     if (
-        actor != item.get("creator_user_id")
+        not is_admin
+        and actor != item.get("creator_user_id")
         and actor != item.get("broadcaster_user_id")
     ):
         raise HTTPException(403, "Not authorized to delete this clip")
@@ -290,6 +301,13 @@ def delete_clip(clip_id: str, actor: str) -> Dict[str, Any]:
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":deleted": "deleted"},
     )
+
+    if is_admin:
+        logger.info(
+            "clip: admin-moderated delete clip_id=%s actor=%s role=%s reason=moderation",
+            clip_id, actor, normalize_role(role).value,
+        )
+
     return {"ok": True, "clip_id": clip_id, "status": "deleted"}
 
 
@@ -333,14 +351,32 @@ def record_share(clip_id: str) -> Dict[str, Any]:
 # --- Internal helpers ---
 
 def _count_user_clips_for_session(session_id: str, user_id: str) -> int:
-    """Count clips created by a user for a specific session."""
-    resp = T.broadcast_clips.query(
-        IndexName="BySession",
-        KeyConditionExpression=Key("GSI1PK").eq(f"SESSION#{session_id}"),
-        FilterExpression=Attr("creator_user_id").eq(user_id) & Attr("status").ne("deleted"),
-        Select="COUNT",
-    )
-    return resp.get("Count", 0)
+    """Count non-deleted clips created by a user for a specific session.
+
+    Paginates through all DDB pages via ``LastEvaluatedKey`` so the
+    ``FilterExpression`` never silently under-counts on high-volume sessions.
+    DynamoDB applies ``FilterExpression`` only after reading up to 1 MB of raw
+    items per page; a single ``query()`` would miss this user's clips that fall
+    beyond the first page, letting them exceed the per-broadcast quota
+    (GAP-0168).
+    """
+    total = 0
+    kwargs: Dict[str, Any] = {
+        "IndexName": "BySession",
+        "KeyConditionExpression": Key("GSI1PK").eq(f"SESSION#{session_id}"),
+        "FilterExpression": (
+            Attr("creator_user_id").eq(user_id) & Attr("status").ne("deleted")
+        ),
+        "Select": "COUNT",
+    }
+    while True:
+        resp = T.broadcast_clips.query(**kwargs)
+        total += resp.get("Count", 0)
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+    return total
 
 
 def _mark_clip_ready(clip_id: str, duration: float) -> None:

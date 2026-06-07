@@ -19,6 +19,7 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.metrics import record_auth_event
+from app.services.email_delivery import record_email_failure
 from app.services.rate_limit import can_send_alert_channel
 from app.services.profile import get_profile_identity
 from app.services.push import send_push_for_alert
@@ -475,8 +476,20 @@ def send_alert_email(to_emails: List[str], subject: str, body_text: str) -> None
             Destination={"ToAddresses": to_emails},
             Message={"Subject": {"Data": subject[:120]}, "Body": {"Text": {"Data": body_text[:8000]}}},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Failed to send alert email to %s", to_emails)
+        try:
+            from app.metrics import EMAIL_FAILED
+
+            EMAIL_FAILED.inc()
+        except Exception:
+            logger.exception("Failed to increment EMAIL_FAILED metric")
+        try:
+            record_email_failure(to_emails, subject, str(exc))
+        except Exception:
+            logger.exception("Failed to record email failure for %s", to_emails)
+        return None
+    return None
 
 def send_alert_sms(to_numbers: List[str], body_text: str) -> List[Dict[str, Any]]:
     """Send SMS via the production pipeline. Returns list of result dicts.
@@ -790,7 +803,11 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
                     lines.append(json.dumps(payload, indent=2)[:4000])
                     send_alert_email(emails, subj, "\n".join(lines))
     except Exception:
-        pass
+        # GAP-0325: do NOT silently swallow email fanout failures (security
+        # alert emails like new-device login / MFA changes could vanish with
+        # no trace). Log and continue to the other channels (SMS/webhook) so
+        # a single channel failure does not break multi-channel fanout.
+        logger.exception("alert email fanout failed")
 
     # Optional SMS fanout
     try:

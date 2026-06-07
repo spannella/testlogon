@@ -32,6 +32,7 @@ from app.models import (
     ContentAnalyticsOut,
     ContentAnalyticsRevenueBreakdown,
     ContentAnalyticsViewsItem,
+    EngagementBenchmarksOut,
     EngagementPublicOut,
     EngagementPublicToggleIn,
     EngagementRateOut,
@@ -51,6 +52,8 @@ from app.services.creator_analytics import (
 )
 from app.services.engagement_rate import (
     VALID_PERIOD_DAYS,
+    compute_platform_benchmarks,
+    get_benchmarks_with_percentile,
     get_engagement_history,
     get_engagement_summary,
     get_public_engagement,
@@ -64,6 +67,9 @@ router = APIRouter(prefix="/ui/analytics", tags=["analytics"])
 
 # Public (no-auth) router for profile-facing engagement display.
 public_router = APIRouter(tags=["analytics-public"])
+
+# Internal router for ops/cron triggers (not proxied to the public internet).
+internal_router = APIRouter(prefix="/internal/analytics", tags=["analytics-internal"])
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -319,12 +325,21 @@ def analytics_refresh(session=Depends(require_ui_session)):
     _refresh_timestamps[user_id] = now
     lookback = S.analytics_rollup_lookback_days
 
-    # The refresh endpoint returns success immediately.
-    # In a production system this would trigger an async rollup job.
-    # For now it serves as a rate-limited placeholder.
+    # GAP-0336: actually recompute rollups from raw analytics_events instead of
+    # returning a no-op success. Canonical engine signature is
+    # compute_daily_rollups(lookback_days=...). Best-effort: a computation failure
+    # must not surface as a 500 — the in-process cooldown still applies.
+    from app.services.analytics_rollup_engine import compute_daily_rollups
+
+    try:
+        processed = compute_daily_rollups(lookback_days=lookback)
+    except Exception:
+        logger.exception("analytics_refresh: rollup computation failed for %s", user_id)
+        processed = 0
+
     return AnalyticsRefreshOut(
         ok=True,
-        message=f"Rollup refresh triggered for {lookback} days",
+        message=f"Rollup refresh completed for {lookback} days; {processed} rows written",
         days_refreshed=lookback,
     )
 
@@ -406,6 +421,44 @@ def analytics_engagement_public_toggle(
         engagement_rate_7d=s7["engagement_rate"],
         visible=True,
     )
+
+
+@router.get("/engagement/benchmarks", response_model=EngagementBenchmarksOut)
+def analytics_engagement_benchmarks(
+    date: Optional[str] = Query(default=None),
+    session=Depends(require_ui_session),
+):
+    """Platform-wide engagement benchmarks plus the caller's percentile.
+
+    Returns 503 when no benchmark snapshot has been computed yet (the daily job
+    or the internal compute endpoint must run first).
+    """
+    target = _validate_date(date) if date else _today()
+    user_id = session["user_sub"]
+    result = get_benchmarks_with_percentile(user_id, target)
+    if result is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Benchmarks not yet computed. Try again later.",
+        )
+    return EngagementBenchmarksOut(**result)
+
+
+@internal_router.post("/engagement/compute-benchmarks")
+def trigger_compute_benchmarks(date: Optional[str] = Query(default=None)):
+    """Recompute platform-wide engagement benchmarks for ``date`` (default today).
+
+    Called by the daily background job and by ops tooling. The ``/internal``
+    prefix is firewalled to the VPC in production (SECOPS-007); no per-request
+    auth is enforced here.
+    """
+    target = _validate_date(date) if date else _today()
+    result = compute_platform_benchmarks(target)
+    return {
+        "ok": True,
+        "date": target,
+        "sample_size": int(result.get("sample_size", 0)),
+    }
 
 
 @public_router.get("/api/creators/{creator_id}/engagement", response_model=EngagementPublicOut)

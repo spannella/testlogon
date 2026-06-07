@@ -383,24 +383,34 @@ def cross_reference_profile(extraction: dict[str, Any], profile: dict[str, Any])
 # --- deterministic mock MRZ ------------------------------------------------
 
 # Deterministic mock MRZ strings whose check digits are all valid.
+#
+# GAP-0271: the expiry field is "361231" (YYMMDD = 2036-12-31), an unambiguous
+# far-future date. The earlier example used "120415" (2012-04-15); although the
+# century roll-forward in ``_mrz_expiry_to_iso`` masked that at runtime (it maps
+# 2012 -> 2112), the raw value read as expired and a naive constant edit or a
+# clock-stubbed test could re-introduce ``status="rejected"``. The expiry and
+# all dependent check digits (expiry check + composite for TD3; expiry check +
+# composite for TD1) were recomputed with ``mrz_check_digit`` -- see
+# tests/test_gap_0271_kyc_id_scanner.py which pins them as valid for the next
+# decade. Do NOT change the expiry field without recomputing those check digits.
 _MOCK_MRZ: dict[str, dict[str, list[str]]] = {
     "passport": {
         "lines": [
             "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
-            "L898902C36UTO7408122F1204159ZE184226B<<<<<10",
+            "L898902C36UTO7408122F3612314ZE184226B<<<<<18",
         ],
     },
     "national_id_card": {
         "lines": [
             "I<UTOD231458907<<<<<<<<<<<<<<<",
-            "7408122F1204159UTO<<<<<<<<<<<6",
+            "7408122F3612314UTO<<<<<<<<<<<4",
             "ERIKSSON<<ANNA<MARIA<<<<<<<<<<",
         ],
     },
     "residence_permit": {
         "lines": [
             "I<UTOD231458907<<<<<<<<<<<<<<<",
-            "7408122F1204159UTO<<<<<<<<<<<6",
+            "7408122F3612314UTO<<<<<<<<<<<4",
             "ERIKSSON<<ANNA<MARIA<<<<<<<<<<",
         ],
     },
@@ -441,6 +451,23 @@ class KycIdScannerStore:
             profile = {}
         out["first_name"] = profile.get("first_name") or ""
         out["last_name"] = profile.get("last_name") or ""
+        # GAP-0270: if structured name fields are absent, derive them from display_name.
+        # Users who registered with only a full_name (stored as display_name) would
+        # otherwise produce an empty profile_name, skipping the name comparison and
+        # yielding match_score=0 -> every such scan is falsely flagged.
+        if not out["first_name"] and not out["last_name"]:
+            display_name = str(profile.get("display_name") or "").strip()
+            if display_name:
+                parts = display_name.split(None, 1)  # split on first whitespace, max 2 parts
+                out["first_name"] = parts[0] if parts else ""
+                out["last_name"] = parts[1] if len(parts) > 1 else ""
+                logger.debug(
+                    "kyc.id_scanner.crosscheck.display_name_fallback user_sub=%s "
+                    "derived first_name=%r last_name=%r",
+                    user_sub,
+                    out["first_name"],
+                    out["last_name"],
+                )
         out["date_of_birth"] = profile.get("birthday") or profile.get("date_of_birth") or ""
         out["nationality"] = profile.get("nationality") or profile.get("country") or ""
         # case META may carry overriding identity fields
@@ -621,10 +648,13 @@ class KycIdScannerStore:
             )
             return list(resp.get("Items", []))
         except Exception:
-            resp = self._table.scan()
-            items = [i for i in resp.get("Items", []) if i.get("case_id") == case_id]
-            items.sort(key=lambda i: _coerce_int(i.get("created_at")), reverse=True)
-            return items
+            # Fail closed: never fall back to a full table scan, which would load
+            # every user's scan records into memory (cross-user PII exposure).
+            logger.exception(
+                "kyc_id_scanner.list_scans_for_case: ByCase GSI query failed for case_id=%s",
+                case_id,
+            )
+            return []
 
     def list_by_status(self, status: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """List scans by status via the ByStatus GSI (PK=status, SK=created_at)."""

@@ -19,6 +19,37 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FEEDBACK_TIMEOUT_SECONDS = 14400  # 4 hours
 
+# ─── ReDoS guards for user-supplied patterns (GAP-0087) ─────────────────────
+# User-submitted regexes are validated only for syntax by re.compile, which does
+# not catch catastrophic backtracking (e.g. "(a+)+$" or "(x+x+)+y"). A
+# pathological pattern would later pin a CPU core and hang the single-worker
+# monitoring loop on live terminal output.
+#
+# Guard at write time with (1) a length cap and (2) a static structural check
+# that rejects nested unbounded quantifiers — the canonical catastrophic shape
+# where a quantifier (+, *, {n,}) is applied to a group whose body itself
+# contains an unbounded quantifier. The structural check NEVER executes the
+# candidate regex, so a malicious pattern cannot pin a CPU core or starve the
+# GIL even during validation. Pure-Python, no AWS dependency, identical in dev
+# and prod (SECOPS-007).
+_PATTERN_MAX_LEN = 500
+
+# Matches a group "(...)" whose body contains an unbounded quantifier (+ or *),
+# immediately followed by another quantifier (+, *, ?, or {). This catches
+# (a+)+, (a*)*, (x+x+)+, ([0-9]+)+, (a+){2,}, etc., while leaving simple
+# anchored/keyword patterns and bounded quantifiers untouched.
+_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*][^()]*\)[+*?{]")
+
+
+def _is_safe_pattern(pattern: str) -> bool:
+    """Return False if *pattern* exhibits the canonical catastrophic-
+    backtracking shape (a nested unbounded quantifier).
+
+    Performed by static inspection of the pattern source — the candidate regex
+    is never run, so this guard cannot itself be used as a DoS vector.
+    """
+    return not _NESTED_QUANTIFIER.search(pattern)
+
 # ─── Default patterns ───────────────────────────────────────────────────────
 
 DEFAULT_PATTERNS: List[Dict[str, str]] = [
@@ -185,6 +216,47 @@ class PatternMatcher:
         return None
 
 
+# ─── Integration: output → buffer → pattern match ───────────────────────────
+
+
+def get_default_patterns_for_worker(worker_id: str) -> Dict[str, List[str]]:
+    """Return per-worker pattern config, falling back to defaults.
+
+    If a custom pattern config has been stored for the worker, use it;
+    otherwise fall back to the built-in defaults.
+    """
+    custom = get_worker_pattern_config(worker_id)
+    return custom or DEFAULT_FEEDBACK_PATTERNS
+
+
+def process_terminal_output(
+    worker_id: str,
+    chunk: str,
+) -> Optional[Dict[str, str]]:
+    """Feed a chunk of terminal output through the buffer and pattern matcher.
+
+    Appends *chunk* to the worker's ring buffer, then runs the PatternMatcher
+    against the most recent 2000 characters of buffered output.
+
+    Returns a signal dict ``{"signal": <category>, "pattern": ..., "match": ...}``
+    if a pattern fires, else ``None``. This is the integration point the SSH
+    WebSocket output forwarding loop taps into so live agent terminal output
+    flows through the AGENT-006 detection pipeline.
+    """
+    buf = get_or_create_buffer(worker_id)
+    buf.append(chunk)
+    recent = buf.get_recent(2000)
+    patterns = get_default_patterns_for_worker(worker_id)
+    matcher = PatternMatcher(patterns)
+    signal = matcher.match(recent)
+    if signal:
+        logger.info(
+            "Terminal signal '%s' detected for worker %s",
+            signal["signal"], worker_id,
+        )
+    return signal
+
+
 # ─── Feedback CRUD ───────────────────────────────────────────────────────────
 
 
@@ -222,6 +294,27 @@ def create_feedback_request(
         "notified": False,
     }
     T.agent_feedback.put_item(Item=item)
+
+    # Pause the agent so it stops processing until the human responds. Mirrors
+    # the symmetric "working" resume in respond_to_feedback (GAP-0011). The
+    # worker may already be in awaiting_feedback (duplicate signal), in a
+    # terminal state, or deleted in the meantime; log and continue so the
+    # feedback record is still returned to the caller. (GAP-0086)
+    from app.services import agent_orchestrator
+    try:
+        agent_orchestrator.transition_agent_state(
+            user_id, worker_id, "awaiting_feedback"
+        )
+        logger.info(
+            "Agent %s transitioned to awaiting_feedback for request %s",
+            worker_id, request_id,
+        )
+    except (ValueError, LookupError) as exc:
+        logger.warning(
+            "Could not transition worker %s to awaiting_feedback for "
+            "request %s: %s",
+            worker_id, request_id, exc,
+        )
 
     logger.info(
         "Created feedback request %s for worker %s (ticket %s)",
@@ -262,6 +355,29 @@ def respond_to_feedback(
         "Responded to feedback %s for worker %s",
         request_id, worker_id,
     )
+
+    # Inject the response into the worker's terminal buffer so subsequent
+    # pattern-matching rounds (and any live terminal viewers) have context.
+    buf = get_or_create_buffer(worker_id)
+    buf.append(f"\n[User response]: {response_text}\n")
+
+    # Transition the agent back to "working" so it resumes instead of staying
+    # stuck in "awaiting_feedback". The worker may have been manually
+    # transitioned or deleted in the meantime; log and continue if so.
+    from app.services import agent_orchestrator
+    try:
+        agent_orchestrator.transition_agent_state(user_id, worker_id, "working")
+        logger.info(
+            "Agent %s transitioned to working after feedback response %s",
+            worker_id, request_id,
+        )
+    except (ValueError, LookupError) as exc:
+        logger.warning(
+            "Could not transition worker %s to working after feedback "
+            "response %s: %s",
+            worker_id, request_id, exc,
+        )
+
     return get_feedback_request(worker_id, request_id)
 
 
@@ -423,6 +539,22 @@ def update_pattern_config(
         if len(pattern_list) > 50:
             raise ValueError(f"Too many patterns in category {category} (max 50)")
         for p in pattern_list:
+            # Length cap — reject absurdly long patterns outright (GAP-0087).
+            if len(p) > _PATTERN_MAX_LEN:
+                raise ValueError(
+                    f"Pattern too long (max {_PATTERN_MAX_LEN} chars): "
+                    f"'{p[:80]}...'"
+                )
+            # ReDoS safety check — reject catastrophic backtracking before
+            # compiling/storing (GAP-0087). Done first so a pathological
+            # pattern is never executed.
+            if not _is_safe_pattern(p):
+                raise ValueError(
+                    f"Pattern '{p}' rejected by safety check "
+                    f"(possible catastrophic backtracking from nested "
+                    f"quantifiers). Use a simpler pattern."
+                )
+            # Syntax check.
             try:
                 re.compile(p)
             except re.error as exc:

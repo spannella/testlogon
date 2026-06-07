@@ -83,6 +83,20 @@ def review_by_status(
     return {"submissions": kyc_proof_of_funds.list_by_status(status)}
 
 
+@kyc_proof_of_funds_router.get("/admin/submissions")
+def admin_list_submissions_for_user(
+    user_sub: str,
+    _user=Depends(require_admin_or_root),
+):
+    """List all proof-of-funds submissions for a given user. Admin/root only.
+
+    Used by the Financial Verification tab on the KYC admin case detail page
+    (GAP-0257) so reviewers can see a case applicant's score, declared amount,
+    and risk contribution without leaving the case view.
+    """
+    return {"submissions": kyc_proof_of_funds.list_submissions_for_user(user_sub)}
+
+
 @kyc_proof_of_funds_router.post("/review/{submission_id}/adjudicate")
 def adjudicate(
     submission_id: str,

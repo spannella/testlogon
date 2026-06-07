@@ -1,0 +1,1 @@
+- [UNBUILT] helpdesk SLA timeout, business-hours fallback, queue-position feedback, and auto-ticket escalation not implemented — see writeups/HELP-001.md

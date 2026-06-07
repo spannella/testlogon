@@ -177,10 +177,32 @@ test.describe("80 · Google Drive Picker — API lifecycle", () => {
 });
 
 test.describe("80 · Google Drive Picker — UI", () => {
-  test("80.9 Drive picker dialog renders on Files page", async ({ browser }) => {
+  // GAP-0239 / GAP-0240: the "Google Drive" toolbar button is now wired into
+  // FilesPage and renders GoogleDrivePickerDialog. These tests assert the wiring
+  // unconditionally (the previous `if (visible)` guard passed vacuously).
+
+  test("80.9 Connect Google Drive button is visible on Files page", async ({ browser }) => {
+    const alicePage = await newIdentityPage(browser, ALICE_ID);
+    // Ensure a clean disconnected state.
+    await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/disconnect", {}).catch(() => {});
+
+    await alicePage.goto("/files");
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    const btn = alicePage.getByTestId("connect-google-drive-button");
+    await expect(btn).toBeVisible({ timeout: 5000 });
+    await expect(btn).toContainText(/connect google drive/i);
+
+    // Status panel shows the disconnected badge.
+    await expect(alicePage.getByTestId("google-drive-disconnected-badge")).toBeVisible();
+
+    await alicePage.context().close();
+  });
+
+  test("80.10 Drive picker dialog opens from the toolbar button", async ({ browser }) => {
     const alicePage = await newIdentityPage(browser, ALICE_ID);
 
-    // Connect Drive first
+    // Connect Drive first so the picker can browse mock files.
     await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/callback", {
       code: `mock_ui_${TS}`,
       redirect_uri: "",
@@ -196,25 +218,40 @@ test.describe("80 · Google Drive Picker — UI", () => {
     await alicePage.goto("/files");
     await alicePage.waitForLoadState("domcontentloaded");
 
-    // Look for the Google Drive button
-    const driveButton = alicePage.getByRole("button", { name: /google drive/i });
-    const visible = await driveButton.isVisible({ timeout: 3000 }).catch(() => false);
+    // When connected the toolbar button reads "Browse Drive" and a Browse button
+    // also appears in the status panel. Use the status-panel Browse button.
+    const browseBtn = alicePage.getByTestId("google-drive-browse-button");
+    await expect(browseBtn).toBeVisible({ timeout: 5000 });
+    await browseBtn.click();
 
-    if (visible) {
-      await driveButton.click();
-      const dialog = alicePage.locator('[data-testid="drive-picker-dialog"]');
-      await expect(dialog).toBeVisible({ timeout: 5000 });
-      await expect(alicePage.locator('[data-testid="drive-search-input"]')).toBeVisible();
-      await expect(alicePage.locator('[data-testid="drive-breadcrumbs"]')).toContainText("My Drive");
-      await alicePage.getByRole("button", { name: "Cancel" }).click();
-    }
-    // If button not visible, the dialog component exists in code but may not be
-    // wired into the Files page toolbar yet. The API tests above validate the
-    // backend integration. Either way the page loaded without errors.
-    await expect(alicePage.locator("body")).toBeVisible();
+    const dialog = alicePage.locator('[data-testid="drive-picker-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(alicePage.locator('[data-testid="drive-search-input"]')).toBeVisible();
+    await expect(alicePage.locator('[data-testid="drive-breadcrumbs"]')).toContainText("My Drive");
+    await alicePage.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).not.toBeVisible();
 
     // Cleanup
     await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/disconnect", {});
+    await alicePage.request.post(`${API}/mock/google-drive/reset`);
+    await alicePage.context().close();
+  });
+
+  test("80.11 Disconnect button removes the Google Drive connection", async ({ browser }) => {
+    const alicePage = await newIdentityPage(browser, ALICE_ID);
+
+    await apiPost(alicePage, ALICE_ID, "/ui/integrations/google-drive/callback", {
+      code: `mock_ui_disc_${TS}`,
+      redirect_uri: "",
+    });
+
+    await alicePage.goto("/files");
+    await alicePage.waitForLoadState("domcontentloaded");
+
+    await expect(alicePage.getByTestId("google-drive-connected-badge")).toBeVisible({ timeout: 5000 });
+    await alicePage.getByTestId("google-drive-disconnect-button").click();
+    await expect(alicePage.getByTestId("google-drive-disconnected-badge")).toBeVisible({ timeout: 5000 });
+
     await alicePage.request.post(`${API}/mock/google-drive/reset`);
     await alicePage.context().close();
   });

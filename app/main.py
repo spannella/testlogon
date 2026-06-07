@@ -8,7 +8,7 @@ from app.auth.root_invariant import validate_startup_root_invariant
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.settings import Settings
@@ -123,8 +123,13 @@ from app.routers.kyc_partner_api import kyc_partner_api_router
 from app.routers.kyc_case_assignment import router as kyc_case_assignment_router
 from app.routers.kyc_translations import router as kyc_translations_router
 from app.services.kyc_case_assignment import start_kyc_sla_checker_task
+from app.services.kyc_monitoring_scheduler import kyc_monitoring_startup
+from app.services.kyc_liveness_call import start_kyc_liveness_expiry_task
+from app.services.kyc_residency import start_kyc_residency_expiry_task
 from app.routers.kyc_analytics import router as kyc_analytics_router
 from app.services.kyc_analytics import start_kyc_analytics_precompute_task
+from app.services.recommendations import start_reco_refresh_task
+from app.services.analytics_rollup_engine import start_analytics_rollup_task
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
@@ -151,6 +156,8 @@ from app.routers.tip_leaderboard import router as tip_leaderboard_router
 from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
 from app.routers.creator_analytics import router as creator_analytics_router
 from app.routers.creator_analytics import public_router as creator_analytics_public_router
+from app.routers.creator_analytics import internal_router as creator_analytics_internal_router
+from app.services.engagement_rate import start_engagement_benchmark_task
 from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
@@ -163,11 +170,13 @@ from app.routers.account_deletion import (
     account_deletion_admin_router,
 )
 from app.services.deletion_scheduler import start_deletion_scheduler_task
+from app.services.dmca_claims import start_dmca_timer_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
 from app.routers.affiliate_links import router as affiliate_links_router
 from app.routers.ad_creative_affiliate import ad_creative_affiliate_router
 from app.routers.collaborations import router as collaborations_router
+from app.routers.collaborations import admin_router as collaboration_admin_disputes_router
 from app.routers.orgs import router as orgs_router
 from app.routers.user_groups import router as user_groups_router
 from app.routers.group_feed import router as group_feed_router, public_group_feed_router
@@ -180,6 +189,10 @@ from app.routers.media_preferences import router as media_preferences_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
+from app.services.payment_provider_health import start_provider_health_check_task
+from app.services.llm_provider_keys import start_llm_usage_reset_task
+from app.services.ad_daily_reset import start_ad_daily_reset_task
+from app.services.ad_analytics import start_ad_analytics_rollup_task
 from app.services.filemanager import start_filemgr_purge_task
 from app.services.api_usage_metering import record_api_usage_from_response, enforce_account_quota_pre_request
 from app.services.api_metering_policy import build_limit_denial_headers
@@ -205,6 +218,8 @@ from app.services.broadcast_reconciler import start_broadcast_reconciler_task
 from app.services.transcode_worker import start_transcode_worker_task
 from app.routers.webhooks import router as webhooks_router
 from app.services.webhook_dispatcher import start_webhook_dispatcher_task
+from app.services.audit_export_worker import start_audit_export_worker_task
+from app.services.audit_export_schedule import start_audit_export_scheduler_task
 from app.routers.geo_rules import router as geo_rules_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.i18n import router as i18n_router
@@ -279,6 +294,8 @@ from app.routers.license_compliance import (
 )
 from app.routers.k8s_launcher import router as k8s_launcher_router
 from app.services.k8s_launcher import start_k8s_ttl_checker_task
+from app.services.compute_billing import start_compute_billing_timer_task
+from app.services.agent_worker_provisioner import start_idle_worker_checker_task
 from app.routers.instance_templates import router as instance_templates_router
 from app.services.instance_templates import ensure_system_templates
 from app.routers.ssh_session_recording import ssh_session_recording_router
@@ -344,6 +361,102 @@ def _playback_entitlement_middleware():
                 return JSONResponse(status_code=401, content={"detail": {"code": exc.code, "message": exc.message}})
         return await call_next(request)
     return _middleware
+
+# --- GAP-0323: crawler-detection meta-tag middleware ---------------------
+# Social bots (Facebook, Twitter/X, Discord, Slack, LinkedIn, ...) do not
+# execute JS, so client-side react-helmet-async produces no OG/meta tags for
+# them. For GET requests from known crawler User-Agents to public page routes
+# we return a minimal server-rendered HTML document containing the OG/meta
+# tags from the existing seo_metadata service instead of the SPA shell.
+# Non-bot requests (and any error during meta rendering) pass through unchanged.
+import re as _re
+
+_CRAWLER_BOT_RE = _re.compile(
+    r"(facebookexternalhit|Twitterbot|LinkedInBot|Slackbot|Discordbot"
+    r"|WhatsApp|TelegramBot|Pinterest|Googlebot|bingbot|DuckDuckBot"
+    r"|Applebot|vkShare|W3C_Validator|ia_archiver|SemrushBot"
+    r"|AhrefsBot|MJ12bot|redditbot|Embedly|Google-InspectionTool)",
+    _re.IGNORECASE,
+)
+
+# Public, share-able page routes that have crawler-facing metadata.
+_CRAWLER_PUBLIC_PATH_RE = _re.compile(
+    r"^/(u/[^/?#]+|posts/[^/?#]+|event/[^/?#]+/[^/?#]+"
+    r"|videos/[^/?#]+|live/[^/?#]+)/?$"
+)
+
+# Prefixes that are never page routes (API / static / internal surfaces).
+_CRAWLER_EXCLUDED_PREFIXES = (
+    "/api", "/ui", "/seo", "/internal", "/mock", "/telemetry",
+    "/static", "/v1", "/metrics", "/openapi.json", "/docs", "/redoc",
+)
+
+_CRAWLER_META_SHELL = (
+    '<!DOCTYPE html>\n<html lang="en"><head>\n'
+    "    {tags}\n"
+    "</head><body></body></html>\n"
+)
+
+
+def _is_crawler_ua(user_agent: str) -> bool:
+    """Return True when the User-Agent matches a known social/search crawler."""
+    if not user_agent:
+        return False
+    return bool(_CRAWLER_BOT_RE.search(user_agent))
+
+
+def _is_crawler_eligible_path(path: str) -> bool:
+    """Return True when the path is a public page route eligible for meta injection."""
+    if not path:
+        return False
+    for prefix in _CRAWLER_EXCLUDED_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return False
+    return bool(_CRAWLER_PUBLIC_PATH_RE.match(path))
+
+
+def _crawler_middleware_enabled() -> bool:
+    return os.environ.get("SEO_CRAWLER_MIDDLEWARE_ENABLED", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _render_crawler_meta_html(path: str, base_url: str) -> str:
+    """Render the minimal meta-only HTML document for a crawler request.
+
+    Delegates entirely to the existing seo_metadata service -- no meta logic
+    is reimplemented here.
+    """
+    from app.services.seo_metadata import metadata_for_path, render_meta_tags
+
+    meta = metadata_for_path(path, base_url=base_url)
+    tags = render_meta_tags(meta)
+    return _CRAWLER_META_SHELL.format(tags=tags)
+
+
+def _crawler_meta_middleware():
+    async def _middleware(request: Request, call_next):
+        try:
+            if (
+                _crawler_middleware_enabled()
+                and request.method == "GET"
+                and _is_crawler_ua(request.headers.get("user-agent", ""))
+                and _is_crawler_eligible_path(request.url.path or "")
+            ):
+                try:
+                    base = str(request.base_url).rstrip("/")
+                except Exception:
+                    base = ""
+                html = _render_crawler_meta_html(request.url.path, base)
+                return HTMLResponse(content=html, status_code=200)
+        except Exception:
+            # Any failure in crawler detection / meta rendering must never
+            # break real users or bots -- fall through to the normal response.
+            logger.debug("crawler_meta_middleware fell through", exc_info=True)
+        return await call_next(request)
+
+    return _middleware
+
 
 def _security_headers_middleware(default_csp: str):
     async def _middleware(request: Request, call_next):
@@ -413,6 +526,7 @@ def create_app() -> FastAPI:
     if _S.multi_tenancy_enabled:
         from app.middleware.tenant import TenantMiddleware
         app.add_middleware(TenantMiddleware)
+    app.middleware("http")(_crawler_meta_middleware())
     app.middleware("http")(rate_limit_middleware_factory())
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
@@ -513,19 +627,29 @@ def create_app() -> FastAPI:
             _S.video_upload_bucket,
             _S.vod_output_bucket or "vod-output",
             _S.filemgr_bucket or "filemgr",  # FIN-001 invoice PDFs
+            _S.broadcast_recording_vod_bucket or "broadcast-vod",  # GAP-0121 recording VOD
         ] if b]
         app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
 
 
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_provider_health_check_task)
+    app.add_event_handler("startup", start_llm_usage_reset_task)
+    app.add_event_handler("startup", start_ad_daily_reset_task)
+    app.add_event_handler("startup", start_ad_analytics_rollup_task)
+    app.add_event_handler("startup", start_engagement_benchmark_task)
     app.add_event_handler("startup", start_filemgr_purge_task)
     app.add_event_handler("startup", start_scheduled_messages_task)
     app.add_event_handler("startup", start_broadcast_scheduler_task)
     app.add_event_handler("startup", start_broadcast_reminder_task)
     app.add_event_handler("startup", _seed_notification_templates_on_startup)
     app.add_event_handler("startup", start_deletion_scheduler_task)
+    app.add_event_handler("startup", start_dmca_timer_task)
     app.add_event_handler("startup", start_kyc_sla_checker_task)
+    app.add_event_handler("startup", kyc_monitoring_startup)  # GAP-0276
+    app.add_event_handler("startup", start_kyc_liveness_expiry_task)
+    app.add_event_handler("startup", start_kyc_residency_expiry_task)
     from app.services.carrier_tracking_poller import start_carrier_polling_task
     app.add_event_handler("startup", start_carrier_polling_task)
     app.include_router(purchase_history_router)
@@ -584,6 +708,8 @@ def create_app() -> FastAPI:
     app.include_router(kyc_translations_router)
     app.include_router(kyc_analytics_router)
     app.add_event_handler("startup", start_kyc_analytics_precompute_task)
+    app.add_event_handler("startup", start_analytics_rollup_task)
+    app.add_event_handler("startup", start_reco_refresh_task)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router
@@ -615,6 +741,7 @@ def create_app() -> FastAPI:
     app.include_router(tip_leaderboard_internal_router)
     app.include_router(creator_analytics_router)
     app.include_router(creator_analytics_public_router)
+    app.include_router(creator_analytics_internal_router)
     app.include_router(per_content_revenue_router)
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
@@ -645,6 +772,7 @@ def create_app() -> FastAPI:
     app.include_router(affiliate_links_router)
     app.include_router(ad_creative_affiliate_router)
     app.include_router(collaborations_router)
+    app.include_router(collaboration_admin_disputes_router)
     app.include_router(orgs_router)
     app.include_router(user_groups_router)
     app.include_router(group_feed_router)
@@ -706,6 +834,8 @@ def create_app() -> FastAPI:
     app.include_router(license_compliance_admin_router)
     app.include_router(k8s_launcher_router)
     app.add_event_handler("startup", start_k8s_ttl_checker_task)
+    app.add_event_handler("startup", start_compute_billing_timer_task)
+    app.add_event_handler("startup", start_idle_worker_checker_task)
     app.include_router(instance_templates_router)
     app.add_event_handler("startup", ensure_system_templates)
     app.include_router(ssh_session_recording_router)
@@ -730,9 +860,11 @@ def create_app() -> FastAPI:
     from app.routers.group_fundraising import (
         group_fundraising_router,
         public_group_fundraising_router,
+        fundraising_internal_router,
     )
     app.include_router(group_fundraising_router)
     app.include_router(public_group_fundraising_router)
+    app.include_router(fundraising_internal_router)
 
     app.include_router(agent_orchestrator_router)
     app.include_router(ads_router)
@@ -780,10 +912,12 @@ def create_app() -> FastAPI:
     app.include_router(agent_stylist_router)
     from app.routers.agent_marketing import agent_marketing_router
     app.include_router(agent_marketing_router)
+    from app.services.agent_marketing import start_marketing_publish_task
     from app.routers.agent_compliance import agent_compliance_router
     app.include_router(agent_compliance_router)
     from app.routers.agent_accountant import agent_accountant_router
     app.include_router(agent_accountant_router)
+    from app.services.agent_accountant import start_cost_collection_task
     from app.routers.invoices import invoices_router, invoices_admin_router
     app.include_router(invoices_router)
     app.include_router(invoices_admin_router)
@@ -803,7 +937,11 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_broadcast_reconciler_task)
     app.add_event_handler("startup", start_transcode_worker_task)
     app.add_event_handler("startup", start_webhook_dispatcher_task)
+    app.add_event_handler("startup", start_audit_export_worker_task)
+    app.add_event_handler("startup", start_audit_export_scheduler_task)
     app.add_event_handler("startup", start_cart_abandonment_task)
+    app.add_event_handler("startup", start_marketing_publish_task)
+    app.add_event_handler("startup", start_cost_collection_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

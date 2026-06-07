@@ -93,6 +93,8 @@ def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
         out["category_id"] = item["category_id"]
     if item.get("item_id"):
         out["item_id"] = item["item_id"]
+    if item.get("creator_user_id"):
+        out["creator_user_id"] = item["creator_user_id"]
     if item.get("product_type"):
         out["product_type"] = item.get("product_type")
         out["scope"] = dict(item.get("scope") or {})
@@ -358,6 +360,8 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         item["category_id"] = payload["category_id"]
     if payload.get("item_id"):
         item["item_id"] = payload["item_id"]
+    if payload.get("creator_user_id"):
+        item["creator_user_id"] = payload["creator_user_id"]
     T.shopping_cart.put_item(Item=item)
     _touch_cart_activity(user_sub, cart_id)
     return _item_from_item(item)
@@ -388,6 +392,7 @@ def add_catalog_item(
         "name": item.get("name", "Catalog item"),
         "quantity": quantity,
         "unit_price_cents": int(item.get("price_cents", 0)),
+        "creator_user_id": item.get("creator_id"),
     }
     return add_item(user_sub, cart_id, payload)
 
@@ -732,13 +737,22 @@ def purchase_cart(
 # ─── SHOP-003: Cart Abandonment Detection & Reminders ──────────────────────────
 
 
-def scan_abandoned_carts(*, threshold_hours: int = 24, now: Optional[int] = None) -> List[Dict[str, Any]]:
+def scan_abandoned_carts(
+    *,
+    threshold_hours: int = 24,
+    now: Optional[int] = None,
+    apply_reminder_gate: bool = True,
+) -> List[Dict[str, Any]]:
     """Find OPEN carts with no activity in the last threshold_hours.
 
     Uses ByStatusActivity GSI: status="OPEN" AND last_activity_at < cutoff.
-    Filters out recently reminded carts and carts at max reminders.
     Loops over LastEvaluatedKey so a busy table doesn't silently hide carts
     beyond the first page (CLAUDE.md FilterExpression/pagination gotcha).
+
+    When ``apply_reminder_gate`` is True (the legacy single-blast path) carts at
+    ``max_reminders`` or within the global ``cooldown`` window are filtered out.
+    The multi-stage service (GAP-0189) passes ``apply_reminder_gate=False`` and
+    applies its own per-stage delay / stage-cap gating instead.
 
     `now` is injectable for deterministic testing; defaults to the wall clock.
     """
@@ -763,6 +777,9 @@ def scan_abandoned_carts(*, threshold_hours: int = 24, now: Optional[int] = None
         last_key = resp.get("LastEvaluatedKey")
         if not last_key:
             break
+
+    if not apply_reminder_gate:
+        return items
 
     # Filter in-memory: skip recently reminded or maxed-out carts
     eligible: List[Dict[str, Any]] = []
@@ -797,6 +814,12 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
     if not latest or latest.get("status") != "OPEN":
         return
 
+    # GAP-0191: respect the user's cart-reminder opt-out preference.
+    from app.services.cart_reminders import is_user_opted_out, generate_recovery_link
+
+    if is_user_opted_out(user_sub):
+        return
+
     # Count items in this cart
     prefix = f"CART#{cart_id}#ITEM#"
     items_resp = T.shopping_cart.query(
@@ -807,6 +830,9 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
     if items_count == 0:
         return  # Don't remind for empty carts
 
+    # GAP-0190: signed one-time recovery URL embedded in the alert + email.
+    recovery_url = generate_recovery_link(user_sub, cart_id)
+
     # Write in-app alert
     write_alert(
         user_sub,
@@ -816,7 +842,7 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
         details={
             "cart_id": cart_id,
             "alert_type": "cart.abandoned",
-            "link": f"/cart?cartId={cart_id}",
+            "link": recovery_url,
             "items_count": str(items_count),
         },
     )
@@ -830,7 +856,7 @@ def send_cart_reminder(cart: Dict[str, Any], *, now: Optional[int] = None) -> No
             subject="You left items in your cart",
             body_text=(
                 f"You have {items_count} item(s) waiting in your cart. "
-                f"Complete your purchase: /cart?cartId={cart_id}"
+                f"Complete your purchase: {recovery_url}"
             ),
         )
 

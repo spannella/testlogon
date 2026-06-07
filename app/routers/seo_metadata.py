@@ -41,6 +41,31 @@ def _base_url(req: Request) -> str:
         return ""
 
 
+def _resolve_path(path: Optional[str], url: Optional[str]) -> Optional[str]:
+    """Normalise a ``path`` or ``url`` query param into a routable path.
+
+    ``url`` is an alias for ``path``; if it is a full URL (``https://host/u/x``)
+    only the path component is kept so ``metadata_for_path`` can dispatch on it.
+    Returns ``None`` when neither was supplied (so callers can fall back to
+    ``type``/``id`` resolution).
+    """
+    candidate = path if path else url
+    if not candidate:
+        return None
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("http://") or candidate.startswith("https://"):
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(candidate)
+            candidate = parsed.path or "/"
+        except Exception:
+            return "/"
+    return candidate
+
+
 @seo_metadata_router.get("/metadata")
 async def get_seo_metadata(
     req: Request,
@@ -48,15 +73,19 @@ async def get_seo_metadata(
     id: Optional[str] = Query(default=None, max_length=256),
     secondary_id: Optional[str] = Query(default=None, max_length=256),
     path: Optional[str] = Query(default=None, max_length=512),
+    url: Optional[str] = Query(default=None, max_length=2048),
 ):
     """Return SEO/OpenGraph metadata for a public resource.
 
     Provide either ``type`` + ``id`` (+ ``secondary_id`` for events), or a
-    ``path`` such as ``/u/alice`` / ``/event/cal/evt`` / ``/posts/p_abc``.
+    ``path``/``url`` such as ``/u/alice`` / ``/event/cal/evt`` / ``/posts/p_abc``.
+    ``url`` is an alias for ``path`` (a full URL is accepted -- its path is used)
+    so crawler middleware can dispatch with ``GET /seo/metadata?url=...``.
     """
     base = _base_url(req)
-    if path:
-        return metadata_for_path(path, base_url=base)
+    target = _resolve_path(path, url)
+    if target is not None:
+        return metadata_for_path(target, base_url=base)
     if type and id:
         return build_metadata(type, id, secondary_id=secondary_id, base_url=base)
     return default_metadata(base, "/")
@@ -69,11 +98,17 @@ async def get_seo_meta_tags(
     id: Optional[str] = Query(default=None, max_length=256),
     secondary_id: Optional[str] = Query(default=None, max_length=256),
     path: Optional[str] = Query(default=None, max_length=512),
+    url: Optional[str] = Query(default=None, max_length=2048),
 ):
-    """Return an HTML ``<meta>`` tag block for crawler / preview injection."""
+    """Return an HTML ``<meta>`` tag block for crawler / preview injection.
+
+    Accepts ``type`` + ``id``, or a ``path``/``url`` (``url`` is an alias for
+    ``path``; a full URL is accepted and only its path component is used).
+    """
     base = _base_url(req)
-    if path:
-        meta = metadata_for_path(path, base_url=base)
+    target = _resolve_path(path, url)
+    if target is not None:
+        meta = metadata_for_path(target, base_url=base)
     elif type and id:
         meta = build_metadata(type, id, secondary_id=secondary_id, base_url=base)
     else:

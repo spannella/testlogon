@@ -42,7 +42,8 @@ class RuleValidationError(Exception):
 
 
 class DangerousRule(Exception):
-    """Raised when a rule opens SSH (22) to 0.0.0.0/0."""
+    """Raised when a rule opens a sensitive port (SSH 22, RDP 3389, VNC 5900-5999)
+    to a public wildcard source (0.0.0.0/0 or ::/0)."""
 
 
 class MaxRulesExceeded(Exception):
@@ -142,19 +143,44 @@ def validate_rule(rule: Dict[str, Any]) -> List[str]:
     return errors
 
 
+# Dangerous port ranges: (low, high) inclusive. Any inbound rule whose port
+# range overlaps one of these AND whose source is a public wildcard is blocked.
+_DANGEROUS_PORT_RANGES: List[tuple] = [
+    (22, 22),        # SSH
+    (3389, 3389),    # RDP
+    (5900, 5999),    # VNC
+]
+
+# Public wildcard sources (IPv4 + IPv6 any-host).
+_DANGEROUS_SOURCES = frozenset({"0.0.0.0/0", "::/0"})
+
+
 def is_dangerous_rule(rule: Dict[str, Any]) -> bool:
-    """True if the rule opens SSH (port 22) to 0.0.0.0/0 inbound over TCP."""
+    """True if the rule opens a sensitive port range to the public internet
+    (IPv4 or IPv6 wildcard) inbound over TCP.
+
+    Covers: SSH (22), RDP (3389), VNC (5900-5999), and either the IPv4 (0.0.0.0/0)
+    or IPv6 (::/0) any-host source. ``protocol == "all"`` is treated as TCP-covering.
+    """
     source = rule.get("source", "")
     protocol = rule.get("protocol")
     direction = rule.get("direction", "inbound")
     port_from = int(rule.get("port_from", 0) or 0)
     port_to = int(rule.get("port_to", 0) or 0)
-    return (
-        source == "0.0.0.0/0"
-        and direction == "inbound"
-        and protocol == "tcp"
-        and port_from <= 22 <= port_to
-    )
+
+    if source not in _DANGEROUS_SOURCES:
+        return False
+    if direction != "inbound":
+        return False
+    if protocol not in ("tcp", "all"):
+        return False
+
+    for range_low, range_high in _DANGEROUS_PORT_RANGES:
+        # Ranges overlap when: port_from <= range_high AND port_to >= range_low
+        if port_from <= range_high and port_to >= range_low:
+            return True
+
+    return False
 
 
 def _prepare_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
@@ -168,8 +194,8 @@ def _prepare_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
 
     if S.security_groups_block_dangerous_rules and is_dangerous_rule(rule):
         raise DangerousRule(
-            "SSH (port 22) open to 0.0.0.0/0 is not recommended. "
-            "Use 'platform_only' or a specific CIDR."
+            "This rule opens a sensitive port (SSH/RDP/VNC) to the public "
+            "internet (0.0.0.0/0 or ::/0). Use 'platform_only' or a specific CIDR."
         )
 
     protocol = rule["protocol"]

@@ -1,0 +1,8 @@
+# BCAST-006 Gap List
+
+- [HIGH] `inventory_segments` production path is a stub — `broadcast_recording_worker.py:55` — returns `[]` in both mock and non-mock paths; no S3 `ListObjectsV2` pagination wired; production recordings have no segments — Fix: implement paginated `s3.get_paginator("list_objects_v2")` with moto endpoint in dev — Effort: M
+- [HIGH] `concatenate_segments` production path is a stub — `broadcast_recording_worker.py:71` — logs segment count then returns `None` even when FFmpeg is present; all production recordings use mock metadata with `duration_seconds=0` — Fix: implement FFmpeg concat demuxer subprocess + S3 upload via new `_upload_to_s3` helper — Effort: M
+- [HIGH] `_upload_to_s3` helper missing — `broadcast_recording_worker.py:130` — comment `# Upload to S3 would happen here in production`; MP4 and HLS output never uploaded — Fix: create `_upload_to_s3(local_path, *, bucket, key)` using `boto3.client("s3", endpoint_url=...)` — Effort: M
+- [MED] `broadcast_recording_vod_prefix` setting unused — `app/core/settings.py:1451` — declared but never incorporated into S3 key construction — Fix: either remove setting or thread it through all S3 key generation — Effort: S
+- [MED] Retention reconciler wiring unverified — `broadcast_reconciler.py` / `app/main.py:803` — if `expire_stale_recordings()` not called from reconciler loop, recordings accumulate past `expires_at` — Fix: verify and wire `expire_stale_recordings` call inside the reconciler loop — Effort: S
+- [LOW] No segment continuity gap detection — `broadcast_recording_worker.py` — acceptance criterion of gap-free recording has no implementation; no check during `inventory_segments` — Fix: add segment timestamp continuity check in `inventory_segments` — Effort: S

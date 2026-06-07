@@ -400,17 +400,50 @@ def leave_syndicate(
     _require_is_member(syndicate_id, user_id)
     is_admin = meta["admin_user_id"] == user_id
 
+    # SYND-004 §3.3: refund the leaving member their proportional share of the
+    # treasury BEFORE removing them. A refund failure must surface (do NOT
+    # silently remove the member and lose their money), but a transient/empty
+    # refund must not trap the member in the syndicate forever — so we attempt
+    # it strictly and log, only swallowing if the syndicate has no treasury.
+    refund_result: Dict[str, Any] = {"refunded_cents": 0}
+    try:
+        from app.services import syndicate_treasury
+        refund_result = syndicate_treasury.refund_on_member_leave(syndicate_id, user_id)
+    except Exception:
+        logger.exception(
+            "syndicate_treasury.refund_on_member_leave failed during leave_syndicate",
+            extra={"syndicate_id": syndicate_id, "user_id": user_id},
+        )
+        raise
+
     # Remove member + user index
     _remove_member(syndicate_id, user_id)
     new_count = int(meta["member_count"]) - 1
     _set_member_count(syndicate_id, new_count)
 
     if new_count <= 0:
+        # SYND-004 §3.3: refund ALL remaining treasury funds proportionally to
+        # the remaining contributors and zero the treasury before dissolving.
+        dissolution_refund: Dict[str, Any] = {"total_refunded": 0, "refunds": []}
+        try:
+            from app.services import syndicate_treasury
+            dissolution_refund = syndicate_treasury.refund_on_dissolution(syndicate_id)
+        except Exception:
+            logger.exception(
+                "syndicate_treasury.refund_on_dissolution failed during dissolution",
+                extra={"syndicate_id": syndicate_id},
+            )
+            raise
         # Dissolve syndicate
         _archive_syndicate(syndicate_id)
         _write_audit(syndicate_id, user_id, "member_left", user_id)
         _write_audit(syndicate_id, user_id, "syndicate_dissolved", syndicate_id)
-        return {"dissolved": True, "syndicate_id": syndicate_id}
+        return {
+            "dissolved": True,
+            "syndicate_id": syndicate_id,
+            "refund": refund_result,
+            "dissolution_refund": dissolution_refund,
+        }
 
     if is_admin:
         # Promote next oldest member
@@ -423,7 +456,7 @@ def leave_syndicate(
 
     _write_audit(syndicate_id, user_id, "member_left", user_id)
     _on_member_left_hook(syndicate_id, user_id)
-    return {"dissolved": False, "syndicate_id": syndicate_id}
+    return {"dissolved": False, "syndicate_id": syndicate_id, "refund": refund_result}
 
 
 def remove_member(
@@ -459,8 +492,9 @@ def list_pending_invites(user_id: str) -> List[Dict[str, Any]]:
     return [i for i in items if i.get("status") == "pending"]
 
 
-def list_pending_requests(syndicate_id: str) -> List[Dict[str, Any]]:
-    """List pending join requests for a syndicate."""
+def list_pending_requests(syndicate_id: str, caller_sub: str) -> List[Dict[str, Any]]:
+    """List pending join requests for a syndicate (admin only)."""
+    _require_admin(syndicate_id, caller_sub)
     resp = T.syndicates.query(
         KeyConditionExpression=Key("pk").eq(f"SYND#{syndicate_id}") & Key("sk").begins_with("REQUEST#"),
     )

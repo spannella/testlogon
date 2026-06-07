@@ -1,10 +1,51 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
+// GAP-0323: dev-server parity for the production CrawlerMetaMiddleware.
+// Social bots do not execute JS, so client-side react-helmet-async produces no
+// OG/meta tags for them. For crawler User-Agents requesting public page routes
+// we fetch the server-rendered meta HTML from the backend's /seo/meta-tags
+// endpoint (the SAME source the prod middleware uses) and return it instead of
+// the SPA shell. Normal dev requests are untouched. Mirrors the BOT_RE list +
+// public-path list + backend source used in app/main.py (SECOPS-007 parity).
+function crawlerMetaInjectPlugin(): Plugin {
+  const BOT_RE =
+    /facebookexternalhit|Twitterbot|LinkedInBot|Slackbot|Discordbot|WhatsApp|TelegramBot|Pinterest|Googlebot|bingbot|DuckDuckBot|Applebot|vkShare|W3C_Validator|ia_archiver|SemrushBot|AhrefsBot|MJ12bot|redditbot|Embedly|Google-InspectionTool/i;
+  const PUBLIC_RE =
+    /^\/(u\/[^/?#]+|posts\/[^/?#]+|event\/[^/?#]+\/[^/?#]+|videos\/[^/?#]+|live\/[^/?#]+)\/?$/;
+
+  return {
+    name: "crawler-meta-inject",
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        try {
+          const method = (req.method ?? "GET").toUpperCase();
+          const ua = req.headers["user-agent"] ?? "";
+          const rawPath = (req.url ?? "/").split("?")[0];
+          if (method !== "GET" || !BOT_RE.test(ua) || !PUBLIC_RE.test(rawPath)) {
+            return next();
+          }
+          const backendResp = await fetch(
+            `http://localhost:8000/seo/meta-tags?path=${encodeURIComponent(rawPath)}`,
+          );
+          const tags = await backendResp.text();
+          const html = `<!DOCTYPE html>\n<html lang="en"><head>\n    ${tags}\n</head><body></body></html>\n`;
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.statusCode = 200;
+          res.end(html);
+        } catch {
+          // Any failure → fall through to the normal dev pipeline.
+          next();
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [crawlerMetaInjectPlugin(), react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -27,6 +68,19 @@ export default defineConfig({
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
       "/messaging": "http://localhost:8000",
+      // /messages is BOTH a SPA route (the messages page) and a backend API
+      // prefix (call-recording endpoints live at /messages/recordings). Serve
+      // index.html for browser navigations; proxy XHR/fetch to the backend.
+      "/messages": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
       "/feed": {
         target: "http://localhost:8000",
         bypass: (req) => {

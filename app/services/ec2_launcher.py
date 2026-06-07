@@ -20,6 +20,28 @@ from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
+
+def _record_timeline(
+    user_sub: str, instance_id: str, event_type: str, *, detail: dict | None = None
+) -> None:
+    """Best-effort EC2 lifecycle timeline write (GAP-0231).
+
+    Imported lazily to avoid a circular import (instance_monitoring imports this
+    module). Backend-agnostic — writes only to DynamoDB, so it runs identically
+    on the mock and real EC2 paths (SECOPS-007).
+    """
+    try:
+        from app.services.instance_monitoring import record_timeline_event
+        record_timeline_event(
+            user_sub, instance_id, event_type, resource_type="ec2", detail=detail
+        )
+    except Exception:
+        logger.exception(
+            "ec2_timeline_write_failed user_sub=%s instance_id=%s event=%s",
+            user_sub, instance_id, event_type,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Instance type allowlist with cost metadata (cents per minute)
 # ---------------------------------------------------------------------------
@@ -110,6 +132,74 @@ _mock_store = _MockEc2Store()
 
 
 # ---------------------------------------------------------------------------
+# Real AWS EC2 helpers (production path only — gated on `not S.ec2_mock_enabled`)
+# ---------------------------------------------------------------------------
+
+def _resolve_real_ami(platform_ami_id: str) -> str:
+    """Map a curated platform AMI alias to a real AWS AMI ID via settings.
+
+    Read from `S` at call time so per-environment overrides (and tests) take
+    effect without re-importing this module.
+    """
+    real_ami_map = {
+        "ami-ubuntu-2204": S.ec2_real_ami_ubuntu_2204,
+        "ami-ubuntu-2404": S.ec2_real_ami_ubuntu_2404,
+        "ami-amzn2": S.ec2_real_ami_amzn2,
+        "ami-windows-2022": S.ec2_real_ami_windows_2022,
+    }
+    real = real_ami_map.get(platform_ami_id, "")
+    if not real:
+        raise ValueError(
+            f"No real AWS AMI ID configured for alias '{platform_ami_id}'. "
+            "Set the matching EC2_REAL_AMI_* environment variable."
+        )
+    return real
+
+
+def _real_ec2_launch(
+    *,
+    instance_type: str,
+    ami_id: str,
+    startup_script: str = "",
+    ssh_key_name: str | None = None,
+    security_group_id: str | None = None,
+) -> Dict[str, Any]:
+    """Call the real AWS EC2 RunInstances API.
+
+    Returns a dict shaped like `_MockEc2Store.launch()` so the rest of
+    `launch_instance` stays unchanged.
+    """
+    from app.core.aws import ec2_client
+
+    real_ami_id = _resolve_real_ami(ami_id)
+
+    kwargs: Dict[str, Any] = {
+        "ImageId": real_ami_id,
+        "InstanceType": instance_type,
+        "MinCount": 1,
+        "MaxCount": 1,
+    }
+    if startup_script:
+        import base64
+        kwargs["UserData"] = base64.b64encode(startup_script.encode()).decode()
+    if ssh_key_name:
+        kwargs["KeyName"] = ssh_key_name
+    if security_group_id:
+        kwargs["SecurityGroupIds"] = [security_group_id]
+
+    resp = ec2_client().run_instances(**kwargs)
+    inst = resp["Instances"][0]
+    return {
+        "ec2_instance_id": inst["InstanceId"],
+        "instance_type": instance_type,
+        "ami_id": ami_id,
+        "status": inst.get("State", {}).get("Name", "pending"),
+        "public_ip": inst.get("PublicIpAddress", ""),
+        "private_ip": inst.get("PrivateIpAddress", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -181,8 +271,13 @@ def launch_instance(
             user_data=startup_script,
         )
     else:
-        # Real EC2 launch would go here
-        raise NotImplementedError("Real EC2 launch not implemented yet")
+        result = _real_ec2_launch(
+            instance_type=instance_type,
+            ami_id=ami_id,
+            startup_script=startup_script,
+            ssh_key_name=None,  # key injection handled via startup_script / SSM
+            security_group_id=resolved_sg_id or None,
+        )
 
     # 5. Store in DDB
     now = now_ts()
@@ -220,6 +315,52 @@ def launch_instance(
             associate_instance(user_sub, resolved_sg_id, instance_id)
         except Exception:
             logger.exception("sg_associate_failed instance_id=%s sg_id=%s", instance_id, resolved_sg_id)
+
+    # Auto-register in host inventory (INFRA-001 integration / GAP-0223).
+    # Runs in both mock and real modes — the host inventory record lives in DDB
+    # regardless of whether the underlying EC2 instance is mocked or real.
+    # A missing public IP (real AWS may not assign one immediately) or any
+    # registration failure must not roll back the instance launch.
+    if result.get("public_ip"):
+        try:
+            from app.services import host_inventory
+            ami_info = AMIS.get(ami_id, {})
+            protocol = "rdp" if ami_info.get("os_type") == "windows" else "ssh"
+            port = 3389 if protocol == "rdp" else 22
+            host = host_inventory.create_host(
+                user_sub,
+                label=f"{label} (EC2)",
+                hostname=result["public_ip"],
+                port=port,
+                protocol=protocol,
+                username=ami_info.get("username", ""),
+                group="EC2 Instances",
+                os_type=ami_info.get("os_type", "unknown"),
+                source="ec2_auto",
+            )
+            host_id = host["host_id"]
+            # Back-write host_id to the DDB instance record.
+            T.ec2_instances.update_item(
+                Key={"user_sub": user_sub, "sk": f"INSTANCE#{instance_id}"},
+                UpdateExpression="SET host_id = :hid",
+                ExpressionAttributeValues={":hid": host_id},
+            )
+            item["host_id"] = host_id
+            logger.info(
+                "ec2_host_registered user_sub=%s instance_id=%s host_id=%s",
+                user_sub, instance_id, host_id,
+            )
+        except Exception:
+            logger.exception(
+                "ec2_host_register_failed user_sub=%s instance_id=%s",
+                user_sub, instance_id,
+            )
+
+    # Lifecycle timeline (GAP-0231). Best-effort; never blocks the launch.
+    _record_timeline(
+        user_sub, instance_id, "launched",
+        detail={"instance_type": instance_type, "ami_id": ami_id, "label": label},
+    )
 
     logger.info(
         "ec2_launched user_sub=%s instance_id=%s type=%s ami=%s",
@@ -272,6 +413,9 @@ def stop_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.stop(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().stop_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -283,6 +427,7 @@ def stop_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
 
     item["status"] = "stopped"
     item["stopped_at"] = now
+    _record_timeline(user_sub, instance_id, "stopped")
     logger.info("ec2_stopped user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -301,6 +446,9 @@ def start_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.start(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().start_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -313,6 +461,7 @@ def start_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     item["status"] = "running"
     item["started_at"] = now
     item["last_activity_at"] = now
+    _record_timeline(user_sub, instance_id, "started")
     logger.info("ec2_started user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -331,6 +480,9 @@ def terminate_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.terminate(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().terminate_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -349,8 +501,39 @@ def terminate_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
         except Exception:
             logger.exception("sg_disassociate_failed instance_id=%s sg_id=%s", instance_id, sg_id)
 
+    # Delete the auto-registered host inventory entry (INFRA-001 / GAP-0224).
+    # Runs in both mock and real modes — the host record exists regardless of
+    # whether the EC2 instance was mocked. Cleanup failure must not block
+    # termination, and delete_host is safe with a stale/missing host_id.
+    host_id = item.get("host_id", "")
+    if host_id:
+        # Disassociate any SSH key from this host first (INFRA-002).
+        ssh_key_id = item.get("ssh_key_id", "")
+        if ssh_key_id:
+            try:
+                from app.services import ssh_key_manager
+                ssh_key_manager.disassociate_key_from_host(user_sub, ssh_key_id, host_id)
+            except Exception:
+                logger.exception(
+                    "ec2_key_disassociate_failed user_sub=%s instance_id=%s key_id=%s",
+                    user_sub, instance_id, ssh_key_id,
+                )
+        try:
+            from app.services import host_inventory
+            host_inventory.delete_host(user_sub, host_id)
+            logger.info(
+                "ec2_host_deregistered user_sub=%s instance_id=%s host_id=%s",
+                user_sub, instance_id, host_id,
+            )
+        except Exception:
+            logger.exception(
+                "ec2_host_deregister_failed user_sub=%s instance_id=%s host_id=%s",
+                user_sub, instance_id, host_id,
+            )
+
     item["status"] = "terminated"
     item["terminated_at"] = now
+    _record_timeline(user_sub, instance_id, "terminated")
     logger.info("ec2_terminated user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -369,6 +552,9 @@ def reboot_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     ec2_id = item["ec2_instance_id"]
     if S.ec2_mock_enabled:
         _mock_store.reboot(ec2_id)
+    else:
+        from app.core.aws import ec2_client
+        ec2_client().reboot_instances(InstanceIds=[ec2_id])
 
     now = now_ts()
     T.ec2_instances.update_item(
@@ -378,6 +564,7 @@ def reboot_instance(user_sub: str, instance_id: str) -> Dict[str, Any]:
     )
 
     item["last_activity_at"] = now
+    _record_timeline(user_sub, instance_id, "rebooted")
     logger.info("ec2_rebooted user_sub=%s instance_id=%s", user_sub, instance_id)
     return item
 
@@ -404,6 +591,10 @@ def check_idle_instances() -> int:
         if last_activity > 0 and (now - last_activity) > threshold:
             try:
                 terminate_instance(item["user_sub"], item["instance_id"])
+                _record_timeline(
+                    item["user_sub"], item["instance_id"], "auto_terminated",
+                    detail={"idle_seconds": now - last_activity},
+                )
                 terminated += 1
                 logger.info(
                     "ec2_auto_terminated user_sub=%s instance_id=%s idle_seconds=%d",

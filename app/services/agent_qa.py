@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -749,10 +750,13 @@ def file_bug_tickets(
 
 
 def build_pr_review_command(*, pr_number: int, verdict: str, report: str) -> str:
-    body = (report or "").replace('"', "'")
+    # Shell-quote the report body so command-substitution ($(...)/backticks),
+    # quotes, newlines, and other POSIX metacharacters are inert if this string
+    # is ever dispatched to a shell (gated behind S.agent_qa_execute_commands).
+    body = shlex.quote((report or "").strip())
     if verdict in ("pass", "flaky"):
-        return f"gh pr review {pr_number} --approve --body \"{body}\""
-    return f"gh pr review {pr_number} --request-changes --body \"{body}\""
+        return f"gh pr review {pr_number} --approve --body {body}"
+    return f"gh pr review {pr_number} --request-changes --body {body}"
 
 
 def pr_review_action_for_verdict(verdict: str) -> str:

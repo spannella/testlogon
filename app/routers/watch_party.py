@@ -21,10 +21,10 @@ from app.models import (
     PartyOut,
     PlaybackControlIn,
 )
-from app.services.broadcast_sse import (
-    broadcast_sse_publish,
-    broadcast_sse_subscribe,
-    broadcast_sse_unsubscribe,
+from app.services.watch_party_sse import (
+    wp_sse_publish as broadcast_sse_publish,
+    wp_sse_subscribe as broadcast_sse_subscribe,
+    wp_sse_unsubscribe as broadcast_sse_unsubscribe,
 )
 from app.services.watch_party import (
     control_playback,

@@ -49,6 +49,9 @@ const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
 const SyndicateProfilePage = lazy(() => import("@/pages/syndicates/SyndicateProfilePage"));
 const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
 const SyndicateAdvertisingDetailPage = lazy(() => import("@/pages/syndicates/SyndicateAdvertisingDetailPage"));
+const DelegatesPage = lazy(
+  () => import("@/pages/delegates/DelegatesPage"),
+);
 const DelegationApiKeysPage = lazy(
   () => import("@/pages/delegates/DelegationApiKeysPage"),
 );
@@ -130,6 +133,7 @@ const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"))
 const WebhooksPage = lazy(() => import("@/pages/settings/WebhooksPage"));
 const CustomEmojisPage = lazy(() => import("@/pages/settings/CustomEmojisPage"));
 const GeoRulesPage = lazy(() => import("@/pages/settings/GeoRulesPage"));
+const CallRateSettings = lazy(() => import("@/pages/settings/CallRateSettings"));
 const ReferralDashboard = lazy(() => import("@/pages/referrals/ReferralDashboard"));
 const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
 const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
@@ -142,6 +146,8 @@ const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePa
 const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
 const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
+const AppealsPage = lazy(() => import("@/pages/appeals/AppealsPage"));
+const AppealReviewQueuePage = lazy(() => import("@/pages/admin/AppealReviewQueuePage"));
 const FraudReviewQueuePage = lazy(() => import("@/pages/admin/fraud/FraudReviewQueuePage"));
 const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
 const AffiliateDashboard = lazy(() => import("@/pages/affiliates/AffiliateDashboard"));
@@ -184,6 +190,7 @@ const KycDocumentReviewQueuePage = lazy(() => import("@/pages/kyc/KycDocumentRev
 const KycResidencyVerificationPage = lazy(() => import("@/pages/kyc/KycResidencyVerificationPage"));
 const KycResidencyReviewQueuePage = lazy(() => import("@/pages/kyc/KycResidencyReviewQueuePage"));
 const KycProofOfFunds = lazy(() => import("@/pages/kyc/KycProofOfFunds"));
+const KycProofOfFundsReviewQueue = lazy(() => import("@/pages/kyc/KycProofOfFundsReviewQueue"));
 const KycLivenessCallSchedulePage = lazy(() => import("@/pages/kyc/KycLivenessCallSchedulePage"));
 const KycLivenessCallVerifierPage = lazy(() => import("@/pages/kyc/KycLivenessCallVerifierPage"));
 const KycScreeningReviewQueuePage = lazy(() => import("@/pages/kyc/KycScreeningReviewQueuePage"));
@@ -343,10 +350,12 @@ export default function App() {
           <Route path="syndicates/:syndicateId" element={<SyndicateProfilePage />} />
           <Route path="syndicates/:syndicateId/manage" element={<SyndicateDetailPage />} />
           <Route path="syndicates/:syndicateId/campaigns/:campaignId" element={<SyndicateAdvertisingDetailPage />} />
+          <Route path="delegates" element={<DelegatesPage />} />
           <Route path="delegation-api" element={<DelegationApiKeysPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="activity" element={<ActivityFeedPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
+          <Route path="appeals" element={<AppealsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
@@ -388,6 +397,7 @@ export default function App() {
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/emojis" element={<CustomEmojisPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
+          <Route path="settings/call-rate" element={<CallRateSettings />} />
           <Route path="webhooks" element={<WebhookDashboard />} />
           <Route path="webhooks/:endpointId" element={<WebhookEndpointDetail />} />
           <Route path="purchases" element={<PurchasesPage />} />
@@ -425,6 +435,7 @@ export default function App() {
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/bulk-payouts" element={<BulkPayoutConsole />} />
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
+          <Route path="admin/appeals" element={<AppealReviewQueuePage />} />
           <Route path="admin/fraud" element={<FraudReviewQueuePage />} />
           <Route path="admin/kyc-workload" element={<KycWorkloadPage />} />
           <Route path="admin/kyc" element={<KycQueuePage />} />
@@ -462,6 +473,7 @@ export default function App() {
           <Route path="kyc/residency" element={<KycResidencyVerificationPage />} />
           <Route path="admin/kyc/residency" element={<KycResidencyReviewQueuePage />} />
           <Route path="kyc/proof-of-funds" element={<KycProofOfFunds />} />
+          <Route path="admin/kyc/proof-of-funds" element={<KycProofOfFundsReviewQueue />} />
           <Route path="kyc/liveness-call" element={<KycLivenessCallSchedulePage />} />
           <Route path="admin/kyc/liveness-call" element={<KycLivenessCallVerifierPage />} />
           <Route path="admin/kyc/screening" element={<KycScreeningReviewQueuePage />} />

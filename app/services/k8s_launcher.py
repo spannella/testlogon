@@ -19,7 +19,41 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
+# Host inventory integration (INFRA-001) — imported at module level so the
+# auto-register (GAP-0226) and auto-cleanup (GAP-0227) paths are easily
+# monkeypatched in tests as ``app.services.k8s_launcher.create_host`` /
+# ``delete_host``. These are pure DynamoDB operations with no dev/prod fork,
+# so they run identically under the mock and real K8s paths (SECOPS-007).
+from app.services.host_inventory import (  # noqa: E402
+    create_host,
+    delete_host,
+    HostValidationError,
+    HostLimitExceeded,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _record_timeline(
+    user_sub: str, pod_id: str, event_type: str, *, detail: dict | None = None
+) -> None:
+    """Best-effort K8s pod lifecycle timeline write (GAP-0231).
+
+    Imported lazily to avoid a circular import (instance_monitoring imports the
+    EC2 launcher, which makes this a sibling). Writes only to DynamoDB, so it
+    runs identically on the mock and real K8s paths (SECOPS-007).
+    """
+    try:
+        from app.services.instance_monitoring import record_timeline_event
+        record_timeline_event(
+            user_sub, pod_id, event_type, resource_type="k8s", detail=detail
+        )
+    except Exception:
+        logger.exception(
+            "k8s_timeline_write_failed user_sub=%s pod_id=%s event=%s",
+            user_sub, pod_id, event_type,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Resource presets
@@ -93,6 +127,137 @@ class _MockK8sStore:
 
 
 _mock_store = _MockK8sStore()
+
+
+# ---------------------------------------------------------------------------
+# Real Kubernetes client helpers (production path only — gated on
+# `not S.k8s_mock_enabled`). The `kubernetes` package is an OPTIONAL/prod-only
+# dependency: it is imported lazily inside these helpers so the module always
+# imports cleanly in dev/CI where the package is not installed (SECOPS-007:
+# dev/mock path must remain reachable without the prod dependency).
+# ---------------------------------------------------------------------------
+
+# Cached CoreV1Api client (lazy-initialised). Patch this to None to force a
+# re-load, or monkeypatch `_get_k8s_core_v1` directly in tests.
+_k8s_core_v1_cache: Any = None
+
+
+def _get_k8s_core_v1():
+    """Return a ``kubernetes.client.CoreV1Api`` instance.
+
+    Loads in-cluster config when running inside a pod (``KUBERNETES_SERVICE_HOST``
+    is set), otherwise falls back to a kubeconfig file (``KUBECONFIG`` env var,
+    or the default location). The result is cached for the process lifetime.
+
+    Raises ``RuntimeError`` (not ``ImportError``) when the optional ``kubernetes``
+    package is not installed so callers get an actionable message instead of a
+    raw import failure.
+    """
+    global _k8s_core_v1_cache
+    if _k8s_core_v1_cache is not None:
+        return _k8s_core_v1_cache
+
+    try:
+        from kubernetes import client as k8s_client  # type: ignore
+        from kubernetes import config as k8s_config  # type: ignore
+    except ImportError as exc:  # pragma: no cover - exercised only in prod
+        raise RuntimeError(
+            "kubernetes package not installed. "
+            "Run: pip install 'kubernetes>=28.1.0'"
+        ) from exc
+
+    import os
+
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        k8s_config.load_incluster_config()
+    else:
+        kubeconfig = os.environ.get("KUBECONFIG", "")
+        k8s_config.load_kube_config(config_file=kubeconfig or None)
+
+    _k8s_core_v1_cache = k8s_client.CoreV1Api()
+    return _k8s_core_v1_cache
+
+
+def _real_k8s_launch(
+    *,
+    pod_name: str,
+    namespace: str,
+    image: str,
+    cpu_millicores: int,
+    memory_mb: int,
+    env_vars: dict,
+    ssh_pub_key: str | None,
+) -> Dict[str, Any]:
+    """Launch a real Kubernetes pod via ``create_namespaced_pod``.
+
+    Mirrors the shape returned by ``_MockK8sStore.create_pod`` so the caller can
+    treat mock and real results identically.
+    """
+    from kubernetes import client as k8s_client  # type: ignore
+
+    core_v1 = _get_k8s_core_v1()
+
+    env_list = [
+        k8s_client.V1EnvVar(name=str(k), value=str(v))
+        for k, v in (env_vars or {}).items()
+    ]
+    if ssh_pub_key:
+        env_list.append(
+            k8s_client.V1EnvVar(name="SSH_PUBLIC_KEY", value=ssh_pub_key)
+        )
+
+    container = k8s_client.V1Container(
+        name="workspace",
+        image=image,
+        env=env_list,
+        resources=k8s_client.V1ResourceRequirements(
+            requests={
+                "cpu": f"{cpu_millicores}m",
+                "memory": f"{memory_mb}Mi",
+            },
+            limits={
+                "cpu": f"{cpu_millicores * 2}m",
+                "memory": f"{memory_mb * 2}Mi",
+            },
+        ),
+        ports=[k8s_client.V1ContainerPort(container_port=22)],
+    )
+    pod_spec = k8s_client.V1Pod(
+        metadata=k8s_client.V1ObjectMeta(
+            name=pod_name,
+            namespace=namespace,
+            labels={
+                "app": "platform-workspace",
+                "managed-by": "k8s-launcher",
+            },
+        ),
+        spec=k8s_client.V1PodSpec(
+            containers=[container],
+            restart_policy="Never",
+        ),
+    )
+
+    # Ensure the per-user namespace exists (idempotent — already-exists is fine).
+    try:
+        core_v1.create_namespace(
+            k8s_client.V1Namespace(
+                metadata=k8s_client.V1ObjectMeta(name=namespace)
+            )
+        )
+    except Exception:  # already exists or insufficient perms (namespace pre-created)
+        pass
+
+    pod = core_v1.create_namespaced_pod(namespace=namespace, body=pod_spec)
+
+    status = getattr(pod, "status", None)
+    metadata = getattr(pod, "metadata", None)
+    return {
+        "pod_name": getattr(metadata, "name", pod_name) or pod_name,
+        "namespace": getattr(metadata, "namespace", namespace) or namespace,
+        "status": getattr(status, "phase", None) or "pending",
+        "pod_ip": getattr(status, "pod_ip", None) or "",
+        "service_hostname": f"{pod_name}.{namespace}.svc.cluster.local",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +338,15 @@ def launch_pod(
             ssh_pub_key=None,  # mock ignores SSH key
         )
     else:
-        raise NotImplementedError("Real K8s launch not implemented yet")
+        result = _real_k8s_launch(
+            pod_name=k8s_pod_name,
+            namespace=namespace,
+            image=image,
+            cpu_millicores=preset_info["cpu_millicores"],
+            memory_mb=preset_info["memory_mb"],
+            env_vars=env_vars or {},
+            ssh_pub_key=None,  # inject via env_vars if needed
+        )
 
     # 6. Store in DDB
     now = now_ts()
@@ -205,9 +378,56 @@ def launch_pod(
     }
     T.k8s_pods.put_item(Item=item)
 
+    # 7. Auto-register in the Host Inventory (GAP-0226) so the pod is reachable
+    #    via Quick Connect / connection profiles, and write the resulting
+    #    host_id back into the pod record so termination can clean it up
+    #    (GAP-0227). Failure to register must NOT fail the launch — the pod is
+    #    already created — so create_host errors are logged and swallowed.
+    try:
+        host = create_host(
+            user_sub,
+            label=f"{label} (K8s)",
+            hostname=result["service_hostname"],
+            port=22,
+            protocol="ssh",
+            username=image_info.get("username", "ubuntu"),
+            description=f"Auto-registered K8s pod {pod_id} (preset={preset})",
+            group="K8s Containers",
+            os_type=image_info.get("os_type", "linux"),
+            source="k8s_auto",
+        )
+        host_id = host.get("host_id", "")
+        if host_id:
+            T.k8s_pods.update_item(
+                Key={"user_sub": user_sub, "sk": f"POD#{pod_id}"},
+                UpdateExpression="SET host_id = :hid",
+                ExpressionAttributeValues={":hid": host_id},
+            )
+            item["host_id"] = host_id
+            logger.info(
+                "k8s_pod_host_registered user_sub=%s pod_id=%s host_id=%s",
+                user_sub, pod_id, host_id,
+            )
+    except (HostValidationError, HostLimitExceeded):
+        logger.warning(
+            "k8s_pod_host_register_failed user_sub=%s pod_id=%s hostname=%s",
+            user_sub, pod_id, result.get("service_hostname"),
+        )
+    except Exception:
+        logger.exception(
+            "k8s_pod_host_register_error user_sub=%s pod_id=%s",
+            user_sub, pod_id,
+        )
+
+    # Lifecycle timeline (GAP-0231). Best-effort; never blocks the launch.
+    _record_timeline(
+        user_sub, pod_id, "launched",
+        detail={"image": image, "preset": preset, "ttl_seconds": ttl_seconds, "label": label},
+    )
+
     logger.info(
-        "k8s_pod_launched user_sub=%s pod_id=%s image=%s preset=%s ttl=%d",
-        user_sub, pod_id, image, preset, ttl_seconds,
+        "k8s_pod_launched user_sub=%s pod_id=%s image=%s preset=%s ttl=%d host_id=%s",
+        user_sub, pod_id, image, preset, ttl_seconds, item.get("host_id", ""),
     )
 
     return item
@@ -254,7 +474,22 @@ def get_pod_logs(user_sub: str, pod_id: str, *, tail: int = 100) -> List[str]:
     if S.k8s_mock_enabled:
         return _mock_store.get_logs(k8s_pod_name, namespace, tail=tail)
 
-    raise NotImplementedError("Real K8s logs not implemented yet")
+    # Real K8s logs
+    core_v1 = _get_k8s_core_v1()
+    try:
+        log_str = core_v1.read_namespaced_pod_log(
+            name=k8s_pod_name,
+            namespace=namespace,
+            tail_lines=tail,
+        )
+    except Exception as exc:
+        logger.exception(
+            "k8s_log_fetch_failed pod=%s namespace=%s", k8s_pod_name, namespace
+        )
+        raise PodNotFound(
+            f"Could not fetch logs for pod {k8s_pod_name}: {exc}"
+        ) from exc
+    return log_str.splitlines() if log_str else []
 
 
 def terminate_pod(user_sub: str, pod_id: str) -> Dict[str, Any]:
@@ -271,6 +506,23 @@ def terminate_pod(user_sub: str, pod_id: str) -> Dict[str, Any]:
 
     if S.k8s_mock_enabled:
         _mock_store.delete_pod(k8s_pod_name, namespace)
+    else:
+        from kubernetes import client as k8s_client  # type: ignore
+
+        core_v1 = _get_k8s_core_v1()
+        try:
+            core_v1.delete_namespaced_pod(
+                name=k8s_pod_name,
+                namespace=namespace,
+                body=k8s_client.V1DeleteOptions(grace_period_seconds=0),
+            )
+        except Exception:
+            # Log but do not block the DDB status update — a missing pod (already
+            # gone) must still flip the record to "terminated".
+            logger.exception(
+                "k8s_pod_delete_failed pod=%s namespace=%s",
+                k8s_pod_name, namespace,
+            )
 
     now = now_ts()
     T.k8s_pods.update_item(
@@ -282,6 +534,27 @@ def terminate_pod(user_sub: str, pod_id: str) -> Dict[str, Any]:
 
     item["status"] = "terminated"
     item["terminated_at"] = now
+
+    # Clean up the auto-registered Host Inventory entry (GAP-0227). The
+    # `if host_id:` guard makes this a no-op for pods created before GAP-0226
+    # (host_id == ""). delete_host returns False for an unknown host (it never
+    # raises HostNotFound), so a broad except is sufficient; cleanup failures
+    # must not roll back the already-completed termination.
+    host_id = item.get("host_id", "")
+    if host_id:
+        try:
+            delete_host(user_sub, host_id)
+            logger.info(
+                "k8s_pod_host_deregistered user_sub=%s pod_id=%s host_id=%s",
+                user_sub, pod_id, host_id,
+            )
+        except Exception:
+            logger.exception(
+                "k8s_pod_host_deregister_failed user_sub=%s pod_id=%s host_id=%s",
+                user_sub, pod_id, host_id,
+            )
+
+    _record_timeline(user_sub, pod_id, "terminated")
     logger.info("k8s_pod_terminated user_sub=%s pod_id=%s", user_sub, pod_id)
     return item
 
@@ -307,6 +580,10 @@ def check_expired_pods() -> int:
         if expires_at > 0 and now > expires_at:
             try:
                 terminate_pod(item["user_sub"], item["pod_id"])
+                _record_timeline(
+                    item["user_sub"], item["pod_id"], "ttl_expired",
+                    detail={"expires_at": expires_at},
+                )
                 terminated += 1
                 logger.info(
                     "k8s_pod_ttl_expired user_sub=%s pod_id=%s",

@@ -1,4 +1,4 @@
-import { api } from "@/api/client";
+import { api, ApiError } from "@/api/client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,9 +50,21 @@ export interface CallBillingStatus {
 // API functions
 // ---------------------------------------------------------------------------
 
-/** Get a creator's per-minute call rate. */
-export const getCallRate = (creatorId: string) =>
-  api.get<CallRate>(`/ui/calls/rates/${creatorId}`);
+/**
+ * Get a creator's per-minute call rate.
+ *
+ * Returns `null` when the creator has not configured a paid-call rate (the
+ * backend responds 404), so callers can treat "no rate" as a clean absence
+ * rather than an error.
+ */
+export const getCallRate = async (creatorId: string): Promise<CallRate | null> => {
+  try {
+    return await api.get<CallRate>(`/ui/calls/rates/${creatorId}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+};
 
 /** Set own call rate (creator). */
 export const setCallRate = (data: CallRateIn) =>

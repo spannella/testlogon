@@ -27,6 +27,7 @@ floating-point drift. Helper conversions to a percentage are provided.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -381,3 +382,204 @@ def get_public_engagement(user_id: str) -> Optional[Dict[str, Any]]:
         "engagement_rate_7d": summary_7["engagement_rate"],
         "visible": True,
     }
+
+
+# ── platform-wide benchmarks (GAP-0201 / FIN-012) ──────────────────
+
+# Benchmark snapshots are stored in the SAME AnalyticsRollups table under a
+# reserved partition key so no new table provisioning is needed (the table is
+# bounded to analytics data only). PK=PLATFORM#BENCHMARKS, SK=<YYYY-MM-DD>.
+_BENCHMARK_PK = "PLATFORM#BENCHMARKS"
+
+
+def _percentile_bps(sorted_rates: List[int], pct: float) -> int:
+    """Nearest-rank percentile over a pre-sorted list of bps values.
+
+    ``pct`` is a fraction in [0, 1]. Returns 0 for an empty list.
+    """
+    n = len(sorted_rates)
+    if n == 0:
+        return 0
+    if n == 1:
+        return sorted_rates[0]
+    # Nearest-rank: rank = ceil(pct * n), clamped to [1, n].
+    import math
+
+    rank = int(math.ceil(pct * n))
+    rank = max(1, min(rank, n))
+    return sorted_rates[rank - 1]
+
+
+def _collect_daily_rates(date_str: str) -> List[int]:
+    """Scan AnalyticsRollups for all creators' ``DAILY#<date>`` engagement bps.
+
+    Only positive rates (creators with real engagement data) are included so the
+    benchmark reflects active creators, not zero-activity placeholders.
+    """
+    rates: List[int] = []
+    sk_target = f"DAILY#{date_str}"
+    kwargs: Dict[str, Any] = {}
+    while True:
+        try:
+            resp = T.analytics_rollups.scan(**kwargs)
+        except Exception:
+            logger.exception("Failed to scan rollups for benchmarks: %s", date_str)
+            break
+        for item in resp.get("Items", []):
+            if item.get("sk") != sk_target:
+                continue
+            if not str(item.get("pk", "")).startswith("CREATOR#"):
+                continue
+            bps = _to_int(item.get("engagement_rate_bps", 0))
+            if bps > 0:
+                rates.append(bps)
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return rates
+
+
+def compute_platform_benchmarks(date_str: Optional[str] = None) -> Dict[str, Any]:
+    """Aggregate every creator's daily engagement rate for ``date_str`` into
+    platform-wide percentiles and persist a snapshot row.
+
+    Returns the stored payload (bps fields + ``sample_size`` + ``computed_at``).
+    With no qualifying data, returns/stores a zero-sample snapshot. Deterministic
+    and Decimal-safe (all numeric values stored as ints / bps).
+    """
+    target = date_str or _today()
+    rates = _collect_daily_rates(target)
+    computed_at = now_ts()
+
+    if not rates:
+        item: Dict[str, Any] = {
+            "pk": _BENCHMARK_PK,
+            "sk": target,
+            "date": target,
+            "average_rate_bps": 0,
+            "median_rate_bps": 0,
+            "p25_rate_bps": 0,
+            "p75_rate_bps": 0,
+            "sample_size": 0,
+            "computed_at": computed_at,
+        }
+        try:
+            T.analytics_rollups.put_item(Item=item)
+        except Exception:
+            logger.exception("Failed to store empty benchmark snapshot for %s", target)
+        return item
+
+    rates.sort()
+    n = len(rates)
+    avg_bps = int(round(sum(rates) / n))
+    median_bps = _percentile_bps(rates, 0.5)
+    p25_bps = _percentile_bps(rates, 0.25)
+    p75_bps = _percentile_bps(rates, 0.75)
+
+    item = {
+        "pk": _BENCHMARK_PK,
+        "sk": target,
+        "date": target,
+        "average_rate_bps": avg_bps,
+        "median_rate_bps": median_bps,
+        "p25_rate_bps": p25_bps,
+        "p75_rate_bps": p75_bps,
+        "sample_size": n,
+        "computed_at": computed_at,
+    }
+    try:
+        T.analytics_rollups.put_item(Item=item)
+    except Exception:
+        logger.exception("Failed to store benchmark snapshot for %s", target)
+    return item
+
+
+def get_platform_benchmarks(date_str: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Read a previously-computed benchmark snapshot for ``date_str``.
+
+    Returns ``None`` when no snapshot exists yet (caller maps this to 503).
+    """
+    target = date_str or _today()
+    try:
+        resp = T.analytics_rollups.get_item(Key={"pk": _BENCHMARK_PK, "sk": target})
+        return resp.get("Item")
+    except Exception:
+        logger.exception("Failed to read platform benchmarks for %s", target)
+        return None
+
+
+def percentile_for_rate(date_str: str, my_bps: int) -> Optional[float]:
+    """Compute the caller's exact percentile against the day's rate distribution.
+
+    Percentile = fraction of sampled creators with a rate at or below the
+    caller's, expressed 0–100 (one decimal). Returns ``None`` when the caller
+    has no rate (``my_bps <= 0``) or there is no sample to compare against.
+    """
+    my_bps = _to_int(my_bps)
+    if my_bps <= 0:
+        return None
+    rates = _collect_daily_rates(date_str)
+    n = len(rates)
+    if n == 0:
+        return None
+    at_or_below = sum(1 for r in rates if r <= my_bps)
+    return round(at_or_below / n * 100.0, 1)
+
+
+def get_benchmarks_with_percentile(
+    viewer_user_id: str,
+    date_str: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Read the benchmark snapshot for ``date_str`` and enrich with the viewer's
+    percentile.
+
+    Returns ``None`` when no snapshot has been computed yet. Otherwise returns a
+    dict with percent-valued fields ready for ``EngagementBenchmarksOut``.
+    """
+    target = date_str or _today()
+    bench = get_platform_benchmarks(target)
+    if bench is None:
+        return None
+
+    sample_size = _to_int(bench.get("sample_size", 0))
+    my_summary = get_engagement_summary(viewer_user_id, DEFAULT_PERIOD_DAYS)
+    my_bps = _to_int(my_summary.get("engagement_rate_bps", 0))
+    my_pct = percentile_for_rate(target, my_bps) if sample_size > 0 else None
+
+    return {
+        "average_rate": bps_to_percent(bench.get("average_rate_bps", 0)),
+        "median_rate": bps_to_percent(bench.get("median_rate_bps", 0)),
+        "p25_rate": bps_to_percent(bench.get("p25_rate_bps", 0)),
+        "p75_rate": bps_to_percent(bench.get("p75_rate_bps", 0)),
+        "sample_size": sample_size,
+        "my_percentile": my_pct,
+        "computed_at": _to_int(bench.get("computed_at", 0)),
+        "date": target,
+    }
+
+
+# ── daily background job (GAP-0201 / FIN-012) ──────────────────────
+
+_BENCHMARK_INTERVAL_SECONDS = 86400  # once per day
+
+
+async def _platform_benchmark_loop() -> None:
+    """Background loop: recompute the platform engagement benchmark daily."""
+    while True:
+        try:
+            compute_platform_benchmarks(_today())
+            logger.info("platform_engagement_benchmarks_computed")
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            break
+        except Exception:
+            logger.exception("platform benchmark compute failed")
+        try:
+            await asyncio.sleep(_BENCHMARK_INTERVAL_SECONDS)
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            break
+
+
+def start_engagement_benchmark_task() -> None:
+    """Startup handler: schedule the daily platform-benchmark background loop."""
+    asyncio.ensure_future(_platform_benchmark_loop())

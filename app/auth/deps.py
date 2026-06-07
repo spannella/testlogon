@@ -127,6 +127,21 @@ class AuthenticatedUser:
     sub: str
     role: Role = Role.USER
     admin_profile: AdminProfile = AdminProfile()
+    # Tenant the identity was resolved under (GAP-0171 / ENTERPRISE-001).
+    # Defaults to "default" so legacy JWTs/sessions and single-tenant dev
+    # deployments (where no request tenant is present) keep working.
+    tenant_id: str = "default"
+
+
+def _request_tenant_id(request: Request) -> str:
+    """Best-effort read of the request's resolved tenant.
+
+    Returns ``"default"`` when ``TenantMiddleware`` has not populated
+    ``request.state.tenant_id`` (single-tenant dev, or unit-test requests
+    that bypass the middleware). Never raises.
+    """
+    state = getattr(request, "state", None)
+    return str(getattr(state, "tenant_id", None) or "default")
 
 
 def _enforce_not_banned(*, user_sub: str, role: Role) -> None:
@@ -206,7 +221,7 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
                 role = Role.USER
             role = enforce_root_role_invariant(user_sub=user_sub, role=role)
             _enforce_not_banned(user_sub=user_sub, role=role)
-            return AuthenticatedUser(sub=user_sub, role=role)
+            return AuthenticatedUser(sub=user_sub, role=role, tenant_id=_request_tenant_id(request))
 
     # 1. Cookie-based path (browser flow)
     access_cookie_name = getattr(S, "ui_access_token_cookie_name", "")
@@ -227,7 +242,12 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
                     role = enforce_root_role_invariant(user_sub=str(user_sub), role=role)
                     admin_profile = _extract_admin_profile_from_claims(payload)
                     _enforce_not_banned(user_sub=str(user_sub), role=role)
-                    return AuthenticatedUser(sub=str(user_sub), role=role, admin_profile=admin_profile)
+                    return AuthenticatedUser(
+                        sub=str(user_sub),
+                        role=role,
+                        admin_profile=admin_profile,
+                        tenant_id=_request_tenant_id(request),
+                    )
             except jwt.PyJWTError:
                 pass
 
@@ -245,7 +265,12 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
         role = enforce_root_role_invariant(user_sub=str(user_sub), role=role)
         admin_profile = _extract_admin_profile_from_claims(payload)
         _enforce_not_banned(user_sub=str(user_sub), role=role)
-        return AuthenticatedUser(sub=str(user_sub), role=role, admin_profile=admin_profile)
+        return AuthenticatedUser(
+            sub=str(user_sub),
+            role=role,
+            admin_profile=admin_profile,
+            tenant_id=_request_tenant_id(request),
+        )
 
     # 3. Dev-mode fallbacks
     if not S.dev_mode:
@@ -257,7 +282,12 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
         fallback_role = enforce_root_role_invariant(user_sub=fallback_user, role=fallback_role)
         fallback_admin_profile = normalize_admin_profile(request.headers.get("x-user-admin-profile"))
         _enforce_not_banned(user_sub=fallback_user, role=fallback_role)
-        return AuthenticatedUser(sub=fallback_user, role=fallback_role, admin_profile=fallback_admin_profile)
+        return AuthenticatedUser(
+            sub=fallback_user,
+            role=fallback_role,
+            admin_profile=fallback_admin_profile,
+            tenant_id=_request_tenant_id(request),
+        )
 
     auth = request.headers.get("authorization", "")
     token = extract_bearer_token(auth)
@@ -267,7 +297,12 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     role = enforce_root_role_invariant(user_sub=sub, role=role)
     admin_profile = _extract_admin_profile_from_claims(payload)
     _enforce_not_banned(user_sub=sub, role=role)
-    return AuthenticatedUser(sub=sub, role=role, admin_profile=admin_profile)
+    return AuthenticatedUser(
+        sub=sub,
+        role=role,
+        admin_profile=admin_profile,
+        tenant_id=_request_tenant_id(request),
+    )
 
 
 async def require_root_session(request: Request) -> AuthenticatedUser:
@@ -312,7 +347,12 @@ def require_kyc_tier(minimum_tier: int):
     """FastAPI dependency factory that enforces a minimum KYC tier."""
 
     async def _check(request: Request):
-        if not S.kyc_tier_gating_enabled:
+        # GAP-0268: router-level enforcement is gated behind a dedicated flag that
+        # defaults OFF. When disabled, this dependency is a pure pass-through so that
+        # existing tier-0 users (dev/E2E) are never blocked. The broader
+        # kyc_tier_gating_enabled flag must also be on for tier values to be read
+        # from DDB (otherwise get_user_kyc_tier returns KYC_TIER_MAX and all pass).
+        if not (S.kyc_tier_enforcement_enabled and S.kyc_tier_gating_enabled):
             return  # Feature flag: skip tier check when disabled
         from app.services.kyc_tiers import get_user_kyc_tier, KYC_TIER_NAMES
         user = await get_authenticated_user(request)

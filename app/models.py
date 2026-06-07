@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
+import ipaddress
 import re
 from enum import Enum
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from pydantic import (
     AliasChoices,
@@ -265,6 +267,11 @@ class RegisterEmailCheckReq(BaseModel):
 class RegisterEmailCheckResp(BaseModel):
     status: str
     available: bool
+    # Distinguishes a taken+verified account (unverified=False) from a
+    # taken+pending-verification account (unverified=True) so the frontend can
+    # offer a resume/resend path (GAP-0107). Defaults to False for backward
+    # compatibility with clients that only read `available`.
+    unverified: bool = False
 
 class WebAuthnRegisterBeginReq(BaseModel):
     label: Optional[str] = None
@@ -677,6 +684,14 @@ class PushRegisterReq(BaseModel):
 
 class PushRevokeReq(BaseModel):
     device_id: str
+
+class PushSubscribeReq(BaseModel):
+    endpoint: str
+    keys_p256dh: str
+    keys_auth: str
+
+class PushUnsubscribeReq(BaseModel):
+    endpoint: str
 
 
 class PaymentMethodOut(BaseModel):
@@ -1607,6 +1622,12 @@ class BulkBatchOut(BaseModel):
     failure_count: int = 0
     total_cents: int
     items: List[BulkBatchItem] = Field(default_factory=list)
+    # GAP-0212: 5-minute reversal window. ``undo_expires_at`` is the Unix ts
+    # until which an undo is valid (set only on completed batches);
+    # ``undo_performed_at`` is set when an undo completes. Both nullable for
+    # backward compatibility with batches that predate this field.
+    undo_expires_at: Optional[int] = None
+    undo_performed_at: Optional[int] = None
 
 
 class VerifyMicrodepositsReq(BaseModel):
@@ -2154,6 +2175,25 @@ class DevtoolsBillingLedgerOut(BaseModel):
     parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
 
 
+class DevtoolsFfmpegHealthOut(BaseModel):
+    """FFmpeg binary health for the internal dev-tools surface (GAP-0301).
+
+    `validate_ffmpeg()` returns a FULL dict only when the binary is available;
+    when it is unavailable it returns just ``{"status", "path", "error"}``.
+    All non-status/path fields are therefore optional so that
+    ``DevtoolsFfmpegHealthOut(**result)`` never raises on the unavailable path.
+    """
+
+    status: Literal["healthy", "degraded", "unavailable"]
+    path: str = ""
+    error: Optional[str] = None
+    version: Optional[str] = None
+    codecs: List[str] = Field(default_factory=list)
+    missing_required: List[str] = Field(default_factory=list)
+    missing_recommended: List[str] = Field(default_factory=list)
+    issues: List[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # MOD-002: DMCA Takedown Workflow
 # ---------------------------------------------------------------------------
@@ -2185,8 +2225,54 @@ class DmcaClaimIn(BaseModel):
     @classmethod
     def _validate_content_url(cls, v: str) -> str:
         v = v.strip()
+        # Existing scheme-prefix check (kept intact for backward compat).
         if v.startswith("javascript:") or v.startswith("data:"):
             raise ValueError("Invalid content URL scheme")
+
+        # Relative URLs (bare paths) are platform-internal and safe.
+        if v.startswith("/"):
+            return v
+
+        parsed = urlparse(v)
+        scheme = (parsed.scheme or "").lower()
+
+        # No scheme + not a leading-slash path: treat as a relative reference
+        # (e.g. "feed/post/abc"); leave to downstream resolution.
+        if not scheme:
+            return v
+
+        # SSRF defence #1: only http/https are permitted for absolute URLs.
+        # Rejects file:, ftp:, gopher:, dict:, ldap:, sftp:, etc.
+        if scheme not in ("http", "https"):
+            raise ValueError(f"content_url scheme '{scheme}:' is not permitted")
+
+        hostname = (parsed.hostname or "").strip().lower()
+        if not hostname:
+            raise ValueError("content_url must include a hostname")
+
+        # SSRF defence #2: reject well-known internal hostnames.
+        _BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal"}
+        if hostname in _BLOCKED_HOSTS or hostname.endswith(
+            (".localhost", ".local", ".internal")
+        ):
+            raise ValueError("content_url must not point to an internal hostname")
+
+        # SSRF defence #3: classify literal IP hosts (no DNS lookup) and reject
+        # private / loopback / link-local / reserved / unspecified addresses.
+        # urlparse strips the brackets from IPv6 literals in .hostname.
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            ip = None
+        if ip is not None and (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ValueError("content_url must not point to an internal network address")
+
         return v
 
     @model_validator(mode="after")
@@ -2475,6 +2561,7 @@ class PayoutBalanceOut(BaseModel):
 class PayoutRequestIn(BaseModel):
     amount_cents: int = Field(ge=100)
     method: str = "bank_transfer"
+    method_id: Optional[str] = None
     notes: str = Field(default="", max_length=500)
 
 
@@ -2523,6 +2610,37 @@ class PayoutRejectIn(BaseModel):
 
 class PayoutMarkPaidIn(BaseModel):
     reference: str = Field(default="", max_length=500)
+
+
+# -- Payout Methods (GAP-0195 / FIN-009) --
+
+class PayoutMethodIn(BaseModel):
+    method_type: str = Field(..., pattern="^(bank_ach|bank_wire|paypal|check)$")
+    account_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
+    routing_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
+    paypal_email: str = Field(default="", max_length=254)
+    nickname: str = Field(default="", max_length=100)
+    set_as_default: bool = False
+
+
+class PayoutMethodUpdateIn(BaseModel):
+    nickname: str = Field(..., max_length=100)
+
+
+class PayoutMethodOut(BaseModel):
+    method_id: str
+    method_type: str
+    account_last4: str = ""
+    routing_last4: str = ""
+    paypal_email: str = ""
+    nickname: str = ""
+    is_default: bool = False
+    created_at: int
+    updated_at: int
+
+
+class PayoutMethodListOut(BaseModel):
+    methods: List[PayoutMethodOut]
 
 
 # ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
@@ -3310,7 +3428,7 @@ class PromoCodeStatsOut(PromoCodeOut):
 
 class PromoValidateIn(BaseModel):
     code: str
-    checkout_type: Literal["subscription", "vod", "shop"]
+    checkout_type: Literal["subscription", "vod", "shop", "tip", "unlock"]
     item_price_cents: int = 0
     creator_user_id: str
 
@@ -3320,8 +3438,14 @@ class PromoValidateOut(BaseModel):
     code_id: Optional[str] = None
     discount_type: Optional[str] = None
     discount_cents: int = 0
+    discount_pct: Optional[int] = None
+    original_price_cents: int = 0
     final_price_cents: int = 0
     free_trial_days: int = 0
+    buy_x: Optional[int] = None
+    get_y: Optional[int] = None
+    free_item_description: Optional[str] = None
+    error_code: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -4205,6 +4329,19 @@ class LlmKeyCreateIn(BaseModel):
     rate_limit_rpm: int = Field(default=60, ge=1, le=10000)
     monthly_budget_cents: int = Field(default=0, ge=0)
 
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, v: str) -> str:
+        # SSRF protection (GAP-0009): reject non-HTTPS / private-range URLs.
+        # Reuses the existing webhook SSRF validator (blocks RFC-1918,
+        # loopback, link-local; allows http://localhost only in dev mode).
+        if not v:
+            return v
+        from app.services.webhook_ssrf import validate_webhook_url
+
+        validate_webhook_url(v)  # raises ValueError on disallowed URL
+        return v
+
 
 class LlmKeyRotateIn(BaseModel):
     new_api_key: str = Field(..., min_length=8, max_length=500)
@@ -4293,6 +4430,14 @@ class AdAccountCreateIn(BaseModel):
     billing_email: str = Field(..., min_length=3, max_length=320)
 
 
+# Reasonable bid bounds (in cents):
+# Floor: $0.50 CPM = 50 cents
+# Ceiling: $200 CPM = 20000 cents
+_BID_CPM_MIN = 50
+_BID_CPM_MAX = 20_000
+_BID_CPM_DEFAULT = 500  # $5.00 CPM default
+
+
 class CampaignCreateIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     objective: str = Field(..., pattern=r"^(awareness|traffic|conversions)$")
@@ -4300,6 +4445,26 @@ class CampaignCreateIn(BaseModel):
     budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None  # Unix timestamp
     end_date: Optional[int] = None    # Unix timestamp
+    # Auction bid (GAP-0044): CPM bid in cents used by the serving engine to
+    # rank candidates. Defaults to $5.00 so existing clients that omit the field
+    # keep working; bounded to a sane range to prevent garbage bids.
+    bid_cpm_cents: int = Field(
+        default=_BID_CPM_DEFAULT, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
+    # Ad category for the campaign. Validated against the same VALID_AD_CATEGORIES
+    # taxonomy that creators use for allowed_ad_categories (see CreatorAdSettingsIn)
+    # so the serving-engine whitelist comparison is meaningful. "general" is the
+    # default for campaigns that do not declare a category (treated as
+    # uncategorized — only served when a creator imposes no whitelist).
+    category: str = Field(default="general")
+
+    @field_validator("category")
+    @classmethod
+    def _validate_category(cls, v: str) -> str:
+        from app.models import VALID_AD_CATEGORIES  # forward ref (defined above)
+        if v != "general" and v not in VALID_AD_CATEGORIES:
+            raise ValueError(f"Unknown ad category: {v}")
+        return v
 
 
 class CampaignOut(BaseModel):
@@ -4317,6 +4482,10 @@ class CampaignOut(BaseModel):
     end_date: Optional[int] = None
     created_at: int
     updated_at: int
+    category: str = "general"
+    # GAP-0044: surface the auction bid so advertisers can audit their CPM.
+    # Defaults to $5.00 for legacy items written before this attribute existed.
+    bid_cpm_cents: int = _BID_CPM_DEFAULT
 
 
 # -- Delegates (DELEGATE-001) --
@@ -4620,7 +4789,10 @@ class CampaignUpdateIn(BaseModel):
     budget_cents: Optional[int] = None
     budget_type: Optional[str] = None
     status: Optional[str] = None
-    bid_cpm_cents: Optional[int] = None
+    # GAP-0044: bound the bid range on update to match creation validation.
+    bid_cpm_cents: Optional[int] = Field(
+        default=None, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
 
 
 class CampaignReviewIn(BaseModel):
@@ -5273,6 +5445,13 @@ class Ec2InstanceTypeInfo(BaseModel):
 
 # -- Agent Worker Provisioning (AGENT-002) --
 
+# GAP-0078: shell metacharacters that must never appear in user-supplied worker
+# install/verify commands (they would enable command injection once a prod
+# provisioner embeds them in a shell / cloud-init script).
+_WORKER_SHELL_METACHARS = re.compile(r"[;&|`$()<>\n\r]")
+_WORKER_MAX_CUSTOM_CMDS = 20
+
+
 class CreateWorkerIn(BaseModel):
     label: str = Field(..., min_length=1, max_length=200)
     agent_type: str = Field(..., pattern=r"^(coder|qa|reviewer|devops|custom)$")
@@ -5287,6 +5466,45 @@ class CreateWorkerIn(BaseModel):
     custom_install_commands: Optional[List[str]] = None
     custom_env_var: str = Field(default="", max_length=100)
     custom_verify_command: str = Field(default="", max_length=500)
+
+    # GAP-0078: these fields feed a (future) provisioner that may embed them in a
+    # shell / cloud-init script. Reject shell metacharacters so arbitrary command
+    # strings (`;`, `|`, `&`, backtick, `$()`, newline, redirects) can never be
+    # stored, even though the current dev provisioner does not execute them.
+    @field_validator("custom_install_commands")
+    @classmethod
+    def _validate_custom_install_commands(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        if len(v) > _WORKER_MAX_CUSTOM_CMDS:
+            raise ValueError(f"At most {_WORKER_MAX_CUSTOM_CMDS} install commands allowed")
+        for cmd in v:
+            if _WORKER_SHELL_METACHARS.search(cmd):
+                raise ValueError(
+                    f"Install command contains forbidden shell metacharacters: {cmd[:40]!r}"
+                )
+        return v
+
+    @field_validator("custom_verify_command")
+    @classmethod
+    def _validate_custom_verify_command(cls, v: str) -> str:
+        if v and _WORKER_SHELL_METACHARS.search(v):
+            raise ValueError(
+                f"Verify command contains forbidden shell metacharacters: {v[:40]!r}"
+            )
+        return v
+
+    @field_validator("custom_env_var")
+    @classmethod
+    def _validate_custom_env_var(cls, v: str) -> str:
+        # Name of an env var only — no value/assignment/injection. Must be a
+        # valid POSIX-ish shell identifier.
+        if v and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v):
+            raise ValueError(
+                "custom_env_var must be a valid environment variable name "
+                "([A-Za-z_][A-Za-z0-9_]*)"
+            )
+        return v
 
 
 class ProvisionStepOut(BaseModel):
@@ -8037,6 +8255,9 @@ class StylistConfigOut(BaseModel):
     ticket_min_severity: Literal["error", "warning", "info"] = "warning"
     brand_colors: List[str] = Field(default_factory=list)
     font_families: List[str] = Field(default_factory=list)
+    # GAP-0103: derived indicator only. The raw app-auth secret name/ARN and the
+    # credentials behind it are never exposed in this output model.
+    has_app_credentials: bool = False
     updated_at: Optional[int] = None
 
 
@@ -8053,6 +8274,10 @@ class UpdateStylistConfigIn(BaseModel):
     ticket_min_severity: Optional[Literal["error", "warning", "info"]] = None
     brand_colors: Optional[List[str]] = None
     font_families: Optional[List[str]] = None
+    # GAP-0103: pointer to a Secrets Manager secret holding live-app auth
+    # credentials. Stored as a name/ARN only; the raw credential is never
+    # persisted and never returned. Empty string clears it.
+    app_auth_credentials_secret_name: Optional[str] = Field(default=None, max_length=2048)
 # Marketing Agent (AGENT-017)
 # ---------------------------------------------------------------------------
 
@@ -8307,6 +8532,14 @@ class SecurityAgentConfigOut(BaseModel):
     ignored_paths: List[str] = Field(default_factory=list)
     auto_create_remediation_tickets: bool = True
     remediation_ticket_min_severity: str = "high"
+    # GAP-0101: SSRF allowlist of repo hosts the agent may act against.
+    allowed_repo_hosts: List[str] = Field(
+        default_factory=lambda: ["github.com", "gitlab.com"]
+    )
+    # GAP-0102: write-only Secrets Manager reference (name/ARN). The raw GitHub
+    # token is NEVER exposed here; only the boolean indicator below is returned.
+    github_token_secret_name: Optional[str] = None
+    has_github_token: bool = False
     updated_at: Optional[int] = None
 
 
@@ -10215,6 +10448,37 @@ class InstanceMonitoringIngestOut(BaseModel):
     ts: int
     health_status: str
     stored: bool = True
+
+
+# -- Auto-restart policy (GAP-0230, INFRA-008) --
+
+class RestartPolicyIn(BaseModel):
+    auto_restart_enabled: Optional[bool] = None
+    max_restarts: Optional[int] = Field(default=None, ge=0, le=10)
+
+
+class RestartPolicyOut(BaseModel):
+    instance_id: str
+    resource_type: str = "ec2"  # "ec2" | "k8s"
+    auto_restart_enabled: bool = False
+    max_restarts: int = 3
+    restart_count: int = 0
+    last_restart_at: int = 0
+
+
+# -- Lifecycle event timeline (GAP-0231, INFRA-008) --
+
+class TimelineEventOut(BaseModel):
+    event_id: str
+    event_type: str
+    ts: int
+    detail: Dict[str, Any] = Field(default_factory=dict)
+
+
+class InstanceTimelineOut(BaseModel):
+    instance_id: str
+    resource_type: str = "ec2"  # "ec2" | "k8s"
+    events: List[TimelineEventOut] = Field(default_factory=list)
 # -- Consumer Tax Documents (FIN-004) --
 
 class SpendingCategoryOut(BaseModel):
@@ -10303,6 +10567,53 @@ class BatchGenerateTaxForm1099Out(BaseModel):
     generated: int = 0
     skipped: int = 0
     errors: int = 0
+
+
+class W9SubmitIn(BaseModel):
+    """W-9 / tax-info submission (GAP-0020 / FIN-008).
+
+    The raw ``tin`` is KMS-encrypted at the service layer and NEVER stored in
+    plaintext, logged, or echoed back in any API response.
+    """
+
+    legal_name: str = Field(..., min_length=1, max_length=200)
+    tin: str = Field(
+        ...,
+        description="Raw SSN (XXX-XX-XXXX) or EIN (XX-XXXXXXX). Never stored in plaintext.",
+        min_length=9,
+        max_length=11,
+    )
+    tin_type: Literal["ssn", "ein"]
+    address_line1: str = Field(..., min_length=1, max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    state: str = Field(..., min_length=2, max_length=2)
+    zip_code: str = Field(..., min_length=5, max_length=10)
+    certified: bool
+
+
+class W9StatusOut(BaseModel):
+    """Safe view of stored tax info — never includes ``tin_encrypted``."""
+
+    legal_name: str = ""
+    tin_last4: str = ""
+    tin_type: str = ""
+    address_line1: str = ""
+    city: str = ""
+    state: str = ""
+    zip_code: str = ""
+    certified: bool = False
+    certified_at: Optional[int] = None
+    updated_at: int = 0
+
+
+class TaxInfoAdminOut(W9StatusOut):
+    """W9StatusOut extended with the decrypted TIN (GAP-0194 / FIN-008).
+
+    Returned ONLY by the ADMIN/ROOT-gated TIN-reveal endpoint. Every reveal is
+    recorded in a queryable TAX_AUDIT trail. Never returned to non-admin callers.
+    """
+
+    tin_full: str = Field(..., description="Decrypted full TIN (SSN/EIN). Never cached or logged.")
 
 
 # ── Admin Ad Platform Management (ADS-018) ──────────────────────────────────
@@ -10817,6 +11128,10 @@ class CreateConnectionProfileIn(BaseModel):
     port: int = Field(default=22, ge=1, le=65535)
     username: Optional[str] = Field(default="", max_length=64)
     auth_method: Literal["key", "key_ref", "password"] = "key_ref"
+    # SEC-022: optional plaintext password (KMS-encrypted at rest by the
+    # service; never echoed back — responses expose only ``has_password``).
+    vnc_password: Optional[str] = Field(default=None, max_length=256)
+    ssh_password: Optional[str] = Field(default=None, max_length=256)
     ssh_key_id: Optional[str] = Field(default="", max_length=128)
     bastion_path_id: Optional[str] = Field(default="", max_length=128)
     terminal_cols: int = Field(default=80, ge=40, le=300)
@@ -10834,6 +11149,10 @@ class UpdateConnectionProfileIn(BaseModel):
     port: Optional[int] = Field(default=None, ge=1, le=65535)
     username: Optional[str] = Field(default=None, max_length=64)
     auth_method: Optional[Literal["key", "key_ref", "password"]] = None
+    # SEC-022: rotate (``password``) or remove (``clear_password``) the stored
+    # password. KMS-encrypted at rest; never echoed back.
+    password: Optional[str] = Field(default=None, max_length=256)
+    clear_password: bool = False
     ssh_key_id: Optional[str] = Field(default=None, max_length=128)
     bastion_path_id: Optional[str] = Field(default=None, max_length=128)
     terminal_cols: Optional[int] = Field(default=None, ge=40, le=300)
@@ -10853,6 +11172,7 @@ class ConnectionProfileOut(BaseModel):
     port: int = 22
     username: str = ""
     auth_method: str = "key_ref"
+    has_password: bool = False
     ssh_key_id: str = ""
     bastion_path_id: str = ""
     terminal_cols: int = 80
@@ -10887,6 +11207,7 @@ class QuickConnectOut(BaseModel):
     port: int
     username: str
     auth_method: str
+    has_password: bool = False
     ssh_key_id: str = ""
     bastion_path_id: str = ""
     bastion: Optional[QuickConnectBastionOut] = None
@@ -11486,6 +11807,7 @@ class BillingConfigOut(BaseModel):
     fee_subscriptions_bps: int = Field(..., ge=0, le=5000, description="Platform fee for subscriptions")
     fee_catalog_bps: int = Field(..., ge=0, le=5000, description="Platform fee for catalog purchases")
     fee_ad_revenue_bps: int = Field(..., ge=0, le=5000, description="Platform fee for ad revenue share")
+    fee_call_bps: int = Field(..., ge=0, le=5000, description="Platform fee for per-minute calls")
     min_payout_cents: int = Field(..., ge=0, description="Minimum payout threshold in cents")
     payout_fee_cents: int = Field(..., ge=0, description="Per-payout processing fee in cents")
     payout_schedule: str = Field(..., description="Payout frequency: daily, weekly, or monthly")
@@ -11509,6 +11831,7 @@ class BillingConfigUpdate(BaseModel):
     fee_subscriptions_bps: Optional[int] = Field(default=None, ge=0, le=5000)
     fee_catalog_bps: Optional[int] = Field(default=None, ge=0, le=5000)
     fee_ad_revenue_bps: Optional[int] = Field(default=None, ge=0, le=5000)
+    fee_call_bps: Optional[int] = Field(default=None, ge=0, le=5000)
     min_payout_cents: Optional[int] = Field(default=None, ge=0)
     payout_fee_cents: Optional[int] = Field(default=None, ge=0)
     payout_schedule: Optional[str] = Field(default=None, pattern=r"^(daily|weekly|monthly)$")
@@ -11672,9 +11995,12 @@ class ContentAdOverrideOut(BaseModel):
 
 
 class RevenueShareIn(BaseModel):
-    """Negotiated revenue share in basis points (0-10000)."""
+    """Creator self-service revenue share in basis points (0-7000 max).
 
-    revenue_share_bps: int = Field(ge=0, le=10000)
+    Capped at the platform ceiling (70%); the platform retains at least a 30% floor.
+    """
+
+    revenue_share_bps: int = Field(ge=0, le=7000)
 
 
 class AdRevenueBreakdownContentOut(BaseModel):
@@ -12055,6 +12381,19 @@ class EngagementPublicOut(BaseModel):
     engagement_rate_30d: float = 0.0
     engagement_rate_7d: float = 0.0
     visible: bool = False
+
+
+class EngagementBenchmarksOut(BaseModel):
+    """Platform-wide engagement benchmarks with the caller's percentile (GAP-0201)."""
+
+    average_rate: float = 0.0
+    median_rate: float = 0.0
+    p25_rate: float = 0.0
+    p75_rate: float = 0.0
+    sample_size: int = 0
+    my_percentile: Optional[float] = None  # null when caller has no rollup data
+    computed_at: int = 0  # Unix timestamp of last benchmark compute
+    date: str = ""  # YYYY-MM-DD the benchmark covers
 
 
 
@@ -13062,6 +13401,7 @@ class CreateHostIn(BaseModel):
     tags: List[str] = Field(default_factory=list, max_length=20)
     group: str = Field(default="", max_length=50)
     os_type: Literal["linux", "windows", "macos", "unknown"] = "unknown"
+    record_sessions: bool = False
 
 
 class UpdateHostIn(BaseModel):
@@ -13075,6 +13415,7 @@ class UpdateHostIn(BaseModel):
     group: Optional[str] = Field(default=None, max_length=50)
     os_type: Optional[Literal["linux", "windows", "macos", "unknown"]] = None
     is_pinned: Optional[bool] = None
+    record_sessions: Optional[bool] = None
 
 
 class HostOut(BaseModel):
@@ -13095,6 +13436,7 @@ class HostOut(BaseModel):
     status: str = "unknown"
     is_pinned: bool = False
     source: str = "manual"
+    record_sessions: bool = False
 
 
 class HostListOut(BaseModel):
@@ -13994,3 +14336,56 @@ class CompareResponse(BaseModel):
     current: AnalyticsSnapshotOut
     previous: AnalyticsSnapshotOut
     deltas: DeltasOut
+
+
+# ---------------------------------------------------------------------------
+# Affiliate analytics (FIN-010 / GAP-0197)
+# ---------------------------------------------------------------------------
+
+
+class AffiliateSummaryOut(BaseModel):
+    total_links: int
+    active_links: int
+    total_clicks: int
+    unique_clicks: int
+    total_conversions: int
+    total_revenue_cents: int
+    total_commission_cents: int
+    overall_conversion_rate_pct: float
+
+
+class AffiliateClickBucket(BaseModel):
+    bucket: str
+    clicks: int
+
+
+class AffiliateClickTimeSeriesOut(BaseModel):
+    items: List[AffiliateClickBucket]
+    interval: str
+
+
+class AffiliateEarningsItem(BaseModel):
+    link_id: str
+    target_name: str
+    target_type: str
+    commission_earned_cents: int
+    revenue_cents: int
+    conversions: int
+
+
+class AffiliateEarningsBreakdownOut(BaseModel):
+    items: List[AffiliateEarningsItem]
+    total_commission_cents: int
+
+
+class AffiliateTopProductItem(BaseModel):
+    link_id: str
+    target_name: str
+    target_id: str
+    click_count: int
+    conversion_count: int
+    commission_earned_cents: int
+
+
+class AffiliateTopProductsOut(BaseModel):
+    items: List[AffiliateTopProductItem]

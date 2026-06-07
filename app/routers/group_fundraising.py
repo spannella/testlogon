@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.auth.deps import AuthenticatedUser, require_root_session
 from app.core.settings import S
 from app.models import (
     GroupCampaignListOut,
@@ -33,6 +34,11 @@ from app.services.sessions import require_ui_session
 
 group_fundraising_router = APIRouter(prefix="/ui/groups/fundraising", tags=["group-fundraising"])
 public_group_fundraising_router = APIRouter(prefix="/public", tags=["group-fundraising-public"])
+# GAP-0218: production donation-confirmation surface (Stripe webhook + ROOT
+# break-glass). In dev/test donations auto-confirm; in prod the treasury is only
+# credited once a real Stripe ``payment_intent.succeeded`` event proves the
+# charge cleared.
+fundraising_internal_router = APIRouter(prefix="/internal", tags=["group-fundraising-internal"])
 
 
 def _check_enabled() -> None:
@@ -211,3 +217,78 @@ def public_donate(fundraiser_id: str, body: GroupDonateIn) -> GroupDonationOut:
 def public_receipt(fundraiser_id: str, donation_id: str) -> GroupDonationReceiptOut:
     _check_enabled()
     return GroupDonationReceiptOut(**svc.get_donation_receipt(donation_id, fundraiser_id))
+
+
+# ---------------------------------------------------------------------------
+# Production donation confirmation (GAP-0218)
+#
+# In dev/test donations auto-confirm synchronously (stripe-mock cannot complete
+# off-session payments). In production the auto-confirm path is disabled, so a
+# donation stays ``pending`` until either:
+#   1. A real Stripe ``payment_intent.succeeded`` webhook fires (the normal
+#      path), or
+#   2. A ROOT operator manually confirms it (break-glass for a missed webhook).
+# Only then is the group treasury credited.
+# ---------------------------------------------------------------------------
+
+
+@fundraising_internal_router.post("/fundraisers/stripe/webhook")
+async def fundraising_stripe_webhook(req: Request) -> Dict[str, Any]:
+    """Stripe webhook for fundraising donations (``payment_intent.succeeded``).
+
+    Verifies the Stripe signature, then confirms the matching pending donation
+    (credits the treasury, increments ``raised_cents``). The PaymentIntent must
+    carry ``metadata.fundraiser_id`` and ``metadata.donation_id``. Idempotent:
+    ``confirm_donation`` returns ``already_confirmed`` for completed donations,
+    so Stripe retries are safe.
+    """
+    _check_enabled()
+    if not S.stripe_webhook_secret:
+        raise HTTPException(status_code=501, detail="Stripe webhook secret not configured")
+
+    payload = await req.body()
+    sig = req.headers.get("stripe-signature")
+    try:
+        import stripe  # local import: stripe SDK is optional in some envs
+
+        event = stripe.Webhook.construct_event(
+            payload=payload, sig_header=sig, secret=S.stripe_webhook_secret
+        )
+    except Exception as exc:  # invalid signature / malformed payload
+        raise HTTPException(status_code=400, detail=f"Webhook error: {exc}") from exc
+
+    event_type = event["type"]
+    if event_type != "payment_intent.succeeded":
+        return {"received": True, "ignored": event_type}
+
+    pi = event["data"]["object"]
+    pi_id = pi.get("id")
+    metadata = pi.get("metadata", {}) or {}
+    fundraiser_id = metadata.get("fundraiser_id")
+    donation_id = metadata.get("donation_id")
+    if not fundraiser_id or not donation_id:
+        # Not a fundraising PaymentIntent — nothing for us to do.
+        return {"received": True, "ignored": "missing_fundraising_metadata"}
+
+    result = svc.confirm_donation_by_payment_intent(
+        fundraiser_id=fundraiser_id,
+        donation_id=donation_id,
+        stripe_pi_id=pi_id,
+    )
+    return {"received": True, "confirmed": True, **result}
+
+
+@group_fundraising_router.post("/{group_id}/fundraisers/{fundraiser_id}/donations/{donation_id}/confirm")
+def root_confirm_donation(
+    group_id: str,
+    fundraiser_id: str,
+    donation_id: str,
+    user: AuthenticatedUser = Depends(require_root_session),
+) -> Dict[str, Any]:
+    """ROOT-only break-glass: manually confirm a pending donation.
+
+    Used when a Stripe ``payment_intent.succeeded`` webhook was missed (endpoint
+    downtime, network failure). Credits the treasury for the donation. Idempotent.
+    """
+    _check_enabled()
+    return svc.confirm_donation(fundraiser_id, donation_id)

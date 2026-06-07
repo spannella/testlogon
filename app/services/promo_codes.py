@@ -22,7 +22,7 @@ from app.core.time import now_ts
 # ─── Constants ────────────────────────────────────────────────────
 
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,30}$")
-VALID_CHECKOUT_TYPES = {"subscription", "vod", "shop"}
+VALID_CHECKOUT_TYPES = {"subscription", "vod", "shop", "tip", "unlock"}
 VALID_DISCOUNT_TYPES = {"percentage", "fixed_amount", "free_trial"}
 
 
@@ -246,21 +246,35 @@ def validate_promo_code(
     """
     Validate a promo code for a given checkout context.
     Returns a dict matching PromoValidateOut shape:
-      { valid, code_id, discount_type, discount_cents, final_price_cents, free_trial_days, message }
+      { valid, code_id, discount_type, discount_cents, discount_pct,
+        original_price_cents, final_price_cents, free_trial_days,
+        buy_x, get_y, free_item_description, error_code, message }
     """
     fail = {
         "valid": False,
         "code_id": None,
         "discount_type": None,
         "discount_cents": 0,
+        "discount_pct": None,
+        "original_price_cents": item_price_cents,
         "final_price_cents": item_price_cents,
         "free_trial_days": 0,
+        "buy_x": None,
+        "get_y": None,
+        "free_item_description": None,
+        "error_code": None,
         "message": None,
     }
 
     promo = get_promo_code_by_string(code)
-    if not promo or not promo.get("active", True):
+    if not promo:
         fail["message"] = "Code not found"
+        fail["error_code"] = "not_found"
+        return fail
+    if not promo.get("active", True):
+        fail["message"] = "This promo code is no longer active"
+        fail["error_code"] = "deactivated"
+        fail["code_id"] = promo["code_id"]
         return fail
 
     ts = now_ts()
@@ -269,6 +283,7 @@ def validate_promo_code(
     exp = int(promo.get("expires_at") or 0)
     if exp > 0 and exp < ts:
         fail["message"] = "This code has expired"
+        fail["error_code"] = "expired"
         fail["code_id"] = promo["code_id"]
         return fail
 
@@ -277,6 +292,7 @@ def validate_promo_code(
     current = int(promo.get("current_uses") or 0)
     if max_uses > 0 and current >= max_uses:
         fail["message"] = "This code has been fully redeemed"
+        fail["error_code"] = "usage_limit"
         fail["code_id"] = promo["code_id"]
         return fail
 
@@ -287,6 +303,7 @@ def validate_promo_code(
             user_redeems = _query_promo_user_redeems(promo["code_id"], user_id)
             if len(user_redeems) >= max_per:
                 fail["message"] = "You have already used this code"
+                fail["error_code"] = "already_used"
                 fail["code_id"] = promo["code_id"]
                 return fail
 
@@ -294,12 +311,14 @@ def validate_promo_code(
     applies = promo.get("applies_to") or []
     if checkout_type not in applies:
         fail["message"] = "This code does not apply to this checkout type"
+        fail["error_code"] = "checkout_type_mismatch"
         fail["code_id"] = promo["code_id"]
         return fail
 
     # Creator scope check
     if promo["creator_user_id"] != creator_user_id:
         fail["message"] = "This code is not valid for this creator"
+        fail["error_code"] = "product_mismatch"
         fail["code_id"] = promo["code_id"]
         return fail
 
@@ -307,6 +326,7 @@ def validate_promo_code(
     dtype = promo["discount_type"]
     if dtype == "free_trial" and checkout_type != "subscription":
         fail["message"] = "Free trial codes are only valid for subscriptions"
+        fail["error_code"] = "checkout_type_mismatch"
         fail["code_id"] = promo["code_id"]
         return fail
 
@@ -315,19 +335,40 @@ def validate_promo_code(
     if min_cents > 0 and item_price_cents < min_cents:
         dollars = min_cents / 100
         fail["message"] = f"Minimum purchase of ${dollars:.2f} required"
+        fail["error_code"] = "min_order"
         fail["code_id"] = promo["code_id"]
         return fail
 
     # Calculate discount
     discount_cents, final_price, trial_days = _calculate_discount(promo, item_price_cents)
 
+    # Type-specific display fields
+    discount_pct: Optional[int] = None
+    buy_x: Optional[int] = None
+    get_y: Optional[int] = None
+    free_item_description: Optional[str] = None
+    if dtype == "percentage":
+        discount_pct = int(promo.get("discount_value") or 0)
+    elif dtype == "buy_x_get_y":
+        # Not produced by the current service, but populated defensively
+        # so future BOGO codes surface through the response unchanged.
+        buy_x = int(promo.get("buy_x") or 0)
+        get_y = int(promo.get("get_y") or 0)
+        free_item_description = promo.get("free_item_description")
+
     return {
         "valid": True,
         "code_id": promo["code_id"],
         "discount_type": dtype,
         "discount_cents": discount_cents,
+        "discount_pct": discount_pct,
+        "original_price_cents": item_price_cents,
         "final_price_cents": final_price,
         "free_trial_days": trial_days,
+        "buy_x": buy_x,
+        "get_y": get_y,
+        "free_item_description": free_item_description,
+        "error_code": None,
         "message": None,
     }
 
