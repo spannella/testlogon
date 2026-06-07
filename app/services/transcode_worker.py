@@ -144,6 +144,7 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
                 scratch_dir=scratch_dir,
                 rendition_idx=i,
                 total_renditions=total,
+                tenant_id=job.get("tenant_id", ""),
             )
             completed_renditions.append(rendition_name)
 
@@ -301,6 +302,7 @@ async def _run_ffmpeg_for_rendition(
     scratch_dir: Path,
     rendition_idx: int,
     total_renditions: int,
+    tenant_id: str = "",
     cancel_event: Optional[asyncio.Event] = None,
 ) -> None:
     """Run FFmpeg for a single rendition using the VOD-004 executor."""
@@ -343,7 +345,12 @@ async def _run_ffmpeg_for_rendition(
         )
 
         _asset_id = rendition.get("_asset_id", job_id)
-        _encryption_params = prepare_encryption_params(_asset_id, scratch_dir=scratch_dir)
+        # GAP-0372: derive a tenant-scoped key. Prefer the rendition-level
+        # tenant override, falling back to the job tenant_id.
+        _tenant_id = rendition.get("_tenant_id") or tenant_id
+        _encryption_params = prepare_encryption_params(
+            _asset_id, _tenant_id, scratch_dir=scratch_dir
+        )
         if _encryption_params:
             enc_args = get_ffmpeg_encryption_args(_encryption_params)
             # Insert encryption args before the output playlist path (last arg)

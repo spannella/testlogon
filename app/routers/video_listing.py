@@ -202,7 +202,8 @@ def _video_to_detail(
         try:
             from app.services.vod_drm_keys import get_key_uri
 
-            drm_key_uri = get_key_uri(video.id)
+            # GAP-0372: key derivation is tenant-scoped; the owner is the tenant.
+            drm_key_uri = get_key_uri(video.id, video.owner_user_id)
         except Exception:
             pass
 

@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { MediaPlayer, type MediaError, type SubtitleTrackInfo } from "@/components/shared/MediaPlayer";
+import WatermarkOverlay from "@/components/shared/WatermarkOverlay";
 import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
 import { listSubtitles, uploadSubtitle, deleteSubtitle } from "@/api/endpoints/subtitles";
 import { recordEngagement } from "@/api/endpoints/recommendations";
@@ -385,6 +386,23 @@ export default function VideoPlayerPage() {
     });
   }, []);
 
+  // ─── Playback token auto-refresh (GAP-0371) ─────────────────────────────
+  // The playback_token has a short TTL (default 300s); if it lapses mid-session
+  // HLS.js receives 401/403 on the next manifest/segment/key fetch and tears
+  // down with a fatal error. The video detail endpoint mints a FRESH
+  // playback_token (and playback_expires_at) on every request, so we rotate the
+  // token in-place via MediaPlayer's onTokenExpiring hook (GAP-0300): it injects
+  // the returned token into subsequent XHRs WITHOUT rebuilding the HLS instance.
+  // refetch() forces a network call (queryKey ["video", videoId]) → new token.
+  const handleTokenExpiring = useCallback(async (): Promise<string> => {
+    const result = await refetch();
+    const fresh = result.data?.playback_token;
+    if (!fresh) {
+      throw new Error("No fresh playback token returned");
+    }
+    return fresh;
+  }, [refetch]);
+
   // ─── Recommendation engagement signals (GAP-0160) ───────────────────────
   // Records watch signals so compute_affinity_scores has data to work with.
   // Fire-and-forget: failures must never affect playback UX.
@@ -507,7 +525,7 @@ export default function VideoPlayerPage() {
 
           {/* Active player */}
           {!playerError && playbackUrl && (
-            <div data-testid="video-player">
+            <div data-testid="video-player" style={{ position: "relative" }}>
               <MediaPlayer
                 src={playbackUrl}
                 mode="vod"
@@ -517,7 +535,13 @@ export default function VideoPlayerPage() {
                 onError={handleMediaError}
                 onEnded={handleVideoEnded}
                 onProgress={handleVideoProgress}
+                onTokenExpiring={handleTokenExpiring}
+                tokenExpiresAt={video.playback_expires_at ?? undefined}
                 subtitleTracks={subtitleTracksForPlayer.length > 0 ? subtitleTracksForPlayer : undefined}
+              />
+              <WatermarkOverlay
+                sessionId={video.playback_token?.slice(0, 12)}
+                tenantId={video.owner_user_id}
               />
             </div>
           )}
