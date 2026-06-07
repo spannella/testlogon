@@ -325,12 +325,21 @@ def analytics_refresh(session=Depends(require_ui_session)):
     _refresh_timestamps[user_id] = now
     lookback = S.analytics_rollup_lookback_days
 
-    # The refresh endpoint returns success immediately.
-    # In a production system this would trigger an async rollup job.
-    # For now it serves as a rate-limited placeholder.
+    # GAP-0336: actually recompute rollups from raw analytics_events instead of
+    # returning a no-op success. Canonical engine signature is
+    # compute_daily_rollups(lookback_days=...). Best-effort: a computation failure
+    # must not surface as a 500 — the in-process cooldown still applies.
+    from app.services.analytics_rollup_engine import compute_daily_rollups
+
+    try:
+        processed = compute_daily_rollups(lookback_days=lookback)
+    except Exception:
+        logger.exception("analytics_refresh: rollup computation failed for %s", user_id)
+        processed = 0
+
     return AnalyticsRefreshOut(
         ok=True,
-        message=f"Rollup refresh triggered for {lookback} days",
+        message=f"Rollup refresh completed for {lookback} days; {processed} rows written",
         days_refreshed=lookback,
     )
 

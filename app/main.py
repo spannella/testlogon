@@ -129,6 +129,7 @@ from app.services.kyc_residency import start_kyc_residency_expiry_task
 from app.routers.kyc_analytics import router as kyc_analytics_router
 from app.services.kyc_analytics import start_kyc_analytics_precompute_task
 from app.services.recommendations import start_reco_refresh_task
+from app.services.analytics_rollup_engine import start_analytics_rollup_task
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
@@ -707,6 +708,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_translations_router)
     app.include_router(kyc_analytics_router)
     app.add_event_handler("startup", start_kyc_analytics_precompute_task)
+    app.add_event_handler("startup", start_analytics_rollup_task)
     app.add_event_handler("startup", start_reco_refresh_task)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
