@@ -110,11 +110,18 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.cart_reminder_config_table_name, "cart_reminder_config"),
             "pk", "sk",
         ),
+        # GAP-0348 / SHOP-001: ByItemId GSI lets adjust_stock + sibling endpoints
+        # resolve an item from a bare item_id with an O(1) query instead of a
+        # full-table scan (_find_item_by_id in app/routers/catalog.py). Catalog
+        # item rows already carry item_id as a top-level attribute.
         TableDef(
             _resolve_table_name(S.catalog_table_name, "shopping_catalog"),
             "PK",
             "SK",
-            gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByItemId", "partition_key": "item_id"},
+            ],
         ),
         TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
         TableDef(
@@ -2531,6 +2538,11 @@ def main() -> None:
     _enable_ttl_if_needed(ddb, os.getenv("APP_TABLE", "app_single_table"))
     # GAP-0333 / PLATFORM-019: analytics_events expires raw events via ttl_epoch.
     _enable_ttl_if_needed(ddb, _resolve_table_name(S.analytics_events_table_name, "AnalyticsEvents"))
+    # GAP-0347 / SHOP-001: shopping_catalog carries per-item low-stock-alert
+    # sentinel rows (ttl_epoch = now+3600) for once-per-hour alert dedup. Only
+    # the sentinel rows write ttl_epoch; real catalog/item/review rows omit it
+    # and are unaffected by TTL enablement.
+    _enable_ttl_if_needed(ddb, _resolve_table_name(S.catalog_table_name, "shopping_catalog"))
     # SHOP-003: Enable TTL on shopping_cart table with attribute "ttl"
     _cart_table = _resolve_table_name(S.shopping_cart_table_name, "shopping_cart")
     try:

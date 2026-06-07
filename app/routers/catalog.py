@@ -636,49 +636,86 @@ else:
     router.post("/categories/{category_id}/items/{item_id}/images/upload")(_catalog_upload_unavailable)
 
 
+# GAP-0347 / SHOP-001: once-per-hour low-stock alert dedup window.
+_LOW_STOCK_SENTINEL_TTL_SECONDS = 3600  # 1 hour
+
+
 def _check_low_stock_alert(item: dict, new_stock: int) -> None:
     if not S.catalog_stock_alerts_enabled:
         return
     threshold = int(item.get("low_stock_threshold") or S.catalog_default_low_stock_threshold)
-    if new_stock <= threshold and new_stock >= 0:
-        try:
-            from app.services.alerts import write_alert
-        except Exception:
+    if new_stock > threshold or new_stock < 0:
+        return
+    creator_id = item.get("creator_id")
+    if not creator_id:
+        return
+
+    # GAP-0347: per-item once-per-hour dedup. A conditional put of a sparse
+    # sentinel row (no GSI1PK/GSI1SK/item_id so it never pollutes listings or
+    # the ByItemId GSI) acts as an atomic test-and-set. If the put succeeds the
+    # window is fresh → fire the alert; ConditionalCheckFailed means a recent
+    # alert already fired within the TTL window → suppress. The sentinel carries
+    # ttl_epoch (= now+3600) so DynamoDB TTL reclaims it after the window.
+    item_id = str(item.get("item_id") or "unknown")
+    sentinel_pk = f"LOWSTOCK_ALERT_SENTINEL#{creator_id}"
+    sentinel_sk = f"LOWSTOCK#{item_id}"
+    try:
+        T.catalog.put_item(
+            Item={
+                "PK": sentinel_pk,
+                "SK": sentinel_sk,
+                "entity": "lowstock_alert_sentinel",
+                "ttl_epoch": int(time.time()) + _LOW_STOCK_SENTINEL_TTL_SECONDS,
+            },
+            ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # A recent alert already fired in this window — suppress.
             return
-        creator_id = item.get("creator_id")
-        if creator_id:
-            try:
-                write_alert(
-                    creator_id,
-                    event="catalog.low_stock",
-                    outcome="warning",
-                    title=f"Low stock: {item.get('name', 'Unknown item')} ({new_stock} remaining)",
-                    details={
-                        "item_id": item.get("item_id"),
-                        "item_name": item.get("name"),
-                        "stock_count": new_stock,
-                        "threshold": threshold,
-                    },
-                )
-            except Exception:
-                pass
+        # Unexpected DDB error: suppress to avoid breaking the stock adjustment.
+        return
+    except Exception:
+        return
+
+    try:
+        from app.services.alerts import write_alert
+    except Exception:
+        return
+    try:
+        write_alert(
+            creator_id,
+            event="catalog.low_stock",
+            outcome="warning",
+            title=f"Low stock: {item.get('name', 'Unknown item')} ({new_stock} remaining)",
+            details={
+                "item_id": item.get("item_id"),
+                "item_name": item.get("name"),
+                "stock_count": new_stock,
+                "threshold": threshold,
+            },
+        )
+    except Exception:
+        pass
 
 
 def _find_item_by_id(item_id: str) -> Optional[Dict[str, Any]]:
-    """Scan catalog table for an item by item_id (paginated scan)."""
-    kwargs: Dict[str, Any] = {
-        "FilterExpression": "item_id = :iid AND entity = :ent",
-        "ExpressionAttributeValues": {":iid": item_id, ":ent": "item"},
-    }
-    while True:
-        resp = T.catalog.scan(**kwargs)
-        items = resp.get("Items", [])
-        if items:
-            return items[0]
-        lek = resp.get("LastEvaluatedKey")
-        if not lek:
-            return None
-        kwargs["ExclusiveStartKey"] = lek
+    """Find a catalog item by item_id via the ByItemId GSI (O(1) query).
+
+    GAP-0348 / SHOP-001: replaces a full-table scan. Catalog item rows carry
+    item_id as a top-level attribute, so they are indexed by the ByItemId GSI.
+    Review rows also carry item_id, hence the FilterExpression on entity="item".
+    """
+    resp = T.catalog.query(
+        IndexName="ByItemId",
+        KeyConditionExpression=Key("item_id").eq(item_id),
+        FilterExpression="entity = :ent",
+        ExpressionAttributeValues={":ent": "item"},
+    )
+    items = resp.get("Items", [])
+    if items:
+        return items[0]
+    return None
 
 
 @router.patch("/items/{item_id}/stock", response_model=CatalogStockOut)

@@ -1268,6 +1268,207 @@ def _user_delete_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _user_reactivate_command(args: argparse.Namespace) -> Dict[str, Any]:
+    shared = _shared_opts(args)
+    root_sub = str(getattr(args, "root_sub", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    target_user_sub = str(getattr(args, "target_user_sub", "") or "").strip()
+
+    _require_existing_non_root_user(target_user_sub, root_sub=root_sub)
+
+    # Must currently be deactivated (not deleted — use undelete for that).
+    state = T.account_state.get_item(Key={"user_sub": target_user_sub}).get("Item") or {}
+    current_status = _normalize_status(str(state.get("status") or "active"))
+    if current_status != "deactivated":
+        raise CliPolicyError(
+            "reactivate requires account status to be 'deactivated'",
+            details={
+                "code": "invalid_state_transition",
+                "current_status": current_status,
+                "target_user_sub": target_user_sub,
+            },
+        )
+
+    if bool(shared.dry_run):
+        return {
+            "ok": True,
+            "group": str(args.group),
+            "command": str(args.command),
+            "dry_run": True,
+            "actor_sub": actor_sub,
+            "target_user_sub": target_user_sub,
+            "previous_status": current_status,
+            "new_status": "active",
+            "reason": reason,
+            "ticket": ticket,
+            "request_id": shared.request_id,
+            "correlation_id": shared.correlation_id,
+            "message": "dry-run: user would be reactivated",
+        }
+
+    ts = now_ts()
+    T.account_state.put_item(
+        Item={
+            "user_sub": target_user_sub,
+            "status": "active",
+            "updated_at": ts,
+            "reason": reason,
+            "requested_by": actor_sub,
+        }
+    )
+    T.users.update_item(
+        Key={"user_sub": target_user_sub},
+        UpdateExpression=(
+            "SET reactivated_at=:ts, reactivated_by=:actor, "
+            "reactivation_reason=:reason, reactivation_ticket=:ticket"
+        ),
+        ExpressionAttributeValues={
+            ":ts": ts,
+            ":actor": actor_sub,
+            ":reason": reason,
+            ":ticket": ticket,
+        },
+    )
+
+    # Sessions and API keys were intentionally revoked on deactivate and are NOT
+    # restored here — the user obtains fresh sessions on next login.
+    audit_event(
+        "user_reactivated_cli",
+        target_user_sub,
+        None,
+        outcome="success",
+        actor_sub=actor_sub,
+        target_user_sub=target_user_sub,
+        previous_status=current_status,
+        new_status="active",
+        reason=reason,
+        ticket_id=ticket,
+        request_id=shared.request_id,
+        correlation_id=shared.correlation_id,
+        cli=True,
+    )
+
+    return {
+        "ok": True,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": False,
+        "actor_sub": actor_sub,
+        "target_user_sub": target_user_sub,
+        "previous_status": current_status,
+        "new_status": "active",
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": shared.correlation_id,
+        "audit_event": "user_reactivated_cli",
+    }
+
+
+def _user_undelete_command(args: argparse.Namespace) -> Dict[str, Any]:
+    shared = _shared_opts(args)
+    root_sub = str(getattr(args, "root_sub", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    target_user_sub = str(getattr(args, "target_user_sub", "") or "").strip()
+
+    # The user record must still exist; a HARD delete removes it and is
+    # irreversible. _require_existing_non_root_user raises "target user not found"
+    # for that case.
+    _require_existing_non_root_user(target_user_sub, root_sub=root_sub)
+
+    state = T.account_state.get_item(Key={"user_sub": target_user_sub}).get("Item") or {}
+    current_status = _normalize_status(str(state.get("status") or "active"))
+    if current_status != "deleted":
+        raise CliPolicyError(
+            "undelete requires account status to be 'deleted'",
+            details={
+                "code": "invalid_state_transition",
+                "current_status": current_status,
+                "target_user_sub": target_user_sub,
+            },
+        )
+
+    if bool(shared.dry_run):
+        return {
+            "ok": True,
+            "group": str(args.group),
+            "command": str(args.command),
+            "dry_run": True,
+            "actor_sub": actor_sub,
+            "target_user_sub": target_user_sub,
+            "previous_status": current_status,
+            "new_status": "active",
+            "reason": reason,
+            "ticket": ticket,
+            "request_id": shared.request_id,
+            "correlation_id": shared.correlation_id,
+            "message": "dry-run: soft-deleted user would be restored to active",
+        }
+
+    ts = now_ts()
+    T.account_state.put_item(
+        Item={
+            "user_sub": target_user_sub,
+            "status": "active",
+            "updated_at": ts,
+            "reason": reason,
+            "requested_by": actor_sub,
+        }
+    )
+    T.users.update_item(
+        Key={"user_sub": target_user_sub},
+        UpdateExpression=(
+            "SET undeleted_at=:ts, undeleted_by=:actor, "
+            "undeletion_reason=:reason, undeletion_ticket=:ticket"
+        ),
+        ExpressionAttributeValues={
+            ":ts": ts,
+            ":actor": actor_sub,
+            ":reason": reason,
+            ":ticket": ticket,
+        },
+    )
+
+    # Sessions and API keys were intentionally revoked on delete and are NOT
+    # restored here — the user obtains fresh sessions on next login.
+    audit_event(
+        "user_undeleted_cli",
+        target_user_sub,
+        None,
+        outcome="success",
+        severity="high",
+        actor_sub=actor_sub,
+        target_user_sub=target_user_sub,
+        previous_status=current_status,
+        new_status="active",
+        reason=reason,
+        ticket_id=ticket,
+        request_id=shared.request_id,
+        correlation_id=shared.correlation_id,
+        cli=True,
+    )
+
+    return {
+        "ok": True,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": False,
+        "actor_sub": actor_sub,
+        "target_user_sub": target_user_sub,
+        "previous_status": current_status,
+        "new_status": "active",
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": shared.correlation_id,
+        "audit_event": "user_undeleted_cli",
+    }
+
+
 def _persist_role_assignment_event_cli(
     *,
     actor_sub: str,
@@ -2472,6 +2673,38 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
         delete.add_argument("--hard-delete", action="store_true", help="Permanently remove user and account state")
         delete.set_defaults(
             handler=_user_delete_command,
+            group=group_name,
+            mutating=True,
+            requires_root=True,
+            requires_ticket=True,
+            requires_confirm=True,
+        )
+
+        reactivate = commands.add_parser(
+            "reactivate",
+            help="Restore a deactivated user account to active status",
+        )
+        _add_shared_options(reactivate)
+        _add_mutation_guard_options(reactivate)
+        reactivate.add_argument("--target-user-sub", required=True, help="Target user subject")
+        reactivate.set_defaults(
+            handler=_user_reactivate_command,
+            group=group_name,
+            mutating=True,
+            requires_root=True,
+            requires_ticket=True,
+            requires_confirm=False,
+        )
+
+        undelete = commands.add_parser(
+            "undelete",
+            help="Restore a soft-deleted user account to active status",
+        )
+        _add_shared_options(undelete)
+        _add_mutation_guard_options(undelete)
+        undelete.add_argument("--target-user-sub", required=True, help="Target user subject")
+        undelete.set_defaults(
+            handler=_user_undelete_command,
             group=group_name,
             mutating=True,
             requires_root=True,
