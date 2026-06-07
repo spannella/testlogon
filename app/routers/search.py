@@ -277,17 +277,38 @@ def _search_messages(q: str, user_id: str, limit: int) -> Dict[str, Any]:
         if not tokens:
             return _empty_section()
 
-        # Step 1: Get the user's conversation IDs for authorization
+        # Step 1: Get the user's conversation IDs for authorization.
+        # GAP-0329: paginate until DynamoDB is exhausted so the COMPLETE
+        # allowed_conv_ids set is built before filtering. A premature
+        # len(parts) >= 500 early-exit previously dropped all conversations
+        # beyond the first page, so users in >500 conversations got no search
+        # results for conversations 501+. Per the DDB FilterExpression/page
+        # caveat, loop on LastEvaluatedKey until it is falsy. A generous
+        # page-count safety bound prevents unbounded memory; if it is ever hit
+        # we LOG rather than silently truncate.
+        _MAX_PARTICIPANT_PAGES = 50  # 50 x 500 = 25,000 conversations
         parts: list[dict] = []
         last_key = None
+        page_count = 0
         while True:
             kw: dict = {"KeyConditionExpression": Key("user_id").eq(user_id), "Limit": 500}
             if last_key:
                 kw["ExclusiveStartKey"] = last_key
             resp = tbl_parts.query(**kw)
             parts.extend(resp.get("Items", []))
+            page_count += 1
             last_key = resp.get("LastEvaluatedKey")
-            if not last_key or len(parts) >= 500:
+            if not last_key:
+                break
+            if page_count >= _MAX_PARTICIPANT_PAGES:
+                logger.warning(
+                    "search: participant pagination hit safety cap of %d pages "
+                    "(%d records) for user_id=%s; allowed_conv_ids may be "
+                    "truncated",
+                    _MAX_PARTICIPANT_PAGES,
+                    len(parts),
+                    user_id,
+                )
                 break
 
         allowed_conv_ids: set[str] = {p["conversation_id"] for p in parts}
