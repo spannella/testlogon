@@ -1554,6 +1554,8 @@ class Settings:
     vod_drm_enabled: bool = os.environ.get("VOD_DRM_ENABLED", "1") not in ("0", "false", "False")
     vod_drm_key_root: str = os.environ.get("VOD_DRM_KEY_ROOT", "dev-vod-drm-root-key-change-me")
     vod_drm_key_server_base_url: str = os.environ.get("VOD_DRM_KEY_SERVER_BASE_URL", "http://localhost:8000/v1/vod/drm")
+    # ContentKeys table (VOD-010 §4.2 / GAP-0374): DRM key revocation records + audit trail
+    content_keys_table_name: str = os.environ.get("DDB_CONTENT_KEYS", "ContentKeys")
 
     # VOD Download (VOD-012)
     video_download_enabled: bool = os.environ.get("VIDEO_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")

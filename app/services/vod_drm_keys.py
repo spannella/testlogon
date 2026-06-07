@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
-from typing import Optional
+from typing import Any, Dict, List, Optional
+
+from boto3.dynamodb.conditions import Key
 
 from app.core.settings import S
+from app.core.tables import T
+from app.core.time import now_ts
+
+logger = logging.getLogger(__name__)
 
 
 class VodDrmKeyError(ValueError):
@@ -195,3 +202,127 @@ def validate_key_id(key_id: str, asset_id: str, tenant_id: str, key_slot: int = 
     """
     expected = derive_key_id(asset_id, tenant_id, key_slot)
     return hmac.compare_digest(key_id, expected)
+
+
+# ---------------------------------------------------------------------------
+# DRM key revocation (VOD-010 §4.3 / §6.5-6.7, GAP-0374)
+#
+# Compromised keys must be invalidatable without redeploying. Revocation
+# records are persisted to the ContentKeys DynamoDB table and checked at key
+# serve time. Two record shapes share the same table (pk=key_id):
+#   - per-key   : key_id = "<derived key_id hex>"  (revokes one specific key)
+#   - per-asset : key_id = "ASSET#{tenant_id}#{asset_id}" (revoke-all marker)
+# Both carry asset_id / tenant_id / created_at so the ByAssetCreatedAt /
+# ByTenantCreatedAt GSIs can drive audit queries.
+# ---------------------------------------------------------------------------
+
+_ASSET_REVOCATION_PREFIX = "ASSET#"
+
+
+def _asset_revocation_pk(tenant_id: str, asset_id: str) -> str:
+    return f"{_ASSET_REVOCATION_PREFIX}{tenant_id}#{asset_id}"
+
+
+def revoke_key(
+    *,
+    key_id: str,
+    asset_id: str,
+    tenant_id: str,
+    revoked_by: str,
+    reason: str | None = None,
+    key_slot: int | None = None,
+) -> Dict[str, Any]:
+    """Persist a revocation record for a single DRM key (GAP-0374).
+
+    The record is written to the ContentKeys table keyed by ``key_id`` so that
+    ``is_key_revoked`` can look it up directly at serve time.
+    """
+    if not key_id or not key_id.strip():
+        raise VodDrmKeyError("invalid_key_id", "key_id must be non-empty")
+    if not asset_id or not asset_id.strip():
+        raise VodDrmKeyError("invalid_asset_id", "asset_id must be non-empty")
+    tenant = _require_tenant_id(tenant_id)
+
+    item: Dict[str, Any] = {
+        "key_id": key_id.strip(),
+        "record_type": "key_revocation",
+        "asset_id": asset_id.strip(),
+        "tenant_id": tenant,
+        "revoked": True,
+        "revoked_by": (revoked_by or "").strip() or "unknown",
+        "reason": (reason or "").strip() or None,
+        "created_at": now_ts(),
+    }
+    if key_slot is not None:
+        item["key_slot"] = int(key_slot)
+    T.content_keys.put_item(Item=item)
+    return item
+
+
+def revoke_all_keys_for_asset(
+    *,
+    asset_id: str,
+    tenant_id: str,
+    revoked_by: str,
+    reason: str | None = None,
+) -> Dict[str, Any]:
+    """Persist an asset-wide revocation marker (revoke-all) for GAP-0374.
+
+    A single marker record revokes EVERY key derived for the asset+tenant,
+    regardless of key_slot — keys are deterministically derived, so the marker
+    is matched by asset_id+tenant_id at serve time rather than by key_id.
+    """
+    if not asset_id or not asset_id.strip():
+        raise VodDrmKeyError("invalid_asset_id", "asset_id must be non-empty")
+    tenant = _require_tenant_id(tenant_id)
+    asset = asset_id.strip()
+
+    item: Dict[str, Any] = {
+        "key_id": _asset_revocation_pk(tenant, asset),
+        "record_type": "asset_revocation",
+        "asset_id": asset,
+        "tenant_id": tenant,
+        "revoked": True,
+        "revoked_by": (revoked_by or "").strip() or "unknown",
+        "reason": (reason or "").strip() or None,
+        "created_at": now_ts(),
+    }
+    T.content_keys.put_item(Item=item)
+    return item
+
+
+def is_asset_revoked(asset_id: str, tenant_id: str) -> bool:
+    """Return True if an asset-wide revocation marker exists for asset+tenant."""
+    if not asset_id or not asset_id.strip() or not tenant_id or not tenant_id.strip():
+        return False
+    try:
+        resp = T.content_keys.get_item(
+            Key={"key_id": _asset_revocation_pk(tenant_id.strip(), asset_id.strip())}
+        )
+    except Exception:  # pragma: no cover - never block serving on a lookup error path
+        logger.exception("is_asset_revoked lookup failed")
+        return False
+    item = resp.get("Item")
+    return bool(item and item.get("revoked"))
+
+
+def is_key_revoked(key_id: str, asset_id: str | None = None, tenant_id: str | None = None) -> bool:
+    """Return True if the key (or its owning asset) has been revoked (GAP-0374).
+
+    Checks both the per-key revocation record and, when asset/tenant are known,
+    the asset-wide revoke-all marker. Never raises — a lookup failure must not
+    crash the key-serve path.
+    """
+    if not key_id or not key_id.strip():
+        return False
+    try:
+        resp = T.content_keys.get_item(Key={"key_id": key_id.strip()})
+        item = resp.get("Item")
+        if item and item.get("revoked"):
+            return True
+    except Exception:  # pragma: no cover
+        logger.exception("is_key_revoked lookup failed")
+        return False
+    if asset_id and tenant_id:
+        return is_asset_revoked(asset_id, tenant_id)
+    return False

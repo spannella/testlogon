@@ -196,6 +196,7 @@ class Tables:
     scheduled_actions: Any
     watermark_jobs: Any
     vod_watermark_downloads: Any
+    content_keys: Any
     recommendations: Any
     refund_requests: Any
     billing_disputes: Any
@@ -436,6 +437,7 @@ T = Tables(
     scheduled_actions=_safe_table(S.scheduled_actions_table_name),
     watermark_jobs=_safe_table(S.watermark_jobs_table_name),
     vod_watermark_downloads=_safe_table(S.vod_watermark_downloads_table_name),
+    content_keys=_safe_table(S.content_keys_table_name),
     recommendations=_safe_table(S.recommendations_table_name),
     refund_requests=_safe_table(S.refund_requests_table_name),
     billing_disputes=_safe_table(S.billing_disputes_table_name),

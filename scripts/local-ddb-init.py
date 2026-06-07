@@ -1325,6 +1325,18 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"GSI1SK": "N"},
         ),
+        # ContentKeys (VOD-010 §4.2 / GAP-0374): DRM key revocation records + audit trail.
+        # pk=key_id (the revocation record key); GSI ByAssetCreatedAt / ByTenantCreatedAt
+        # let revocation/audit queries fetch all records for an asset or tenant.
+        TableDef(
+            _resolve_table_name(S.content_keys_table_name, "ContentKeys"),
+            "key_id",
+            gsi=[
+                {"index_name": "ByAssetCreatedAt", "partition_key": "asset_id", "sort_key": "created_at"},
+                {"index_name": "ByTenantCreatedAt", "partition_key": "tenant_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Per-viewer Watermarked Download renders (VOD-020 — distinct pipeline)
         TableDef(
             _resolve_table_name(S.vod_watermark_downloads_table_name, "vod_watermark_downloads"),
