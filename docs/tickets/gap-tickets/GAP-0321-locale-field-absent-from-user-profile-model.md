@@ -16,3 +16,6 @@ add `locale: Optional[str]` to profile, validated against `I18N_SUPPORTED_LOCALE
 This gap was identified by the second-pass as-built review of PLATFORM-003. Apply the dev/prod
 parity rules in SECOPS-007 if the fix touches AWS-backed paths. Add a regression test
 (pytest offline / Playwright) that fails before the fix and passes after.
+
+## Implemented (branch impl/crit-batch-1, 2026-06-06)
+Verified already-built: locale field on ProfileBase/Patch/Put, in PROFILE_FIELDS (private), validated against i18n_supported_locales in _normalize_profile_data. Added lock-in regression test.

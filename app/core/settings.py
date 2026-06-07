@@ -223,6 +223,12 @@ class Settings:
     # Email Delivery Tracking (PLATFORM-006)
     email_delivery_table_name: str = os.environ.get("EMAIL_DELIVERY_TABLE_NAME", "email_delivery")
     email_suppression_enabled: bool = os.environ.get("EMAIL_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
+    # SES/SNS notification signature verification (PLATFORM-002 / GAP-0319).
+    # Default ON (secure). Same verification code runs in dev and prod; the flag
+    # exists only so tests/dev can opt out deterministically.
+    ses_sns_signature_verification_enabled: bool = os.environ.get(
+        "SES_SNS_SIGNATURE_VERIFICATION_ENABLED", "1"
+    ) not in ("0", "false", "False")
 
     # Admin Email/SMS Dashboards (ADMIN-002)
     admin_messaging_templates_table_name: str = os.environ.get(
