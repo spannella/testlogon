@@ -508,7 +508,82 @@ compute dashboard zooms all the way out: total spend across everyone, active ins
 breakdown, instance-type popularity, and a force-terminate for any resource on the platform.
 
 Launch, monitor, auto-bill, auto-restart — full cloud compute, EC2 and Kubernetes alike, without ever leaving
-the browser. And that's the platform. From messaging, newsfeed, files, and calendar, through commerce, billing,
-subscriptions, and a storefront, into tickets, signing, and questionnaires, then security, KYC, admin and root
-controls, and finally remote access and compute — every piece working together in one place. Thanks for
-watching the tour.
+the browser.
+
+## SEGMENT 18 — Registration & MFA
+
+Every account starts at the front door — and the front door is built for both ease and safety. Registration is
+fully self-service: enter your name and email, and the address is checked for availability the moment you type
+it. A live strength meter holds every password to a real policy, and right at sign-up you can opt into an
+authenticator app or SMS — security from minute one. Submit, and a verification code is emailed to confirm it's
+really you; enter it, and the account is live.
+
+Once you're in, the Security Center is where you harden things. Enroll a TOTP authenticator — scan the QR code or
+type the secret by hand — and you're handed one-time recovery codes for the day you lose your phone. Prefer
+hardware? Register a passkey for phishing-resistant, FIDO2 sign-in. Need programmatic access? Mint scoped API
+keys with per-scope permissions, expiry, and IP rules. You can see every active session across your devices and
+revoke any of them in a click — and if you ever forget your password, self-service recovery gets you back in,
+with no support ticket required.
+
+## SEGMENT 19 — Accounting & Taxes
+
+A platform that moves money has to do the paperwork — and this one does it automatically. Tax documents give
+every member a clean, categorized summary of what they spent across the year: subscriptions, tips, purchases,
+unlocks, and deposits, each broken out and totaled, with a signed PDF you can generate for any year and keep in
+your history.
+
+For creators, earnings come with their own forms. Cross six hundred dollars in a tax year and the platform
+issues a 1099-NEC automatically — nonemployee compensation, generated, signed, and ready to file. And behind
+every single transaction sits an itemized invoice: sequential numbers, line items, per-type filtering, and a
+downloadable PDF for each one. Spending summaries, tax forms, and invoices — compliant accounting, produced
+without anyone lifting a finger.
+
+## SEGMENT 20 — Delegate Messaging
+
+As creators grow, they can't answer every message alone — so the platform lets them delegate. A creator grants a
+trusted teammate scoped access: here, Bob becomes a Chat Agent who can read and respond, and nothing more.
+Permissions are granular and revocable — chat, feed, or broadcast — chosen from a preset or composed by hand.
+
+When the delegate replies, the message posts as the creator, but it's transparently stamped with a "via" tag, so
+no one is ever misled about who's really typing. And every action a delegate takes is written to a complete,
+tamper-evident audit log. From the delegate's own side, a "Managing" view lists every creator who's handed them
+access. It's team inboxes — without ever sharing a password.
+
+## SEGMENT 21 — Developer Tools
+
+The whole dev stack runs on mocked services — and this console makes them legible. It's a standalone app, no
+login required, giving read-only visibility into everything the stack does. The email explorer shows every
+outbound message — verification codes, security alerts, receipts — exactly as they'd be sent. The SMS explorer
+does the same for text messages, grouped into conversations.
+
+The MFA tab is a fully client-side authenticator: paste a secret, and it generates real, live one-time codes
+right in your browser, counting down to each rollover. And the billing view surfaces the payment ledger — gross
+inflow, fees, and net — with the raw provider payload for any entry one click away. A transparent, debuggable
+dev stack, all in one window.
+
+## SEGMENT 22 — AI Agent Fleet
+
+This is where the platform gets autonomous. You start by connecting a model: bring your own Anthropic or OpenAI
+key, encrypted at rest with KMS, each with its own rate limit, monthly budget, and live usage tracking. Then you
+provision workers — Coder, QA, or Reviewer agents — on EC2 or Kubernetes compute; in development they come up
+ready in seconds.
+
+The fleet dashboard is the control plane: total workers, active count, queue depth, and errors, with start- and
+stop-all and saved templates to scale from. The orchestrator drives a single agent through its state machine —
+idle, claiming, working — with live heartbeats and ticket counts. Crucially, agents have durable memory: an
+identity, full project context, and a token-budgeted knowledge base of learnings, decisions, and patterns. And a
+human is always on the controls — when an agent hits a judgement call, it pauses and asks, you answer, and it
+resumes. Autonomous work, with humans in the loop.
+
+## SEGMENT 23 — Theming & Customization
+
+Finally, the platform bends to each user. Switch between light, dark, and system, and the entire interface
+recolors instantly. Pick an accent color and every button, link, and focus ring follows — or paste your own hex.
+Scale the font, tighten or loosen the density, and flip on high-contrast for accessibility, all live, with no
+reload. The whole interface is translated, too: switch to Spanish or French and the labels re-render in place.
+And a dedicated theme studio offers curated presets with a live preview before you save.
+
+And that's the platform. From registration and messaging, through commerce, billing, subscriptions, taxes, and a
+storefront; into tickets, signing, KYC, and delegated team inboxes; across remote terminals, cloud compute, and
+an autonomous AI agent fleet; with admin, root, and developer tools holding it all together — and an experience
+every user can make their own. Thanks for watching the tour.

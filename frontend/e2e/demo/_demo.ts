@@ -7,6 +7,7 @@
  * so the silent recording is self-explanatory; the matching voiceover lives in
  * docs/demo-video-script.md and is muxed in later.
  */
+import { execSync } from "child_process";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { loadSessions, type SessionData } from "../helpers/session";
 
@@ -276,4 +277,62 @@ export async function revealClick(
   await reveal(page, loc, title, subtitle, { ms: opts.ms ?? 1800 });
   await loc.click().catch(() => {});
   await page.waitForTimeout(opts.settleMs ?? 1400);
+}
+
+/* ── Off-camera seeding helpers (shared by the v2 segments) ────────────────── */
+
+export const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+
+/**
+ * Run an inline Python snippet against the local stack. The harness, prepended
+ * to every body, sources `.env.local` into os.environ (so AWS creds / DDB / KMS
+ * endpoints resolve exactly like the backend), puts the repo root on sys.path
+ * (so `from app...` imports work — e.g. kms_encrypt), and exposes a ready DDB
+ * resource as `ddb`. Returns captured stdout (use `print(...)` to surface ids).
+ *
+ * CONSTRAINT: the body is embedded inside a double-quoted shell `-c "..."`, so
+ * use ONLY single quotes inside the Python body and avoid f-strings/`$` (build
+ * strings with concatenation), mirroring the proven seg07 helper.
+ */
+export function py(body: string): string {
+  return execSync(
+    `${PYTHON} -c "
+import os, sys
+sys.path.insert(0, '/home/ubuntu/testlogon')
+from pathlib import Path
+env = Path('/home/ubuntu/testlogon/.env.local')
+if env.exists():
+    for line in env.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+import boto3
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID','test'), aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY','test'))
+${body}
+"`,
+    { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+  )
+    .toString()
+    .trim();
+}
+
+/**
+ * Re-auth the SAME browser context as a different seeded identity: clear cookies,
+ * add the target's cookies, and inject the auth-store (role-aware token) so the
+ * next navigation renders as that user. Must be followed by a page.goto().
+ */
+export async function reauth(page: Page, key: string): Promise<SessionData> {
+  const sess = loadSessions()[key];
+  if (!sess) throw new Error(`No seeded session for identity "${key}"`);
+  await page.context().clearCookies();
+  await page.context().addCookies(sess.cookies);
+  await page.addInitScript(
+    ({ uid, token }: { uid: string; token: string }) => {
+      const state = { userId: uid, accessToken: token, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    { uid: sess.user_sub, token: sess.access_token },
+  );
+  return sess;
 }
