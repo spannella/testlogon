@@ -256,7 +256,28 @@ A cloud drive, full-text search, Google Drive integration, and built-in PDF sign
 end to end. Next up: Calendar and Booking.
 
 ## SEGMENT 10 — Calendar & Booking
-<!-- TODO -->
+
+Scheduling is built right in. The Calendar gives you a full month grid with your events laid out at a
+glance — a product demo, a one-on-one, a standup, a design review, a client call — each one on the day
+it belongs. And it's not month-only: switch between Month, Week, and Day with a single click. The week
+view drops you into an hour-by-hour grid, so you can see exactly when your time is booked.
+
+Every event is interactive. Click one and its full details open right up — the title, the description,
+the start and end times, and recurrence options — all editable in place, so adjusting your schedule
+never means leaving the calendar.
+
+When you want others to schedule time with you, booking links do the work. Publish a shareable link —
+a thirty-minute meeting, say — and anyone with it can pick an open slot on your calendar. Available
+times are computed automatically from your calendar and your working hours, so the slots people see are
+always the ones you can actually take.
+
+And every event has a public face. Share its link and anyone can view the details without signing in —
+no account required. From there it's one tap to book: visitors add the event straight to their own
+calendar. Or they can download a standard dot-i-c-s file and drop it into Apple Calendar, Google
+Calendar, or Outlook — full iCal export, so your events travel anywhere.
+
+Events, scheduling, public booking, and iCal export — a complete calendar without bolting on a third
+service. Next up: Tickets and Helpdesk.
 
 ## SEGMENT 11 — Tickets & Helpdesk
 <!-- TODO -->
