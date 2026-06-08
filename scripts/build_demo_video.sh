@@ -38,13 +38,11 @@ ffmpeg -y -loglevel error \
   -c:v libx264 -pix_fmt yuv420p -r ${FPS} -t 3.2 -c:a aac -shortest "$INTRO"
 SEG_MP4S+=("$INTRO")
 
-# Each segment: copy webm out, normalize to mp4 with a silent audio track.
-for dir in "$ART"/seg*-*.demo.ts-*; do
-  [ -d "$dir" ] || continue
-  webm="$dir/video.webm"
+# Each segment: normalize the PRESERVED out/segNN.webm (written by
+# scripts/record_all_demo.sh) to mp4 with a silent audio track.
+for webm in "$OUT"/seg*.webm; do
   [ -f "$webm" ] || continue
-  seg="$(basename "$dir" | sed -E 's/^(seg[0-9]+).*/\1/')"   # seg01, seg02, ...
-  cp "$webm" "$OUT/$seg.webm"
+  seg="$(basename "$webm" .webm)"   # seg01, seg02, ...
   mp4="$OUT/$seg.mp4"
   echo "  normalizing $seg ($(basename "$webm"))"
   ffmpeg -y -loglevel error \
