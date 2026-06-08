@@ -26,6 +26,27 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+
+    <!-- Pre-paint theme guard: apply the persisted/OS theme before React mounts
+         so there is no light-mode flash on load for dark-mode users. (THM-006) -->
+    <script>
+      (function () {
+        try {
+          var t = "system";
+          var raw = localStorage.getItem("ui-store");
+          if (raw) {
+            var v = JSON.parse(raw);
+            if (v && v.state && v.state.theme) t = v.state.theme;
+          }
+          var dark =
+            t === "dark" ||
+            (t === "system" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <noscript>
