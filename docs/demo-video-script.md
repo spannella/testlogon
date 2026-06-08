@@ -168,7 +168,36 @@ subscriber's access updates automatically.
 That's groups and syndicates. Next up: subscriptions and monetization.
 
 ## SEGMENT 07 — Subscriptions & Monetization
-<!-- TODO -->
+
+This is where the platform turns an audience into a living. It's a full money loop — fans subscribe,
+creators earn, and the platform pays out.
+
+It starts with subscriptions. The Subscriptions page lets anyone browse a creator's plans and manage
+their own — all in one place. Pull up a creator and their plans appear as clean cards: each one
+shows its name, a transparent monthly price, the billing interval, and any perks the creator
+includes. Here it's the Studio Supporter plan at nine ninety-nine a month.
+
+Subscribing is one tap. The moment you subscribe, billing starts and the creator's members-only
+content unlocks — and the subscription shows up instantly under My Subscriptions, with its full
+billing detail: the price, the active status, the renewal date, and every invoice, all tracked for
+you.
+
+Now flip to the other side of that transaction — the creator. The earnings dashboard shows lifetime
+earnings across every revenue stream on the platform, and an available balance: everything past the
+hold period that's ready to withdraw. The earnings breakdown shows exactly where the money comes
+from — subscriptions, tips, and unlocks, each with its own share of the chart. Subscriptions are the
+biggest slice.
+
+Cashing out is just as simple. In the Request Payout form, choose an amount — the form validates it
+against your available balance and the minimum — and submit. The request lands in your payout
+history as "requested," awaiting review, because every payout is checked by the platform before it's
+paid.
+
+That review happens here, on the admin side. An admin sees every pending payout across all creators
+in the payout queue — creator, amount, method, and status. One click to approve releases the funds,
+and the status flips to "approved" — the payout is on its way.
+
+Subscribe, earn, withdraw, approve — that's the complete monetization loop. Next up: the Shop.
 
 ## SEGMENT 08 — Shop
 <!-- TODO -->
