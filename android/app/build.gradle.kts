@@ -71,6 +71,15 @@ dependencies {
     // Coroutines (StateFlow / Flow operators used by the auth router)
     implementation(libs.coroutines.android)
 
+    // Networking (auth DTOs + AuthApi live in the app module's data.auth package)
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.moshi)
+    implementation(libs.moshi)
+    ksp(libs.moshi.codegen)
+
+    // Persistence for the auth state store
+    implementation(libs.datastore.preferences)
+
     // Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -90,6 +99,11 @@ dependencies {
 
     // Test
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.moshi)
+    testImplementation(libs.retrofit)
+    testImplementation(libs.retrofit.moshi)
 
     // UI / navigation tests
     androidTestImplementation(platform(libs.compose.bom))

@@ -17,41 +17,11 @@ import com.testlogon.android.core.ui.input.TlButton
 import com.testlogon.android.core.ui.input.TlButtonVariant
 
 /**
- * Placeholder unauthenticated screens (AND-023). Real UI is owned by E04/E05 (AND-026+).
- * Each is stateless and takes only navigation lambdas (never a NavController).
+ * Placeholder unauthenticated screens (AND-023) still owned by later tickets.
+ *
+ * Login (AND-030/031) and MFA (AND-039/040) are now real screens; the placeholders below remain for
+ * Register / Recovery / MagicLink. Each is stateless and takes only navigation lambdas.
  */
-
-@Composable
-fun LoginPlaceholderScreen(
-    onContinueToMfa: (challengeId: String) -> Unit,
-    onRegister: () -> Unit,
-    onRecovery: () -> Unit,
-    onMagicLink: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    PlaceholderScaffold(title = "Login", testTag = "login_screen", modifier = modifier) {
-        TlButton(
-            text = "Continue to MFA",
-            onClick = { onContinueToMfa("chg_placeholder") },
-            modifier = Modifier.testTag("login_to_mfa_button"),
-        )
-        TlButton(text = "Register", onClick = onRegister, variant = TlButtonVariant.Secondary)
-        TlButton(text = "Recover account", onClick = onRecovery, variant = TlButtonVariant.Text)
-        TlButton(text = "Use magic link", onClick = onMagicLink, variant = TlButtonVariant.Text)
-    }
-}
-
-@Composable
-fun MfaPlaceholderScreen(
-    challengeId: String,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    PlaceholderScaffold(title = "MFA", testTag = "mfa_screen", modifier = modifier) {
-        Text("challengeId: $challengeId", modifier = Modifier.testTag("mfa_challenge_id"))
-        TlButton(text = "Back", onClick = onBack, variant = TlButtonVariant.Text)
-    }
-}
 
 @Composable
 fun RegisterPlaceholderScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {

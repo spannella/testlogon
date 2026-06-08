@@ -23,9 +23,15 @@ object TlGraphs {
 sealed class AuthDest(val route: String) {
     data object Login : AuthDest("auth/login")
 
-    data object Mfa : AuthDest("auth/mfa/{challengeId}") {
+    data object Mfa : AuthDest("auth/mfa/{challengeId}?factors={factors}") {
         const val ARG_CHALLENGE_ID = "challengeId"
-        fun build(challengeId: String): String = "auth/mfa/${Uri.encode(challengeId)}"
+        const val ARG_FACTORS = "factors"
+
+        /** [factors] is a comma-joined list of lowercase factor tokens (e.g. "totp,sms"). */
+        fun build(challengeId: String, factors: List<String> = emptyList()): String {
+            val joined = Uri.encode(factors.joinToString(","))
+            return "auth/mfa/${Uri.encode(challengeId)}?factors=$joined"
+        }
     }
 
     data object Register : AuthDest("auth/register")

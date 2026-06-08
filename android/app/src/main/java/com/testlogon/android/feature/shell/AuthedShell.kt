@@ -107,7 +107,5 @@ private fun HomePlaceholderScreen() {
 
 @Composable
 private fun MePlaceholderScreen() {
-    Box(Modifier.fillMaxSize().testTag("me_placeholder"), contentAlignment = Alignment.Center) {
-        Text("Profile", style = MaterialTheme.typography.headlineSmall)
-    }
+    com.testlogon.android.feature.profile.ProfileScreen()
 }

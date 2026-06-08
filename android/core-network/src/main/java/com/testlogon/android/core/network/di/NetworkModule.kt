@@ -37,10 +37,6 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideAuthEventSink(): AuthEventSink = AuthEventSink.NONE
-
-    @Provides
-    @Singleton
     fun provideMoshi(): Moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
