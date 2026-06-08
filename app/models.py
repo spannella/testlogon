@@ -4513,6 +4513,7 @@ class DelegateSettingsIn(BaseModel):
     default_preset: Optional[str] = None
     delegate_tag_enabled: bool = True
     delegate_tag_format: str = Field(default="[via @{delegate_name}]", max_length=100)
+    hide_delegate_from_recipients: bool = False
 
 
 class DelegateOut(BaseModel):
@@ -4544,6 +4545,7 @@ class DelegateSettingsOut(BaseModel):
     default_preset: Optional[str] = None
     delegate_tag_enabled: bool = True
     delegate_tag_format: str = "[via @{delegate_name}]"
+    hide_delegate_from_recipients: bool = False
 
 
 class DelegateAuditOut(BaseModel):

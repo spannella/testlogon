@@ -88,6 +88,7 @@ async def get_settings(user=Depends(require_ui_session)):
         default_preset=item.get("default_preset"),
         delegate_tag_enabled=bool(item.get("delegate_tag_enabled", True)),
         delegate_tag_format=item.get("delegate_tag_format", "[via @{delegate_name}]"),
+        hide_delegate_from_recipients=bool(item.get("hide_delegate_from_recipients", False)),
     )
 
 
@@ -101,6 +102,7 @@ async def update_settings(body: DelegateSettingsIn, user=Depends(require_ui_sess
         default_preset=body.default_preset,
         delegate_tag_enabled=body.delegate_tag_enabled,
         delegate_tag_format=body.delegate_tag_format,
+        hide_delegate_from_recipients=body.hide_delegate_from_recipients,
     )
     return DelegateSettingsOut(
         require_acceptance=bool(item.get("require_acceptance", True)),
@@ -108,6 +110,7 @@ async def update_settings(body: DelegateSettingsIn, user=Depends(require_ui_sess
         default_preset=item.get("default_preset"),
         delegate_tag_enabled=bool(item.get("delegate_tag_enabled", True)),
         delegate_tag_format=item.get("delegate_tag_format", "[via @{delegate_name}]"),
+        hide_delegate_from_recipients=bool(item.get("hide_delegate_from_recipients", False)),
     )
 
 

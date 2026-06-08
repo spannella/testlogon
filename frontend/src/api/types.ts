@@ -5133,6 +5133,7 @@ export interface DelegateSettingsReq {
   default_preset?: string;
   delegate_tag_enabled?: boolean;
   delegate_tag_format?: string;
+  hide_delegate_from_recipients?: boolean;
 }
 
 export interface DelegateOut {
@@ -5164,6 +5165,7 @@ export interface DelegateSettingsOut {
   default_preset?: string;
   delegate_tag_enabled: boolean;
   delegate_tag_format: string;
+  hide_delegate_from_recipients?: boolean;
 }
 
 export interface DelegateAuditOut {
