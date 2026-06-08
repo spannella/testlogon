@@ -28,7 +28,13 @@ for spec in "${SPECS[@]}"; do
   n=$(basename "$spec" | sed -E 's/^seg([0-9]+).*/\1/')
   in_want "$n" || continue
   echo "================ SEGMENT $n ================"
-  ( cd "$ROOT" && just restart >/dev/null 2>&1 ) && echo "  [restart issued]"
+  # By default restart between segments (clean slate, no cross-segment clutter).
+  # Set NORESTART=1 to skip per-segment restarts (one restart up front, record
+  # all back-to-back) — far faster + avoids restart-readiness churn; segments
+  # then share accumulated data (cosmetic only, specs self-seed).
+  if [ "${NORESTART:-0}" != "1" ]; then
+    ( cd "$ROOT" && just restart >/dev/null 2>&1 ) && echo "  [restart issued]"
+  fi
   # Wait until BOTH backend and frontend actually serve 200 before recording —
   # `just restart` returns before the backend (269 tables + startup tasks) is
   # ready, and recording against a not-ready stack hangs every navigation.
