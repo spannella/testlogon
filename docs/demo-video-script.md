@@ -413,7 +413,34 @@ watermarked playback, tenant DRM, clips, and protected downloads — a complete 
 terminals.
 
 ## SEGMENT 15 — Remote Terminals
-<!-- TODO -->
+
+The platform doesn't just manage content — it gives you remote access to your infrastructure, straight from
+the browser. It starts with the host inventory: one place to save every machine you connect to. SSH servers,
+VNC desktops, and RDP boxes all live here, grouped by environment, so production, staging, and support stay
+tidy and easy to find. Each row shows the label, the hostname and port, and a protocol badge at a glance —
+and a VNC support desktop sits right alongside the SSH servers in the same list. When you want in, the plug
+icon is a one-click quick-connect: it launches a brokered session straight into the browser terminal, with
+no client to install.
+
+Take VNC first. The noVNC connection form brokers a session entirely in the browser — you give it a target,
+and the platform validates it and opens a secure viewer. And notice the auth-input mode: you can connect with
+a short-lived session token, or a one-off password that is never persisted. Secrets stay safe by design.
+
+SSH adds another option: stored-key authentication. You generate or upload a key once, here in the key
+manager, and from then on your connections just reference it by id. The private key lives encrypted on the
+server and is resolved at connect time — the PEM never reaches the browser at all.
+
+For locked-down hosts that you can't reach directly, there's the multi-hop bastion. You define an ordered
+chain of jump hosts that the platform tunnels through to a target. Here, the production database is only
+reachable through a public bastion — and the path shows the whole route end to end: platform, to the bastion,
+to the final target. One click connects through every hop, all from the browser.
+
+And everything you do is captured. Every SSH session is recorded server-side as an asciicast — host, user,
+duration, and size — for a tamper-evident audit trail. This one was recorded off the prod-web-1 host as
+ubuntu, and you can replay the entire terminal transcript right in the browser: scrub through every command
+and its output, with no external tooling, fully auditable. Host inventory, brokered VNC and SSH, stored-key
+auth, multi-hop bastions, and recorded sessions — full remote access, all in the browser. Next up: admin and
+root.
 
 ## SEGMENT 16 — Admin & Root
 <!-- TODO -->
