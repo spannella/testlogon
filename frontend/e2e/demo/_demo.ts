@@ -7,7 +7,7 @@
  * so the silent recording is self-explanatory; the matching voiceover lives in
  * docs/demo-video-script.md and is muxed in later.
  */
-import type { Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { loadSessions, type SessionData } from "../helpers/session";
 
 export { loadSessions, type SessionData };
@@ -203,4 +203,77 @@ export async function step(
 export async function visit(page: Page, path: string, settleMs = 1200): Promise<void> {
   await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(settleMs);
+}
+
+/** Draw a temporary highlight ring around an element (centered, glowing). */
+export async function highlight(page: Page, locator: Locator): Promise<void> {
+  await locator
+    .evaluate((el) => {
+      const prev = (el as HTMLElement).style.cssText;
+      (el as HTMLElement).dataset.__demoPrev = prev;
+      (el as HTMLElement).style.outline = "3px solid #60a5fa";
+      (el as HTMLElement).style.outlineOffset = "3px";
+      (el as HTMLElement).style.borderRadius = (el as HTMLElement).style.borderRadius || "8px";
+      (el as HTMLElement).style.boxShadow = "0 0 0 6px rgba(96,165,250,.25)";
+      (el as HTMLElement).style.transition = "box-shadow .3s ease, outline .3s ease";
+    })
+    .catch(() => {});
+}
+
+/** Remove a previously-applied highlight ring. */
+export async function unhighlight(page: Page, locator: Locator): Promise<void> {
+  await locator
+    .evaluate((el) => {
+      const h = el as HTMLElement;
+      h.style.outline = "";
+      h.style.boxShadow = "";
+    })
+    .catch(() => {});
+}
+
+/**
+ * Bring a target on-screen and PROVE it: scroll it to center, set the caption,
+ * ASSERT it is actually in the viewport (the recording fails if it isn't — this
+ * enforces "what we're showing is scrolled to and visible"), highlight it, hold
+ * the beat, then drop the highlight.
+ *
+ * `target` may be a Locator or a string (resolved as getByText, first match).
+ */
+export async function reveal(
+  page: Page,
+  target: Locator | string,
+  title: string,
+  subtitle = "",
+  opts: { ms?: number; ring?: boolean; exact?: boolean } = {},
+): Promise<void> {
+  const loc =
+    typeof target === "string"
+      ? page.getByText(target, { exact: opts.exact ?? false }).first()
+      : target;
+  await loc.scrollIntoViewIfNeeded({ timeout: 12_000 }).catch(() => {});
+  // Center it in the viewport for a clean shot.
+  await loc
+    .evaluate((el) => el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" as ScrollBehavior }))
+    .catch(() => {});
+  await page.waitForTimeout(350);
+  await caption(page, title, subtitle);
+  // Enforce visibility: the take is only valid if the target is on screen.
+  await expect(loc).toBeInViewport({ ratio: 0.2, timeout: 12_000 });
+  if (opts.ring !== false) await highlight(page, loc);
+  await beat(page, opts.ms ?? BEAT);
+  if (opts.ring !== false) await unhighlight(page, loc);
+}
+
+/** Like reveal() but for an action target you also click after showing it. */
+export async function revealClick(
+  page: Page,
+  target: Locator | string,
+  title: string,
+  subtitle = "",
+  opts: { ms?: number; settleMs?: number } = {},
+): Promise<void> {
+  const loc = typeof target === "string" ? page.getByText(target).first() : target;
+  await reveal(page, loc, title, subtitle, { ms: opts.ms ?? 1800 });
+  await loc.click().catch(() => {});
+  await page.waitForTimeout(opts.settleMs ?? 1400);
 }
