@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AND-005 — shared Android Lint severity map (placeholder).
+  Detailed Lint policy tuning is deferred to a later chore; this file exists so the convention
+  wiring can reference a single shared config and so CI can invoke Lint consistently.
+-->
+<lint>
+    <!-- Keep the build green on the current scaffold; promote to "error" as policy matures. -->
+    <issue id="GradleDependency" severity="warning" />
+    <issue id="ObsoleteLintCustomCheck" severity="ignore" />
+</lint>

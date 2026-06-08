@@ -3,6 +3,10 @@ package com.testlogon.android.feature.auth.login
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.testlogon.android.core.data.telemetry.AuthEvent
+import com.testlogon.android.core.data.telemetry.AuthStage
+import com.testlogon.android.core.data.telemetry.AuthTelemetry
+import com.testlogon.android.core.data.telemetry.NoopAuthTelemetry
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.LogoutReason
@@ -10,6 +14,8 @@ import com.testlogon.android.data.auth.AuthRepository
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.auth.LoginOutcome
 import com.testlogon.android.data.auth.MfaFactor
+import com.testlogon.android.data.auth.toAuthReason
+import com.testlogon.android.data.auth.toTelemetry
 import com.testlogon.android.navigation.AuthDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.BufferOverflow
@@ -67,6 +73,9 @@ class LoginViewModel @Inject constructor(
     private val serverUrlConfig: ServerUrlConfig,
     private val authStateStore: AuthStateStore,
     savedStateHandle: SavedStateHandle,
+    // AND-052: redacted auth telemetry. Defaulted to no-op so unit tests that construct the
+    // ViewModel directly need no change; Hilt injects DefaultAuthTelemetry in the app.
+    private val telemetry: AuthTelemetry = NoopAuthTelemetry,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState(serverUrl = serverUrlConfig.current()))
@@ -111,20 +120,38 @@ class LoginViewModel @Inject constructor(
         val snapshot = _uiState.value
         if (snapshot.isSubmitting || !snapshot.submitEnabled) return
         _uiState.update { it.copy(status = LoginStatus.Submitting, error = null) }
+        telemetry.log(AuthEvent.LoginAttempt(userPresent = snapshot.email.isNotBlank()))
         viewModelScope.launch {
             when (val result = authRepository.login(snapshot.email.trim(), snapshot.password)) {
-                is ApiResult.Success -> handleSuccess(result.data)
-                is ApiResult.Failure ->
+                is ApiResult.Success -> {
+                    telemetry.log(AuthEvent.LoginSuccess(requiredFactors = result.data.telemetryFactors()))
+                    handleSuccess(result.data)
+                }
+                is ApiResult.Failure -> {
+                    telemetry.log(
+                        AuthEvent.LoginFailure(
+                            reason = result.toAuthReason(AuthStage.LOGIN),
+                            httpStatus = result.error.status,
+                        ),
+                    )
                     _uiState.update { it.copy(status = LoginStatus.Idle, error = result.error.toMessage()) }
-                is ApiResult.NetworkError ->
+                }
+                is ApiResult.NetworkError -> {
+                    telemetry.log(AuthEvent.LoginFailure(reason = result.toAuthReason(AuthStage.LOGIN)))
                     _uiState.update {
                         it.copy(
                             status = LoginStatus.Idle,
                             error = "Couldn't reach the server. Check your connection and try again.",
                         )
                     }
+                }
             }
         }
+    }
+
+    private fun LoginOutcome.telemetryFactors() = when (this) {
+        is LoginOutcome.MfaRequired -> factors.map { it.toTelemetry() }
+        is LoginOutcome.Authenticated -> emptyList()
     }
 
     private fun handleSuccess(outcome: LoginOutcome) {

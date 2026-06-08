@@ -1,5 +1,8 @@
 package com.testlogon.android.data.auth
 
+import com.testlogon.android.core.data.telemetry.AuthEvent
+import com.testlogon.android.core.data.telemetry.AuthOutcome
+import com.testlogon.android.core.data.telemetry.AuthTelemetry
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
@@ -70,6 +73,8 @@ class AuthRepositoryImpl @Inject constructor(
     private val cookieCleaner: SessionCookieCleaner,
     private val errorParser: ApiErrorParser,
     private val authAreaCache: AuthAreaCache,
+    // AND-052: defaulted to no-op so direct-construction tests are unaffected; Hilt injects real.
+    private val telemetry: AuthTelemetry = com.testlogon.android.core.data.telemetry.NoopAuthTelemetry,
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -174,6 +179,7 @@ class AuthRepositoryImpl @Inject constructor(
         authStateStore.clear()
         authAreaCache.clear() // AND-045 per-identity cache cleared on logout
         _cachedUser.value = null
+        telemetry.log(AuthEvent.LogoutResult(outcome = AuthOutcome.SUCCESS))
         ApiResult.Success(Unit)
     }
 
@@ -199,11 +205,28 @@ class AuthRepositoryImpl @Inject constructor(
 
     private suspend fun finalizeAndLoadMe(challengeId: String): ApiResult<MfaVerifyOutcome> =
         when (val fin = apiCall { api.sessionFinalize(SessionFinalizeReq(challengeId)) }) {
-            is ApiResult.Failure -> fin
-            is ApiResult.NetworkError -> fin
+            is ApiResult.Failure -> {
+                telemetry.log(
+                    AuthEvent.FinalizeResult(
+                        outcome = AuthOutcome.FAILURE,
+                        reason = fin.toAuthReason(com.testlogon.android.core.data.telemetry.AuthStage.FINALIZE),
+                    ),
+                )
+                fin
+            }
+            is ApiResult.NetworkError -> {
+                telemetry.log(
+                    AuthEvent.FinalizeResult(
+                        outcome = AuthOutcome.FAILURE,
+                        reason = fin.toAuthReason(com.testlogon.android.core.data.telemetry.AuthStage.FINALIZE),
+                    ),
+                )
+                fin
+            }
             is ApiResult.Success -> {
                 val resp = fin.data
                 if (resp.status == "ok" && !resp.sessionId.isNullOrBlank()) {
+                    telemetry.log(AuthEvent.FinalizeResult(outcome = AuthOutcome.SUCCESS))
                     when (val me = getMe()) {
                         is ApiResult.Success -> ApiResult.Success(MfaVerifyOutcome.Authenticated(me.data))
                         is ApiResult.Failure -> me

@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.hilt)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -9,6 +11,11 @@ android {
 
     defaultConfig {
         minSdk = 24
+    }
+
+    buildFeatures {
+        // AND-052 — BuildConfig.DEBUG gates Logcat output in the telemetry layer.
+        buildConfig = true
     }
 
     compileOptions {
@@ -24,4 +31,15 @@ kotlin {
 dependencies {
     implementation(project(":core-model"))
     implementation(project(":core-network"))
+
+    // Coroutines (telemetry scope seam)
+    implementation(libs.coroutines.core)
+
+    // DI
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+
+    // Test
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 }

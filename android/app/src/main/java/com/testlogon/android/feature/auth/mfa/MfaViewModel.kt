@@ -3,10 +3,17 @@ package com.testlogon.android.feature.auth.mfa
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.testlogon.android.core.data.telemetry.AuthEvent
+import com.testlogon.android.core.data.telemetry.AuthFactor
+import com.testlogon.android.core.data.telemetry.AuthStage
+import com.testlogon.android.core.data.telemetry.AuthTelemetry
+import com.testlogon.android.core.data.telemetry.NoopAuthTelemetry
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.auth.AuthRepository
 import com.testlogon.android.data.auth.MfaFactor
 import com.testlogon.android.data.auth.MfaVerifyOutcome
+import com.testlogon.android.data.auth.toAuthReason
+import com.testlogon.android.data.auth.toTelemetry
 import com.testlogon.android.navigation.AuthDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.BufferOverflow
@@ -70,6 +77,8 @@ data class MfaUiState(
 class MfaViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     savedStateHandle: SavedStateHandle,
+    // AND-052: defaulted to no-op so direct-construction unit tests are unaffected; Hilt injects real.
+    private val telemetry: AuthTelemetry = NoopAuthTelemetry,
 ) : ViewModel() {
 
     private val challengeId: String =
@@ -133,6 +142,9 @@ class MfaViewModel @Inject constructor(
         val s = _uiState.value
         if (s.isVerifying || !s.canSubmit) return
         _uiState.update { it.copy(isVerifying = true, error = null) }
+        val verifyFactor =
+            if (s.recoveryMode) AuthFactor.RECOVERY else (s.activeFactor ?: MfaFactor.Totp).toTelemetry()
+        telemetry.log(AuthEvent.MfaVerifyAttempt(factor = verifyFactor, challengeId = s.challengeId))
         viewModelScope.launch {
             val result = when {
                 s.recoveryMode -> authRepository.useRecovery(s.challengeId, s.recoveryCode)
@@ -141,18 +153,24 @@ class MfaViewModel @Inject constructor(
                 s.activeFactor == MfaFactor.Email -> authRepository.verifyEmail(s.challengeId, s.code)
                 else -> authRepository.verifyTotp(s.challengeId, s.code)
             }
-            handleVerify(result)
+            handleVerify(result, verifyFactor, s.challengeId)
         }
     }
 
-    private fun handleVerify(result: ApiResult<MfaVerifyOutcome>) = when (result) {
+    private fun handleVerify(
+        result: ApiResult<MfaVerifyOutcome>,
+        verifyFactor: AuthFactor,
+        challengeId: String,
+    ) = when (result) {
         is ApiResult.Success -> when (val outcome = result.data) {
             is MfaVerifyOutcome.Authenticated -> {
+                telemetry.log(AuthEvent.MfaSuccess(factor = verifyFactor, challengeId = challengeId))
                 _uiState.update { it.copy(isVerifying = false) }
                 _effects.tryEmit(MfaEffect.NavigateHome)
                 Unit
             }
             is MfaVerifyOutcome.FactorsRemaining -> {
+                telemetry.log(AuthEvent.MfaSuccess(factor = verifyFactor, challengeId = challengeId))
                 val next = outcome.factors.firstOrNull() ?: MfaFactor.Totp
                 _uiState.update {
                     it.copy(
@@ -170,6 +188,14 @@ class MfaViewModel @Inject constructor(
             }
         }
         is ApiResult.Failure -> {
+            telemetry.log(
+                AuthEvent.MfaFailure(
+                    factor = verifyFactor,
+                    reason = result.toAuthReason(AuthStage.MFA_VERIFY),
+                    remainingFactors = _uiState.value.remainingFactors.size,
+                    httpStatus = result.error.status,
+                ),
+            )
             val sessionLost = result.error.status == 401 || result.error.status == 410
             if (sessionLost) {
                 _uiState.update { it.copy(isVerifying = false) }
@@ -179,13 +205,21 @@ class MfaViewModel @Inject constructor(
                 _uiState.update { it.copy(isVerifying = false, code = "", error = result.error.message) }
             }
         }
-        is ApiResult.NetworkError ->
+        is ApiResult.NetworkError -> {
+            telemetry.log(
+                AuthEvent.MfaFailure(
+                    factor = verifyFactor,
+                    reason = result.toAuthReason(AuthStage.MFA_VERIFY),
+                    remainingFactors = _uiState.value.remainingFactors.size,
+                ),
+            )
             _uiState.update {
                 it.copy(
                     isVerifying = false,
                     error = "Couldn't reach the server. Check your connection and try again.",
                 )
             }
+        }
     }
 
     private var begunFor: MfaFactor? = null
@@ -196,6 +230,7 @@ class MfaViewModel @Inject constructor(
         if (factor != MfaFactor.Sms && factor != MfaFactor.Email) return
         if (!force && begunFor == factor) return
         begunFor = factor
+        telemetry.log(AuthEvent.MfaBegin(factor = factor.toTelemetry(), challengeId = s.challengeId))
         _uiState.update { it.copy(isSending = true, error = null) }
         viewModelScope.launch {
             val result: ApiResult<List<String>> = when (factor) {

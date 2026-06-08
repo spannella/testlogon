@@ -18,6 +18,14 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // AND-006 — backend base URL exposed as a compile-time constant.
+        // NOTE: product flavors (dev/staging/prod) are intentionally NOT used here; renaming the
+        // variants would break `assembleDebug`/`testDebugUnitTest` and our CI scripts. The
+        // dev/staging/prod selection is done at RUNTIME via SettingsStore (which seeds from this
+        // value and supports an in-app override). Flavors are deferred — see android/README.md.
+        // Third arg is literal generated source, so the String needs its own escaped quotes.
+        buildConfigField("String", "API_BASE_URL", "\"http://18.222.237.167:8000/\"")
     }
 
     buildTypes {

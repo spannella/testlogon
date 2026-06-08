@@ -34,7 +34,12 @@ class SettingsStore @Inject constructor(
     }
 
     companion object {
-        const val DEFAULT_BASE_URL = "http://18.222.237.167:8000/"
+        /**
+         * Compile-time default base URL (AND-006). Sourced from [BuildConfig.API_BASE_URL] and
+         * normalized to end with '/' so the flaky plaintext dev host is never hard-coded in source.
+         * dev/staging/prod selection is a runtime concern (this store), not a build flavor.
+         */
+        val DEFAULT_BASE_URL: String = normalize(BuildConfig.API_BASE_URL)
 
         private const val PREFS_NAME = "tl_settings"
         private const val KEY_BASE_URL = "base_url"
