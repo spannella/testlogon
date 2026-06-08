@@ -117,7 +117,30 @@ And anything worth keeping, you can bookmark — saved away for whenever you com
 That's the newsfeed. Next up: social.
 
 ## SEGMENT 05 — Social
-<!-- TODO -->
+
+The social layer is what turns the platform into a community. Every creator gets a shareable
+public profile — a clean page with their avatar, name, and headline, like Bob Rivera here, the
+photographer and creator. Right in the header you get social stats at a glance: followers,
+following, and post counts.
+
+Following someone is one tap. Hit Follow and their posts start flowing into your feed — the button
+flips straight to "Following," and the follower count ticks up live, from nine forty-eight to nine
+forty-nine.
+
+You're always in control of who you interact with. Every profile has a more-actions menu right next
+to Follow. Open it to block someone — a blocked user can no longer message you or see your content,
+and you can unblock them any time from Settings.
+
+Finding people is just as easy. The Discover page surfaces suggested and trending creators, and
+instant search lets you find anyone as you type — search "Bob" and matching creators appear right
+away.
+
+And as you grow, you earn achievements. Hit milestones to unlock badges — your First Post, Rising
+Star for reaching a thousand followers, and more. Badges come in tiers, from common to rare, epic,
+and legendary, each worth points toward the leaderboard, and you can showcase your favorites on
+your profile.
+
+That's the social layer. Next up: groups and syndicates.
 
 ## SEGMENT 06 — Groups & Syndicates
 <!-- TODO -->

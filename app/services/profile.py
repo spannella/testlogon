@@ -266,6 +266,16 @@ def get_profile(user_sub: str) -> Dict[str, Any]:
     profile = item.get("profile") or {}
     merged = empty_profile()
     merged.update(profile)
+    # Social counts are maintained at the TOP level of the profiles item by
+    # app/services/social.py (_increment_counts) and read top-level by discovery.
+    # Surface them here so the profile/public-profile read path reflects follows
+    # (otherwise the nested map's stale 0 is shown and the count never updates).
+    for k in ("follower_count", "following_count", "post_count"):
+        if k in item:
+            try:
+                merged[k] = int(item.get(k) or 0)
+            except (TypeError, ValueError):
+                merged[k] = 0
     return merged
 
 
