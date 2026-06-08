@@ -200,7 +200,30 @@ and the status flips to "approved" — the payout is on its way.
 Subscribe, earn, withdraw, approve — that's the complete monetization loop. Next up: the Shop.
 
 ## SEGMENT 08 — Shop
-<!-- TODO -->
+
+The platform ships with a complete storefront — so creators can sell physical merch and digital goods
+right alongside everything else.
+
+It starts in the Shop. Products are laid out as clean cards, each one organized into a browsable
+category and showing its name, an image, and a price up front — the Signed Poster, the Studio Hoodie
+at fifty-nine dollars, a Sticker Pack, a Preset Bundle. Tap any product to open its full detail page,
+choose a quantity, and add it to your cart. The moment you do, a confirmation pops up — the item is in
+your cart.
+
+The Cart pulls it all together. Every line item appears with its thumbnail, unit price, and quantity,
+and the total updates the instant you change anything — here, three items for ninety-two dollars. One
+button takes you to a secure checkout.
+
+Checkout opens with an order summary that itemizes exactly what you're buying. Got a discount code?
+Apply it right here. Entering the code knocks the discount straight off the order total — twenty-five
+percent off drops ninety-two dollars to sixty-nine. Then pick a payment method — a saved Visa ending
+in 4242 — and place the order at the discounted total. One tap.
+
+And if a shopper leaves a cart behind, they're not lost: the platform can email them a one-tap
+recovery link to bring them right back to their cart.
+
+Catalog, cart, promo codes, checkout, and recovery — a full e-commerce flow, built in. Next up: Files
+and Integrations.
 
 ## SEGMENT 09 — Files & Integrations
 <!-- TODO -->
