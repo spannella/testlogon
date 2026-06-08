@@ -150,3 +150,93 @@ data class MfaVerifyResp(
     val passed: Map<String, Boolean> = emptyMap(),
     @Json(name = "remaining_factors") val remainingFactors: List<String> = emptyList(),
 )
+
+// ── register/start (AND-053) ──
+//
+// Verified shapes (OpenAPI RegisterStartReq/Resp + frontend src/api/types.ts):
+//  - delivery_method is optional (server default "email"); the web omits it, so we send null.
+//  - phone is sent only when enable_sms_mfa is true (web rule).
+//  - the response carries a free-form `status`, a verification flag, masked delivery fields, and a
+//    nullable session_id (present only on the no-verification auto-login path).
+
+@JsonClass(generateAdapter = true)
+data class RegisterStartReq(
+    @Json(name = "full_name") val fullName: String,
+    val email: String,
+    val password: String,
+    @Json(name = "confirm_password") val confirmPassword: String,
+    @Json(name = "delivery_method") val deliveryMethod: String? = null,
+    val phone: String? = null,
+    @Json(name = "enable_sms_mfa") val enableSmsMfa: Boolean = false,
+    @Json(name = "enable_totp_mfa") val enableTotpMfa: Boolean = false,
+) {
+    override fun toString() =
+        "RegisterStartReq(fullName=***, email=***, password=***, confirmPassword=***, " +
+            "deliveryMethod=$deliveryMethod, phone=***, enableSmsMfa=$enableSmsMfa, " +
+            "enableTotpMfa=$enableTotpMfa)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RegisterStartResp(
+    val status: String,
+    @Json(name = "verification_required") val verificationRequired: Boolean = false,
+    @Json(name = "delivery_medium") val deliveryMedium: String? = null,
+    @Json(name = "delivery_destination") val deliveryDestination: String? = null,
+    @Json(name = "session_id") val sessionId: String? = null,
+)
+
+// ── register/confirm (AND-054) ──
+// Keyed on the registrant EMAIL (no challenge/registration id). Success may carry a session_id
+// (auto-login) and an mfa_setup directive driving the MFA-enrollment handoff (AND-056).
+
+@JsonClass(generateAdapter = true)
+data class RegisterConfirmReq(
+    val email: String,
+    @Json(name = "confirmation_code") val confirmationCode: String,
+) {
+    override fun toString() = "RegisterConfirmReq(email=***, confirmationCode=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RegisterConfirmResp(
+    val status: String,
+    @Json(name = "session_id") val sessionId: String? = null,
+    @Json(name = "mfa_setup") val mfaSetup: List<String>? = null,
+    @Json(name = "sms_phone") val smsPhone: String? = null,
+)
+
+// ── register/resend (AND-054) ──
+// Re-sends the verification code; carries the MFA flags/phone captured at start (web parity).
+
+@JsonClass(generateAdapter = true)
+data class RegisterResendReq(
+    val email: String,
+    @Json(name = "delivery_method") val deliveryMethod: String = "email",
+    val phone: String? = null,
+    @Json(name = "enable_sms_mfa") val enableSmsMfa: Boolean = false,
+    @Json(name = "enable_totp_mfa") val enableTotpMfa: Boolean = false,
+) {
+    override fun toString() =
+        "RegisterResendReq(email=***, deliveryMethod=$deliveryMethod, phone=***, " +
+            "enableSmsMfa=$enableSmsMfa, enableTotpMfa=$enableTotpMfa)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RegisterResendResp(
+    val status: String,
+    @Json(name = "delivery_medium") val deliveryMedium: String? = null,
+    @Json(name = "delivery_destination") val deliveryDestination: String? = null,
+)
+
+// ── register/check (AND-055) — email availability ──
+
+@JsonClass(generateAdapter = true)
+data class RegisterEmailCheckReq(val email: String) {
+    override fun toString() = "RegisterEmailCheckReq(email=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RegisterEmailCheckResp(
+    val available: Boolean,
+    val status: String,
+)

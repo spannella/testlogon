@@ -7,10 +7,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.testlogon.android.feature.auth.MagicLinkPlaceholderScreen
+import com.testlogon.android.feature.auth.MfaSetupPlaceholderScreen
 import com.testlogon.android.feature.auth.RecoveryPlaceholderScreen
-import com.testlogon.android.feature.auth.RegisterPlaceholderScreen
 import com.testlogon.android.feature.auth.login.LoginRoute
 import com.testlogon.android.feature.auth.mfa.MfaRoute
+import com.testlogon.android.feature.auth.register.RegisterConfirmRoute
+import com.testlogon.android.feature.auth.register.RegisterRoute
 import com.testlogon.android.feature.settings.ServerUrlSettingsRoute
 
 /**
@@ -75,7 +77,99 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
             )
         }
         composable(AuthDest.Register.route) {
-            RegisterPlaceholderScreen(onBack = { navController.popBackStack() })
+            RegisterRoute(
+                onNavigateToConfirm = { email, medium, destination, smsMfa, totpMfa, phone ->
+                    navController.navigate(
+                        AuthDest.RegisterConfirm.build(
+                            email = email,
+                            deliveryMedium = medium,
+                            deliveryDestination = destination,
+                            enableSmsMfa = smsMfa,
+                            enableTotpMfa = totpMfa,
+                            phone = phone,
+                        ),
+                    ) { launchSingleTop = true }
+                },
+                onNavigateToLogin = {
+                    navController.navigate(AuthDest.Login.route) {
+                        popUpTo(AuthDest.Login.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateHome = { /* auth gate swaps graphs once getMe sets the session */ },
+            )
+        }
+        composable(
+            route = AuthDest.RegisterConfirm.route,
+            arguments = listOf(
+                navArgument(AuthDest.RegisterConfirm.ARG_EMAIL) { type = NavType.StringType },
+                navArgument(AuthDest.RegisterConfirm.ARG_MEDIUM) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(AuthDest.RegisterConfirm.ARG_DESTINATION) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(AuthDest.RegisterConfirm.ARG_SMS_MFA) {
+                    type = NavType.StringType
+                    defaultValue = "false"
+                },
+                navArgument(AuthDest.RegisterConfirm.ARG_TOTP_MFA) {
+                    type = NavType.StringType
+                    defaultValue = "false"
+                },
+                navArgument(AuthDest.RegisterConfirm.ARG_PHONE) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
+        ) {
+            RegisterConfirmRoute(
+                onNavigateToLogin = {
+                    navController.navigate(AuthDest.Login.route) {
+                        popUpTo(AuthDest.Login.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateHome = { /* auth gate swaps graphs once confirm establishes a session */ },
+                onNavigateToMfaSetup = { handoff ->
+                    navController.navigate(
+                        AuthDest.MfaSetup.build(
+                            factors = handoff.factors.map { it.wire },
+                            smsPhone = handoff.smsPhone,
+                        ),
+                    ) { launchSingleTop = true }
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(
+            route = AuthDest.MfaSetup.route,
+            arguments = listOf(
+                navArgument(AuthDest.MfaSetup.ARG_FACTORS) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(AuthDest.MfaSetup.ARG_PHONE) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
+        ) { entry ->
+            val factors = entry.arguments?.getString(AuthDest.MfaSetup.ARG_FACTORS)
+                .orEmpty()
+                .split(",")
+                .filter { it.isNotBlank() }
+            val phone = entry.arguments?.getString(AuthDest.MfaSetup.ARG_PHONE)?.takeIf { it.isNotBlank() }
+            MfaSetupPlaceholderScreen(
+                factors = factors,
+                smsPhone = phone,
+                // The user is already authenticated here; the gate will swap graphs. "Continue"
+                // simply pops back so the authenticated graph becomes visible (AND-064 owns the
+                // real enrollment + completion routing).
+                onContinue = { navController.popBackStack() },
+            )
         }
         composable(AuthDest.Recovery.route) {
             RecoveryPlaceholderScreen(onBack = { navController.popBackStack() })

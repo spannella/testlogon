@@ -71,4 +71,22 @@ interface AuthApi {
         @Path("factor") factor: String,
         @Body body: RecoveryReq,
     ): MfaVerifyResp
+
+    // ── Registration (AND-053/054/055) ──
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/register/start")
+    suspend fun registerStart(@Body body: RegisterStartReq): RegisterStartResp
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/register/confirm")
+    suspend fun registerConfirm(@Body body: RegisterConfirmReq): RegisterConfirmResp
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/register/resend")
+    suspend fun registerResend(@Body body: RegisterResendReq): RegisterResendResp
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/register/check")
+    suspend fun registerCheck(@Body body: RegisterEmailCheckReq): RegisterEmailCheckResp
 }

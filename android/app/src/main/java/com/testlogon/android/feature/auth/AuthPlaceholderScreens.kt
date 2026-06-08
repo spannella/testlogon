@@ -23,10 +23,19 @@ import com.testlogon.android.core.ui.input.TlButtonVariant
  * Register / Recovery / MagicLink. Each is stateless and takes only navigation lambdas.
  */
 
+/**
+ * MFA-enrollment handoff target (AND-056). The real enrollment screens are owned by AND-064; until
+ * they land, the registration → MFA-setup handoff routes here so the flow is end-to-end testable.
+ */
 @Composable
-fun RegisterPlaceholderScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    PlaceholderScaffold(title = "Register", testTag = "register_screen", modifier = modifier) {
-        TlButton(text = "Back", onClick = onBack, variant = TlButtonVariant.Text)
+fun MfaSetupPlaceholderScreen(
+    factors: List<String>,
+    smsPhone: String?,
+    onContinue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    PlaceholderScaffold(title = "Set up two-factor auth", testTag = "mfa_setup_screen", modifier = modifier) {
+        TlButton(text = "Continue", onClick = onContinue, variant = TlButtonVariant.Text)
     }
 }
 

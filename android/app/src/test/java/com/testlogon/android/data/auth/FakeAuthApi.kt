@@ -79,6 +79,24 @@ class FakeAuthApi : AuthApi {
     override suspend fun useRecovery(factor: String, body: RecoveryReq): MfaVerifyResp =
         recoveryResult()
 
+    // ── Registration (AND-053/054/055): scriptable stubs ──
+
+    var registerStartResult: () -> RegisterStartResp = { error("not scripted") }
+    var registerConfirmResult: () -> RegisterConfirmResp = { error("not scripted") }
+    var registerResendResult: () -> RegisterResendResp = { RegisterResendResp("sent") }
+    var registerCheckResult: () -> RegisterEmailCheckResp = { RegisterEmailCheckResp(true, "ok") }
+
+    override suspend fun registerStart(body: RegisterStartReq): RegisterStartResp = registerStartResult()
+
+    override suspend fun registerConfirm(body: RegisterConfirmReq): RegisterConfirmResp =
+        registerConfirmResult()
+
+    override suspend fun registerResend(body: RegisterResendReq): RegisterResendResp =
+        registerResendResult()
+
+    override suspend fun registerCheck(body: RegisterEmailCheckReq): RegisterEmailCheckResp =
+        registerCheckResult()
+
     companion object {
         /** Builds an [HttpException] with the given status + JSON error body. */
         fun httpError(status: Int, body: String = """{"detail":"error"}"""): HttpException =
