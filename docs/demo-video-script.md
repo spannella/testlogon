@@ -143,7 +143,29 @@ your profile.
 That's the social layer. Next up: groups and syndicates.
 
 ## SEGMENT 06 — Groups & Syndicates
-<!-- TODO -->
+
+Beyond one-to-one social, the platform has spaces built for whole communities. A group like the
+Atelier Collective gets its own header, its own membership, and a dedicated feed. The header shows
+the member count and quick links to everything the group shares — settings, fundraising, and a
+group treasury — all in one place.
+
+Inside the feed, admins keep the important things visible. Pin the most important updates — rules,
+schedules, announcements — and they stay locked to the top of the feed for every member, marked
+with a Pinned badge, no matter how much new activity comes in.
+
+Every group also has a shared treasury — a pooled balance funded by its members. The balance card
+tracks everything: what's been contributed, what's been donated, and what's been spent. Members
+chip in straight from their wallet — pick an amount and tap Contribute, and it's added to the pool
+instantly. Here the treasury climbs from a hundred and fifty dollars to two hundred the moment the
+contribution lands.
+
+For creators, syndicates take this even further. A syndicate is a collective — multiple creators
+banding together into one group. The real power is in bundle subscriptions: a single All-Access
+Bundle plan, one monthly price, and subscribers get access to every creator in the syndicate at
+once. And membership is dynamic — as creators join or leave the syndicate, every bundle
+subscriber's access updates automatically.
+
+That's groups and syndicates. Next up: subscriptions and monetization.
 
 ## SEGMENT 07 — Subscriptions & Monetization
 <!-- TODO -->
