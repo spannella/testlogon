@@ -342,7 +342,41 @@ track throughput and turnaround over time. Identity verification, documents, liv
 audited PII — a complete KYC pipeline, built in. Next up: the Ads Platform.
 
 ## SEGMENT 13 — Ads Platform
-<!-- TODO -->
+
+The platform isn't just a place to spend money — it's a place to make it. Built right in is a complete,
+self-serve advertising platform, and it starts on the advertiser's side. From the Advertiser Dashboard,
+anyone can spin up an advertiser account — here, Lumina Studios — with its own spend balance and lifetime
+spend. Accounts don't go live automatically: each one is reviewed by the platform first, and this one is
+approved and active.
+
+With an account approved, advertisers build campaigns. The campaign manager shows each campaign with its
+objective, a daily budget, and a lifecycle status — our Summer Launch campaign runs on an awareness
+objective with a five-hundred-dollar daily budget, approved and serving.
+
+Campaigns are filled with creatives. The creative manager handles image, video, and native-post ads —
+each one uploaded, content-policy reviewed, and assigned a rotation weight. Our Hero Banner has been
+uploaded and approved for delivery, and a live preview shows exactly how the ad will render before it ever
+goes out.
+
+Great ads find the right audience. The targeting editor lets advertisers dial in who sees an ad —
+demographics, geography, devices, content categories, and even specific creators, with exclusions
+supported too. Our saved set targets US and Canadian adults aged twenty-five to forty-four on mobile and
+desktop, and a live audience estimate updates in real time as the targeting tightens or widens.
+
+Ads don't only run in the feed — they run inside live broadcasts. When a non-subscribing viewer joins a
+live stream, they're served a skippable in-stream pre-roll ad before playback begins, complete with a
+sponsored label and a five-second skip timer. Subscribers, of course, join completely ad-free.
+
+And every dollar is measured. The advertiser analytics dashboard reports impressions, clicks, click-through
+rate, spend, and cost-per-acquisition — the figures that drive return on ad spend — with daily performance
+trends and per-creative and per-surface breakdowns underneath.
+
+Finally, the platform keeps control of its own ad ecosystem. The root-only Ad Platform Management console
+gives operators cross-account oversight — moderation, revenue, and, under Emergency Controls, a
+platform-wide ad kill-switch. A single, reason-gated, audited control can halt all ad serving instantly,
+with a live status badge showing whether ads are serving normally or fully halted. Advertiser accounts,
+campaigns, creatives, targeting, in-stream ads, analytics, and a platform kill-switch — a full ads stack,
+built in. Next up: VOD.
 
 ## SEGMENT 14 — VOD
 <!-- TODO -->
