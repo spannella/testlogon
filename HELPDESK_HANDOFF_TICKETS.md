@@ -165,10 +165,11 @@ This backlog turns the helpdesk queue into a live, presence-driven handoff: when
 - Root cause of the poor client UX: `_conversation_out_from_items` (`app/routers/messaging.py:4587`) only populates `routing_state`/`active_agent_user_id` when `_is_helpdesk_agent_viewer` is true (`app/routers/messaging.py:4592`). For the customer, `routing_state` is empty, so the `HelpdeskRoutingBanner` short-circuits to `null` (`frontend/src/pages/messages/ConversationView.tsx:1606`, gated again by `conversation.routing_state` at line 1208). The customer sees no status at all.
 - Expose a customer-safe routing view: always set `out.routing_state` for participants of a helpdesk_bridge convo, but DO NOT leak the agent's `active_agent_user_id` to the customer (keep that agent-only, consistent with `_project_helpdesk_lifecycle_payload_for_user`, `app/routers/messaging.py:4662`). Add a derived boolean `agent_connected` instead.
 - Add `routing_state` (customer-safe values) + `agent_connected` to `ConversationOut` / `frontend/src/api/types.ts`.
+- (Verified 2026-06-08) `routing_mode` is ALREADY exposed to customers for helpdesk_bridge convos (`app/routers/messaging.py:4588-4591`) so they can identify the chat — that exposure must be preserved; only `routing_state`/`active_agent_user_id` are agent-gated today. This ticket adds `routing_state` (customer-safe) without changing the `routing_mode` behavior.
 
 **Acceptance Criteria**
 - A customer's `GET /messaging/conversations` returns `routing_state` for their helpdesk chat and `agent_connected` reflecting `assigned`.
-- The customer payload never includes the agent's `active_agent_user_id`.
+- The customer payload still includes `routing_mode` (unchanged) and never includes the agent's `active_agent_user_id`.
 - Agent payloads are unchanged (still include `active_agent_user_id`).
 
 **Dependencies**

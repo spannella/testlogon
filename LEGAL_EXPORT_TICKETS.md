@@ -213,6 +213,7 @@ This backlog adds three legal/compliance export capabilities on top of the exist
 **Estimate:** 2 day(s)
 
 **Description**
+- (Verified 2026-06-08) `app/auth/roles.py` defines `Role` (line 8) and `AdminScope` (line 14) but has NO legal capability today, so this is genuinely net-new and a hard prerequisite for every Milestone-2/3 endpoint (LEX-008/LEX-012). Until it lands, gate those endpoints ROOT-only.
 - Add a `LEGAL` capability — either a new `Role`/`AdminScope` in `app/auth/roles.py:8,14` or a dedicated allowlist — gating all Milestone-2/3 endpoints; ROOT is always permitted.
 - Add a `_require_legal(ctx)` helper modelled on `_require_root` (`app/routers/audit_export.py:34`) and apply it to LEX-008/LEX-012 routers.
 - Legal exports must NOT be accessible to ordinary ADMIN (the existing audit export is ROOT-only — preserve that bar).
