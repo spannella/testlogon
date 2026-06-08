@@ -33,30 +33,65 @@ export function WatermarkOverlay({ sessionId, tenantId }: WatermarkOverlayProps)
         pointerEvents: "none",
         overflow: "hidden",
         zIndex: 10,
-        display: "flex",
-        flexWrap: "wrap",
-        alignContent: "space-around",
-        justifyContent: "space-around",
-        opacity: 0.18,
         userSelect: "none",
       }}
     >
-      {Array.from({ length: 12 }).map((_, i) => (
+      {/*
+       * Faint, full-frame forensic tiling. Kept at a very low opacity so it's
+       * easy to recover from a screen capture but unobtrusive to the viewer — it
+       * shouldn't compete with the video itself. (WMK-006)
+       */}
+      <div
+        data-testid="watermark-forensic"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexWrap: "wrap",
+          alignContent: "space-around",
+          justifyContent: "space-around",
+          opacity: 0.05,
+        }}
+      >
+        {Array.from({ length: 12 }).map((_, i) => (
+          <span
+            key={i}
+            style={{
+              color: "white",
+              fontSize: "11px",
+              fontFamily: "monospace",
+              transform: "rotate(-25deg)",
+              whiteSpace: "nowrap",
+              letterSpacing: "0.05em",
+            }}
+          >
+            {text}
+          </span>
+        ))}
+      </div>
+
+      {/* One clear corner mark — the visible deterrent. */}
+      <div
+        data-testid="watermark-corner"
+        style={{
+          position: "absolute",
+          bottom: "8px",
+          right: "10px",
+          opacity: 0.3,
+        }}
+      >
         <span
-          key={i}
           style={{
             color: "white",
-            fontSize: "11px",
+            fontSize: "10px",
             fontFamily: "monospace",
-            transform: "rotate(-25deg)",
-            whiteSpace: "nowrap",
-            textShadow: "0 0 3px rgba(0,0,0,0.7)",
-            letterSpacing: "0.05em",
+            textShadow: "0 0 3px rgba(0,0,0,0.85)",
+            letterSpacing: "0.04em",
           }}
         >
           {text}
         </span>
-      ))}
+      </div>
     </div>
   );
 }
