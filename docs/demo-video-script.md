@@ -378,8 +378,39 @@ with a live status badge showing whether ads are serving normally or fully halte
 campaigns, creatives, targeting, in-stream ads, analytics, and a platform kill-switch — a full ads stack,
 built in. Next up: VOD.
 
-## SEGMENT 14 — VOD
-<!-- TODO -->
+## SEGMENT 14 — Video on Demand
+
+Beyond live broadcasts, the platform is a full video-on-demand service — and it begins in the creator's
+video library. Every upload, every transcode, and every published title lives here in one catalog. This
+one, "Behind the Build — Episode 1," is finished and published as adaptive-bitrate HLS, ready to stream,
+with its lifecycle status shown right on the card — uploading, encoding, in review, or ready.
+
+Getting there runs through a pipeline. When a creator uploads a file, the platform probes it, encodes it
+into multiple HLS renditions, and then drops it into a review queue. The admin Video Review Queue is where
+those freshly transcoded videos wait — each one approved or rejected before it can ever publish.
+
+Once it's live, playback is locked down. The player streams real adaptive-bitrate HLS, but it only plays
+because the platform issued a short-lived, per-session playback token — and that token quietly refreshes
+mid-stream so long sessions never stall. Multiple renditions are encoded per video, so the stream adapts to
+whatever bandwidth the viewer has.
+
+Look closely at the picture and you'll see a second layer of protection: a forensic session watermark. A
+faint, repeating fingerprint — the viewer's session token plus the creator's tenant ID — is drawn across
+every single frame, so if a recording ever leaks, it traces straight back to the session that made it.
+
+Underneath that sits tenant-scoped DRM. The HLS segments are AES-128 encrypted, and the keys are minted
+per-tenant and released only to a valid, entitled token. The encrypted files alone are worthless — without
+the tenant key, a leaked segment plays back as nothing. And before a key is ever issued, access itself is
+checked: free, subscriber-only, or pay-per-view, the entitlement is verified up front.
+
+Creators can also cut highlights into shareable clips. This public clip page needs no login at all — anyone
+with the link can watch — and every clip stays attributed, linking back to the original broadcast and
+crediting the creator who made it.
+
+Finally, when downloads are allowed, they're protected too. The download is minted on demand with a
+per-viewer forensic watermark burned directly into the file. Upload, a transcode pipeline, token-gated and
+watermarked playback, tenant DRM, clips, and protected downloads — a complete VOD stack. Next up: remote
+terminals.
 
 ## SEGMENT 15 — Remote Terminals
 <!-- TODO -->
