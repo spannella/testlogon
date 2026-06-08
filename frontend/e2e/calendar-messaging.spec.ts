@@ -1184,12 +1184,12 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   test.afterAll(async () => page.close());
 
   test("CalendarDays dropdown button is visible in ComposeBar", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await expect(calBtn).toBeVisible({ timeout: 5000 });
   });
 
   test("CalendarDays dropdown shows three calendar menu items", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await expect(page.getByText(/share my calendar/i)).toBeVisible({ timeout: 3000 });
     await expect(page.getByText(/share an event/i)).toBeVisible({ timeout: 3000 });
@@ -1199,7 +1199,7 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   });
 
   test("'Share my calendar' opens CalendarPickerDialog", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await page.getByText(/share my calendar/i).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
@@ -1209,7 +1209,7 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   });
 
   test("'Share an event' opens EventPickerDialog", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await page.getByText(/share an event/i).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
@@ -1218,7 +1218,7 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   });
 
   test("'Schedule a meeting' opens MeetingPollComposer", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await page.getByText(/schedule a meeting/i).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
