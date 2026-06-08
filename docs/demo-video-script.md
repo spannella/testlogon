@@ -280,7 +280,30 @@ Events, scheduling, public booking, and iCal export — a complete calendar with
 service. Next up: Tickets and Helpdesk.
 
 ## SEGMENT 11 — Tickets & Helpdesk
-<!-- TODO -->
+
+When something goes wrong, support is built right in. The Support Tickets page is the hub: open, track,
+and resolve every customer issue, in a list or on a kanban board. For admins it's a full queue — every
+ticket in one place, with live counts across Open, In progress, Waiting on user, and Unassigned.
+
+Raising a ticket takes seconds. Anyone can file one from the New ticket form — just a subject and a
+description, with validation keeping it short and clear. Hit create and the ticket is filed and threaded
+instantly, opening in its own reply panel ready for a conversation.
+
+This is where admins go to work. From the thread, assign a ticket to a teammate, claim it yourself,
+resolve it, or reopen it. Here a billing dispute — an invoice charged twice — has been claimed by an
+admin and worked all the way to resolution. Every status change, from assign to resolve to reopen, is
+tracked end to end, so nothing falls through the cracks.
+
+Tickets don't have to live in one big pile. Ticket Spaces let you group them into private or shared team
+boards — a Billing Disputes space, for instance — and invite owners, editors, and viewers to collaborate
+on a queue together.
+
+And for the moments that call for a real conversation, there's live helpdesk chat. Customers reach out
+from their own Support Chats, talking to support in real time — and every chat is bridged straight into
+the agent queue. Starting a new one is a single tap on Contact Support, anytime.
+
+Support tickets, an admin queue, shared spaces, and live helpdesk chat — a complete support desk, no
+extra tooling required. Next up: KYC.
 
 ## SEGMENT 12 — KYC
 <!-- TODO -->
