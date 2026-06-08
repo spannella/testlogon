@@ -1756,6 +1756,8 @@ class ConversationOut(BaseModel):
     active_agent_user_id: Optional[str] = None
     active_agent_claimed_at: Optional[int] = None
     assignment_version: Optional[int] = None
+    # Identity-free signal for the customer-facing helpdesk banner (HMH-008).
+    agent_connected: Optional[bool] = None
     participants: List["ParticipantOut"] = Field(default_factory=list)
     last_message: Optional["MessageOut"] = None
 
@@ -4589,12 +4591,23 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
         # Always expose routing_mode to all participants so the UI can identify
         # the conversation as a helpdesk chat (e.g. customer "Your Support Chats" view).
         out.routing_mode = raw_routing_mode
-    if _is_helpdesk_agent_viewer(convo, viewer_user_id):
-        out.routing_group_id = str(convo.get("routing_group_id") or "")
-        out.routing_state = str(convo.get("routing_state") or "")
-        out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
-        out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
-        out.assignment_version = int(convo.get("assignment_version", 0) or 0)
+        # Customer-safe status: routing_state carries only the lifecycle stage
+        # ("awaiting_agent" / "assigned" / …) — no agent identity — so the
+        # customer's routing banner can render. `agent_connected` is a derived,
+        # identity-free flag so the customer knows an agent is on without learning
+        # who. (HMH-008)
+        routing_state = str(convo.get("routing_state") or "")
+        out.routing_state = routing_state
+        out.agent_connected = bool(
+            routing_state == "assigned" or convo.get("active_agent_user_id")
+        )
+        # Agent-only fields (incl. the agent's identity) stay gated to helpdesk
+        # agents — never sent to the customer.
+        if _is_helpdesk_agent_viewer(convo, viewer_user_id):
+            out.routing_group_id = str(convo.get("routing_group_id") or "")
+            out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
+            out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
+            out.assignment_version = int(convo.get("assignment_version", 0) or 0)
     return out
 
 

@@ -795,13 +795,16 @@ export interface Conversation {
   muted_until: number;
   last_read_at: number;
   unread_count: number;
-  // Helpdesk routing fields (populated for helpdesk agents only)
+  // Helpdesk routing fields. routing_mode/routing_state/agent_connected are
+  // customer-safe; routing_group_id/active_agent_user_id/claimed_at/version are
+  // populated for helpdesk agents only (HMH-008).
   routing_mode?: string;
   routing_group_id?: string;
   routing_state?: string;
   active_agent_user_id?: string;
   active_agent_claimed_at?: number;
   assignment_version?: number;
+  agent_connected?: boolean;
   // Latest active pin projection
   latest_pinned_message_id?: string;
   latest_pinned_by_user_id?: string;

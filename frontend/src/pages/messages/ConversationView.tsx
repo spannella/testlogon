@@ -1582,12 +1582,33 @@ interface HelpdeskRoutingBannerProps {
 function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming }: HelpdeskRoutingBannerProps) {
   const state = conversation.routing_state ?? "";
   const assignedAgent = conversation.active_agent_user_id ?? "";
+  // Agent-only fields (routing_group_id / active_agent_user_id) are present in
+  // the payload only for helpdesk agents (HMH-008), so their presence tells us
+  // the viewer is an agent vs the customer.
+  const isAgent = Boolean(conversation.routing_group_id);
 
   let bgClass = "bg-muted";
   let text = "";
   let showClaim = false;
 
-  if (state === "awaiting_agent") {
+  if (!isAgent) {
+    // Customer-facing status — never a Claim action, never an agent identity.
+    if (state === "awaiting_agent") {
+      bgClass = "bg-amber-50 border-amber-200 text-amber-800";
+      text = "Connecting you to an agent…";
+    } else if (state === "assigned") {
+      bgClass = "bg-green-50 border-green-200 text-green-800";
+      text = "An agent has joined this chat";
+    } else if (state === "paused_no_agents_online") {
+      bgClass = "bg-red-50 border-red-200 text-red-800";
+      text = "No agents are online right now — we'll connect you as soon as one is available";
+    } else if (state === "closed") {
+      bgClass = "bg-muted border-border text-muted-foreground";
+      text = "This support chat is closed";
+    } else {
+      return null;
+    }
+  } else if (state === "awaiting_agent") {
     bgClass = "bg-amber-50 border-amber-200 text-amber-800";
     text = "Waiting for agent";
     showClaim = true;
