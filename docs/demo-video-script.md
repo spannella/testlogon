@@ -306,7 +306,40 @@ Support tickets, an admin queue, shared spaces, and live helpdesk chat — a com
 extra tooling required. Next up: KYC.
 
 ## SEGMENT 12 — KYC
-<!-- TODO -->
+
+Regulated platforms need to know who their users are — and the platform ships a full identity-verification
+stack, end to end. Start with the applicant's view. From their Verification Status page, a user tracks
+their KYC case from submission all the way to a decision: a clear timeline runs submitted, under review,
+approved, with a live status badge — and an estimated review time so they always know roughly how long
+it'll take.
+
+Now switch to the reviewer. The KYC review queue puts every pending case in one place, filterable by
+status, risk tier, or assignee. Each row shows the applicant, the case status, its risk tier, how long
+it's been waiting, and who it's assigned to — so nothing sits unreviewed. This case is an enhanced-profile
+application flagged high-risk and under active review.
+
+Open it and you get a full review workspace. The document viewer lets a reviewer inspect every uploaded
+document — ID front, ID back, and selfie — and zoom, rotate, or go fullscreen to scrutinize an ID up
+close. Each document carries its own verified, pending, or rejected state. The Document Extraction tab
+shows what OCR pulled from each one — name, document number, date of birth, expiry — and cross-checks
+every field for a match, with an overall confidence score the reviewer can trust.
+
+Identity verification isn't just paperwork. The verification call panel lets a reviewer schedule a live
+liveness call, conduct it, and record a pass or fail outcome — tracked end to end right alongside the
+documents.
+
+And the sensitive data stays sensitive. The Sensitive PII tab keeps the document number, date of birth,
+and tax ID encrypted at rest and masked by default. Revealing a field requires a reason and is logged to
+an audit trail — the plaintext is shown only after that reasoned, recorded reveal.
+
+With everything in hand, the reviewer makes the call. Approve, reject, or request more information — every
+decision is reason-coded with a note. Confirm an approval and the case transitions to approved, and the
+applicant is notified instantly.
+
+Zoom out, and the KYC Metrics dashboard tells the compliance story at a glance: funnel counts across the
+whole pipeline, an approval rate, and review-latency percentiles — p50, p90, and p99 — so the team can
+track throughput and turnaround over time. Identity verification, documents, liveness, risk scoring, and
+audited PII — a complete KYC pipeline, built in. Next up: the Ads Platform.
 
 ## SEGMENT 13 — Ads Platform
 <!-- TODO -->
