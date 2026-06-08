@@ -53,8 +53,11 @@ test("Segment 18 — Registration & MFA", async ({ page }) => {
     { ms: 3200 },
   ).catch(() => {});
 
-  await page.locator("#password").fill("Demo-Pass-2026!").catch(() => {});
-  await page.locator("#confirm_password").fill("Demo-Pass-2026!").catch(() => {});
+  // A strong password with NO overlap with the name/email (the policy rejects
+  // passwords "too similar to personal information").
+  const pw = "Bright-Harbor-Mast-92!";
+  await page.locator("#password").fill(pw).catch(() => {});
+  await page.locator("#confirm_password").fill(pw).catch(() => {});
   await page.waitForTimeout(700);
   await reveal(
     page,
