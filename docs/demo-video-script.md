@@ -443,7 +443,41 @@ auth, multi-hop bastions, and recorded sessions — full remote access, all in t
 root.
 
 ## SEGMENT 16 — Admin & Root
-<!-- TODO -->
+
+Behind every platform is a set of controls only the people running it should ever touch — and this is where
+they live. We're filming as the root account, the one identity that sees every control. It starts with the
+root-only role console: this is where you assign admins, tune their capability profiles, and review an
+immutable audit history. Granting a role is a deliberate, reason-required action — you can promote someone to a
+general admin with the run of every domain, or a scoped admin confined to just auth, billing, or content
+moderation. And you can re-scope an existing admin between general and scoped, or revoke the role entirely.
+Whatever you do, it lands in the role-assignment audit timeline: every grant, revoke, and profile change,
+recorded with the actor, the target, and the reason.
+
+Support teams sometimes need to see exactly what a user sees — so impersonation is built right in. A persistent
+banner lets root and general admins act as another user, but only after entering a target and a reason, and the
+session expires automatically. Once you begin, the banner switches to show exactly who you're acting as and
+when it expires — it stays visible the whole time you're impersonating, so there's never any doubt. One click
+on Stop returns you to your own account, and the session and its full audit trail are sealed.
+
+Keeping the platform safe is a daily job, so there's a dedicated moderation board. Reported content flows into
+newsfeed, message, and profile queues that you can filter by status, topic, and assignee. Open any ticket and
+you get the full picture: a snapshot of the content, the linked reports, the offender's history, and prior
+enforcement actions. Then you decide — resolve it as no-violation or content-removed, with an optional warn or
+ban enforcement action, all in one panel.
+
+When auditors come calling, the audit log export has you covered. Pull events by category — auth, moderation,
+broadcast, admin, billing — and export them as machine-readable NDJSON or CSV, or as a tamper-evident,
+audit-grade PDF. Past exports are listed with their status, event count, and a download link, and recurring
+reports can run automatically on a schedule.
+
+Money needs its own watchtower, and that's the payment provider health dashboard. Stripe, PayPal, and CCBill
+are tracked live — success rate, average and p95 latency, success and failure counts, and the last health
+check, all at a glance, with full incident history behind it. And when a provider goes sideways, root has a
+kill-switch: disabling a provider stops new payment initiation instantly, while in-flight charges are left
+untouched. Even that is reason-gated — flipping the switch is a deliberate, logged decision. Zoom out to the
+platform financials and you get the bird's-eye view: revenue trends over time and a provider split across all
+three processors. Roles, impersonation, moderation, audit exports, payment health, and kill-switches — the
+complete operator toolkit. Next up: compute.
 
 ## SEGMENT 17 — Compute
 <!-- TODO -->
