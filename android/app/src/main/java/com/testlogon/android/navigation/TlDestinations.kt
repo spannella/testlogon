@@ -21,7 +21,13 @@ object TlGraphs {
 
 /** Destinations inside the unauthenticated graph (AND-023). */
 sealed class AuthDest(val route: String) {
-    data object Login : AuthDest("auth/login")
+    data object Login : AuthDest("auth/login?reason={reason}") {
+        const val ARG_REASON = "reason"
+
+        /** Builds the login route, optionally carrying a [LogoutReason] name (AND-044). */
+        fun build(reason: String? = null): String =
+            if (reason.isNullOrBlank()) "auth/login" else "auth/login?reason=${Uri.encode(reason)}"
+    }
 
     data object Mfa : AuthDest("auth/mfa/{challengeId}?factors={factors}") {
         const val ARG_CHALLENGE_ID = "challengeId"
@@ -37,10 +43,16 @@ sealed class AuthDest(val route: String) {
     data object Register : AuthDest("auth/register")
     data object Recovery : AuthDest("auth/recovery")
     data object MagicLink : AuthDest("auth/magic_link")
+
+    /** Server-URL settings (AND-041); reachable pre-login from the Login screen. */
+    data object ServerUrl : AuthDest("settings/server-url")
 }
 
 /** Destinations inside the authenticated graph (AND-024). */
 sealed class MainDest(val route: String) {
     /** The bottom-nav shell host. */
     data object Shell : MainDest("main/shell")
+
+    /** Active sessions list + revoke (AND-043), reached from Profile/Security. */
+    data object ActiveSessions : MainDest("main/sessions")
 }

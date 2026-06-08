@@ -1,9 +1,12 @@
 package com.testlogon.android.feature.auth.login
 
+import androidx.lifecycle.SavedStateHandle
 import com.testlogon.android.MainDispatcherRule
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.LogoutReason
 import com.testlogon.android.data.auth.FakeAuthRepository
+import com.testlogon.android.data.auth.FakeAuthStateStore
 import com.testlogon.android.data.auth.LoginOutcome
 import com.testlogon.android.data.auth.MfaFactor
 import com.testlogon.android.data.auth.User
@@ -31,15 +34,19 @@ class LoginViewModelTest {
         var url = "http://host:8000/"
         override fun current() = url
         override fun update(value: String) { url = value }
+        override fun default() = "http://18.222.237.167:8000/"
+        override fun reset() { url = default() }
     }
 
     private lateinit var serverConfig: FakeServerUrlConfig
+    private lateinit var store: FakeAuthStateStore
 
     @Before
     fun setUp() {
         repo = FakeAuthRepository()
         serverConfig = FakeServerUrlConfig()
-        vm = LoginViewModel(repo, serverConfig)
+        store = FakeAuthStateStore()
+        vm = LoginViewModel(repo, serverConfig, store, SavedStateHandle())
     }
 
     @Test
@@ -163,5 +170,68 @@ class LoginViewModelTest {
     fun uiStateToString_doesNotLeakPassword() {
         vm.onPasswordChange("hunter2")
         assertFalse(vm.uiState.value.toString().contains("hunter2"))
+    }
+
+    // ── AND-044 expiry reason ──
+
+    @Test
+    fun expiryReason_fromNavArg_isExposed() = runTest(mainRule.dispatcher) {
+        val handle = SavedStateHandle(mapOf("reason" to "SESSION_EXPIRED"))
+        val v = LoginViewModel(repo, serverConfig, store, handle)
+        advanceUntilIdle()
+        assertEquals(LogoutReason.SESSION_EXPIRED, v.uiState.value.expiryReason)
+    }
+
+    @Test
+    fun expiryReason_fallsBackToPersistedReason() = runTest(mainRule.dispatcher) {
+        store.clear(LogoutReason.SESSION_REVOKED)
+        val v = LoginViewModel(repo, serverConfig, store, SavedStateHandle())
+        advanceUntilIdle()
+        assertEquals(LogoutReason.SESSION_REVOKED, v.uiState.value.expiryReason)
+    }
+
+    @Test
+    fun userInitiatedReason_showsNoBanner() = runTest(mainRule.dispatcher) {
+        val handle = SavedStateHandle(mapOf("reason" to "USER_INITIATED"))
+        val v = LoginViewModel(repo, serverConfig, store, handle)
+        advanceUntilIdle()
+        assertNull(v.uiState.value.expiryReason)
+    }
+
+    @Test
+    fun unknownReason_mapsToNoBanner() = runTest(mainRule.dispatcher) {
+        val handle = SavedStateHandle(mapOf("reason" to "garbage"))
+        val v = LoginViewModel(repo, serverConfig, store, handle)
+        advanceUntilIdle()
+        assertNull(v.uiState.value.expiryReason)
+    }
+
+    @Test
+    fun successfulLogin_clearsExpiryReason_andPersistedReason() = runTest(mainRule.dispatcher) {
+        store.clear(LogoutReason.SESSION_EXPIRED)
+        val handle = SavedStateHandle(mapOf("reason" to "SESSION_EXPIRED"))
+        val v = LoginViewModel(repo, serverConfig, store, handle)
+        advanceUntilIdle()
+        assertEquals(LogoutReason.SESSION_EXPIRED, v.uiState.value.expiryReason)
+
+        repo.loginResult = ApiResult.Success(LoginOutcome.Authenticated(User("u", "s", "ip")))
+        v.onEmailChange("alice@example.com")
+        v.onPasswordChange("pw")
+        v.onSubmit()
+        advanceUntilIdle()
+
+        assertNull(v.uiState.value.expiryReason)
+        assertNull(store.lastLogoutReason())
+    }
+
+    @Test
+    fun dismissExpiry_clearsBannerAndPersistedReason() = runTest(mainRule.dispatcher) {
+        store.clear(LogoutReason.SESSION_EXPIRED)
+        val v = LoginViewModel(repo, serverConfig, store, SavedStateHandle())
+        advanceUntilIdle()
+        v.onDismissExpiry()
+        advanceUntilIdle()
+        assertNull(v.uiState.value.expiryReason)
+        assertNull(store.lastLogoutReason())
     }
 }

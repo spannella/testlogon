@@ -72,6 +72,7 @@ dependencies {
     implementation(libs.coroutines.android)
 
     // Networking (auth DTOs + AuthApi live in the app module's data.auth package)
+    implementation(libs.okhttp) // okhttp3.HttpUrl for BaseUrlValidator (AND-041)
     implementation(libs.retrofit)
     implementation(libs.retrofit.moshi)
     implementation(libs.moshi)

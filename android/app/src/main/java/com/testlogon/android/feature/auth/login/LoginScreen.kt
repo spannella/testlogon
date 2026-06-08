@@ -2,26 +2,22 @@ package com.testlogon.android.feature.auth.login
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -33,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.core.model.LogoutReason
 import com.testlogon.android.core.ui.input.TlButton
 import com.testlogon.android.core.ui.input.TlButtonVariant
 import com.testlogon.android.core.ui.input.TlPasswordField
@@ -46,6 +43,7 @@ fun LoginRoute(
     onNavigateHome: () -> Unit,
     onRegister: () -> Unit,
     onRecovery: () -> Unit,
+    onOpenServerSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LoginViewModel = hiltViewModel(),
 ) {
@@ -67,7 +65,8 @@ fun LoginRoute(
         onTogglePasswordVisibility = viewModel::onTogglePasswordVisibility,
         onSubmit = viewModel::onSubmit,
         onDismissError = viewModel::onDismissError,
-        onServerUrlChange = viewModel::onServerUrlChange,
+        onDismissExpiry = viewModel::onDismissExpiry,
+        onOpenServerSettings = onOpenServerSettings,
         onRegister = onRegister,
         onRecovery = onRecovery,
         modifier = modifier,
@@ -83,13 +82,12 @@ fun LoginScreen(
     onTogglePasswordVisibility: () -> Unit,
     onSubmit: () -> Unit,
     onDismissError: () -> Unit,
-    onServerUrlChange: (String) -> Unit,
+    onDismissExpiry: () -> Unit,
+    onOpenServerSettings: () -> Unit,
     onRegister: () -> Unit,
     onRecovery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var showServerDialog by remember { mutableStateOf(false) }
-
     Scaffold(modifier = modifier.testTag("login_screen")) { padding ->
         Column(
             modifier = Modifier
@@ -109,6 +107,10 @@ fun LoginScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (state.expiryReason != null) {
+                ExpiryBanner(reason = state.expiryReason, onDismiss = onDismissExpiry)
+            }
 
             if (state.error != null) {
                 Text(
@@ -171,7 +173,7 @@ fun LoginScreen(
             )
 
             TextButton(
-                onClick = { showServerDialog = true },
+                onClick = onOpenServerSettings,
                 enabled = !state.isSubmitting,
                 modifier = Modifier.testTag("login_server_url"),
             ) {
@@ -179,43 +181,33 @@ fun LoginScreen(
             }
         }
     }
-
-    if (showServerDialog) {
-        ServerUrlDialog(
-            current = state.serverUrl,
-            onConfirm = {
-                onServerUrlChange(it)
-                showServerDialog = false
-            },
-            onDismiss = { showServerDialog = false },
-        )
-    }
 }
 
 @Composable
-private fun ServerUrlDialog(
-    current: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var text by remember { mutableStateOf(current) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Server URL") },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                label = { Text("Base URL") },
-                modifier = Modifier.fillMaxWidth().testTag("server_url_field"),
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(text) }, modifier = Modifier.testTag("server_url_save")) {
-                Text("Save")
+private fun ExpiryBanner(reason: LogoutReason, onDismiss: () -> Unit) {
+    val message = when (reason) {
+        LogoutReason.SESSION_EXPIRED -> "Your session expired. Please sign in again."
+        LogoutReason.SESSION_REVOKED -> "Your session was revoked. Please sign in again."
+        LogoutReason.USER_INITIATED -> "You were signed out."
+        LogoutReason.UNKNOWN -> "Please sign in again."
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("login_expiry_banner")
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(text = message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            TextButton(onClick = onDismiss, modifier = Modifier.testTag("login_expiry_dismiss")) {
+                Text("Dismiss")
             }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+        }
+    }
 }

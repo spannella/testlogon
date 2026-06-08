@@ -1,12 +1,16 @@
 package com.testlogon.android.feature.auth.login
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.LogoutReason
 import com.testlogon.android.data.auth.AuthRepository
+import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.auth.LoginOutcome
 import com.testlogon.android.data.auth.MfaFactor
+import com.testlogon.android.navigation.AuthDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -38,6 +42,7 @@ data class LoginUiState(
     val status: LoginStatus = LoginStatus.Idle,
     val error: String? = null,
     val serverUrl: String = "",
+    val expiryReason: LogoutReason? = null,
 ) {
     val isSubmitting: Boolean get() = status == LoginStatus.Submitting
     val submitEnabled: Boolean
@@ -47,7 +52,7 @@ data class LoginUiState(
 
     override fun toString(): String =
         "LoginUiState(email=$email, password=***, passwordVisible=$passwordVisible, " +
-            "status=$status, error=$error, serverUrl=$serverUrl)"
+            "status=$status, error=$error, serverUrl=$serverUrl, expiryReason=$expiryReason)"
 }
 
 /**
@@ -60,10 +65,25 @@ data class LoginUiState(
 class LoginViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val serverUrlConfig: ServerUrlConfig,
+    private val authStateStore: AuthStateStore,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState(serverUrl = serverUrlConfig.current()))
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
+
+    init {
+        // Expiry reason (AND-044): prefer the nav arg; fall back to the persisted reason so a cold
+        // launch after process death still shows the banner. USER_INITIATED/UNKNOWN render no banner.
+        val navReason = savedStateHandle.get<String>(AuthDest.Login.ARG_REASON)
+            ?.let(LogoutReason::fromName)
+        viewModelScope.launch {
+            val reason = navReason ?: authStateStore.lastLogoutReason()
+            if (reason == LogoutReason.SESSION_EXPIRED || reason == LogoutReason.SESSION_REVOKED) {
+                _uiState.update { it.copy(expiryReason = reason) }
+            }
+        }
+    }
 
     private val _effects = MutableSharedFlow<LoginEffect>(
         replay = 0,
@@ -81,10 +101,10 @@ class LoginViewModel @Inject constructor(
 
     fun onDismissError() = _uiState.update { it.copy(error = null) }
 
-    /** Persists a new base URL (dev host is flaky) and reflects it in state. */
-    fun onServerUrlChange(value: String) {
-        serverUrlConfig.update(value)
-        _uiState.update { it.copy(serverUrl = serverUrlConfig.current()) }
+    /** Dismiss the expiry banner (web parity: the session-expired banner is dismissable). */
+    fun onDismissExpiry() {
+        _uiState.update { it.copy(expiryReason = null) }
+        viewModelScope.launch { authStateStore.clearLogoutReason() }
     }
 
     fun onSubmit() {
@@ -107,7 +127,14 @@ class LoginViewModel @Inject constructor(
         }
     }
 
-    private fun handleSuccess(outcome: LoginOutcome) = when (outcome) {
+    private fun handleSuccess(outcome: LoginOutcome) {
+        // FR-8: a successful (re)login consumes the stale expiry reason so it can't reappear.
+        _uiState.update { it.copy(expiryReason = null) }
+        viewModelScope.launch { authStateStore.clearLogoutReason() }
+        handleOutcome(outcome)
+    }
+
+    private fun handleOutcome(outcome: LoginOutcome) = when (outcome) {
         is LoginOutcome.MfaRequired -> {
             _uiState.update { it.copy(status = LoginStatus.Idle) }
             _effects.tryEmit(LoginEffect.NavigateToMfa(outcome.challengeId, outcome.factors))

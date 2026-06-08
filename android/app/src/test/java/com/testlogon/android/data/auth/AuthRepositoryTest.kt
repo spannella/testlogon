@@ -27,6 +27,7 @@ class AuthRepositoryTest {
             authStateStore = store,
             cookieCleaner = SessionCookieCleaner { cleared++ },
             errorParser = ApiErrorParser(Moshi.Builder().build()),
+            authAreaCache = AuthAreaCache(),
         )
     }
 

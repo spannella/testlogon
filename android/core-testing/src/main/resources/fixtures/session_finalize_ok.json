@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "session_id": "sess-1",
+  "required_factors": [],
+  "passed": { "totp": true }
+}

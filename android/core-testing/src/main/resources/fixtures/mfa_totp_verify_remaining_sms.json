@@ -1,0 +1,7 @@
+{
+  "status": "pending",
+  "session_id": null,
+  "required_factors": ["totp", "sms"],
+  "passed": { "totp": true },
+  "remaining_factors": ["sms"]
+}

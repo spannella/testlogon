@@ -16,6 +16,12 @@ import javax.inject.Singleton
 interface ServerUrlConfig {
     fun current(): String
     fun update(value: String)
+
+    /** Compile-time default base URL (AND-041 "reset to default"). */
+    fun default(): String
+
+    /** Restores [default] as the persisted base URL. */
+    fun reset()
 }
 
 @Singleton
@@ -28,6 +34,10 @@ class SettingsServerUrlConfig @Inject constructor(
         val trimmed = value.trim()
         if (trimmed.isNotEmpty()) settingsStore.baseUrl = trimmed
     }
+
+    override fun default(): String = SettingsStore.DEFAULT_BASE_URL
+
+    override fun reset() = settingsStore.resetBaseUrl()
 }
 
 @Module

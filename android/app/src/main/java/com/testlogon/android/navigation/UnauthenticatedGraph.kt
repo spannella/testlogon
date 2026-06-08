@@ -11,6 +11,7 @@ import com.testlogon.android.feature.auth.RecoveryPlaceholderScreen
 import com.testlogon.android.feature.auth.RegisterPlaceholderScreen
 import com.testlogon.android.feature.auth.login.LoginRoute
 import com.testlogon.android.feature.auth.mfa.MfaRoute
+import com.testlogon.android.feature.settings.ServerUrlSettingsRoute
 
 /**
  * Registers the unauthenticated (logged-out) graph (AND-023). Login is the start destination.
@@ -25,7 +26,16 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         route = TlGraphs.UNAUTHENTICATED,
         startDestination = AuthDest.Login.route,
     ) {
-        composable(AuthDest.Login.route) {
+        composable(
+            route = AuthDest.Login.route,
+            arguments = listOf(
+                navArgument(AuthDest.Login.ARG_REASON) {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) {
             LoginRoute(
                 onNavigateToMfa = { challengeId, factors ->
                     navController.navigate(
@@ -38,6 +48,9 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
                 },
                 onRecovery = {
                     navController.navigate(AuthDest.Recovery.route) { launchSingleTop = true }
+                },
+                onOpenServerSettings = {
+                    navController.navigate(AuthDest.ServerUrl.route) { launchSingleTop = true }
                 },
             )
         }
@@ -69,6 +82,9 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         }
         composable(AuthDest.MagicLink.route) {
             MagicLinkPlaceholderScreen(onBack = { navController.popBackStack() })
+        }
+        composable(AuthDest.ServerUrl.route) {
+            ServerUrlSettingsRoute(onNavigateBack = { navController.popBackStack() })
         }
     }
 }

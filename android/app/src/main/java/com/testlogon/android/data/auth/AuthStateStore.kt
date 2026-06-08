@@ -7,11 +7,13 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.testlogon.android.auth.AuthStateProvider
+import com.testlogon.android.core.model.LogoutReason
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import java.io.IOException
@@ -35,7 +37,15 @@ interface AuthStateStore : AuthStateProvider {
     val userSub: StateFlow<String?>
 
     suspend fun setAuthenticated(userSub: String)
-    suspend fun clear()
+
+    /** Clears auth state. [reason] is persisted (AND-044) so the login banner survives process death. */
+    suspend fun clear(reason: LogoutReason = LogoutReason.USER_INITIATED)
+
+    /** Reads (and does NOT clear) the last persisted logout reason; null if none / never set. */
+    suspend fun lastLogoutReason(): LogoutReason?
+
+    /** Clears the persisted logout reason after a successful re-login (FR-8). */
+    suspend fun clearLogoutReason()
 }
 
 @Singleton
@@ -49,6 +59,7 @@ class DataStoreAuthStateStore @Inject constructor(
     private object Keys {
         val AUTHENTICATED = booleanPreferencesKey("authenticated")
         val USER_SUB = stringPreferencesKey("user_sub")
+        val LAST_LOGOUT_REASON = stringPreferencesKey("last_logout_reason")
     }
 
     private val state: StateFlow<Pair<Boolean, String?>> =
@@ -74,10 +85,21 @@ class DataStoreAuthStateStore @Inject constructor(
         }
     }
 
-    override suspend fun clear() {
+    override suspend fun clear(reason: LogoutReason) {
         dataStore.edit {
             it[Keys.AUTHENTICATED] = false
             it.remove(Keys.USER_SUB)
+            it[Keys.LAST_LOGOUT_REASON] = reason.name
         }
+    }
+
+    override suspend fun lastLogoutReason(): LogoutReason? =
+        dataStore.data
+            .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+            .map { prefs -> prefs[Keys.LAST_LOGOUT_REASON]?.let(LogoutReason::fromName) }
+            .first()
+
+    override suspend fun clearLogoutReason() {
+        dataStore.edit { it.remove(Keys.LAST_LOGOUT_REASON) }
     }
 }

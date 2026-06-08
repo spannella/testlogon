@@ -69,6 +69,7 @@ class AuthRepositoryImpl @Inject constructor(
     private val authStateStore: AuthStateStore,
     private val cookieCleaner: SessionCookieCleaner,
     private val errorParser: ApiErrorParser,
+    private val authAreaCache: AuthAreaCache,
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -111,6 +112,7 @@ class AuthRepositoryImpl @Inject constructor(
     override suspend fun getMe(): ApiResult<User> = when (val r = apiCall { api.me().toDomain() }) {
         is ApiResult.Success -> {
             _cachedUser.value = r.data
+            authAreaCache.putMe(r.data) // AND-045 last-known-good /ui/me
             authStateStore.setAuthenticated(r.data.userSub)
             r
         }
@@ -118,7 +120,7 @@ class AuthRepositoryImpl @Inject constructor(
             // A definitive 401 (post-refresh) is the canonical "not logged in" signal.
             if (r.error.status == 401) {
                 _cachedUser.value = null
-                authStateStore.clear()
+                authStateStore.clear(com.testlogon.android.core.model.LogoutReason.SESSION_EXPIRED)
             }
             r // network / 5xx: persisted auth flag untouched (flaky host must not log out).
         }
@@ -170,6 +172,7 @@ class AuthRepositoryImpl @Inject constructor(
         // (b-c) guaranteed local teardown regardless of (a)
         cookieCleaner.clear()
         authStateStore.clear()
+        authAreaCache.clear() // AND-045 per-identity cache cleared on logout
         _cachedUser.value = null
         ApiResult.Success(Unit)
     }

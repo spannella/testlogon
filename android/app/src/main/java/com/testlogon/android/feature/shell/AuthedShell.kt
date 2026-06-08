@@ -52,7 +52,10 @@ enum class AuthedTab(
  * [NavController] that keeps each tab's back stack isolated and preserves per-tab state.
  */
 @Composable
-fun AuthedShellScreen(modifier: Modifier = Modifier) {
+fun AuthedShellScreen(
+    modifier: Modifier = Modifier,
+    onOpenSessions: () -> Unit = {},
+) {
     val tabNav = rememberNavController()
     val backStack by tabNav.currentBackStackEntryAsState()
     val current = AuthedTab.fromRoute(backStack?.destination?.route)
@@ -85,7 +88,7 @@ fun AuthedShellScreen(modifier: Modifier = Modifier) {
             modifier = Modifier.padding(padding),
         ) {
             composable(AuthedTab.HOME.route) { HomePlaceholderScreen() }
-            composable(AuthedTab.ME.route) { MePlaceholderScreen() }
+            composable(AuthedTab.ME.route) { MePlaceholderScreen(onOpenSessions = onOpenSessions) }
         }
     }
 }
@@ -106,6 +109,6 @@ private fun HomePlaceholderScreen() {
 }
 
 @Composable
-private fun MePlaceholderScreen() {
-    com.testlogon.android.feature.profile.ProfileScreen()
+private fun MePlaceholderScreen(onOpenSessions: () -> Unit) {
+    com.testlogon.android.feature.profile.ProfileScreen(onOpenSessions = onOpenSessions)
 }

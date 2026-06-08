@@ -46,7 +46,8 @@ object AuthDataProvidesModule {
         @AppScope scope: CoroutineScope,
         store: Provider<AuthStateStore>,
     ): AuthEventSink = AuthEventSink {
-        scope.launch { store.get().clear() }
+        // The authenticator only fires this on an unrecoverable 401 -> session expired (AND-044).
+        scope.launch { store.get().clear(com.testlogon.android.core.model.LogoutReason.SESSION_EXPIRED) }
     }
 }
 
@@ -62,4 +63,8 @@ abstract class AuthDataBindsModule {
     @Binds
     @Singleton
     abstract fun bindAuthStateStore(impl: DataStoreAuthStateStore): AuthStateStore
+
+    @Binds
+    @Singleton
+    abstract fun bindSessionsRepository(impl: SessionsRepositoryImpl): SessionsRepository
 }

@@ -21,6 +21,7 @@ import com.testlogon.android.core.ui.input.TlButtonVariant
 @Composable
 fun ProfileScreen(
     modifier: Modifier = Modifier,
+    onOpenSessions: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -38,6 +39,12 @@ fun ProfileScreen(
             text = state.userSub?.let { "Signed in as $it" } ?: "Signed in",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TlButton(
+            text = "Active sessions",
+            onClick = onOpenSessions,
+            variant = TlButtonVariant.Secondary,
+            modifier = Modifier.testTag("profile_active_sessions"),
         )
         TlButton(
             text = "Log out",
