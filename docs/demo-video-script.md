@@ -480,4 +480,35 @@ three processors. Roles, impersonation, moderation, audit exports, payment healt
 complete operator toolkit. Next up: compute.
 
 ## SEGMENT 17 — Compute
-<!-- TODO -->
+
+The platform doesn't just run your apps — it runs your infrastructure, right from the browser. This is Compute,
+and it starts with cloud instances. Spin up a real EC2 instance, and it shows up here in seconds: name, type,
+public IP, and a full set of lifecycle controls. Every instance can be started, stopped, rebooted, or
+terminated on the spot — and every one of those actions is metered and audited. Launching is template-driven:
+pick an instance type from the catalogue — each with its vCPU and memory — choose an AMI, give it a label, drop
+in an optional startup script, and launch. It's the same type catalogue that drives billing, so what you pick
+is what you pay for.
+
+It isn't just virtual machines. Kubernetes pods work exactly the same way: launch a container by image and
+resource preset, and it comes up with a pod IP, a TTL countdown, and live logs you can stream — the whole
+container lifecycle, managed from the same place.
+
+Once something's running, you'll want to watch it. Open an instance's monitoring view and you get live CPU,
+memory, and disk gauges, fed by ingested monitoring datapoints, with the overall health derived automatically.
+Below that, a rolling time series charts CPU, memory, and disk together — and that signal is exactly what powers
+auto-restart, bringing a critical instance back on its own. And nothing happens silently: every launch, stop,
+and start is written to a per-resource lifecycle timeline on the server, so you always have the full history of
+what an instance did and when.
+
+All of this is metered automatically. A background timer bills every running instance and pod by the minute,
+against a monthly budget you set — and if the balance runs out, it auto-terminates rather than overspend. The
+spending view breaks it all down: total spend, an EC2-versus-Kubernetes split, a per-resource cost breakdown, a
+running ledger, and a budget you can cap with alert thresholds. And for whoever runs the platform, the root
+compute dashboard zooms all the way out: total spend across everyone, active instances and pods, a per-user
+breakdown, instance-type popularity, and a force-terminate for any resource on the platform.
+
+Launch, monitor, auto-bill, auto-restart — full cloud compute, EC2 and Kubernetes alike, without ever leaving
+the browser. And that's the platform. From messaging, newsfeed, files, and calendar, through commerce, billing,
+subscriptions, and a storefront, into tickets, signing, and questionnaires, then security, KYC, admin and root
+controls, and finally remote access and compute — every piece working together in one place. Thanks for
+watching the tour.
