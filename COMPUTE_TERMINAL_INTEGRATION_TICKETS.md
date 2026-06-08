@@ -110,20 +110,21 @@ This backlog wires the compute surfaces (EC2 launcher, K8s launcher, instance mo
 
 ## Milestone 3 — Frontend deep-link + unified Connect UX
 
-### CTI-006: Add the missing `/remote/ssh` deep-link route + prefilled terminal
-**Type:** Bug  
+### CTI-006: Build the Browser SSH terminal page (xterm) + the missing `/remote/ssh` route
+**Type:** Feature  
 **Priority:** P0  
-**Estimate:** 1.5 days
+**Estimate:** 4 days
 
 **Description**
-- `quick_connect` and HostInventoryPage already navigate to `/remote/ssh?host=...&port=...&username=...` (`app/services/host_inventory.py:542`; `frontend/src/pages/remote/HostInventoryPage.tsx:398-406` `quickConnectMut` → `navigate(res.connect_path)`), but **no `/remote/ssh` route exists** in `frontend/src/App.tsx` (only `remote/ssh-keys` at line 377) — the deep-link 404s today.
-- Add a `remote/ssh` route to `frontend/src/App.tsx` (~line 376-386) pointing at the Browser SSH terminal page/component, and have it read `host`, `port`, `username`, and `host_id` from `useSearchParams` and prefill the connect form (pattern as in `frontend/src/pages/remote/RemoteDesktopPage.tsx` which already uses `useNavigate`/search params).
-- When `host_id` is present, send it in the connect payload so the server resolves params authoritatively (CTI-001).
+- ⚠️ **(Verified 2026-06-08) The Browser SSH terminal FRONTEND was never built.** The backend WS is live (`app/routers/browser_ssh_terminal.py:800` `@router.websocket("/ws")`, prefix `/api/browser-ssh`) and there are SSH key-manager / recordings / bastion pages + a recording *player* (`SshRecordingPlayer.tsx`), but there is **no interactive terminal**: no `xterm`/`@xterm/xterm` dependency in `frontend/package.json` (or any branch), no `*Terminal*.tsx`, no `new Terminal(`/`FitAddon`/`.onData(` usage. The xterm terminal was only ever *planned* (ticket `SSH-003` "xterm.js terminal component + resize fit" in `SSH_BROWSER_TERMINAL_TICKETS.md`). So this is a build, not a route one-liner.
+- Implement `SSH-003`/`SSH-005`: add `@xterm/xterm` + `@xterm/addon-fit`, create a `RemoteSshTerminalPage` that opens a WebSocket to `/api/browser-ssh/ws`, speaks the connect/input/resize/output/status/error protocol (`browser_ssh_terminal.py:42-53`), and renders an xterm view with the fit addon (PTY `xterm-256color`, propagate resize).
+- Read `host`, `port`, `username`, and `host_id` from `useSearchParams` and prefill the connect form; when `host_id` is present, send it in the connect payload so the server resolves params authoritatively (CTI-001).
+- Add the `remote/ssh` route to `frontend/src/App.tsx` (~line 376-386) behind the same auth shell as the other `remote/*` routes. Today `quick_connect`/HostInventoryPage navigate to `/remote/ssh?...` (`app/services/host_inventory.py:542`; `frontend/src/pages/remote/HostInventoryPage.tsx:398-406`) but **no such route exists** (only `remote/ssh-keys` at line 377) → the deep-link 404s.
 
 **Acceptance Criteria**
+- A live xterm terminal connects to `/api/browser-ssh/ws`, accepts keyboard input, and resizes (fit addon → resize event).
 - Navigating to `/remote/ssh?host_id=...` (or `?host=&port=&username=`) loads the terminal with the form prefilled.
 - Clicking "Connect" in HostInventoryPage for an SSH host opens a working terminal (no 404).
-- The route is registered behind the same auth shell as the other `remote/*` routes.
 
 **Dependencies**
 - CTI-001.
