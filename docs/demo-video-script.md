@@ -226,7 +226,34 @@ Catalog, cart, promo codes, checkout, and recovery — a full e-commerce flow, b
 and Integrations.
 
 ## SEGMENT 09 — Files & Integrations
-<!-- TODO -->
+
+Every account comes with a full cloud drive built right in — a File Manager for storing, organizing,
+and previewing your files, folders and all.
+
+Your files live in a familiar tree. Each one shows its type, its size, and the date it was last
+modified — a quarterly report, your brand guidelines, an invoice, meeting notes. It's exactly the
+file experience you'd expect, with none of the setup.
+
+Finding anything is instant. By default you search by file name, and results filter as you type. But
+flip the toggle and you can search inside file contents, too — the same box, two modes. Type a query
+and the matching file surfaces in milliseconds. And when you've got something new to add, uploading is
+one click — or just drag and drop files straight onto the page.
+
+The File Manager doesn't stop at what you store here. Connect your Google Drive and you can browse and
+import files from there without leaving the platform. The integration starts disconnected and stays
+read-only until you opt in, through a secure, one-tap OAuth consent flow. Once it's connected, a
+built-in picker lists your Drive files and folders — a contract draft, a headshot, a shared folder —
+so you can pull any of them straight into your drive.
+
+Files are also where documents get signed. Open the signing workspace and the platform composes a
+signature packet from any PDF — and it's not a placeholder, it's the real document, rendered live in
+your browser with the signature fields overlaid exactly where they belong. Senders place those fields
+and route the packet to signers; assigned recipients get a guided fill workflow right here. And signing
+is hands-on: a freehand pad captures a real, hand-drawn signature — or type it instead — and either way
+the platform records a tamper-evident audit trail of who signed what, and when.
+
+A cloud drive, full-text search, Google Drive integration, and built-in PDF signing — your documents,
+end to end. Next up: Calendar and Booking.
 
 ## SEGMENT 10 — Calendar & Booking
 <!-- TODO -->
