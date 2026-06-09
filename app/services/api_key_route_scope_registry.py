@@ -68,6 +68,7 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
 
 
 API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
+    "GET:/feed/for-you": {"reason": "session-auth newsfeed For-You route, not in initial API-key rollout scope"},
     "GET:/health": {"reason": "health probe endpoint, not product API traffic"},
     "GET:/metrics": {"reason": "internal metrics endpoint"},
     "GET:/openapi.json": {"reason": "schema discovery endpoint"},

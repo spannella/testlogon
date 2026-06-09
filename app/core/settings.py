@@ -1980,6 +1980,24 @@ class Settings:
     reco_new_video_boost_hours: int = int(os.environ.get("RECO_NEW_VIDEO_BOOST_HOURS", "48"))
     reco_signal_retention_days: int = int(os.environ.get("RECO_SIGNAL_RETENTION_DAYS", "90"))
 
+    # Newsfeed "For You" recommendations (NRS-001) — flag defaults OFF so existing
+    # GET /feed behavior is byte-for-byte unchanged unless explicitly enabled.
+    newsfeed_recsys_enabled: bool = os.environ.get("NEWSFEED_RECSYS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    newsfeed_recsys_refresh_interval_hours: int = int(os.environ.get("NEWSFEED_RECSYS_REFRESH_INTERVAL_HOURS", "6"))
+    newsfeed_recsys_max_for_you_results: int = int(os.environ.get("NEWSFEED_RECSYS_MAX_FOR_YOU_RESULTS", "200"))
+    newsfeed_recsys_candidate_followed_limit: int = int(os.environ.get("NEWSFEED_RECSYS_CANDIDATE_FOLLOWED_LIMIT", "200"))
+    newsfeed_recsys_candidate_popular_limit: int = int(os.environ.get("NEWSFEED_RECSYS_CANDIDATE_POPULAR_LIMIT", "100"))
+    newsfeed_recsys_candidate_affinity_limit: int = int(os.environ.get("NEWSFEED_RECSYS_CANDIDATE_AFFINITY_LIMIT", "100"))
+    newsfeed_recsys_signal_retention_days: int = int(os.environ.get("NEWSFEED_RECSYS_SIGNAL_RETENTION_DAYS", "90"))
+    newsfeed_recsys_new_post_boost_hours: int = int(os.environ.get("NEWSFEED_RECSYS_NEW_POST_BOOST_HOURS", "48"))
+    # Ranking-weight knobs (consumed by score_post in NRS-005)
+    newsfeed_recsys_weight_recency: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_RECENCY", "1.0"))
+    newsfeed_recsys_weight_engagement: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_ENGAGEMENT", "1.0"))
+    newsfeed_recsys_weight_affinity: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_AFFINITY", "3.0"))
+    newsfeed_recsys_weight_content_type: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_CONTENT_TYPE", "0.5"))
+    newsfeed_recsys_weight_personal_history: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_PERSONAL_HISTORY", "2.0"))
+    newsfeed_recsys_engagement_decay_factor: float = float(os.environ.get("NEWSFEED_RECSYS_ENGAGEMENT_DECAY_FACTOR", "0.95"))
+
     # Refund Requests (BILLING-001)
     refund_requests_table_name: str = os.environ.get("DDB_REFUND_REQUESTS", "RefundRequests")
     refund_requests_enabled: bool = os.environ.get("REFUND_REQUESTS_ENABLED", "1") not in ("0", "false", "False")

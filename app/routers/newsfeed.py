@@ -4683,6 +4683,8 @@ def like_post(post_id: str, user_id: UserIdDep):
             )
         except Exception:
             logger.debug("analytics hook: like_post engagement", exc_info=True)
+        # NRS-003: For-You engagement signal (no-op unless flag on).
+        _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="like")
     except ClientError as exc:
         if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
             raise HTTPException(
@@ -4847,6 +4849,9 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
     except Exception:
         logger.debug("analytics hook: tip_post revenue", exc_info=True)
 
+    # NRS-003: For-You engagement signal (no-op unless flag on).
+    _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="tip")
+
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
 
 
@@ -4927,6 +4932,8 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
             )
         except Exception:
             logger.warning("reaction social alert failed post_id=%s", post_id, exc_info=True)
+    # NRS-003: For-You engagement signal (no-op unless flag on).
+    _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="reaction")
     return {"ok": True}
 
 
@@ -5477,6 +5484,296 @@ def view_feed(
         raise
 
 
+def _hydrate_feed_posts_for_viewer(
+    user_id: str,
+    post_ids: List[str],
+    *,
+    fanout_source_by_post: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Hydrate a list of post_ids into _post_to_dict items with the SAME viewer
+    flags the chronological feed applies (liked_by_me, unlocked, is_bookmarked,
+    source) and the SAME exclusion rules. Order of input post_ids is preserved.
+    Used by GET /feed/for-you (NRS-009)."""
+    unique_post_ids = list(dict.fromkeys([p for p in post_ids if p]))
+    if not unique_post_ids:
+        return []
+    fanout_source_by_post = fanout_source_by_post or {}
+
+    # Batch-hydrate post items (parity with the chronological loop).
+    posts: List[Dict[str, Any]] = []
+    try:
+        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in unique_post_ids]}})
+        posts = raw.get("Responses", {}).get(APP_TABLE, [])
+    except ClientError:
+        posts = []
+    post_by_id = {post["post_id"]: post for post in posts if "post_id" in post}
+
+    liked_post_ids: set = set()
+    try:
+        like_raw = ddb.batch_get_item(
+            RequestItems={APP_TABLE: {"Keys": [{"pk": pk_like(user_id), "sk": f"POST#{pid}"} for pid in unique_post_ids]}}
+        )
+        liked_post_ids = {item.get("post_id", "") for item in like_raw.get("Responses", {}).get(APP_TABLE, [])}
+    except ClientError:
+        pass
+
+    bookmarked_post_ids: set = set()
+    try:
+        bk_raw = ddb.batch_get_item(
+            RequestItems={APP_TABLE: {"Keys": [{"pk": pk_bookmark_lookup(user_id), "sk": f"post#{pid}"} for pid in unique_post_ids]}}
+        )
+        bookmarked_post_ids = {item.get("content_id", "") for item in bk_raw.get("Responses", {}).get(APP_TABLE, [])}
+    except Exception:
+        pass
+
+    from app.services.blocking import get_blocked_set, get_blocked_by_set
+    blocked_set = get_blocked_set(user_id) | get_blocked_by_set(user_id)
+    snoozed_set: Set[str] = set()
+    try:
+        from app.services.social import get_snoozed_following_ids
+        snoozed_set = get_snoozed_following_ids(user_id)
+    except Exception:
+        pass
+
+    out: List[Dict[str, Any]] = []
+    for post_id in unique_post_ids:
+        post = post_by_id.get(post_id)
+        if not post:
+            continue
+        status, _pa, _pat, _stz, _sal = _resolve_post_lifecycle_fields(post)
+        if status != "published":
+            continue
+        if post.get("moderation_removed") or post.get("moderation_removed_at"):
+            continue
+        if is_hidden(user_id, post_id):
+            continue
+        author = post.get("user_id")
+        if author and author in blocked_set:
+            continue
+        if author and author in snoozed_set:
+            continue
+        if author and author != user_id and not can_view_post(user_id, post):
+            continue
+        locked = bool(post.get("locked"))
+        is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
+        viewer_unlocked = locked and not is_locked_for_viewer
+        post_dict = _post_to_dict(
+            post,
+            locked_body=is_locked_for_viewer,
+            liked_by_me=post_id in liked_post_ids,
+            unlocked=viewer_unlocked,
+            viewer_id=user_id,
+            bookmarked_ids=bookmarked_post_ids,
+        )
+        post_dict["source"] = fanout_source_by_post.get(post_id, "for_you")
+        out.append(post_dict)
+    return out
+
+
+@router.get("/feed/for-you")
+def view_for_you_feed(
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: Optional[str] = Query(default=None),
+    user_id: UserIdDep = None,
+):
+    """Ranked "For You" newsfeed (NRS-009). Falls back to the chronological feed
+    when the flag is off, no pre-computed row exists, or ranking yields zero
+    items — so this endpoint always returns posts."""
+    from app.metrics import (
+        record_newsfeed_recsys_request,
+        record_newsfeed_recsys_latency,
+    )
+    from app.services.newsfeed_recsys import get_for_you_posts
+
+    started = time.perf_counter()
+
+    def _chronological_fallback(source: str):
+        chrono = view_feed(limit=limit, cursor=cursor, user_id=user_id)
+        chrono = dict(chrono)
+        chrono["source"] = source
+        record_newsfeed_recsys_request(mode="for_you", source=source)
+        record_newsfeed_recsys_latency(source=source, elapsed_seconds=time.perf_counter() - started)
+        return chrono
+
+    if not S.newsfeed_recsys_enabled:
+        return _chronological_fallback("chronological_fallback")
+
+    offset = 0
+    if cursor:
+        try:
+            offset = max(0, int(cursor))
+        except (TypeError, ValueError):
+            offset = 0
+
+    post_ids, next_cursor, source = get_for_you_posts(user_id, limit=limit, offset=offset)
+    if source != "for_you" or not post_ids:
+        return _chronological_fallback("chronological_fallback")
+
+    items = _hydrate_feed_posts_for_viewer(user_id, post_ids)
+    if not items:
+        return _chronological_fallback("chronological_fallback")
+
+    record_newsfeed_recsys_request(mode="for_you", source="for_you")
+    record_newsfeed_recsys_latency(source="for_you", elapsed_seconds=time.perf_counter() - started)
+    logger.info(
+        "newsfeed for-you query",
+        extra={
+            "viewer_id": user_id,
+            "source": "for_you",
+            "served_count": len(items),
+            "ranked_pool": len(post_ids),
+            "has_next_cursor": bool(next_cursor),
+        },
+    )
+    return {"items": items, "next_cursor": next_cursor, "source": "for_you"}
+
+
+def _recsys_fetch_followed(viewer_id: str, limit: int) -> List[Dict[str, str]]:
+    """Recent feed refs for a viewer (own + fanned-out posts) via GSI1."""
+    out: List[Dict[str, str]] = []
+    try:
+        resp = ddb_query(
+            IndexName="GSI1",
+            KeyConditionExpression="GSI1PK = :pk",
+            ExpressionAttributeValues={":pk": f"FEED#{viewer_id}"},
+            ScanIndexForward=False,
+            Limit=min(limit, 200),
+        )
+        for ref in resp.get("Items", []):
+            pid = ref.get("post_id")
+            if pid:
+                out.append({"post_id": str(pid), "author_id": str(ref.get("author_id") or "")})
+    except Exception:
+        logger.debug("recsys fetch_followed failed for %s", viewer_id, exc_info=True)
+    return out
+
+
+def _recsys_fetch_author_posts(author_id: str, limit: int) -> List[Dict[str, str]]:
+    """Recent posts by an author via GSI2 POST_AUTHOR."""
+    out: List[Dict[str, str]] = []
+    if not author_id:
+        return out
+    try:
+        resp = ddb_query(
+            IndexName="GSI2",
+            KeyConditionExpression="GSI2PK = :pk",
+            ExpressionAttributeValues={":pk": f"POST_AUTHOR#{author_id}"},
+            ScanIndexForward=False,
+            Limit=min(limit, 50),
+        )
+        for it in resp.get("Items", []):
+            pid = it.get("post_id")
+            if pid:
+                out.append({"post_id": str(pid), "author_id": author_id})
+    except Exception:
+        logger.debug("recsys fetch_author_posts failed for %s", author_id, exc_info=True)
+    return out
+
+
+def _recsys_hydrate(post_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Batch-get raw post items for ranking (no viewer-flag decoration)."""
+    unique = list(dict.fromkeys([p for p in post_ids if p]))
+    if not unique:
+        return {}
+    try:
+        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in unique]}})
+        posts = raw.get("Responses", {}).get(APP_TABLE, [])
+    except ClientError:
+        return {}
+    return {p["post_id"]: p for p in posts if "post_id" in p}
+
+
+def _recsys_engage(*, user_id: str, post: Optional[Dict[str, Any]], post_id: str, action: str) -> None:
+    """Fire-and-forget For-You engagement signal (NRS-003). No-op when flag off.
+    Never raises — must not change the 2xx outcome of the engagement endpoint."""
+    try:
+        from app.services.newsfeed_recsys import record_post_engagement
+        author_id = (post or {}).get("user_id") or ""
+        is_public = not bool((post or {}).get("locked"))
+        record_post_engagement(
+            user_id=user_id,
+            post_id=post_id,
+            author_id=author_id,
+            action=action,
+            is_public=is_public,
+        )
+    except Exception:
+        logger.debug("recsys engage hook failed (%s)", action, exc_info=True)
+
+
+def recompute_for_you_for_viewer(viewer_id: str) -> Dict[str, Any]:
+    """Candidate gen -> rank -> store the For-You row for one viewer."""
+    from app.services.newsfeed_recsys import compute_for_you_posts
+
+    follow_set: Set[str] = set()
+    try:
+        from app.services.social import get_following
+        following, _ = get_following(viewer_id, limit=200)
+        for f in following:
+            aid = f.get("target_user_id") or f.get("user_id") or ""
+            if aid:
+                follow_set.add(aid)
+    except Exception:
+        logger.debug("recompute_for_you: get_following failed for %s", viewer_id, exc_info=True)
+
+    def _exclude(post: Dict[str, Any]) -> bool:
+        post_id = str(post.get("post_id") or "")
+        author = post.get("user_id")
+        status, _pa, _pat, _stz, _sal = _resolve_post_lifecycle_fields(post)
+        if status != "published":
+            return True
+        if post.get("moderation_removed") or post.get("moderation_removed_at"):
+            return True
+        if is_hidden(viewer_id, post_id):
+            return True
+        if author and author != viewer_id and not can_view_post(viewer_id, post):
+            return True
+        return False
+
+    return compute_for_you_posts(
+        viewer_id,
+        fetch_followed=_recsys_fetch_followed,
+        fetch_author_posts=_recsys_fetch_author_posts,
+        hydrate=_recsys_hydrate,
+        follow_set=follow_set,
+        exclude=_exclude,
+    )
+
+
+def recompute_for_you_all_users() -> Dict[str, Any]:
+    """Recompute For-You rows for every viewer that has post-engagement signals."""
+    from app.services.newsfeed_recsys import list_post_signal_users
+
+    viewers = list_post_signal_users()
+    processed = 0
+    errors = 0
+    for vid in viewers:
+        try:
+            recompute_for_you_for_viewer(vid)
+            processed += 1
+        except Exception:
+            logger.exception("recsys refresh_all: error for viewer %s", vid)
+            errors += 1
+    return {"viewers_processed": processed, "errors": errors}
+
+
+recsys_internal_router = APIRouter(prefix="/internal/newsfeed-recsys", tags=["newsfeed-recsys-internal"])
+
+
+class _RecsysRefreshIn(BaseModel):
+    viewer_id: Optional[str] = None
+
+
+@recsys_internal_router.post("/refresh")
+def recsys_refresh_endpoint(body: _RecsysRefreshIn):
+    """Internal recompute trigger (single viewer or all signal users)."""
+    if body.viewer_id:
+        result = recompute_for_you_for_viewer(body.viewer_id)
+        return {"ok": True, "viewers_processed": 1, "result": result}
+    result = recompute_for_you_all_users()
+    return {"ok": True, **result}
+
+
 @router.get("/feed/capabilities", response_model=FeedCapabilitiesResponse)
 def feed_capabilities(user_id: UserIdDep):
     enabled = _is_unlock_limit_enabled_for_user(user_id)
@@ -5655,6 +5952,9 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         )
     except Exception:
         logger.debug("analytics hook: create_comment engagement", exc_info=True)
+
+    # NRS-003: For-You engagement signal (no-op unless flag on).
+    _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="comment")
 
     if post_author and post_author != user_id and parent is None:
         put_notification(
@@ -6258,6 +6558,10 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depen
         reason_code="payment_confirmed",
         payment_status=str(conf.get("status") or ""),
     )
+
+    # NRS-003: For-You engagement signal (no-op unless flag on). Unlock is a
+    # strong personal-history signal; locked posts are not pushed to popularity.
+    _recsys_engage(user_id=user_id, post=post, post_id=req.post_id, action="unlock")
 
     # GAP-0337: analytics instrumentation (revenue: unlock). Creator = post
     # author, amount = unlock price, subscriber = unlocking user. Best-effort.
