@@ -28,8 +28,13 @@ import kotlinx.coroutines.flow.map
 fun AppNavHost(
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController(),
+    // AND-061: lets the host Activity grab the NavController so onNewIntent can forward warm/foreground
+    // magic-link deep links. Defaulted to a no-op so previews / tests don't need to supply it.
+    onNavControllerReady: (NavHostController) -> Unit = {},
     viewModel: AuthRoutingViewModel = hiltViewModel(),
 ) {
+    LaunchedEffect(navController) { onNavControllerReady(navController) }
+
     // The graph swap is driven entirely by the effect below so the start destination stays fixed
     // (avoids rebuilding the NavHost when auth flips). The default provider is unauthenticated.
     LaunchedEffect(navController) {

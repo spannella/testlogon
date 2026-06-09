@@ -1,15 +1,18 @@
 package com.testlogon.android.navigation
 
+import androidx.navigation.NavDeepLink
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import androidx.navigation.navDeepLink
 import androidx.navigation.navigation
-import com.testlogon.android.feature.auth.MagicLinkPlaceholderScreen
 import com.testlogon.android.feature.auth.MfaSetupPlaceholderScreen
 import com.testlogon.android.feature.auth.login.LoginRoute
 import com.testlogon.android.feature.auth.mfa.MfaRoute
+import com.testlogon.android.feature.auth.passwordless.MagicLinkStartRoute
+import com.testlogon.android.feature.auth.passwordless.MagicLinkVerifyRoute
 import com.testlogon.android.feature.auth.recovery.RecoveryChallengeRoute
 import com.testlogon.android.feature.auth.recovery.RecoveryConfirmRoute
 import com.testlogon.android.feature.auth.recovery.RecoveryStartRoute
@@ -52,6 +55,9 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
                 },
                 onRecovery = {
                     navController.navigate(AuthDest.Recovery.route) { launchSingleTop = true }
+                },
+                onMagicLink = {
+                    navController.navigate(AuthDest.MagicLink.route) { launchSingleTop = true }
                 },
                 onOpenServerSettings = {
                     navController.navigate(AuthDest.ServerUrl.route) { launchSingleTop = true }
@@ -253,11 +259,74 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
                 },
             )
         }
+        // ── Passwordless / magic-link (AND-060/061) ──
         composable(AuthDest.MagicLink.route) {
-            MagicLinkPlaceholderScreen(onBack = { navController.popBackStack() })
+            MagicLinkStartRoute(
+                onBackToLogin = {
+                    navController.navigate(AuthDest.Login.route) {
+                        popUpTo(AuthDest.Login.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
+        composable(
+            route = AuthDest.MagicLinkVerify.route,
+            arguments = listOf(
+                navArgument(AuthDest.MagicLinkVerify.ARG_TOKEN) {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+            // App Link (prod HTTPS, autoVerify) + dev HTTP tap-through. The path is shared; the email
+            // link is https://HOST/magic-link-verify?token=... and the dev variant uses plain http.
+            deepLinks = magicLinkDeepLinks(),
+        ) {
+            MagicLinkVerifyRoute(
+                // Full session: the repository already ran getMe, flipping the durable auth state, so
+                // the auth gate swaps to the authenticated graph. Pop verify so Back can't return here.
+                onAuthenticated = {
+                    navController.popBackStack(AuthDest.MagicLinkVerify.route, inclusive = true)
+                },
+                onMfaRequired = { challengeId, requiredFactors ->
+                    navController.navigate(
+                        AuthDest.Mfa.build(challengeId, requiredFactors),
+                    ) {
+                        popUpTo(AuthDest.MagicLinkVerify.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onRequestNewLink = {
+                    navController.navigate(AuthDest.MagicLink.route) {
+                        popUpTo(AuthDest.MagicLinkVerify.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onUsePassword = {
+                    navController.navigate(AuthDest.Login.route) {
+                        popUpTo(AuthDest.MagicLinkVerify.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
         }
         composable(AuthDest.ServerUrl.route) {
             ServerUrlSettingsRoute(onNavigateBack = { navController.popBackStack() })
         }
     }
+}
+
+/**
+ * Deep links the magic-link verify destination resolves (AND-061), matching the manifest
+ * intent-filters: a verified HTTPS App Link on the production host and a non-verified HTTP tap-through
+ * on the dev host. The `{host}` placeholder lets any production host (set via assetlinks.json) match;
+ * the dev host is pinned to the plaintext dev IP.
+ */
+private fun magicLinkDeepLinks(): List<NavDeepLink> {
+    val path = AuthDest.MagicLinkVerify.DEEP_LINK_PATH
+    return listOf(
+        navDeepLink { uriPattern = "https://{host}$path?token={token}" },
+        navDeepLink { uriPattern = "http://18.222.237.167$path?token={token}" },
+    )
 }

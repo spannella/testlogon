@@ -130,4 +130,20 @@ interface AuthApi {
     @Headers("Content-Type: application/json")
     @POST("ui/password-recovery/confirm")
     suspend fun passwordRecoveryConfirm(@Body body: PasswordRecoveryConfirmReq): OkResp
+
+    // ── Passwordless / magic-link (AND-060/061) ──
+    //
+    // Unauthenticated namespace. start dispatches a sign-in link to the user's email; verify exchanges
+    // the one-time token from that link for a session (or an MFA challenge). Both are non-idempotent
+    // POSTs and are never auto-retried. See AuthDtos for the verified shapes.
+
+    /** AND-060: request a magic-link email; returns a status + optional masked destinations. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/passwordless/start")
+    suspend fun passwordlessStart(@Body body: PasswordlessStartReq): PasswordlessStartResp
+
+    /** AND-061: exchange a one-time link token for a session or an MFA challenge. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/passwordless/verify")
+    suspend fun passwordlessVerify(@Body body: PasswordlessVerifyReq): PasswordlessVerifyResp
 }

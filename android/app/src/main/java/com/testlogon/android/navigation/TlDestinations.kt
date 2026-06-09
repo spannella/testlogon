@@ -153,7 +153,25 @@ sealed class AuthDest(val route: String) {
             "recovery/confirm/${Uri.encode(username)}/${Uri.encode(challengeId)}"
     }
 
-    data object MagicLink : AuthDest("auth/magic_link")
+    /** Passwordless / magic-link start (AND-060). Reached from the Login screen affordance. */
+    data object MagicLink : AuthDest("auth/magic-link")
+
+    /**
+     * Passwordless / magic-link deep-link verify (AND-061). Carries the one-time `token` query arg
+     * extracted from the email link's URI; the screen exchanges it for a session / MFA challenge.
+     *
+     * SECURITY: the one-time token is sensitive but is unavoidably a deep-link query param (the link
+     * the user taps). It lives only in the nav arg / SavedStateHandle, is never logged, and the
+     * destination is popped after a successful verify so it cannot be replayed from the back stack.
+     */
+    data object MagicLinkVerify : AuthDest("auth/magic-link-verify?token={token}") {
+        const val ARG_TOKEN = "token"
+
+        /** The deep-link path the email link points at, on both the prod (HTTPS) and dev (HTTP) hosts. */
+        const val DEEP_LINK_PATH = "/magic-link-verify"
+
+        fun build(token: String): String = "auth/magic-link-verify?token=${Uri.encode(token)}"
+    }
 
     /** Server-URL settings (AND-041); reachable pre-login from the Login screen. */
     data object ServerUrl : AuthDest("settings/server-url")

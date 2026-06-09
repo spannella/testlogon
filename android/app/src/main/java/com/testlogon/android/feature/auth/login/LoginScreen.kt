@@ -43,6 +43,7 @@ fun LoginRoute(
     onNavigateHome: () -> Unit,
     onRegister: () -> Unit,
     onRecovery: () -> Unit,
+    onMagicLink: () -> Unit,
     onOpenServerSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LoginViewModel = hiltViewModel(),
@@ -69,6 +70,7 @@ fun LoginRoute(
         onOpenServerSettings = onOpenServerSettings,
         onRegister = onRegister,
         onRecovery = onRecovery,
+        onMagicLink = onMagicLink,
         modifier = modifier,
     )
 }
@@ -86,6 +88,7 @@ fun LoginScreen(
     onOpenServerSettings: () -> Unit,
     onRegister: () -> Unit,
     onRecovery: () -> Unit,
+    onMagicLink: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier.testTag("login_screen")) { padding ->
@@ -162,6 +165,14 @@ fun LoginScreen(
                 enabled = state.submitEnabled,
                 loading = state.isSubmitting,
                 modifier = Modifier.fillMaxWidth().testTag("login_submit"),
+            )
+
+            TlButton(
+                text = "Sign in with a magic link",
+                onClick = onMagicLink,
+                variant = TlButtonVariant.Text,
+                enabled = !state.isSubmitting,
+                modifier = Modifier.fillMaxWidth().testTag("login_magic_link"),
             )
 
             TlButton(

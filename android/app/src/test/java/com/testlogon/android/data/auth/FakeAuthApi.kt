@@ -122,6 +122,28 @@ class FakeAuthApi : AuthApi {
     override suspend fun passwordRecoveryConfirm(body: PasswordRecoveryConfirmReq): OkResp =
         pwRecoveryConfirmResult()
 
+    // ── Passwordless / magic-link (AND-060/061): scriptable stubs ──
+
+    var passwordlessStartResult: () -> PasswordlessStartResp = { error("not scripted") }
+    var passwordlessVerifyResult: () -> PasswordlessVerifyResp = { error("not scripted") }
+
+    var passwordlessStartCalls = 0
+    var passwordlessVerifyCalls = 0
+    var lastPasswordlessStartBody: PasswordlessStartReq? = null
+    var lastPasswordlessVerifyBody: PasswordlessVerifyReq? = null
+
+    override suspend fun passwordlessStart(body: PasswordlessStartReq): PasswordlessStartResp {
+        passwordlessStartCalls++
+        lastPasswordlessStartBody = body
+        return passwordlessStartResult()
+    }
+
+    override suspend fun passwordlessVerify(body: PasswordlessVerifyReq): PasswordlessVerifyResp {
+        passwordlessVerifyCalls++
+        lastPasswordlessVerifyBody = body
+        return passwordlessVerifyResult()
+    }
+
     companion object {
         /** Builds an [HttpException] with the given status + JSON error body. */
         fun httpError(status: Int, body: String = """{"detail":"error"}"""): HttpException =

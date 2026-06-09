@@ -241,6 +241,45 @@ data class RegisterEmailCheckResp(
     val status: String,
 )
 
+// ── passwordless / magic-link (AND-060/061) ──
+//
+// Verified shapes (OpenAPI PasswordlessStartReq/Resp + PasswordlessVerifyReq/Resp, frontend
+// src/api/types.ts):
+//  - start: request key is `username` (NOT `email`); response carries a required `status` plus an
+//    optional `sent_to` array of opaque strings. There is NO resend_after / expires_in.
+//  - verify: request is `{token}`; response carries a required `status`, an optional `session_id`,
+//    `auth_required` (default false), an optional `challenge_id`, and `required_factors[]`.
+// The token/username are PII-ish; request DTOs redact them in toString so logging can't leak them.
+
+@JsonClass(generateAdapter = true)
+data class PasswordlessStartReq(
+    @Json(name = "username") val username: String,
+) {
+    override fun toString() = "PasswordlessStartReq(username=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class PasswordlessStartResp(
+    @Json(name = "status") val status: String,
+    @Json(name = "sent_to") val sentTo: List<String>? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class PasswordlessVerifyReq(
+    @Json(name = "token") val token: String,
+) {
+    override fun toString() = "PasswordlessVerifyReq(token=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class PasswordlessVerifyResp(
+    @Json(name = "status") val status: String,
+    @Json(name = "session_id") val sessionId: String? = null,
+    @Json(name = "auth_required") val authRequired: Boolean = false,
+    @Json(name = "challenge_id") val challengeId: String? = null,
+    @Json(name = "required_factors") val requiredFactors: List<String> = emptyList(),
+)
+
 // ── password-recovery/start (AND-057) ──
 //
 // Verified shapes (frontend src/api/types.ts: PasswordRecoveryStartReq/Resp). OpenAPI types the 200

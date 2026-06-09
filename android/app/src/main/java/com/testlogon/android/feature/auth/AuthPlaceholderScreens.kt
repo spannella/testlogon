@@ -19,9 +19,9 @@ import com.testlogon.android.core.ui.input.TlButtonVariant
 /**
  * Placeholder unauthenticated screens (AND-023) still owned by later tickets.
  *
- * Login/MFA (AND-030/031/039/040), Register (AND-053/054), and Recovery (AND-057/058/059) are now
- * real screens; the placeholders below remain for the MFA-setup handoff and MagicLink. Each is
- * stateless and takes only navigation lambdas.
+ * Login/MFA (AND-030/031/039/040), Register (AND-053/054), Recovery (AND-057/058/059), and
+ * passwordless / magic-link (AND-060/061) are now real screens; the placeholder below remains only for
+ * the MFA-setup handoff. It is stateless and takes only navigation lambdas.
  */
 
 /**
@@ -37,13 +37,6 @@ fun MfaSetupPlaceholderScreen(
 ) {
     PlaceholderScaffold(title = "Set up two-factor auth", testTag = "mfa_setup_screen", modifier = modifier) {
         TlButton(text = "Continue", onClick = onContinue, variant = TlButtonVariant.Text)
-    }
-}
-
-@Composable
-fun MagicLinkPlaceholderScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    PlaceholderScaffold(title = "Magic link", testTag = "magic_link_screen", modifier = modifier) {
-        TlButton(text = "Back", onClick = onBack, variant = TlButtonVariant.Text)
     }
 }
 

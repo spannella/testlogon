@@ -5,4 +5,8 @@
     <!-- Authenticated shell bottom-nav tabs (AND-024) -->
     <string name="tab_home">Home</string>
     <string name="tab_me">Profile</string>
+
+    <!-- AND-061: production host claimed by the magic-link App Link (autoVerify). Update for the real
+         production domain; assetlinks.json on this host must carry the release cert fingerprint. -->
+    <string name="applink_host" translatable="false">app.testlogon.example.com</string>
 </resources>
