@@ -5836,6 +5836,42 @@ export interface WorkerList {
   count: number;
 }
 
+// ─── Interactive Claude Code sessions (ACS-009/010) ──────────────
+
+export type AgentSessionState =
+  | "starting"
+  | "ready"
+  | "awaiting_input"
+  | "running"
+  | "ended"
+  | "error";
+
+export interface AgentSession {
+  session_id: string;
+  worker_id: string;
+  user_id: string;
+  state: AgentSessionState;
+  created_at: number;
+  started_at: number;
+  ended_at: number;
+  last_activity_at: number;
+  cols: number;
+  rows: number;
+  claude_pid: number;
+  error_message: string;
+  ws_path: string;
+}
+
+export interface AgentSessionList {
+  sessions: AgentSession[];
+  count: number;
+}
+
+export interface CreateAgentSessionIn {
+  cols?: number;
+  rows?: number;
+}
+
 export interface ToolInfo {
   tool: string;
   display_name: string;

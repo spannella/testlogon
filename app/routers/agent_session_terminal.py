@@ -66,6 +66,10 @@ logger = logging.getLogger(__name__)
 # (CLAUDE.md: --workers 1). A backend restart drops live PTYs; reattach restarts
 # the CLI, which is acceptable per the ADR.
 _LIVE_BRIDGES: Dict[str, Any] = {}
+# Parallel metadata (session_id -> {user_id, worker_id}) so the idle reaper can
+# resolve a live bridge's owning session record (PK is USER#{user_id}) without
+# changing the _LIVE_BRIDGES value shape that the WS handler + tests rely on.
+_BRIDGE_META: Dict[str, Dict[str, str]] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
@@ -80,9 +84,16 @@ def _replay_bytes() -> int:
         return 65536
 
 
-def _register_bridge(session_id: str, bridge: Any) -> None:
+def _register_bridge(
+    session_id: str,
+    bridge: Any,
+    *,
+    user_id: str = "",
+    worker_id: str = "",
+) -> None:
     with _REGISTRY_LOCK:
         _LIVE_BRIDGES[session_id] = bridge
+        _BRIDGE_META[session_id] = {"user_id": user_id, "worker_id": worker_id}
 
 
 def _get_bridge(session_id: str) -> Optional[Any]:
@@ -92,6 +103,7 @@ def _get_bridge(session_id: str) -> Optional[Any]:
 
 def _drop_bridge(session_id: str) -> Optional[Any]:
     with _REGISTRY_LOCK:
+        _BRIDGE_META.pop(session_id, None)
         return _LIVE_BRIDGES.pop(session_id, None)
 
 
@@ -111,6 +123,106 @@ def stop_session_bridge(session_id: str) -> bool:
     return True
 
 
+def _idle_timeout_seconds() -> int:
+    try:
+        return max(0, int(getattr(S, "agent_claude_code_session_idle_timeout_seconds", 1800)))
+    except (TypeError, ValueError):
+        return 1800
+
+
+def reap_idle_sessions(*, now: Optional[float] = None) -> int:
+    """Close + end any live PTY bridge whose session has been idle/abandoned
+    longer than ``AGENT_CLAUDE_CODE_SESSION_IDLE_TIMEOUT_SECONDS``.
+
+    A *detached* session (the browser closed the WS) keeps its bridge alive in
+    the process-local registry so the user can reattach (ADR-002 driver #4) —
+    but a bridge with no viewer still consumes a PTY and LLM tokens. This reaper
+    is the safety valve called out in the ADR "Consequences": it walks the live
+    bridge registry, and for each bridge whose owning session record has not had
+    activity within the idle window (or whose record is already terminal /
+    missing), it closes the PTY (``stop_session_bridge``) and transitions the
+    session to ``ended`` (``error``-tolerant). Returns the number of sessions
+    reaped.
+
+    Best-effort and never raises: a per-session failure is logged and skipped.
+    A timeout of 0 disables reaping (treated as "never idle out").
+    """
+    timeout = _idle_timeout_seconds()
+    if timeout <= 0:
+        return 0
+    now_s = float(now) if now is not None else time.time()
+    with _REGISTRY_LOCK:
+        snapshot = dict(_BRIDGE_META)
+    reaped = 0
+    for session_id, meta in snapshot.items():
+        if session_id not in _LIVE_BRIDGES:
+            continue
+        user_id = meta.get("user_id", "")
+        worker_id = meta.get("worker_id", "")
+        try:
+            sess = sessions_mgr.get_session(user_id, session_id) if user_id else None
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("reap_idle_sessions lookup failed session_id=%s", session_id)
+            continue
+        # Orphaned bridge (record gone or already terminal): drop the PTY.
+        if not sess or sess.get("state") in sessions_mgr.TERMINAL_STATES:
+            stop_session_bridge(session_id)
+            reaped += 1
+            continue
+        last_activity = int(sess.get("last_activity_at", 0) or 0)
+        if last_activity and (now_s - last_activity) < timeout:
+            continue
+        # Idle/abandoned past the window — close the PTY and end the session.
+        stop_session_bridge(session_id)
+        try:
+            sessions_mgr.end_session(user_id, session_id)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("reap_idle_sessions end failed session_id=%s", session_id)
+        _audit(
+            "agent_session_reaped",
+            user_id,
+            outcome="idle_timeout",
+            session_id=session_id,
+            worker_id=worker_id,
+            idle_timeout_seconds=timeout,
+        )
+        logger.info(
+            "agent_session reaped idle session_id=%s worker_id=%s (idle>%ds)",
+            session_id, worker_id, timeout,
+        )
+        reaped += 1
+    return reaped
+
+
+async def run_idle_session_reaper(*, poll_interval: Optional[int] = None) -> None:
+    """Background task: periodically reap idle/abandoned agent sessions.
+
+    Gated by the master flag at registration time. The poll interval defaults to
+    a fraction of the idle timeout (so a session is reaped within roughly one
+    extra interval of going idle), bounded to a sane floor/ceiling.
+    """
+    if poll_interval is not None:
+        interval = poll_interval
+    else:
+        interval = min(300, max(30, _idle_timeout_seconds() // 4 or 60))
+    while True:
+        try:
+            reap_idle_sessions()
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("agent_session idle reaper error")
+        await asyncio.sleep(interval)
+
+
+def start_agent_session_reaper_task() -> None:
+    """Register the idle-session reaper at app startup (flag-gated)."""
+    if agent_claude_code_session_enabled():
+        asyncio.ensure_future(run_idle_session_reaper())
+        logger.info(
+            "Agent Claude Code session idle reaper started (idle_timeout=%ds)",
+            _idle_timeout_seconds(),
+        )
+
+
 async def _dispatch_signal(
     *,
     signal: Dict[str, Any],
@@ -118,13 +230,17 @@ async def _dispatch_signal(
     user_id: str,
     session_id: str,
     websocket: WebSocket,
-) -> None:
+) -> Optional[str]:
     """Map a monitor signal to a browser message AND a session-state transition.
 
     Mirrors browser_ssh_terminal._dispatch_terminal_signal for the browser
     surface, but additionally drives the session state machine (ACS-008):
     ``feedback_needed`` → ``awaiting_input``; ``completion`` → ``ended``;
     ``error`` → ``error``. Best-effort — never interrupts the stream.
+
+    Returns the ``request_id`` of a newly created feedback request when the
+    signal was ``feedback_needed`` (so the WS loop can later mark it responded
+    when the user answers), else ``None``.
     """
     category = signal.get("signal")
     match_text = signal.get("match", "")
@@ -133,6 +249,7 @@ async def _dispatch_signal(
     context = buf.get_recent(2000)
 
     if category == "feedback_needed":
+        request_id: Optional[str] = None
         try:
             req = terminal_monitor.create_feedback_request(
                 user_id=user_id or "",
@@ -142,15 +259,17 @@ async def _dispatch_signal(
                 terminal_context=context,
                 detected_pattern=detected_pattern,
             )
+            request_id = req.get("request_id")
             await websocket.send_json(
                 {
                     "type": "feedback_request",
-                    "payload": {"request_id": req["request_id"], "question": match_text},
+                    "payload": {"request_id": request_id, "question": match_text},
                 }
             )
         except Exception:  # pragma: no cover - defensive
             logger.exception("agent_session feedback dispatch failed worker_id=%s", worker_id)
         _safe_transition(user_id, session_id, sessions_mgr.STATE_AWAITING_INPUT)
+        return request_id
     elif category == "completion":
         try:
             await websocket.send_json({"type": "agent_complete", "payload": {}})
@@ -163,6 +282,7 @@ async def _dispatch_signal(
         except Exception:  # pragma: no cover - defensive
             logger.exception("agent_session agent_error failed worker_id=%s", worker_id)
         _safe_transition(user_id, session_id, sessions_mgr.STATE_ERROR, error_message=match_text)
+    return None
 
 
 def _safe_transition(
@@ -234,6 +354,11 @@ async def agent_session_ws(websocket: WebSocket) -> None:
     slot_acquired = False
     attached_existing = False  # reattach to an already-live bridge (no new slot)
     started_at = time.time()
+    # Most-recent pending feedback request_id for this session (ACS-005). When
+    # the user's next input answers it we mark it responded via the monitor's
+    # no-buffer-reinject helper so the feedback CRUD view stays consistent
+    # without double-injecting the answer into the ring buffer.
+    pending_feedback_id: str | None = None
 
     await websocket.send_json(
         {
@@ -267,13 +392,15 @@ async def agent_session_ws(websocket: WebSocket) -> None:
                     # every poll and clobber the state the user just advanced.
                     # The monitor tap above still sees the full output regardless.
                     if signal and str(signal.get("match", "")) and str(signal["match"]) in output:
-                        await _dispatch_signal(
+                        new_fb = await _dispatch_signal(
                             signal=signal,
                             worker_id=worker_id,
                             user_id=user_sub,
                             session_id=session_id,
                             websocket=websocket,
                         )
+                        if new_fb:
+                            pending_feedback_id = new_fb
 
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=0.05)
@@ -535,7 +662,9 @@ async def agent_session_ws(websocket: WebSocket) -> None:
                     bridge = None
                     continue
 
-                _register_bridge(session_id, bridge)
+                _register_bridge(
+                    session_id, bridge, user_id=user_sub, worker_id=worker_id
+                )
                 _safe_transition(user_sub, session_id, sessions_mgr.STATE_READY)
                 _audit(
                     "agent_session_start",
@@ -597,6 +726,23 @@ async def agent_session_ws(websocket: WebSocket) -> None:
                         }
                     )
                     continue
+                # If this input answers a pending feedback request, flip that
+                # request to "responded" via the monitor's no-buffer-reinject
+                # helper. The answer is ALREADY tapped into the ring buffer via
+                # the PTY echo on the next poll, so we must NOT call the
+                # buffer-appending respond_to_feedback here (that would
+                # double-inject the same answer and skew pattern matching).
+                if pending_feedback_id:
+                    try:
+                        terminal_monitor.mark_feedback_responded(
+                            worker_id, pending_feedback_id, payload["data"]
+                        )
+                    except Exception:  # pragma: no cover - defensive
+                        logger.exception(
+                            "agent_session mark_feedback_responded failed session_id=%s",
+                            session_id,
+                        )
+                    pending_feedback_id = None
                 # Submitting input clears awaiting_input back to running so the UI
                 # badge updates promptly (ACS-008).
                 _safe_transition(user_sub, session_id, sessions_mgr.STATE_RUNNING)

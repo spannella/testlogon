@@ -438,5 +438,174 @@ class TestWsHandler(_Base):
         self.assertEqual(self.ast._LIVE_BRIDGES, {})
 
 
+# ---------------------------------------------------------------------------
+# Hardening: respond_to_feedback wiring (no double-inject) + idle reaper
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipIf(mock_aws is None, "moto is not installed")
+class TestFeedbackResponseWiring(TestWsHandler):
+    def test_input_marks_pending_feedback_responded_without_buffer_reinject(self):
+        """Browser input that answers the scripted feedback request flips the
+        feedback record to ``responded`` via mark_feedback_responded — and does
+        NOT call the buffer-appending respond_to_feedback (no double-inject)."""
+        self._seed_worker()
+        marked = []
+        respond_called = []
+
+        def _mark(worker_id, request_id, text):
+            marked.append((worker_id, request_id, text))
+            return {"request_id": request_id, "feedback_status": "responded"}
+
+        # Make create_feedback_request return a real request_id so the loop can
+        # track it; spy on the two response paths.
+        self.stack.enter_context(
+            patch.object(
+                self.ast.terminal_monitor,
+                "create_feedback_request",
+                lambda **kw: {"request_id": "fb_xyz"},
+            )
+        )
+        self.stack.enter_context(
+            patch.object(self.ast.terminal_monitor, "mark_feedback_responded", _mark)
+        )
+        self.stack.enter_context(
+            patch.object(
+                self.ast.terminal_monitor,
+                "respond_to_feedback",
+                lambda *a, **k: respond_called.append(a) or {},
+            )
+        )
+
+        ws = self._run(
+            [
+                {"type": "connect", "payload": {"worker_id": self.WORKER}},
+                {"type": "input", "payload": {"data": "use option B\n"}},
+            ]
+        )
+        # The feedback request was emitted (banner has the feedback line).
+        self.assertTrue([m for m in ws.sent if m.get("type") == "feedback_request"])
+        # Input marked it responded via the no-reinject helper.
+        self.assertTrue(marked, "mark_feedback_responded must be called on answer")
+        self.assertEqual(marked[0][1], "fb_xyz")
+        self.assertIn("use option B", marked[0][2])
+        # The buffer-appending respond_to_feedback was NOT used (no double-inject).
+        self.assertEqual(respond_called, [])
+
+    def test_input_without_pending_feedback_does_not_mark(self):
+        self._seed_worker()
+        marked = []
+        # No feedback request created (suppress the banner signal path).
+        self.stack.enter_context(
+            patch.object(
+                self.ast.terminal_monitor,
+                "create_feedback_request",
+                lambda **kw: {"request_id": ""},
+            )
+        )
+        self.stack.enter_context(
+            patch.object(
+                self.ast.terminal_monitor,
+                "mark_feedback_responded",
+                lambda *a, **k: marked.append(a),
+            )
+        )
+        ws = self._run(
+            [
+                {"type": "connect", "payload": {"worker_id": self.WORKER}},
+                {"type": "input", "payload": {"data": "hi\n"}},
+            ]
+        )
+        self.assertEqual(marked, [])
+
+
+@unittest.skipIf(mock_aws is None, "moto is not installed")
+class TestIdleReaper(_Base):
+    def setUp(self):
+        super().setUp()
+        import app.routers.agent_session_terminal as ast
+
+        self.ast = ast
+        self.stack.enter_context(patch.object(ast, "audit_event", lambda *a, **k: None))
+        from app.core.settings import S
+
+        self.S = S
+        prev = S.agent_claude_code_session_enabled
+        object.__setattr__(S, "agent_claude_code_session_enabled", True)
+        self.addCleanup(lambda: object.__setattr__(S, "agent_claude_code_session_enabled", prev))
+        ast._LIVE_BRIDGES.clear()
+        ast._BRIDGE_META.clear()
+        self.addCleanup(ast._LIVE_BRIDGES.clear)
+        self.addCleanup(ast._BRIDGE_META.clear)
+
+    class _StubBridge:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def _seed_live_session(self, last_activity, state="running"):
+        """Create a session record, force last_activity_at, register a stub bridge."""
+        self._seed_worker()
+        s = self.sm.create_session(user_id=self.USER, worker_id=self.WORKER)
+        sid = s["session_id"]
+        self.sm.transition_state(self.USER, sid, self.sm.STATE_READY)
+        if state == "running":
+            self.sm.transition_state(self.USER, sid, self.sm.STATE_RUNNING)
+        # Force last_activity_at directly on the item.
+        self.sessions_table.update_item(
+            Key={"pk": f"USER#{self.USER}", "sk": f"SESSION#{sid}"},
+            UpdateExpression="SET last_activity_at = :la",
+            ExpressionAttributeValues={":la": last_activity},
+        )
+        bridge = self._StubBridge()
+        self.ast._register_bridge(sid, bridge, user_id=self.USER, worker_id=self.WORKER)
+        return sid, bridge
+
+    def test_idle_session_is_reaped(self):
+        sid, bridge = self._seed_live_session(last_activity=1000)
+        # now is far past the idle window -> reaped.
+        reaped = self.ast.reap_idle_sessions(now=1000 + 99999)
+        self.assertEqual(reaped, 1)
+        self.assertTrue(bridge.closed)
+        self.assertNotIn(sid, self.ast._LIVE_BRIDGES)
+        sess = self.sm.get_session(self.USER, sid)
+        self.assertEqual(sess["state"], self.sm.STATE_ENDED)
+
+    def test_active_session_is_not_reaped(self):
+        sid, bridge = self._seed_live_session(last_activity=5000)
+        # now within the idle window -> NOT reaped.
+        reaped = self.ast.reap_idle_sessions(now=5000 + 5)
+        self.assertEqual(reaped, 0)
+        self.assertFalse(bridge.closed)
+        self.assertIn(sid, self.ast._LIVE_BRIDGES)
+        sess = self.sm.get_session(self.USER, sid)
+        self.assertEqual(sess["state"], self.sm.STATE_RUNNING)
+
+    def test_orphaned_bridge_for_terminal_session_is_dropped(self):
+        sid, bridge = self._seed_live_session(last_activity=9_000_000_000)
+        # End the session out from under the bridge; reaper should drop the PTY
+        # even though last_activity is "recent".
+        self.sm.end_session(self.USER, sid)
+        reaped = self.ast.reap_idle_sessions(now=9_000_000_001)
+        self.assertEqual(reaped, 1)
+        self.assertTrue(bridge.closed)
+        self.assertNotIn(sid, self.ast._LIVE_BRIDGES)
+
+    def test_zero_timeout_disables_reaping(self):
+        sid, bridge = self._seed_live_session(last_activity=1)
+        prev = self.S.agent_claude_code_session_idle_timeout_seconds
+        object.__setattr__(self.S, "agent_claude_code_session_idle_timeout_seconds", 0)
+        try:
+            reaped = self.ast.reap_idle_sessions(now=10_000_000)
+        finally:
+            object.__setattr__(
+                self.S, "agent_claude_code_session_idle_timeout_seconds", prev
+            )
+        self.assertEqual(reaped, 0)
+        self.assertFalse(bridge.closed)
+
+
 if __name__ == "__main__":
     unittest.main()

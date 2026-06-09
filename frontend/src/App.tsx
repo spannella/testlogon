@@ -208,6 +208,7 @@ const KycIdScannerReviewQueuePage = lazy(() => import("@/pages/kyc/KycIdScannerR
 const KycWizardPage = lazy(() => import("@/pages/kyc/KycWizardPage"));
 const KycStatusPage = lazy(() => import("@/pages/kyc/KycStatusPage"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
+const AgentSessionPage = lazy(() => import("@/pages/agents/AgentSessionPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
 const GroupFundraisingPage = lazy(() => import("@/pages/groups/GroupFundraisingPage"));
@@ -510,6 +511,7 @@ export default function App() {
           <Route path="admin/kyc/id-scanner" element={<KycIdScannerReviewQueuePage />} />
           <Route path="admin/kyc/compliance" element={<KycComplianceReportsPage />} />
           <Route path="agents/workers" element={<WorkersPage />} />
+          <Route path="agents/session" element={<AgentSessionPage />} />
           <Route path="agents/llm-keys" element={<LlmKeysPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />
           <Route path="agents/fleet" element={<FleetDashboard />} />

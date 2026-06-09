@@ -319,7 +319,10 @@ from app.routers.agent_orchestrator import router as agent_orchestrator_router
 from app.routers.ads import router as ads_router
 from app.routers.sponsorship_deals import sponsorship_deals_router
 from app.routers.agent_workers import router as agent_workers_router
-from app.routers.agent_session_terminal import router as agent_session_terminal_router
+from app.routers.agent_session_terminal import (
+    router as agent_session_terminal_router,
+    start_agent_session_reaper_task,
+)
 from app.routers.agent_fleet import router as agent_fleet_router
 from app.routers.agent_memory import router as agent_memory_router
 
@@ -700,6 +703,9 @@ def create_app() -> FastAPI:
     app.include_router(jira_integrations_router)
     app.include_router(browser_ssh_terminal_router)
     app.include_router(agent_session_terminal_router)
+    # ACS hardening: reap idle/abandoned agent sessions (detached bridges still
+    # hold a PTY + LLM tokens). Flag-gated inside the starter.
+    app.add_event_handler("startup", start_agent_session_reaper_task)
     app.include_router(ssh_key_manager_router)
     app.include_router(questionnaires_router)
     app.include_router(kyc_cases_router)
