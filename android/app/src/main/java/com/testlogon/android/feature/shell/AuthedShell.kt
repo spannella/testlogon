@@ -4,9 +4,11 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
@@ -36,6 +38,7 @@ enum class AuthedTab(
     val unselectedIcon: ImageVector,
 ) {
     HOME("authed/home", R.string.tab_home, Icons.Filled.Home, Icons.Outlined.Home),
+    FEED("authed/feed", R.string.tab_feed, Icons.Filled.DynamicFeed, Icons.Outlined.DynamicFeed),
     ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person),
     MORE("authed/more", R.string.tab_more, Icons.Filled.Apps, Icons.Outlined.Apps);
 
@@ -98,6 +101,16 @@ fun AuthedShellScreen(
                         onOpenRoute(com.testlogon.android.navigation.MainDest.Settings.route)
                     },
                     onOpenMore = { tabNav.navigateToTab(AuthedTab.MORE) },
+                )
+            }
+            composable(AuthedTab.FEED.route) {
+                com.testlogon.android.feature.feed.FeedRoute(
+                    onPostClick = { postId ->
+                        onOpenRoute(com.testlogon.android.navigation.PostDetailDest.build(postId))
+                    },
+                    onAuthorClick = { authorId ->
+                        onOpenRoute(com.testlogon.android.navigation.PublicProfileDest.build(authorId))
+                    },
                 )
             }
             composable(AuthedTab.ME.route) {

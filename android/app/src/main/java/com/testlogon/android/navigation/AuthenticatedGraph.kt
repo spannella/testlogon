@@ -93,6 +93,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         }
         // AND-073: public profile (also registered unauthenticated for shared links).
         publicProfileDestination(navController)
+        // AND-100: read-only post detail (in-app nav + deep link).
+        postDetailDestination(navController)
     }
 }
 

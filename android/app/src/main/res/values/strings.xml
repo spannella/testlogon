@@ -4,6 +4,7 @@
 
     <!-- Authenticated shell bottom-nav tabs (AND-024 / AND-067) -->
     <string name="tab_home">Home</string>
+    <string name="tab_feed">Feed</string>
     <string name="tab_me">Profile</string>
     <string name="tab_more">More</string>
 

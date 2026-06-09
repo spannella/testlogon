@@ -260,3 +260,20 @@ data object PublicProfileDest {
 
     fun build(identifier: String): String = "profile/public/${Uri.encode(identifier)}"
 }
+
+/**
+ * Read-only post detail by id (AND-100), `post/{postId}`.
+ *
+ * Reachable in-app from the feed and by deep link (`testlogon://post/{postId}`, the production HTTPS
+ * App Link `/post/{postId}`, and the plaintext dev-host HTTP tap-through). `postId` is validated by the
+ * detail ViewModel before use.
+ */
+data object PostDetailDest {
+    const val ROUTE = "post/{postId}"
+    const val ARG_POST_ID = "postId"
+
+    /** Web path the App Link mirrors: https://HOST/post/:postId. */
+    const val DEEP_LINK_PATH = "/post"
+
+    fun build(postId: String): String = "post/${Uri.encode(postId)}"
+}
