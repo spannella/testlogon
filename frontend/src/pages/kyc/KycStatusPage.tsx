@@ -1,21 +1,33 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Clock, ShieldCheck, Upload, Loader2 } from "lucide-react";
+import { Clock, ShieldCheck, Upload, Loader2, RotateCcw, Gavel } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { ApiError } from "@/api/client";
 import {
   listKycCases,
   getKycEstimatedWait,
   uploadAndAttachKycFile,
 } from "@/api/endpoints/kyc";
+import { disputeKycCase, reopenKycCase } from "@/api/endpoints/kyc-cases";
 import type { KycSelfServiceCase, KycCaseStatus } from "@/api/types";
 
-const ACTIVE_STATUSES: KycCaseStatus[] = ["submitted", "under_review", "needs_more_info"];
+const ACTIVE_STATUSES: KycCaseStatus[] = ["submitted", "under_review", "needs_more_info", "disputed"];
 const HISTORICAL_STATUSES: KycCaseStatus[] = ["approved", "rejected", "expired"];
 
 const TIMELINE: KycCaseStatus[] = ["submitted", "under_review", "approved"];
@@ -32,6 +44,8 @@ function statusBadgeClass(status: string): string {
       return "bg-gray-200 text-gray-700";
     case "under_review":
       return "bg-blue-100 text-blue-800";
+    case "disputed":
+      return "bg-purple-100 text-purple-800";
     default:
       return "bg-slate-100 text-slate-800";
   }
@@ -39,7 +53,7 @@ function statusBadgeClass(status: string): string {
 
 function StatusTimeline({ status }: { status: KycCaseStatus }) {
   const currentIdx =
-    status === "rejected"
+    status === "rejected" || status === "disputed"
       ? TIMELINE.indexOf("under_review")
       : Math.max(0, TIMELINE.indexOf(status === "needs_more_info" ? "under_review" : status));
   return (
@@ -135,6 +149,7 @@ function ReuploadControl({ kycCase }: { kycCase: KycSelfServiceCase }) {
 }
 
 function ActiveCaseCard({ kycCase }: { kycCase: KycSelfServiceCase }) {
+  const dispute = kycCase.review?.dispute;
   return (
     <Card className="mb-4" data-testid="kyc-active-case">
       <CardHeader>
@@ -146,6 +161,25 @@ function ActiveCaseCard({ kycCase }: { kycCase: KycSelfServiceCase }) {
       <CardContent className="space-y-4">
         <StatusTimeline status={kycCase.status} />
         <EstimatedWaitCard />
+        {kycCase.status === "disputed" ? (
+          <div
+            className="space-y-1 rounded border border-purple-300 bg-purple-50 p-3"
+            data-testid="kyc-dispute-banner"
+          >
+            <p className="flex items-center gap-1 text-sm font-medium text-purple-900">
+              <Gavel className="h-4 w-4" /> Appeal under review
+            </p>
+            <p className="text-xs text-purple-800">
+              Your dispute is being reviewed by our team. We'll notify you when there's an update.
+            </p>
+            {dispute?.reason ? (
+              <p className="text-xs text-purple-800">
+                <span className="font-medium">Reason:</span> {dispute.reason}
+              </p>
+            ) : null}
+            {dispute?.note ? <p className="text-xs text-purple-700">{dispute.note}</p> : null}
+          </div>
+        ) : null}
         {kycCase.status === "needs_more_info" ? (
           <div className="space-y-3 rounded border border-yellow-300 bg-yellow-50 p-3">
             <p className="text-sm font-medium text-yellow-900">
@@ -165,7 +199,109 @@ function ActiveCaseCard({ kycCase }: { kycCase: KycSelfServiceCase }) {
   );
 }
 
+function DisputeDialog({
+  kycCase,
+  open,
+  onOpenChange,
+}: {
+  kycCase: KycSelfServiceCase;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      disputeKycCase(kycCase.kyc_case_id, {
+        expected_version: kycCase.version,
+        reason: reason.trim(),
+        note: note.trim() || undefined,
+      }),
+    onSuccess: () => {
+      toast.success("Dispute submitted — your appeal is under review");
+      qc.invalidateQueries({ queryKey: ["kyc", "cases"] });
+      onOpenChange(false);
+      setReason("");
+      setNote("");
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.detail : "Could not submit dispute"),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent data-testid="kyc-dispute-dialog">
+        <DialogHeader>
+          <DialogTitle>Dispute this decision</DialogTitle>
+          <DialogDescription>
+            Tell us why you believe this verification was rejected in error. A reviewer will
+            re-examine your case.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="kyc-dispute-reason">Reason</Label>
+            <Input
+              id="kyc-dispute-reason"
+              data-testid="kyc-dispute-reason"
+              maxLength={240}
+              placeholder="Brief summary (required)"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="kyc-dispute-note">Additional details (optional)</Label>
+            <Textarea
+              id="kyc-dispute-note"
+              data-testid="kyc-dispute-note"
+              maxLength={2000}
+              rows={4}
+              placeholder="Anything that helps us understand your appeal"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={mutation.isPending}>
+            Cancel
+          </Button>
+          <Button
+            data-testid="kyc-dispute-submit"
+            onClick={() => mutation.mutate()}
+            disabled={!reason.trim() || mutation.isPending}
+          >
+            {mutation.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+            Submit dispute
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function HistoricalCaseCard({ kycCase }: { kycCase: KycSelfServiceCase }) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [disputeOpen, setDisputeOpen] = useState(false);
+
+  const canRetry = kycCase.status === "rejected" || kycCase.status === "expired";
+  const canDispute = kycCase.status === "rejected";
+
+  const reopenMutation = useMutation({
+    mutationFn: () => reopenKycCase(kycCase.kyc_case_id, { expected_version: kycCase.version }),
+    onSuccess: () => {
+      toast.success("Reopened — continue your verification");
+      qc.invalidateQueries({ queryKey: ["kyc", "cases"] });
+      navigate("/kyc");
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError ? e.detail : "Could not reopen this application"),
+  });
+
   return (
     <Card className="mb-3" data-testid="kyc-historical-case">
       <CardContent className="flex items-center justify-between p-4">
@@ -182,13 +318,43 @@ function HistoricalCaseCard({ kycCase }: { kycCase: KycSelfServiceCase }) {
         </div>
         <div className="flex items-center gap-3">
           <Badge className={statusBadgeClass(kycCase.status)}>{kycCase.status}</Badge>
-          {kycCase.status !== "approved" ? (
+          {canRetry ? (
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="kyc-try-again"
+              disabled={reopenMutation.isPending}
+              onClick={() => reopenMutation.mutate()}
+            >
+              {reopenMutation.isPending ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <RotateCcw className="mr-1 h-4 w-4" />
+              )}
+              Try again
+            </Button>
+          ) : null}
+          {canDispute ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="kyc-dispute"
+              onClick={() => setDisputeOpen(true)}
+            >
+              <Gavel className="mr-1 h-4 w-4" />
+              Dispute
+            </Button>
+          ) : null}
+          {!canRetry && kycCase.status !== "approved" ? (
             <Button asChild size="sm" variant="ghost">
               <Link to="/kyc">Start New</Link>
             </Button>
           ) : null}
         </div>
       </CardContent>
+      {canDispute ? (
+        <DisputeDialog kycCase={kycCase} open={disputeOpen} onOpenChange={setDisputeOpen} />
+      ) : null}
     </Card>
   );
 }

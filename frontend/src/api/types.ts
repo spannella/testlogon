@@ -11495,7 +11495,8 @@ export type KycCaseStatus =
   | "needs_more_info"
   | "approved"
   | "rejected"
-  | "expired";
+  | "expired"
+  | "disputed";
 
 export type KycSelfServiceFileType = "id_front" | "id_back" | "selfie" | "proof_of_address";
 
@@ -11520,6 +11521,29 @@ export interface KycCaseReviewRef {
   decision?: string | null;
   decided_at?: number | null;
   reason_codes?: string[];
+  // KYD-008/009/010: dispute & reopen-and-resubmit lifecycle metadata (additive, optional).
+  attempt_count?: number | null;
+  dispute?: KycCaseDisputeRef | null;
+  dispute_resolution?: Record<string, unknown> | null;
+}
+
+export interface KycCaseDisputeRef {
+  reason?: string | null;
+  note?: string | null;
+  disputed_at?: number | null;
+  disputed_by?: string | null;
+  dispute_hash?: string | null;
+  dispute_count?: number | null;
+}
+
+export interface KycDisputeRequest {
+  expected_version: number;
+  reason: string;
+  note?: string;
+}
+
+export interface KycReopenRequest {
+  expected_version: number;
 }
 
 export interface KycSelfServiceFile {
