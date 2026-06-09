@@ -1,5 +1,8 @@
 package com.testlogon.android.feature.auth.login
 
+import android.app.Activity
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -14,8 +17,14 @@ import com.testlogon.android.data.auth.AuthRepository
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.auth.LoginOutcome
 import com.testlogon.android.data.auth.MfaFactor
+import com.testlogon.android.data.auth.PasskeyAuthResult
+import com.testlogon.android.data.auth.PasskeyRepository
+import com.testlogon.android.data.auth.SsoInfo
+import com.testlogon.android.data.auth.SsoRepository
+import com.testlogon.android.data.auth.SsoStateStore
 import com.testlogon.android.data.auth.toAuthReason
 import com.testlogon.android.data.auth.toTelemetry
+import com.testlogon.android.feature.auth.sso.SsoTabLauncher
 import com.testlogon.android.navigation.AuthDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.BufferOverflow
@@ -27,9 +36,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.security.SecureRandom
 import javax.inject.Inject
 
-/** One-shot navigation effects from the login screen (AND-031). */
+/** One-shot navigation effects from the login screen (AND-031/062/063). */
 sealed interface LoginEffect {
     data class NavigateToMfa(val challengeId: String, val factors: List<MfaFactor>) : LoginEffect
     data object NavigateHome : LoginEffect
@@ -49,16 +59,34 @@ data class LoginUiState(
     val error: String? = null,
     val serverUrl: String = "",
     val expiryReason: LogoutReason? = null,
+    // AND-063 SSO
+    val ssoInfo: SsoInfo? = null,
+    val ssoBusy: Boolean = false,
+    // AND-062 passkeys
+    val passkeySupported: Boolean = false,
+    val passkeyBusy: Boolean = false,
 ) {
     val isSubmitting: Boolean get() = status == LoginStatus.Submitting
+
+    /** SSO-only tenants hide the password form (web parity: sso_only). */
+    val ssoOnly: Boolean get() = ssoInfo?.ssoOnly == true
+    val ssoAvailable: Boolean get() = ssoInfo?.ssoAvailable == true
+    val ssoProviderName: String get() = ssoInfo?.providerDisplayName ?: "SSO"
+
     val submitEnabled: Boolean
         get() = status != LoginStatus.Submitting &&
+            !ssoOnly &&
             LoginValidator.validateEmail(email) == null &&
             password.isNotBlank()
 
+    /** Passkey sign-in requires a non-blank username (no usernameless flow in the contract). */
+    val passkeySignInEnabled: Boolean
+        get() = !isSubmitting && !passkeyBusy && email.isNotBlank()
+
     override fun toString(): String =
         "LoginUiState(email=$email, password=***, passwordVisible=$passwordVisible, " +
-            "status=$status, error=$error, serverUrl=$serverUrl, expiryReason=$expiryReason)"
+            "status=$status, error=$error, serverUrl=$serverUrl, expiryReason=$expiryReason, " +
+            "ssoOnly=$ssoOnly, ssoBusy=$ssoBusy, passkeySupported=$passkeySupported, passkeyBusy=$passkeyBusy)"
 }
 
 /**
@@ -76,6 +104,12 @@ class LoginViewModel @Inject constructor(
     // AND-052: redacted auth telemetry. Defaulted to no-op so unit tests that construct the
     // ViewModel directly need no change; Hilt injects DefaultAuthTelemetry in the app.
     private val telemetry: AuthTelemetry = NoopAuthTelemetry,
+    // AND-062/063: defaulted to no-ops so existing unit tests that construct the VM directly are
+    // unaffected; Hilt ignores the defaults and injects the real bound collaborators.
+    private val ssoRepository: SsoRepository = NoopSsoRepository,
+    private val ssoStateStore: SsoStateStore = NoopSsoStateStore,
+    private val ssoTabLauncher: SsoTabLauncher = SsoTabLauncher { _, _ -> false },
+    private val passkeyRepository: PasskeyRepository = NoopPasskeyRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState(serverUrl = serverUrlConfig.current()))
@@ -90,6 +124,113 @@ class LoginViewModel @Inject constructor(
             val reason = navReason ?: authStateStore.lastLogoutReason()
             if (reason == LogoutReason.SESSION_EXPIRED || reason == LogoutReason.SESSION_REVOKED) {
                 _uiState.update { it.copy(expiryReason = reason) }
+            }
+        }
+        // AND-062: capability gate for the passkey sign-in button.
+        viewModelScope.launch {
+            _uiState.update { it.copy(passkeySupported = passkeyRepository.isSupported()) }
+        }
+        // AND-063: tenant SSO discovery on mount (web parity: getSsoInfo("default")).
+        probeSso()
+    }
+
+    // ── AND-063 SSO ──
+
+    /** Tenant-scoped SSO discovery; degrades silently to the password form on failure. */
+    fun probeSso(tenant: String = "default") {
+        viewModelScope.launch {
+            when (val r = ssoRepository.getSsoInfo(tenant)) {
+                is ApiResult.Success -> _uiState.update { it.copy(ssoInfo = r.data) }
+                is ApiResult.Failure -> Unit // fall back to the password form
+                is ApiResult.NetworkError -> Unit
+            }
+        }
+    }
+
+    /** Opens the SSO/SAML authorization URL in a Custom Tab; persists a local-only correlation state. */
+    fun startSso(context: Context) {
+        if (_uiState.value.ssoBusy) return
+        _uiState.update { it.copy(ssoBusy = true, error = null) }
+        viewModelScope.launch {
+            val state = newStateToken()
+            ssoStateStore.save(state)
+            val url = ssoRepository.authorizeUrl(_uiState.value.ssoInfo, tenant = "default")
+            val launched = ssoTabLauncher.launch(context, url)
+            if (!launched) {
+                _uiState.update { it.copy(ssoBusy = false, error = "No browser available to complete sign-in.") }
+                ssoStateStore.clear()
+            }
+        }
+    }
+
+    /** Handle the ACS deep-link callback: map ?error= codes, else finalize via getMe (source of truth). */
+    fun onSsoRedirect(uri: Uri) {
+        val errorCode = uri.getQueryParameter("error")
+        if (errorCode != null) {
+            _uiState.update { it.copy(ssoBusy = false, error = mapSsoError(errorCode)) }
+            viewModelScope.launch { ssoStateStore.clear() }
+            return
+        }
+        _uiState.update { it.copy(ssoBusy = true) }
+        viewModelScope.launch {
+            // state is a local-only guard; absence on a legitimate ACS redirect must not block — gate
+            // finalization on getMe instead.
+            ssoStateStore.clear()
+            when (ssoRepository.finalizeAfterCallback()) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(ssoBusy = false) }
+                    _effects.tryEmit(LoginEffect.NavigateHome)
+                }
+                is ApiResult.Failure ->
+                    _uiState.update { it.copy(ssoBusy = false, error = "Sign-in could not be completed. Please try again.") }
+                is ApiResult.NetworkError ->
+                    _uiState.update {
+                        it.copy(ssoBusy = false, error = "Couldn't reach the server. Check your connection and try again.")
+                    }
+            }
+        }
+    }
+
+    private fun mapSsoError(code: String): String = when (code) {
+        "sso_validation_failed" -> "We couldn't validate your sign-in. Please try again."
+        "sso_not_authenticated" -> "Sign-in was not completed."
+        "sso_replay_detected" -> "This sign-in link was already used. Please try again."
+        "sso_no_email" -> "Your account has no email on file with the provider."
+        "sso_domain_not_allowed" -> "Your email domain isn't allowed for SSO."
+        "sso_user_not_found" -> "No matching account was found."
+        "account_banned" -> "This account has been disabled."
+        else -> "SSO error: $code"
+    }
+
+    private fun newStateToken(): String {
+        val bytes = ByteArray(16)
+        SecureRandom().nextBytes(bytes)
+        // Hex, not android.util.Base64 (unavailable in JVM unit tests) and not java.util.Base64
+        // (needs API 26 > minSdk 24); a 32-char random token is ample for a local CSRF-style state.
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    // ── AND-062 passkey sign-in ──
+
+    /** Authenticate with a platform passkey using the entered username (required by the contract). */
+    fun signInWithPasskey(activity: Activity) {
+        val username = _uiState.value.email.trim()
+        if (username.isEmpty() || _uiState.value.passkeyBusy) return
+        _uiState.update { it.copy(passkeyBusy = true, error = null) }
+        viewModelScope.launch {
+            when (val r = passkeyRepository.authenticateWithPasskey(activity, username)) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(passkeyBusy = false) }
+                    if (r.data is PasskeyAuthResult.Authenticated) {
+                        _effects.tryEmit(LoginEffect.NavigateHome)
+                    }
+                    // Cancelled: silent return, no error.
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(passkeyBusy = false, error = r.error.message) }
+                is ApiResult.NetworkError ->
+                    _uiState.update {
+                        it.copy(passkeyBusy = false, error = "Couldn't reach the server. Check your connection and try again.")
+                    }
             }
         }
     }
@@ -178,4 +319,36 @@ class LoginViewModel @Inject constructor(
         status == 401 -> "Invalid email or password."
         else -> message
     }
+}
+
+/**
+ * No-op defaults for the AND-062/063 collaborators so the [LoginViewModel] can be constructed without
+ * them in pure-JVM tests (Hilt ignores these and injects the real bound implementations). They render
+ * SSO/passkey affordances inert (no discovery, unsupported device, no-op store).
+ */
+private object NoopSsoRepository : SsoRepository {
+    override suspend fun getSsoInfo(tenant: String): ApiResult<SsoInfo> =
+        ApiResult.Failure(ApiError(0, "sso disabled"))
+    override fun authorizeUrl(info: SsoInfo?, tenant: String): String = ""
+    override suspend fun finalizeAfterCallback(): ApiResult<com.testlogon.android.data.auth.SsoFinalizeResult> =
+        ApiResult.Failure(ApiError(0, "sso disabled"))
+}
+
+private object NoopSsoStateStore : SsoStateStore {
+    override suspend fun save(state: String, ttlMillis: Long) = Unit
+    override suspend fun peek(): com.testlogon.android.data.auth.PendingSso? = null
+    override suspend fun clear() = Unit
+}
+
+private object NoopPasskeyRepository : PasskeyRepository {
+    override suspend fun isSupported(): Boolean = false
+    override suspend fun registerPasskey(
+        activity: Context,
+        label: String?,
+    ): ApiResult<com.testlogon.android.data.auth.RegisteredPasskey> =
+        ApiResult.Failure(ApiError(0, "passkeys disabled"))
+    override suspend fun authenticateWithPasskey(
+        activity: Context,
+        username: String,
+    ): ApiResult<PasskeyAuthResult> = ApiResult.Failure(ApiError(0, "passkeys disabled"))
 }

@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -35,6 +36,8 @@ import com.testlogon.android.core.ui.input.TlButtonVariant
 import com.testlogon.android.core.ui.input.TlPasswordField
 import com.testlogon.android.core.ui.input.TlTextField
 import com.testlogon.android.data.auth.MfaFactor
+import com.testlogon.android.feature.auth.passkey.PasskeySignInButton
+import com.testlogon.android.feature.auth.passkey.findActivity
 
 /** Route-level Login entry, bound by the unauthenticated nav graph (AND-030). */
 @Composable
@@ -46,9 +49,16 @@ fun LoginRoute(
     onMagicLink: () -> Unit,
     onOpenServerSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    ssoCallbackUri: android.net.Uri? = null,
     viewModel: LoginViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // AND-063: forward an ACS callback deep-link to the VM exactly once per distinct URI.
+    LaunchedEffect(ssoCallbackUri) {
+        ssoCallbackUri?.let(viewModel::onSsoRedirect)
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
@@ -71,12 +81,15 @@ fun LoginRoute(
         onRegister = onRegister,
         onRecovery = onRecovery,
         onMagicLink = onMagicLink,
+        onStartSso = { context.findActivity()?.let { viewModel.startSso(it) } },
+        onPasskeySignIn = { activity -> viewModel.signInWithPasskey(activity) },
         modifier = modifier,
     )
 }
 
-/** Stateless, previewable login screen (AND-030). */
+/** Stateless, previewable login screen (AND-030/062/063). */
 @Composable
+@Suppress("LongParameterList")
 fun LoginScreen(
     state: LoginUiState,
     onEmailChange: (String) -> Unit,
@@ -89,6 +102,8 @@ fun LoginScreen(
     onRegister: () -> Unit,
     onRecovery: () -> Unit,
     onMagicLink: () -> Unit,
+    onStartSso: () -> Unit = {},
+    onPasskeySignIn: (android.app.Activity) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier.testTag("login_screen")) { padding ->
@@ -141,30 +156,53 @@ fun LoginScreen(
                 modifier = Modifier.testTag("login_email"),
             )
 
-            TlPasswordField(
-                value = state.password,
-                onValueChange = onPasswordChange,
-                label = "Password",
-                enabled = !state.isSubmitting,
-                imeAction = ImeAction.Done,
-                onImeAction = { if (state.submitEnabled) onSubmit() },
-                modifier = Modifier.testTag("login_password"),
-            )
+            // AND-063: SSO-only tenants hide the password form entirely.
+            if (!state.ssoOnly) {
+                TlPasswordField(
+                    value = state.password,
+                    onValueChange = onPasswordChange,
+                    label = "Password",
+                    enabled = !state.isSubmitting,
+                    imeAction = ImeAction.Done,
+                    onImeAction = { if (state.submitEnabled) onSubmit() },
+                    modifier = Modifier.testTag("login_password"),
+                )
 
-            TextButton(
-                onClick = onRecovery,
-                enabled = !state.isSubmitting,
-                modifier = Modifier.align(Alignment.End).testTag("login_forgot_password"),
-            ) {
-                Text("Forgot password?")
+                TextButton(
+                    onClick = onRecovery,
+                    enabled = !state.isSubmitting,
+                    modifier = Modifier.align(Alignment.End).testTag("login_forgot_password"),
+                ) {
+                    Text("Forgot password?")
+                }
+
+                TlButton(
+                    text = "Sign in",
+                    onClick = onSubmit,
+                    enabled = state.submitEnabled,
+                    loading = state.isSubmitting,
+                    modifier = Modifier.fillMaxWidth().testTag("login_submit"),
+                )
             }
 
-            TlButton(
-                text = "Sign in",
-                onClick = onSubmit,
-                enabled = state.submitEnabled,
-                loading = state.isSubmitting,
-                modifier = Modifier.fillMaxWidth().testTag("login_submit"),
+            // AND-063: SSO affordance — primary when sso_only, secondary alongside the password form.
+            if (state.ssoOnly || state.ssoAvailable) {
+                TlButton(
+                    text = "Sign in with ${state.ssoProviderName}",
+                    onClick = onStartSso,
+                    variant = if (state.ssoOnly) TlButtonVariant.Primary else TlButtonVariant.Secondary,
+                    enabled = !state.isSubmitting && !state.ssoBusy,
+                    loading = state.ssoBusy,
+                    modifier = Modifier.fillMaxWidth().testTag("login_sso"),
+                )
+            }
+
+            // AND-062: passkey sign-in — hidden on unsupported devices, requires a non-blank username.
+            PasskeySignInButton(
+                enabled = state.passkeySignInEnabled,
+                loading = state.passkeyBusy,
+                supported = state.passkeySupported,
+                onSignIn = onPasskeySignIn,
             )
 
             TlButton(

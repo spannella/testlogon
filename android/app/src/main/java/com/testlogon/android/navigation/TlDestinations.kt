@@ -175,6 +175,20 @@ sealed class AuthDest(val route: String) {
 
     /** Server-URL settings (AND-041); reachable pre-login from the Login screen. */
     data object ServerUrl : AuthDest("settings/server-url")
+
+    /**
+     * SSO / SAML callback deep-link target (AND-063). The ACS redirect returns here; the Login screen
+     * forwards the URI to LoginViewModel.onSsoRedirect, which finalizes via getMe or maps ?error=.
+     *
+     * SECURITY: the backend does not echo a client `state`; the local `state` lives in SsoStateStore,
+     * never in a route arg. Only the `error` code (if any) rides as a query param.
+     */
+    data object SsoCallback : AuthDest("auth/sso/callback?error={error}") {
+        const val ARG_ERROR = "error"
+
+        /** Shared callback path for both the prod App Link (HTTPS) and the dev custom scheme. */
+        const val DEEP_LINK_PATH = "/auth/sso/callback"
+    }
 }
 
 /** Destinations inside the authenticated graph (AND-024). */
@@ -184,4 +198,7 @@ sealed class MainDest(val route: String) {
 
     /** Active sessions list + revoke (AND-043), reached from Profile/Security. */
     data object ActiveSessions : MainDest("main/sessions")
+
+    /** MFA device management (AND-064), reached from Profile → Security. */
+    data object MfaDevices : MainDest("main/mfa-devices")
 }

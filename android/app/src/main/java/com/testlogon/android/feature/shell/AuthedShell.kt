@@ -55,6 +55,7 @@ enum class AuthedTab(
 fun AuthedShellScreen(
     modifier: Modifier = Modifier,
     onOpenSessions: () -> Unit = {},
+    onOpenMfaDevices: () -> Unit = {},
 ) {
     val tabNav = rememberNavController()
     val backStack by tabNav.currentBackStackEntryAsState()
@@ -88,7 +89,9 @@ fun AuthedShellScreen(
             modifier = Modifier.padding(padding),
         ) {
             composable(AuthedTab.HOME.route) { HomePlaceholderScreen() }
-            composable(AuthedTab.ME.route) { MePlaceholderScreen(onOpenSessions = onOpenSessions) }
+            composable(AuthedTab.ME.route) {
+                MePlaceholderScreen(onOpenSessions = onOpenSessions, onOpenMfaDevices = onOpenMfaDevices)
+            }
         }
     }
 }
@@ -109,6 +112,9 @@ private fun HomePlaceholderScreen() {
 }
 
 @Composable
-private fun MePlaceholderScreen(onOpenSessions: () -> Unit) {
-    com.testlogon.android.feature.profile.ProfileScreen(onOpenSessions = onOpenSessions)
+private fun MePlaceholderScreen(onOpenSessions: () -> Unit, onOpenMfaDevices: () -> Unit) {
+    com.testlogon.android.feature.profile.ProfileScreen(
+        onOpenSessions = onOpenSessions,
+        onOpenMfaDevices = onOpenMfaDevices,
+    )
 }

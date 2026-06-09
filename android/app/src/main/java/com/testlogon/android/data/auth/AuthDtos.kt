@@ -361,3 +361,202 @@ data class PasswordRecoveryConfirmReq(
         "PasswordRecoveryConfirmReq(username=***, confirmationCode=***, newPassword=***, " +
             "challengeId=$challengeId)"
 }
+
+// ── WebAuthn / passkeys (AND-062) ──
+//
+// Verified shapes (OpenAPI WebAuthn schemas + frontend src/api/types.ts):
+//  - register endpoints are authenticated (Bearer + cookie + X-CSRF-Token via the shared client);
+//    authenticate endpoints are public. There is NO challenge_id on any WebAuthn schema.
+//  - the begin responses carry a single opaque `options` object (additionalProperties:true) that is
+//    forwarded verbatim to Credential Manager — modeled as a raw Map so Moshi never drops fields.
+//  - register/begin sends an empty body; the label rides on register/finish only.
+//  - register/finish responds with only `credential_id`; authenticate/finish responds with
+//    `{status, session_id?}` (success keyed on status == "ok" && session_id present).
+// The credential / options payloads are sensitive: request DTOs redact them in toString.
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnRegisterBeginReq(
+    @Json(name = "label") val label: String? = null,
+) {
+    override fun toString() = "WebAuthnRegisterBeginReq(label=$label)"
+}
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnRegisterBeginResp(
+    @Json(name = "options") val options: Map<String, Any?> = emptyMap(),
+) {
+    override fun toString() = "WebAuthnRegisterBeginResp(options=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnRegisterFinishReq(
+    @Json(name = "credential") val credential: Map<String, Any?>,
+    @Json(name = "label") val label: String? = null,
+) {
+    override fun toString() = "WebAuthnRegisterFinishReq(credential=***, label=$label)"
+}
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnRegisterFinishResp(
+    @Json(name = "credential_id") val credentialId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnAuthBeginReq(
+    @Json(name = "username") val username: String,
+) {
+    override fun toString() = "WebAuthnAuthBeginReq(username=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnAuthBeginResp(
+    @Json(name = "options") val options: Map<String, Any?> = emptyMap(),
+) {
+    override fun toString() = "WebAuthnAuthBeginResp(options=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnAuthFinishReq(
+    @Json(name = "username") val username: String,
+    @Json(name = "credential") val credential: Map<String, Any?>,
+) {
+    override fun toString() = "WebAuthnAuthFinishReq(username=***, credential=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class WebAuthnAuthFinishResp(
+    @Json(name = "status") val status: String,
+    @Json(name = "session_id") val sessionId: String? = null,
+)
+
+// ── SSO / SAML discovery (AND-063) ──
+//
+// Verified shapes (frontend src/api/types.ts: SsoInfoOut). OpenAPI types the 200 body as an open
+// object, so every field is nullable/defaulted. The browser authorization endpoint (/saml/login) is
+// NOT a Retrofit call — only discovery (getSsoInfo) lives on AuthApi.
+
+@JsonClass(generateAdapter = true)
+data class SsoInfoDto(
+    @Json(name = "sso_available") val ssoAvailable: Boolean = false,
+    @Json(name = "sso_only") val ssoOnly: Boolean = false,
+    @Json(name = "sso_login_url") val ssoLoginUrl: String? = null,
+    @Json(name = "provider_display_name") val providerDisplayName: String? = null,
+    @Json(name = "provider_protocol") val providerProtocol: String? = null,
+)
+
+// ── MFA device management (AND-064) ──
+//
+// Verified shapes (OpenAPI request schemas + frontend src/api/types.ts). Per-type list endpoints (no
+// unified /ui/mfa/devices); created_at is a numeric epoch (Long); the id field differs per type.
+// Confirm keys differ: TOTP confirm carries device_id + two codes; SMS/email confirm carries
+// challenge_id + code. SMS/email removal is a two-step begin/confirm challenge. Code/secret-bearing
+// request DTOs redact in toString.
+
+@JsonClass(generateAdapter = true)
+data class TotpDeviceDto(
+    @Json(name = "device_id") val deviceId: String,
+    @Json(name = "label") val label: String? = null,
+    @Json(name = "enabled") val enabled: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "last_used_at") val lastUsedAt: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class SmsDeviceDto(
+    @Json(name = "sms_device_id") val deviceId: String,
+    @Json(name = "phone_e164") val phoneE164: String? = null,
+    @Json(name = "label") val label: String? = null,
+    @Json(name = "enabled") val enabled: Boolean = false,
+    @Json(name = "pending") val pending: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "last_used_at") val lastUsedAt: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class EmailDeviceDto(
+    @Json(name = "email_device_id") val deviceId: String,
+    @Json(name = "email") val email: String? = null,
+    @Json(name = "label") val label: String? = null,
+    @Json(name = "enabled") val enabled: Boolean = false,
+    @Json(name = "pending") val pending: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "last_used_at") val lastUsedAt: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class TotpDeviceListDto(val devices: List<TotpDeviceDto> = emptyList())
+
+@JsonClass(generateAdapter = true)
+data class SmsDeviceListDto(val devices: List<SmsDeviceDto> = emptyList())
+
+@JsonClass(generateAdapter = true)
+data class EmailDeviceListDto(val devices: List<EmailDeviceDto> = emptyList())
+
+@JsonClass(generateAdapter = true)
+data class TotpDeviceBeginReq(@Json(name = "label") val label: String? = null)
+
+@JsonClass(generateAdapter = true)
+data class TotpEnrollDto(
+    @Json(name = "device_id") val deviceId: String,
+    @Json(name = "secret") val secret: String,
+    @Json(name = "qr_code_uri") val qrCodeUri: String,
+) {
+    override fun toString() = "TotpEnrollDto(deviceId=$deviceId, secret=***, qrCodeUri=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class TotpDeviceConfirmReq(
+    @Json(name = "device_id") val deviceId: String,
+    @Json(name = "totp_code") val totpCode: String,
+    @Json(name = "totp_code2") val totpCode2: String,
+) {
+    override fun toString() = "TotpDeviceConfirmReq(deviceId=$deviceId, totpCode=***, totpCode2=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class TotpDeviceRemoveReq(@Json(name = "totp_code") val totpCode: String) {
+    override fun toString() = "TotpDeviceRemoveReq(totpCode=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class SmsDeviceBeginReq(
+    @Json(name = "phone_e164") val phoneE164: String,
+    @Json(name = "label") val label: String? = null,
+) {
+    override fun toString() = "SmsDeviceBeginReq(phoneE164=***, label=$label)"
+}
+
+@JsonClass(generateAdapter = true)
+data class EmailDeviceBeginReq(
+    @Json(name = "email") val email: String,
+    @Json(name = "label") val label: String? = null,
+) {
+    override fun toString() = "EmailDeviceBeginReq(email=***, label=$label)"
+}
+
+@JsonClass(generateAdapter = true)
+data class DeviceChallengeDto(
+    @Json(name = "challenge_id") val challengeId: String,
+    @Json(name = "sent_to") val sentTo: List<String> = emptyList(),
+    @Json(name = "sms_device_id") val smsDeviceId: String? = null,
+    @Json(name = "email_device_id") val emailDeviceId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class DeviceConfirmReq(
+    @Json(name = "challenge_id") val challengeId: String,
+    @Json(name = "code") val code: String,
+) {
+    override fun toString() = "DeviceConfirmReq(challengeId=$challengeId, code=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class EnrollResultDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "sms_device_id") val smsDeviceId: String? = null,
+    @Json(name = "email_device_id") val emailDeviceId: String? = null,
+    @Json(name = "recovery_codes") val recoveryCodes: List<String> = emptyList(),
+) {
+    override fun toString() =
+        "EnrollResultDto(ok=$ok, smsDeviceId=$smsDeviceId, emailDeviceId=$emailDeviceId, recoveryCodes=***)"
+}

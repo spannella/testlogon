@@ -41,6 +41,30 @@
                     android:host="18.222.237.167"
                     android:pathPrefix="/magic-link-verify" />
             </intent-filter>
+
+            <!-- AND-063: SSO/SAML ACS callback App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/auth/sso/callback" />
+            </intent-filter>
+
+            <!-- AND-063: custom-scheme SSO callback fallback for the plaintext dev host that cannot
+                 serve assetlinks (NOT auto-verified). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="com.testlogon.android"
+                    android:host="auth"
+                    android:pathPrefix="/sso/callback" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

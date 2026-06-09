@@ -144,6 +144,127 @@ class FakeAuthApi : AuthApi {
         return passwordlessVerifyResult()
     }
 
+    // ── WebAuthn / passkeys (AND-062): scriptable stubs ──
+
+    var webauthnRegisterBeginResult: () -> WebAuthnRegisterBeginResp = { error("not scripted") }
+    var webauthnRegisterFinishResult: () -> WebAuthnRegisterFinishResp = { error("not scripted") }
+    var webauthnAuthBeginResult: () -> WebAuthnAuthBeginResp = { error("not scripted") }
+    var webauthnAuthFinishResult: () -> WebAuthnAuthFinishResp = { error("not scripted") }
+
+    var webauthnRegisterBeginCalls = 0
+    var webauthnRegisterFinishCalls = 0
+    var webauthnAuthBeginCalls = 0
+    var webauthnAuthFinishCalls = 0
+    var lastWebauthnRegisterFinishBody: WebAuthnRegisterFinishReq? = null
+    var lastWebauthnAuthBeginBody: WebAuthnAuthBeginReq? = null
+    var lastWebauthnAuthFinishBody: WebAuthnAuthFinishReq? = null
+
+    override suspend fun webauthnRegisterBegin(body: WebAuthnRegisterBeginReq): WebAuthnRegisterBeginResp {
+        webauthnRegisterBeginCalls++
+        return webauthnRegisterBeginResult()
+    }
+
+    override suspend fun webauthnRegisterFinish(body: WebAuthnRegisterFinishReq): WebAuthnRegisterFinishResp {
+        webauthnRegisterFinishCalls++
+        lastWebauthnRegisterFinishBody = body
+        return webauthnRegisterFinishResult()
+    }
+
+    override suspend fun webauthnAuthenticateBegin(body: WebAuthnAuthBeginReq): WebAuthnAuthBeginResp {
+        webauthnAuthBeginCalls++
+        lastWebauthnAuthBeginBody = body
+        return webauthnAuthBeginResult()
+    }
+
+    override suspend fun webauthnAuthenticateFinish(body: WebAuthnAuthFinishReq): WebAuthnAuthFinishResp {
+        webauthnAuthFinishCalls++
+        lastWebauthnAuthFinishBody = body
+        return webauthnAuthFinishResult()
+    }
+
+    // ── SSO discovery (AND-063): scriptable stub ──
+
+    var ssoInfoResult: () -> SsoInfoDto = { SsoInfoDto() }
+    var lastSsoTenant: String? = null
+
+    override suspend fun getSsoInfo(tenant: String): SsoInfoDto {
+        lastSsoTenant = tenant
+        return ssoInfoResult()
+    }
+
+    // ── MFA device management (AND-064): scriptable stubs ──
+
+    var totpDevicesResult: () -> TotpDeviceListDto = { TotpDeviceListDto() }
+    var smsDevicesResult: () -> SmsDeviceListDto = { SmsDeviceListDto() }
+    var emailDevicesResult: () -> EmailDeviceListDto = { EmailDeviceListDto() }
+    var beginTotpDeviceResult: () -> TotpEnrollDto = { error("not scripted") }
+    var confirmTotpDeviceResult: () -> EnrollResultDto = { error("not scripted") }
+    var beginSmsDeviceResult: () -> DeviceChallengeDto = { error("not scripted") }
+    var beginEmailDeviceResult: () -> DeviceChallengeDto = { error("not scripted") }
+    var confirmCodeDeviceResult: () -> EnrollResultDto = { error("not scripted") }
+    var removeTotpDeviceResult: () -> OkResp = { OkResp(true) }
+    var beginRemoveCodeDeviceResult: () -> DeviceChallengeDto = { error("not scripted") }
+    var confirmRemoveCodeDeviceResult: () -> OkResp = { OkResp(true) }
+
+    var lastTotpConfirmBody: TotpDeviceConfirmReq? = null
+    var lastSmsBeginBody: SmsDeviceBeginReq? = null
+    var lastEmailBeginBody: EmailDeviceBeginReq? = null
+    var lastCodeConfirmBody: DeviceConfirmReq? = null
+    var lastCodeConfirmType: String? = null
+    var lastTotpRemoveBody: TotpDeviceRemoveReq? = null
+    var lastTotpRemoveDeviceId: String? = null
+    var lastRemoveBeginType: String? = null
+    var lastRemoveBeginDeviceId: String? = null
+    var lastRemoveConfirmBody: DeviceConfirmReq? = null
+    var lastRemoveConfirmType: String? = null
+
+    override suspend fun listTotpDevices(): TotpDeviceListDto = totpDevicesResult()
+
+    override suspend fun listSmsDevices(): SmsDeviceListDto = smsDevicesResult()
+
+    override suspend fun listEmailDevices(): EmailDeviceListDto = emailDevicesResult()
+
+    override suspend fun beginTotpDevice(body: TotpDeviceBeginReq): TotpEnrollDto = beginTotpDeviceResult()
+
+    override suspend fun confirmTotpDevice(body: TotpDeviceConfirmReq): EnrollResultDto {
+        lastTotpConfirmBody = body
+        return confirmTotpDeviceResult()
+    }
+
+    override suspend fun beginSmsDevice(body: SmsDeviceBeginReq): DeviceChallengeDto {
+        lastSmsBeginBody = body
+        return beginSmsDeviceResult()
+    }
+
+    override suspend fun beginEmailDevice(body: EmailDeviceBeginReq): DeviceChallengeDto {
+        lastEmailBeginBody = body
+        return beginEmailDeviceResult()
+    }
+
+    override suspend fun confirmCodeDevice(type: String, body: DeviceConfirmReq): EnrollResultDto {
+        lastCodeConfirmType = type
+        lastCodeConfirmBody = body
+        return confirmCodeDeviceResult()
+    }
+
+    override suspend fun removeTotpDevice(deviceId: String, body: TotpDeviceRemoveReq): OkResp {
+        lastTotpRemoveDeviceId = deviceId
+        lastTotpRemoveBody = body
+        return removeTotpDeviceResult()
+    }
+
+    override suspend fun beginRemoveCodeDevice(type: String, deviceId: String): DeviceChallengeDto {
+        lastRemoveBeginType = type
+        lastRemoveBeginDeviceId = deviceId
+        return beginRemoveCodeDeviceResult()
+    }
+
+    override suspend fun confirmRemoveCodeDevice(type: String, body: DeviceConfirmReq): OkResp {
+        lastRemoveConfirmType = type
+        lastRemoveConfirmBody = body
+        return confirmRemoveCodeDeviceResult()
+    }
+
     companion object {
         /** Builds an [HttpException] with the given status + JSON error body. */
         fun httpError(status: Int, body: String = """{"detail":"error"}"""): HttpException =

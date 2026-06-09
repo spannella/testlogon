@@ -102,6 +102,13 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.hilt.navigation.compose)
 
+    // AND-062: WebAuthn / passkeys via AndroidX Credential Manager.
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+
+    // AND-063: SSO / SAML browser handoff via Chrome Custom Tabs.
+    implementation(libs.androidx.browser)
+
     // Hilt
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
@@ -113,6 +120,8 @@ dependencies {
     testImplementation(libs.moshi)
     testImplementation(libs.retrofit)
     testImplementation(libs.retrofit.moshi)
+    // AND-062: a JVM-side android.content.Context mock for passkey repository tests.
+    testImplementation(libs.mockito.core)
 
     // UI / navigation tests
     androidTestImplementation(platform(libs.compose.bom))

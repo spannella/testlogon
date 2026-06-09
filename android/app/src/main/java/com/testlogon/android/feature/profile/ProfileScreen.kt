@@ -16,12 +16,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.input.TlButton
 import com.testlogon.android.core.ui.input.TlButtonVariant
+import com.testlogon.android.feature.auth.passkey.AddPasskeySection
 
 /** Authenticated Profile tab: shows the current principal and a Logout action (AND-032). */
 @Composable
 fun ProfileScreen(
     modifier: Modifier = Modifier,
     onOpenSessions: () -> Unit = {},
+    onOpenMfaDevices: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -46,6 +48,14 @@ fun ProfileScreen(
             variant = TlButtonVariant.Secondary,
             modifier = Modifier.testTag("profile_active_sessions"),
         )
+        TlButton(
+            text = "Two-factor authentication",
+            onClick = onOpenMfaDevices,
+            variant = TlButtonVariant.Secondary,
+            modifier = Modifier.testTag("profile_mfa_devices"),
+        )
+        // AND-062: register-passkey entry, shown only when the device supports platform passkeys.
+        AddPasskeySection()
         TlButton(
             text = "Log out",
             onClick = viewModel::onLogout,

@@ -42,7 +42,13 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
                     defaultValue = null
                 },
             ),
-        ) {
+            // AND-063: the SSO/SAML ACS redirect deep-links back into the Login destination so the same
+            // LoginViewModel can finalize the session / surface ?error= codes.
+            deepLinks = ssoCallbackDeepLinks(),
+        ) { entry ->
+            // If this Login entry was opened by an ACS redirect, the deep-link Intent (and thus the
+            // full callback URI incl. any ?error=) is stashed on the entry's arguments by Navigation.
+            val ssoCallbackUri = entry.ssoCallbackUriOrNull()
             LoginRoute(
                 onNavigateToMfa = { challengeId, factors ->
                     navController.navigate(
@@ -62,6 +68,7 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
                 onOpenServerSettings = {
                     navController.navigate(AuthDest.ServerUrl.route) { launchSingleTop = true }
                 },
+                ssoCallbackUri = ssoCallbackUri,
             )
         }
         composable(
@@ -329,4 +336,29 @@ private fun magicLinkDeepLinks(): List<NavDeepLink> {
         navDeepLink { uriPattern = "https://{host}$path?token={token}" },
         navDeepLink { uriPattern = "http://18.222.237.167$path?token={token}" },
     )
+}
+
+/**
+ * SSO/SAML callback deep links (AND-063): a verified HTTPS App Link on the production host plus a
+ * custom-scheme fallback for the plaintext dev host that cannot serve assetlinks. The `error` query
+ * param is optional; success redirects carry no params (finalization gates on `GET /ui/me`).
+ */
+private fun ssoCallbackDeepLinks(): List<NavDeepLink> {
+    val path = AuthDest.SsoCallback.DEEP_LINK_PATH
+    return listOf(
+        navDeepLink { uriPattern = "https://{host}$path?error={error}" },
+        navDeepLink { uriPattern = "https://{host}$path" },
+        navDeepLink { uriPattern = "com.testlogon.android://auth/sso/callback?error={error}" },
+        navDeepLink { uriPattern = "com.testlogon.android://auth/sso/callback" },
+    )
+}
+
+/** Reconstructs the SSO callback URI from the deep-link Intent stashed on this entry, if any. */
+@Suppress("DEPRECATION")
+private fun androidx.navigation.NavBackStackEntry.ssoCallbackUriOrNull(): android.net.Uri? {
+    val parcelable = arguments?.getParcelable<android.os.Parcelable>(
+        androidx.navigation.NavController.KEY_DEEP_LINK_INTENT,
+    )
+    val data = (parcelable as? android.content.Intent)?.data ?: return null
+    return if (data.path?.contains(AuthDest.SsoCallback.DEEP_LINK_PATH) == true) data else null
 }

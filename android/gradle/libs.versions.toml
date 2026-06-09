@@ -18,7 +18,10 @@ coil = "2.7.0"
 media3 = "1.4.1"
 paging = "3.3.4"
 coreKtx = "1.13.1"
+credentials = "1.3.0"
+browser = "1.8.0"
 junit = "4.13.2"
+mockito = "5.14.2"
 androidxTestExt = "1.2.1"
 espresso = "3.6.1"
 
@@ -47,6 +50,11 @@ compose-material-icons-extended = { group = "androidx.compose.material", name = 
 navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 navigation-testing = { group = "androidx.navigation", name = "navigation-testing", version.ref = "navigationCompose" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+
+# AND-062 WebAuthn / passkeys (Credential Manager) + AND-063 SSO Custom Tabs
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 
 # Hilt
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
@@ -83,6 +91,7 @@ coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+mockito-core = { group = "org.mockito", name = "mockito-core", version.ref = "mockito" }
 androidx-test-ext = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExt" }
 espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }

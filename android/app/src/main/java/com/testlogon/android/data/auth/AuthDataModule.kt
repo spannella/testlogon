@@ -83,4 +83,33 @@ abstract class AuthDataBindsModule {
     abstract fun bindPasswordlessRepository(
         impl: PasswordlessRepositoryImpl,
     ): PasswordlessRepository
+
+    // AND-062 WebAuthn / passkeys
+    @Binds
+    @Singleton
+    abstract fun bindPasskeyManager(impl: CredentialManagerPasskeyManager): PasskeyManager
+
+    @Binds
+    @Singleton
+    abstract fun bindPasskeyRepository(impl: PasskeyRepositoryImpl): PasskeyRepository
+
+    // AND-063 SSO / SAML
+    @Binds
+    @Singleton
+    abstract fun bindSsoRepository(impl: SsoRepositoryImpl): SsoRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSsoStateStore(impl: DataStoreSsoStateStore): SsoStateStore
+
+    @Binds
+    @Singleton
+    abstract fun bindSsoTabLauncher(
+        impl: com.testlogon.android.feature.auth.sso.CustomTabsSsoTabLauncher,
+    ): com.testlogon.android.feature.auth.sso.SsoTabLauncher
+
+    // AND-064 MFA device management
+    @Binds
+    @Singleton
+    abstract fun bindMfaDeviceRepository(impl: MfaDeviceRepositoryImpl): MfaDeviceRepository
 }

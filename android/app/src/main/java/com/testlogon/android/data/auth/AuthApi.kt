@@ -5,6 +5,7 @@ import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * Retrofit interface for the cookie-based session + MFA surface (AND-027, AND-033).
@@ -146,4 +147,100 @@ interface AuthApi {
     @Headers("Content-Type: application/json")
     @POST("ui/passwordless/verify")
     suspend fun passwordlessVerify(@Body body: PasswordlessVerifyReq): PasswordlessVerifyResp
+
+    // ── WebAuthn / passkeys (AND-062) ──
+    //
+    // register endpoints ride the authenticated transport (Bearer + cookie + X-CSRF-Token attached by
+    // the shared interceptor chain); authenticate endpoints are public. The begin/finish JSON carries
+    // opaque WebAuthn options/credential payloads. Endpoint refs use the path form ui/webauthn/...
+    // (never the slash-star form, to keep this comment safe).
+
+    /** AND-062: register begin (authenticated); returns the opaque creation-options object. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/webauthn/register/begin")
+    suspend fun webauthnRegisterBegin(@Body body: WebAuthnRegisterBeginReq): WebAuthnRegisterBeginResp
+
+    /** AND-062: register finish (authenticated); posts the Credential Manager registration response. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/webauthn/register/finish")
+    suspend fun webauthnRegisterFinish(@Body body: WebAuthnRegisterFinishReq): WebAuthnRegisterFinishResp
+
+    /** AND-062: authenticate begin (public); requires a username, returns request-options. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/webauthn/authenticate/begin")
+    suspend fun webauthnAuthenticateBegin(@Body body: WebAuthnAuthBeginReq): WebAuthnAuthBeginResp
+
+    /** AND-062: authenticate finish (public); posts the assertion, returns {status, session_id?}. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/webauthn/authenticate/finish")
+    suspend fun webauthnAuthenticateFinish(@Body body: WebAuthnAuthFinishReq): WebAuthnAuthFinishResp
+
+    // ── SSO / SAML discovery (AND-063) ──
+
+    /** AND-063: tenant-scoped SSO discovery (idempotent GET). The /saml/login URL is opened in a tab. */
+    @GET("ui/sso/info")
+    suspend fun getSsoInfo(@Query("tenant") tenant: String = "default"): SsoInfoDto
+
+    // ── MFA device management (AND-064) ──
+    //
+    // Three per-type list endpoints (no unified /ui/mfa/devices). TOTP enroll/remove differ from
+    // SMS/email: TOTP confirm uses device_id + two codes, TOTP remove is single-step with a re-auth
+    // code; SMS/email enroll keys on phone_e164/email then confirm on challenge_id, and removal is a
+    // two-step begin/confirm challenge. All are authenticated mutating POSTs (lists are GETs).
+
+    @GET("ui/mfa/totp/devices")
+    suspend fun listTotpDevices(): TotpDeviceListDto
+
+    @GET("ui/mfa/sms/devices")
+    suspend fun listSmsDevices(): SmsDeviceListDto
+
+    @GET("ui/mfa/email/devices")
+    suspend fun listEmailDevices(): EmailDeviceListDto
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/totp/devices/begin")
+    suspend fun beginTotpDevice(@Body body: TotpDeviceBeginReq): TotpEnrollDto
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/totp/devices/confirm")
+    suspend fun confirmTotpDevice(@Body body: TotpDeviceConfirmReq): EnrollResultDto
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/sms/devices/begin")
+    suspend fun beginSmsDevice(@Body body: SmsDeviceBeginReq): DeviceChallengeDto
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/email/devices/begin")
+    suspend fun beginEmailDevice(@Body body: EmailDeviceBeginReq): DeviceChallengeDto
+
+    /** SMS/email enroll confirm; [type] is "sms" or "email". Body keys on challenge_id. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/{type}/devices/confirm")
+    suspend fun confirmCodeDevice(
+        @Path("type") type: String,
+        @Body body: DeviceConfirmReq,
+    ): EnrollResultDto
+
+    /** TOTP remove — single-step, requires a current TOTP code (re-auth). */
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/totp/devices/{deviceId}/remove")
+    suspend fun removeTotpDevice(
+        @Path("deviceId") deviceId: String,
+        @Body body: TotpDeviceRemoveReq,
+    ): OkResp
+
+    /** SMS/email remove begin — delivers a remove-challenge code; [type] is "sms" or "email". */
+    @POST("ui/mfa/{type}/devices/{deviceId}/remove/begin")
+    suspend fun beginRemoveCodeDevice(
+        @Path("type") type: String,
+        @Path("deviceId") deviceId: String,
+    ): DeviceChallengeDto
+
+    /** SMS/email remove confirm — keys on challenge_id; [type] is "sms" or "email". */
+    @Headers("Content-Type: application/json")
+    @POST("ui/mfa/{type}/devices/remove/confirm")
+    suspend fun confirmRemoveCodeDevice(
+        @Path("type") type: String,
+        @Body body: DeviceConfirmReq,
+    ): OkResp
 }

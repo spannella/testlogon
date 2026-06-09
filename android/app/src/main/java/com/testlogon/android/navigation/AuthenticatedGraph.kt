@@ -4,6 +4,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import androidx.navigation.navigation
+import com.testlogon.android.feature.account.MfaDevicesRoute
 import com.testlogon.android.feature.sessions.ActiveSessionsRoute
 import com.testlogon.android.feature.shell.AuthedShellScreen
 
@@ -23,10 +24,16 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                 onOpenSessions = {
                     navController.navigate(MainDest.ActiveSessions.route) { launchSingleTop = true }
                 },
+                onOpenMfaDevices = {
+                    navController.navigate(MainDest.MfaDevices.route) { launchSingleTop = true }
+                },
             )
         }
         composable(MainDest.ActiveSessions.route) {
             ActiveSessionsRoute(onBack = { navController.popBackStack() })
+        }
+        composable(MainDest.MfaDevices.route) {
+            MfaDevicesRoute(onBack = { navController.popBackStack() })
         }
     }
 }
