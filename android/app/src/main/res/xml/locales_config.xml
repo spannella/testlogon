@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    AND-112/AND-114 — enumerates the locales the app ships so the OS per-app language picker
+    (Settings → Apps → TestLogon → Language, Android 13+) and the AppCompat backport (minSdk 24)
+    expose them. Kept in lockstep with the ported catalogs in :core-ui (values/ = en default,
+    values-es/ = Spanish). Referenced from AndroidManifest via android:localeConfig. Add a
+    <locale> here whenever a new values-<lang> catalog lands.
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+    <locale android:name="es" />
+</locale-config>

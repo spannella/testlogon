@@ -18,6 +18,7 @@ class SettingsHubViewModelTest {
                 SettingsSectionKey.ALERTS, // AND-088 — email/SMS alert-target management
                 SettingsSectionKey.MEDIA,
                 SettingsSectionKey.APPEARANCE,
+                SettingsSectionKey.LANGUAGE, // AND-114 — in-app locale picker
                 SettingsSectionKey.PRIVACY,
             ),
             keys,

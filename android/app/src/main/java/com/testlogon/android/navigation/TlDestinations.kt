@@ -223,6 +223,9 @@ sealed class MainDest(val route: String) {
     /** Settings → Appearance / theme (AND-081). */
     data object SettingsAppearance : MainDest("settings/appearance")
 
+    /** Settings → Language / in-app locale picker (AND-114). */
+    data object SettingsLanguage : MainDest("settings/language")
+
     /** Settings → Privacy & data export entry (handoff). (AND-082) */
     data object SettingsPrivacy : MainDest("settings/privacy")
 

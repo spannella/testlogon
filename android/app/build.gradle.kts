@@ -72,6 +72,8 @@ dependencies {
 
     // AndroidX core / lifecycle
     implementation(libs.androidx.core.ktx)
+    // AND-114 — per-app locales (AppCompatDelegate.setApplicationLocales) backported to minSdk 24.
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

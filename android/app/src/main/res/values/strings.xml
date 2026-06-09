@@ -131,6 +131,9 @@
     <string name="settings_section_media_subtitle">Call audio, video and quality</string>
     <string name="settings_section_appearance_title">Appearance</string>
     <string name="settings_section_appearance_subtitle">Theme and dynamic color</string>
+    <!-- AND-114: in-app language picker entry -->
+    <string name="settings_section_language_title">Language</string>
+    <string name="settings_section_language_subtitle">Display language for the app</string>
     <string name="settings_section_privacy_title">Privacy</string>
     <string name="settings_section_privacy_subtitle">Data export and account data</string>
 
@@ -215,4 +218,8 @@
     <string name="notif_perm_rationale_body">Allow notifications to get messages, broadcasts and alerts from TestLogon.</string>
     <string name="notif_perm_rationale_allow">Allow</string>
     <string name="notif_perm_rationale_not_now">Not now</string>
+    <!-- AND-111/114: language picker -->
+    <string name="language_picker_title">Language</string>
+    <string name="language_picker_back">Back</string>
+    <string name="language_picker_system_default">System default</string>
 </resources>

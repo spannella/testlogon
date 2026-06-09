@@ -3,6 +3,7 @@ package com.testlogon.android.feature.settings.hub
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PermMedia
@@ -87,6 +88,14 @@ class SettingsHubViewModel @Inject constructor() : ViewModel() {
                 subtitleRes = R.string.settings_section_appearance_subtitle,
                 icon = Icons.Outlined.DarkMode,
                 route = MainDest.SettingsAppearance.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.LANGUAGE,
+                titleRes = R.string.settings_section_language_title,
+                subtitleRes = R.string.settings_section_language_subtitle,
+                icon = Icons.Outlined.Language,
+                route = MainDest.SettingsLanguage.route,
                 available = true,
             ),
             SettingsSection(

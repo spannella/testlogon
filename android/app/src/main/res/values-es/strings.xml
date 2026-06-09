@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AND-112: representative Spanish catalog; missing keys fall back to values/strings.xml -->
+<resources>
+    <string name="tab_home">Inicio</string>
+    <string name="tab_feed">Feed</string>
+    <string name="tab_me">Perfil</string>
+    <string name="tab_more">Más</string>
+    <string name="dashboard_title">Panel</string>
+    <string name="action_back">Atrás</string>
+    <string name="action_retry">Reintentar</string>
+    <string name="settings_title">Ajustes</string>
+    <string name="language_picker_title">Idioma</string>
+    <string name="language_picker_back">Atrás</string>
+    <string name="language_picker_system_default">Predeterminado del sistema</string>
+</resources>

@@ -8,7 +8,9 @@ import com.testlogon.android.R
  * AND-077 — stable identity for each Settings section. The `key` drives test tags, analytics, and
  * the nav route so reordering/gating never touches navigation code.
  */
-enum class SettingsSectionKey { ACCOUNT, SECURITY, NOTIFICATIONS, ALERTS, MEDIA, APPEARANCE, PRIVACY }
+enum class SettingsSectionKey {
+    ACCOUNT, SECURITY, NOTIFICATIONS, ALERTS, MEDIA, APPEARANCE, LANGUAGE, PRIVACY
+}
 
 /**
  * A single Settings hub row descriptor. [available] false renders the row Disabled (greyed,
