@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        AND-112 — Spanish (es) catalog, ported from reference/src/i18n/locales/es.json.
+        Only the representative shared i18n_* keys are translated here; every other app string falls
+        back to values/ (English) via Android resource resolution (FR-3). Apostrophes are Android-
+        escaped (\'); interpolation placeholders keep the same positional arg index as the default. -->
+
+    <!-- Stale/reconnect UX hooks (AND-117) -->
+    <string name="stale_offline_saved">Sin conexión: mostrando datos guardados.</string>
+    <string name="stale_refresh_failed">No se pudo actualizar: mostrando datos guardados.</string>
+    <string name="stale_showing_saved">Mostrando datos guardados.</string>
+    <string name="stale_reconnecting">Reconectando…</string>
+    <string name="stale_retry">Intentar de nuevo</string>
+
+    <!-- common.* -->
+    <string name="i18n_common_save">Guardar</string>
+    <string name="i18n_common_cancel">Cancelar</string>
+    <string name="i18n_common_delete">Eliminar</string>
+    <string name="i18n_common_loading">Cargando…</string>
+    <string name="i18n_common_error">Algo salió mal</string>
+    <string name="i18n_common_retry">Intentar de nuevo</string>
+    <string name="i18n_common_close">Cerrar</string>
+    <string name="i18n_common_back">Atrás</string>
+    <string name="i18n_common_search">Buscar</string>
+    <string name="i18n_common_yes">Sí</string>
+    <string name="i18n_common_no">No</string>
+
+    <!-- auth.* -->
+    <string name="i18n_auth_login">Iniciar Sesión</string>
+    <string name="i18n_auth_logout">Cerrar Sesión</string>
+    <string name="i18n_auth_email">Correo electrónico</string>
+    <string name="i18n_auth_password">Contraseña</string>
+    <string name="i18n_auth_no_account">¿No tienes una cuenta?</string>
+
+    <!-- settings.* -->
+    <string name="i18n_settings_title">Configuración</string>
+    <string name="i18n_settings_language">Idioma</string>
+    <string name="i18n_settings_language_description">Elige tu idioma preferido para la interfaz</string>
+    <string name="i18n_settings_appearance">Apariencia</string>
+
+    <!-- errors.* -->
+    <string name="i18n_errors_network">Error de red. Verifica tu conexión.</string>
+    <string name="i18n_errors_rate_limited">Demasiadas solicitudes. Inténtalo de nuevo en %1$d segundos.</string>
+
+    <!-- Language picker UI (AND-114) -->
+    <string name="language_picker_title">Idioma</string>
+    <string name="language_picker_system_default">Predeterminado del sistema</string>
+    <string name="language_picker_back">Atrás</string>
+    <string name="language_picker_selected_cd">Seleccionado</string>
+
+    <!-- Settings hub entry -->
+    <string name="settings_section_language_title">Idioma</string>
+    <string name="settings_section_language_subtitle">Idioma de la aplicación</string>
+</resources>

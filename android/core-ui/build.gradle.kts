@@ -38,6 +38,7 @@ dependencies {
     api(libs.compose.ui.graphics)
     api(libs.compose.material3)
     api(libs.compose.material.icons.extended)
+    api(libs.compose.animation) // AND-117 AnimatedVisibility for StaleBar
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.androidx.core.ktx) // WindowCompat

@@ -1,5 +1,6 @@
 package com.testlogon.android.data.auth
 
+import com.testlogon.android.core.data.cache.UserScopedCacheCleaner
 import com.testlogon.android.core.data.telemetry.AuthEvent
 import com.testlogon.android.core.data.telemetry.AuthOutcome
 import com.testlogon.android.core.data.telemetry.AuthTelemetry
@@ -93,6 +94,9 @@ class AuthRepositoryImpl @Inject constructor(
     private val telemetry: AuthTelemetry = com.testlogon.android.core.data.telemetry.NoopAuthTelemetry,
     // AND-109: defaulted to no-op so direct-construction tests are unaffected; Hilt injects real.
     private val pushLogoutHandler: PushLogoutHandler = PushLogoutHandler.NOOP,
+    // AND-118: per-user Room cache purge on logout; defaulted no-op so direct-construction tests
+    // are unaffected. Hilt injects the real CacheManager-backed cleaner.
+    private val cacheCleaner: UserScopedCacheCleaner = UserScopedCacheCleaner.NOOP,
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -200,6 +204,9 @@ class AuthRepositoryImpl @Inject constructor(
         cookieCleaner.clear()
         authStateStore.clear()
         authAreaCache.clear() // AND-045 per-identity cache cleared on logout
+        // AND-118: wipe all user-scoped Room cache rows so account B never sees account A's content.
+        // Best-effort and self-bounded — never blocks or fails logout.
+        runCatching { cacheCleaner.clearAllUserScopedCache() }
         _cachedUser.value = null
         telemetry.log(AuthEvent.LogoutResult(outcome = AuthOutcome.SUCCESS))
         ApiResult.Success(Unit)
