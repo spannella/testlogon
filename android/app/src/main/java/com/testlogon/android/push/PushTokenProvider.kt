@@ -3,6 +3,7 @@ package com.testlogon.android.push
 import com.google.firebase.messaging.FirebaseMessaging
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import dagger.Lazy
 import kotlinx.coroutines.suspendCancellableCoroutine
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -27,12 +28,17 @@ interface PushTokenProvider {
  * the kotlinx-coroutines-play-services dependency; behavior matches Task.await().
  */
 class FirebaseMessagingTokenProvider @Inject constructor(
-    private val messaging: FirebaseMessaging,
+    // Lazy so the FirebaseMessaging provider is NOT resolved at Hilt graph construction (app
+    // startup). FirebaseMessaging.getInstance() throws when no default FirebaseApp exists (no
+    // google-services.json) — resolving eagerly crashed Application.onCreate. We touch it only on a
+    // real token fetch (which only runs once Firebase is configured), and the catch below still
+    // turns a not-initialized failure into a graceful ApiResult.Failure.
+    private val messaging: Lazy<FirebaseMessaging>,
 ) : PushTokenProvider {
 
     override suspend fun currentToken(): ApiResult<String> = try {
         val token = suspendCancellableCoroutine { cont ->
-            messaging.token
+            messaging.get().token
                 .addOnSuccessListener { t -> if (cont.isActive) cont.resume(t) }
                 .addOnFailureListener { e -> if (cont.isActive) cont.resumeWith(Result.failure(e)) }
                 .addOnCanceledListener { if (cont.isActive) cont.cancel() }

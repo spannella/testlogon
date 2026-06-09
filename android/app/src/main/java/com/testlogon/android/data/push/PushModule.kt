@@ -27,9 +27,10 @@ import javax.inject.Singleton
  * real implementations:
  *  - [PushTokenSink]   -> [FcmTokenRegistrar]   (AND-106/109: persist + register on rotation/login)
  *  - [PushMessageSink] -> [NotificationDisplaySink] (AND-107: parse + post on the right channel)
- * replacing AND-105's logging defaults. [FirebaseMessaging.getInstance] is safe to call even when
- * Firebase is unconfigured here (it returns a handle); actual token/delivery just fails gracefully
- * (see PushTokenProvider) until a google-services.json + the gms plugin are added.
+ * replacing AND-105's logging defaults. NOTE: [FirebaseMessaging.getInstance] THROWS when no default
+ * FirebaseApp exists (no google-services.json), so this provider must never be resolved eagerly at
+ * graph construction — its only consumer injects it as dagger.Lazy and resolves it lazily on a real
+ * token fetch (see PushTokenProvider), which only runs once Firebase is configured.
  */
 @Module
 @InstallIn(SingletonComponent::class)
