@@ -176,8 +176,11 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
  * AND-085 — routes a tapped notification's resolved [NotificationTarget] to an in-app destination.
  * Targets whose backing route is not yet wired (or that are [NotificationTarget.Unknown]) are
  * no-oped safely rather than crashing.
+ *
+ * AND-108 reuses this same routing (and the [NotificationTargetResolver]) for FCM push-notification
+ * taps, so in-app and push notifications resolve to identical destinations.
  */
-private fun NavHostController.navigateToNotificationTarget(target: NotificationTarget) {
+internal fun NavHostController.navigateToNotificationTarget(target: NotificationTarget) {
     when (target) {
         is NotificationTarget.Profile ->
             navigate(PublicProfileDest.build(target.identifier)) { launchSingleTop = true }
@@ -185,6 +188,9 @@ private fun NavHostController.navigateToNotificationTarget(target: NotificationT
             navigate(MainDest.ActiveSessions.route) { launchSingleTop = true }
         NotificationTarget.Settings ->
             navigate(MainDest.Settings.route) { launchSingleTop = true }
-        NotificationTarget.Unknown -> Unit
+        NotificationTarget.Unknown ->
+            // No first-party detail route yet for this kind — land on the Notification Center so a
+            // push tap is never a dead end (AND-108 §13 R1; swap to a per-entity route on merge).
+            navigate(MainDest.Notifications.route) { launchSingleTop = true }
     }
 }

@@ -66,6 +66,22 @@ fun interface SessionCookieCleaner {
     fun clear()
 }
 
+/**
+ * AND-109 — seam invoked at the FRONT of logout, while the session cookies + CSRF header are still
+ * live, so the push deregister call (`POST /ui/push/revoke`) is authenticated. Implementations must
+ * be best-effort and self-bounded: logout MUST NOT be blocked or failed by a deregister failure
+ * (FR-5). The real impl (PushLogoutHandlerImpl) revokes server-side with a short timeout, enqueues a
+ * retry worker on failure, and clears local push state. Defaulted to a no-op so direct-construction
+ * AuthRepository tests are unaffected.
+ */
+fun interface PushLogoutHandler {
+    suspend fun onLogout()
+
+    companion object {
+        val NOOP = PushLogoutHandler {}
+    }
+}
+
 @Singleton
 class AuthRepositoryImpl @Inject constructor(
     private val api: AuthApi,
@@ -75,6 +91,8 @@ class AuthRepositoryImpl @Inject constructor(
     private val authAreaCache: AuthAreaCache,
     // AND-052: defaulted to no-op so direct-construction tests are unaffected; Hilt injects real.
     private val telemetry: AuthTelemetry = com.testlogon.android.core.data.telemetry.NoopAuthTelemetry,
+    // AND-109: defaulted to no-op so direct-construction tests are unaffected; Hilt injects real.
+    private val pushLogoutHandler: PushLogoutHandler = PushLogoutHandler.NOOP,
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -172,6 +190,10 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     override suspend fun logout(): ApiResult<Unit> = withContext(io) {
+        // AND-109: deregister this device for push BEFORE the session is torn down, so the revoke
+        // call (POST /ui/push/revoke) is still authenticated (cookies + CSRF). Best-effort and
+        // self-bounded — never blocks or fails logout (FR-5).
+        runCatching { pushLogoutHandler.onLogout() }
         // (a) best-effort server invalidation
         runCatching { api.sessionLogout() }
         // (b-c) guaranteed local teardown regardless of (a)

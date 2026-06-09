@@ -20,6 +20,8 @@ paging = "3.3.4"
 coreKtx = "1.13.1"
 credentials = "1.3.0"
 browser = "1.8.0"
+firebaseBom = "33.7.0"
+work = "2.9.1"
 junit = "4.13.2"
 mockito = "5.14.2"
 androidxTestExt = "1.2.1"
@@ -55,6 +57,17 @@ hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-com
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
+
+# AND-105/106 Firebase Cloud Messaging (push). NOTE: the com.google.gms.google-services
+# Gradle plugin is intentionally NOT applied (no google-services.json is committed; applying
+# the plugin would fail the build). The SDK compiles and is referenced without the plugin;
+# runtime initialization is gated so the app does not crash when Firebase is unconfigured.
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+
+# AND-106/109 WorkManager for deferred push (de)registration retries.
+androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+androidx-work-testing = { group = "androidx.work", name = "work-testing", version.ref = "work" }
 
 # Hilt
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }

@@ -88,6 +88,8 @@ fun AuthedShellScreen(
             }
         },
     ) { padding ->
+        // AND-107: request POST_NOTIFICATIONS once now that the user is authenticated (no-op < API 33).
+        com.testlogon.android.notifications.NotificationPermissionGate()
         NavHost(
             navController = tabNav,
             startDestination = AuthedTab.START.route,

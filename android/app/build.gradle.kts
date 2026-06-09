@@ -89,6 +89,17 @@ dependencies {
     // Persistence for the auth state store
     implementation(libs.datastore.preferences)
 
+    // AND-105/106/107/109 — Firebase Cloud Messaging (push).
+    // The Firebase BoM aligns the messaging SDK version. The com.google.gms.google-services
+    // Gradle plugin is deliberately NOT applied here (see libs.versions.toml): there is no
+    // google-services.json in the repo and applying the plugin fails the build. The SDK
+    // compiles/links fine without it; runtime init is gated in TestLogonApp.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+
+    // AND-106/109 — WorkManager for deferred push (de)registration retries.
+    implementation(libs.androidx.work.runtime)
+
     // Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -131,6 +142,8 @@ dependencies {
     testImplementation(libs.mockito.core)
     // AND-090: Paging 3 test harness (TestPager / asSnapshot) for the notifications suite.
     testImplementation(libs.paging.testing)
+    // AND-106/109/110: WorkManager TestListenableWorkerBuilder for the push worker tests.
+    testImplementation(libs.androidx.work.testing)
 
     // UI / navigation tests
     androidTestImplementation(platform(libs.compose.bom))

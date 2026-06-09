@@ -200,4 +200,19 @@
     <string name="privacy_settings_title">Privacy</string>
     <string name="privacy_row_export">Request data export</string>
     <string name="privacy_row_delete">Delete my data</string>
+
+    <!-- Push notification channels (AND-105 / AND-107) -->
+    <string name="notif_channel_group_name">TestLogon</string>
+    <string name="notif_channel_messages_name">Messages</string>
+    <string name="notif_channel_broadcasts_name">Broadcasts</string>
+    <string name="notif_channel_alerts_name">Alerts</string>
+    <!-- FCM default channel id for system-displayed notification-type messages (AND-105). Maps to
+         the Broadcasts channel created by DefaultNotificationChannelInitializer. -->
+    <string name="default_notification_channel_id" translatable="false">tl_broadcasts</string>
+
+    <!-- POST_NOTIFICATIONS runtime-permission rationale (AND-107) -->
+    <string name="notif_perm_rationale_title">Stay in the loop</string>
+    <string name="notif_perm_rationale_body">Allow notifications to get messages, broadcasts and alerts from TestLogon.</string>
+    <string name="notif_perm_rationale_allow">Allow</string>
+    <string name="notif_perm_rationale_not_now">Not now</string>
 </resources>

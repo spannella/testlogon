@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- AND-107: runtime notification permission (requested at runtime on Android 13+ / API 33). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:name=".TestLogonApp"
         android:allowBackup="true"
@@ -132,5 +135,24 @@
                     android:host="post" />
             </intent-filter>
         </activity>
+
+        <!-- AND-105: FCM service. exported=false so only the signed Firebase intent can reach it. -->
+        <service
+            android:name=".push.TlFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- AND-105/107: default channel + small icon the system uses for notification-type FCM
+             messages auto-displayed while backgrounded. App-controlled data messages route through
+             NotificationPresenter to the typed channels instead. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="@string/default_notification_channel_id" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notification" />
     </application>
 </manifest>
