@@ -53,4 +53,60 @@
     <!-- AND-061: production host claimed by the magic-link App Link (autoVerify). Update for the real
          production domain; assetlinks.json on this host must carry the release cert fingerprint. -->
     <string name="applink_host" translatable="false">app.testlogon.example.com</string>
+
+    <!-- Profile (AND-071..076) -->
+    <string name="profile_title">Profile</string>
+    <string name="profile_avatar_cd">Your profile photo</string>
+    <string name="profile_edit_action">Edit profile</string>
+    <string name="profile_change_photo">Change photo</string>
+    <string name="profile_email_label">Email</string>
+    <string name="profile_phone_label">Phone</string>
+    <string name="profile_languages_label">Languages</string>
+    <string name="profile_refresh_failed_stale">Couldn\'t refresh — showing saved data.</string>
+    <string name="action_back">Back</string>
+    <string name="action_retry">Retry</string>
+
+    <!-- Account / security actions on the Profile tab -->
+    <string name="profile_account_section_title">Account &amp; security</string>
+    <string name="profile_signed_in_as">Signed in as %1$s</string>
+    <string name="profile_signed_in">Signed in</string>
+    <string name="profile_active_sessions">Active sessions</string>
+    <string name="profile_two_factor">Two-factor authentication</string>
+    <string name="profile_log_out">Log out</string>
+
+    <!-- Edit profile (AND-072) -->
+    <string name="profile_edit_title">Edit profile</string>
+    <string name="profile_edit_display_name">Display name</string>
+    <string name="profile_edit_title_field">Title</string>
+    <string name="profile_edit_location">Location</string>
+    <string name="profile_edit_description">Bio</string>
+    <string name="profile_edit_save">Save</string>
+    <string name="profile_edit_discard_title">Discard changes?</string>
+    <string name="profile_edit_discard_body">You have unsaved changes. Discard them?</string>
+    <string name="profile_edit_discard_confirm">Discard</string>
+    <string name="profile_edit_discard_cancel">Keep editing</string>
+    <string name="profile_edit_error_name_required">Display name is required.</string>
+    <string name="profile_edit_error_name_invalid">Display name contains invalid characters.</string>
+    <string name="profile_edit_error_name_too_long">Display name is too long.</string>
+    <string name="profile_edit_error_description_too_long">Bio is too long.</string>
+    <string name="profile_edit_error_title_too_long">Title is too long.</string>
+    <string name="profile_edit_error_location_too_long">Location is too long.</string>
+    <string name="profile_edit_error_name_server">The server rejected this display name.</string>
+    <string name="profile_edit_error_description_server">The server rejected this bio.</string>
+    <string name="profile_edit_error_field_server">The server rejected this value.</string>
+
+    <!-- Public profile (AND-073) -->
+    <string name="profile_public_title">Profile</string>
+    <string name="profile_public_avatar_cd">Avatar of %1$s</string>
+    <string name="profile_public_not_found_title">This profile isn\'t available</string>
+    <string name="profile_public_not_found_body">It may have been removed or set to private.</string>
+    <string name="profile_public_rate_limited_title">Too many requests</string>
+    <string name="profile_public_rate_limited_body">Please try again in a moment.</string>
+    <string name="profile_stat_followers">Followers</string>
+    <string name="profile_stat_following">Following</string>
+    <string name="profile_stat_posts">Posts</string>
+
+    <!-- Profile media upload (AND-074) -->
+    <string name="profile_media_prepare_failed">Couldn\'t prepare the image.</string>
+    <string name="profile_media_upload_failed">Couldn\'t upload the photo. Try again.</string>
 </resources>

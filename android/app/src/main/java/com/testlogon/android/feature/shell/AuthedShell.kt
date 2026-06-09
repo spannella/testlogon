@@ -55,6 +55,7 @@ fun AuthedShellScreen(
     modifier: Modifier = Modifier,
     onOpenSessions: () -> Unit = {},
     onOpenMfaDevices: () -> Unit = {},
+    onEditProfile: () -> Unit = {},
 ) {
     val tabNav = rememberNavController()
     val backStack by tabNav.currentBackStackEntryAsState()
@@ -96,7 +97,11 @@ fun AuthedShellScreen(
                 )
             }
             composable(AuthedTab.ME.route) {
-                MePlaceholderScreen(onOpenSessions = onOpenSessions, onOpenMfaDevices = onOpenMfaDevices)
+                com.testlogon.android.feature.profile.own.OwnProfileRoute(
+                    onEditProfile = onEditProfile,
+                    onOpenSessions = onOpenSessions,
+                    onOpenMfaDevices = onOpenMfaDevices,
+                )
             }
             composable(AuthedTab.MORE.route) {
                 com.testlogon.android.feature.more.MoreRoute(
@@ -121,12 +126,4 @@ private fun NavController.navigateToTab(tab: AuthedTab) {
         launchSingleTop = true
         restoreState = true
     }
-}
-
-@Composable
-private fun MePlaceholderScreen(onOpenSessions: () -> Unit, onOpenMfaDevices: () -> Unit) {
-    com.testlogon.android.feature.profile.ProfileScreen(
-        onOpenSessions = onOpenSessions,
-        onOpenMfaDevices = onOpenMfaDevices,
-    )
 }

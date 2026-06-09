@@ -102,6 +102,9 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.hilt.navigation.compose)
 
+    // AND-074: Coil for avatar/cover images.
+    implementation(libs.coil.compose)
+
     // AND-062: WebAuthn / passkeys via AndroidX Credential Manager.
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)

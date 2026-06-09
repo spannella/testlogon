@@ -201,4 +201,23 @@ sealed class MainDest(val route: String) {
 
     /** MFA device management (AND-064), reached from Profile → Security. */
     data object MfaDevices : MainDest("main/mfa-devices")
+
+    /** Edit own profile (AND-072), reached from the Profile tab's own-profile screen. */
+    data object EditProfile : MainDest("profile/edit")
+}
+
+/**
+ * Public profile by identifier (AND-073), `/u/{identifier}`.
+ *
+ * Registered in both graphs so a shared link opens whether or not the viewer is signed in (the public
+ * read is auth-optional). Reached in-app via [build] and by an App Link / custom-scheme deep link.
+ */
+data object PublicProfileDest {
+    const val ROUTE = "profile/public/{identifier}"
+    const val ARG_IDENTIFIER = "identifier"
+
+    /** Web path the App Link mirrors: https://HOST/u/:identifier. */
+    const val DEEP_LINK_PATH = "/u"
+
+    fun build(identifier: String): String = "profile/public/${Uri.encode(identifier)}"
 }

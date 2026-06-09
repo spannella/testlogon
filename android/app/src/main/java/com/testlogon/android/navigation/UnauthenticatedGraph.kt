@@ -321,6 +321,8 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         composable(AuthDest.ServerUrl.route) {
             ServerUrlSettingsRoute(onNavigateBack = { navController.popBackStack() })
         }
+        // AND-073: public profile via the /u/{identifier} App Link works while signed out too.
+        publicProfileDestination(navController)
     }
 }
 

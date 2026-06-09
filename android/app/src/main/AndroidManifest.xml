@@ -65,6 +65,39 @@
                     android:host="auth"
                     android:pathPrefix="/sso/callback" />
             </intent-filter>
+
+            <!-- AND-073: public profile App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/u/" />
+            </intent-filter>
+
+            <!-- AND-073: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/u/" />
+            </intent-filter>
+
+            <!-- AND-073: custom-scheme public-profile fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="u" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

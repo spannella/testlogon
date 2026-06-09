@@ -5,6 +5,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import androidx.navigation.navigation
 import com.testlogon.android.feature.account.MfaDevicesRoute
+import com.testlogon.android.feature.profile.edit.EditProfileRoute
 import com.testlogon.android.feature.sessions.ActiveSessionsRoute
 import com.testlogon.android.feature.shell.AuthedShellScreen
 
@@ -27,6 +28,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                 onOpenMfaDevices = {
                     navController.navigate(MainDest.MfaDevices.route) { launchSingleTop = true }
                 },
+                onEditProfile = {
+                    navController.navigate(MainDest.EditProfile.route) { launchSingleTop = true }
+                },
             )
         }
         composable(MainDest.ActiveSessions.route) {
@@ -35,5 +39,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         composable(MainDest.MfaDevices.route) {
             MfaDevicesRoute(onBack = { navController.popBackStack() })
         }
+        // AND-072: edit own profile, reached from the Profile tab.
+        composable(MainDest.EditProfile.route) {
+            EditProfileRoute(onNavigateBack = { navController.popBackStack() })
+        }
+        // AND-073: public profile (also registered unauthenticated for shared links).
+        publicProfileDestination(navController)
     }
 }
