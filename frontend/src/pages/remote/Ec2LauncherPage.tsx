@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -9,6 +10,7 @@ import {
   RotateCw,
   Plus,
   Loader2,
+  Terminal,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -80,6 +82,7 @@ function relativeTime(ts: number): string {
 
 export default function Ec2LauncherPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showLaunch, setShowLaunch] = useState(false);
   const [showTermConfirm, setShowTermConfirm] = useState<string | null>(null);
 
@@ -230,6 +233,22 @@ export default function Ec2LauncherPage() {
                           >
                             <RotateCw className="h-3 w-3 mr-1" /> Reboot
                           </Button>
+                          {inst.os_type !== "windows" && (inst.host_id || inst.public_ip) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                navigate(
+                                  inst.host_id
+                                    ? `/remote/ssh?host_id=${encodeURIComponent(inst.host_id)}`
+                                    : `/remote/ssh?host=${encodeURIComponent(inst.public_ip)}`,
+                                )
+                              }
+                              data-testid={`open-terminal-${inst.instance_id}`}
+                            >
+                              <Terminal className="h-3 w-3 mr-1" /> Open terminal
+                            </Button>
+                          )}
                         </>
                       )}
                       {inst.status === "stopped" && (
