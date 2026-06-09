@@ -154,6 +154,13 @@ export const isAgentSshQaEnabled = () => agentSshQaEnabled;
 export const rdpRemoteDesktopEnabled = toBool(env.VITE_RDP_REMOTE_DESKTOP_ENABLED, false);
 export const isRdpRemoteDesktopEnabled = () => rdpRemoteDesktopEnabled;
 
+// Inventory & soft-reservations admin UI (ADR-001 OFB-003/004 / OFB-INV-UI).
+// Mirrors the backend INVENTORY_RESERVATIONS_ENABLED master flag. Default OFF —
+// with it off the inventory admin page/route/nav entry are hidden and the
+// backend endpoints 404, so existing catalog/cart behaviour is unchanged.
+export const inventoryReservationsEnabled = toBool(env.VITE_INVENTORY_RESERVATIONS_ENABLED, false);
+export const isInventoryReservationsEnabled = () => inventoryReservationsEnabled;
+
 export const broadcastNavigationEnabled = toBool(env.VITE_BROADCAST_NAVIGATION_ENABLED, true);
 export const broadcastNavigationKillSwitch = toBool(env.VITE_BROADCAST_NAVIGATION_KILL_SWITCH, false);
 export const isBroadcastNavigationEnabled = () =>

@@ -2159,6 +2159,37 @@ export interface StockAdjustment {
   stock_updated_at?: string;
 }
 
+// ─── Inventory (ADR-001 OFB-003/004 / OFB-INV-UI) ─────────────────
+export interface InventoryRecord {
+  sku: string;
+  location_id: string;
+  on_hand: number;
+  reserved: number;
+  available: number;
+  reorder_point: number;
+  status: "in_stock" | "low_stock" | "out_of_stock" | string;
+  updated_at: number;
+}
+
+export interface InventoryLowStockResp {
+  items: InventoryRecord[];
+}
+
+export interface InventorySetOnHandIn {
+  sku: string;
+  on_hand: number;
+  location_id?: string;
+  reorder_point?: number | null;
+  reason?: string;
+}
+
+export interface InventoryAdjustIn {
+  sku: string;
+  delta: number;
+  location_id?: string;
+  reason?: string;
+}
+
 export interface CatalogReviewIn {
   rating: number;
   title?: string;

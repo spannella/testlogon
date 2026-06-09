@@ -42,6 +42,7 @@ const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
 const ProductDetail = lazy(() => import("@/pages/shop/ProductDetail"));
 const CartPage = lazy(() => import("@/pages/shop/CartPage"));
 const Checkout = lazy(() => import("@/pages/shop/Checkout"));
+const InventoryAdmin = lazy(() => import("@/pages/shop/admin/InventoryAdmin"));
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
 const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
@@ -477,6 +478,7 @@ export default function App() {
           <Route path="admin/kyc/translations" element={<KycTranslationsPage />} />
           <Route path="admin/communications" element={<EmailSmsDashboardPage />} />
           <Route path="admin/compute" element={<AdminComputeDashboard />} />
+          <Route path="admin/inventory" element={<InventoryAdmin />} />
           <Route path="admin/jobs" element={<JobDashboardPage />} />
           <Route path="admin/financials" element={<FinancialDashboard />} />
           <Route path="admin/payment-health" element={<PaymentHealthDashboard />} />

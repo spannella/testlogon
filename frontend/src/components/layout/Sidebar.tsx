@@ -55,6 +55,7 @@ import {
   Phone,
   ShieldAlert,
   Server,
+  Boxes,
   Container,
   LayoutTemplate,
   Bot,
@@ -74,10 +75,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/stores/uiStore";
 import { useAuthStore } from "@/stores/authStore";
-import { canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { canAccessGeneralAdminControls, canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
-import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled, isAgentSshQaEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled, isAgentSshQaEnabled, isInventoryReservationsEnabled } from "@/lib/featureFlags";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -233,6 +234,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Legal Holds", i18nKey: "nav.legalHolds", path: "/admin/legal-holds", icon: <Gavel className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
+      { label: "Inventory", i18nKey: "nav.inventory", path: "/admin/inventory", icon: <Boxes className="h-5 w-5" /> },
       { label: "Financials", i18nKey: "nav.financials", path: "/admin/financials", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Billing Config", path: "/admin/billing-config", icon: <CreditCard className="h-5 w-5" /> },
       { label: "1099 Batch", path: "/admin/tax-forms-1099", icon: <Receipt className="h-5 w-5" /> },
@@ -257,6 +259,8 @@ export default function Sidebar() {
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
   const showModerationBoard = canAccessModerationBoard(accessToken);
   const showPaymentIncidents = canAccessPaymentIncidentQueue(accessToken);
+  const showInventoryAdmin =
+    isInventoryReservationsEnabled() && canAccessGeneralAdminControls(accessToken);
 
   const { data: convoData } = useQuery({
     queryKey: ["conversations"],
@@ -320,6 +324,7 @@ export default function Sidebar() {
             if (item.path === "/admin/ads/fraud") return showModerationBoard;
             if (item.path === "/admin/ad-platform") return showModerationBoard;
             if (item.path === "/admin/bulk-payouts") return showRootRoleManagement;
+            if (item.path === "/admin/inventory") return showInventoryAdmin;
             return true;
           });
           if (items.length === 0) return null;
