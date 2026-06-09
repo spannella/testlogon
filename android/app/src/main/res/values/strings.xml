@@ -2,9 +2,53 @@
 <resources>
     <string name="app_name">TestLogon</string>
 
-    <!-- Authenticated shell bottom-nav tabs (AND-024) -->
+    <!-- Authenticated shell bottom-nav tabs (AND-024 / AND-067) -->
     <string name="tab_home">Home</string>
     <string name="tab_me">Profile</string>
+    <string name="tab_more">More</string>
+
+    <!-- Dashboard (AND-066 / AND-068 / AND-069) -->
+    <string name="dashboard_title">Dashboard</string>
+    <string name="dashboard_summary_title">Summary</string>
+    <string name="dashboard_kpi_today_earnings">Today\'s earnings</string>
+    <string name="dashboard_kpi_period_views">Views</string>
+    <string name="dashboard_kpi_subscribers">Subscribers</string>
+    <string name="dashboard_kpi_period_revenue">Revenue</string>
+    <string name="dashboard_highlights_title">Recent highlights</string>
+    <string name="dashboard_highlights_empty">No recent activity yet.</string>
+    <string name="dashboard_highlights_see_all">See all</string>
+    <string name="dashboard_broadcast_default_title">Live broadcast</string>
+    <string name="dashboard_quick_links_title">Quick links</string>
+    <string name="dashboard_quick_link_profile">Profile</string>
+    <string name="dashboard_quick_link_sessions">Sessions</string>
+    <string name="dashboard_quick_link_settings">Settings</string>
+    <string name="dashboard_quick_link_more">More</string>
+    <string name="dashboard_action_refresh">Refresh</string>
+    <string name="dashboard_action_retry">Retry</string>
+    <string name="dashboard_empty_title">Nothing to show yet</string>
+    <string name="dashboard_empty_body">Your dashboard will appear here once there is activity.</string>
+    <string name="dashboard_error_generic">Something went wrong.</string>
+    <string name="dashboard_offline_title">You\'re offline</string>
+    <string name="dashboard_offline_body">Offline — showing last-known data.</string>
+    <string name="dashboard_offline_stale_as_of">Showing saved data from %1$s.</string>
+    <string name="dashboard_refresh_failed_stale">Refresh failed — showing saved data.</string>
+
+    <!-- "More" hub (AND-067) -->
+    <string name="more_title">More</string>
+    <string name="more_empty">Nothing here yet</string>
+    <string name="more_section_account">Account</string>
+    <string name="more_section_security">Security</string>
+    <string name="more_section_app">App</string>
+    <string name="more_section_support">Support</string>
+    <string name="more_unavailable_coming_soon">Coming soon</string>
+    <string name="more_unavailable_account">Not available for your account</string>
+    <string name="more_entry_profile">Profile</string>
+    <string name="more_entry_sessions">Active sessions</string>
+    <string name="more_entry_mfa_devices">Two-factor devices</string>
+    <string name="more_entry_notifications">Notifications</string>
+    <string name="more_entry_settings">Settings</string>
+    <string name="more_entry_help">Help</string>
+    <string name="more_entry_about">About</string>
 
     <!-- AND-061: production host claimed by the magic-link App Link (autoVerify). Update for the real
          production domain; assetlinks.json on this host must carry the release cert fingerprint. -->

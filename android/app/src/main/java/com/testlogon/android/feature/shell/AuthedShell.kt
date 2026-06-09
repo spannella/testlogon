@@ -1,23 +1,21 @@
 package com.testlogon.android.feature.shell
 
 import androidx.annotation.StringRes
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -38,7 +36,8 @@ enum class AuthedTab(
     val unselectedIcon: ImageVector,
 ) {
     HOME("authed/home", R.string.tab_home, Icons.Filled.Home, Icons.Outlined.Home),
-    ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person);
+    ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person),
+    MORE("authed/more", R.string.tab_more, Icons.Filled.Apps, Icons.Outlined.Apps);
 
     companion object {
         val START = HOME
@@ -88,9 +87,29 @@ fun AuthedShellScreen(
             startDestination = AuthedTab.START.route,
             modifier = Modifier.padding(padding),
         ) {
-            composable(AuthedTab.HOME.route) { HomePlaceholderScreen() }
+            composable(AuthedTab.HOME.route) {
+                com.testlogon.android.feature.dashboard.DashboardRoute(
+                    onOpenProfile = { tabNav.navigateToTab(AuthedTab.ME) },
+                    onOpenSessions = onOpenSessions,
+                    onOpenSettings = { tabNav.navigateToTab(AuthedTab.MORE) },
+                    onOpenMore = { tabNav.navigateToTab(AuthedTab.MORE) },
+                )
+            }
             composable(AuthedTab.ME.route) {
                 MePlaceholderScreen(onOpenSessions = onOpenSessions, onOpenMfaDevices = onOpenMfaDevices)
+            }
+            composable(AuthedTab.MORE.route) {
+                com.testlogon.android.feature.more.MoreRoute(
+                    onNavigate = { route ->
+                        when (route) {
+                            com.testlogon.android.navigation.MoreRoutes.PROFILE ->
+                                tabNav.navigateToTab(AuthedTab.ME)
+                            com.testlogon.android.navigation.MoreRoutes.SESSIONS -> onOpenSessions()
+                            com.testlogon.android.navigation.MoreRoutes.MFA_DEVICES -> onOpenMfaDevices()
+                            else -> Unit // coming-soon entries are non-interactive
+                        }
+                    },
+                )
             }
         }
     }
@@ -101,13 +120,6 @@ private fun NavController.navigateToTab(tab: AuthedTab) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true
-    }
-}
-
-@Composable
-private fun HomePlaceholderScreen() {
-    Box(Modifier.fillMaxSize().testTag("home_placeholder"), contentAlignment = Alignment.Center) {
-        Text("Home", style = MaterialTheme.typography.headlineSmall)
     }
 }
 
