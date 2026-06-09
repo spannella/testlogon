@@ -49,10 +49,12 @@ SaaS) and current state:
 | M | **Human Resources** | Employees, positions, payroll | None | — | **OUT (recommend)** |
 | N | **Asset Maintenance / FixedAsset** | Fixed assets, depreciation, maintenance | None | — | **OUT (recommend)** |
 
-**Recommended "full commerce/ERP" scope for a creator platform = A–J** (the
-commerce + accounting + supply/fulfillment + CRM core). **K–N are classic OFBiz
-modules that don't fit a creator-economy SaaS** — I recommend OUT, but since you
-said "full," I'll confirm before excluding (esp. Manufacturing & POS).
+**SCOPE DECISION (user, 2026-06-09): FULL OFBiz — A through N.** The build
+includes the commerce/ERP core (A–J) **plus** Manufacturing/MRP (K),
+Point-of-Sale (L), HR (M), and Fixed-Asset Maintenance (N). These last four are
+classic OFBiz applications with limited natural fit for a creator-economy SaaS,
+but the explicit goal is full OFBiz functionality, so they are IN. (M/HR is the
+most peripheral; it is built last.)
 
 ---
 
@@ -129,9 +131,31 @@ Purchasing, Shipping) are net-new ticket files to author.
 
 ---
 
-## 6. Immediate next step
+## 6. Ticket files to author (full scope A–N)
 
-Confirm the module scope (A–J in; K–N out, or include some), then run the
-**ticket-authoring workflow** to expand the in-scope phases into detailed
-`<MODULE>_TICKETS.md` files — after which each phase builds via the standard
-sequential build workflow.
+Each in-scope module gets its own `<MODULE>_TICKETS.md` (repo's standard ticket
+format), grounded in the cited current-state code. Accounting (E) and Pricing (F)
+already live in `OFBIZ_COMMERCE_TICKETS.md` (Milestones 4–5) and are reused/extended.
+
+| Module | Ticket file | Prefix |
+|---|---|---|
+| A Party / CRM | `PARTY_CRM_TICKETS.md` | `PTY` |
+| B Catalog / Product depth | `CATALOG_DEPTH_TICKETS.md` | `PRD` |
+| C Order lifecycle | `ORDER_LIFECYCLE_TICKETS.md` | `ORD` |
+| D Facility / fulfillment (extends inventory) | `FACILITY_FULFILLMENT_TICKETS.md` | `FAC` |
+| G Purchasing / SCM | `PURCHASING_SCM_TICKETS.md` | `PUR` |
+| H Shipping / logistics | `SHIPPING_LOGISTICS_TICKETS.md` | `SHP` |
+| I Marketing / campaigns | `MARKETING_CAMPAIGNS_TICKETS.md` | `MKT` |
+| J eCommerce store integration | `ECOMMERCE_INTEGRATION_TICKETS.md` | `ECM` |
+| K Manufacturing / MRP | `MANUFACTURING_MRP_TICKETS.md` | `MFG` |
+| L Point of Sale | `POS_TICKETS.md` | `POS` |
+| M Human Resources | `HR_TICKETS.md` | `HRM` |
+| N Fixed Assets / maintenance | `FIXED_ASSETS_TICKETS.md` | `FXA` |
+| (E) Accounting GL/AR/AP | `OFBIZ_COMMERCE_TICKETS.md` (M4) | `OFB` |
+| (F) Pricing/promotions engine | `OFBIZ_COMMERCE_TICKETS.md` (M5) | `OFB` |
+
+## 7. Immediate next step
+
+Run the **ticket-authoring workflow** to generate the 12 net-new ticket files
+above, then build phase-by-phase via the standard **sequential commit-on-green
+build workflow** (the same cadence that produced the 7 foundations + their FE).
