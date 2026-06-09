@@ -2449,6 +2449,33 @@ def _table_defs() -> List[TableDef]:
             "token_id",
             gsi=[{"index_name": "ByLookupHash", "partition_key": "lookup_hash"}],
         ),
+        # OFBiz commerce/ERP Phase 1 — inventory & soft reservations (ADR-001, OFB-002).
+        # inventory: first-class SKU stock record. PK=sku, SK=LOC#{location_id}
+        # (single default "warehouse" now; multi-location deferred). GSI_AVAILABLE
+        # buckets by status with numeric `available` sort key for low-stock filtering.
+        TableDef(
+            _resolve_table_name(S.inventory_table_name, "inventory"),
+            "sku",
+            "location_sk",
+            gsi=[
+                {"index_name": "GSI_AVAILABLE", "partition_key": "status", "sort_key": "available"},
+            ],
+            attr_types={"available": "N"},
+        ),
+        # reservations: reserve -> commit -> release lifecycle. PK=reservation_pk
+        # (RES#{reservation_id}), SK=META. GSI_SKU lists reservations per SKU
+        # (numeric created_at); GSI_EXPIRY drives the TTL-release loop over active
+        # reservations (partition gsi_expiry_pk=SCHED#ACTIVE, numeric expires_at).
+        TableDef(
+            _resolve_table_name(S.reservations_table_name, "reservations"),
+            "reservation_pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "created_at"},
+                {"index_name": "GSI_EXPIRY", "partition_key": "gsi_expiry_pk", "sort_key": "expires_at"},
+            ],
+            attr_types={"created_at": "N", "expires_at": "N"},
+        ),
     ]
 
 

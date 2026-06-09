@@ -833,6 +833,14 @@ class Settings:
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
     catalog_stock_alerts_enabled: bool = os.environ.get("CATALOG_STOCK_ALERTS_ENABLED", "1") not in ("0", "false", "False")
 
+    # OFBiz commerce/ERP — Phase 1: inventory & soft reservations (ADR-001, OFB-002/003/004).
+    # Master switch defaults OFF: with it off, the catalog/cart/billing decrement-at-purchase
+    # path is byte-for-byte unchanged; the inventory service is dormant.
+    inventory_reservations_enabled: bool = os.environ.get("INVENTORY_RESERVATIONS_ENABLED", "false").lower() == "true"
+    inventory_reservation_ttl_seconds: int = int(os.environ.get("INVENTORY_RESERVATION_TTL_SECONDS", "1800"))
+    inventory_table_name: str = os.environ.get("INVENTORY_TABLE_NAME", "inventory")
+    reservations_table_name: str = os.environ.get("RESERVATIONS_TABLE_NAME", "reservations")
+
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
     filemgr_mounts_table_name: str = os.environ.get("FILEMGR_MOUNTS_TABLE_NAME", "filemgr_mounts")

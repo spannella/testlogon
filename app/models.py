@@ -578,6 +578,55 @@ class CatalogStockOut(BaseModel):
     stock_updated_at: Optional[str] = None
 
 
+# ── OFBiz commerce/ERP Phase 1 — inventory & soft reservations (ADR-001 / OFB-003/004) ──
+
+
+class InventoryRecordOut(BaseModel):
+    sku: str
+    location_id: str = "warehouse"
+    on_hand: int = 0
+    reserved: int = 0
+    available: int = 0
+    reorder_point: int = 0
+    status: str = "in_stock"  # in_stock | low_stock | out_of_stock
+    updated_at: int = 0
+
+
+class InventorySetOnHandIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    on_hand: int = Field(ge=0, le=100_000_000)
+    location_id: str = Field(default="warehouse", min_length=1, max_length=128)
+    reorder_point: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+class InventoryAdjustIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    delta: int = Field(ge=-100_000_000, le=100_000_000)
+    location_id: str = Field(default="warehouse", min_length=1, max_length=128)
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+class InventoryReserveIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+    location_id: str = Field(default="warehouse", min_length=1, max_length=128)
+    cart_id: Optional[str] = Field(default=None, max_length=256)
+    ttl_seconds: Optional[int] = Field(default=None, ge=10, le=86_400)
+
+
+class ReservationOut(BaseModel):
+    reservation_id: str
+    sku: str
+    location_id: str = "warehouse"
+    quantity: int
+    status: str  # active | committed | released | expired
+    cart_id: Optional[str] = None
+    user_sub: Optional[str] = None
+    created_at: int = 0
+    expires_at: int = 0
+
+
 class CatalogItemOut(BaseModel):
     category_id: str
     item_id: str
