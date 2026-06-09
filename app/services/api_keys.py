@@ -383,9 +383,41 @@ def enforce_api_key_ip_rules(client_ip: str, key_item: Dict[str, Any]) -> None:
     if deny and ip_in_any_cidr(client_ip, deny):
         raise HTTPException(403, "API key denied from this IP")
 
+def _check_honeytoken_tripwire(api_key_id: str, api_key_secret: str, client_ip: str) -> None:
+    """HNY-005: detect a decoy API key at the auth chokepoint.
+
+    Gated on ``S.honeytoken_enabled`` (default off → no-op, no DDB reads).
+    On a honeytoken match, records a CRITICAL security event but does NOT
+    change the response — the caller still raises the SAME 401 a bogus key
+    raises, so there is no oracle for the attacker. Never raises itself.
+    """
+    if not S.honeytoken_enabled:
+        return
+    try:
+        from app.services import honeytokens
+
+        ht = honeytokens.match_api_key(api_key_id, api_key_secret)
+        if not ht:
+            return
+        from app.services import security_events
+
+        security_events.safe_record(
+            kind="honeytoken_api_key_used",
+            severity="critical",
+            source_ip=client_ip,
+            token_id=ht.get("token_id", ""),
+            label=ht.get("label", ""),
+            key_id=api_key_id,
+        )
+    except Exception:
+        # Trip-wire must never interfere with the auth path.
+        pass
+
+
 def check_api_key_allowed(api_key_id: str, api_key_secret: str, client_ip: str) -> Dict[str, Any]:
     it = T.api_keys.get_item(Key={"key_id": api_key_id}).get("Item")
     if not it or it.get("revoked", False):
+        _check_honeytoken_tripwire(api_key_id, api_key_secret, client_ip)
         raise HTTPException(401, "Invalid API key")
     expires_at = int(it.get("expires_at") or 0)
     if expires_at and now_ts() > expires_at:

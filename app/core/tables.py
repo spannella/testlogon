@@ -310,6 +310,8 @@ class Tables:
     geo_rules: Any
     legal_holds: Any
     legal_exports: Any
+    security_events: Any
+    honeytokens: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -555,4 +557,6 @@ T = Tables(
     geo_rules=_safe_table(S.geo_rules_table_name),
     legal_holds=_safe_table(S.legal_holds_table_name),
     legal_exports=_safe_table(S.legal_exports_table_name),
+    security_events=_safe_table(S.security_events_table_name),
+    honeytokens=_safe_table(S.honeytokens_table_name),
 )

@@ -13031,6 +13031,44 @@ class UserRiskProfile(BaseModel):
     recent_flags: Optional[List[FraudFlagOut]] = Field(None, description="Most recent flags")
 
 
+class HoneytokenMintIn(BaseModel):
+    """Request to mint a decoy honeytoken (HNY-004/HNY-007)."""
+    kind: str = Field(
+        ..., pattern=r"^(api_key|credential_record|canary_row)$",
+        description="Honeytoken kind",
+    )
+    label: str = Field(..., min_length=1, max_length=200, description="Human label / where placed")
+    placement: Optional[str] = Field(None, max_length=500, description="Optional placement hint")
+
+
+class HoneytokenOut(BaseModel):
+    """Honeytoken metadata. NEVER includes the stored secret/hash."""
+    token_id: str
+    kind: str
+    label: str = ""
+    created_by: str = ""
+    created_at: int = 0
+    retired: bool = False
+    placement: str = ""
+    key_id: str = ""
+    decoy_username: str = ""
+    canary_id: str = ""
+
+
+class HoneytokenMintOut(BaseModel):
+    """Mint response — returns the plaintext secret ONCE (api_key/credential)."""
+    token_id: str
+    kind: str
+    label: str = ""
+    created_at: int = 0
+    placement: str = ""
+    api_key: Optional[str] = None
+    key_id: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    canary_id: Optional[str] = None
+
+
 class FreezeUserRequest(BaseModel):
     """Request model for freezing a user's financial operations."""
     reason: str = Field(..., min_length=1, max_length=500, description="Reason for freezing")

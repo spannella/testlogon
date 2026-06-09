@@ -2577,6 +2577,58 @@ class Settings:
         os.environ.get("FRAUD_SCORE_THRESHOLD", "70")
     )
 
+    # HNY (Security tooling & honeypots) — all DEFENSIVE-only, default OFF.
+    # SECOPS-007 dev/prod parity: no dev_mode branch; the code paths gated by
+    # these flags short-circuit to current behavior when the flag is off.
+    security_events_table_name: str = os.environ.get(
+        "SECURITY_EVENTS_TABLE_NAME", "security_events"
+    )
+    honeytokens_table_name: str = os.environ.get(
+        "HONEYTOKENS_TABLE_NAME", "honeytokens"
+    )
+    honeytoken_enabled: bool = os.environ.get(
+        "HONEYTOKEN_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    honeypot_endpoints_enabled: bool = os.environ.get(
+        "HONEYPOT_ENDPOINTS_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    honeypot_tarpit_enabled: bool = os.environ.get(
+        "HONEYPOT_TARPIT_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    honeypot_tarpit_max_seconds: int = int(
+        os.environ.get("HONEYPOT_TARPIT_MAX_SECONDS", "5")
+    )
+    ids_enabled: bool = os.environ.get(
+        "IDS_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_impossible_travel_enabled: bool = os.environ.get(
+        "IDS_IMPOSSIBLE_TRAVEL_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_credential_stuffing_enabled: bool = os.environ.get(
+        "IDS_CREDENTIAL_STUFFING_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_scanning_detection_enabled: bool = os.environ.get(
+        "IDS_SCANNING_DETECTION_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    security_dashboard_enabled: bool = os.environ.get(
+        "SECURITY_DASHBOARD_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    security_webhooks_enabled: bool = os.environ.get(
+        "SECURITY_WEBHOOKS_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_credential_stuffing_max_failures: int = int(
+        os.environ.get("IDS_CREDENTIAL_STUFFING_MAX_FAILURES", "10")
+    )
+    ids_credential_stuffing_window_seconds: int = int(
+        os.environ.get("IDS_CREDENTIAL_STUFFING_WINDOW_SECONDS", "300")
+    )
+    ids_scanning_max_404_per_min: int = int(
+        os.environ.get("IDS_SCANNING_MAX_404_PER_MIN", "30")
+    )
+    ids_impossible_travel_min_kmh: int = int(
+        os.environ.get("IDS_IMPOSSIBLE_TRAVEL_MIN_KMH", "900")
+    )
+
     # KYC-017: Document Signing Template Library
     kyc_document_templates_table_name: str = os.environ.get(
         "KYC_DOCUMENT_TEMPLATES_TABLE_NAME", "kyc_document_templates"

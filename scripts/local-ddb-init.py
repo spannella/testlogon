@@ -2400,6 +2400,29 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # HNY-002: unified security/IDS/honeypot/honeytoken signal store.
+        # PK=pk (EVENT#{event_id}), SK=sk (META). GSI ByDate lets the security
+        # dashboard query a time window by event_date (S, e.g. "2026-06-09")
+        # + ts (N, unix seconds) instead of scanning. ts MUST be declared "N"
+        # or DynamoDB stores it as String and queries with integers raise
+        # ValidationException (CLAUDE.md numeric-GSI gotcha).
+        TableDef(
+            _resolve_table_name(S.security_events_table_name, "security_events"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByDate", "partition_key": "event_date", "sort_key": "ts"}],
+            attr_types={"ts": "N"},
+        ),
+        # HNY-002: honeytoken (decoy credential / canary) store. PK=token_id.
+        # GSI ByLookupHash resolves a presented decoy key by its lookup_hash
+        # (api_key_hash of the secret) so the trip-wire can match without
+        # storing decoys in the real api_keys table (attacker-indistinguishable
+        # public shape, isolated store).
+        TableDef(
+            _resolve_table_name(S.honeytokens_table_name, "honeytokens"),
+            "token_id",
+            gsi=[{"index_name": "ByLookupHash", "partition_key": "lookup_hash"}],
+        ),
     ]
 
 

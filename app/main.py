@@ -229,6 +229,7 @@ from app.routers.audit_export import router as audit_export_router
 from app.routers.legal_export import router as legal_export_router
 from app.routers.refund_requests import router as refund_requests_router
 from app.routers.fraud_detection import router as fraud_detection_router
+from app.routers.security_honeytokens import router as security_honeytokens_router
 from app.routers.billing_disputes import billing_disputes_router
 from app.routers.achievements import router as achievements_router
 from app.routers.admin_jobs import router as admin_jobs_router
@@ -768,6 +769,13 @@ def create_app() -> FastAPI:
     app.include_router(legal_export_router)
     app.include_router(refund_requests_router)
     app.include_router(fraud_detection_router)
+    app.include_router(security_honeytokens_router)
+    # HNY-008: decoy/honeypot endpoints are only mounted when explicitly
+    # enabled, so probing them 404s like any unknown path when off.
+    if getattr(_S, "honeypot_endpoints_enabled", False):
+        from app.routers.security_honeypot import router as security_honeypot_router
+
+        app.include_router(security_honeypot_router)
     app.include_router(billing_disputes_router)
     app.include_router(achievements_router)
     app.include_router(promo_codes_router)
