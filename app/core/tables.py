@@ -232,6 +232,7 @@ class Tables:
     broadcast_clips: Any
     broadcast_ad_events: Any
     llm_provider_keys: Any
+    message_ai_cache: Any
     delegates: Any
     delegation_api_keys: Any
     syndicates: Any
@@ -474,6 +475,7 @@ T = Tables(
     broadcast_clips=_safe_table(S.broadcast_clips_table_name),
     broadcast_ad_events=_safe_table(S.broadcast_ad_events_table_name),
     llm_provider_keys=_safe_table(S.llm_provider_keys_table_name),
+    message_ai_cache=_safe_table(S.message_ai_cache_table_name),
     delegates=_safe_table(S.delegates_table_name),
     delegation_api_keys=_safe_table(S.delegation_api_keys_table_name),
     syndicates=_safe_table(S.syndicates_table_name),

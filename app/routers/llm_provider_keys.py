@@ -41,6 +41,8 @@ async def list_providers(_: Dict = Depends(require_ui_session)):
                 base_url=info["base_url"],
                 models=info.get("models", []),
                 supports_usage_api=info.get("supports_usage_api", False),
+                stt_model=info.get("stt_model", ""),
+                default_voice_id=info.get("default_voice_id", ""),
             )
         )
     return LlmProviderListOut(providers=providers)
@@ -57,6 +59,7 @@ async def add_key(body: LlmKeyCreateIn, ctx: Dict = Depends(require_ui_session))
             api_key=body.api_key,
             base_url=body.base_url,
             model_preference=body.model_preference,
+            voice_preference=body.voice_preference,
             rate_limit_rpm=body.rate_limit_rpm,
             monthly_budget_cents=body.monthly_budget_cents,
         )

@@ -1701,6 +1701,12 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Messenger AI cache (MVA-002): translation/transcript caching.
+        TableDef(
+            _resolve_table_name(S.message_ai_cache_table_name, "message_ai_cache"),
+            "cache_key",
+            attr_types={"created_at": "N", "ttl": "N"},
+        ),
         # Delegates (DELEGATE-001 .. DELEGATE-003)
         TableDef(
             _resolve_table_name(S.delegates_table_name, "delegates"),

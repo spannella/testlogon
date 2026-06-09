@@ -2441,6 +2441,10 @@ class MessageOut(BaseModel):
     lottery: Optional[Dict[str, Any]] = None
     voice_message: Optional[Dict[str, Any]] = None
     voicemail: Optional[Dict[str, Any]] = None
+    # Per-message translation (MVA-005): populated when the viewer has
+    # auto-translate on and a cached translation exists. Best-effort, never set
+    # for viewers without the preference.
+    translation: Optional[Dict[str, Any]] = None
     # Countdown message fields (MSG-010)
     countdown_title: Optional[str] = None
     target_datetime: Optional[int] = None
@@ -4106,6 +4110,15 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             "duration_seconds": float(merged_item.get("duration_seconds", 0)),
             "waveform_data": [float(v) for v in raw_waveform],
         }
+        # MVA-007: project a persisted transcript (if any) for all participants.
+        if merged_item.get("transcript"):
+            voice_message_out["transcript"] = str(merged_item.get("transcript"))
+            voice_message_out["transcript_lang"] = str(merged_item.get("transcript_lang") or "")
+        # MVA-009: surface TTS provenance/source text.
+        if merged_item.get("is_tts"):
+            voice_message_out["is_tts"] = True
+            if merged_item.get("tts_source_text"):
+                voice_message_out["tts_source_text"] = str(merged_item.get("tts_source_text"))
 
     # Voicemail projection (CALL-014)
     voicemail_out: Optional[Dict[str, Any]] = None
@@ -14850,3 +14863,368 @@ def list_delegated_chat_audit(
         limit=limit,
     )
     return [ChatDelegateAuditEntry(**item) for item in items]
+
+
+# ─── Messenger Voice & Translation AI (MVA-004 / MVA-007 / MVA-009) ──────────
+
+from app.models import (
+    TranslateMessageRequest,
+    TranslateMessageOut,
+    TranscribeMessageOut,
+    TtsVoiceMessageRequest,
+)
+
+
+def _ai_rate_limit_or_429(user_id: str, category: str, max_n: int, win: int) -> None:
+    """DDB-backed fixed-window rate limit on T.message_ai_cache.
+
+    Keyed per (user, category) so each AI feature has an independent bucket,
+    distinct from message-send quotas (MVA-011). Fail-open on store errors so
+    a transient DDB hiccup never blocks the feature.
+    """
+    now = now_ts()
+    bucket_key = f"RL#{category}#{user_id}#{now // win}"
+    try:
+        resp = T.message_ai_cache.update_item(
+            Key={"cache_key": bucket_key},
+            UpdateExpression="ADD #c :one SET #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ttl": "ttl"},
+            ExpressionAttributeValues={":one": 1, ":ttl": now + win + 60},
+            ReturnValues="UPDATED_NEW",
+        )
+        count = int(resp.get("Attributes", {}).get("count", 1))
+    except Exception:
+        return  # fail-open
+    if count > max_n:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "messaging_ai_rate_limited", "message": "Too many AI requests"},
+            headers={"Retry-After": str(win)},
+        )
+
+
+def _ai_cache_get(cache_key: str) -> Optional[Dict[str, Any]]:
+    try:
+        item = T.message_ai_cache.get_item(Key={"cache_key": cache_key}).get("Item")
+    except Exception:
+        return None
+    return item if isinstance(item, dict) else None
+
+
+def _ai_cache_put(cache_key: str, payload: Dict[str, Any], ttl_seconds: int) -> None:
+    now = now_ts()
+    item: Dict[str, Any] = {"cache_key": cache_key, "created_at": now, **payload}
+    if ttl_seconds and ttl_seconds > 0:
+        item["ttl"] = now + ttl_seconds
+    try:
+        T.message_ai_cache.put_item(Item=item)
+    except Exception:
+        logger.warning("message_ai_cache put failed key=%s", cache_key, exc_info=True)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/translate",
+    response_model=TranslateMessageOut,
+)
+def translate_message(
+    conversation_id: str,
+    message_id: str,
+    body: TranslateMessageRequest,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Translate a text message into ``target_lang`` (cached) (MVA-004)."""
+    if not S.messaging_translation_enabled:
+        raise HTTPException(404, "Message translation is not enabled")
+    require_participant_active(user_id, conversation_id)
+    item = _get_message_or_404(conversation_id, message_id)
+
+    # Only plain text content is translatable; reject hidden/locked/view-once.
+    if item.get("kind") != "text":
+        raise HTTPException(400, "Only text messages can be translated")
+    if item.get("view_once") or item.get("is_encrypted"):
+        raise HTTPException(400, "This message cannot be translated")
+    if item.get("lock_price_cents") and item.get("sender_id") != user_id:
+        raise HTTPException(400, "Locked messages cannot be translated")
+    text = str(item.get("text") or "")
+    if not text.strip():
+        raise HTTPException(400, "Message has no translatable text")
+
+    target_lang = body.target_lang.strip()
+    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    cache_key = "TX#" + hashlib.sha256(
+        f"{message_id}|{target_lang}|{text_hash}".encode("utf-8")
+    ).hexdigest()
+
+    cached = _ai_cache_get(cache_key)
+    if cached and cached.get("translated_text") is not None:
+        return TranslateMessageOut(
+            translated_text=str(cached.get("translated_text") or ""),
+            source_lang=str(cached.get("source_lang") or "auto"),
+            target_lang=target_lang,
+            cached=True,
+        )
+
+    # Rate-limit only the provider-call (cache-miss) path.
+    _ai_rate_limit_or_429(
+        user_id,
+        "translate",
+        S.messaging_ai_translate_max_per_window,
+        S.messaging_ai_translate_window_seconds,
+    )
+
+    from app.services import messaging_ai
+
+    try:
+        translated, source_lang = messaging_ai.translate_text(
+            user_id=user_id, text=text, target_lang=target_lang
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    _ai_cache_put(
+        cache_key,
+        {"translated_text": translated, "source_lang": source_lang, "target_lang": target_lang},
+        S.messaging_translation_cache_ttl_seconds,
+    )
+    return TranslateMessageOut(
+        translated_text=translated,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        cached=False,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/transcribe",
+    response_model=TranscribeMessageOut,
+)
+def transcribe_message(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Transcribe a voice message and persist the transcript (MVA-007)."""
+    if not S.messaging_transcription_enabled:
+        raise HTTPException(404, "Message transcription is not enabled")
+    require_participant_active(user_id, conversation_id)
+    item = _get_message_or_404(conversation_id, message_id)
+
+    if item.get("kind") not in ("voice_message", "voicemail"):
+        raise HTTPException(400, "Only voice messages can be transcribed")
+
+    # Idempotent: a stored transcript short-circuits the provider call.
+    existing = item.get("transcript")
+    if existing:
+        return TranscribeMessageOut(
+            transcript=str(existing),
+            transcript_lang=str(item.get("transcript_lang") or ""),
+            cached=True,
+        )
+
+    s3_key = str(item.get("audio_url") or "")
+    if not s3_key:
+        raise HTTPException(400, "Voice message has no audio")
+
+    _ai_rate_limit_or_429(
+        user_id,
+        "transcribe",
+        S.messaging_ai_transcribe_max_per_window,
+        S.messaging_ai_transcribe_window_seconds,
+    )
+
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET_IMAGES, Key=s3_key)
+        audio_bytes = obj["Body"].read()
+    except Exception as exc:
+        logger.warning("transcribe_message s3 get failed key=%s err=%s", s3_key, exc)
+        raise HTTPException(502, "Could not fetch audio for transcription")
+
+    content_type = str(item.get("audio_content_type") or "audio/webm")
+    from app.services import messaging_ai
+
+    try:
+        transcript, lang = messaging_ai.transcribe_audio(
+            user_id=user_id, audio_bytes=audio_bytes, content_type=content_type
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    ts = now_ts()
+    try:
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression="SET transcript = :t, transcript_lang = :l, transcribed_at = :ts",
+            ConditionExpression="attribute_not_exists(transcript)",
+            ExpressionAttributeValues={":t": transcript, ":l": lang, ":ts": ts},
+        )
+    except Exception:
+        # Concurrent write won the race; re-read to return the stored value.
+        fresh = _get_message_or_404(conversation_id, message_id)
+        return TranscribeMessageOut(
+            transcript=str(fresh.get("transcript") or transcript),
+            transcript_lang=str(fresh.get("transcript_lang") or lang),
+            cached=True,
+        )
+
+    return TranscribeMessageOut(transcript=transcript, transcript_lang=lang, cached=False)
+
+
+@router.post("/conversations/{conversation_id}/tts-voice-message", response_model=MessageOut)
+def create_tts_voice_message(
+    conversation_id: str,
+    body: TtsVoiceMessageRequest,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Synthesize text into a stored voice message via TTS (MVA-009)."""
+    if not S.messaging_tts_enabled or not S.voice_message_enabled:
+        raise HTTPException(404, "Text-to-speech voice messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > S.messaging_tts_max_chars:
+        raise HTTPException(400, f"text exceeds {S.messaging_tts_max_chars} characters")
+
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    ts = now_ts()
+    deliver_at: Optional[int] = None
+    is_scheduled = False
+    if body.send_at is not None:
+        if body.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at = body.send_at
+        is_scheduled = True
+
+    _validate_reply_target(conversation_id, body.reply_to_message_id)
+
+    _ai_rate_limit_or_429(
+        user_id,
+        "tts",
+        S.messaging_ai_tts_max_per_window,
+        S.messaging_ai_tts_window_seconds,
+    )
+
+    from app.services import messaging_ai
+
+    try:
+        audio_bytes, content_type = messaging_ai.synthesize_speech(
+            user_id=user_id, text=text, voice_id=body.voice_id, model_id=body.model_id
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    mid = "m_" + uuid.uuid4().hex
+    s3_key = f"voice-messages/{conversation_id}/{mid}.mp3"
+    try:
+        s3.put_object(Bucket=S3_BUCKET_IMAGES, Key=s3_key, Body=audio_bytes, ContentType=content_type)
+    except Exception as exc:
+        logger.warning("create_tts_voice_message s3 put failed key=%s err=%s", s3_key, exc)
+        raise HTTPException(502, "Could not store synthesized audio")
+
+    # Estimate duration from byte length (rough; ~16KB/s) and a flat waveform.
+    duration_seconds = max(1.0, round(len(audio_bytes) / 16000.0, 1))
+    from decimal import Decimal as _DecTTS
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "voice_message",
+        "text": text,  # accessibility: keep the source text
+        "audio_url": s3_key,
+        "audio_content_type": content_type,
+        "audio_size_bytes": len(audio_bytes),
+        "duration_seconds": _DecTTS(str(duration_seconds)),
+        "waveform_data": [_DecTTS("0.5")] * 20,
+        "is_tts": True,
+        "tts_source_text": text,
+        "reactions": {},
+    }
+    if is_scheduled:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=body.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
+
+    tbl_msgs.put_item(Item=item)
+
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled,
+        preview_text="[Voice message]",
+    )
+
+    from urllib.parse import quote as _tts_quote
+    if S.dev_mode:
+        audio_url_out = f"/mock/s3/{S3_BUCKET_IMAGES}/{_tts_quote(s3_key, safe='/')}"
+    else:
+        audio_url_out = s3_key
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind="voice_message",
+        text=text,
+        voice_message={
+            "audio_url": audio_url_out,
+            "audio_content_type": content_type,
+            "audio_size_bytes": len(audio_bytes),
+            "duration_seconds": duration_seconds,
+            "waveform_data": [0.5] * 20,
+            "is_tts": True,
+            "tts_source_text": text,
+        },
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        scheduled=is_scheduled,
+        deliver_at=deliver_at,
+    )
+    if not is_scheduled:
+        message = _apply_message_receipts(message, item, participants)
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="voice_message",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return message

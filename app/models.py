@@ -4321,11 +4321,12 @@ class FollowStatusResponse(BaseModel):
 
 
 class LlmKeyCreateIn(BaseModel):
-    provider: str = Field(..., pattern=r"^(openai|anthropic|deepseek|gemini|custom)$")
+    provider: str = Field(..., pattern=r"^(openai|anthropic|deepseek|gemini|elevenlabs|custom)$")
     label: str = Field(..., min_length=1, max_length=200)
     api_key: str = Field(..., min_length=8, max_length=500)
     base_url: str = Field(default="", max_length=500)
     model_preference: str = Field(default="", max_length=200)
+    voice_preference: str = Field(default="", max_length=200)
     rate_limit_rpm: int = Field(default=60, ge=1, le=10000)
     monthly_budget_cents: int = Field(default=0, ge=0)
 
@@ -4359,6 +4360,7 @@ class LlmKeyOut(BaseModel):
     key_suffix: str = ""
     base_url: str = ""
     model_preference: str = ""
+    voice_preference: str = ""
     available_models: List[str] = Field(default_factory=list)
     rate_limit_rpm: int = 60
     monthly_budget_cents: int = 0
@@ -4402,10 +4404,41 @@ class LlmProviderInfo(BaseModel):
     base_url: str
     models: List[str] = Field(default_factory=list)
     supports_usage_api: bool = False
+    # MVA-001: TTS/STT capability metadata (ElevenLabs).
+    stt_model: str = ""
+    default_voice_id: str = ""
 
 
 class LlmProviderListOut(BaseModel):
     providers: List[LlmProviderInfo]
+
+
+# --- Messenger Voice & Translation AI (MVA-004 / MVA-007 / MVA-009) ---
+
+
+class TranslateMessageRequest(BaseModel):
+    target_lang: str = Field(..., min_length=2, max_length=35)
+
+
+class TranslateMessageOut(BaseModel):
+    translated_text: str
+    source_lang: str = "auto"
+    target_lang: str
+    cached: bool = False
+
+
+class TranscribeMessageOut(BaseModel):
+    transcript: str
+    transcript_lang: str = ""
+    cached: bool = False
+
+
+class TtsVoiceMessageRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=20000)
+    voice_id: str = Field(default="", max_length=200)
+    model_id: str = Field(default="", max_length=200)
+    reply_to_message_id: Optional[str] = None
+    send_at: Optional[int] = None
 # --- Advertiser Accounts & Campaigns (ADS-001) ---
 
 class AdAccountOut(BaseModel):

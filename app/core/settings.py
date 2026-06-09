@@ -1841,6 +1841,25 @@ class Settings:
     voice_message_max_size_bytes: int = int(os.environ.get("VOICE_MESSAGE_MAX_SIZE_BYTES", "52428800"))
     voice_message_waveform_samples: int = int(os.environ.get("VOICE_MESSAGE_WAVEFORM_SAMPLES", "100"))
 
+    # Messenger Voice & Translation AI (MVA-001..MVA-003)
+    # Flags default safely: translation on; transcription/TTS off until keys configured.
+    messaging_translation_enabled: bool = os.environ.get("MESSAGING_TRANSLATION_ENABLED", "1") not in ("0", "false", "False")
+    messaging_transcription_enabled: bool = os.environ.get("MESSAGING_TRANSCRIPTION_ENABLED", "0") not in ("0", "false", "False")
+    messaging_tts_enabled: bool = os.environ.get("MESSAGING_TTS_ENABLED", "0") not in ("0", "false", "False")
+    messaging_translation_provider: str = os.environ.get("MESSAGING_TRANSLATION_PROVIDER", "anthropic")
+    messaging_tts_provider: str = os.environ.get("MESSAGING_TTS_PROVIDER", "elevenlabs")
+    messaging_stt_provider: str = os.environ.get("MESSAGING_STT_PROVIDER", "elevenlabs")
+    messaging_tts_max_chars: int = int(os.environ.get("MESSAGING_TTS_MAX_CHARS", "5000"))
+    messaging_translation_cache_ttl_seconds: int = int(os.environ.get("MESSAGING_TRANSLATION_CACHE_TTL_SECONDS", "2592000"))
+    message_ai_cache_table_name: str = os.environ.get("MESSAGE_AI_CACHE_TABLE_NAME", "message_ai_cache")
+    # Per-feature rate-limit caps (requests per window).
+    messaging_ai_translate_max_per_window: int = int(os.environ.get("MESSAGING_AI_TRANSLATE_RL_MAX", "60"))
+    messaging_ai_translate_window_seconds: int = int(os.environ.get("MESSAGING_AI_TRANSLATE_RL_WINDOW", "60"))
+    messaging_ai_transcribe_max_per_window: int = int(os.environ.get("MESSAGING_AI_TRANSCRIBE_RL_MAX", "20"))
+    messaging_ai_transcribe_window_seconds: int = int(os.environ.get("MESSAGING_AI_TRANSCRIBE_RL_WINDOW", "60"))
+    messaging_ai_tts_max_per_window: int = int(os.environ.get("MESSAGING_AI_TTS_RL_MAX", "20"))
+    messaging_ai_tts_window_seconds: int = int(os.environ.get("MESSAGING_AI_TTS_RL_WINDOW", "60"))
+
     # Voicemail (CALL-014)
     voicemail_enabled: bool = os.environ.get("VOICEMAIL_ENABLED", "1") not in ("0", "false", "False")
     voicemail_max_duration_seconds: int = int(os.environ.get("VOICEMAIL_MAX_DURATION_SECONDS", "60"))
