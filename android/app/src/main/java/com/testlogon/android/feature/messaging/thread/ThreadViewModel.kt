@@ -63,6 +63,16 @@ class ThreadViewModel @Inject constructor(
     /** Oldest message id we have loaded, used as the next `before` cursor. */
     private var oldestLoadedId: String? = null
 
+    /**
+     * AND-125 — newest message known to the client (server id + created_at), used as the read marker.
+     * Updated from every thread emission so mark-read targets the latest message.
+     */
+    private var newestMessageId: String? = null
+    private var newestMessageEpochSeconds: Long? = null
+
+    /** AND-125 — in-session guard: don't re-POST read for an already-read thread (FR-2). */
+    private var readMarked: Boolean = false
+
     init {
         observeThread()
         observeRealtime()
@@ -74,10 +84,32 @@ class ThreadViewModel @Inject constructor(
             val currentUser = authStateStore.userSub.value
             repository.observeThread(conversationId).collect { messages ->
                 val self = authStateStore.userSub.value ?: currentUser
+                // Track the newest CONFIRMED (server id present) message as the read marker (AND-125).
+                messages.lastOrNull { it.id != null }?.let {
+                    newestMessageId = it.id
+                    newestMessageEpochSeconds = it.createdAtEpochSeconds
+                }
                 _state.update { prior ->
                     prior.copy(messages = messages.map { it.toUi(self) })
                 }
             }
+        }
+    }
+
+    /**
+     * AND-125 — called when the thread becomes visible (ON_START). Marks the conversation read once
+     * per session; the optimistic local clear + POST is owned by the repository. Re-arms when a new
+     * inbound message arrives while the thread is open (see [observeRealtime]).
+     */
+    fun onThreadVisible() {
+        if (readMarked) return
+        readMarked = true
+        viewModelScope.launch {
+            repository.markRead(
+                conversationId,
+                lastReadMessageId = newestMessageId,
+                lastReadAtEpochSeconds = newestMessageEpochSeconds,
+            )
         }
     }
 
@@ -179,6 +211,10 @@ class ThreadViewModel @Inject constructor(
                     if (event is MessagingEvent.NewMessage && event.conversationId == conversationId) {
                         repository.applyInboundMessage(event)
                         _events.trySend(ThreadEvent.ScrollToBottom)
+                        // AND-125 FR-2: a new inbound message re-arms the read trigger; since the
+                        // thread is open and visible, mark it read again straight away.
+                        readMarked = false
+                        onThreadVisible()
                     }
                 }
             }

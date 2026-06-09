@@ -20,6 +20,17 @@ interface ConversationDao {
     @Upsert
     suspend fun upsertAll(items: List<ConversationEntity>)
 
+    @Query("SELECT * FROM conversations WHERE conversationId = :id LIMIT 1")
+    suspend fun findById(id: String): ConversationEntity?
+
+    /** AND-125 — optimistic local read clear: zeroes the unread badge for one conversation. */
+    @Query("UPDATE conversations SET unreadCount = 0 WHERE conversationId = :id")
+    suspend fun clearUnread(id: String)
+
+    /** AND-125 — reactive aggregate: number of conversations with a non-zero unread count. */
+    @Query("SELECT COALESCE(SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END), 0) FROM conversations")
+    fun observeUnreadConversationCount(): Flow<Int>
+
     @Query("DELETE FROM conversations")
     suspend fun clear()
 }

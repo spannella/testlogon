@@ -97,3 +97,13 @@ data class MarkReadReq(
     @Json(name = "last_read_message_id") val lastReadMessageId: String? = null,
     @Json(name = "last_read_at") val lastReadAt: Long? = null,
 )
+
+/**
+ * POST dm/find-or-create body = FindOrCreateDmIn. Single required field `user_id` (the peer).
+ * Verified: reference/src/api/endpoints/messaging.ts findOrCreateDm posts `{ user_id }`;
+ * OpenAPI op find_or_create_dm req=FindOrCreateDmIn resp=200:ConversationOut.
+ */
+@JsonClass(generateAdapter = true)
+data class FindOrCreateDmReq(
+    @Json(name = "user_id") val userId: String,
+)

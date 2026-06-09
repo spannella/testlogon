@@ -72,9 +72,26 @@ class MessagingDaoTest {
         assertEquals(0, outboxDao.observe("c1").first().size)
     }
 
-    private fun conversation(id: String, activity: Long) = ConversationEntity(
+    @Test
+    fun conversations_clearUnread_andAggregateUnreadCount() = runTest {
+        conversationDao.upsertAll(
+            listOf(
+                conversation("c1", activity = 100, unread = 3),
+                conversation("c2", activity = 200, unread = 1),
+                conversation("c3", activity = 300, unread = 0),
+            ),
+        )
+        assertEquals(2, conversationDao.observeUnreadConversationCount().first())
+
+        conversationDao.clearUnread("c1")
+        assertEquals(0, conversationDao.findById("c1")?.unreadCount)
+        // AND-125: aggregate recomputes reactively (2 unread -> 1 after clearing c1).
+        assertEquals(1, conversationDao.observeUnreadConversationCount().first())
+    }
+
+    private fun conversation(id: String, activity: Long, unread: Int = 0) = ConversationEntity(
         conversationId = id, title = id, iconUrl = null, lastMessagePreview = null,
-        lastActivityEpochSeconds = activity, unreadCount = 0,
+        lastActivityEpochSeconds = activity, unreadCount = unread,
     )
 
     private fun message(id: String, conversationId: String, createdAt: Long) = MessageEntity(

@@ -130,6 +130,43 @@ class MessagingApiContractTest {
     }
 
     @Test
+    fun markRead_serializesLastReadAt_whenProvided() = runTest {
+        backend.enqueue(Fixtures.okBody(""))
+        api().markRead("conv_1", MarkReadReq(lastReadAt = 1749126660L))
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/messaging/conversations/conv_1/read", req.requestUrl?.encodedPath)
+        // Moshi serializes the Long as a JSON number; bodyJson decodes it as Double.
+        assertEquals(1749126660.0, req.bodyJson()["last_read_at"])
+        assertNull(req.bodyJson()["last_read_message_id"])
+    }
+
+    @Test
+    fun findOrCreateDm_postsUserId_decodesConversationOut() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """
+                {"conversation_id":"conv_new","type":"dm","status":"active",
+                 "participant_count":2,"created_at":1749124800,"created_by":"usr_self",
+                 "unread_count":0,"last_message":null,"last_message_at":null,
+                 "participants":[
+                   {"user_id":"usr_self","status":"active","role":"member","display_name":"You"},
+                   {"user_id":"usr_peer","status":"active","role":"member","display_name":"Ada"}
+                 ]}
+                """.trimIndent(),
+            ),
+        )
+        val conversation = api().findOrCreateDm(FindOrCreateDmReq("usr_peer"))
+        assertEquals("conv_new", conversation.conversationId)
+        assertEquals(1749124800L, conversation.createdAt)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/messaging/conversations/dm/find-or-create", req.requestUrl?.encodedPath)
+        assertEquals("usr_peer", req.bodyJson()["user_id"])
+    }
+
+    @Test
     fun getConversation_404_throwsHttpException() = runTest {
         backend.enqueue(Fixtures.error("""{"code":"not_found"}""", code = 404))
         val error = runCatching { api().getConversation("missing") }.exceptionOrNull()

@@ -238,4 +238,9 @@
     <string name="thread_scroll_to_latest">Scroll to latest messages</string>
     <string name="thread_composer_hint">Message</string>
     <string name="thread_composer_over_limit">Message is too long (max 4000 characters)</string>
+
+    <!-- AND-127: start DM (find-or-create) -->
+    <string name="dm_message">Message</string>
+    <string name="dm_message_cd">Start a direct message</string>
+    <string name="dm_start_failed">Couldn\'t start the conversation. Try again.</string>
 </resources>

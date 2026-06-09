@@ -30,8 +30,22 @@ class FakeMessagingRepository : MessagingRepository {
     /** Result the next sendOutbox() returns. Drives reconcile vs FAILED. */
     var sendResult: ApiResult<Message> = ApiResult.NetworkError(IOException("default"), isTimeout = false)
 
-    var markReadCalls = mutableListOf<Pair<String, String?>>()
+    /** Recorded markRead calls: (conversationId, lastReadMessageId, lastReadAtEpochSeconds). */
+    var markReadCalls = mutableListOf<Triple<String, String?, Long?>>()
     var inboundApplied = mutableListOf<MessagingEvent.NewMessage>()
+
+    /** Result the next markRead() returns; defaults to success. */
+    var markReadResult: ApiResult<Unit> = ApiResult.Success(Unit)
+
+    private val totalUnread = MutableStateFlow(0)
+    fun emitTotalUnread(value: Int) { totalUnread.value = value }
+
+    /** Recorded findOrCreateDm calls (peerUserId). */
+    var findOrCreateDmCalls = mutableListOf<String>()
+
+    /** Result the next findOrCreateDm() returns. */
+    var findOrCreateDmResult: ApiResult<Conversation> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
 
     fun emitConversations(list: List<Conversation>) { conversations.value = list }
     fun emitThread(list: List<Message>) { thread.value = list }
@@ -109,8 +123,20 @@ class FakeMessagingRepository : MessagingRepository {
         )
     }
 
-    override suspend fun markRead(conversationId: String, lastReadMessageId: String?) {
-        markReadCalls += conversationId to lastReadMessageId
+    override suspend fun markRead(
+        conversationId: String,
+        lastReadMessageId: String?,
+        lastReadAtEpochSeconds: Long?,
+    ): ApiResult<Unit> {
+        markReadCalls += Triple(conversationId, lastReadMessageId, lastReadAtEpochSeconds)
+        return markReadResult
+    }
+
+    override fun observeTotalUnread(): Flow<Int> = totalUnread.asStateFlow()
+
+    override suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation> {
+        findOrCreateDmCalls += peerUserId
+        return findOrCreateDmResult
     }
 
     companion object {

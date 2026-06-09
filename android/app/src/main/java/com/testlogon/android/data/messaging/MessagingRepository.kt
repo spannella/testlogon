@@ -6,8 +6,10 @@ import com.testlogon.android.core.data.messaging.MessageDao
 import com.testlogon.android.core.data.messaging.MessageEntity
 import com.testlogon.android.core.data.messaging.OutboxDao
 import com.testlogon.android.core.data.messaging.OutboxMessageEntity
+import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -61,8 +63,28 @@ interface MessagingRepository {
     /** Apply an inbound realtime new-message event to the caches. */
     suspend fun applyInboundMessage(event: MessagingEvent.NewMessage)
 
-    /** Best-effort mark-read (POST); failures are swallowed (non-critical). */
-    suspend fun markRead(conversationId: String, lastReadMessageId: String?)
+    /**
+     * AND-125 — mark a conversation read. Optimistically clears the local unread count/badge first,
+     * then POSTs the read marker. The web client sends `last_read_at` (the newest loaded message's
+     * created_at epoch); we mirror that. Failures keep the optimistic clear (read intent not lost)
+     * and are not surfaced as a blocking error. [lastReadMessageId] is sent too when known (the
+     * backend MarkReadIn accepts both nullable fields).
+     */
+    suspend fun markRead(
+        conversationId: String,
+        lastReadMessageId: String? = null,
+        lastReadAtEpochSeconds: Long? = null,
+    ): ApiResult<Unit>
+
+    /** AND-125 — reactive total of unread conversations (rows with unreadCount > 0). */
+    fun observeTotalUnread(): Flow<Int>
+
+    /**
+     * AND-127 — find-or-create a 1:1 DM with [peerUserId], resolving to a [Conversation]. Guards
+     * against self-DM locally (no network). The returned conversation is upserted into the cache so
+     * the list reflects a brand-new DM immediately.
+     */
+    suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation>
 }
 
 @Singleton
@@ -72,6 +94,7 @@ class MessagingRepositoryImpl @Inject constructor(
     private val messageDao: MessageDao,
     private val outboxDao: OutboxDao,
     private val errorParser: ApiErrorParser,
+    private val authStateStore: AuthStateStore,
 ) : MessagingRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -176,9 +199,48 @@ class MessagingRepositoryImpl @Inject constructor(
         )
     }
 
-    override suspend fun markRead(conversationId: String, lastReadMessageId: String?) {
-        withContext(io) {
-            runCatching { api.markRead(conversationId, MarkReadReq(lastReadMessageId = lastReadMessageId)) }
+    override suspend fun markRead(
+        conversationId: String,
+        lastReadMessageId: String?,
+        lastReadAtEpochSeconds: Long?,
+    ): ApiResult<Unit> = withContext(io) {
+        // FR-3: optimistic local clear so the unread badge / aggregate update without the network.
+        conversationDao.clearUnread(conversationId)
+        // FR-7 (corrected): no config gate exists; always attempt the POST after the optimistic clear.
+        // Mirror the web client: send `last_read_at` (newest message created_at); include the
+        // message id too when known (MarkReadIn accepts both nullable fields).
+        apiCall {
+            api.markRead(
+                conversationId,
+                MarkReadReq(
+                    lastReadMessageId = lastReadMessageId,
+                    lastReadAt = lastReadAtEpochSeconds,
+                ),
+            )
+        }
+        // FR-4: on success or failure we keep the optimistic clear (read intent is not lost). The
+        // authoritative unread_count is reconciled by the next conversation-list refresh.
+    }
+
+    override fun observeTotalUnread(): Flow<Int> = conversationDao.observeUnreadConversationCount()
+
+    override suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation> = withContext(io) {
+        // FR-5: self-DM guard — short-circuit locally with no network request.
+        val me = authStateStore.userSub.value
+        if (me != null && me == peerUserId) {
+            return@withContext ApiResult.Failure(
+                ApiError(status = STATUS_SELF_DM, message = "You can't message yourself."),
+            )
+        }
+        when (val result = apiCall { api.findOrCreateDm(FindOrCreateDmReq(peerUserId)) }) {
+            is ApiResult.Success -> {
+                val conversation = result.data.toDomain()
+                // Non-blocking side effect: surface a brand-new DM in the list immediately.
+                conversationDao.upsertAll(listOf(conversation.toEntity()))
+                ApiResult.Success(conversation)
+            }
+            is ApiResult.Failure -> result
+            is ApiResult.NetworkError -> result
         }
     }
 
@@ -197,6 +259,11 @@ class MessagingRepositoryImpl @Inject constructor(
         ApiResult.Failure(errorParser.from(e))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+    }
+
+    companion object {
+        /** Sentinel status for a locally-rejected self-DM attempt (no HTTP response involved). */
+        const val STATUS_SELF_DM = -100
     }
 }
 

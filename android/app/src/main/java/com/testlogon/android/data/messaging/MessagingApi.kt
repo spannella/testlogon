@@ -63,4 +63,13 @@ interface MessagingApi {
         @Path("id") id: String,
         @Body body: MarkReadReq,
     )
+
+    /**
+     * Find-or-create a 1:1 DM with a peer user. Idempotent by participant pair server-side:
+     * returns the existing conversation if one exists, else a freshly created one (HTTP 200,
+     * ConversationOut). State-changing POST so it carries the CSRF header via the interceptor chain.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/dm/find-or-create")
+    suspend fun findOrCreateDm(@Body body: FindOrCreateDmReq): ConversationDto
 }

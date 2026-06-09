@@ -147,6 +147,51 @@ class ThreadViewModelTest {
     }
 
     @Test
+    fun onThreadVisible_marksRead_oncePerSession_withNewestMarker() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        // Newest confirmed message drives the read marker (id + created_at).
+        repo.emitThread(
+            listOf(
+                Message(id = "m1", clientId = "m1", conversationId = "c1", senderId = "you", text = "a", createdAtEpochSeconds = 10),
+                Message(id = "m2", clientId = "m2", conversationId = "c1", senderId = "you", text = "b", createdAtEpochSeconds = 20),
+            ),
+        )
+        advanceUntilIdle()
+
+        vm.onThreadVisible()
+        vm.onThreadVisible() // FR-2: second ON_START in the same session is a no-op
+        advanceUntilIdle()
+
+        assertEquals(1, repo.markReadCalls.size)
+        val (cid, lastReadId, lastReadAt) = repo.markReadCalls.single()
+        assertEquals("c1", cid)
+        assertEquals("m2", lastReadId)
+        assertEquals(20L, lastReadAt)
+    }
+
+    @Test
+    fun inboundMessage_reArmsMarkRead() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.onThreadVisible()
+        advanceUntilIdle()
+        assertEquals(1, repo.markReadCalls.size)
+
+        // A new inbound message re-arms the trigger and marks read again (FR-2).
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.NewMessage(
+                    conversationId = "c1", messageId = "m9", senderId = "other",
+                    text = "new", kind = "text", createdAtEpochSeconds = 99,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+        assertEquals(2, repo.markReadCalls.size)
+    }
+
+    @Test
     fun isOwn_derivedFromCurrentUserSub() = runTest {
         val vm = vm(currentUser = "me")
         advanceUntilIdle()
