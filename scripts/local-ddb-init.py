@@ -2383,6 +2383,23 @@ def _table_defs() -> List[TableDef]:
             "pk",
             "sk",
         ),
+        # LEX-006: standalone legal holds. PK=pk (HOLD#{hold_id}), SK=sk (META).
+        # GSI ByUser lets is_user_on_hold() do an O(1) query keyed on the held
+        # user_sub instead of scanning all holds. Sparse: user-index rows carry
+        # gsi1pk="USER#{user_sub}" / gsi1sk="HOLD#{hold_id}".
+        TableDef(
+            _resolve_table_name(S.legal_holds_table_name, "legal_holds"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByUser", "partition_key": "gsi1pk", "sort_key": "gsi1sk"}],
+        ),
+        # LEX-009/010: law-enforcement / subpoena scoped exports. PK=pk
+        # (EXPORT#{legal_export_id}), SK=sk (META).
+        TableDef(
+            _resolve_table_name(S.legal_exports_table_name, "legal_exports"),
+            "pk",
+            "sk",
+        ),
     ]
 
 

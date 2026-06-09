@@ -308,6 +308,8 @@ class Tables:
     file_share_links: Any
     host_inventory: Any
     geo_rules: Any
+    legal_holds: Any
+    legal_exports: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -551,4 +553,6 @@ T = Tables(
     host_inventory=_safe_table(S.ddb_host_inventory_table),
     kyc_document_templates=_safe_table(S.kyc_document_templates_table_name),
     geo_rules=_safe_table(S.geo_rules_table_name),
+    legal_holds=_safe_table(S.legal_holds_table_name),
+    legal_exports=_safe_table(S.legal_exports_table_name),
 )

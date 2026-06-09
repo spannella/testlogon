@@ -2619,5 +2619,30 @@ class Settings:
         os.environ.get("HOST_INVENTORY_MAX_PER_USER", "500")
     )
 
+    # LEX (Legal & DSAR export). Master flag DEFAULTS OFF: with it off, the
+    # legal-export/legal-hold endpoints all 404/403 and no deletion-path
+    # behavior changes (legal-hold enforcement is gated on this flag).
+    legal_export_enabled: bool = os.environ.get(
+        "LEGAL_EXPORT_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
+    legal_holds_table_name: str = os.environ.get(
+        "LEGAL_HOLDS_TABLE_NAME", "legal_holds"
+    )
+    legal_exports_table_name: str = os.environ.get(
+        "LEGAL_EXPORTS_TABLE_NAME", "legal_exports"
+    )
+    legal_export_s3_bucket: str = os.environ.get(
+        "LEGAL_EXPORT_S3_BUCKET", "data-exports"
+    )
+    legal_export_ttl_days: int = int(os.environ.get("LEGAL_EXPORT_TTL_DAYS", "90"))
+    legal_export_url_ttl_seconds: int = int(
+        os.environ.get("LEGAL_EXPORT_URL_TTL_SECONDS", "900")
+    )
+    # Comma-separated list of user_subs granted the LEGAL capability (in
+    # addition to ROOT, which is always permitted). Empty by default.
+    legal_export_authorized_subs: str = os.environ.get(
+        "LEGAL_EXPORT_AUTHORIZED_SUBS", ""
+    )
+
 
 S = Settings()

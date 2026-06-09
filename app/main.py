@@ -226,6 +226,7 @@ from app.routers.i18n import router as i18n_router
 from app.services.unified_scheduler import start_unified_scheduler_task
 from app.routers.csv_export import router as csv_export_router
 from app.routers.audit_export import router as audit_export_router
+from app.routers.legal_export import router as legal_export_router
 from app.routers.refund_requests import router as refund_requests_router
 from app.routers.fraud_detection import router as fraud_detection_router
 from app.routers.billing_disputes import billing_disputes_router
@@ -764,6 +765,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks_router)
     app.include_router(csv_export_router)
     app.include_router(audit_export_router)
+    app.include_router(legal_export_router)
     app.include_router(refund_requests_router)
     app.include_router(fraud_detection_router)
     app.include_router(billing_disputes_router)
