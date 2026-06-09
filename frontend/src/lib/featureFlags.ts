@@ -32,6 +32,23 @@ export const messagingDmLotteryEnabled = toBool(env.VITE_MESSAGING_DM_LOTTERY_EN
 export const messagingDmLotteryKillSwitch = toBool(env.VITE_MESSAGING_DM_LOTTERY_KILL_SWITCH, false);
 export const isMessagingDmLotteryEnabled = () => messagingDmLotteryEnabled && !messagingDmLotteryKillSwitch;
 
+// Messenger Voice & AI (MVA). These mirror the server-side feature flags
+// (messaging_translation_enabled / messaging_transcription_enabled /
+// messaging_tts_enabled). They gate whether the UI shows the action; the
+// server still authoritatively 404s the endpoint when its flag is off, which
+// the UI surfaces as a toast. Translation defaults on (server default true);
+// transcription/TTS default off (server default false until keys configured).
+export const messagingTranslationEnabled = toBool(env.VITE_MESSAGING_TRANSLATION_ENABLED, true);
+export const isMessagingTranslationEnabled = () => messagingTranslationEnabled;
+export const messagingTranscriptionEnabled = toBool(env.VITE_MESSAGING_TRANSCRIPTION_ENABLED, false);
+export const isMessagingTranscriptionEnabled = () => messagingTranscriptionEnabled;
+export const messagingTtsEnabled = toBool(env.VITE_MESSAGING_TTS_ENABLED, false);
+export const isMessagingTtsEnabled = () => messagingTtsEnabled;
+// Default target language for one-click translate (BCP-47).
+export const messagingTranslationDefaultLang = String(
+  env.VITE_MESSAGING_TRANSLATION_DEFAULT_LANG ?? "en",
+).trim() || "en";
+
 export const messagingWebrtcDirectCallEnabled = toBool(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED, false);
 export const messagingWebrtcDirectCallKillSwitch = toBool(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_KILL_SWITCH, false);
 export const messagingWebrtcDirectCallMode = String(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_MODE ?? "enabled").trim().toLowerCase();

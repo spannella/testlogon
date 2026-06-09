@@ -16,6 +16,7 @@ import {
   isMessagingViewOnceImageEnabled,
   isMessagingViewOnceVideoEnabled,
   isMessagingDraftsEnabled,
+  isMessagingTtsEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
 import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
@@ -67,6 +68,8 @@ interface ComposeBarProps {
   onSendCountdown?: (params: CountdownSubmitData) => void;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
+  // MVA-010: synthesize the current draft text into a TTS voice message.
+  onSendTtsVoice?: (text: string, opts: { reply_to_message_id?: string | null }) => Promise<void> | void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
@@ -98,6 +101,7 @@ export function ComposeBar({
   onSendCountdown,
   onSendLottery,
   onSendVoiceMessage,
+  onSendTtsVoice,
   sending,
   disabled,
   onKeystroke,
@@ -216,6 +220,26 @@ export function ComposeBar({
     clearSyncIssue,
   } = useConversationDrafts(normalizedConversationId);
   const draftsEnabled = isMessagingDraftsEnabled();
+  const ttsEnabled = isMessagingTtsEnabled();
+  const [ttsSynthesizing, setTtsSynthesizing] = React.useState(false);
+  // MVA-010: synthesize the current draft into a TTS voice message.
+  const handleSpeakThis = React.useCallback(async () => {
+    if (!onSendTtsVoice) return;
+    const draft = text.trim();
+    if (!draft) {
+      toast.error("Type something to speak first");
+      return;
+    }
+    setMoreOpen(false);
+    setTtsSynthesizing(true);
+    try {
+      await onSendTtsVoice(draft, { reply_to_message_id: replyingTo?.message_id ?? null });
+      // Only clear the draft once synthesis succeeded; errors keep the text.
+      setText("");
+    } finally {
+      setTtsSynthesizing(false);
+    }
+  }, [onSendTtsVoice, text, replyingTo, setMoreOpen, setText]);
   const [retryingDraftSync, setRetryingDraftSync] = React.useState(false);
   const autosaveTimerRef = React.useRef<number | null>(null);
   const lastPersistedDraftTextRef = React.useRef("");
@@ -1530,7 +1554,7 @@ export function ComposeBar({
       <div className="flex items-end gap-2">
         {(onSendVoiceMessage || onSendGallery || onSendLottery || onSendFileShare || onSendVideoShare ||
           onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime ||
-          onSendCountdown || draftsEnabled) && (
+          onSendCountdown || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -1553,6 +1577,14 @@ export function ComposeBar({
                     disabled={disabled || sending || encrypting || !!pendingFile || galleryMode || lotteryMode}
                     aria-label="Record voice message">
                     <Mic className="h-4 w-4" /> Voice message
+                  </Button>
+                )}
+                {onSendTtsVoice && ttsEnabled && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { void handleSpeakThis(); }}
+                    disabled={disabled || sending || encrypting || ttsSynthesizing || !text.trim()}
+                    aria-label="Speak this draft as a voice message">
+                    {ttsSynthesizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Headphones className="h-4 w-4" />} Speak this
                   </Button>
                 )}
                 {onSendGallery && (

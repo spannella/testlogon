@@ -1104,6 +1104,39 @@ export interface FindDateTimePostPoll {
   best_windows: FindDateTimeBestWindow[] | null;
 }
 
+// --- Messenger Voice & AI (MVA) ---
+export interface MessageTranslation {
+  translated_text: string;
+  source_lang?: string;
+  target_lang: string;
+  cached?: boolean;
+}
+
+export interface TranslateMessageReq {
+  target_lang: string;
+}
+
+export interface TranslateMessageResp {
+  translated_text: string;
+  source_lang: string;
+  target_lang: string;
+  cached: boolean;
+}
+
+export interface TranscribeMessageResp {
+  transcript: string;
+  transcript_lang: string;
+  cached: boolean;
+}
+
+export interface TtsVoiceMessageReq {
+  text: string;
+  voice_id?: string;
+  model_id?: string;
+  reply_to_message_id?: string;
+  send_at?: number;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
@@ -1148,6 +1181,12 @@ export interface Message {
     audio_size_bytes: number;
     duration_seconds: number;
     waveform_data: number[];
+    // MVA-009/010: TTS-synthesized voice messages
+    is_tts?: boolean;
+    tts_source_text?: string;
+    // MVA-007/008: persisted transcript
+    transcript?: string;
+    transcript_lang?: string;
   };
   voicemail?: {
     call_id: string;
@@ -1161,7 +1200,12 @@ export interface Message {
     call_state: string;
     caller_user_id: string;
     callee_user_id: string;
+    // MVA-007/008: persisted transcript
+    transcript?: string;
+    transcript_lang?: string;
   };
+  // MVA-005/006: per-viewer auto-translate projection (best-effort)
+  translation?: MessageTranslation | null;
   // Countdown message fields (MSG-010)
   countdown_title?: string | null;
   target_datetime?: number | null;
