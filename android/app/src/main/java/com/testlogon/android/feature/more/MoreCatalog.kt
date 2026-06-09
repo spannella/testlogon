@@ -1,8 +1,11 @@
 package com.testlogon.android.feature.more
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
@@ -29,6 +32,27 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Person,
             route = MoreRoutes.PROFILE,
             section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "activity",
+            labelRes = R.string.more_entry_activity,
+            icon = Icons.Outlined.History,
+            route = MoreRoutes.ACTIVITY,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "saved",
+            labelRes = R.string.more_entry_saved,
+            icon = Icons.Outlined.Bookmark,
+            route = MoreRoutes.SAVED,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "achievements",
+            labelRes = R.string.more_entry_achievements,
+            icon = Icons.Outlined.EmojiEvents,
+            route = MoreRoutes.ACHIEVEMENTS,
+            section = MoreSection.APP,
         ),
         MoreEntry(
             id = "sessions",

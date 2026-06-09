@@ -5,10 +5,14 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import androidx.navigation.navigation
 import com.testlogon.android.feature.account.MfaDevicesRoute
+import com.testlogon.android.feature.achievements.AchievementsRoute
+import com.testlogon.android.feature.achievements.LeaderboardRoute
+import com.testlogon.android.feature.activity.ActivityFeedRoute
 import com.testlogon.android.feature.alerts.AlertPrefsRoute
 import com.testlogon.android.feature.notifications.NotificationCenterRoute
 import com.testlogon.android.feature.notifications.NotificationTarget
 import com.testlogon.android.feature.profile.edit.EditProfileRoute
+import com.testlogon.android.feature.saved.SavedRoute
 import com.testlogon.android.feature.sessions.ActiveSessionsRoute
 import com.testlogon.android.feature.settings.account.AccountSettingsRoute
 import com.testlogon.android.feature.settings.appearance.AppearanceSettingsRoute
@@ -58,6 +62,28 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                 onNavigateTarget = { target -> navController.navigateToNotificationTarget(target) },
                 onBack = { navController.popBackStack() },
             )
+        }
+        // AND-091: account activity feed (paged).
+        composable(MainDest.Activity.route) {
+            ActivityFeedRoute(onBack = { navController.popBackStack() })
+        }
+        // AND-092: saved / bookmarks (paged + unsave). Row-open is delegated to E14/E24 detail
+        // screens that are not yet wired, so it is a safe no-op for now.
+        composable(MainDest.Saved.route) {
+            SavedRoute(onBack = { navController.popBackStack() })
+        }
+        // AND-093: achievements (earned/locked + progress); links to the leaderboard.
+        composable(MainDest.Achievements.route) {
+            AchievementsRoute(
+                onBack = { navController.popBackStack() },
+                onOpenLeaderboard = {
+                    navController.navigate(MainDest.Leaderboard.route) { launchSingleTop = true }
+                },
+            )
+        }
+        // AND-094: achievements leaderboard.
+        composable(MainDest.Leaderboard.route) {
+            LeaderboardRoute(onBack = { navController.popBackStack() })
         }
         // AND-077..082: Settings hub + subsections.
         settingsDestinations(navController)

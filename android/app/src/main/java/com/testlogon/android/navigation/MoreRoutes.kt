@@ -23,6 +23,15 @@ object MoreRoutes {
     // AND-088: alert preferences (email/SMS target management).
     val ALERT_PREFS: String get() = MainDest.SettingsAlerts.route
 
+    // AND-091: account activity feed.
+    val ACTIVITY: String get() = MainDest.Activity.route
+
+    // AND-092: saved / bookmarks.
+    val SAVED: String get() = MainDest.Saved.route
+
+    // AND-093: achievements (earned/locked + progress).
+    val ACHIEVEMENTS: String get() = MainDest.Achievements.route
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -37,6 +46,9 @@ object MoreRoutes {
             NOTIFICATION_CENTER,
             NOTIFICATIONS,
             ALERT_PREFS,
+            ACTIVITY,
+            SAVED,
+            ACHIEVEMENTS,
             SETTINGS,
             HELP,
             ABOUT,

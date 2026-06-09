@@ -119,8 +119,12 @@ fun AuthedShellScreen(
                             com.testlogon.android.navigation.MoreRoutes.SESSIONS -> onOpenSessions()
                             com.testlogon.android.navigation.MoreRoutes.MFA_DEVICES -> onOpenMfaDevices()
                             // AND-077/080: Settings hub + notification prefs are outer-graph routes.
+                            // AND-091/092/093: activity / saved / achievements are outer-graph routes.
                             com.testlogon.android.navigation.MoreRoutes.SETTINGS,
-                            com.testlogon.android.navigation.MoreRoutes.NOTIFICATIONS ->
+                            com.testlogon.android.navigation.MoreRoutes.NOTIFICATIONS,
+                            com.testlogon.android.navigation.MoreRoutes.ACTIVITY,
+                            com.testlogon.android.navigation.MoreRoutes.SAVED,
+                            com.testlogon.android.navigation.MoreRoutes.ACHIEVEMENTS ->
                                 onOpenRoute(route)
                             else -> Unit // coming-soon entries are non-interactive
                         }

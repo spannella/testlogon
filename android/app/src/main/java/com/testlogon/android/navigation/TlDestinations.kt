@@ -231,6 +231,18 @@ sealed class MainDest(val route: String) {
 
     /** Alert preferences — email/SMS alert TARGET management (AND-088). */
     data object SettingsAlerts : MainDest("settings/alerts")
+
+    /** Account activity feed — paged list of account events (AND-091). */
+    data object Activity : MainDest("activity")
+
+    /** Saved / bookmarks — paged list + unsave (AND-092). */
+    data object Saved : MainDest("saved")
+
+    /** Achievements — earned/locked badges + progress (AND-093). */
+    data object Achievements : MainDest("achievements")
+
+    /** Achievements leaderboard — ranked list + own rank (AND-094). */
+    data object Leaderboard : MainDest("achievements/leaderboard")
 }
 
 /**
