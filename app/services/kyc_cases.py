@@ -38,6 +38,13 @@ _ALLOWED_STATUSES = {
     "approved",
     "rejected",
     "expired",
+    # KYD-001: a rejected case the applicant has appealed. Reopen reuses the
+    # existing "draft" state (no new "reopened" status) so the wizard and the
+    # submit_case draft|needs_more_info gate work unchanged. New transitions:
+    #   rejected -> disputed                     (user appeal, dispute_case)
+    #   rejected|expired -> draft                (user reopen, reopen_case)
+    #   disputed -> approved|rejected|needs_more_info  (admin decision)
+    "disputed",
 }
 
 
@@ -425,12 +432,27 @@ class KycCaseStore:
                     return latest
                 raise KycCaseConflictError("kyc_case_update_conflict") from exc
             raise
-        _emit_kyc_event_safe(
-            event="kyc.case.submitted",
-            user_sub=owner_sub,
-            case_id=case_id,
-            submitted_at=ts,
-        )
+        # KYD-007: a submission of a case that was previously reopened (i.e. it
+        # carries review.attempt_count > 0) is a *resubmission* of a prior
+        # rejection — fire kyc.case.resubmitted instead of kyc.case.submitted so
+        # subscribers can distinguish a retry from a first-time application. A
+        # first submission (attempt_count == 0/absent) still fires submitted.
+        attempt_count = int((existing.get("review") or {}).get("attempt_count") or 0)
+        if attempt_count > 0:
+            _emit_kyc_event_safe(
+                event="kyc.case.resubmitted",
+                user_sub=owner_sub,
+                case_id=case_id,
+                submitted_at=ts,
+                attempt_count=attempt_count,
+            )
+        else:
+            _emit_kyc_event_safe(
+                event="kyc.case.submitted",
+                user_sub=owner_sub,
+                case_id=case_id,
+                submitted_at=ts,
+            )
         return self.get_case(case_id)
 
     def sync_from_ticket_event(
@@ -557,7 +579,10 @@ class KycCaseStore:
             and str(review.get("last_request_info_hash") or "") == request_hash
         ):
             return existing
-        if str(existing.get("status") or "") != "under_review":
+        # KYD-004: allow a reviewer to ask for more info during an appeal too
+        # (disputed -> needs_more_info), so the resulting needs_more_info ->
+        # submit path routes back through the normal flow.
+        if str(existing.get("status") or "") not in {"under_review", "disputed"}:
             raise KycCaseValidationError("kyc_invalid_transition")
 
         current_version = int(existing.get("version") or 0)
@@ -639,7 +664,12 @@ class KycCaseStore:
             ):
                 return existing
             raise KycCaseValidationError("kyc_invalid_transition")
-        if current_status != "under_review":
+        # KYD-004: a disputed case (a rejected case under appeal) can be decided
+        # by an admin too. The original review.decision/decided_at from the
+        # first rejection are preserved; the appeal outcome is recorded
+        # separately under review.dispute_resolution for an auditable history.
+        is_dispute_decision = current_status == "disputed"
+        if current_status not in {"under_review", "disputed"}:
             raise KycCaseValidationError("kyc_invalid_transition")
 
         current_version = int(existing.get("version") or 0)
@@ -648,14 +678,28 @@ class KycCaseStore:
 
         ts = now_ts()
         next_version = current_version + 1
-        review["decision"] = normalized
-        review["decided_at"] = ts
-        review["reason_codes"] = [str(code) for code in reason_codes]
-        review["decision_note"] = str(note)
-        review["decision_actor_sub"] = admin_sub
-        review["decision_hash"] = decision_hash
-        review["last_actor_sub"] = admin_sub
-        review["last_action_at"] = ts
+        if is_dispute_decision:
+            # Preserve the original rejection's decision/decided_at; record the
+            # appeal outcome distinctly so the trail shows both events.
+            review["dispute_resolution"] = {
+                "outcome": target_status,
+                "resolved_at": ts,
+                "resolved_by": admin_sub,
+                "reason_codes": [str(code) for code in reason_codes],
+                "note": str(note),
+            }
+            review["decision_hash"] = decision_hash
+            review["last_actor_sub"] = admin_sub
+            review["last_action_at"] = ts
+        else:
+            review["decision"] = normalized
+            review["decided_at"] = ts
+            review["reason_codes"] = [str(code) for code in reason_codes]
+            review["decision_note"] = str(note)
+            review["decision_actor_sub"] = admin_sub
+            review["decision_hash"] = decision_hash
+            review["last_actor_sub"] = admin_sub
+            review["last_action_at"] = ts
 
         try:
             self._table.update_item(
@@ -760,6 +804,201 @@ class KycCaseStore:
             raise
         return self.get_case(case_id)
 
+    def dispute_case(
+        self,
+        *,
+        case_id: str,
+        owner_sub: str,
+        expected_version: int,
+        reason: str,
+        note: str = "",
+    ) -> dict[str, Any] | None:
+        """User-initiated appeal of a rejected case (KYD-002): rejected -> disputed.
+
+        Modeled on apply_admin_decision for the optimistic-concurrency +
+        conditional-write pattern. Idempotent: replaying the same dispute (same
+        dispute_hash) on an already-disputed case returns the existing case
+        without a second write / event. Enforces S.kyc_dispute_window_days
+        against review.decided_at. Bumps version and updates gsi_status_* so the
+        admin queue index stays consistent. Emits kyc.case.disputed after a
+        successful write.
+        """
+        existing = self.get_case(case_id)
+        if not existing:
+            return None
+        if str(existing.get("user_sub") or "") != owner_sub:
+            raise KycCaseValidationError("kyc_access_forbidden")
+
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise KycCaseValidationError("kyc_invalid_request")
+        normalized_note = str(note or "")
+        dispute_basis = json.dumps(
+            {"reason": normalized_reason, "note": normalized_note},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        dispute_hash = hashlib.sha256(dispute_basis.encode("utf-8")).hexdigest()
+
+        review = dict(existing.get("review") or _empty_review_ref())
+        current_status = str(existing.get("status") or "")
+        if current_status == "disputed":
+            prior = dict(review.get("dispute") or {})
+            if str(prior.get("dispute_hash") or "") == dispute_hash:
+                return existing
+            raise KycCaseValidationError("kyc_invalid_transition")
+        if current_status != "rejected":
+            raise KycCaseValidationError("kyc_invalid_transition")
+
+        # Enforce the dispute window against the original decision time.
+        decided_at = int(review.get("decided_at") or 0)
+        window_days = max(0, int(S.kyc_dispute_window_days))
+        if decided_at > 0 and window_days > 0:
+            if now_ts() > decided_at + window_days * 24 * 3600:
+                raise KycCaseValidationError("kyc_dispute_window_expired")
+
+        current_version = int(existing.get("version") or 0)
+        if current_version != int(expected_version):
+            raise KycCaseConflictError("kyc_case_update_conflict")
+
+        ts = now_ts()
+        next_version = current_version + 1
+        prior_count = int((review.get("dispute") or {}).get("dispute_count") or 0)
+        review["dispute"] = {
+            "reason": normalized_reason,
+            "note": normalized_note,
+            "disputed_at": ts,
+            "disputed_by": owner_sub,
+            "dispute_hash": dispute_hash,
+            "dispute_count": prior_count + 1,
+        }
+        review["last_actor_sub"] = owner_sub
+        review["last_action_at"] = ts
+
+        try:
+            self._table.update_item(
+                Key={"pk": _case_pk(case_id), "sk": "META"},
+                UpdateExpression=(
+                    "SET #status=:status, review=:review, updated_at=:updated_at, version=:version, "
+                    "gsi_owner_sk=:gsi_owner_sk, gsi_status_pk=:gsi_status_pk, gsi_status_sk=:gsi_status_sk"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":status": "disputed",
+                    ":review": review,
+                    ":updated_at": ts,
+                    ":version": next_version,
+                    ":gsi_owner_sk": _updated_sk(ts, case_id),
+                    ":gsi_status_pk": _status_pk("disputed"),
+                    ":gsi_status_sk": _updated_sk(ts, case_id),
+                    ":expected_version": current_version,
+                    ":rejected": "rejected",
+                },
+                ConditionExpression="version = :expected_version AND #status = :rejected",
+            )
+        except ClientError as exc:
+            if _is_conditional_conflict(exc):
+                raise KycCaseConflictError("kyc_case_update_conflict") from exc
+            raise
+        _emit_kyc_event_safe(
+            event="kyc.case.disputed",
+            user_sub=owner_sub,
+            case_id=case_id,
+            reason=normalized_reason,
+            note=normalized_note,
+            disputed_at=ts,
+        )
+        return self.get_case(case_id)
+
+    def reopen_case(
+        self,
+        *,
+        case_id: str,
+        owner_sub: str,
+        expected_version: int,
+    ) -> dict[str, Any] | None:
+        """User-initiated reopen of a rejected/expired case (KYD-003): -> draft.
+
+        Clears submission + the prior decision/reason_codes so the case
+        re-enters the wizard cleanly, while PRESERVING attached files +
+        questionnaire refs so the user edits rather than redoing from scratch.
+        Tracks review.attempt_count and enforces S.kyc_retry_max_attempts; once
+        exhausted raises a typed kyc_retry_limit_reached error without
+        transitioning. Bumps version. Does NOT emit a user webhook (the eventual
+        /submit re-emits kyc.case.resubmitted — see KYD-007); emits a
+        lightweight kyc.case.reopened internal audit only.
+        """
+        existing = self.get_case(case_id)
+        if not existing:
+            return None
+        if str(existing.get("user_sub") or "") != owner_sub:
+            raise KycCaseValidationError("kyc_access_forbidden")
+
+        current_status = str(existing.get("status") or "")
+        if current_status not in {"rejected", "expired"}:
+            raise KycCaseValidationError("kyc_invalid_transition")
+
+        review = dict(existing.get("review") or _empty_review_ref())
+        prior_attempts = int(review.get("attempt_count") or 0)
+        max_attempts = max(0, int(S.kyc_retry_max_attempts))
+        if max_attempts > 0 and prior_attempts >= max_attempts:
+            raise KycCaseValidationError("kyc_retry_limit_reached")
+
+        current_version = int(existing.get("version") or 0)
+        if current_version != int(expected_version):
+            raise KycCaseConflictError("kyc_case_update_conflict")
+
+        ts = now_ts()
+        next_version = current_version + 1
+        # Reset decision/appeal fields so the case re-enters the wizard cleanly,
+        # but preserve the ticket linkage and bump the attempt counter.
+        review["attempt_count"] = prior_attempts + 1
+        review["last_reopened_at"] = ts
+        review["last_actor_sub"] = owner_sub
+        review["last_action_at"] = ts
+        for stale in ("decision", "decided_at", "decision_note", "decision_actor_sub", "decision_hash"):
+            review.pop(stale, None)
+        review["reason_codes"] = []
+
+        try:
+            self._table.update_item(
+                Key={"pk": _case_pk(case_id), "sk": "META"},
+                UpdateExpression=(
+                    "SET #status=:status, submission=:submission, review=:review, "
+                    "updated_at=:updated_at, version=:version, gsi_owner_sk=:gsi_owner_sk, "
+                    "gsi_status_pk=:gsi_status_pk, gsi_status_sk=:gsi_status_sk"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":status": "draft",
+                    ":submission": _empty_submission_ref(),
+                    ":review": review,
+                    ":updated_at": ts,
+                    ":version": next_version,
+                    ":gsi_owner_sk": _updated_sk(ts, case_id),
+                    ":gsi_status_pk": _status_pk("draft"),
+                    ":gsi_status_sk": _updated_sk(ts, case_id),
+                    ":expected_version": current_version,
+                    ":rejected": "rejected",
+                    ":expired": "expired",
+                },
+                ConditionExpression="version = :expected_version AND (#status = :rejected OR #status = :expired)",
+            )
+        except ClientError as exc:
+            if _is_conditional_conflict(exc):
+                raise KycCaseConflictError("kyc_case_update_conflict") from exc
+            raise
+        # Lightweight internal audit only — no user webhook (reopen != resubmit).
+        _emit_kyc_event_safe(
+            event="kyc.case.reopened",
+            user_sub=owner_sub,
+            case_id=case_id,
+            attempt_count=review["attempt_count"],
+            reopened_at=ts,
+            from_status=current_status,
+        )
+        return self.get_case(case_id)
+
     def list_cases_by_owner(self, *, user_sub: str, limit: int = 25) -> list[dict[str, Any]]:
         response = self._table.query(
             IndexName=S.kyc_cases_owner_index_name,
@@ -811,7 +1050,7 @@ class KycCaseStore:
     ) -> dict[str, Any]:
         normalized_statuses = [str(s or "").strip() for s in statuses if str(s or "").strip() in _ALLOWED_STATUSES]
         if not normalized_statuses:
-            normalized_statuses = ["submitted", "under_review", "needs_more_info"]
+            normalized_statuses = ["submitted", "under_review", "needs_more_info", "disputed"]
         now = now_ts()
         collected: list[dict[str, Any]] = []
         for status in normalized_statuses:

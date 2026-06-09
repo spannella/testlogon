@@ -40,6 +40,8 @@ _ALERT_TITLES: Dict[str, str] = {
     "kyc.case.approved": "Identity verification approved",
     "kyc.case.rejected": "Identity verification not approved",
     "kyc.case.needs_info": "Additional information needed",
+    "kyc.case.disputed": "Verification decision disputed",
+    "kyc.case.resubmitted": "Verification resubmitted for review",
     "kyc.tier.changed": "Verification level changed",
     "kyc.tier.upgraded": "Verification level upgraded",
     "kyc.tier.downgraded": "Verification level changed",
@@ -60,11 +62,15 @@ _EMAIL_SUBJECTS: Dict[str, str] = {
     "kyc.case.approved": "Your identity verification has been approved",
     "kyc.case.rejected": "Your identity verification requires attention",
     "kyc.case.needs_info": "Additional information needed for your verification",
+    "kyc.case.disputed": "We have received your verification appeal",
+    "kyc.case.resubmitted": "Your verification application has been resubmitted",
 }
 
 # Events relevant to admins/compliance (queue / risk).
 _ADMIN_EVENTS = {
     "kyc.case.submitted",
+    "kyc.case.disputed",
+    "kyc.case.resubmitted",
     "kyc.sanctions.match",
     "kyc.liveness.failed",
 }
@@ -338,5 +344,18 @@ def _build_email_body(event: str, payload: Dict[str, Any]) -> str:
             f"Additional information is needed for your verification "
             f"(Case {case_id}). Requested: {items}. Please log in and update your "
             f"application."
+        )
+    if event == "kyc.case.disputed":
+        reason = payload.get("reason") or "See case details"
+        return (
+            f"We have received your appeal for verification Case {case_id}. "
+            f"Reason: {reason}. Our compliance team will review your dispute and "
+            f"notify you of the outcome."
+        )
+    if event == "kyc.case.resubmitted":
+        return (
+            f"Your verification application (Case {case_id}) has been resubmitted "
+            f"with updated information and is back in our review queue. We will "
+            f"notify you when a decision is made."
         )
     return f"KYC notification: {event}"

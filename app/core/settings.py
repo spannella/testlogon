@@ -1243,6 +1243,13 @@ class Settings:
     kyc_pii_audit_accessor_index_name: str = os.environ.get("KYC_PII_AUDIT_ACCESSOR_INDEX_NAME", "pii-audit-accessor-index")
     kyc_retention_rejected_days: int = int(os.environ.get("KYC_RETENTION_REJECTED_DAYS", "30"))
     kyc_retention_expired_days: int = int(os.environ.get("KYC_RETENTION_EXPIRED_DAYS", "7"))
+    # KYC disputes & retry (KYD-001). Both gates DEFAULT OFF so the dispute /
+    # reopen-and-resubmit flows are inert until explicitly enabled — with the
+    # flags off, rejected/expired cases remain terminal exactly as before.
+    kyc_dispute_enabled: bool = os.environ.get("KYC_DISPUTE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    kyc_retry_enabled: bool = os.environ.get("KYC_RETRY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    kyc_retry_max_attempts: int = int(os.environ.get("KYC_RETRY_MAX_ATTEMPTS", "3"))
+    kyc_dispute_window_days: int = int(os.environ.get("KYC_DISPUTE_WINDOW_DAYS", "30"))
     kyc_retention_approved_days: int = int(os.environ.get("KYC_RETENTION_APPROVED_DAYS", "365"))
     kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
     kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")

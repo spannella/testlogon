@@ -148,6 +148,8 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     "kyc.case.approved": "A KYC case was approved",
     "kyc.case.rejected": "A KYC case was rejected",
     "kyc.case.needs_info": "Additional information was requested for a KYC case",
+    "kyc.case.disputed": "A rejected KYC case was disputed/appealed by the applicant",
+    "kyc.case.resubmitted": "A previously-rejected KYC case was resubmitted after a retry",
     "kyc.tier.changed": "A user verification tier changed",
     "kyc.tier.upgraded": "A user verification tier was upgraded",
     "kyc.tier.downgraded": "A user verification tier was downgraded",
