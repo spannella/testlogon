@@ -13,8 +13,12 @@ object MoreRoutes {
     const val PROFILE = "more/profile"
     val SESSIONS: String get() = MainDest.ActiveSessions.route
     val MFA_DEVICES: String get() = MainDest.MfaDevices.route
-    const val NOTIFICATIONS = "more/notifications"
-    const val SETTINGS = "more/settings"
+
+    // AND-080: notification prefs now live under the Settings hub.
+    val NOTIFICATIONS: String get() = MainDest.SettingsNotifications.route
+
+    // AND-077: the Settings hub landing.
+    val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
     const val ABOUT = "more/about"
 

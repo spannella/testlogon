@@ -56,6 +56,8 @@ fun AuthedShellScreen(
     onOpenSessions: () -> Unit = {},
     onOpenMfaDevices: () -> Unit = {},
     onEditProfile: () -> Unit = {},
+    // AND-077: opens a full-screen outer-graph route (e.g. the Settings hub) by route constant.
+    onOpenRoute: (route: String) -> Unit = {},
 ) {
     val tabNav = rememberNavController()
     val backStack by tabNav.currentBackStackEntryAsState()
@@ -92,7 +94,9 @@ fun AuthedShellScreen(
                 com.testlogon.android.feature.dashboard.DashboardRoute(
                     onOpenProfile = { tabNav.navigateToTab(AuthedTab.ME) },
                     onOpenSessions = onOpenSessions,
-                    onOpenSettings = { tabNav.navigateToTab(AuthedTab.MORE) },
+                    onOpenSettings = {
+                        onOpenRoute(com.testlogon.android.navigation.MainDest.Settings.route)
+                    },
                     onOpenMore = { tabNav.navigateToTab(AuthedTab.MORE) },
                 )
             }
@@ -101,6 +105,9 @@ fun AuthedShellScreen(
                     onEditProfile = onEditProfile,
                     onOpenSessions = onOpenSessions,
                     onOpenMfaDevices = onOpenMfaDevices,
+                    onOpenSettings = {
+                        onOpenRoute(com.testlogon.android.navigation.MainDest.Settings.route)
+                    },
                 )
             }
             composable(AuthedTab.MORE.route) {
@@ -111,6 +118,10 @@ fun AuthedShellScreen(
                                 tabNav.navigateToTab(AuthedTab.ME)
                             com.testlogon.android.navigation.MoreRoutes.SESSIONS -> onOpenSessions()
                             com.testlogon.android.navigation.MoreRoutes.MFA_DEVICES -> onOpenMfaDevices()
+                            // AND-077/080: Settings hub + notification prefs are outer-graph routes.
+                            com.testlogon.android.navigation.MoreRoutes.SETTINGS,
+                            com.testlogon.android.navigation.MoreRoutes.NOTIFICATIONS ->
+                                onOpenRoute(route)
                             else -> Unit // coming-soon entries are non-interactive
                         }
                     },

@@ -109,4 +109,88 @@
     <!-- Profile media upload (AND-074) -->
     <string name="profile_media_prepare_failed">Couldn\'t prepare the image.</string>
     <string name="profile_media_upload_failed">Couldn\'t upload the photo. Try again.</string>
+
+    <!-- Settings hub (AND-077) -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_section_coming_soon">Coming soon</string>
+    <string name="settings_section_account_title">Account</string>
+    <string name="settings_section_account_subtitle">Status, sessions and account lifecycle</string>
+    <string name="settings_section_security_title">Security</string>
+    <string name="settings_section_security_subtitle">Sessions and two-factor devices</string>
+    <string name="settings_section_notifications_title">Notifications</string>
+    <string name="settings_section_notifications_subtitle">Push, email and SMS preferences</string>
+    <string name="settings_section_media_title">Media</string>
+    <string name="settings_section_media_subtitle">Call audio, video and quality</string>
+    <string name="settings_section_appearance_title">Appearance</string>
+    <string name="settings_section_appearance_subtitle">Theme and dynamic color</string>
+    <string name="settings_section_privacy_title">Privacy</string>
+    <string name="settings_section_privacy_subtitle">Data export and account data</string>
+
+    <!-- Profile → Settings entry (AND-077) -->
+    <string name="profile_settings">Settings</string>
+
+    <!-- Appearance / theme settings (AND-081) -->
+    <string name="appearance_title">Appearance</string>
+    <string name="appearance_mode_section">Theme</string>
+    <string name="appearance_mode_light">Light</string>
+    <string name="appearance_mode_dark">Dark</string>
+    <string name="appearance_mode_system">System default</string>
+    <string name="appearance_dynamic_color">Use dynamic color</string>
+    <string name="appearance_dynamic_color_subtitle">Match colors to your wallpaper (Android 12+).</string>
+
+    <!-- Media (call) preferences (AND-079) -->
+    <string name="media_prefs_title">Media</string>
+    <string name="media_prefs_retry">Retry</string>
+    <string name="media_prefs_save">Save preferences</string>
+    <string name="media_prefs_stale_banner">Showing saved settings — couldn\'t reach the server.</string>
+    <string name="media_prefs_start_muted_title">Start calls muted</string>
+    <string name="media_prefs_start_muted_desc">Join calls with your microphone off.</string>
+    <string name="media_prefs_video_off_title">Start video calls with camera off</string>
+    <string name="media_prefs_video_off_desc">Join video calls with your camera off.</string>
+    <string name="media_prefs_resolution_title">Call video resolution</string>
+    <string name="media_prefs_resolution_360">360p (Low)</string>
+    <string name="media_prefs_resolution_480">480p (Medium)</string>
+    <string name="media_prefs_resolution_720">720p (HD)</string>
+    <string name="media_prefs_resolution_1080">1080p (Full HD)</string>
+
+    <!-- Notification preferences (AND-080) -->
+    <string name="notif_prefs_title">Notifications</string>
+    <string name="notif_prefs_empty">No notification categories available.</string>
+    <string name="notif_prefs_stale_banner">Showing saved settings — couldn\'t reach the server.</string>
+    <string name="notif_prefs_channel_push">Push</string>
+    <string name="notif_prefs_channel_email">Email</string>
+    <string name="notif_prefs_channel_sms">SMS</string>
+    <string name="notif_prefs_category_generic">Notifications</string>
+    <string name="notif_prefs_category_security">Security alerts</string>
+    <string name="notif_prefs_category_account">Account activity</string>
+    <string name="notif_prefs_category_product">Product updates</string>
+    <string name="notif_prefs_category_billing">Billing</string>
+    <string name="notif_prefs_category_marketing">Marketing</string>
+
+    <!-- Account settings &amp; status (AND-082) -->
+    <string name="account_settings_title">Account</string>
+    <string name="account_status_label">Status: %1$s</string>
+    <string name="account_reason_label">Reason: %1$s</string>
+    <string name="account_closed_at_label">Closed at: %1$s</string>
+    <string name="account_state_active">Active</string>
+    <string name="account_state_suspended">Suspended</string>
+    <string name="account_state_closure_pending">Closure pending</string>
+    <string name="account_state_closed">Closed</string>
+    <string name="account_state_unknown">Unknown</string>
+    <string name="account_row_sessions">Active sessions</string>
+    <string name="account_row_mfa">Two-factor devices</string>
+    <string name="account_row_privacy">Privacy &amp; data export</string>
+    <string name="account_row_reactivate">Reactivate account</string>
+    <string name="account_row_close">Close account</string>
+    <string name="account_close_confirm_title">Close your account?</string>
+    <string name="account_close_confirm_body">The next screen will guide you through closing your account. This action can be permanent.</string>
+    <string name="account_close_confirm_continue">Continue</string>
+    <string name="account_close_confirm_cancel">Cancel</string>
+
+    <!-- Security &amp; Privacy subsections (AND-077 / AND-082) -->
+    <string name="security_settings_title">Security</string>
+    <string name="privacy_settings_title">Privacy</string>
+    <string name="privacy_row_export">Request data export</string>
+    <string name="privacy_row_delete">Delete my data</string>
 </resources>

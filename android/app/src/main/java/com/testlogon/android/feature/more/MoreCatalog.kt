@@ -49,7 +49,6 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Notifications,
             route = MoreRoutes.NOTIFICATIONS,
             section = MoreSection.APP,
-            comingSoon = true,
         ),
         MoreEntry(
             id = "settings",
@@ -57,7 +56,6 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Settings,
             route = MoreRoutes.SETTINGS,
             section = MoreSection.APP,
-            comingSoon = true,
         ),
         MoreEntry(
             id = "help",

@@ -40,6 +40,7 @@ class OwnProfileScreenTest {
                     onChangePhoto = onChangePhoto,
                     onOpenSessions = {},
                     onOpenMfaDevices = {},
+                    onOpenSettings = {},
                     accountActions = {}, // avoid Hilt-backed account VM in this stateless render test
                 )
             }

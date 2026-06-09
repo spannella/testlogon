@@ -29,6 +29,7 @@ fun AccountActionsSection(
     modifier: Modifier = Modifier,
     onOpenSessions: () -> Unit = {},
     onOpenMfaDevices: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     viewModel: AccountActionsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -61,6 +62,13 @@ fun AccountActionsSection(
             onClick = onOpenMfaDevices,
             variant = TlButtonVariant.Secondary,
             modifier = Modifier.fillMaxWidth().testTag("profile_mfa_devices"),
+        )
+        // AND-077: entry into the Settings hub from the Profile tab.
+        TlButton(
+            text = stringResource(R.string.profile_settings),
+            onClick = onOpenSettings,
+            variant = TlButtonVariant.Secondary,
+            modifier = Modifier.fillMaxWidth().testTag("profile_settings"),
         )
         // AND-062: register-passkey entry, shown only when the device supports platform passkeys.
         AddPasskeySection()

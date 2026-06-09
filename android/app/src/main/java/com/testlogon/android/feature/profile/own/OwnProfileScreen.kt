@@ -56,6 +56,7 @@ fun OwnProfileRoute(
     onEditProfile: () -> Unit,
     onOpenSessions: () -> Unit,
     onOpenMfaDevices: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: OwnProfileViewModel = hiltViewModel(),
     mediaViewModel: ProfileMediaViewModel = hiltViewModel(),
@@ -99,6 +100,7 @@ fun OwnProfileRoute(
         },
         onOpenSessions = onOpenSessions,
         onOpenMfaDevices = onOpenMfaDevices,
+        onOpenSettings = onOpenSettings,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -114,10 +116,15 @@ fun OwnProfileScreen(
     onChangePhoto: () -> Unit,
     onOpenSessions: () -> Unit,
     onOpenMfaDevices: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     accountActions: @Composable () -> Unit = {
-        AccountActionsSection(onOpenSessions = onOpenSessions, onOpenMfaDevices = onOpenMfaDevices)
+        AccountActionsSection(
+            onOpenSessions = onOpenSessions,
+            onOpenMfaDevices = onOpenMfaDevices,
+            onOpenSettings = onOpenSettings,
+        )
     },
 ) {
     TlScaffold(

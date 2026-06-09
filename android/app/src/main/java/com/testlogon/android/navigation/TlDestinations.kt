@@ -204,6 +204,27 @@ sealed class MainDest(val route: String) {
 
     /** Edit own profile (AND-072), reached from the Profile tab's own-profile screen. */
     data object EditProfile : MainDest("profile/edit")
+
+    /** Settings hub landing (AND-077), reached from the More hub / Profile. */
+    data object Settings : MainDest("settings")
+
+    /** Settings → Account status & lifecycle entry (AND-082). */
+    data object SettingsAccount : MainDest("settings/account")
+
+    /** Settings → Security aggregation (links to sessions / MFA). (AND-077) */
+    data object SettingsSecurity : MainDest("settings/security")
+
+    /** Settings → Notification preferences (AND-080). */
+    data object SettingsNotifications : MainDest("settings/notifications")
+
+    /** Settings → Media (call) preferences (AND-079). */
+    data object SettingsMedia : MainDest("settings/media")
+
+    /** Settings → Appearance / theme (AND-081). */
+    data object SettingsAppearance : MainDest("settings/appearance")
+
+    /** Settings → Privacy & data export entry (handoff). (AND-082) */
+    data object SettingsPrivacy : MainDest("settings/privacy")
 }
 
 /**
