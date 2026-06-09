@@ -542,8 +542,15 @@ def quick_connect(user_sub: str, host_id: str) -> Optional[Dict[str, Any]]:
         out["target_id"] = f"user:{host_id}"
         out["ws_url"] = f"ws://{host['hostname']}:{host['port']}/websockify"
         out["connect_path"] = f"/remote?target_id=user:{host_id}"
+    elif protocol == "rdp":
+        # ADR-004 (CTI-005): RDP routes to its own surface, NOT the SSH connect
+        # form (which cannot speak RDP). With RDP_REMOTE_DESKTOP_ENABLED off
+        # (default), /remote/rdp shows the fallback/instructions page; the
+        # target resolves owner-scoped server-side, so only host_id travels.
+        out["target_id"] = f"user:{host_id}"
+        out["connect_path"] = f"/remote/rdp?host_id={host_id}"
     else:
-        # SSH/RDP: frontend pre-fills the terminal connect form.
+        # SSH: frontend pre-fills the terminal connect form.
         params = f"host={host['hostname']}&port={host['port']}"
         if host["username"]:
             params += f"&username={host['username']}"

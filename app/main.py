@@ -105,6 +105,7 @@ from app.routers.browser_ssh_terminal import (
 from app.routers.ssh_key_manager import router as ssh_key_manager_router
 from app.routers.questionnaires import router as questionnaires_router
 from app.routers.vnc_sessions import router as vnc_sessions_router
+from app.routers.rdp_sessions import router as rdp_sessions_router
 from app.routers.kyc_cases import router as kyc_cases_router
 from app.routers.kyc_business import router as kyc_business_router
 from app.routers.kyc_compliance_reports import router as kyc_compliance_reports_router
@@ -725,6 +726,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_analytics_rollup_task)
     app.add_event_handler("startup", start_reco_refresh_task)
     app.include_router(vnc_sessions_router)
+    app.include_router(rdp_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router
     # so /gallery/for-you and /{video_id}/similar match before /{video_id}

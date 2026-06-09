@@ -140,6 +140,14 @@ export const isVncRemoteDesktopEnabled = () => vncRemoteDesktopEnabled && !vncRe
 export const browserSshEnabled = toBool(env.VITE_BROWSER_SSH_ENABLED, true);
 export const isBrowserSshEnabled = () => browserSshEnabled;
 
+// RDP browser transport (ADR-004 / CTI-005). Phase 1 ships only the fallback
+// /remote/rdp instructions page; native in-browser RDP is a future milestone.
+// Default OFF — mirrors backend RDP_REMOTE_DESKTOP_ENABLED. With it off the
+// page shows "RDP not available — use VNC/SSH"; the fallback metadata surface
+// is always available so Windows hosts never dead-end in the SSH form.
+export const rdpRemoteDesktopEnabled = toBool(env.VITE_RDP_REMOTE_DESKTOP_ENABLED, false);
+export const isRdpRemoteDesktopEnabled = () => rdpRemoteDesktopEnabled;
+
 export const broadcastNavigationEnabled = toBool(env.VITE_BROADCAST_NAVIGATION_ENABLED, true);
 export const broadcastNavigationKillSwitch = toBool(env.VITE_BROADCAST_NAVIGATION_KILL_SWITCH, false);
 export const isBroadcastNavigationEnabled = () =>

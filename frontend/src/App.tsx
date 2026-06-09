@@ -82,6 +82,7 @@ const ComputeSpendingPage = lazy(() => import("@/pages/remote/ComputeSpendingPag
 const SecurityGroupsPage = lazy(() => import("@/pages/remote/SecurityGroupsPage"));
 const SshKeyManagerPage = lazy(() => import("@/pages/remote/SshKeyManagerPage"));
 const BrowserSshPage = lazy(() => import("@/pages/remote/BrowserSshPage"));
+const RemoteRdpPage = lazy(() => import("@/pages/remote/RemoteRdpPage"));
 const Ec2LauncherPage = lazy(() => import("@/pages/remote/Ec2LauncherPage"));
 const LlmKeysPage = lazy(() => import("@/pages/agents/LlmKeysPage"));
 const MyBundlesPage = lazy(() => import("@/pages/syndicates/MyBundlesPage"));
@@ -397,6 +398,9 @@ export default function App() {
           <Route path="remote/ec2" element={<Ec2LauncherPage />} />
           <Route path="remote/ssh-keys" element={<SshKeyManagerPage />} />
           {showBrowserSsh && <Route path="remote/ssh" element={<BrowserSshPage />} />}
+          {/* ADR-004/CTI-005: RDP fallback surface is always reachable so Windows
+              hosts never dead-end in the SSH form, regardless of the RDP flag. */}
+          <Route path="remote/rdp" element={<RemoteRdpPage />} />
           <Route path="remote/k8s" element={<K8sLauncherPage />} />
           <Route path="remote/billing" element={<ComputeSpendingPage />} />
           <Route path="remote/security-groups" element={<SecurityGroupsPage />} />
