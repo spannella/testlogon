@@ -3685,6 +3685,64 @@ export interface DataRequestAuditEntry {
   details?: Record<string, unknown>;
 }
 
+// ─── Legal holds + law-enforcement export (LEX-008 / LEX-012) ───
+
+export interface LegalHold {
+  hold_id: string;
+  user_sub: string;
+  case_id: string;
+  matter_ref: string;
+  reason: string;
+  status: string; // "active" | "released"
+  created_by: string;
+  created_at: number;
+  released_by?: string | null;
+  released_at?: number | null;
+  expires_at?: number | null;
+}
+
+export interface PlaceHoldBody {
+  user_sub: string;
+  reason: string;
+  case_id?: string;
+  matter_ref?: string;
+  expires_at?: number;
+}
+
+export interface LegalExport {
+  legal_export_id: string;
+  matter_ref: string;
+  requesting_authority: string;
+  requested_by: string;
+  legal_basis: string;
+  reason?: string;
+  target_user_subs: string[];
+  data_types: string[];
+  from_ts?: number;
+  to_ts?: number;
+  status: string; // "intake" | "completed" | "failed"
+  created_at: number;
+  completed_at?: number;
+  s3_key?: string;
+  s3_bucket?: string;
+  package_sha256?: string;
+  size_bytes?: number;
+  expires_at?: number;
+  sealed?: boolean;
+  error_message?: string;
+}
+
+export interface LegalExportIntakeBody {
+  matter_ref: string;
+  requesting_authority: string;
+  legal_basis: string;
+  target_user_subs: string[];
+  data_types?: string[];
+  from_ts?: number;
+  to_ts?: number;
+  reason?: string;
+}
+
 // ─── Stories / Ephemeral Content (FEED-002) ─────────────────────
 
 export interface Story {

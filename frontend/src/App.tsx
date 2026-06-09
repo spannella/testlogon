@@ -160,6 +160,7 @@ const CollaborationRevenuePage = lazy(() => import("@/pages/collaborations/Colla
 const FanClubPage = lazy(() => import("@/pages/fan-club/FanClubPage"));
 const AchievementsPage = lazy(() => import("@/pages/achievements/AchievementsPage"));
 const AuditExportPage = lazy(() => import("@/pages/admin/AuditExportPage"));
+const LegalHoldPage = lazy(() => import("@/pages/admin/LegalHoldPage"));
 const TenantAdmin = lazy(() => import("@/pages/admin/TenantAdmin"));
 const SsoProvidersPage = lazy(() => import("@/pages/admin/SsoProvidersPage"));
 const LicenseRevenuePage = lazy(() => import("@/pages/licenses/LicenseRevenuePage"));
@@ -476,6 +477,7 @@ export default function App() {
           <Route path="admin/ads/fraud" element={<AdFraudDashboard />} />
           <Route path="admin/ad-platform" element={<AdPlatformDashboard />} />
           <Route path="admin/audit-exports" element={<AuditExportPage />} />
+          <Route path="admin/legal-holds" element={<LegalHoldPage />} />
           <Route path="admin/kyc/analytics" element={<KycAnalyticsDashboard />} />
           <Route path="admin/tenants" element={<TenantAdmin />} />
           <Route path="admin/sso" element={<SsoProvidersPage />} />
