@@ -1269,6 +1269,10 @@ ENCRYPTED_EDIT_ERROR_CODE = "encrypted_message_edit_unsupported"
 NO_AGENTS_ONLINE_NOTICE_TEXT = "No helpdesk agents are online right now. Please try again later."
 NO_AGENTS_NOTICE_THROTTLE_SEC = int(os.getenv("NO_AGENTS_NOTICE_THROTTLE_SEC", "600"))
 HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# HMH-003: when on, a new helpdesk chat is auto-routed to an available agent at
+# creation (skipping the queue). Default off — flag-off behavior is identical to
+# the historical alert-only fanout path.
+HELPDESK_AUTO_ROUTE_ENABLED = os.getenv("HELPDESK_AUTO_ROUTE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED = bool(getattr(S, "messaging_hidden_timeline_filter_enabled", True))
 
 HELPDESK_ROUTING_EVENT_SCHEMA_VERSION = 1
@@ -5205,6 +5209,28 @@ def _resolve_online_helpdesk_members(group_id: str, ts: int) -> list[str]:
     return out
 
 
+def count_available_agents(group_id: str, ts: int) -> int:
+    """HMH-001: number of helpdesk agents currently online/available for a group."""
+    try:
+        return len(_resolve_online_helpdesk_members(group_id, ts))
+    except Exception:
+        return 0
+
+
+def pick_available_agent(group_id: str, ts: int, *, exclude: Optional[set[str]] = None) -> Optional[str]:
+    """HMH-001: choose an online/available agent for the group, or None.
+
+    Excludes any ids in ``exclude``. Selection is first-available (presence
+    order); least-loaded selection is a future refinement. Never raises.
+    """
+    excl = exclude or set()
+    try:
+        online = [u for u in _resolve_online_helpdesk_members(group_id, ts) if u and u not in excl]
+    except Exception:
+        return None
+    return online[0] if online else None
+
+
 
 
 def _normalize_presence_status(status: Optional[str]) -> str:
@@ -6026,9 +6052,46 @@ def start_conversation(
         )
 
     if routing_mode == "helpdesk_bridge":
-        delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
-        if delivered == 0:
-            _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
+        auto_assigned = False
+        # HMH-004: when enabled and an agent is online, assign immediately so the
+        # chat becomes a live messenger DM instead of sitting in the queue.
+        if HELPDESK_AUTO_ROUTE_ENABLED:
+            agent = pick_available_agent(group_id, created_at)
+            if agent:
+                try:
+                    result = _apply_helpdesk_routing_transition(
+                        conversation_id=cid,
+                        cmd=RoutingTransitionInput(
+                            action="assign_agent",
+                            now_ts=created_at,
+                            agent_user_id=agent,
+                            expected_assignment_version=0,
+                        ),
+                        actor_user_id=agent,
+                        metadata={"reason": "auto_route"},
+                    )
+                    updated_routing = result.get("conversation", {}) if isinstance(result, dict) else {}
+                    _attach_agent_participant(
+                        conversation_id=cid,
+                        agent_user_id=agent,
+                        ts=created_at,
+                        routing_event_id=str(result.get("event", {}).get("event_id") or ""),
+                        routing_state=str(updated_routing.get("routing_state") or "assigned"),
+                        assignment_version=int(updated_routing.get("assignment_version") or 1),
+                    )
+                    # Reflect the assignment on the local item used for the response.
+                    convo_item["routing_state"] = str(updated_routing.get("routing_state") or "assigned")
+                    convo_item["active_agent_user_id"] = agent
+                    convo_item["assignment_version"] = int(updated_routing.get("assignment_version") or 1)
+                    record_helpdesk_claim("success")
+                    auto_assigned = True
+                except Exception:
+                    logger.exception("helpdesk auto-route failed; falling back to queue cid=%s", cid)
+                    auto_assigned = False
+        if not auto_assigned:
+            delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
+            if delivered == 0:
+                _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
 
     profile_cache: Dict[str, Any] = {}
     convo = ConversationOut(
@@ -6584,6 +6647,77 @@ def delete_conversation_if_last(conversation_id: str, req: Request = None, user_
     return {"ok": True, "deleted": True}
 
 
+def _attach_agent_participant(
+    *,
+    conversation_id: str,
+    agent_user_id: str,
+    ts: int,
+    routing_event_id: str,
+    routing_state: str,
+    assignment_version: int,
+) -> str:
+    """Add an agent as an active admin participant of a helpdesk conversation.
+
+    Shared by the claim path and the auto-route path (HMH-004) so the
+    participant-join + participant_count increment + membership-archive event
+    stay identical (single source of truth). Returns the membership transition
+    ("helpdesk_agent_joined" / "helpdesk_agent_reactivated" / "none").
+    """
+    existing_part = tbl_parts.get_item(
+        Key={"user_id": agent_user_id, "conversation_id": conversation_id}
+    ).get("Item")
+    membership_transition = "none"
+    if not existing_part:
+        tbl_parts.put_item(Item={
+            "user_id": agent_user_id,
+            "conversation_id": conversation_id,
+            "status": "active",
+            "role": "admin",
+            "muted_until": 0,
+            "last_read_at": 0,
+            "unread_count": 0,
+            "joined_at": ts,
+            "left_at": 0,
+            "GSI1PK": conversation_id,
+            "GSI1SK": agent_user_id,
+        })
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :inc",
+            ExpressionAttributeValues={":inc": 1},
+        )
+        membership_transition = "helpdesk_agent_joined"
+    elif existing_part.get("status") != "active":
+        tbl_parts.update_item(
+            Key={"user_id": agent_user_id, "conversation_id": conversation_id},
+            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
+        )
+        membership_transition = "helpdesk_agent_reactivated"
+
+    if membership_transition != "none":
+        _emit_conversation_membership_archive_event_or_503(
+            event_ts=ts,
+            conversation_id=conversation_id,
+            subject_user_id=agent_user_id,
+            actor_user_id=agent_user_id,
+            event_type="conversation.member_joined",
+            payload={
+                "transition": membership_transition,
+                "subject_user_id": agent_user_id,
+                "status": "active",
+                "role": "admin",
+                "timeline_state": {
+                    "routing_event_id": routing_event_id,
+                    "routing_state": routing_state,
+                    "assignment_version": assignment_version,
+                },
+            },
+        )
+    return membership_transition
+
+
 def _claim_helpdesk_conversation_internal(
     *,
     conversation_id: str,
@@ -6662,58 +6796,16 @@ def _claim_helpdesk_conversation_internal(
 
     updated = result.get("conversation", {}) if isinstance(result, dict) else {}
 
-    # Add the claiming agent as an active participant (admin role) so they can send messages.
-    # Use a conditional put to avoid overwriting an existing participant record.
-    existing_part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": conversation_id}).get("Item")
-    membership_transition = "none"
-    if not existing_part:
-        tbl_parts.put_item(Item={
-            "user_id": user_id,
-            "conversation_id": conversation_id,
-            "status": "active",
-            "role": "admin",
-            "muted_until": 0,
-            "last_read_at": 0,
-            "unread_count": 0,
-            "joined_at": ts,
-            "left_at": 0,
-            "GSI1PK": conversation_id,
-            "GSI1SK": user_id,
-        })
-        tbl_convos.update_item(
-            Key={"conversation_id": conversation_id},
-            UpdateExpression="ADD participant_count :inc",
-            ExpressionAttributeValues={":inc": 1},
-        )
-        membership_transition = "helpdesk_agent_joined"
-    elif existing_part.get("status") != "active":
-        tbl_parts.update_item(
-            Key={"user_id": user_id, "conversation_id": conversation_id},
-            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
-        )
-        membership_transition = "helpdesk_agent_reactivated"
-
-    if membership_transition != "none":
-        _emit_conversation_membership_archive_event_or_503(
-            event_ts=ts,
-            conversation_id=conversation_id,
-            subject_user_id=user_id,
-            actor_user_id=user_id,
-            event_type="conversation.member_joined",
-            payload={
-                "transition": membership_transition,
-                "subject_user_id": user_id,
-                "status": "active",
-                "role": "admin",
-                "timeline_state": {
-                    "routing_event_id": str(result.get("event", {}).get("event_id") or ""),
-                    "routing_state": str(updated.get("routing_state") or "assigned"),
-                    "assignment_version": int(updated.get("assignment_version") or (current_version + 1)),
-                },
-            },
-        )
+    # Add the claiming agent as an active participant (admin role) so they can
+    # send messages. Shared with the auto-route path (HMH-004).
+    _attach_agent_participant(
+        conversation_id=conversation_id,
+        agent_user_id=user_id,
+        ts=ts,
+        routing_event_id=str(result.get("event", {}).get("event_id") or ""),
+        routing_state=str(updated.get("routing_state") or "assigned"),
+        assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
+    )
 
     audit_event(
         "messaging_helpdesk_conversation_claimed",
@@ -6736,6 +6828,21 @@ def _claim_helpdesk_conversation_internal(
         assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
         idempotent=False,
     )
+
+
+@router.get("/helpdesk/availability")
+def get_helpdesk_availability(
+    group_id: str = Query(..., max_length=128),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-002: counts of online/available agents for a group.
+
+    Customer-callable (no helpdesk-group membership required) so the client can
+    show "agents online" before starting a chat. Returns counts only — never any
+    agent identity.
+    """
+    count = count_available_agents(group_id, now_ts())
+    return {"available_agent_count": count, "any_available": count > 0}
 
 
 @router.get("/helpdesk/queue", response_model=List[ConversationOut])

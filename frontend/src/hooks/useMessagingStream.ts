@@ -1,5 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useAuthStore } from "@/stores/authStore";
 
 const MESSAGING_STREAM_URL = "/messaging/events/stream";
 const MAX_RETRY_DELAY = 30_000;
@@ -13,6 +15,10 @@ const MAX_RETRY_DELAY = 30_000;
 export function useMessagingStream(enabled = true) {
   const queryClient = useQueryClient();
   const retryCount = React.useRef(0);
+  // Current user id, via a ref so the SSE listener doesn't rebind on change (HMH-005).
+  const currentUserId = useAuthStore((s) => s.userId);
+  const userIdRef = React.useRef(currentUserId);
+  userIdRef.current = currentUserId;
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -51,6 +57,20 @@ export function useMessagingStream(enabled = true) {
           eventType === "helpdesk.conversation.no_agents_online"
         ) {
           queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
+        }
+
+        // HMH-005: toast the agent who was just auto-routed a customer. The
+        // agent identity is only present in the payload projected to agents, so
+        // a customer's event won't match and won't toast.
+        if (eventType === "helpdesk.conversation.assigned") {
+          const payload = (data.payload ?? {}) as Record<string, unknown>;
+          const agent =
+            (typeof payload.active_agent_user_id === "string" && payload.active_agent_user_id) ||
+            (typeof data.active_agent_user_id === "string" && data.active_agent_user_id) ||
+            "";
+          if (agent && agent === userIdRef.current) {
+            toast.success("You've been connected with a customer");
+          }
         }
 
         // Refresh the specific conversation's message list.
