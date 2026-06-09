@@ -140,6 +140,12 @@ export const isVncRemoteDesktopEnabled = () => vncRemoteDesktopEnabled && !vncRe
 export const browserSshEnabled = toBool(env.VITE_BROWSER_SSH_ENABLED, true);
 export const isBrowserSshEnabled = () => browserSshEnabled;
 
+// Agent SSH QA actions panel (ADR-003 / AQA). Default OFF — mirrors the backend
+// AGENT_SSH_QA_ENABLED master flag. With it off the QA Actions page/route/nav
+// entry are hidden and the backend router is not registered.
+export const agentSshQaEnabled = toBool(env.VITE_AGENT_SSH_QA_ENABLED, false);
+export const isAgentSshQaEnabled = () => agentSshQaEnabled;
+
 // RDP browser transport (ADR-004 / CTI-005). Phase 1 ships only the fallback
 // /remote/rdp instructions page; native in-browser RDP is a future milestone.
 // Default OFF — mirrors backend RDP_REMOTE_DESKTOP_ENABLED. With it off the

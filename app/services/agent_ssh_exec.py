@@ -592,21 +592,54 @@ def execute_action(raw: Dict[str, Any]) -> Dict[str, Any]:
 def _execute_multihop(
     user_sub: str, worker_id: str, path_id: str, command: str, timeout: int
 ) -> Dict[str, Any]:
-    """Multi-hop QA via resolve_connection_chain + MultiHopSshBridge (AQA-005).
+    """Multi-hop QA via resolve_connection_chain + non-interactive chain exec.
 
-    Currently runs the command via the bridge's interactive shell as a thin
-    bridge over the existing multi-hop transport; the chain's plaintext PEM is
-    server-internal only (never persisted/logged). Single-host exec_command is
-    the primary tested path; multi-hop exec is a documented follow-up.
+    Resolves the stored bastion path into a credentialled hop chain and runs the
+    command non-interactively through it (``exec_command`` on the final
+    transport) via ``ssh_bastion.exec_command_multihop``. The chain's plaintext
+    PEM is server-internal only (never persisted/logged); only the structured
+    ``{status, exit_code, stdout, stderr}`` result crosses back here.
+
+    Raises ``AgentSshExecError`` (mirroring the single-host codes) on any
+    resolution / transport / auth failure so the runner persists a structured
+    ``failed`` record without leaking credentials.
     """
     from app.services import ssh_bastion
 
-    chain = ssh_bastion.resolve_connection_chain(user_sub, path_id, include_keys=True)
-    if not chain or len(chain) < 2:
+    # Resolve topology first (no keys) so we can apply the destination policy +
+    # at-least-2-hops guard before any KMS decryption / dial.
+    try:
+        topology = ssh_bastion.resolve_connection_chain(
+            user_sub, path_id, include_keys=False
+        )
+    except ssh_bastion.BastionPathNotFound:
+        raise AgentSshExecError("path_not_found", "Bastion path not found or not owned by caller.")
+    except ssh_bastion.ChainValidationError as exc:
+        raise AgentSshExecError("invalid_path", str(exc) or "Bastion path failed validation.")
+    if not topology or len(topology) < 2:
         raise AgentSshExecError("invalid_path", "Multi-hop path must have at least 2 hops.")
-    # Bridge connect is delegated; treated as a simulated success surface for
-    # now (full exec_command-over-direct-tcpip is a follow-up, AQA-005 P2).
-    raise AgentSshExecError("multihop_not_implemented", "Multi-hop exec is not yet supported.")
+
+    # Apply the env host/port destination policy to the FINAL target hop, same
+    # as the single-host path (the bastions are by definition owned + stored).
+    target = topology[-1]
+    _check_destination_policy(target.get("hostname", ""), int(target.get("port", 22) or 22))
+
+    _audit(
+        "agent_action.connect", user_sub,
+        worker_id=worker_id, host_id=path_id, action_id="", outcome="connecting_multihop",
+    )
+
+    try:
+        return ssh_bastion.exec_command_multihop(
+            user_sub, path_id, command, timeout_seconds=timeout
+        )
+    except ssh_bastion.BastionConnectError as exc:
+        # Normalise to the AgentSshExecError contract without leaking creds.
+        code = "connect_failed" if exc.code not in (
+            "auth_failed", "ssh_unavailable", "invalid_chain",
+            "invalid_private_key", "invalid_private_key_format",
+        ) else exc.code
+        raise AgentSshExecError(code, exc.message)
 
 
 def _stream_into_monitor(

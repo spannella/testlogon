@@ -5836,6 +5836,54 @@ export interface WorkerList {
   count: number;
 }
 
+// ─── Agent SSH QA actions (ADR-003 / AQA) ────────────────────────
+// SECURITY: the submit body carries ONLY identifiers (host_id / ssh_key_id /
+// path_id) — never a key, PEM, or password. Credentials are resolved
+// server-side from the owner's KMS-encrypted store.
+
+export type AgentActionType = "run_command" | "run_test_suite";
+
+export type AgentActionStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "denied";
+
+export interface RunAgentActionIn {
+  action_type: AgentActionType;
+  command: string;
+  host_id?: string;
+  ssh_key_id?: string;
+  path_id?: string;
+  timeout_seconds?: number;
+}
+
+export interface AgentActionOut {
+  action_id: string;
+  worker_id: string;
+  action_type: AgentActionType;
+  host_id: string;
+  command: string;
+  status: AgentActionStatus;
+  exit_code: number | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  error_code: string;
+  error_message: string;
+  created_at: number;
+  started_at: number;
+  finished_at: number;
+  timeout_seconds: number;
+}
+
+export interface AgentActionListOut {
+  actions: AgentActionOut[];
+  count: number;
+}
+
 // ─── Interactive Claude Code sessions (ACS-009/010) ──────────────
 
 export type AgentSessionState =

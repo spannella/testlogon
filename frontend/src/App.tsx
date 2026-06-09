@@ -8,7 +8,7 @@ import { Loader2 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
 import { ErrorPage } from "@/components/shared/ErrorPage";
-import { isBroadcastNavigationEnabled, isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled, isBrowserSshEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled, isBrowserSshEnabled, isAgentSshQaEnabled } from "@/lib/featureFlags";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -208,6 +208,7 @@ const KycIdScannerReviewQueuePage = lazy(() => import("@/pages/kyc/KycIdScannerR
 const KycWizardPage = lazy(() => import("@/pages/kyc/KycWizardPage"));
 const KycStatusPage = lazy(() => import("@/pages/kyc/KycStatusPage"));
 const WorkersPage = lazy(() => import("@/pages/agents/WorkersPage"));
+const QaActionsPage = lazy(() => import("@/pages/agents/QaActionsPage"));
 const AgentSessionPage = lazy(() => import("@/pages/agents/AgentSessionPage"));
 const AdBillingPage = lazy(() => import("@/pages/ads/AdBillingPage"));
 const GroupTreasuryPage = lazy(() => import("@/pages/groups/GroupTreasuryPage"));
@@ -274,6 +275,7 @@ function PageSpinner() {
 export default function App() {
   const showVncRemoteDesktop = isVncRemoteDesktopEnabled();
   const showBrowserSsh = isBrowserSshEnabled();
+  const showAgentSshQa = isAgentSshQaEnabled();
   const showBroadcastNavigation = isBroadcastNavigationEnabled();
   const showCanonicalProfileRoute = isCanonicalProfileNavigationEnabled();
 
@@ -511,6 +513,9 @@ export default function App() {
           <Route path="admin/kyc/id-scanner" element={<KycIdScannerReviewQueuePage />} />
           <Route path="admin/kyc/compliance" element={<KycComplianceReportsPage />} />
           <Route path="agents/workers" element={<WorkersPage />} />
+          {showAgentSshQa && (
+            <Route path="agents/qa-actions" element={<QaActionsPage />} />
+          )}
           <Route path="agents/session" element={<AgentSessionPage />} />
           <Route path="agents/llm-keys" element={<LlmKeysPage />} />
           <Route path="agents/dashboard" element={<AgentDashboard />} />

@@ -77,7 +77,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
-import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled, isAgentSshQaEnabled } from "@/lib/featureFlags";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -172,6 +172,7 @@ const NAV_GROUPS: NavGroup[] = [
     i18nKey: "nav.aiAgents",
     items: [
       { label: "Workers", i18nKey: "nav.workers", path: "/agents/workers", icon: <Bot className="h-5 w-5" /> },
+      { label: "QA Actions", i18nKey: "nav.qaActions", path: "/agents/qa-actions", icon: <Terminal className="h-5 w-5" /> },
       { label: "Fleet Dashboard", i18nKey: "nav.fleetDashboard", path: "/agents/fleet", icon: <LayoutGrid className="h-5 w-5" /> },
       { label: "Project Dashboard", i18nKey: "nav.projectDashboard", path: "/agents/project-dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
       { label: "Agent PRs", i18nKey: "nav.agentPrs", path: "/agents/prs", icon: <GitPullRequest className="h-5 w-5" /> },
@@ -304,6 +305,7 @@ export default function Sidebar() {
             if (item.path === "/broadcast/schedule") return isBroadcastNavigationEnabled();
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
+            if (item.path === "/agents/qa-actions") return isAgentSshQaEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             if (item.path === "/admin/video-review") return showModerationBoard;

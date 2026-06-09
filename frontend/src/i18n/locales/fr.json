@@ -20,7 +20,6 @@
   "common.status": "Statut",
   "common.yes": "Oui",
   "common.no": "Non",
-
   "nav.dashboard": "Tableau de bord",
   "nav.messages": "Messages",
   "nav.contacts": "Contacts",
@@ -70,7 +69,6 @@
   "nav.productivity": "Productivité",
   "nav.media": "Médias",
   "nav.account": "Compte",
-
   "auth.login": "Se Connecter",
   "auth.register": "Créer un Compte",
   "auth.logout": "Se Déconnecter",
@@ -84,7 +82,6 @@
   "auth.hasAccount": "Déjà un compte ?",
   "auth.welcomeBack": "Content de vous revoir",
   "auth.signInDescription": "Entrez vos identifiants pour accéder à votre compte",
-
   "messages.compose": "Tapez un message...",
   "messages.send": "Envoyer",
   "messages.noConversations": "Pas encore de conversations",
@@ -96,7 +93,6 @@
   "messages.scheduled": "Prévu pour {{date}}",
   "messages.newMessage": "Nouveau Message",
   "messages.searchMessages": "Rechercher des messages...",
-
   "settings.title": "Paramètres",
   "settings.description": "Gérez l'état et les préférences de votre compte",
   "settings.appearance": "Apparence",
@@ -105,37 +101,31 @@
   "settings.profile": "Profil",
   "settings.security": "Sécurité",
   "settings.account": "Compte",
-
   "billing.balance": "Solde",
   "billing.deposit": "Dépôt",
   "billing.history": "Historique de Facturation",
   "billing.paymentMethods": "Méthodes de Paiement",
-
   "feed.createPost": "Créer une Publication",
   "feed.comments_one": "{{count}} commentaire",
   "feed.comments_other": "{{count}} commentaires",
   "feed.noPostsYet": "Pas encore de publications",
-
   "errors.notFound": "Page non trouvée",
   "errors.unauthorized": "Veuillez vous connecter pour continuer",
   "errors.rateLimited": "Trop de requêtes. Veuillez réessayer dans {{seconds}} secondes.",
   "errors.serverError": "Erreur serveur. Veuillez réessayer plus tard.",
   "errors.networkError": "Erreur réseau. Vérifiez votre connexion.",
-
   "profile.editProfile": "Modifier le Profil",
   "profile.displayName": "Nom d'affichage",
   "profile.description": "Description",
   "profile.location": "Localisation",
-
   "calendar.title": "Calendrier",
   "calendar.newEvent": "Nouvel Événement",
   "calendar.noEvents": "Aucun événement prévu",
-
   "files.title": "Fichiers",
   "files.upload": "Téléverser",
   "files.noFiles": "Pas encore de fichiers",
-
   "contacts.title": "Contacts",
   "contacts.addContact": "Ajouter un Contact",
-  "contacts.noContacts": "Pas encore de contacts"
+  "contacts.noContacts": "Pas encore de contacts",
+  "nav.qaActions": "Actions QA"
 }

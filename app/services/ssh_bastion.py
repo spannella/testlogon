@@ -771,3 +771,181 @@ def build_multihop_bridge(
         for hop in chain
     ]
     return MultiHopSshBridge(hops=hops, cols=cols, rows=rows)
+
+
+# ---------------------------------------------------------------------------
+# Non-interactive multi-hop exec (ADR-003 / AQA-005) — for agent SSH QA
+# ---------------------------------------------------------------------------
+
+def exec_via_chain(
+    chain: List[Dict[str, Any]],
+    command: str,
+    *,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    """Run a single command non-interactively through a resolved bastion chain.
+
+    Unlike :class:`MultiHopSshBridge` (which invokes an *interactive* shell for
+    a human terminal), this builds the exact same ``direct-tcpip`` transport
+    tunnel hop-by-hop, then runs ``exec_command`` on the final transport to
+    capture a discrete ``exit_code`` + clean stdout/stderr — the shape QA needs.
+
+    ``chain`` is the ordered hop list from
+    :func:`resolve_connection_chain` (outermost bastion first, target last),
+    each hop carrying ``hostname``/``port``/``username`` and credentials
+    (``private_key_pem`` and/or ``password``). The plaintext PEM in the chain is
+    server-internal only and must never be persisted or logged by the caller.
+
+    Returns ``{"status", "exit_code", "stdout", "stderr"}`` where ``status`` is
+    ``completed`` (exit 0), ``failed`` (non-zero), or ``timed_out``. All
+    transports/clients are always torn down in ``finally``. A transport/auth
+    failure raises :class:`BastionConnectError`.
+    """
+    if len(chain) < 2:
+        raise BastionConnectError(
+            "invalid_chain",
+            "Multi-hop exec requires at least 2 hops (one bastion + target).",
+        )
+    try:
+        import paramiko
+    except ImportError as exc:  # pragma: no cover - dependency protection
+        raise BastionConnectError(
+            "ssh_unavailable", "SSH support is unavailable on this server."
+        ) from exc
+
+    clients: List[Any] = []
+    transports: List[Any] = []
+    connect_to = min(30, max(1, int(timeout_seconds)))
+    try:
+        # Hop 0: direct connection.
+        first = chain[0]
+        client0 = paramiko.SSHClient()
+        client0.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs: Dict[str, Any] = {
+            "hostname": first["hostname"],
+            "port": int(first["port"]),
+            "username": first["username"],
+            "look_for_keys": False,
+            "allow_agent": False,
+            "timeout": connect_to,
+            "banner_timeout": connect_to,
+            "auth_timeout": connect_to,
+        }
+        if MultiHopSshBridge._has_key(first):
+            connect_kwargs["pkey"] = MultiHopSshBridge._load_private_key(
+                MultiHopSshBridge._hop_pem(first), first.get("passphrase"), paramiko
+            )
+        else:
+            connect_kwargs["password"] = first.get("password")
+        client0.connect(**connect_kwargs)
+        clients.append(client0)
+        transports.append(client0.get_transport())
+
+        # Subsequent hops: tunnel via direct-tcpip through the previous hop.
+        for i in range(1, len(chain)):
+            hop = chain[i]
+            prev_transport = transports[-1]
+            dest_addr = (hop["hostname"], int(hop["port"]))
+            local_addr = ("127.0.0.1", 0)
+            tcp_channel = prev_transport.open_channel(
+                "direct-tcpip", dest_addr, local_addr, timeout=connect_to
+            )
+            transport = paramiko.Transport(tcp_channel)
+            transport.start_client(timeout=connect_to)
+            if MultiHopSshBridge._has_key(hop):
+                key = MultiHopSshBridge._load_private_key(
+                    MultiHopSshBridge._hop_pem(hop), hop.get("passphrase"), paramiko
+                )
+                transport.auth_publickey(hop["username"], key)
+            else:
+                transport.auth_password(hop["username"], hop.get("password") or "")
+            transports.append(transport)
+
+        # Non-interactive exec on the final transport.
+        final_transport = transports[-1]
+        session = final_transport.open_session(timeout=connect_to)
+        session.settimeout(float(timeout_seconds))
+        session.exec_command(command)
+
+        deadline = time.monotonic() + timeout_seconds
+        while not session.exit_status_ready():
+            if time.monotonic() > deadline:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+                return {
+                    "status": "timed_out",
+                    "exit_code": None,
+                    "stdout": _recv_all(session.recv),
+                    "stderr": _recv_all(session.recv_stderr),
+                }
+            time.sleep(0.05)
+
+        exit_code = session.recv_exit_status()
+        stdout = _recv_all(session.recv)
+        stderr = _recv_all(session.recv_stderr)
+        status = "completed" if exit_code == 0 else "failed"
+        logger.info(
+            "ssh_bastion.multihop_exec hops=%d target=%s:%s status=%s",
+            len(chain), chain[-1]["hostname"], chain[-1]["port"], status,
+        )
+        return {
+            "status": status,
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    except BastionConnectError:
+        raise
+    except paramiko.AuthenticationException as exc:
+        raise BastionConnectError(
+            "auth_failed", "Authentication failed on a bastion hop."
+        ) from exc
+    except Exception as exc:  # pragma: no cover - network/paramiko failure modes
+        raise BastionConnectError(
+            "connect_failed", f"Multi-hop SSH exec failed: {type(exc).__name__}"
+        ) from exc
+    finally:
+        for transport in reversed(transports):
+            try:
+                transport.close()
+            except Exception:
+                pass
+        for client in reversed(clients):
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def _recv_all(recv_fn: Any, *, chunk: int = 4096, max_bytes: int = 1_000_000) -> str:
+    """Drain a paramiko channel recv/recv_stderr callable into a UTF-8 string."""
+    buf = bytearray()
+    try:
+        while len(buf) < max_bytes:
+            data = recv_fn(chunk)
+            if not data:
+                break
+            buf.extend(data)
+    except Exception:
+        pass
+    return buf.decode("utf-8", "replace")
+
+
+def exec_command_multihop(
+    user_sub: str,
+    path_id: str,
+    command: str,
+    *,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    """Resolve a stored bastion path (with per-hop keys) and run ``command``
+    non-interactively through it. Thin factory over
+    :func:`resolve_connection_chain` + :func:`exec_via_chain`.
+
+    The resolved chain holds plaintext PEM and is server-internal only; the
+    caller must never persist or log it.
+    """
+    chain = resolve_connection_chain(user_sub, path_id, include_keys=True)
+    return exec_via_chain(chain, command, timeout_seconds=timeout_seconds)
