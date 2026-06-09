@@ -55,6 +55,28 @@ export const getFeed = async (params?: FeedQueryParams) => {
   return withOfflineCache(networkFn, { endpoint: "feed", cacheKey }, userId)();
 };
 
+export interface ForYouFeedResp {
+  items: FeedPost[];
+  next_cursor?: string;
+  source: "for_you" | "chronological_fallback" | "cold_start";
+}
+
+/**
+ * NRS-009/NRS-011: Ranked "For You" newsfeed. The backend always returns posts:
+ * when NEWSFEED_RECSYS_ENABLED is off, no pre-computed row exists, or ranking
+ * yields zero items, it transparently falls back to the chronological feed and
+ * reports `source` accordingly. Same item shape as {@link getFeed}.
+ */
+export const getForYouFeed = (params?: { cursor?: string; limit?: number }) => {
+  const query: Record<string, string> = {};
+  if (params?.cursor) query.cursor = params.cursor;
+  if (typeof params?.limit === "number") query.limit = String(params.limit);
+  return api.get<ForYouFeedResp>(
+    "/feed/for-you",
+    Object.keys(query).length ? query : undefined,
+  );
+};
+
 export const getFeedCapabilities = () =>
   api.get<FeedCapabilities>("/feed/capabilities");
 

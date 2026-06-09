@@ -118,6 +118,13 @@ export const newsfeedDraftsEnabled = toBool(env.VITE_NEWSFEED_DRAFTS_ENABLED, tr
 export const newsfeedDraftsKillSwitch = toBool(env.VITE_NEWSFEED_DRAFTS_KILL_SWITCH, false);
 export const isNewsfeedDraftsEnabled = () => newsfeedDraftsEnabled && !newsfeedDraftsKillSwitch;
 export const newsfeedSchedulingUiEnabled = toBool(env.VITE_NEWSFEED_SCHEDULING_UI_ENABLED, true);
+
+// NRS-011: "For You" ranked-feed tab. Gates the visible tab bar in the newsfeed.
+// Defaults OFF so removing the flag reverts cleanly to the chronological feed.
+// The server still authoritatively falls back to chronological when
+// NEWSFEED_RECSYS_ENABLED is off (the For You request never errors).
+export const newsfeedRecsysUiEnabled = toBool(env.VITE_NEWSFEED_RECSYS_UI_ENABLED, false);
+export const isNewsfeedRecsysUiEnabled = () => newsfeedRecsysUiEnabled;
 export const profilePostsFeedEnabled = toBool(env.VITE_PROFILE_POSTS_FEED_ENABLED, true);
 export const profilePostsFeedKillSwitch = toBool(env.VITE_PROFILE_POSTS_FEED_KILL_SWITCH, false);
 export const isProfilePostsFeedEnabled = () => profilePostsFeedEnabled && !profilePostsFeedKillSwitch;

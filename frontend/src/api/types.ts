@@ -2314,6 +2314,8 @@ export interface FeedPost {
   interesting_count?: number;
   /** FEED-007: whether the current viewer marked this post interesting */
   is_interesting?: boolean;
+  /** Feed candidate source attribution (e.g. "following", "for_you", "popular") */
+  source?: string;
   /** SOCIAL-002: present when a feed item is a repost — who reposted it */
   reposted_by?: { user_id: string; display_name: string };
   /** SOCIAL-002: quote text from a quote repost */
