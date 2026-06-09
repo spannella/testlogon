@@ -9,6 +9,7 @@ import com.testlogon.android.feature.achievements.AchievementsRoute
 import com.testlogon.android.feature.achievements.LeaderboardRoute
 import com.testlogon.android.feature.activity.ActivityFeedRoute
 import com.testlogon.android.feature.alerts.AlertPrefsRoute
+import com.testlogon.android.feature.messaging.nav.messagingGraph
 import com.testlogon.android.feature.notifications.NotificationCenterRoute
 import com.testlogon.android.feature.notifications.NotificationTarget
 import com.testlogon.android.feature.profile.edit.EditProfileRoute
@@ -68,6 +69,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         composable(MainDest.Activity.route) {
             ActivityFeedRoute(onBack = { navController.popBackStack() })
         }
+        // AND-120..124: messaging (conversation list + thread). First M3 two-user feature.
+        messagingGraph(navController)
         // AND-092: saved / bookmarks (paged + unsave). Row-open is delegated to E14/E24 detail
         // screens that are not yet wired, so it is a safe no-op for now.
         composable(MainDest.Saved.route) {

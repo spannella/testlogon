@@ -1,5 +1,6 @@
 package com.testlogon.android.navigation
 
+import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 import com.testlogon.android.feature.shell.AuthedTab
 
 /**
@@ -19,6 +20,9 @@ object MoreRoutes {
 
     // AND-085: the notification center (inbox list).
     val NOTIFICATION_CENTER: String get() = MainDest.Notifications.route
+
+    // AND-120..124: the messaging conversation list (inbox), first M3 two-user feature.
+    val MESSAGES: String get() = MessagingRoutes.LIST
 
     // AND-088: alert preferences (email/SMS target management).
     val ALERT_PREFS: String get() = MainDest.SettingsAlerts.route
@@ -41,6 +45,7 @@ object MoreRoutes {
     val REGISTERED: Set<String>
         get() = setOf(
             PROFILE,
+            MESSAGES,
             SESSIONS,
             MFA_DEVICES,
             NOTIFICATION_CENTER,

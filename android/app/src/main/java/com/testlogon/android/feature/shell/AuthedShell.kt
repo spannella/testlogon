@@ -137,6 +137,7 @@ fun AuthedShellScreen(
                             // AND-091/092/093: activity / saved / achievements are outer-graph routes.
                             com.testlogon.android.navigation.MoreRoutes.SETTINGS,
                             com.testlogon.android.navigation.MoreRoutes.NOTIFICATIONS,
+                            com.testlogon.android.navigation.MoreRoutes.MESSAGES,
                             com.testlogon.android.navigation.MoreRoutes.ACTIVITY,
                             com.testlogon.android.navigation.MoreRoutes.SAVED,
                             com.testlogon.android.navigation.MoreRoutes.ACHIEVEMENTS ->

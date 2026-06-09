@@ -4,6 +4,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
@@ -31,6 +32,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_profile,
             icon = Icons.Outlined.Person,
             route = MoreRoutes.PROFILE,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "messages",
+            labelRes = R.string.more_entry_messages,
+            icon = Icons.Outlined.ChatBubbleOutline,
+            route = MoreRoutes.MESSAGES,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

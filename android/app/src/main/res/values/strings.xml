@@ -49,6 +49,7 @@
     <string name="more_entry_notifications">Notifications</string>
     <string name="more_entry_notification_center">Notification center</string>
     <string name="more_entry_settings">Settings</string>
+    <string name="more_entry_messages">Messages</string>
     <string name="more_entry_activity">Activity</string>
     <string name="more_entry_saved">Saved</string>
     <string name="more_entry_achievements">Achievements</string>
@@ -222,4 +223,19 @@
     <string name="language_picker_title">Language</string>
     <string name="language_picker_back">Back</string>
     <string name="language_picker_system_default">System default</string>
+
+    <!-- AND-120..124: messaging (conversation list + thread + composer) -->
+    <string name="conv_list_title">Messages</string>
+    <string name="conv_list_empty_title">No conversations yet</string>
+    <string name="conv_list_empty_body">Your conversations will appear here.</string>
+    <string name="conv_list_no_messages">No messages yet</string>
+    <string name="conv_list_refresh_failed">Couldn\'t refresh — showing saved conversations.</string>
+    <string name="thread_default_title">Conversation</string>
+    <string name="thread_empty">No messages yet</string>
+    <string name="thread_send">Send</string>
+    <string name="thread_sending">Sending…</string>
+    <string name="thread_send_failed">Failed — tap to retry</string>
+    <string name="thread_scroll_to_latest">Scroll to latest messages</string>
+    <string name="thread_composer_hint">Message</string>
+    <string name="thread_composer_over_limit">Message is too long (max 4000 characters)</string>
 </resources>
