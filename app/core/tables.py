@@ -316,6 +316,7 @@ class Tables:
     honeytokens: Any
     inventory: Any
     reservations: Any
+    returns: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -567,4 +568,5 @@ T = Tables(
     honeytokens=_safe_table(S.honeytokens_table_name),
     inventory=_safe_table(S.inventory_table_name),
     reservations=_safe_table(S.reservations_table_name),
+    returns=_safe_table(S.returns_table_name),
 )

@@ -840,6 +840,11 @@ class Settings:
     inventory_reservation_ttl_seconds: int = int(os.environ.get("INVENTORY_RESERVATION_TTL_SECONDS", "1800"))
     inventory_table_name: str = os.environ.get("INVENTORY_TABLE_NAME", "inventory")
     reservations_table_name: str = os.environ.get("RESERVATIONS_TABLE_NAME", "reservations")
+    # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
+    # Master switch defaults OFF: with it off the returns/RMA endpoints 404 and
+    # the module is dormant; existing order/billing behavior is unchanged.
+    returns_rma_enabled: bool = os.environ.get("RETURNS_RMA_ENABLED", "false").lower() == "true"
+    returns_table_name: str = os.environ.get("RETURNS_TABLE_NAME", "returns")
 
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")

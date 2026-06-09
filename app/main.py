@@ -309,6 +309,7 @@ from app.routers.ssh_bastion import ssh_bastion_router
 from app.routers.connection_profiles import connection_profiles_router
 from app.routers.host_inventory import host_inventory_router
 from app.routers.inventory import inventory_router
+from app.routers.returns_rma import returns_rma_router
 from app.routers.theme_customization import theme_customization_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
@@ -874,6 +875,7 @@ def create_app() -> FastAPI:
     app.include_router(connection_profiles_router)
     app.include_router(host_inventory_router)
     app.include_router(inventory_router)
+    app.include_router(returns_rma_router)
     app.include_router(theme_customization_router)
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)

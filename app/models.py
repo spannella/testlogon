@@ -627,6 +627,48 @@ class ReservationOut(BaseModel):
     expires_at: int = 0
 
 
+# ── Returns / RMA (ADR-001 OFB-008..010) ────────────────────────────────────
+
+
+class ReturnLineIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class ReturnRequestIn(BaseModel):
+    order_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=500)
+    lines: List[ReturnLineIn] = Field(min_length=1)
+
+
+class ReturnDecisionIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class ReturnLineOut(BaseModel):
+    item_id: str
+    sku: Optional[str] = None
+    quantity: int = 0
+    amount_cents: int = 0
+
+
+class ReturnOut(BaseModel):
+    return_id: str
+    order_id: str
+    user_sub: str
+    status: str  # requested | approved | rejected | received | refunded | closed
+    reason: Optional[str] = None
+    currency: str = "usd"
+    refund_amount_cents: int = 0
+    refund_ledger_sk: Optional[str] = None
+    provider: Optional[str] = None
+    lines: List[ReturnLineOut] = Field(default_factory=list)
+    created_at: int = 0
+    updated_at: int = 0
+    decided_by: Optional[str] = None
+    decision_note: Optional[str] = None
+
+
 class CatalogItemOut(BaseModel):
     category_id: str
     item_id: str

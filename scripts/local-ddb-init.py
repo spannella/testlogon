@@ -2476,6 +2476,20 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N", "expires_at": "N"},
         ),
+        # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
+        # returns: RMA header (SK=META) + per-line rows (SK=ITEM#{n}) keyed off the
+        # existing orders/order_items. GSI_ORDER lists returns for an order; GSI_STATUS
+        # drives the admin RMA queue. Both use a numeric created_at sort key.
+        TableDef(
+            _resolve_table_name(S.returns_table_name, "returns"),
+            "return_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
