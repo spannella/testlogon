@@ -112,6 +112,10 @@ export const vncRemoteDesktopEnabled = toBool(env.VITE_VNC_REMOTE_DESKTOP_ENABLE
 export const vncRemoteDesktopKillSwitch = toBool(env.VITE_VNC_REMOTE_DESKTOP_KILL_SWITCH, false);
 export const isVncRemoteDesktopEnabled = () => vncRemoteDesktopEnabled && !vncRemoteDesktopKillSwitch;
 
+// Browser SSH terminal (xterm) — the interactive in-browser SSH page (CTI).
+export const browserSshEnabled = toBool(env.VITE_BROWSER_SSH_ENABLED, true);
+export const isBrowserSshEnabled = () => browserSshEnabled;
+
 export const broadcastNavigationEnabled = toBool(env.VITE_BROADCAST_NAVIGATION_ENABLED, true);
 export const broadcastNavigationKillSwitch = toBool(env.VITE_BROADCAST_NAVIGATION_KILL_SWITCH, false);
 export const isBroadcastNavigationEnabled = () =>

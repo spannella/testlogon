@@ -65,6 +65,7 @@ import {
   Palette,
   Gauge,
   Receipt,
+  Terminal,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -200,6 +201,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
+      { label: "SSH Terminal", i18nKey: "nav.browserSsh", path: "/remote/ssh", icon: <Terminal className="h-5 w-5" /> },
       { label: "Containers", i18nKey: "nav.containers", path: "/remote/k8s", icon: <Container className="h-5 w-5" /> },
       { label: "Security Groups", i18nKey: "nav.securityGroups", path: "/remote/security-groups", icon: <Shield className="h-5 w-5" /> },
       { label: "Templates", i18nKey: "nav.instanceTemplates", path: "/remote/templates", icon: <LayoutTemplate className="h-5 w-5" /> },

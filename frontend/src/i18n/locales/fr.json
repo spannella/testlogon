@@ -49,6 +49,7 @@
   "nav.tickets": "Tickets",
   "nav.ticketSpaces": "Espaces de Tickets",
   "nav.remoteDesktop": "Bureau à Distance",
+  "nav.browserSsh": "Terminal SSH",
   "nav.settings": "Paramètres",
   "nav.privacy": "Confidentialité",
   "nav.webhooks": "Webhooks",

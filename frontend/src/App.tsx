@@ -8,7 +8,7 @@ import { Loader2 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
 import { ErrorPage } from "@/components/shared/ErrorPage";
-import { isBroadcastNavigationEnabled, isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled, isBrowserSshEnabled } from "@/lib/featureFlags";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -81,6 +81,7 @@ const K8sLauncherPage = lazy(() => import("@/pages/remote/K8sLauncherPage"));
 const ComputeSpendingPage = lazy(() => import("@/pages/remote/ComputeSpendingPage"));
 const SecurityGroupsPage = lazy(() => import("@/pages/remote/SecurityGroupsPage"));
 const SshKeyManagerPage = lazy(() => import("@/pages/remote/SshKeyManagerPage"));
+const BrowserSshPage = lazy(() => import("@/pages/remote/BrowserSshPage"));
 const Ec2LauncherPage = lazy(() => import("@/pages/remote/Ec2LauncherPage"));
 const LlmKeysPage = lazy(() => import("@/pages/agents/LlmKeysPage"));
 const MyBundlesPage = lazy(() => import("@/pages/syndicates/MyBundlesPage"));
@@ -258,6 +259,7 @@ function PageSpinner() {
 
 export default function App() {
   const showVncRemoteDesktop = isVncRemoteDesktopEnabled();
+  const showBrowserSsh = isBrowserSshEnabled();
   const showBroadcastNavigation = isBroadcastNavigationEnabled();
   const showCanonicalProfileRoute = isCanonicalProfileNavigationEnabled();
 
@@ -375,6 +377,7 @@ export default function App() {
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="remote/ec2" element={<Ec2LauncherPage />} />
           <Route path="remote/ssh-keys" element={<SshKeyManagerPage />} />
+          {showBrowserSsh && <Route path="remote/ssh" element={<BrowserSshPage />} />}
           <Route path="remote/k8s" element={<K8sLauncherPage />} />
           <Route path="remote/billing" element={<ComputeSpendingPage />} />
           <Route path="remote/security-groups" element={<SecurityGroupsPage />} />

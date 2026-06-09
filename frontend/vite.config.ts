@@ -65,6 +65,9 @@ export default defineConfig({
     proxy: {
       "/saml": "http://localhost:8000",
       "/ui": "http://localhost:8000",
+      // Browser SSH terminal WebSocket — needs ws:true for the upgrade to proxy.
+      // Must precede the generic "/api" entry so the WS path matches here first.
+      "/api/browser-ssh": { target: "http://localhost:8000", ws: true, changeOrigin: true },
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
       "/messaging": "http://localhost:8000",
