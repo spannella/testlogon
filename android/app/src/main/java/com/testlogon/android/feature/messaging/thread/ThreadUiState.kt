@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.messaging.thread
 
+import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.SendStatus
 
 /**
@@ -18,6 +19,23 @@ data class ThreadUiState(
     val endOfHistory: Boolean = false,
     val errorMessage: String? = null,
     val composer: ComposerState = ComposerState(),
+    /** AND-131 — video-share picker state (hidden until the user taps "share video"). */
+    val videoPicker: VideoPickerState = VideoPickerState(),
+)
+
+/** AND-131 — state of the library-video share picker sheet. */
+data class VideoPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val videos: List<ShareableVideoUi> = emptyList(),
+    val errorMessage: String? = null,
+)
+
+data class ShareableVideoUi(
+    val videoId: String,
+    val title: String,
+    val thumbnailUrl: String?,
+    val durationSeconds: Int?,
 )
 
 data class ThreadMessageUi(
@@ -27,9 +45,13 @@ data class ThreadMessageUi(
     val isOwn: Boolean,
     val createdAtEpochSeconds: Long,
     val sendStatus: SendStatus,
+    /** AND-130/131 — media payload; [MessageMedia.None] for plain text. */
+    val media: MessageMedia = MessageMedia.None,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
+    val isImage: Boolean get() = media is MessageMedia.Image
+    val isVideo: Boolean get() = media is MessageMedia.VideoShare
 }
 
 data class ComposerState(

@@ -11,6 +11,42 @@ package com.testlogon.android.data.messaging
 /** Delivery state of a thread row. History rows are SENT; the outbox produces SENDING/FAILED. */
 enum class SendStatus { SENDING, SENT, FAILED }
 
+/**
+ * AND-130 / AND-131 — media payload attached to a message. Text messages carry [None]. Outbox rows
+ * for an in-flight image carry an [Image] with a local source uri + upload progress so the bubble
+ * renders an optimistic thumbnail with progress before the remote url exists.
+ */
+sealed interface MessageMedia {
+    data object None : MessageMedia
+
+    /**
+     * @param url remote display url (server `image.url` else bucket/key-derived S3 url); null while
+     *            the optimistic row is still uploading.
+     * @param localUri local content uri for the optimistic thumbnail; null for received images.
+     * @param uploadProgress 0f..1f while uploading; null when not in an upload.
+     */
+    data class Image(
+        val url: String?,
+        val localUri: String? = null,
+        val width: Int? = null,
+        val height: Int? = null,
+        val uploadProgress: Float? = null,
+    ) : MessageMedia
+
+    /** Shared library video — inline HLS playback (AND-131). */
+    data class VideoShare(
+        val videoId: String,
+        val title: String?,
+        val thumbnailUrl: String?,
+        val durationSeconds: Int?,
+        val hlsManifestUrl: String?,
+        val playbackToken: String?,
+        val drmEnabled: Boolean,
+        val width: Int? = null,
+        val height: Int? = null,
+    ) : MessageMedia
+}
+
 /** A single message in a conversation, merged from history + the local outbox at render time. */
 data class Message(
     /** Server message id; null until a send is acked (outbox rows have no server id yet). */
@@ -23,6 +59,10 @@ data class Message(
     /** Epoch SECONDS. Local placeholder for an optimistic row until the server ack replaces it. */
     val createdAtEpochSeconds: Long,
     val sendStatus: SendStatus = SendStatus.SENT,
+    /** AND-130/131 — message discriminator: "text" | "image" | "video_share". */
+    val kind: String = "text",
+    /** AND-130/131 — media payload; [MessageMedia.None] for text. */
+    val media: MessageMedia = MessageMedia.None,
 )
 
 /** A conversation summary for the inbox list. */
@@ -48,10 +88,44 @@ internal fun MessageDto.toDomain(
     clientId = clientId,
     conversationId = conversationId,
     senderId = senderId,
-    text = text ?: preview ?: "",
+    // Image/video bubbles render media, not text; keep caption text when present.
+    text = text ?: if (kind == "text") preview ?: "" else "",
     createdAtEpochSeconds = createdAt,
     sendStatus = sendStatus,
+    kind = kind,
+    media = toMedia(),
 )
+
+/** Maps the wire image/video_share object to the domain [MessageMedia] (pure; no Android types). */
+internal fun MessageDto.toMedia(): MessageMedia = when {
+    image != null -> MessageMedia.Image(
+        url = image.url?.takeIf { it.isNotBlank() }
+            ?: deriveS3Url(image.bucket, image.key),
+        width = image.width,
+        height = image.height,
+    )
+    videoShare != null -> MessageMedia.VideoShare(
+        videoId = videoShare.videoId,
+        title = videoShare.title,
+        thumbnailUrl = videoShare.thumbnailUrl,
+        durationSeconds = videoShare.durationSeconds,
+        hlsManifestUrl = videoShare.hlsManifestUrl,
+        playbackToken = videoShare.playbackToken,
+        drmEnabled = videoShare.drmEnabled,
+        width = videoShare.width,
+        height = videoShare.height,
+    )
+    else -> MessageMedia.None
+}
+
+/**
+ * Derives the public S3 object url from bucket+key (mirrors messagingAdapter.ts: buildS3ObjectUrl),
+ * keeping the path separators unescaped. Pure / JVM-testable.
+ */
+internal fun deriveS3Url(bucket: String?, key: String?): String? {
+    if (bucket.isNullOrBlank() || key.isNullOrBlank()) return null
+    return "https://$bucket.s3.amazonaws.com/$key"
+}
 
 internal fun ConversationDto.toDomain(): Conversation = Conversation(
     id = conversationId,

@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.testlogon.android.core.data.BuildConfig
 import dagger.Module
 import dagger.Provides
@@ -25,13 +27,41 @@ import javax.inject.Singleton
         MessageEntity::class,
         OutboxMessageEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
     abstract fun outboxDao(): OutboxDao
+
+    companion object {
+        /**
+         * AND-130 / AND-131 — adds the additive media columns to `messages`. All new columns are
+         * nullable or carry a default, so legacy rows migrate without data loss.
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
+                db.execSQL("ALTER TABLE messages ADD COLUMN imageUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN imageWidth INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN imageHeight INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN videoId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN videoTitle TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN videoThumbnailUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN videoDurationSeconds INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN videoHlsManifestUrl TEXT")
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN videoDrmEnabled INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL(
+                    "ALTER TABLE outbox_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
+                )
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN imageLocalUri TEXT")
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN uploadPercent INTEGER")
+            }
+        }
+    }
 }
 
 @Module
@@ -46,6 +76,7 @@ object MessagingDatabaseModule {
             MessagingDatabase::class.java,
             "messaging.db",
         )
+        builder.addMigrations(MessagingDatabase.MIGRATION_1_2)
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
     }

@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.messaging.thread
 
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -7,6 +8,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.messaging.Message
 import com.testlogon.android.data.messaging.MessagingRepository
+import com.testlogon.android.data.messaging.ShareableVideo
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
@@ -25,6 +27,9 @@ import javax.inject.Inject
 /** One-shot effects for the thread screen. */
 sealed interface ThreadEvent {
     data object ScrollToBottom : ThreadEvent
+
+    /** AND-130 — open the full-screen image viewer for [url]. */
+    data class OpenImageViewer(val url: String) : ThreadEvent
 }
 
 /**
@@ -188,8 +193,72 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             // Re-enqueue as SENDING (same clientId) then re-fire. No server idempotency key exists,
             // so a retry after an uncertain failure may duplicate — retry stays manual.
-            repository.enqueueOptimistic(conversationId, clientId, failed.text, clock())
-            repository.sendOutbox(conversationId, clientId, failed.text)
+            if (failed.isImage) {
+                val uri = imageDrafts[clientId] ?: return@launch
+                repository.enqueueOptimisticImage(conversationId, clientId, uri, clock())
+                repository.sendImageOutbox(conversationId, clientId, uri)
+            } else {
+                repository.enqueueOptimistic(conversationId, clientId, failed.text, clock())
+                repository.sendOutbox(conversationId, clientId, failed.text)
+            }
+        }
+    }
+
+    // ---- AND-130: image messages ----
+
+    /** Tracks picked image uris by local clientId so a retry can re-run without re-picking. */
+    private val imageDrafts = mutableMapOf<String, String>()
+
+    fun onImagePicked(uri: Uri) {
+        val clientId = UUID.randomUUID().toString()
+        val localUri = uri.toString()
+        imageDrafts[clientId] = localUri
+        viewModelScope.launch {
+            repository.enqueueOptimisticImage(conversationId, clientId, localUri, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendImageOutbox(conversationId, clientId, localUri)
+        }
+    }
+
+    fun onOpenImage(url: String) {
+        _events.trySend(ThreadEvent.OpenImageViewer(url))
+    }
+
+    // ---- AND-131: video-share ----
+
+    fun onOpenVideoPicker() {
+        _state.update { it.copy(videoPicker = it.videoPicker.copy(visible = true, loading = true, errorMessage = null)) }
+        viewModelScope.launch {
+            when (val result = repository.listShareableVideos()) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(
+                        videoPicker = it.videoPicker.copy(
+                            loading = false,
+                            videos = result.data.map { v ->
+                                ShareableVideoUi(v.videoId, v.title, v.thumbnailUrl, v.durationSeconds)
+                            },
+                        ),
+                    )
+                }
+                is ApiResult.Failure -> _state.update {
+                    it.copy(videoPicker = it.videoPicker.copy(loading = false, errorMessage = result.error.message))
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(videoPicker = it.videoPicker.copy(loading = false, errorMessage = OFFLINE_MESSAGE))
+                }
+            }
+        }
+    }
+
+    fun onDismissVideoPicker() {
+        _state.update { it.copy(videoPicker = VideoPickerState()) }
+    }
+
+    fun onShareVideo(videoId: String) {
+        _state.update { it.copy(videoPicker = VideoPickerState()) }
+        viewModelScope.launch {
+            repository.sendVideoShare(conversationId, videoId, caption = null)
+            _events.trySend(ThreadEvent.ScrollToBottom)
         }
     }
 
@@ -235,4 +304,5 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     isOwn = senderId.isEmpty() || senderId == currentUserSub,
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = sendStatus,
+    media = media,
 )

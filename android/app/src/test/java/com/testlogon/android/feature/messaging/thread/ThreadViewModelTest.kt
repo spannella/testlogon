@@ -192,6 +192,74 @@ class ThreadViewModelTest {
     }
 
     @Test
+    fun onImagePicked_insertsOptimisticImageRow_thenSends() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val uri = org.mockito.Mockito.mock(android.net.Uri::class.java)
+        org.mockito.Mockito.`when`(uri.toString()).thenReturn("content://pick/1")
+        repo.imageSendResult = ApiResult.Success(
+            Message(
+                id = "img1", clientId = "", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, sendStatus = SendStatus.SENT,
+                kind = "image",
+                media = com.testlogon.android.data.messaging.MessageMedia.Image(url = "https://s/x.jpg"),
+            ),
+        )
+        vm.onImagePicked(uri)
+        advanceUntilIdle()
+        assertEquals(1, repo.imageSendCalls.size)
+        assertEquals("content://pick/1", repo.imageSendCalls.single().third)
+        val row = vm.state.value.messages.single()
+        assertTrue(row.isImage)
+        assertEquals(SendStatus.SENT, row.sendStatus)
+    }
+
+    @Test
+    fun onImagePicked_failure_marksRowFailed() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val uri = org.mockito.Mockito.mock(android.net.Uri::class.java)
+        org.mockito.Mockito.`when`(uri.toString()).thenReturn("content://pick/2")
+        repo.imageSendResult = ApiResult.NetworkError(IOException("offline"), isTimeout = false)
+        vm.onImagePicked(uri)
+        advanceUntilIdle()
+        assertEquals(SendStatus.FAILED, vm.state.value.messages.single().sendStatus)
+    }
+
+    @Test
+    fun onOpenVideoPicker_loadsVideos() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        repo.shareableVideosResult = ApiResult.Success(
+            listOf(
+                com.testlogon.android.data.messaging.ShareableVideo("vid_1", "Clip", "t", 42),
+            ),
+        )
+        vm.onOpenVideoPicker()
+        advanceUntilIdle()
+        val picker = vm.state.value.videoPicker
+        assertTrue(picker.visible)
+        assertFalse(picker.loading)
+        assertEquals("vid_1", picker.videos.single().videoId)
+    }
+
+    @Test
+    fun onShareVideo_sendsAndDismissesPicker() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        repo.videoShareResult = ApiResult.Success(
+            Message(
+                id = "v1", clientId = "v1", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, sendStatus = SendStatus.SENT, kind = "video_share",
+            ),
+        )
+        vm.onShareVideo("vid_1")
+        advanceUntilIdle()
+        assertEquals("vid_1", repo.videoShareCalls.single().second)
+        assertFalse(vm.state.value.videoPicker.visible)
+    }
+
+    @Test
     fun isOwn_derivedFromCurrentUserSub() = runTest {
         val vm = vm(currentUser = "me")
         advanceUntilIdle()

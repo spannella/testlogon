@@ -71,6 +71,11 @@ class MessagingRepositoryTest {
         }
         override suspend fun findById(clientId: String): OutboxMessageEntity? =
             rows.value.firstOrNull { it.clientId == clientId }
+        override suspend fun updateUploadPercent(clientId: String, percent: Int) {
+            rows.value = rows.value.map {
+                if (it.clientId == clientId) it.copy(uploadPercent = percent) else it
+            }
+        }
     }
 
     // ---- API fake ----
@@ -96,6 +101,65 @@ class MessagingRepositoryTest {
             findOrCreateThrows?.let { throw it }
             return requireNotNull(findOrCreateResult)
         }
+
+        // AND-130 / AND-131 — image + video-share endpoints.
+        var presignImageResult: ImagePresignResp? = null
+        var createImageCalls = mutableListOf<Pair<String, CreateImageMessageReq>>()
+        var createImageResult: MessageDto? = null
+        var createVideoShareCalls = mutableListOf<Pair<String, CreateVideoShareReq>>()
+        var createVideoShareResult: MessageDto? = null
+        var createVideoShareThrows: Throwable? = null
+        var listVideosResult: VideoListRespDto? = null
+
+        override suspend fun presignImage(id: String, body: ImagePresignReq): ImagePresignResp =
+            requireNotNull(presignImageResult)
+        override suspend fun createImageMessage(id: String, body: CreateImageMessageReq): MessageDto {
+            createImageCalls += id to body
+            return requireNotNull(createImageResult)
+        }
+        override suspend fun createVideoShareMessage(id: String, body: CreateVideoShareReq): MessageDto {
+            createVideoShareCalls += id to body
+            createVideoShareThrows?.let { throw it }
+            return requireNotNull(createVideoShareResult)
+        }
+        override suspend fun listMyVideos(status: String?, limit: Int?, cursor: String?): VideoListRespDto =
+            requireNotNull(listVideosResult)
+    }
+
+    // ---- AND-130 fakes: uploader + image processor ----
+
+    private class FakeUploader(
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null,
+        var failure: com.testlogon.android.data.upload.UploadError? = null,
+    ) : com.testlogon.android.data.upload.AttachmentUploader {
+        var lastRequest: com.testlogon.android.data.upload.UploadRequest? = null
+        override fun upload(
+            request: com.testlogon.android.data.upload.UploadRequest,
+        ): Flow<com.testlogon.android.data.upload.UploadProgress> {
+            lastRequest = request
+            return kotlinx.coroutines.flow.flow {
+                emit(com.testlogon.android.data.upload.UploadProgress.Preparing)
+                emit(com.testlogon.android.data.upload.UploadProgress.Uploading(50, 100))
+                val fail = failure
+                if (fail != null) {
+                    emit(
+                        com.testlogon.android.data.upload.UploadProgress.Failed(
+                            fail, com.testlogon.android.data.upload.UploadPhase.PUT,
+                        ),
+                    )
+                } else {
+                    emit(
+                        com.testlogon.android.data.upload.UploadProgress.Succeeded(
+                            requireNotNull(attachment),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private class FakeImageProcessor(var result: ProcessedImage?) : MessageImageProcessor {
+        override suspend fun process(source: android.net.Uri): ProcessedImage? = result
     }
 
     private val conversationDao = FakeConversationDao()
@@ -104,6 +168,9 @@ class MessagingRepositoryTest {
     private val api = FakeApi()
     private val auth = FakeAuthStateStore()
 
+    private val uploader = FakeUploader()
+    private val imageProcessor = FakeImageProcessor(result = null)
+
     private fun repo() = MessagingRepositoryImpl(
         api = api,
         conversationDao = conversationDao,
@@ -111,6 +178,8 @@ class MessagingRepositoryTest {
         outboxDao = outboxDao,
         errorParser = ApiErrorParser(Moshi.Builder().build()),
         authStateStore = auth,
+        uploader = uploader,
+        imageProcessor = imageProcessor,
     )
 
     private fun convEntity(id: String, unread: Int) = ConversationEntity(
@@ -195,5 +264,61 @@ class MessagingRepositoryTest {
 
         assertTrue(result is ApiResult.NetworkError)
         assertNull(conversationDao.findById("conv_new"))
+    }
+
+    // ---- AND-131: video-share ----
+
+    @Test
+    fun listShareableVideos_mapsPublishedItems() = runTest {
+        api.listVideosResult = VideoListRespDto(
+            items = listOf(
+                VideoListItemDto("vid_1", title = "Clip A", durationSeconds = 42, thumbnailUrl = "t1"),
+                VideoListItemDto("vid_2", title = "Clip B"),
+            ),
+        )
+        val result = repo().listShareableVideos()
+        assertTrue(result is ApiResult.Success)
+        val videos = (result as ApiResult.Success).data
+        assertEquals(2, videos.size)
+        assertEquals("vid_1", videos[0].videoId)
+        assertEquals(42, videos[0].durationSeconds)
+    }
+
+    @Test
+    fun sendVideoShare_postsVideoId_andCachesMessage() = runTest {
+        api.createVideoShareResult = MessageDto(
+            messageId = "msg_v1",
+            conversationId = "c1",
+            senderId = "usr_self",
+            createdAt = 100,
+            kind = "video_share",
+            videoShare = VideoShareDto(
+                videoId = "vid_1",
+                title = "Clip A",
+                thumbnailUrl = "thumb",
+                durationSeconds = 42,
+                hlsManifestUrl = "https://h/manifest.m3u8",
+                playbackToken = "tok",
+            ),
+        )
+        val result = repo().sendVideoShare("c1", videoId = "vid_1", caption = "look")
+
+        assertTrue(result is ApiResult.Success)
+        val (cid, body) = api.createVideoShareCalls.single()
+        assertEquals("c1", cid)
+        assertEquals("vid_1", body.videoId)
+        assertEquals("look", body.text)
+        val message = (result as ApiResult.Success).data
+        assertEquals("video_share", message.kind)
+        assertTrue(message.media is MessageMedia.VideoShare)
+        assertEquals("msg_v1", messageDao.findById("msg_v1")?.messageId)
+    }
+
+    @Test
+    fun sendVideoShare_networkError_propagates_noCache() = runTest {
+        api.createVideoShareThrows = IOException("offline")
+        val result = repo().sendVideoShare("c1", "vid_x", null)
+        assertTrue(result is ApiResult.NetworkError)
+        assertNull(messageDao.findById("msg_v1"))
     }
 }

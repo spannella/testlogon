@@ -68,4 +68,8 @@ interface OutboxDao {
 
     @Query("SELECT * FROM outbox_messages WHERE clientId = :clientId LIMIT 1")
     suspend fun findById(clientId: String): OutboxMessageEntity?
+
+    /** AND-130 — update the live upload progress (0..100) of an optimistic image row. */
+    @Query("UPDATE outbox_messages SET uploadPercent = :percent WHERE clientId = :clientId")
+    suspend fun updateUploadPercent(clientId: String, percent: Int)
 }

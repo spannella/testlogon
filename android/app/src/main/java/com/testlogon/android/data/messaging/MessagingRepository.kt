@@ -1,5 +1,6 @@
 package com.testlogon.android.data.messaging
 
+import android.net.Uri
 import com.testlogon.android.core.data.messaging.ConversationDao
 import com.testlogon.android.core.data.messaging.ConversationEntity
 import com.testlogon.android.core.data.messaging.MessageDao
@@ -11,6 +12,9 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
+import com.testlogon.android.data.upload.AttachmentUploader
+import com.testlogon.android.data.upload.UploadProgress
+import com.testlogon.android.data.upload.UploadRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -85,7 +89,47 @@ interface MessagingRepository {
      * the list reflects a brand-new DM immediately.
      */
     suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation>
+
+    /**
+     * AND-130 — enqueue an optimistic image outbox row (renders a local-thumbnail bubble with
+     * progress immediately).
+     */
+    suspend fun enqueueOptimisticImage(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    )
+
+    /**
+     * AND-130 — drive a picked image through process to presign to PUT to create-message and
+     * reconcile the optimistic row. Progress is written to the outbox row so the bubble animates.
+     * Marks the row FAILED on any error (manual retry, no server idempotency key).
+     */
+    suspend fun sendImageOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+    ): ApiResult<Message>
+
+    /** AND-131 — list the current user's published videos for the share picker. */
+    suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>>
+
+    /** AND-131 — share a library video by id into [conversationId]; returns the created message. */
+    suspend fun sendVideoShare(
+        conversationId: String,
+        videoId: String,
+        caption: String?,
+    ): ApiResult<Message>
 }
+
+/** AND-131 — a video the current user can share, for the picker. */
+data class ShareableVideo(
+    val videoId: String,
+    val title: String,
+    val thumbnailUrl: String?,
+    val durationSeconds: Int?,
+)
 
 @Singleton
 class MessagingRepositoryImpl @Inject constructor(
@@ -95,6 +139,8 @@ class MessagingRepositoryImpl @Inject constructor(
     private val outboxDao: OutboxDao,
     private val errorParser: ApiErrorParser,
     private val authStateStore: AuthStateStore,
+    private val uploader: AttachmentUploader,
+    private val imageProcessor: MessageImageProcessor,
 ) : MessagingRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -195,6 +241,8 @@ class MessagingRepositoryImpl @Inject constructor(
                 text = event.text.orEmpty(),
                 createdAtEpochSeconds = event.createdAtEpochSeconds,
                 clientId = null,
+                kind = event.kind,
+                // Media fields (urls) arrive on the next list refresh; the SSE frame carries no url.
             ),
         )
     }
@@ -241,6 +289,152 @@ class MessagingRepositoryImpl @Inject constructor(
             }
             is ApiResult.Failure -> result
             is ApiResult.NetworkError -> result
+        }
+    }
+
+    override suspend fun enqueueOptimisticImage(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                kind = "image",
+                imageLocalUri = localUri,
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    override suspend fun sendImageOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            // 1. Process (compress, EXIF-strip) the picked uri.
+            val processed = imageProcessor.process(Uri.parse(localUri))
+                ?: return@withContext failImage(clientId, "Couldn't process this image.")
+            val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+
+            // 2. Presign + PUT via the AND-129 uploader (image flow has NO confirm step). The
+            //    uploader returns an AttachmentRef carrying the presign bucket/key we send next.
+            var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+            var uploadError: ApiError? = null
+            uploader.upload(
+                UploadRequest(
+                    uri = processed.uri,
+                    mimeType = processed.mimeType,
+                    category = "message",
+                    sizeBytes = processed.byteSize,
+                    displayName = fileName,
+                    presignPath = "messaging/conversations/$conversationId/images/presign",
+                    confirmPath = null,
+                ),
+            ).collect { progress ->
+                when (progress) {
+                    is UploadProgress.Uploading ->
+                        outboxDao.updateUploadPercent(clientId, (progress.fraction * 100).toInt())
+                    is UploadProgress.Succeeded -> {
+                        outboxDao.updateUploadPercent(clientId, 100)
+                        attachment = progress.attachment
+                    }
+                    is UploadProgress.Failed -> uploadError = ApiError(
+                        status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                        message = progress.error.message ?: "Upload failed",
+                    )
+                    UploadProgress.Cancelled ->
+                        uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                    else -> Unit
+                }
+            }
+            val ref = attachment
+            if (ref == null) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+                )
+            }
+
+            // 3. Create the image message referencing bucket+key from the presign (in the ref).
+            when (
+                val created = apiCall {
+                    api.createImageMessage(
+                        conversationId,
+                        CreateImageMessageReq(
+                            bucket = ref.bucket,
+                            key = ref.key,
+                            contentType = ref.contentType,
+                            filename = fileName,
+                            filesize = processed.byteSize,
+                            width = processed.width,
+                            height = processed.height,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    private suspend fun failImage(clientId: String, message: String): ApiResult<Message> {
+        markOutboxFailed(clientId)
+        return ApiResult.Failure(ApiError(status = ApiError.STATUS_PARSE, message = message))
+    }
+
+    override suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>> = withContext(io) {
+        when (val r = apiCall { api.listMyVideos(status = "published") }) {
+            is ApiResult.Success -> ApiResult.Success(
+                r.data.items.map {
+                    ShareableVideo(
+                        videoId = it.videoId,
+                        title = it.title,
+                        thumbnailUrl = it.thumbnailUrl,
+                        durationSeconds = it.durationSeconds,
+                    )
+                },
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun sendVideoShare(
+        conversationId: String,
+        videoId: String,
+        caption: String?,
+    ): ApiResult<Message> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.createVideoShareMessage(
+                    conversationId,
+                    CreateVideoShareReq(videoId = videoId, text = caption?.takeIf { it.isNotBlank() }),
+                )
+            }
+        ) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
         }
     }
 
@@ -298,14 +492,28 @@ internal fun ConversationEntity.toDomain(): Conversation = Conversation(
     unreadCount = unreadCount,
 )
 
-internal fun Message.toEntity(clientId: String?): MessageEntity = MessageEntity(
-    messageId = id ?: this.clientId,
-    conversationId = conversationId,
-    senderId = senderId,
-    text = text,
-    createdAtEpochSeconds = createdAtEpochSeconds,
-    clientId = clientId,
-)
+internal fun Message.toEntity(clientId: String?): MessageEntity {
+    val image = media as? MessageMedia.Image
+    val video = media as? MessageMedia.VideoShare
+    return MessageEntity(
+        messageId = id ?: this.clientId,
+        conversationId = conversationId,
+        senderId = senderId,
+        text = text,
+        createdAtEpochSeconds = createdAtEpochSeconds,
+        clientId = clientId,
+        kind = kind,
+        imageUrl = image?.url,
+        imageWidth = image?.width,
+        imageHeight = image?.height,
+        videoId = video?.videoId,
+        videoTitle = video?.title,
+        videoThumbnailUrl = video?.thumbnailUrl,
+        videoDurationSeconds = video?.durationSeconds,
+        videoHlsManifestUrl = video?.hlsManifestUrl,
+        videoDrmEnabled = video?.drmEnabled ?: false,
+    )
+}
 
 internal fun MessageEntity.toDomain(): Message = Message(
     id = messageId,
@@ -315,6 +523,21 @@ internal fun MessageEntity.toDomain(): Message = Message(
     text = text,
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = SendStatus.SENT,
+    kind = kind,
+    media = when (kind) {
+        "image" -> MessageMedia.Image(url = imageUrl, width = imageWidth, height = imageHeight)
+        "video_share" -> MessageMedia.VideoShare(
+            videoId = videoId.orEmpty(),
+            title = videoTitle,
+            thumbnailUrl = videoThumbnailUrl,
+            durationSeconds = videoDurationSeconds,
+            // playback_token is not persisted; a play attempt re-fetches the message for a fresh one.
+            hlsManifestUrl = videoHlsManifestUrl,
+            playbackToken = null,
+            drmEnabled = videoDrmEnabled,
+        )
+        else -> MessageMedia.None
+    },
 )
 
 internal fun OutboxMessageEntity.toDomain(): Message = Message(
@@ -325,4 +548,14 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
     text = text,
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = runCatching { SendStatus.valueOf(status) }.getOrDefault(SendStatus.SENDING),
+    kind = kind,
+    media = if (kind == "image") {
+        MessageMedia.Image(
+            url = null,
+            localUri = imageLocalUri,
+            uploadProgress = uploadPercent?.let { it / 100f },
+        )
+    } else {
+        MessageMedia.None
+    },
 )

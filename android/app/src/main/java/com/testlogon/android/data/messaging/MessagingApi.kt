@@ -72,4 +72,45 @@ interface MessagingApi {
     @Headers("Content-Type: application/json")
     @POST("messaging/conversations/dm/find-or-create")
     suspend fun findOrCreateDm(@Body body: FindOrCreateDmReq): ConversationDto
+
+    /**
+     * AND-130 — presign an image upload for a conversation. Body = SendImagePresignIn
+     * {content_type, filename}; returns PresignOut {upload_url, bucket, key, content_type}.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/images/presign")
+    suspend fun presignImage(
+        @Path("id") id: String,
+        @Body body: ImagePresignReq,
+    ): ImagePresignResp
+
+    /**
+     * AND-130 — create an image message referencing the uploaded object by bucket+key. Returns the
+     * persisted MessageOut (kind="image"). There is NO confirm step and NO client_msg_id.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/image")
+    suspend fun createImageMessage(
+        @Path("id") id: String,
+        @Body body: CreateImageMessageReq,
+    ): MessageDto
+
+    /**
+     * AND-131 — share an existing library video into a conversation. Body =
+     * CreateVideoShareMessageIn {video_id, text?, send_at?}; returns MessageOut (kind="video_share").
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/video-share")
+    suspend fun createVideoShareMessage(
+        @Path("id") id: String,
+        @Body body: CreateVideoShareReq,
+    ): MessageDto
+
+    /** AND-131 — list the current user's own videos for the share picker. Idempotent GET. */
+    @GET("ui/videos")
+    suspend fun listMyVideos(
+        @Query("status") status: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("cursor") cursor: String? = null,
+    ): VideoListRespDto
 }

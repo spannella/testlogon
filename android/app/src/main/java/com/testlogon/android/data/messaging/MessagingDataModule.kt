@@ -27,4 +27,9 @@ abstract class MessagingDataModule {
     @Binds
     @Singleton
     abstract fun bindMessagingRepository(impl: MessagingRepositoryImpl): MessagingRepository
+
+    /** AND-130 — binds the runtime image processor (faked in unit tests). */
+    @Binds
+    @Singleton
+    abstract fun bindMessageImageProcessor(impl: DefaultMessageImageProcessor): MessageImageProcessor
 }

@@ -4,8 +4,10 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.messaging.Conversation
 import com.testlogon.android.data.messaging.Message
+import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.SendStatus
+import com.testlogon.android.data.messaging.ShareableVideo
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
@@ -137,6 +139,80 @@ class FakeMessagingRepository : MessagingRepository {
     override suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation> {
         findOrCreateDmCalls += peerUserId
         return findOrCreateDmResult
+    }
+
+    // ---- AND-130 / AND-131 ----
+
+    /** Recorded image sends: (conversationId, clientId, localUri). */
+    var imageSendCalls = mutableListOf<Triple<String, String, String>>()
+
+    /** Result the next sendImageOutbox() returns. */
+    var imageSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    /** Recorded video-share sends: (conversationId, videoId, caption). */
+    var videoShareCalls = mutableListOf<Triple<String, String, String?>>()
+    var videoShareResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    var shareableVideosResult: ApiResult<List<ShareableVideo>> = ApiResult.Success(emptyList())
+
+    override suspend fun enqueueOptimisticImage(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    ) {
+        val row = Message(
+            id = null,
+            clientId = clientId,
+            conversationId = conversationId,
+            senderId = "",
+            text = "",
+            createdAtEpochSeconds = nowSeconds,
+            sendStatus = SendStatus.SENDING,
+            kind = "image",
+            media = MessageMedia.Image(url = null, localUri = localUri, uploadProgress = 0f),
+        )
+        thread.value =
+            if (thread.value.any { it.clientId == clientId }) {
+                thread.value.map { if (it.clientId == clientId) row else it }
+            } else {
+                thread.value + row
+            }
+    }
+
+    override suspend fun sendImageOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+    ): ApiResult<Message> {
+        imageSendCalls += Triple(conversationId, clientId, localUri)
+        return when (val result = imageSendResult) {
+            is ApiResult.Success -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) result.data.copy(clientId = clientId) else it
+                }
+                result
+            }
+            else -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) it.copy(sendStatus = SendStatus.FAILED) else it
+                }
+                result
+            }
+        }
+    }
+
+    override suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>> = shareableVideosResult
+
+    override suspend fun sendVideoShare(
+        conversationId: String,
+        videoId: String,
+        caption: String?,
+    ): ApiResult<Message> {
+        videoShareCalls += Triple(conversationId, videoId, caption)
+        return videoShareResult
     }
 
     companion object {

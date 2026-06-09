@@ -30,6 +30,19 @@ data class MessageEntity(
     val createdAtEpochSeconds: Long,
     /** Locally-attached client correlation id (for outbox cleanup); the server never returns it. */
     val clientId: String?,
+    // AND-130 / AND-131 — additive media columns (DB schema v2). Default "text"/null for legacy rows.
+    val kind: String = "text",
+    /** AND-130 — image display url (server url else bucket/key-derived). */
+    val imageUrl: String? = null,
+    val imageWidth: Int? = null,
+    val imageHeight: Int? = null,
+    /** AND-131 — shared library video fields. The playback_token is intentionally NOT persisted. */
+    val videoId: String? = null,
+    val videoTitle: String? = null,
+    val videoThumbnailUrl: String? = null,
+    val videoDurationSeconds: Int? = null,
+    val videoHlsManifestUrl: String? = null,
+    val videoDrmEnabled: Boolean = false,
 )
 
 @Entity(tableName = "outbox_messages")
@@ -41,4 +54,10 @@ data class OutboxMessageEntity(
     /** "SENDING" | "FAILED" (mirrors com.testlogon.android.data.messaging.SendStatus). */
     val status: String,
     val attemptCount: Int = 0,
+    // AND-130 — optimistic image send (DB schema v2). kind="text" for legacy/text rows.
+    val kind: String = "text",
+    /** Local content uri of the picked image, for the optimistic thumbnail. */
+    val imageLocalUri: String? = null,
+    /** Live upload progress 0..100 (Int avoids a Room Float column). Null when not uploading. */
+    val uploadPercent: Int? = null,
 )

@@ -243,4 +243,26 @@
     <string name="dm_message">Message</string>
     <string name="dm_message_cd">Start a direct message</string>
     <string name="dm_start_failed">Couldn\'t start the conversation. Try again.</string>
+
+    <!-- AND-130: image messages -->
+    <string name="thread_attach_image">Attach image</string>
+    <string name="thread_image_sending">Sending image…</string>
+    <string name="thread_image_failed">Image failed — tap to retry</string>
+    <string name="thread_image_cd">Image message</string>
+    <string name="thread_image_own_cd">Sent image</string>
+    <string name="image_viewer_title">Image</string>
+    <string name="image_viewer_close">Close</string>
+    <string name="image_viewer_cd">Full-screen image</string>
+
+    <!-- AND-131: video messages / share -->
+    <string name="thread_share_video">Share video</string>
+    <string name="video_picker_title">Share a video</string>
+    <string name="video_picker_empty">No shareable videos</string>
+    <string name="video_picker_error">Couldn\'t load your videos. Try again.</string>
+    <string name="video_picker_cancel">Cancel</string>
+    <string name="video_play">Play video</string>
+    <string name="video_play_failed">Couldn\'t play video</string>
+    <string name="video_open_externally">Open externally</string>
+    <string name="video_share_out">Share</string>
+    <string name="video_thumbnail_cd">Video thumbnail</string>
 </resources>

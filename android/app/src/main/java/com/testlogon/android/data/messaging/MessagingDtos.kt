@@ -64,6 +64,40 @@ data class MessageDto(
     val preview: String? = null,
     @Json(name = "edited_at") val editedAt: Long? = null,
     @Json(name = "read_by_count") val readByCount: Int? = null,
+    /** AND-130 — present on kind="image". The display url is `url` else `bucket`/`key`-derived. */
+    val image: MessageImageDto? = null,
+    /** AND-131 — present on kind="video_share". Carries the HLS manifest + short-lived token. */
+    @Json(name = "video_share") val videoShare: VideoShareDto? = null,
+)
+
+/** MessageOut.image (MessageImage). All inner fields are optional per the free-form schema. */
+@JsonClass(generateAdapter = true)
+data class MessageImageDto(
+    val bucket: String? = null,
+    val key: String? = null,
+    val url: String? = null,
+    @Json(name = "content_type") val contentType: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val filename: String? = null,
+    val filesize: Long? = null,
+)
+
+/** MessageOut.video_share — server-resolved shared library video (AND-131). */
+@JsonClass(generateAdapter = true)
+data class VideoShareDto(
+    @Json(name = "video_id") val videoId: String,
+    @Json(name = "owner_user_id") val ownerUserId: String? = null,
+    val title: String? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "duration_seconds") val durationSeconds: Int? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val visibility: String? = null,
+    @Json(name = "drm_enabled") val drmEnabled: Boolean = false,
+    @Json(name = "hls_manifest_url") val hlsManifestUrl: String? = null,
+    @Json(name = "playback_token") val playbackToken: String? = null,
+    @Json(name = "playback_expires_at") val playbackExpiresAt: Long? = null,
 )
 
 /** ConversationOut (returned bare-array by list, and singly by get). */

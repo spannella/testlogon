@@ -115,8 +115,14 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.hilt.navigation.compose)
 
-    // AND-074: Coil for avatar/cover images.
+    // AND-074 / AND-130: Coil for avatar/cover/message images.
     implementation(libs.coil.compose)
+
+    // AND-131: Media3 / ExoPlayer (+ HLS) for inline video-share playback. The player is created
+    // per-screen and lifecycle-scoped (never an eager singleton @Provides).
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.ui)
 
     // AND-085/AND-089: Paging 3 for the notification center list + unread badge.
     implementation(libs.paging.runtime)
