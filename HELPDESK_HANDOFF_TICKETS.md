@@ -2,6 +2,8 @@
 
 This backlog turns the helpdesk queue into a live, presence-driven handoff: when an admin/agent is available a client's support chat is auto-routed straight into a live messenger DM (skipping the queue), with graceful fallback to the queue/ticket flow when nobody is online and clearer client-side status throughout. It builds on the existing helpdesk-bridge routing in `app/routers/messaging.py`, the presence/heartbeat plumbing, and the `app/services/messaging_routing.py` state machine.
 
+**✅ DONE (2026-06-09):** HMH-008 (customer-safe routing visibility, commit 00e39d9f) + HMH-001/002/003/004/005 (auto-route, commit 68c0d282). `pick_available_agent`/`count_available_agents`, `GET /messaging/helpdesk/availability`, `HELPDESK_AUTO_ROUTE_ENABLED` flag, auto-assign in `create_conversation` via the shared `_attach_agent_participant` helper, and the assigned-agent toast. Tests: `tests/test_hmh_helpdesk_autoroute.py` (6/6), `tests/test_hmh_customer_routing_visibility.py` (3/3), helpdesk-extra e2e 5/5. **Remaining:** HMH-006 (replacement agent on assignee disconnect), HMH-007 (manual transfer), HMH-009+ (client UX polish), and a flag-on auto-route e2e.
+
 ## Milestone 1 — Presence-driven availability
 
 ### HMH-001: Agent availability service (presence-backed)
