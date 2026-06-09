@@ -5582,6 +5582,36 @@ class WorkerListOut(BaseModel):
     count: int
 
 
+# --- Interactive Claude Code sessions (ACS-002 / ADR-002) ---
+
+
+class CreateSessionIn(BaseModel):
+    cols: int = 80
+    rows: int = 24
+
+
+class SessionOut(BaseModel):
+    session_id: str
+    worker_id: str
+    user_id: str
+    state: str
+    created_at: int = 0
+    started_at: int = 0
+    ended_at: int = 0
+    last_activity_at: int = 0
+    cols: int = 80
+    rows: int = 24
+    claude_pid: int = 0
+    error_message: str = ""
+    # WS URL the dedicated agent-terminal frontend connects to (ACS-004).
+    ws_path: str = "/api/agent-session/ws"
+
+
+class SessionListOut(BaseModel):
+    sessions: List[SessionOut]
+    count: int
+
+
 class ToolInfo(BaseModel):
     tool: str
     display_name: str

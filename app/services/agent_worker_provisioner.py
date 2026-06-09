@@ -395,6 +395,7 @@ def stop_worker(user_id: str, worker_id: str) -> Dict[str, Any]:
         UpdateExpression="SET worker_status = :st, stopped_at = :ts",
         ExpressionAttributeValues={":st": "stopped", ":ts": ts},
     )
+    _end_live_sessions_for_worker(user_id, worker_id)
     return get_worker(user_id, worker_id)  # type: ignore
 
 
@@ -441,7 +442,33 @@ def terminate_worker(user_id: str, worker_id: str) -> Dict[str, Any]:
         UpdateExpression="SET worker_status = :st, terminated_at = :ts",
         ExpressionAttributeValues={":st": "terminated", ":ts": ts},
     )
+    _end_live_sessions_for_worker(user_id, worker_id)
     return get_worker(user_id, worker_id)  # type: ignore
+
+
+def _end_live_sessions_for_worker(user_id: str, worker_id: str) -> None:
+    """End any interactive Claude Code sessions (ACS-006) tied to a worker when
+    the worker is stopped/terminated, and close their live PTY bridges.
+
+    Best-effort and lazily imported so this is a no-op unless the agent-session
+    feature is wired in (avoids a hard dependency / import cycle). With the
+    feature flag off these tables/registry are simply empty.
+    """
+    try:
+        from app.services import agent_session_manager as _sm
+
+        # Close live PTY bridges held by the WS router's process-local registry.
+        try:
+            from app.routers.agent_session_terminal import stop_session_bridge
+
+            for sess in _sm.list_sessions_for_worker(user_id, worker_id):
+                if sess.get("state") not in _sm.TERMINAL_STATES:
+                    stop_session_bridge(sess["session_id"])
+        except Exception:
+            pass
+        _sm.end_sessions_for_worker(user_id, worker_id)
+    except Exception:
+        logger.debug("end_live_sessions_for_worker skipped worker_id=%s", worker_id)
 
 
 def get_provision_log(user_id: str, worker_id: str) -> List[Dict[str, Any]]:

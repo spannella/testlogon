@@ -264,6 +264,7 @@ class Tables:
     broadcast_moderation: Any
     k8s_pods: Any
     agent_workers: Any
+    agent_sessions: Any
     compute_billing: Any
     compute_quotas: Any
     instance_templates: Any
@@ -510,6 +511,7 @@ T = Tables(
     broadcast_moderation=_safe_table(S.broadcast_moderation_table_name),
     k8s_pods=_safe_table(S.k8s_pods_table_name),
     agent_workers=_safe_table(S.agent_workers_table_name),
+    agent_sessions=_safe_table(S.agent_sessions_table_name),
     compute_billing=_safe_table(S.compute_billing_table_name),
     compute_quotas=_safe_table(S.compute_quotas_table_name),
     instance_templates=_safe_table(S.instance_templates_table_name),

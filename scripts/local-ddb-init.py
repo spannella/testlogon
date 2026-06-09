@@ -1976,6 +1976,19 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Interactive Claude Code Sessions (ACS-001 / ADR-002)
+        # PK pk=USER#{user_id}, SK sk=SESSION#{session_id}; ByWorker GSI keyed on
+        # worker_id (S) + created_at (N) so list_sessions_for_worker can return
+        # newest-first without a ValidationException (numeric sort key gotcha).
+        TableDef(
+            _resolve_table_name(S.agent_sessions_table_name, "agent_sessions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByWorker", "partition_key": "worker_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Compute Cost Tracking (INFRA-005)
         TableDef(
             _resolve_table_name(S.compute_billing_table_name, "compute_billing"),

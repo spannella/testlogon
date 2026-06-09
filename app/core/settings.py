@@ -2346,6 +2346,16 @@ class Settings:
     # Agent Worker Provisioning (AGENT-002)
     agent_workers_table_name: str = os.environ.get("AGENT_WORKERS_TABLE_NAME", "agent_workers")
     agent_max_workers_per_user: int = int(os.environ.get("AGENT_MAX_WORKERS_PER_USER", "5"))
+
+    # Interactive Claude Code Sessions (ACS-001 / ADR-002). Master gate defaults
+    # OFF; with it off the agent-session WS path and REST routes 404/410 and the
+    # raw Browser SSH terminal is byte-for-byte unchanged.
+    agent_claude_code_session_enabled: bool = os.environ.get("AGENT_CLAUDE_CODE_SESSION_ENABLED", "0") not in ("0", "false", "False")
+    agent_claude_code_session_allowed_roles: str = os.environ.get("AGENT_CLAUDE_CODE_SESSION_ALLOWED_ROLES", "admin,root")
+    agent_claude_code_session_max_per_user: int = int(os.environ.get("AGENT_CLAUDE_CODE_SESSION_MAX_PER_USER", "2"))
+    agent_claude_code_session_idle_timeout_seconds: int = int(os.environ.get("AGENT_CLAUDE_CODE_SESSION_IDLE_TIMEOUT_SECONDS", "1800"))
+    agent_claude_code_session_replay_bytes: int = int(os.environ.get("AGENT_CLAUDE_CODE_SESSION_REPLAY_BYTES", "65536"))
+    agent_sessions_table_name: str = os.environ.get("AGENT_SESSIONS_TABLE_NAME", "agent_sessions")
     # User Groups (GROUP-001)
 
     # Group Treasury (GROUP-004)
