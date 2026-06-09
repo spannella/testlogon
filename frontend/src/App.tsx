@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 import { SeoHead } from "@/components/shared/SeoHead";
 
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { Loader2 } from "lucide-react";
 
@@ -74,8 +74,8 @@ const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
 const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
 const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
-const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
-const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
+const BoardsPage = lazy(() => import("@/pages/tickets/BoardsPage"));
+const BoardDetailPage = lazy(() => import("@/pages/tickets/BoardDetailPage"));
 const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"));
 const K8sLauncherPage = lazy(() => import("@/pages/remote/K8sLauncherPage"));
 const ComputeSpendingPage = lazy(() => import("@/pages/remote/ComputeSpendingPage"));
@@ -252,6 +252,13 @@ const KycQueuePage = lazy(() => import("@/pages/admin/KycQueuePage"));
 const KycCaseDetailPage = lazy(() => import("@/pages/admin/KycCaseDetailPage"));
 const KycMetricsDashboard = lazy(() => import("@/pages/admin/KycMetricsDashboard"));
 
+// TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
+// (board_id == space_id), preserving bookmarks/links during the rename.
+function LegacySpaceRedirect() {
+  const { spaceId = "" } = useParams();
+  return <Navigate to={`/tickets/boards/${spaceId}`} replace />;
+}
+
 function PageSpinner() {
   return (
     <div className="flex h-full items-center justify-center py-32">
@@ -366,8 +373,11 @@ export default function App() {
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="appeals" element={<AppealsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
-          <Route path="tickets/spaces" element={<TicketSpacesPage />} />
-          <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
+          <Route path="tickets/boards" element={<BoardsPage />} />
+          <Route path="tickets/boards/:boardId" element={<BoardDetailPage />} />
+          {/* Legacy spaces routes redirect to the new boards experience (TKB-014). */}
+          <Route path="tickets/spaces" element={<Navigate to="/tickets/boards" replace />} />
+          <Route path="tickets/spaces/:spaceId" element={<LegacySpaceRedirect />} />
           <Route path="watch-parties" element={<PartyListPage />} />
           <Route path="watch-parties/:partyId" element={<WatchPartyPage />} />
           <Route path="gallery" element={<GalleryPage />} />
