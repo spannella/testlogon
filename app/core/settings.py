@@ -426,6 +426,10 @@ class Settings:
     tickets_space_status_index_name: str = os.environ.get("TICKETS_SPACE_STATUS_INDEX_NAME", "space_status-updated_at-index")
     tickets_space_assignee_index_name: str = os.environ.get("TICKETS_SPACE_ASSIGNEE_INDEX_NAME", "space_assignee-updated_at-index")
     tickets_member_spaces_index_name: str = os.environ.get("TICKETS_MEMBER_SPACES_INDEX_NAME", "member_sub-space_id-index")
+    # TKB: ticket boards (Kanban). Defaults OFF — when false the /boards router
+    # is not registered and board columns are not seeded/back-filled, so legacy
+    # space/ticket behavior is byte-for-byte unchanged.
+    ticket_boards_enabled: bool = os.environ.get("TICKET_BOARDS_ENABLED", "false").lower() == "true"
     tickets_jira_workspace_index_name: str = os.environ.get("TICKETS_JIRA_WORKSPACE_INDEX_NAME", "jira_workspace-updated_at-index")
     tickets_jira_issue_index_name: str = os.environ.get("TICKETS_JIRA_ISSUE_INDEX_NAME", "jira_issue-index")
     tickets_jira_sync_state_index_name: str = os.environ.get("TICKETS_JIRA_SYNC_STATE_INDEX_NAME", "jira_sync_state-updated_at-index")

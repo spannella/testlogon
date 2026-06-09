@@ -143,6 +143,18 @@ export default defineConfig({
           return null;
         },
       },
+      // TKB-004: /boards mirrors the /tickets bypass — SPA route + API share the
+      // prefix, so browser navigations get index.html and XHR/JSON proxy to backend.
+      "/boards": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
       "/broadcast": {
         target: "http://localhost:8000",
         bypass: (req) => {

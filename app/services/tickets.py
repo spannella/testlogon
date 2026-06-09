@@ -53,6 +53,101 @@ def _label_index_sk(created_at: int, ticket_id: str) -> str:
     return f"{created_at:013d}#{ticket_id}"
 
 
+# TKB-006/TKB-007: default board columns mirror the legacy hardcoded 4-column
+# Kanban (Open / In Progress / Waiting on User / Done). Each column re-skins an
+# underlying ticket status_key that MUST be a member of _TICKET_STATUSES — the
+# stored ticket `status` never leaves _TICKET_STATUSES (free-form statuses are a
+# TKB-016 follow-up spike). Columns are display-only relabelings.
+_DEFAULT_BOARD_COLUMNS: tuple[dict[str, Any], ...] = (
+    {"column_id": "col_open", "title": "Open", "status_key": "open", "order": 0},
+    {"column_id": "col_in_progress", "title": "In Progress", "status_key": "in_progress", "order": 1},
+    {"column_id": "col_waiting", "title": "Waiting on User", "status_key": "waiting_on_user", "order": 2},
+    {"column_id": "col_done", "title": "Done", "status_key": "done", "order": 3},
+)
+
+
+def default_board_columns() -> list[dict[str, Any]]:
+    return [dict(col) for col in _DEFAULT_BOARD_COLUMNS]
+
+
+class BoardColumnError(Exception):
+    """Raised when board column input fails validation (maps to HTTP 400)."""
+
+    def __init__(self, detail: dict[str, Any]):
+        super().__init__(str(detail.get("code", "invalid_board_columns")))
+        self.detail = detail
+
+
+def normalize_board_columns(columns: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Validate + normalize an inbound board column list.
+
+    Rejects unknown status_keys and duplicate column_ids. Returns a clean list
+    with sequential `order` values. Raises BoardColumnError on bad input.
+    """
+    if not columns:
+        raise BoardColumnError({"code": "board_columns_required", "message": "at least one column required"})
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for idx, raw in enumerate(columns):
+        if not isinstance(raw, dict):
+            raise BoardColumnError({"code": "invalid_board_column", "message": "column must be an object", "index": idx})
+        column_id = str(raw.get("column_id") or "").strip() or f"col_{uuid.uuid4().hex[:8]}"
+        if column_id in seen_ids:
+            raise BoardColumnError({"code": "duplicate_column_id", "message": "column_id must be unique", "column_id": column_id})
+        seen_ids.add(column_id)
+        status_key = str(raw.get("status_key") or "").strip().lower()
+        if status_key not in _TICKET_STATUSES:
+            raise BoardColumnError({
+                "code": "invalid_status_key",
+                "message": "status_key must be a valid ticket status",
+                "status_key": status_key,
+                "allowed_status_keys": list(_TICKET_STATUSES),
+            })
+        title = str(raw.get("title") or "").strip()
+        if not title:
+            raise BoardColumnError({"code": "column_title_required", "message": "column title required", "column_id": column_id})
+        col: dict[str, Any] = {
+            "column_id": column_id,
+            "title": title,
+            "status_key": status_key,
+            "order": idx,
+        }
+        if raw.get("wip_limit") is not None:
+            try:
+                col["wip_limit"] = int(raw["wip_limit"])
+            except (TypeError, ValueError):
+                raise BoardColumnError({"code": "invalid_wip_limit", "message": "wip_limit must be an integer", "column_id": column_id})
+        if raw.get("color"):
+            col["color"] = str(raw["color"]).strip()
+        normalized.append(col)
+    return normalized
+
+
+def _columns_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read-time back-fill: boards stored before TKB-006 have no `columns`
+    attribute → return the default column set so they behave identically."""
+    stored = meta.get("columns")
+    if not stored:
+        return default_board_columns()
+    out: list[dict[str, Any]] = []
+    for col in stored:
+        if not isinstance(col, dict):
+            continue
+        entry: dict[str, Any] = {
+            "column_id": str(col.get("column_id", "")),
+            "title": str(col.get("title", "")),
+            "status_key": str(col.get("status_key", "")),
+            "order": int(col.get("order", 0) or 0),
+        }
+        if col.get("wip_limit") is not None:
+            entry["wip_limit"] = int(col["wip_limit"])
+        if col.get("color"):
+            entry["color"] = str(col["color"])
+        out.append(entry)
+    out.sort(key=lambda c: c.get("order", 0))
+    return out or default_board_columns()
+
+
 def _complexity_from_labels(labels: list[str]) -> str | None:
     for level in ("critical", "high", "medium", "low"):
         if f"complexity:{level}" in labels:
@@ -152,21 +247,31 @@ class TicketStore:
     def create_space(self, *, owner_sub: str, name: str, visibility: str = "private") -> dict[str, Any]:
         ts = now_ts()
         space_id = f"spc_{uuid.uuid4().hex[:12]}"
-        self._table.put_item(Item={
+        meta_item: dict[str, Any] = {
             "pk": _space_pk(space_id),
             "sk": "META",
             "entity_type": "ticket_space",
+            # TKB-002: sibling attribute so consumers can filter on either the
+            # legacy `entity_type` or the new board-named alias without a migration.
+            "board_entity_type": "ticket_board",
             "space_id": space_id,
             "owner_sub": owner_sub,
             "name": name,
             "visibility": visibility,
             "created_at": ts,
             "updated_at": ts,
-        })
+        }
+        # TKB-006: seed default columns (flag-gated). With the flag off, no
+        # `columns` attribute is written; get_space still back-fills the default
+        # set at read time, so the stored row is byte-for-byte legacy-shaped.
+        if S.ticket_boards_enabled:
+            meta_item["columns"] = default_board_columns()
+        self._table.put_item(Item=meta_item)
         self._table.put_item(Item={
             "pk": _space_pk(space_id),
             "sk": _space_member_sk(owner_sub),
             "entity_type": "space_membership",
+            "board_entity_type": "board_membership",
             "space_id": space_id,
             "member_sub": owner_sub,
             "role": "owner",
@@ -186,6 +291,7 @@ class TicketStore:
             "pk": _space_pk(space_id),
             "sk": _space_member_sk(member_sub),
             "entity_type": "space_membership",
+            "board_entity_type": "board_membership",
             "space_id": space_id,
             "member_sub": member_sub,
             "role": role,
@@ -214,16 +320,24 @@ class TicketStore:
             ExpressionAttributeValues={":pk": _space_pk(space_id), ":sk_prefix": "MEMBER#"},
             ScanIndexForward=True,
         ).get("Items", [])
+        resolved_id = meta.get("space_id", space_id)
         return {
-            "space_id": meta.get("space_id", space_id),
+            "space_id": resolved_id,
+            # TKB-001: board_id is the canonical public alias; board_id == space_id
+            # for every row (physical PK stays SPACE#{id}, no migration).
+            "board_id": resolved_id,
             "owner_sub": meta.get("owner_sub", ""),
             "name": meta.get("name", ""),
             "visibility": meta.get("visibility", "private"),
             "created_at": int(meta.get("created_at", 0) or 0),
             "updated_at": int(meta.get("updated_at", 0) or 0),
+            # TKB-006: read-time back-fill — legacy boards with no stored columns
+            # get the default 4-column set so they behave exactly as before.
+            "columns": _columns_from_meta(meta),
             "members": [
                 {
                     "space_id": item.get("space_id", space_id),
+                    "board_id": item.get("space_id", space_id),
                     "member_sub": item.get("member_sub", ""),
                     "role": item.get("role", "viewer"),
                     "created_at": int(item.get("created_at", 0) or 0),
@@ -249,7 +363,50 @@ class TicketStore:
             space = self.get_space(space_id)
             if space:
                 spaces.append(space)
-        return {"spaces": spaces, "next_cursor": next_cursor}
+        # TKB-001: expose `boards` alongside legacy `spaces` (same list).
+        return {"spaces": spaces, "boards": spaces, "next_cursor": next_cursor}
+
+    # ------------------------------------------------------------------
+    # TKB-001: board aliases. board_id == space_id; these thin wrappers
+    # delegate to the existing space methods so callers can migrate gradually.
+    # ------------------------------------------------------------------
+    def create_board(self, *, owner_sub: str, name: str, visibility: str = "private") -> dict[str, Any]:
+        return self.create_space(owner_sub=owner_sub, name=name, visibility=visibility)
+
+    def get_board(self, board_id: str) -> dict[str, Any] | None:
+        return self.get_space(board_id)
+
+    def add_board_member(self, *, board_id: str, member_sub: str, role: str) -> dict[str, Any] | None:
+        return self.add_space_member(space_id=board_id, member_sub=member_sub, role=role)
+
+    def remove_board_member(self, *, board_id: str, member_sub: str) -> dict[str, Any] | None:
+        return self.remove_space_member(space_id=board_id, member_sub=member_sub)
+
+    def list_boards_for_member(self, *, member_sub: str, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        return self.list_spaces_for_member(member_sub=member_sub, limit=limit, cursor=cursor)
+
+    def list_board_tickets(self, *, board_id: str, limit: int = 25, cursor: str | None = None, status: str | None = None, assigned_to_sub: str | None = None) -> dict[str, Any]:
+        return self.list_space_tickets(space_id=board_id, limit=limit, cursor=cursor, status=status, assigned_to_sub=assigned_to_sub)
+
+    def update_board_columns(self, *, board_id: str, columns: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """TKB-006/TKB-008: replace a board's column configuration.
+
+        Validates every status_key is a real ticket status and column_ids are
+        unique (raises BoardColumnError → HTTP 400). Returns None if the board
+        does not exist. Persists onto the board META row only (no GSI changes).
+        """
+        meta = self._table.get_item(Key=_space_meta_key(board_id)).get("Item")
+        if not meta:
+            return None
+        normalized = normalize_board_columns(columns)
+        ts = now_ts()
+        self._table.update_item(
+            Key=_space_meta_key(board_id),
+            UpdateExpression="SET #columns = :columns, updated_at = :updated_at",
+            ExpressionAttributeNames={"#columns": "columns"},
+            ExpressionAttributeValues={":columns": normalized, ":updated_at": ts},
+        )
+        return self.get_board(board_id)
 
     def create_ticket(
         self,
@@ -258,6 +415,7 @@ class TicketStore:
         subject: str,
         description: str,
         space_id: str | None = None,
+        board_id: str | None = None,
         ticket_id: str | None = None,
         category: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -265,6 +423,10 @@ class TicketStore:
         estimated_effort_hours: int | None = None,
     ) -> dict[str, Any]:
         ts = now_ts()
+        # TKB-001: board_id is an alias for space_id (same physical attribute).
+        # Either keyword writes the same `space_id` attribute + space GSI keys.
+        if space_id is None and board_id is not None:
+            space_id = board_id
         resolved_ticket_id = ticket_id or f"tkt_{uuid.uuid4().hex[:12]}"
         existing = self.get_ticket(resolved_ticket_id)
         if existing:
@@ -378,6 +540,7 @@ class TicketStore:
             ),
             "status": header.get("status", "open"),
             "space_id": header.get("space_id"),
+            "board_id": header.get("space_id"),
             "assigned_admin_sub": header.get("assigned_admin_sub"),
             "assigned_to_sub": header.get("assigned_to_sub"),
             "assigned_by": header.get("assigned_by"),

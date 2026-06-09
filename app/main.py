@@ -687,6 +687,11 @@ def create_app() -> FastAPI:
     app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
+    # TKB-003: /boards is an alias of /ticket-spaces, gated behind a flag that
+    # defaults off. When off, only /ticket-spaces is mounted (legacy behavior).
+    if _S.ticket_boards_enabled:
+        from app.routers.ticket_boards import router as ticket_boards_router
+        app.include_router(ticket_boards_router)
     app.include_router(internal_devtools_router)
     app.include_router(admin_jira_integration_router)
     app.include_router(jira_integrations_router)
