@@ -222,6 +222,8 @@ def create_worker(
         "llm_key_id": llm_key_id,
         "llm_provider": llm_provider,
         "host_id": "",
+        # AQA-002: ssh key injected during provisioning (empty until key_inject).
+        "ssh_key_id": "",
         "public_ip": "",
         "worker_status": "provisioning",
         "provision_log": [],
@@ -294,6 +296,22 @@ def _provision_worker_dev(
             Key={"pk": f"USER#{user_id}", "sk": f"WORKER#{worker_id}"},
             UpdateExpression="SET compute_instance_id = :cid, public_ip = :ip, host_id = :hid",
             ExpressionAttributeValues={":cid": compute_id, ":ip": public_ip, ":hid": host_id},
+        )
+
+        # Step 1b (AQA-001): install SSH client + paramiko so the worker can run
+        # outbound, non-interactive QA exec (ADR-003). Runs regardless of `tool`.
+        # In dev this completes in-memory (parity with the other dev steps); the
+        # captured version string feeds the `verify` step. The real provisioning
+        # path installs `openssh-client` + a venv with `paramiko`/`cryptography`.
+        _append_provision_step(user_id, worker_id, "ssh_client_install", "running")
+        ssh_client_version = "OpenSSH_9.6p1; paramiko 3.4.0"
+        _append_provision_step(
+            user_id, worker_id, "ssh_client_install", "done", ssh_client_version,
+        )
+        T.agent_workers.update_item(
+            Key={"pk": f"USER#{user_id}", "sk": f"WORKER#{worker_id}"},
+            UpdateExpression="SET ssh_client_version = :v",
+            ExpressionAttributeValues={":v": ssh_client_version},
         )
 
         # Step 2: Install tool

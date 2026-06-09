@@ -2432,6 +2432,21 @@ class Settings:
     doc_pr_trigger_enabled: bool = os.environ.get("DOC_PR_TRIGGER_ENABLED", "0") not in ("0", "false", "False")
     doc_inline_tickets_enabled: bool = os.environ.get("DOC_INLINE_TICKETS_ENABLED", "1") not in ("0", "false", "False")
 
+    # Agent SSH QA (ADR-003 / AQA). Outbound, agent-driven non-interactive SSH
+    # exec for QA. Master flag defaults OFF — when off the router is not
+    # registered and the runner does not start (mirrors AUDIT_EXPORT_WORKER).
+    # Reuses the existing `agent_qa_execute_commands` gate (below) to decide
+    # whether a real SSH dial occurs vs an in-memory simulation.
+    agent_ssh_qa_enabled: bool = os.environ.get("AGENT_SSH_QA_ENABLED", "0") not in ("0", "false", "False")
+    agent_actions_table_name: str = os.environ.get("AGENT_ACTIONS_TABLE_NAME", "agent_actions")
+    agent_ssh_qa_action_timeout_seconds: int = int(os.environ.get("AGENT_SSH_QA_ACTION_TIMEOUT_SECONDS", "300"))
+    agent_ssh_qa_max_concurrent_per_worker: int = int(os.environ.get("AGENT_SSH_QA_MAX_CONCURRENT_PER_WORKER", "1"))
+    agent_ssh_qa_rate_limit_count: int = int(os.environ.get("AGENT_SSH_QA_RATE_LIMIT_COUNT", "10"))
+    agent_ssh_qa_rate_limit_window_seconds: int = int(os.environ.get("AGENT_SSH_QA_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    agent_ssh_qa_command_max_length: int = int(os.environ.get("AGENT_SSH_QA_COMMAND_MAX_LENGTH", "4096"))
+    agent_ssh_qa_command_denylist: str = os.environ.get("AGENT_SSH_QA_COMMAND_DENYLIST", "")
+    agent_vnc_screenshot_enabled: bool = os.environ.get("AGENT_VNC_SCREENSHOT_ENABLED", "0") not in ("0", "false", "False")
+
     # QA Agent (AGENT-009). Reuses the agent_types / agent_runs tables.
     agent_qa_enabled: bool = os.environ.get("QA_AGENT_ENABLED", "1") not in ("0", "false", "False")
     # When false (default, and always in E2E), the QA lifecycle never runs real

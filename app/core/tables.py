@@ -272,6 +272,7 @@ class Tables:
     agent_feedback: Any
     agent_types: Any
     agent_runs: Any
+    agent_actions: Any
     agent_doc_coverage: Any
     agent_doc_templates: Any
     stylist_ui_reviews: Any
@@ -519,6 +520,7 @@ T = Tables(
     agent_feedback=_safe_table(S.agent_feedback_table_name),
     agent_types=_safe_table(S.agent_types_table_name),
     agent_runs=_safe_table(S.agent_runs_table_name),
+    agent_actions=_safe_table(S.agent_actions_table_name),
     agent_doc_coverage=_safe_table(S.agent_doc_coverage_table_name),
     agent_doc_templates=_safe_table(S.agent_doc_templates_table_name),
     stylist_ui_reviews=_safe_table(S.stylist_ui_reviews_table_name),

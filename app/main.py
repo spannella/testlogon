@@ -908,6 +908,12 @@ def create_app() -> FastAPI:
     from app.routers.agent_feedback import router as agent_feedback_router
     app.include_router(agent_feedback_router)
 
+    # Agent SSH QA (ADR-003 / AQA). Master-flag gated, default OFF — with the
+    # flag off the router is not registered and the feature is fully dormant.
+    if getattr(_S, "agent_ssh_qa_enabled", False):
+        from app.routers.agent_actions import router as agent_actions_router
+        app.include_router(agent_actions_router)
+
     from app.routers.agent_pr_integration import (
         router as agent_pr_router,
         webhook_router as agent_pr_webhook_router,
@@ -961,6 +967,9 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_webhook_dispatcher_task)
     app.add_event_handler("startup", start_audit_export_worker_task)
     app.add_event_handler("startup", start_audit_export_scheduler_task)
+    # Agent SSH QA runner (ADR-003 / AQA-006) — self-gates on AGENT_SSH_QA_ENABLED.
+    from app.services.agent_ssh_exec import start_agent_actions_runner_task
+    app.add_event_handler("startup", start_agent_actions_runner_task)
     app.add_event_handler("startup", start_cart_abandonment_task)
     app.add_event_handler("startup", start_marketing_publish_task)
     app.add_event_handler("startup", start_cost_collection_task)

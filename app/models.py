@@ -5562,6 +5562,9 @@ class WorkerOut(BaseModel):
     llm_key_id: str
     llm_provider: str = ""
     host_id: str = ""
+    # AQA-002: SSH key injected during provisioning, used by the agent QA exec
+    # engine to resolve credentials by id (never PEM). Empty when no key.
+    ssh_key_id: str = ""
     public_ip: str = ""
     worker_status: str
     provision_log: List[ProvisionStepOut] = Field(default_factory=list)
@@ -5579,6 +5582,51 @@ class WorkerOut(BaseModel):
 
 class WorkerListOut(BaseModel):
     workers: List[WorkerOut]
+    count: int
+
+
+# --- Agent SSH QA actions (ADR-003 / AQA-003) ---
+
+
+class RunAgentActionIn(BaseModel):
+    """Submit a non-interactive SSH QA action for a worker.
+
+    SECURITY: this request carries ONLY identifiers (`host_id`, `ssh_key_id`,
+    `path_id`) — never a key, PEM, or password. Credentials are resolved
+    server-side from the owner's KMS-encrypted store. A raw hostname is never
+    accepted; the target is resolved from `host_id` via host inventory.
+    """
+
+    action_type: str = "run_command"  # run_command | run_test_suite
+    command: str
+    host_id: str = ""
+    # Optional explicit key id; defaults to the worker's persisted ssh_key_id.
+    ssh_key_id: str = ""
+    # Optional multi-hop bastion path id (resolved server-side).
+    path_id: str = ""
+    timeout_seconds: int = 0  # 0 -> use the configured default cap
+
+
+class AgentActionOut(BaseModel):
+    action_id: str
+    worker_id: str
+    action_type: str = "run_command"
+    host_id: str = ""
+    command: str = ""
+    status: str = "pending"  # pending|running|completed|failed|timed_out|cancelled|denied
+    exit_code: Optional[int] = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    created_at: int = 0
+    started_at: int = 0
+    finished_at: int = 0
+    timeout_seconds: int = 0
+
+
+class AgentActionListOut(BaseModel):
+    actions: List[AgentActionOut]
     count: int
 
 

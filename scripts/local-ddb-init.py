@@ -2058,6 +2058,19 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByTypeDate", "partition_key": "gsi_type_date_pk", "sort_key": "gsi_type_date_sk"},
             ],
         ),
+        # Agent SSH QA (ADR-003 / AQA-003) — non-interactive SSH exec action
+        # records (pk=WORKER#{worker_id}, sk=ACTION#{action_id}). The ByStatus
+        # GSI lets the background runner claim pending actions (status=pending)
+        # oldest-first; created_at is numeric so it must be declared as "N".
+        TableDef(
+            _resolve_table_name(S.agent_actions_table_name, "agent_actions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # DevOps/SRE Agent (AGENT-010) — deployment audit log (pk=DEPLOY#{id}, sk=STEP#{nnnn})
         TableDef(
             _resolve_table_name(S.deployment_log_table_name, "deployment_log"),

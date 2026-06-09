@@ -178,6 +178,10 @@ def _item_to_host(item: Dict[str, Any]) -> Dict[str, Any]:
         # Defaults False so pre-existing host records (which lack the attribute)
         # do not auto-record until explicitly opted in.
         "record_sessions": bool(item.get("record_sessions", False)),
+        # ADR-003 / AQA-009: per-host opt-in for agent-driven QA over SSH.
+        # Defaults False so pre-existing hosts are never auto-targetable by an
+        # agent action until explicitly opted in (mirrors record_sessions).
+        "agent_qa_allowed": bool(item.get("agent_qa_allowed", False)),
     }
 
 
@@ -199,6 +203,7 @@ def create_host(
     os_type: str = "unknown",
     source: str = "manual",
     record_sessions: bool = False,
+    agent_qa_allowed: bool = False,
 ) -> Dict[str, Any]:
     """Create a new host entry in the user's inventory."""
     label = (label or "").strip()
@@ -240,6 +245,7 @@ def create_host(
         "is_pinned": False,
         "source": source,
         "record_sessions": bool(record_sessions),
+        "agent_qa_allowed": bool(agent_qa_allowed),
         "history": [],
     }
     T.host_inventory.put_item(Item=item)
@@ -335,6 +341,8 @@ def update_host(user_sub: str, host_id: str, **updates: Any) -> Dict[str, Any]:
         _set("is_pinned", bool(updates["is_pinned"]))
     if updates.get("record_sessions") is not None:
         _set("record_sessions", bool(updates["record_sessions"]))
+    if updates.get("agent_qa_allowed") is not None:
+        _set("agent_qa_allowed", bool(updates["agent_qa_allowed"]))
 
     _set("updated_at", now_ts())
 
