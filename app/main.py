@@ -52,6 +52,7 @@ from app.routers.sticker_collections import router as sticker_collections_router
 from app.routers.custom_emojis import router as custom_emojis_router, admin_router as custom_emojis_admin_router
 from app.routers.filemanager import router as filemanager_router
 from app.routers.signature_packets import router as signature_packets_router
+from app.routers.signature_public import router as signature_public_router
 from app.routers.signature_templates import router as signature_templates_router
 from app.routers.addresses import router as addresses_router
 from app.routers.file_share_links import router as file_share_links_router
@@ -578,6 +579,7 @@ def create_app() -> FastAPI:
     app.include_router(custom_emojis_admin_router)
     app.include_router(filemanager_router)
     app.include_router(signature_packets_router)
+    app.include_router(signature_public_router)
     app.include_router(signature_templates_router)
     app.include_router(addresses_router)
     app.include_router(calendar_router)

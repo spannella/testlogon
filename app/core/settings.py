@@ -906,6 +906,18 @@ class Settings:
         "By signing this document, you agree your signature is legally binding.",
     )
     signature_packet_reminder_schedule_hours: str = os.environ.get("SIGNATURE_PACKET_REMINDER_SCHEDULE_HOURS", "24,72,168")
+    # SUX-001: public tokenized signing links. Mirrors cart_recovery_link_* —
+    # secret falls back to the UI access-token secret so dev (no extra env) and
+    # prod (set via env) both verify, dev/prod parity (SECOPS-007). Flag default
+    # OFF so existing behaviour is byte-for-byte unchanged until enabled.
+    signature_public_link_enabled: bool = os.environ.get("SIGNATURE_PUBLIC_LINK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    signature_packet_public_link_secret: str = (
+        os.environ.get("SIGNATURE_PACKET_PUBLIC_LINK_SECRET")
+        or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
+    )
+    signature_packet_public_link_ttl_days: int = int(os.environ.get("SIGNATURE_PACKET_PUBLIC_LINK_TTL_DAYS", "14"))
+    signature_public_link_rate_max_per_window: int = int(os.environ.get("SIGNATURE_PUBLIC_LINK_RATE_MAX_PER_WINDOW", "60"))
+    signature_public_link_rate_window_seconds: int = int(os.environ.get("SIGNATURE_PUBLIC_LINK_RATE_WINDOW_SECONDS", "3600"))
     signature_templates_table_name: str = os.environ.get(
         "SIGNATURE_TEMPLATES_TABLE_NAME",
         "signature_templates",

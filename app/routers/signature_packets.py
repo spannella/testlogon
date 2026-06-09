@@ -33,8 +33,11 @@ from app.services.signature_packet_store import (
     get_packet,
     get_packet_signer,
     list_packet_fields,
+    list_packets_by_sender,
+    list_packets_for_signer,
     list_packet_signers,
     list_packet_events,
+    get_signature_packet_progress_for_user,
     mark_packet_partially_signed,
     mark_signer_completed,
     mark_packet_sent,
@@ -88,9 +91,15 @@ def _current_ip(ctx=Depends(require_ui_session)) -> str:
     return str(ctx.get("ip") or "")
 
 
+# SUX-014: broaden accepted origin channels. KYC already passes free-form
+# values straight to the store ("kyc_document_template"), so the store tolerates
+# them; this aligns the public API model with the existing surfaces.
+SignatureOriginChannel = Literal["share", "message", "file_manager", "kyc"]
+
+
 class CreateSignaturePacketIn(BaseModel):
     source_path: str = Field(..., description="Path to an existing uploaded PDF")
-    origin_channel: Literal["share", "message"] = Field(..., description="Workflow origin surface")
+    origin_channel: SignatureOriginChannel = Field(..., description="Workflow origin surface")
     origin_ref: Optional[str] = Field(default=None, description="Optional channel-specific reference id")
 
 
@@ -99,7 +108,7 @@ class CreateSignaturePacketOut(BaseModel):
     status: str
     owner_user_id: str
     source_path: str
-    origin_channel: Literal["share", "message"]
+    origin_channel: str
     origin_ref: Optional[str] = None
     created_at: str
 
@@ -497,6 +506,219 @@ def send_signature_packet(packet_id: str, user_sub: str = Depends(_current_user)
         "sent_at": sent_packet.get("sent_at") or "",
         "invited_signers": len(signer_ids),
     }
+
+
+# ─── SUX-007: "awaiting my signature" / sent / completed inbox endpoints ──────
+# IMPORTANT: these literal-segment routes MUST be declared BEFORE "/{packet_id}"
+# so FastAPI (which matches in declaration order) does not capture "awaiting"
+# etc. as a packet id.
+
+
+class SigningInboxItemOut(BaseModel):
+    packet_id: str
+    owner_user_id: Optional[str] = None
+    source_name: Optional[str] = None
+    status: str
+    status_chip: Optional[str] = None
+    status_text: Optional[str] = None
+    role: Optional[str] = None
+    created_at: Optional[str] = None
+    sent_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class SigningInboxListOut(BaseModel):
+    items: list[SigningInboxItemOut]
+    count: int
+
+
+def _hydrate_signer_inbox_row(signer_row: Dict[str, Any], user_sub: str) -> Optional[Dict[str, Any]]:
+    """Build an inbox item from a signer-assignment GSI row, hydrating live status."""
+    packet_id = str(signer_row.get("packet_id") or "")
+    if not packet_id:
+        return None
+    packet = get_packet(packet_id)
+    if not packet:
+        return None
+    progress = get_signature_packet_progress_for_user(packet_id, user_sub) or {}
+    return {
+        "packet_id": packet_id,
+        "owner_user_id": packet.get("owner_user_id"),
+        "source_name": packet.get("source_name"),
+        "status": str(packet.get("status") or ""),
+        "status_chip": progress.get("signature_packet_status_chip"),
+        "status_text": progress.get("signature_packet_status_text"),
+        "role": progress.get("signature_packet_role") or "signer",
+        "created_at": packet.get("created_at"),
+        "sent_at": packet.get("sent_at"),
+        "completed_at": packet.get("completed_at"),
+    }
+
+
+@router.get("/awaiting", response_model=SigningInboxListOut)
+def list_awaiting_my_signature(limit: int = 100, user_sub: str = Depends(_current_user)) -> Dict[str, Any]:
+    """Packets in sent/partially_signed where the caller is a non-completed signer.
+
+    Backed by the SIGNER_STATUS_INDEX GSI (no table scan).
+    """
+    limit = max(1, min(int(limit), 200))
+    rows = list_packets_for_signer(user_sub, SignatureSignerStatus.PENDING, limit=limit)
+    items: list[Dict[str, Any]] = []
+    for row in rows:
+        item = _hydrate_signer_inbox_row(row, user_sub)
+        if item is None:
+            continue
+        if item["status"] not in {
+            SignaturePacketStatus.SENT.value,
+            SignaturePacketStatus.PARTIALLY_SIGNED.value,
+        }:
+            continue
+        items.append(item)
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/sent", response_model=SigningInboxListOut)
+def list_sent_by_me(limit: int = 100, user_sub: str = Depends(_current_user)) -> Dict[str, Any]:
+    """Packets the caller owns/sent, newest first (OWNER_CREATED_INDEX GSI)."""
+    limit = max(1, min(int(limit), 200))
+    packets = list_packets_by_sender(user_sub, limit=limit)
+    items: list[Dict[str, Any]] = []
+    for packet in packets:
+        items.append(
+            {
+                "packet_id": str(packet.get("packet_id") or ""),
+                "owner_user_id": packet.get("owner_user_id"),
+                "source_name": packet.get("source_name"),
+                "status": str(packet.get("status") or ""),
+                "status_chip": None,
+                "status_text": None,
+                "role": "sender",
+                "created_at": packet.get("created_at"),
+                "sent_at": packet.get("sent_at"),
+                "completed_at": packet.get("completed_at"),
+            }
+        )
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/completed-for-me", response_model=SigningInboxListOut)
+def list_completed_for_me(limit: int = 100, user_sub: str = Depends(_current_user)) -> Dict[str, Any]:
+    """Packets the caller signed and completed (SIGNER_STATUS_INDEX GSI)."""
+    limit = max(1, min(int(limit), 200))
+    rows = list_packets_for_signer(user_sub, SignatureSignerStatus.COMPLETED, limit=limit)
+    items: list[Dict[str, Any]] = []
+    for row in rows:
+        item = _hydrate_signer_inbox_row(row, user_sub)
+        if item is None:
+            continue
+        items.append(item)
+    return {"items": items, "count": len(items)}
+
+
+# ─── SUX-005: owner "create signing link" + revoke (audited) ──────────────────
+
+
+class CreateSigningLinkOut(BaseModel):
+    packet_id: str
+    signer_id: str
+    url: str
+    expires_at: int
+
+
+class RevokeSigningLinkIn(BaseModel):
+    jti: str = Field(..., min_length=1, max_length=128)
+
+
+class RevokeSigningLinkOut(BaseModel):
+    packet_id: str
+    signer_id: str
+    jti: str
+    revoked: bool
+
+
+def _validate_link_owner(packet_id: str, user_sub: str) -> Dict[str, Any]:
+    """Owner-only guard for link mint/revoke; allows sent/partially_signed packets
+    (links only make sense after the packet has been sent)."""
+    packet = get_packet(packet_id)
+    if not packet:
+        raise HTTPException(status_code=404, detail={"code": "signature_packet_not_found"})
+    if packet.get("owner_user_id") != user_sub:
+        _raise_packet_error(
+            status_code=403,
+            code="signature_packet_not_owner",
+            packet_id=packet_id,
+            user_sub=user_sub,
+            category="authorization",
+        )
+    if packet.get("status") not in {
+        SignaturePacketStatus.SENT.value,
+        SignaturePacketStatus.PARTIALLY_SIGNED.value,
+    }:
+        _raise_packet_error(
+            status_code=409,
+            code="signature_packet_not_sendable_for_link",
+            packet_id=packet_id,
+            user_sub=user_sub,
+            category="validation",
+        )
+    return packet
+
+
+@router.post("/{packet_id}/signers/{signer_id}/link", response_model=CreateSigningLinkOut)
+def create_signer_signing_link(
+    packet_id: str,
+    signer_id: str,
+    user_sub: str = Depends(_current_user),
+) -> Dict[str, Any]:
+    if not S.signature_public_link_enabled:
+        raise HTTPException(status_code=404, detail={"code": "signature_public_link_disabled"})
+    _validate_link_owner(packet_id, user_sub)
+    if not signer_assignment_exists(packet_id, signer_id):
+        _raise_packet_error(
+            status_code=404,
+            code="signature_packet_signer_not_found",
+            packet_id=packet_id,
+            user_sub=user_sub,
+            category="validation",
+            extra={"signer_id": signer_id},
+        )
+    from app.services.signature_public_link import generate_signing_link
+
+    link = generate_signing_link(packet_id, signer_id)
+    append_packet_event(
+        packet_id=packet_id,
+        actor_user_id=user_sub,
+        event_type="signing_link_created",
+        event_payload={"signer_id": signer_id, "jti": link.get("jti"), "expires_at": link.get("expires_at")},
+    )
+    return {
+        "packet_id": packet_id,
+        "signer_id": signer_id,
+        "url": str(link.get("url") or ""),
+        "expires_at": int(link.get("expires_at") or 0),
+    }
+
+
+@router.post("/{packet_id}/signers/{signer_id}/link/revoke", response_model=RevokeSigningLinkOut)
+def revoke_signer_signing_link(
+    packet_id: str,
+    signer_id: str,
+    inp: RevokeSigningLinkIn,
+    user_sub: str = Depends(_current_user),
+) -> Dict[str, Any]:
+    if not S.signature_public_link_enabled:
+        raise HTTPException(status_code=404, detail={"code": "signature_public_link_disabled"})
+    _validate_link_owner(packet_id, user_sub)
+    from app.services.signature_public_link import revoke_token
+
+    revoked = revoke_token(inp.jti)
+    append_packet_event(
+        packet_id=packet_id,
+        actor_user_id=user_sub,
+        event_type="signing_link_revoked",
+        event_payload={"signer_id": signer_id, "jti": inp.jti},
+    )
+    return {"packet_id": packet_id, "signer_id": signer_id, "jti": inp.jti, "revoked": bool(revoked)}
 
 
 @router.get("/{packet_id}", response_model=SignaturePacketDetailOut)
