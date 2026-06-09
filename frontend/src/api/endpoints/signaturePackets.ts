@@ -1,7 +1,7 @@
 import { useAuthStore } from "@/stores/authStore";
 import { api, normalizeErrorDetail } from "@/api/client";
 
-export type SignatureOriginChannel = "share" | "message";
+export type SignatureOriginChannel = "share" | "message" | "file_manager" | "kyc";
 export type SignatureFieldType = "signature" | "initials" | "date" | "text" | "notary_stamp";
 
 export type SignaturePacketStatus =
@@ -124,6 +124,103 @@ export const markSignaturePacketDone = (packetId: string) =>
 
 export const acknowledgeSignaturePacketLegalNotice = (packetId: string) =>
   api.post(`/v1/signature-packets/${encodeURIComponent(packetId)}/acknowledge-legal-notice`, {});
+
+// ─── SUX-008: "Awaiting my signature" / sent / completed inbox ───────────────
+
+export interface SigningInboxItem {
+  packet_id: string;
+  owner_user_id?: string | null;
+  source_name?: string | null;
+  status: SignaturePacketStatus | string;
+  status_chip?: string | null;
+  status_text?: string | null;
+  role?: string | null;
+  created_at?: string | null;
+  sent_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface SigningInboxList {
+  items: SigningInboxItem[];
+  count: number;
+}
+
+export const listAwaitingSignature = (limit = 100) =>
+  api.get<SigningInboxList>("/v1/signature-packets/awaiting", { limit: String(limit) });
+
+export const listSentPackets = (limit = 100) =>
+  api.get<SigningInboxList>("/v1/signature-packets/sent", { limit: String(limit) });
+
+export const listCompletedForMe = (limit = 100) =>
+  api.get<SigningInboxList>("/v1/signature-packets/completed-for-me", { limit: String(limit) });
+
+// ─── SUX-005: owner mint/revoke per-signer public signing link ───────────────
+
+export interface CreateSigningLinkResp {
+  packet_id: string;
+  signer_id: string;
+  url: string;
+  expires_at: number;
+}
+
+export interface RevokeSigningLinkResp {
+  packet_id: string;
+  signer_id: string;
+  jti: string;
+  revoked: boolean;
+}
+
+export const createSignerSigningLink = (packetId: string, signerId: string) =>
+  api.post<CreateSigningLinkResp>(
+    `/v1/signature-packets/${encodeURIComponent(packetId)}/signers/${encodeURIComponent(signerId)}/link`,
+    {},
+  );
+
+export const revokeSignerSigningLink = (packetId: string, signerId: string, jti: string) =>
+  api.post<RevokeSigningLinkResp>(
+    `/v1/signature-packets/${encodeURIComponent(packetId)}/signers/${encodeURIComponent(signerId)}/link/revoke`,
+    { jti },
+  );
+
+// ─── SUX-006: public (login-free) signing endpoints (token-scoped) ───────────
+// These hit /ui/sign/{token}; the token binds packet_id + signer_id server-side.
+// `silent403` keeps invalid/expired/used tokens from firing a global toast — the
+// PublicSigningPage renders a friendly terminal state from the thrown ApiError.
+
+export const getPublicSigningDetail = (token: string) =>
+  api<SignaturePacketDetail>(`/ui/sign/${encodeURIComponent(token)}`, {
+    method: "GET",
+    silent403: true,
+  });
+
+export const fillPublicSigningField = (
+  token: string,
+  fieldId: string,
+  body: {
+    value?: string;
+    input_mode?: SignatureInputMode;
+    drawn_strokes?: number[][];
+  },
+) =>
+  api(`/ui/sign/${encodeURIComponent(token)}/fields/${encodeURIComponent(fieldId)}/fill`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    silent403: true,
+  });
+
+export const acknowledgePublicSigningLegalNotice = (token: string) =>
+  api(`/ui/sign/${encodeURIComponent(token)}/acknowledge-legal-notice`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    silent403: true,
+  });
+
+export const markPublicSigningDone = (token: string) =>
+  api(`/ui/sign/${encodeURIComponent(token)}/mark-done`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    silent403: true,
+  });
 
 export const downloadSignaturePacketFinalPdf = async (packetId: string): Promise<void> => {
   const accessToken = useAuthStore.getState().accessToken;

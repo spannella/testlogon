@@ -93,6 +93,9 @@ const SshBastionPage = lazy(() => import("@/pages/remote/SshBastionPage"));
 const ConnectionProfilesPage = lazy(() => import("@/pages/remote/ConnectionProfilesPage"));
 const HostInventoryPage = lazy(() => import("@/pages/remote/HostInventoryPage"));
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
+const PublicSigningPage = lazy(() => import("@/pages/signing/PublicSigningPage"));
+const SigningInboxPage = lazy(() => import("@/pages/signing/SigningInboxPage"));
+const CreateSignatureRequestPage = lazy(() => import("@/pages/signing/CreateSignatureRequestPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
@@ -287,6 +290,7 @@ export default function App() {
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
         {showCanonicalProfileRoute && <Route path="/u/:identifier" element={<PublicUserProfilePage />} />}
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
+        <Route path="/sign/:token" element={<PublicSigningPage />} />
         <Route path="/share/:linkId" element={<PublicDownloadPage />} />
         <Route path="/donate/:fundraiserId" element={<PublicDonationPage />} />
         <Route path="/c/:clipId" element={<PublicClipPage />} />
@@ -306,6 +310,9 @@ export default function App() {
           <Route path="files" element={<FilesPage />} />
           <Route path="files/share-links" element={<ShareLinksPage />} />
           <Route path="signing" element={<SigningPage />} />
+          <Route path="signing/new" element={<CreateSignatureRequestPage />} />
+          <Route path="signing/inbox" element={<SigningInboxPage />} />
+          <Route path="signing/inbox/:packetId" element={<SigningInboxPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
