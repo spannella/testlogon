@@ -96,7 +96,63 @@ sealed class AuthDest(val route: String) {
         }
     }
 
-    data object Recovery : AuthDest("auth/recovery")
+    /**
+     * Password-recovery entry / start step (AND-057). Username-only; no args.
+     * (The legacy `auth/recovery` placeholder route is replaced by `recovery/start`.)
+     */
+    data object Recovery : AuthDest("recovery/start")
+
+    /**
+     * Password-recovery challenge step (AND-058). Carries the start-issued, non-secret handles:
+     * `username`, `challengeId`, the required-factor CSV, and the masked delivery descriptor.
+     *
+     * SECURITY: no password/OTP code is encoded here — only the same class of non-secret correlation
+     * handles the MFA route already carries. The verified code is handed to the confirm step via the
+     * back-stack entry's SavedStateHandle, never via a route arg.
+     */
+    data object RecoveryChallenge : AuthDest(
+        "recovery/challenge/{username}/{challengeId}" +
+            "?factors={factors}&medium={medium}&destination={destination}",
+    ) {
+        const val ARG_USERNAME = "username"
+        const val ARG_CHALLENGE_ID = "challengeId"
+        const val ARG_FACTORS = "factors"
+        const val ARG_MEDIUM = "medium"
+        const val ARG_DESTINATION = "destination"
+
+        fun build(
+            username: String,
+            challengeId: String,
+            factors: List<String> = emptyList(),
+            deliveryMedium: String? = null,
+            deliveryDestination: String? = null,
+        ): String {
+            val q = buildString {
+                append("?factors=").append(Uri.encode(factors.joinToString(",")))
+                append("&medium=").append(Uri.encode(deliveryMedium.orEmpty()))
+                append("&destination=").append(Uri.encode(deliveryDestination.orEmpty()))
+            }
+            return "recovery/challenge/${Uri.encode(username)}/${Uri.encode(challengeId)}$q"
+        }
+    }
+
+    /**
+     * Password-recovery confirm step (AND-059). Carries the non-secret `username` + `challengeId`.
+     *
+     * SECURITY: the verified `confirmation_code` is NOT a route arg — it is set on this entry's
+     * SavedStateHandle by the challenge step (key [KEY_CODE]) so it is never persisted into a route.
+     */
+    data object RecoveryConfirm : AuthDest("recovery/confirm/{username}/{challengeId}") {
+        const val ARG_USERNAME = "username"
+        const val ARG_CHALLENGE_ID = "challengeId"
+
+        /** SavedStateHandle key for the verified confirmation code passed in from the challenge step. */
+        const val KEY_CODE = "recovery_confirmation_code"
+
+        fun build(username: String, challengeId: String): String =
+            "recovery/confirm/${Uri.encode(username)}/${Uri.encode(challengeId)}"
+    }
+
     data object MagicLink : AuthDest("auth/magic_link")
 
     /** Server-URL settings (AND-041); reachable pre-login from the Login screen. */

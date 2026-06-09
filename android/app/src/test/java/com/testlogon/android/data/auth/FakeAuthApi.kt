@@ -97,6 +97,31 @@ class FakeAuthApi : AuthApi {
     override suspend fun registerCheck(body: RegisterEmailCheckReq): RegisterEmailCheckResp =
         registerCheckResult()
 
+    // ── Password recovery (AND-057/058/059): scriptable stubs ──
+
+    var pwRecoveryStartResult: () -> PasswordRecoveryStartResp = { error("not scripted") }
+    var pwRecoveryBeginResult: () -> ChallengeResp = { error("not scripted") }
+    var pwRecoveryVerifyResult: () -> MfaVerifyResp = { error("not scripted") }
+    var pwRecoveryConfirmResult: () -> OkResp = { error("not scripted") }
+
+    override suspend fun passwordRecoveryStart(body: PasswordRecoveryStartReq): PasswordRecoveryStartResp =
+        pwRecoveryStartResult()
+
+    override suspend fun passwordRecoveryBegin(factor: String, body: RecoveryChallengeBeginReq): ChallengeResp =
+        pwRecoveryBeginResult()
+
+    override suspend fun passwordRecoveryVerifyEmailOrSms(factor: String, body: RecoveryEmailSmsVerifyReq): MfaVerifyResp =
+        pwRecoveryVerifyResult()
+
+    override suspend fun passwordRecoveryVerifyTotp(body: RecoveryTotpVerifyReq): MfaVerifyResp =
+        pwRecoveryVerifyResult()
+
+    override suspend fun passwordRecoveryVerifyRecovery(body: RecoveryCodeVerifyReq): MfaVerifyResp =
+        pwRecoveryVerifyResult()
+
+    override suspend fun passwordRecoveryConfirm(body: PasswordRecoveryConfirmReq): OkResp =
+        pwRecoveryConfirmResult()
+
     companion object {
         /** Builds an [HttpException] with the given status + JSON error body. */
         fun httpError(status: Int, body: String = """{"detail":"error"}"""): HttpException =

@@ -240,3 +240,85 @@ data class RegisterEmailCheckResp(
     val available: Boolean,
     val status: String,
 )
+
+// ── password-recovery/start (AND-057) ──
+//
+// Verified shapes (frontend src/api/types.ts: PasswordRecoveryStartReq/Resp). OpenAPI types the 200
+// body as an open object, so every response field is nullable/defaulted — extra/missing keys never
+// crash parsing. The response is FLAT (no nested delivery object, no auth_required flag).
+
+@JsonClass(generateAdapter = true)
+data class PasswordRecoveryStartReq(
+    val username: String,
+) {
+    override fun toString() = "PasswordRecoveryStartReq(username=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class PasswordRecoveryStartResp(
+    val status: String? = null,
+    @Json(name = "delivery_medium") val deliveryMedium: String? = null,
+    @Json(name = "delivery_destination") val deliveryDestination: String? = null,
+    @Json(name = "challenge_id") val challengeId: String? = null,
+    @Json(name = "required_factors") val requiredFactors: List<String> = emptyList(),
+)
+
+// ── password-recovery/challenge (AND-058) ──
+//
+// Every body requires `username` AND `challenge_id` (OpenAPI). Code field names differ by factor:
+// email/sms use `code`, totp uses `totp_code`, recovery uses `recovery_code` (+ `factor`). The
+// begin step reuses ChallengeResp; verify reuses MfaVerifyResp (both already defined above).
+
+@JsonClass(generateAdapter = true)
+data class RecoveryChallengeBeginReq(
+    val username: String,
+    @Json(name = "challenge_id") val challengeId: String,
+) {
+    override fun toString() = "RecoveryChallengeBeginReq(username=***, challengeId=$challengeId)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RecoveryEmailSmsVerifyReq(
+    val username: String,
+    @Json(name = "challenge_id") val challengeId: String,
+    val code: String,
+) {
+    override fun toString() = "RecoveryEmailSmsVerifyReq(username=***, challengeId=$challengeId, code=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RecoveryTotpVerifyReq(
+    val username: String,
+    @Json(name = "challenge_id") val challengeId: String,
+    @Json(name = "totp_code") val totpCode: String,
+) {
+    override fun toString() = "RecoveryTotpVerifyReq(username=***, challengeId=$challengeId, totpCode=***)"
+}
+
+@JsonClass(generateAdapter = true)
+data class RecoveryCodeVerifyReq(
+    val username: String,
+    @Json(name = "challenge_id") val challengeId: String,
+    val factor: String,
+    @Json(name = "recovery_code") val recoveryCode: String,
+) {
+    override fun toString() =
+        "RecoveryCodeVerifyReq(username=***, challengeId=$challengeId, factor=$factor, recoveryCode=***)"
+}
+
+// ── password-recovery/confirm (AND-059) ──
+//
+// Verified (OpenAPI PasswordRecoveryConfirmReq + frontend): required = username, confirmation_code,
+// new_password; challenge_id optional/nullable. Success is OkResp ({ "ok": boolean }).
+
+@JsonClass(generateAdapter = true)
+data class PasswordRecoveryConfirmReq(
+    val username: String,
+    @Json(name = "confirmation_code") val confirmationCode: String,
+    @Json(name = "new_password") val newPassword: String,
+    @Json(name = "challenge_id") val challengeId: String? = null,
+) {
+    override fun toString() =
+        "PasswordRecoveryConfirmReq(username=***, confirmationCode=***, newPassword=***, " +
+            "challengeId=$challengeId)"
+}

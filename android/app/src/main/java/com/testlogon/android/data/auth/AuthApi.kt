@@ -89,4 +89,45 @@ interface AuthApi {
     @Headers("Content-Type: application/json")
     @POST("ui/register/check")
     suspend fun registerCheck(@Body body: RegisterEmailCheckReq): RegisterEmailCheckResp
+
+    // ── Password recovery (AND-057/058/059) ──
+    //
+    // Unauthenticated namespace. The whole flow is bound by the start-issued challenge_id PLUS the
+    // username (required on every challenge/confirm body per OpenAPI). See AuthDtos for shapes.
+
+    /** AND-057: begin recovery; returns the challenge + delivery descriptor. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/password-recovery/start")
+    suspend fun passwordRecoveryStart(@Body body: PasswordRecoveryStartReq): PasswordRecoveryStartResp
+
+    /** AND-058: email/sms begin (deliver a code). Reuses MFA-style ChallengeResp. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/password-recovery/challenge/{factor}/begin")
+    suspend fun passwordRecoveryBegin(
+        @Path("factor") factor: String, // "email" | "sms"
+        @Body body: RecoveryChallengeBeginReq,
+    ): ChallengeResp
+
+    /** AND-058: email/sms verify; both share a {username, challenge_id, code} body. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/password-recovery/challenge/{factor}/verify")
+    suspend fun passwordRecoveryVerifyEmailOrSms(
+        @Path("factor") factor: String, // "email" | "sms"
+        @Body body: RecoveryEmailSmsVerifyReq,
+    ): MfaVerifyResp
+
+    /** AND-058: totp verify; distinct `totp_code` body field. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/password-recovery/challenge/totp/verify")
+    suspend fun passwordRecoveryVerifyTotp(@Body body: RecoveryTotpVerifyReq): MfaVerifyResp
+
+    /** AND-058: backup recovery code; FLAT path (no /verify), `recovery_code` + `factor` body. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/password-recovery/challenge/recovery")
+    suspend fun passwordRecoveryVerifyRecovery(@Body body: RecoveryCodeVerifyReq): MfaVerifyResp
+
+    /** AND-059: set the new password; returns OkResp. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/password-recovery/confirm")
+    suspend fun passwordRecoveryConfirm(@Body body: PasswordRecoveryConfirmReq): OkResp
 }

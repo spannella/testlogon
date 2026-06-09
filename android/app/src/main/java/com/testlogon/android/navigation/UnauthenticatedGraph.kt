@@ -8,9 +8,11 @@ import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.testlogon.android.feature.auth.MagicLinkPlaceholderScreen
 import com.testlogon.android.feature.auth.MfaSetupPlaceholderScreen
-import com.testlogon.android.feature.auth.RecoveryPlaceholderScreen
 import com.testlogon.android.feature.auth.login.LoginRoute
 import com.testlogon.android.feature.auth.mfa.MfaRoute
+import com.testlogon.android.feature.auth.recovery.RecoveryChallengeRoute
+import com.testlogon.android.feature.auth.recovery.RecoveryConfirmRoute
+import com.testlogon.android.feature.auth.recovery.RecoveryStartRoute
 import com.testlogon.android.feature.auth.register.RegisterConfirmRoute
 import com.testlogon.android.feature.auth.register.RegisterRoute
 import com.testlogon.android.feature.settings.ServerUrlSettingsRoute
@@ -18,8 +20,8 @@ import com.testlogon.android.feature.settings.ServerUrlSettingsRoute
 /**
  * Registers the unauthenticated (logged-out) graph (AND-023). Login is the start destination.
  *
- * Login and MFA are the real screens (AND-030/031/039/040); Register/Recovery/MagicLink remain
- * placeholders (later tickets). On a successful login/MFA the auth gate (AppNavHost) swaps to the
+ * Login, MFA, Register, and Recovery are real screens (AND-030/031/039/040/053/054/057/058/059);
+ * MagicLink remains a placeholder (later ticket). On a successful login/MFA the auth gate (AppNavHost) swaps to the
  * authenticated graph once [AuthStateProvider] flips, so the navigate-home callbacks are no-ops
  * here — the gate owns that transition and clears the back stack across the auth boundary.
  */
@@ -171,8 +173,85 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
                 onContinue = { navController.popBackStack() },
             )
         }
+        // ── Password recovery (AND-057/058/059) ──
         composable(AuthDest.Recovery.route) {
-            RecoveryPlaceholderScreen(onBack = { navController.popBackStack() })
+            RecoveryStartRoute(
+                onProceedToChallenge = { username, challengeId, factors, delivery ->
+                    navController.navigate(
+                        AuthDest.RecoveryChallenge.build(
+                            username = username,
+                            challengeId = challengeId,
+                            factors = factors,
+                            deliveryMedium = delivery?.medium,
+                            deliveryDestination = delivery?.destinationMasked,
+                        ),
+                    ) { launchSingleTop = true }
+                },
+                onBackToLogin = {
+                    navController.navigate(AuthDest.Login.route) {
+                        popUpTo(AuthDest.Login.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
+        composable(
+            route = AuthDest.RecoveryChallenge.route,
+            arguments = listOf(
+                navArgument(AuthDest.RecoveryChallenge.ARG_USERNAME) { type = NavType.StringType },
+                navArgument(AuthDest.RecoveryChallenge.ARG_CHALLENGE_ID) { type = NavType.StringType },
+                navArgument(AuthDest.RecoveryChallenge.ARG_FACTORS) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(AuthDest.RecoveryChallenge.ARG_MEDIUM) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument(AuthDest.RecoveryChallenge.ARG_DESTINATION) {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
+        ) {
+            RecoveryChallengeRoute(
+                onVerified = { username, challengeId, code ->
+                    val confirmRoute = AuthDest.RecoveryConfirm.build(username, challengeId)
+                    navController.navigate(confirmRoute) { launchSingleTop = true }
+                    // Hand the verified confirmation code to the confirm entry off-URL (security:
+                    // OTP codes must never be encoded into a route arg).
+                    navController.getBackStackEntry(AuthDest.RecoveryConfirm.route)
+                        .savedStateHandle[AuthDest.RecoveryConfirm.KEY_CODE] = code
+                },
+                onRestart = {
+                    navController.navigate(AuthDest.Recovery.route) {
+                        popUpTo(AuthDest.Recovery.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
+        composable(
+            route = AuthDest.RecoveryConfirm.route,
+            arguments = listOf(
+                navArgument(AuthDest.RecoveryConfirm.ARG_USERNAME) { type = NavType.StringType },
+                navArgument(AuthDest.RecoveryConfirm.ARG_CHALLENGE_ID) { type = NavType.StringType },
+            ),
+        ) {
+            RecoveryConfirmRoute(
+                onSuccess = { username ->
+                    navController.navigate(AuthDest.Login.route) {
+                        popUpTo(AuthDest.Recovery.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onStartOver = {
+                    navController.navigate(AuthDest.Recovery.route) {
+                        popUpTo(AuthDest.Recovery.route) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+            )
         }
         composable(AuthDest.MagicLink.route) {
             MagicLinkPlaceholderScreen(onBack = { navController.popBackStack() })

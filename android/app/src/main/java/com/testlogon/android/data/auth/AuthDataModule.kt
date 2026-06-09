@@ -71,4 +71,10 @@ abstract class AuthDataBindsModule {
     @Binds
     @Singleton
     abstract fun bindRegisterRepository(impl: RegisterRepositoryImpl): RegisterRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindPasswordRecoveryRepository(
+        impl: PasswordRecoveryRepositoryImpl,
+    ): PasswordRecoveryRepository
 }
