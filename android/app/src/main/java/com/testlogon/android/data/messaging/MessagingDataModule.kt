@@ -32,4 +32,9 @@ abstract class MessagingDataModule {
     @Binds
     @Singleton
     abstract fun bindMessageImageProcessor(impl: DefaultMessageImageProcessor): MessageImageProcessor
+
+    /** AND-132 — binds the attachment downloader (grant -> consume? -> GET bytes -> cache). */
+    @Binds
+    @Singleton
+    abstract fun bindAttachmentDownloader(impl: DefaultAttachmentDownloader): AttachmentDownloader
 }

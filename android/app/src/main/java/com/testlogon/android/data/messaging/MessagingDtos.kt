@@ -68,6 +68,14 @@ data class MessageDto(
     val image: MessageImageDto? = null,
     /** AND-131 — present on kind="video_share". Carries the HLS manifest + short-lived token. */
     @Json(name = "video_share") val videoShare: VideoShareDto? = null,
+    /** AND-132 — present on kind="file"/"audio"/"video" (generic file attachment). */
+    val file: MessageFileDto? = null,
+    /** AND-132 — present on kind="file_share" (shared owned file, no re-upload). */
+    @Json(name = "file_share") val fileShare: MessageFileDto? = null,
+    /** AND-133 — present on kind="voice_message". Signed audio url + duration + waveform. */
+    @Json(name = "voice_message") val voiceMessage: VoiceMessageDto? = null,
+    /** AND-132/133 — "none" | "view_once" | "listen_once"; gates once-media cache reuse. */
+    @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
 )
 
 /** MessageOut.image (MessageImage). All inner fields are optional per the free-form schema. */

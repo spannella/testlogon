@@ -27,7 +27,7 @@ import javax.inject.Singleton
         MessageEntity::class,
         OutboxMessageEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -61,6 +61,33 @@ abstract class MessagingDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE outbox_messages ADD COLUMN uploadPercent INTEGER")
             }
         }
+
+        /**
+         * AND-132 / AND-133 — adds the additive file + voice columns to `messages` and
+         * `outbox_messages`. All new columns are nullable or carry a default, so v2 rows migrate
+         * without data loss.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // messages — file/file_share
+                db.execSQL("ALTER TABLE messages ADD COLUMN fileName TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fileSizeBytes INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fileMimeType TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fileIsShare INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN consumptionPolicy TEXT NOT NULL DEFAULT 'none'")
+                // messages — voice
+                db.execSQL("ALTER TABLE messages ADD COLUMN voiceAudioUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN voiceDurationSeconds REAL")
+                db.execSQL("ALTER TABLE messages ADD COLUMN voiceWaveformJson TEXT")
+                // outbox — optimistic file/voice rows
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN attachmentLocalUri TEXT")
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN fileName TEXT")
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN fileSizeBytes INTEGER")
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN fileMimeType TEXT")
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN voiceDurationSeconds REAL")
+                db.execSQL("ALTER TABLE outbox_messages ADD COLUMN voiceWaveformJson TEXT")
+            }
+        }
     }
 }
 
@@ -76,7 +103,7 @@ object MessagingDatabaseModule {
             MessagingDatabase::class.java,
             "messaging.db",
         )
-        builder.addMigrations(MessagingDatabase.MIGRATION_1_2)
+        builder.addMigrations(MessagingDatabase.MIGRATION_1_2, MessagingDatabase.MIGRATION_2_3)
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
     }

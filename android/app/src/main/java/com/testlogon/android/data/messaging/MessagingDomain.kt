@@ -45,6 +45,35 @@ sealed interface MessageMedia {
         val width: Int? = null,
         val height: Int? = null,
     ) : MessageMedia
+
+    /**
+     * AND-132 — a generic file attachment (or file_share). Bytes are downloaded on demand via the
+     * grant/consume flow keyed by message id; the bubble renders name/size/type + a download/open
+     * affordance. [isShare] distinguishes the file_share variant (no re-upload). [localUri] carries
+     * the optimistic source uri while an outbox row is still uploading.
+     */
+    data class File(
+        val fileName: String,
+        val sizeBytes: Long?,
+        val mimeType: String?,
+        val consumptionPolicy: String = "none",
+        val isShare: Boolean = false,
+        val localUri: String? = null,
+        val uploadProgress: Float? = null,
+    ) : MessageMedia
+
+    /**
+     * AND-133 — a voice message. [audioUrl] is the (short-lived) signed url for ExoPlayer playback;
+     * null while an optimistic outbox row is still uploading. [localUri] is the local clip path for
+     * preview/optimistic playback. [waveform] is the server-provided normalized peaks (0..1).
+     */
+    data class Voice(
+        val audioUrl: String?,
+        val durationSeconds: Double,
+        val waveform: List<Float>,
+        val localUri: String? = null,
+        val uploadProgress: Float? = null,
+    ) : MessageMedia
 }
 
 /** A single message in a conversation, merged from history + the local outbox at render time. */
@@ -96,7 +125,7 @@ internal fun MessageDto.toDomain(
     media = toMedia(),
 )
 
-/** Maps the wire image/video_share object to the domain [MessageMedia] (pure; no Android types). */
+/** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {
     image != null -> MessageMedia.Image(
         url = image.url?.takeIf { it.isNotBlank() }
@@ -115,8 +144,25 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         width = videoShare.width,
         height = videoShare.height,
     )
+    voiceMessage != null -> MessageMedia.Voice(
+        audioUrl = voiceMessage.audioUrl?.takeIf { it.isNotBlank() },
+        durationSeconds = voiceMessage.durationSeconds ?: 0.0,
+        waveform = voiceMessage.waveformData ?: emptyList(),
+    )
+    fileShare != null -> fileShare.toFileMedia(consumptionPolicy ?: "none", isShare = true)
+    file != null -> file.toFileMedia(consumptionPolicy ?: "none", isShare = false)
     else -> MessageMedia.None
 }
+
+/** Maps a wire file/file_share object to the domain [MessageMedia.File]. */
+internal fun MessageFileDto.toFileMedia(policy: String, isShare: Boolean): MessageMedia.File =
+    MessageMedia.File(
+        fileName = name ?: path?.substringAfterLast('/') ?: "file",
+        sizeBytes = size,
+        mimeType = contentType,
+        consumptionPolicy = policy,
+        isShare = isShare,
+    )
 
 /**
  * Derives the public S3 object url from bucket+key (mirrors messagingAdapter.ts: buildS3ObjectUrl),

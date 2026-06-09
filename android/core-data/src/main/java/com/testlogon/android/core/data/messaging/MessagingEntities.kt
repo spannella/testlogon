@@ -43,6 +43,18 @@ data class MessageEntity(
     val videoDurationSeconds: Int? = null,
     val videoHlsManifestUrl: String? = null,
     val videoDrmEnabled: Boolean = false,
+    // AND-132 — file/file_share columns (DB schema v3). Null for non-file kinds.
+    val fileName: String? = null,
+    val fileSizeBytes: Long? = null,
+    val fileMimeType: String? = null,
+    val fileIsShare: Boolean = false,
+    /** "none" | "view_once" | "listen_once" — gates once-media cache reuse. */
+    val consumptionPolicy: String = "none",
+    // AND-133 — voice columns (DB schema v3). Null for non-voice kinds.
+    val voiceAudioUrl: String? = null,
+    val voiceDurationSeconds: Double? = null,
+    /** Normalized waveform peaks (0..1) stored as a JSON number[] string. */
+    val voiceWaveformJson: String? = null,
 )
 
 @Entity(tableName = "outbox_messages")
@@ -60,4 +72,15 @@ data class OutboxMessageEntity(
     val imageLocalUri: String? = null,
     /** Live upload progress 0..100 (Int avoids a Room Float column). Null when not uploading. */
     val uploadPercent: Int? = null,
+    // AND-132 / AND-133 — optimistic file/voice outbox rows (DB schema v3).
+    /** Local content uri (file) or local clip path (voice) of the picked/recorded attachment. */
+    val attachmentLocalUri: String? = null,
+    /** Display name for an optimistic file bubble. */
+    val fileName: String? = null,
+    val fileSizeBytes: Long? = null,
+    val fileMimeType: String? = null,
+    /** Voice clip duration (seconds) for the optimistic preview/bubble. */
+    val voiceDurationSeconds: Double? = null,
+    /** Normalized waveform peaks (0..1) as a JSON number[] string, for the optimistic voice bubble. */
+    val voiceWaveformJson: String? = null,
 )

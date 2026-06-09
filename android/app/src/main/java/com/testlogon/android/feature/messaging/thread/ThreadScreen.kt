@@ -24,8 +24,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -68,10 +71,16 @@ import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.messaging.MessageMedia
+import com.testlogon.android.feature.messaging.media.FileMessageBubble
 import com.testlogon.android.feature.messaging.media.FullScreenImageViewer
 import com.testlogon.android.feature.messaging.media.InlineVideoPlayer
+import com.testlogon.android.feature.messaging.media.openDownloadedFile
 import com.testlogon.android.feature.messaging.media.rememberImageViewerState
 import com.testlogon.android.feature.messaging.relativeTimeFromSeconds
+import com.testlogon.android.feature.messaging.voice.RecordingOverlay
+import com.testlogon.android.feature.messaging.voice.VoiceMessageBubble
+import com.testlogon.android.feature.messaging.voice.VoicePreviewCard
+import com.testlogon.android.feature.messaging.voice.VoiceTestTags
 import kotlinx.coroutines.launch
 
 /** Stable testTags for the thread screen (AND-123 / AND-124). */
@@ -85,6 +94,7 @@ object ThreadTestTags {
     const val SCROLL_TO_BOTTOM = "thread_scroll_to_bottom"
     const val RETRY = "thread_retry"
     const val ATTACH_IMAGE = "thread_attach_image"
+    const val ATTACH_FILE = "thread_attach_file"
     const val SHARE_VIDEO = "thread_share_video"
     const val IMAGE_BUBBLE = "thread_image_bubble"
     const val VIDEO_BUBBLE = "thread_video_bubble"
@@ -101,11 +111,38 @@ fun ThreadRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val imageViewer = rememberImageViewerState()
+    val context = LocalContext.current
 
     // AND-130 — system photo picker (no storage permission on any supported API level).
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) viewModel.onImagePicked(uri) }
+
+    // AND-132 — system document picker (OpenDocument, wildcard MIME; no storage permission needed).
+    val pickFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            // Take a (best-effort) persistable read grant for the duration of the upload.
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val info = resolveFileInfo(context, uri)
+            viewModel.onFilePicked(uri, info.first, info.second, info.third)
+        }
+    }
+
+    // AND-133 — RECORD_AUDIO runtime permission (requested at record time, API 23+).
+    val requestMicPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) viewModel.onStartRecording() else viewModel.onPermissionDenied(permanently = false)
+    }
+
+    // AND-133 — observe the shared voice player so bubbles reflect play/pause + position.
+    val voicePlayback by viewModel.voicePlayer.playback.collectAsStateWithLifecycle()
 
     // AND-125 — mark the conversation read on ON_START (in-session guard lives in the ViewModel).
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -122,6 +159,7 @@ fun ThreadRoute(
             when (event) {
                 is ThreadEvent.ScrollToBottom -> listState.animateScrollToItem(0)
                 is ThreadEvent.OpenImageViewer -> imageViewer.open(event.url)
+                is ThreadEvent.OpenFile -> openDownloadedFile(context, event.localPath, event.mimeType)
             }
         }
     }
@@ -141,6 +179,7 @@ fun ThreadRoute(
     ThreadScreen(
         state = state,
         listState = listState,
+        voicePlayback = voicePlayback,
         onBack = onBack,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
@@ -151,10 +190,24 @@ fun ThreadRoute(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
             )
         },
+        onAttachFile = { pickFile.launch(arrayOf("*/*")) },
         onShareVideo = viewModel::onOpenVideoPicker,
         onDismissVideoPicker = viewModel::onDismissVideoPicker,
         onPickVideo = viewModel::onShareVideo,
         onOpenImage = viewModel::onOpenImage,
+        onDownloadFile = viewModel::onDownloadFile,
+        onRecordVoice = {
+            val granted = android.content.pm.PackageManager.PERMISSION_GRANTED ==
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.RECORD_AUDIO,
+                )
+            if (granted) viewModel.onStartRecording() else requestMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+        },
+        onStopVoice = viewModel::onStopRecording,
+        onCancelVoice = viewModel::onCancelRecording,
+        onSendVoice = viewModel::onSendVoice,
+        onToggleVoice = viewModel::onToggleVoice,
+        onSeekVoice = viewModel::onSeekVoice,
         modifier = modifier,
     )
 
@@ -169,16 +222,25 @@ fun ThreadRoute(
 fun ThreadScreen(
     state: ThreadUiState,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onRetrySend: (String) -> Unit,
     onAttachImage: () -> Unit,
+    onAttachFile: () -> Unit,
     onShareVideo: () -> Unit,
     onDismissVideoPicker: () -> Unit,
     onPickVideo: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onDownloadFile: (ThreadMessageUi) -> Unit,
+    onRecordVoice: () -> Unit,
+    onStopVoice: () -> Unit,
+    onCancelVoice: () -> Unit,
+    onSendVoice: () -> Unit,
+    onToggleVoice: (String, String?) -> Unit,
+    onSeekVoice: (String, Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -203,13 +265,34 @@ fun ThreadScreen(
             )
         },
         bottomBar = {
-            MessageComposer(
-                composer = state.composer,
-                onDraftChange = onDraftChange,
-                onSend = onSend,
-                onAttachImage = onAttachImage,
-                onShareVideo = onShareVideo,
-            )
+            // AND-133 — the composer swaps to the recording overlay / preview card while a voice
+            // capture/preview is active; otherwise the normal text composer is shown.
+            when (val voice = state.voice) {
+                is VoiceComposerUiState.Recording -> RecordingOverlay(
+                    elapsedMs = voice.elapsedMs,
+                    peaks = voice.peaks,
+                    countdownSeconds = voice.countdownSeconds,
+                    onCancel = onCancelVoice,
+                    onStop = onStopVoice,
+                    modifier = Modifier.navigationBarsPadding().imePadding(),
+                )
+                is VoiceComposerUiState.Preview -> VoicePreviewCard(
+                    durationMs = voice.durationMs,
+                    peaks = voice.peaks,
+                    onCancel = onCancelVoice,
+                    onSend = onSendVoice,
+                    modifier = Modifier.navigationBarsPadding().imePadding(),
+                )
+                else -> MessageComposer(
+                    composer = state.composer,
+                    onDraftChange = onDraftChange,
+                    onSend = onSend,
+                    onAttachImage = onAttachImage,
+                    onAttachFile = onAttachFile,
+                    onShareVideo = onShareVideo,
+                    onRecordVoice = onRecordVoice,
+                )
+            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -228,8 +311,12 @@ fun ThreadScreen(
                 else -> ThreadList(
                     state = state,
                     listState = listState,
+                    voicePlayback = voicePlayback,
                     onRetrySend = onRetrySend,
                     onOpenImage = onOpenImage,
+                    onDownloadFile = onDownloadFile,
+                    onToggleVoice = onToggleVoice,
+                    onSeekVoice = onSeekVoice,
                 )
             }
         }
@@ -248,8 +335,12 @@ fun ThreadScreen(
 private fun ThreadList(
     state: ThreadUiState,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
     onRetrySend: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onDownloadFile: (ThreadMessageUi) -> Unit,
+    onToggleVoice: (String, String?) -> Unit,
+    onSeekVoice: (String, Float) -> Unit,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
     val reversed = remember(state.messages) { state.messages.asReversed() }
@@ -267,8 +358,13 @@ private fun ThreadList(
             items(reversed, key = { it.key }) { message ->
                 MessageBubble(
                     message = message,
+                    download = state.downloads[message.key] ?: FileDownloadUi.NotDownloaded,
+                    voicePlayback = voicePlayback,
                     onRetry = { onRetrySend(message.key) },
                     onOpenImage = onOpenImage,
+                    onDownloadFile = { onDownloadFile(message) },
+                    onToggleVoice = onToggleVoice,
+                    onSeekVoice = onSeekVoice,
                 )
             }
             if (state.isLoadingOlder) {
@@ -302,8 +398,13 @@ private fun ThreadList(
 @Composable
 private fun MessageBubble(
     message: ThreadMessageUi,
+    download: FileDownloadUi,
+    voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
+    onDownloadFile: () -> Unit,
+    onToggleVoice: (String, String?) -> Unit,
+    onSeekVoice: (String, Float) -> Unit,
 ) {
     val alignment = if (message.isOwn) Alignment.End else Alignment.Start
     val bubbleColor = if (message.isOwn) {
@@ -330,6 +431,20 @@ private fun MessageBubble(
         when (val media = message.media) {
             is MessageMedia.Image -> ImageBubble(media = media, onOpenImage = onOpenImage)
             is MessageMedia.VideoShare -> VideoBubble(media = media)
+            is MessageMedia.File -> FileMessageBubble(
+                file = media,
+                download = download,
+                isOwn = message.isOwn,
+                onDownload = onDownloadFile,
+            )
+            is MessageMedia.Voice -> VoiceMessageBubble(
+                voice = media,
+                isOwn = message.isOwn,
+                playing = voicePlayback.activeMessageId == message.key && voicePlayback.playing,
+                positionMs = if (voicePlayback.activeMessageId == message.key) voicePlayback.positionMs else 0L,
+                onTogglePlay = { onToggleVoice(message.key, media.audioUrl ?: media.localUri) },
+                onSeek = { f -> onSeekVoice(message.key, f) },
+            )
             MessageMedia.None -> Surface(
                 color = bubbleColor,
                 shape = MaterialTheme.shapes.medium,
@@ -500,13 +615,39 @@ private fun VideoPickerSheet(
     }
 }
 
+/**
+ * AND-132 — resolve (displayName, sizeBytes, mimeType) for a picked content uri via the
+ * ContentResolver. Returns sensible fallbacks when the provider omits columns. Not @Composable.
+ */
+private fun resolveFileInfo(
+    context: android.content.Context,
+    uri: android.net.Uri,
+): Triple<String, Long, String> {
+    var name = "file"
+    var size = 0L
+    runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (cursor.moveToFirst()) {
+                if (nameIdx >= 0 && !cursor.isNull(nameIdx)) name = cursor.getString(nameIdx)
+                if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) size = cursor.getLong(sizeIdx)
+            }
+        }
+    }
+    val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
+    return Triple(name, size, mime)
+}
+
 @Composable
 private fun MessageComposer(
     composer: ComposerState,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onAttachImage: () -> Unit,
+    onAttachFile: () -> Unit,
     onShareVideo: () -> Unit,
+    onRecordVoice: () -> Unit,
 ) {
     Surface(tonalElevation = 2.dp) {
         Row(
@@ -514,13 +655,13 @@ private fun MessageComposer(
                 .fillMaxWidth()
                 .imePadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .padding(horizontal = 4.dp, vertical = 8.dp)
                 .testTag(ThreadTestTags.COMPOSER),
             verticalAlignment = Alignment.Bottom,
         ) {
             IconButton(
                 onClick = onAttachImage,
-                modifier = Modifier.size(48.dp).testTag(ThreadTestTags.ATTACH_IMAGE),
+                modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_IMAGE),
             ) {
                 Icon(
                     Icons.Filled.Image,
@@ -529,12 +670,32 @@ private fun MessageComposer(
                 )
             }
             IconButton(
+                onClick = onAttachFile,
+                modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_FILE),
+            ) {
+                Icon(
+                    Icons.Filled.AttachFile,
+                    contentDescription = stringResource(R.string.thread_attach_file),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            IconButton(
                 onClick = onShareVideo,
-                modifier = Modifier.size(48.dp).testTag(ThreadTestTags.SHARE_VIDEO),
+                modifier = Modifier.size(44.dp).testTag(ThreadTestTags.SHARE_VIDEO),
             ) {
                 Icon(
                     Icons.Filled.Videocam,
                     contentDescription = stringResource(R.string.thread_share_video),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            IconButton(
+                onClick = onRecordVoice,
+                modifier = Modifier.size(44.dp).testTag(VoiceTestTags.RECORD),
+            ) {
+                Icon(
+                    Icons.Filled.Mic,
+                    contentDescription = stringResource(R.string.thread_record_voice),
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }

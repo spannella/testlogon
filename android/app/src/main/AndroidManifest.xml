@@ -4,6 +4,9 @@
     <!-- AND-107: runtime notification permission (requested at runtime on Android 13+ / API 33). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- AND-133: microphone for voice messages (requested at runtime, API 23+). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
         android:name=".TestLogonApp"
         android:allowBackup="true"
@@ -135,6 +138,18 @@
                     android:host="post" />
             </intent-filter>
         </activity>
+
+        <!-- AND-132: FileProvider for handing downloaded message attachments to external viewers via
+             a transient content:// read grant (no file:// leaves the app). Scoped to attachments/. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- AND-105: FCM service. exported=false so only the signed Firebase intent can reach it. -->
         <service

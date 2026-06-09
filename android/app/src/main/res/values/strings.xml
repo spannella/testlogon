@@ -265,4 +265,34 @@
     <string name="video_open_externally">Open externally</string>
     <string name="video_share_out">Share</string>
     <string name="video_thumbnail_cd">Video thumbnail</string>
+
+    <!-- AND-132: file messages -->
+    <string name="thread_attach_file">Attach file</string>
+    <string name="thread_file_sending">Sending file…</string>
+    <string name="thread_file_failed">File failed — tap to retry</string>
+    <string name="file_download_cd">Download %1$s</string>
+    <string name="file_open_cd">Open %1$s</string>
+    <string name="file_downloading">Downloading…</string>
+    <string name="file_download_failed">Download failed — tap to retry</string>
+    <string name="file_no_viewer">No app can open this file</string>
+    <string name="file_share_label">Shared file</string>
+
+    <!-- AND-133: voice messages -->
+    <string name="thread_record_voice">Record voice message</string>
+    <string name="voice_recording">Recording…</string>
+    <string name="voice_slide_to_cancel">Slide to cancel</string>
+    <string name="voice_cancel">Cancel recording</string>
+    <string name="voice_stop">Stop recording</string>
+    <string name="voice_send">Send voice message</string>
+    <string name="voice_re_record">Re-record</string>
+    <string name="voice_preview_play">Play preview</string>
+    <string name="voice_play">Play voice message</string>
+    <string name="voice_pause">Pause voice message</string>
+    <string name="voice_message_cd">Voice message, %1$s</string>
+    <string name="voice_too_short">Hold to record</string>
+    <string name="voice_perm_title">Microphone access needed</string>
+    <string name="voice_perm_body">Allow microphone access to record voice messages.</string>
+    <string name="voice_perm_settings">Open settings</string>
+    <string name="voice_send_failed">Couldn\'t send voice message</string>
+    <string name="voice_sending">Sending…</string>
 </resources>

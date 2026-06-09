@@ -1,11 +1,13 @@
 package com.testlogon.android.data.messaging
 
+import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /**
  * AND-120 — Retrofit interface for the TestLogon messaging surface.
@@ -113,4 +115,85 @@ interface MessagingApi {
         @Query("limit") limit: Int? = null,
         @Query("cursor") cursor: String? = null,
     ): VideoListRespDto
+
+    /**
+     * AND-132 — create a file message referencing an uploaded object by its VFS `path` (the storage
+     * key returned by the fs complete-upload). Returns MessageOut (kind="file"). Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/file")
+    suspend fun createFileMessage(
+        @Path("id") id: String,
+        @Body body: CreateFileMessageReq,
+    ): MessageDto
+
+    /**
+     * AND-132 — share an EXISTING owned file (by `file_path`) into a conversation; no bytes upload.
+     * Body = CreateFileShareMessageIn; returns MessageOut (kind="file_share").
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/file-share")
+    suspend fun createFileShareMessage(
+        @Path("id") id: String,
+        @Body body: CreateFileShareReq,
+    ): MessageDto
+
+    /**
+     * AND-132 — create a single-use download grant for a once-media attachment. Empty body;
+     * keyed by message_id. Non-idempotent (NOT auto-retried). Returns AttachmentGrantOut.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/attachment/grant")
+    suspend fun createAttachmentGrant(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: Map<String, String> = emptyMap(),
+    ): AttachmentGrantResp
+
+    /**
+     * AND-132 — record consumption for view_once/listen_once policies. `grant_token` is a QUERY
+     * param; the body carries the client-generated attempt id + trigger. Returns metadata, NOT bytes.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/attachment/consume")
+    suspend fun consumeAttachment(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Query("grant_token") grantToken: String,
+        @Body body: ConsumeAttachmentReq,
+    ): ConsumeAttachmentResp
+
+    /**
+     * AND-132 — stream the raw attachment bytes for a granted message. `grant_token` is a query
+     * param. @Streaming so the body is not buffered into memory (chunked copy in the downloader).
+     */
+    @Streaming
+    @GET("messaging/conversations/{id}/messages/{messageId}/attachment")
+    suspend fun downloadAttachment(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Query("grant_token") grantToken: String,
+    ): ResponseBody
+
+    /**
+     * AND-133 — presign a voice-message upload. Server allocates the message_id + s3_key + upload_url.
+     * Body = PresignVoiceMessageRequest. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/voice-message/presign")
+    suspend fun presignVoice(
+        @Path("id") id: String,
+        @Body body: PresignVoiceReq,
+    ): PresignVoiceResp
+
+    /**
+     * AND-133 — create the voice message record after the PUT. Body = CreateVoiceMessageRequest
+     * (carries duration_seconds + waveform_data). Returns MessageOut (kind="voice_message").
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/voice-message")
+    suspend fun createVoiceMessage(
+        @Path("id") id: String,
+        @Body body: CreateVoiceReq,
+    ): MessageDto
 }

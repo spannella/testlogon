@@ -215,6 +215,159 @@ class FakeMessagingRepository : MessagingRepository {
         return videoShareResult
     }
 
+    // ---- AND-132 / AND-133 ----
+
+    /** Recorded file sends: (conversationId, clientId, localUri). */
+    var fileSendCalls = mutableListOf<Triple<String, String, String>>()
+    var fileSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    /** Recorded shareFile calls: (conversationId, filePath, permission). */
+    var shareFileCalls = mutableListOf<Triple<String, String, String>>()
+    var shareFileResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    /** Recorded voice sends: (conversationId, clientId, localFilePath). */
+    var voiceSendCalls = mutableListOf<Triple<String, String, String>>()
+    var voiceSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    /** Scripted download emissions (per call). */
+    var downloadProgress: List<com.testlogon.android.data.messaging.DownloadProgress> = emptyList()
+
+    override suspend fun enqueueOptimisticFile(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        fileName: String,
+        sizeBytes: Long,
+        mimeType: String,
+        nowSeconds: Long,
+    ) {
+        val row = Message(
+            id = null,
+            clientId = clientId,
+            conversationId = conversationId,
+            senderId = "",
+            text = "",
+            createdAtEpochSeconds = nowSeconds,
+            sendStatus = SendStatus.SENDING,
+            kind = "file",
+            media = MessageMedia.File(
+                fileName = fileName,
+                sizeBytes = sizeBytes,
+                mimeType = mimeType,
+                localUri = localUri,
+                uploadProgress = 0f,
+            ),
+        )
+        thread.value =
+            if (thread.value.any { it.clientId == clientId }) {
+                thread.value.map { if (it.clientId == clientId) row else it }
+            } else {
+                thread.value + row
+            }
+    }
+
+    override suspend fun sendFileOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<Message> {
+        fileSendCalls += Triple(conversationId, clientId, localUri)
+        return when (val result = fileSendResult) {
+            is ApiResult.Success -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) result.data.copy(clientId = clientId) else it
+                }
+                result
+            }
+            else -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) it.copy(sendStatus = SendStatus.FAILED) else it
+                }
+                result
+            }
+        }
+    }
+
+    override suspend fun shareFile(
+        conversationId: String,
+        filePath: String,
+        permission: String,
+        text: String?,
+    ): ApiResult<Message> {
+        shareFileCalls += Triple(conversationId, filePath, permission)
+        return shareFileResult
+    }
+
+    override fun downloadAttachment(
+        conversationId: String,
+        messageId: String,
+        fileName: String,
+        consumptionPolicy: String,
+    ): Flow<com.testlogon.android.data.messaging.DownloadProgress> =
+        kotlinx.coroutines.flow.flow { downloadProgress.forEach { emit(it) } }
+
+    override suspend fun enqueueOptimisticVoice(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        nowSeconds: Long,
+    ) {
+        val row = Message(
+            id = null,
+            clientId = clientId,
+            conversationId = conversationId,
+            senderId = "",
+            text = "",
+            createdAtEpochSeconds = nowSeconds,
+            sendStatus = SendStatus.SENDING,
+            kind = "voice_message",
+            media = MessageMedia.Voice(
+                audioUrl = null,
+                durationSeconds = durationSeconds,
+                waveform = waveform,
+                localUri = localFilePath,
+                uploadProgress = 0f,
+            ),
+        )
+        thread.value =
+            if (thread.value.any { it.clientId == clientId }) {
+                thread.value.map { if (it.clientId == clientId) row else it }
+            } else {
+                thread.value + row
+            }
+    }
+
+    override suspend fun sendVoiceOutbox(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+    ): ApiResult<Message> {
+        voiceSendCalls += Triple(conversationId, clientId, localFilePath)
+        return when (val result = voiceSendResult) {
+            is ApiResult.Success -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) result.data.copy(clientId = clientId) else it
+                }
+                result
+            }
+            else -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) it.copy(sendStatus = SendStatus.FAILED) else it
+                }
+                result
+            }
+        }
+    }
+
     companion object {
         fun failure(status: Int = 500, message: String = "boom"): ApiResult<Nothing> =
             ApiResult.Failure(ApiError(status = status, message = message))

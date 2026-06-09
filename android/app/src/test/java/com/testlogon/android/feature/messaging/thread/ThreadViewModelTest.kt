@@ -34,7 +34,14 @@ class ThreadViewModelTest {
         auth.setAuthenticated(currentUser)
         repo.historyResult = ApiResult.Success(emptyList())
         val handle = SavedStateHandle(mapOf(ThreadViewModel.ARG_CONVERSATION_ID to "c1"))
-        return ThreadViewModel(handle, repo, auth, stream).also { it.clock = { 1000L } }
+        // Voice factories hold only an (unused-in-these-tests) Context; recorder/player are created
+        // lazily and never constructed by non-voice tests, so a mock Context is sufficient.
+        val context = org.mockito.Mockito.mock(android.content.Context::class.java)
+        return ThreadViewModel(
+            handle, repo, auth, stream, context,
+            com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
+            com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
+        ).also { it.clock = { 1000L } }
     }
 
     @Test

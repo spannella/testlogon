@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.asRequestBody
 import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -121,6 +123,68 @@ interface MessagingRepository {
         videoId: String,
         caption: String?,
     ): ApiResult<Message>
+
+    /** AND-132 — enqueue an optimistic file outbox row (renders a chip with name/size + progress). */
+    suspend fun enqueueOptimisticFile(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        fileName: String,
+        sizeBytes: Long,
+        mimeType: String,
+        nowSeconds: Long,
+    )
+
+    /**
+     * AND-132 — drive a picked file through the AND-129 fs upload (presign -> PUT -> complete-upload)
+     * to obtain a server VFS `path`, then POST messages/file. Reconciles the optimistic row or marks
+     * it FAILED. Manual retry (no server idempotency key).
+     */
+    suspend fun sendFileOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<Message>
+
+    /** AND-132 — share an existing owned file (by VFS path) into a conversation; returns the message. */
+    suspend fun shareFile(
+        conversationId: String,
+        filePath: String,
+        permission: String = "read",
+        text: String? = null,
+    ): ApiResult<Message>
+
+    /** AND-132 — download a file/voice attachment to app cache (grant -> consume? -> GET bytes). */
+    fun downloadAttachment(
+        conversationId: String,
+        messageId: String,
+        fileName: String,
+        consumptionPolicy: String,
+    ): Flow<DownloadProgress>
+
+    /** AND-133 — enqueue an optimistic voice outbox row (renders a waveform bubble + progress). */
+    suspend fun enqueueOptimisticVoice(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        nowSeconds: Long,
+    )
+
+    /**
+     * AND-133 — send a recorded voice clip: presign -> PUT (AND-129 transport) -> create. Reconciles
+     * the optimistic row or marks it FAILED. A retry re-issues create with the same message_id/s3_key.
+     */
+    suspend fun sendVoiceOutbox(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+    ): ApiResult<Message>
 }
 
 /** AND-131 — a video the current user can share, for the picker. */
@@ -141,6 +205,9 @@ class MessagingRepositoryImpl @Inject constructor(
     private val authStateStore: AuthStateStore,
     private val uploader: AttachmentUploader,
     private val imageProcessor: MessageImageProcessor,
+    private val uriMetadata: com.testlogon.android.data.upload.UriMetadata,
+    private val storageClient: com.testlogon.android.data.upload.StorageUploadClient,
+    private val attachmentDownloader: AttachmentDownloader,
 ) : MessagingRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -438,6 +505,256 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    // ---- AND-132: file messages + share + download ----
+
+    override suspend fun enqueueOptimisticFile(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        fileName: String,
+        sizeBytes: Long,
+        mimeType: String,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                kind = "file",
+                attachmentLocalUri = localUri,
+                fileName = fileName,
+                fileSizeBytes = sizeBytes,
+                fileMimeType = mimeType,
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    override suspend fun sendFileOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            val uri = Uri.parse(localUri)
+            val info = uriMetadata.resolve(uri, fallbackMime = mimeType)
+            val resolvedName = info.displayName ?: fileName
+            // VFS destination path the fs presign/complete flow writes the object to (mirrors the web
+            // files upload destination); the complete-upload echoes this `path` back for the message.
+            val remotePath = "messages/$conversationId/$resolvedName"
+
+            // Presign -> PUT -> complete-upload via the AND-129 uploader (fs flow HAS a confirm step).
+            var ref: com.testlogon.android.data.upload.AttachmentRef? = null
+            var uploadError: ApiError? = null
+            uploader.upload(
+                UploadRequest(
+                    uri = uri,
+                    mimeType = info.mimeType,
+                    category = "message",
+                    sizeBytes = info.sizeBytes,
+                    displayName = resolvedName,
+                    presignPath = "v1/fs/presign-upload",
+                    confirmPath = "v1/fs/complete-upload",
+                    remotePath = remotePath,
+                ),
+            ).collect { progress ->
+                when (progress) {
+                    is UploadProgress.Uploading ->
+                        outboxDao.updateUploadPercent(clientId, (progress.fraction * 100).toInt())
+                    is UploadProgress.Succeeded -> {
+                        outboxDao.updateUploadPercent(clientId, 100)
+                        ref = progress.attachment
+                    }
+                    is UploadProgress.Failed -> uploadError = ApiError(
+                        status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                        message = progress.error.message ?: "Upload failed",
+                    )
+                    UploadProgress.Cancelled ->
+                        uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                    else -> Unit
+                }
+            }
+            val attachment = ref
+            if (attachment == null) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+                )
+            }
+
+            // The server-side VFS path returned by complete-upload is what messages/file requires.
+            val serverPath = attachment.remotePath ?: remotePath
+            when (
+                val created = apiCall {
+                    api.createFileMessage(
+                        conversationId,
+                        CreateFileMessageReq(path = serverPath, kind = "file"),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    override suspend fun shareFile(
+        conversationId: String,
+        filePath: String,
+        permission: String,
+        text: String?,
+    ): ApiResult<Message> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.createFileShareMessage(
+                    conversationId,
+                    CreateFileShareReq(
+                        filePath = filePath,
+                        permission = permission,
+                        text = text?.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override fun downloadAttachment(
+        conversationId: String,
+        messageId: String,
+        fileName: String,
+        consumptionPolicy: String,
+    ): Flow<DownloadProgress> =
+        attachmentDownloader.download(conversationId, messageId, fileName, consumptionPolicy)
+
+    // ---- AND-133: voice messages ----
+
+    override suspend fun enqueueOptimisticVoice(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                kind = "voice_message",
+                attachmentLocalUri = localFilePath,
+                voiceDurationSeconds = durationSeconds,
+                voiceWaveformJson = waveformToJson(waveform),
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    override suspend fun sendVoiceOutbox(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            val clip = java.io.File(localFilePath)
+            if (!clip.exists() || clip.length() <= 0L) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    ApiError(status = ApiError.STATUS_PARSE, message = "Recording is missing."),
+                )
+            }
+            val sizeBytes = clip.length()
+            val contentType = VOICE_CONTENT_TYPE
+
+            // 1. Presign (server allocates message_id + s3_key + upload_url).
+            val presign = when (
+                val p = apiCall {
+                    api.presignVoice(
+                        conversationId,
+                        PresignVoiceReq(contentType, sizeBytes, durationSeconds),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> p.data
+                is ApiResult.Failure -> { markOutboxFailed(clientId); return@withContext p }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); return@withContext p }
+            }
+
+            // 2. PUT bytes to the presigned url via the COOKIELESS storage client (AND-129 transport).
+            val putResult = try {
+                val body = clip.asRequestBody(contentType.toMediaTypeOrNull())
+                storageClient.put(presign.uploadUrl, contentType, body)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+            }
+            if (!putResult.success) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    ApiError(status = putResult.httpStatus, message = "Voice upload failed"),
+                )
+            }
+            outboxDao.updateUploadPercent(clientId, 100)
+
+            // 3. Create the voice message (carries duration + waveform_data). A retry re-issues create
+            //    with the SAME message_id/s3_key so the already-uploaded object is reused.
+            when (
+                val created = apiCall {
+                    api.createVoiceMessage(
+                        conversationId,
+                        CreateVoiceReq(
+                            messageId = presign.messageId,
+                            s3Key = presign.s3Key,
+                            contentType = contentType,
+                            sizeBytes = sizeBytes,
+                            durationSeconds = durationSeconds,
+                            waveformData = waveform,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    clip.delete()
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
     private suspend fun markOutboxFailed(clientId: String) {
         val current = outboxDao.findById(clientId) ?: return
         outboxDao.upsert(
@@ -458,6 +775,9 @@ class MessagingRepositoryImpl @Inject constructor(
     companion object {
         /** Sentinel status for a locally-rejected self-DM attempt (no HTTP response involved). */
         const val STATUS_SELF_DM = -100
+
+        /** AND-133 — AAC-LC / M4A container MIME (matches the recorder + the presign content-type pattern). */
+        const val VOICE_CONTENT_TYPE = "audio/mp4"
     }
 }
 
@@ -495,6 +815,8 @@ internal fun ConversationEntity.toDomain(): Conversation = Conversation(
 internal fun Message.toEntity(clientId: String?): MessageEntity {
     val image = media as? MessageMedia.Image
     val video = media as? MessageMedia.VideoShare
+    val file = media as? MessageMedia.File
+    val voice = media as? MessageMedia.Voice
     return MessageEntity(
         messageId = id ?: this.clientId,
         conversationId = conversationId,
@@ -512,7 +834,27 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         videoDurationSeconds = video?.durationSeconds,
         videoHlsManifestUrl = video?.hlsManifestUrl,
         videoDrmEnabled = video?.drmEnabled ?: false,
+        fileName = file?.fileName,
+        fileSizeBytes = file?.sizeBytes,
+        fileMimeType = file?.mimeType,
+        fileIsShare = file?.isShare ?: false,
+        consumptionPolicy = file?.consumptionPolicy ?: "none",
+        voiceAudioUrl = voice?.audioUrl,
+        voiceDurationSeconds = voice?.durationSeconds,
+        voiceWaveformJson = voice?.waveform?.let(::waveformToJson),
     )
+}
+
+/** Serializes a normalized waveform (0..1) to a compact JSON number[] string for the Room TEXT column. */
+internal fun waveformToJson(values: List<Float>): String =
+    values.joinToString(prefix = "[", postfix = "]") { String.format(java.util.Locale.ROOT, "%.3f", it) }
+
+/** Parses a JSON number[] string back into a waveform; tolerates null/blank/garbage -> empty list. */
+internal fun waveformFromJson(json: String?): List<Float> {
+    if (json.isNullOrBlank()) return emptyList()
+    return json.trim().removePrefix("[").removeSuffix("]")
+        .split(',')
+        .mapNotNull { it.trim().toFloatOrNull() }
 }
 
 internal fun MessageEntity.toDomain(): Message = Message(
@@ -536,6 +878,18 @@ internal fun MessageEntity.toDomain(): Message = Message(
             playbackToken = null,
             drmEnabled = videoDrmEnabled,
         )
+        "voice_message" -> MessageMedia.Voice(
+            audioUrl = voiceAudioUrl,
+            durationSeconds = voiceDurationSeconds ?: 0.0,
+            waveform = waveformFromJson(voiceWaveformJson),
+        )
+        "file", "file_share", "audio", "video" -> MessageMedia.File(
+            fileName = fileName ?: "file",
+            sizeBytes = fileSizeBytes,
+            mimeType = fileMimeType,
+            consumptionPolicy = consumptionPolicy,
+            isShare = fileIsShare,
+        )
         else -> MessageMedia.None
     },
 )
@@ -549,13 +903,26 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = runCatching { SendStatus.valueOf(status) }.getOrDefault(SendStatus.SENDING),
     kind = kind,
-    media = if (kind == "image") {
-        MessageMedia.Image(
+    media = when (kind) {
+        "image" -> MessageMedia.Image(
             url = null,
             localUri = imageLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
         )
-    } else {
-        MessageMedia.None
+        "file" -> MessageMedia.File(
+            fileName = fileName ?: "file",
+            sizeBytes = fileSizeBytes,
+            mimeType = fileMimeType,
+            localUri = attachmentLocalUri,
+            uploadProgress = uploadPercent?.let { it / 100f },
+        )
+        "voice_message" -> MessageMedia.Voice(
+            audioUrl = null,
+            durationSeconds = voiceDurationSeconds ?: 0.0,
+            waveform = waveformFromJson(voiceWaveformJson),
+            localUri = attachmentLocalUri,
+            uploadProgress = uploadPercent?.let { it / 100f },
+        )
+        else -> MessageMedia.None
     },
 )

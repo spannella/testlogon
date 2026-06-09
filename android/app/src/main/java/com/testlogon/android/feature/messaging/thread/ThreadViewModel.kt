@@ -6,12 +6,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.messaging.DownloadProgress
 import com.testlogon.android.data.messaging.Message
+import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.ShareableVideo
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
+import com.testlogon.android.feature.messaging.voice.RecorderLimits
+import com.testlogon.android.feature.messaging.voice.RecorderState
+import com.testlogon.android.feature.messaging.voice.VoicePlayerController
+import com.testlogon.android.feature.messaging.voice.VoicePlayerFactory
+import com.testlogon.android.feature.messaging.voice.VoiceRecorder
+import com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory
+import com.testlogon.android.feature.messaging.voice.Waveform
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -21,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
@@ -30,6 +40,9 @@ sealed interface ThreadEvent {
 
     /** AND-130 — open the full-screen image viewer for [url]. */
     data class OpenImageViewer(val url: String) : ThreadEvent
+
+    /** AND-132 — open a downloaded file via FileProvider + ACTION_VIEW (UI launches the intent). */
+    data class OpenFile(val localPath: String, val mimeType: String?) : ThreadEvent
 }
 
 /**
@@ -49,7 +62,26 @@ class ThreadViewModel @Inject constructor(
     private val repository: MessagingRepository,
     private val authStateStore: AuthStateStore,
     private val eventStream: MessagingEventStream,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
+    private val recorderFactory: VoiceRecorderFactory,
+    private val playerFactory: VoicePlayerFactory,
 ) : ViewModel() {
+
+    /**
+     * AND-133 — lifecycle-scoped recorder/player, created PER-VM on first use (not eagerly) and
+     * released in [onCleared]. Backing nullables let [onCleared] release only what was actually
+     * created, so closing a thread that never used voice never spins up a MediaRecorder/ExoPlayer.
+     */
+    private var recorderOrNull: VoiceRecorder? = null
+    private val recorder: VoiceRecorder
+        get() = recorderOrNull ?: recorderFactory.create().also { recorderOrNull = it }
+
+    private var voicePlayerOrNull: VoicePlayerController? = null
+    val voicePlayer: VoicePlayerController
+        get() = voicePlayerOrNull ?: playerFactory.create().also { voicePlayerOrNull = it }
+
+    private var recorderObserver: kotlinx.coroutines.Job? = null
+    private var capturedPeaks: List<Float> = emptyList()
 
     /** Epoch-seconds clock; overridable in tests for deterministic optimistic timestamps. */
     internal var clock: () -> Long = { System.currentTimeMillis() / 1000L }
@@ -193,13 +225,24 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             // Re-enqueue as SENDING (same clientId) then re-fire. No server idempotency key exists,
             // so a retry after an uncertain failure may duplicate — retry stays manual.
-            if (failed.isImage) {
-                val uri = imageDrafts[clientId] ?: return@launch
-                repository.enqueueOptimisticImage(conversationId, clientId, uri, clock())
-                repository.sendImageOutbox(conversationId, clientId, uri)
-            } else {
-                repository.enqueueOptimistic(conversationId, clientId, failed.text, clock())
-                repository.sendOutbox(conversationId, clientId, failed.text)
+            when {
+                failed.isImage -> {
+                    val uri = imageDrafts[clientId] ?: return@launch
+                    repository.enqueueOptimisticImage(conversationId, clientId, uri, clock())
+                    repository.sendImageOutbox(conversationId, clientId, uri)
+                }
+                failed.isFile -> {
+                    val (uri, name, mime) = fileDrafts[clientId] ?: return@launch
+                    val file = failed.media as? MessageMedia.File
+                    repository.enqueueOptimisticFile(
+                        conversationId, clientId, uri, name, file?.sizeBytes ?: 0L, mime, clock(),
+                    )
+                    repository.sendFileOutbox(conversationId, clientId, uri, name, mime)
+                }
+                else -> {
+                    repository.enqueueOptimistic(conversationId, clientId, failed.text, clock())
+                    repository.sendOutbox(conversationId, clientId, failed.text)
+                }
             }
         }
     }
@@ -262,6 +305,176 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    // ---- AND-132: file messages ----
+
+    /** Tracks picked file uris by clientId so a retry can re-run without re-picking. */
+    private val fileDrafts = mutableMapOf<String, Triple<String, String, String>>() // uri, name, mime
+
+    fun onFilePicked(uri: android.net.Uri, fileName: String, sizeBytes: Long, mimeType: String) {
+        val clientId = UUID.randomUUID().toString()
+        val localUri = uri.toString()
+        fileDrafts[clientId] = Triple(localUri, fileName, mimeType)
+        viewModelScope.launch {
+            repository.enqueueOptimisticFile(
+                conversationId, clientId, localUri, fileName, sizeBytes, mimeType, clock(),
+            )
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendFileOutbox(conversationId, clientId, localUri, fileName, mimeType)
+        }
+    }
+
+    /** AND-132 — download (grant -> consume? -> GET) a received file, tracking per-message progress. */
+    fun onDownloadFile(message: ThreadMessageUi) {
+        val messageId = message.key
+        val file = message.media as? MessageMedia.File ?: return
+        val existing = _state.value.downloads[messageId]
+        if (existing is FileDownloadUi.Downloading) return
+        if (existing is FileDownloadUi.Downloaded) {
+            _events.trySend(ThreadEvent.OpenFile(existing.localPath, file.mimeType))
+            return
+        }
+        setDownload(messageId, FileDownloadUi.Downloading(0f))
+        viewModelScope.launch {
+            repository.downloadAttachment(
+                conversationId, messageId, file.fileName, file.consumptionPolicy,
+            ).collect { progress ->
+                when (progress) {
+                    is DownloadProgress.Downloading -> setDownload(messageId, FileDownloadUi.Downloading(progress.fraction))
+                    is DownloadProgress.Done -> {
+                        setDownload(messageId, FileDownloadUi.Downloaded(progress.file.absolutePath))
+                        _events.trySend(ThreadEvent.OpenFile(progress.file.absolutePath, file.mimeType))
+                    }
+                    is DownloadProgress.Failed ->
+                        setDownload(messageId, FileDownloadUi.Failed("Download failed"))
+                }
+            }
+        }
+    }
+
+    private fun setDownload(messageId: String, state: FileDownloadUi) {
+        _state.update { it.copy(downloads = it.downloads + (messageId to state)) }
+    }
+
+    // ---- AND-133: voice messages ----
+
+    /** Called once RECORD_AUDIO is granted; starts capturing into a fresh cache temp file. */
+    fun onStartRecording() {
+        val dir = File(appContext.cacheDir, "voice").apply { mkdirs() }
+        val outFile = File(dir, "${UUID.randomUUID()}.m4a")
+        capturedPeaks = emptyList()
+        observeRecorder()
+        recorder.start(outFile)
+        _state.update { it.copy(voice = VoiceComposerUiState.Recording(0L, emptyList(), null)) }
+    }
+
+    fun onPermissionDenied(permanently: Boolean) {
+        _state.update { it.copy(voice = VoiceComposerUiState.PermissionRequired(permanently)) }
+    }
+
+    private fun observeRecorder() {
+        recorderObserver?.cancel()
+        recorderObserver = viewModelScope.launch {
+            recorder.amplitudes.collect { amp ->
+                // Append a coarse normalized peak for the live waveform (full-scale 0..1).
+                capturedPeaks = (capturedPeaks + (amp / 32767f).coerceIn(0f, 1f)).takeLast(MAX_LIVE_PEAKS)
+                val st = recorder.state.value
+                if (st is RecorderState.Recording) {
+                    _state.update {
+                        it.copy(
+                            voice = VoiceComposerUiState.Recording(
+                                elapsedMs = st.elapsedMs,
+                                peaks = capturedPeaks,
+                                countdownSeconds = RecorderLimits.countdownSeconds(st.elapsedMs),
+                            ),
+                        )
+                    }
+                } else if (st is RecorderState.Stopped) {
+                    // Auto-stop (max duration) reached on the recorder ticker.
+                    reduceStopped(st)
+                }
+            }
+        }
+    }
+
+    /** Finish a tap/locked recording; transitions to Preview, or back to Idle if too short. */
+    fun onStopRecording() {
+        val result = recorder.stop()
+        recorderObserver?.cancel()
+        if (result == null) {
+            _state.update { it.copy(voice = VoiceComposerUiState.Idle) }
+            return
+        }
+        reduceStopped(RecorderState.Stopped(result))
+    }
+
+    private fun reduceStopped(stopped: RecorderState.Stopped) {
+        val result = stopped.result
+        val peaks = Waveform.resample(
+            Waveform.normalize(result.amplitudes),
+        )
+        capturedPeaks = peaks
+        currentClipPath = result.file.absolutePath
+        currentClipDurationMs = result.durationMs
+        currentClipRawAmplitudes = result.amplitudes
+        _state.update {
+            it.copy(voice = VoiceComposerUiState.Preview(durationMs = result.durationMs, peaks = peaks))
+        }
+    }
+
+    private var currentClipPath: String? = null
+    private var currentClipDurationMs: Long = 0L
+    private var currentClipRawAmplitudes: List<Int> = emptyList()
+
+    fun onCancelRecording() {
+        recorder.cancel()
+        recorderObserver?.cancel()
+        currentClipPath?.let { File(it).delete() }
+        currentClipPath = null
+        _state.update { it.copy(voice = VoiceComposerUiState.Idle) }
+    }
+
+    fun onSendVoice() {
+        val path = currentClipPath ?: return
+        val durationSeconds = currentClipDurationMs / 1000.0
+        // Downsample to the wire waveform (10..200 floats 0..1), clamped to the min the API accepts.
+        val wire = Waveform.normalize(currentClipRawAmplitudes, Waveform.DEFAULT_BUCKETS)
+        val clientId = UUID.randomUUID().toString()
+        _state.update { it.copy(voice = VoiceComposerUiState.Sending(0f)) }
+        viewModelScope.launch {
+            repository.enqueueOptimisticVoice(conversationId, clientId, path, durationSeconds, wire, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            val result = repository.sendVoiceOutbox(conversationId, clientId, path, durationSeconds, wire)
+            _state.update {
+                it.copy(
+                    voice = if (result is ApiResult.Success) {
+                        VoiceComposerUiState.Idle
+                    } else {
+                        VoiceComposerUiState.Failed("Couldn't send voice message")
+                    },
+                )
+            }
+            if (result is ApiResult.Success) {
+                currentClipPath = null
+            }
+        }
+    }
+
+    /** AND-133 — toggle playback of a received/sent voice bubble (one clip at a time). */
+    fun onToggleVoice(messageId: String, audioUrl: String?) {
+        val url = audioUrl ?: return
+        voicePlayer.toggle(messageId, url)
+    }
+
+    fun onSeekVoice(messageId: String, fraction: Float) {
+        voicePlayer.seekTo(messageId, fraction)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        recorderOrNull?.release()
+        voicePlayerOrNull?.release()
+    }
+
     private fun reduceLoadFailure(message: String) {
         _state.update {
             if (it.messages.isNotEmpty()) {
@@ -294,6 +507,9 @@ class ThreadViewModel @Inject constructor(
         const val ARG_CONVERSATION_ID = "conversationId"
         const val PAGE_SIZE = 30
         private const val OFFLINE_MESSAGE = "You're offline. Showing saved messages."
+
+        /** AND-133 — cap the live-waveform peak buffer so the overlay scrolls a fixed window. */
+        private const val MAX_LIVE_PEAKS = 64
     }
 }
 

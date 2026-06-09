@@ -124,6 +124,47 @@ class MessagingRepositoryTest {
         }
         override suspend fun listMyVideos(status: String?, limit: Int?, cursor: String?): VideoListRespDto =
             requireNotNull(listVideosResult)
+
+        // AND-132 / AND-133 — file/file-share/grant/consume/download + voice presign/create.
+        var createFileCalls = mutableListOf<Pair<String, CreateFileMessageReq>>()
+        var createFileResult: MessageDto? = null
+        var createFileShareCalls = mutableListOf<Pair<String, CreateFileShareReq>>()
+        var createFileShareResult: MessageDto? = null
+        var presignVoiceResult: PresignVoiceResp? = null
+        var createVoiceCalls = mutableListOf<Pair<String, CreateVoiceReq>>()
+        var createVoiceResult: MessageDto? = null
+
+        override suspend fun createFileMessage(id: String, body: CreateFileMessageReq): MessageDto {
+            createFileCalls += id to body
+            return requireNotNull(createFileResult)
+        }
+        override suspend fun createFileShareMessage(id: String, body: CreateFileShareReq): MessageDto {
+            createFileShareCalls += id to body
+            return requireNotNull(createFileShareResult)
+        }
+        override suspend fun createAttachmentGrant(
+            id: String,
+            messageId: String,
+            body: Map<String, String>,
+        ): AttachmentGrantResp = error("unused")
+        override suspend fun consumeAttachment(
+            id: String,
+            messageId: String,
+            grantToken: String,
+            body: ConsumeAttachmentReq,
+        ): ConsumeAttachmentResp = error("unused")
+        override suspend fun downloadAttachment(
+            id: String,
+            messageId: String,
+            grantToken: String,
+        ): okhttp3.ResponseBody = error("unused")
+        override suspend fun presignVoice(id: String, body: PresignVoiceReq): PresignVoiceResp {
+            return requireNotNull(presignVoiceResult)
+        }
+        override suspend fun createVoiceMessage(id: String, body: CreateVoiceReq): MessageDto {
+            createVoiceCalls += id to body
+            return requireNotNull(createVoiceResult)
+        }
     }
 
     // ---- AND-130 fakes: uploader + image processor ----
@@ -171,6 +212,15 @@ class MessagingRepositoryTest {
     private val uploader = FakeUploader()
     private val imageProcessor = FakeImageProcessor(result = null)
 
+    // AND-132/133 — runtime collaborators not exercised by these (text/dm/file-share) tests; mocked
+    // so the repo is constructible. shareFile/createVoice use only `api`, so no real impl is needed.
+    private val uriMetadata =
+        org.mockito.Mockito.mock(com.testlogon.android.data.upload.UriMetadata::class.java)
+    private val storageClient =
+        org.mockito.Mockito.mock(com.testlogon.android.data.upload.StorageUploadClient::class.java)
+    private val attachmentDownloader =
+        org.mockito.Mockito.mock(AttachmentDownloader::class.java)
+
     private fun repo() = MessagingRepositoryImpl(
         api = api,
         conversationDao = conversationDao,
@@ -180,6 +230,9 @@ class MessagingRepositoryTest {
         authStateStore = auth,
         uploader = uploader,
         imageProcessor = imageProcessor,
+        uriMetadata = uriMetadata,
+        storageClient = storageClient,
+        attachmentDownloader = attachmentDownloader,
     )
 
     private fun convEntity(id: String, unread: Int) = ConversationEntity(
@@ -320,5 +373,28 @@ class MessagingRepositoryTest {
         val result = repo().sendVideoShare("c1", "vid_x", null)
         assertTrue(result is ApiResult.NetworkError)
         assertNull(messageDao.findById("msg_v1"))
+    }
+
+    // ---- AND-132: file share ----
+
+    @Test
+    fun shareFile_postsFilePathAndPermission_cachesFileShareMessage() = runTest {
+        api.createFileShareResult = MessageDto(
+            messageId = "msg_fs", conversationId = "c1", senderId = "u1", createdAt = 100,
+            kind = "file_share",
+            fileShare = MessageFileDto(name = "shared.pdf", permission = "read", path = "u/shared.pdf"),
+        )
+        val result = repo().shareFile("c1", filePath = "u/shared.pdf", permission = "read")
+
+        assertTrue(result is ApiResult.Success)
+        val (cid, body) = api.createFileShareCalls.single()
+        assertEquals("c1", cid)
+        assertEquals("u/shared.pdf", body.filePath)
+        assertEquals("read", body.permission)
+        val message = (result as ApiResult.Success).data
+        assertEquals("file_share", message.kind)
+        assertTrue(message.media is MessageMedia.File)
+        assertTrue((message.media as MessageMedia.File).isShare)
+        assertEquals("msg_fs", messageDao.findById("msg_fs")?.messageId)
     }
 }
