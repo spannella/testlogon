@@ -164,6 +164,7 @@ const TenantAdmin = lazy(() => import("@/pages/admin/TenantAdmin"));
 const SsoProvidersPage = lazy(() => import("@/pages/admin/SsoProvidersPage"));
 const LicenseRevenuePage = lazy(() => import("@/pages/licenses/LicenseRevenuePage"));
 const RiskDashboardPage = lazy(() => import("@/pages/admin/RiskDashboardPage"));
+const SecurityDashboardPage = lazy(() => import("@/pages/admin/SecurityDashboardPage"));
 const SubscriptionTierManagerPage = lazy(() => import("@/pages/admin/SubscriptionTierManagerPage"));
 const BillingConfigPage = lazy(() => import("@/pages/admin/BillingConfigPage"));
 const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard"));
@@ -480,6 +481,7 @@ export default function App() {
           <Route path="admin/sso" element={<SsoProvidersPage />} />
           <Route path="licenses/revenue" element={<LicenseRevenuePage />} />
           <Route path="admin/risk" element={<RiskDashboardPage />} />
+          <Route path="admin/security" element={<SecurityDashboardPage />} />
           <Route path="admin/subscription-tiers" element={<SubscriptionTierManagerPage />} />
           <Route path="admin/billing-config" element={<BillingConfigPage />} />
           <Route path="licenses/requests" element={<LicenseRequestsPage />} />

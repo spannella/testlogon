@@ -228,6 +228,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Appeal Queue", i18nKey: "nav.appealQueue", path: "/admin/appeals", icon: <Gavel className="h-5 w-5" /> },
       { label: "Fraud Detection", i18nKey: "nav.fraudDetection", path: "/admin/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
+      { label: "Security Dashboard", i18nKey: "nav.securityDashboard", path: "/admin/security", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
       { label: "Financials", i18nKey: "nav.financials", path: "/admin/financials", icon: <BarChart3 className="h-5 w-5" /> },
@@ -310,6 +311,7 @@ export default function Sidebar() {
             if (item.path === "/admin/appeals") return showModerationBoard;
             if (item.path === "/admin/communications") return showModerationBoard;
             if (item.path === "/admin/rate-limits") return showRootRoleManagement;
+            if (item.path === "/admin/security") return showRootRoleManagement;
             if (item.path === "/admin/jobs") return showModerationBoard;
             if (item.path === "/admin/ads/fraud") return showModerationBoard;
             if (item.path === "/admin/ad-platform") return showModerationBoard;

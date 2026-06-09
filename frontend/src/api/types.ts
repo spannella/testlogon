@@ -11533,6 +11533,96 @@ export interface FraudStatsOut {
   avg_resolution_hours: number;
 }
 
+// ── HNY: Security tooling & honeypots (defensive-only) ───────────────────────
+
+/** Honeytoken kind discriminator (matches backend pattern). */
+export type HoneytokenKind = "api_key" | "credential_record" | "canary_row";
+
+/** Request to mint a decoy honeytoken (HNY-004/HNY-007). */
+export interface HoneytokenMintIn {
+  kind: HoneytokenKind;
+  label: string;
+  placement?: string | null;
+}
+
+/** Honeytoken metadata — NEVER includes the stored secret/hash. */
+export interface HoneytokenOut {
+  token_id: string;
+  kind: string;
+  label: string;
+  created_by: string;
+  created_at: number;
+  retired: boolean;
+  placement: string;
+  key_id: string;
+  decoy_username: string;
+  canary_id: string;
+}
+
+/** Mint response — returns the plaintext secret ONCE (api_key/credential). */
+export interface HoneytokenMintOut {
+  token_id: string;
+  kind: string;
+  label: string;
+  created_at: number;
+  placement: string;
+  api_key?: string | null;
+  key_id?: string | null;
+  username?: string | null;
+  password?: string | null;
+  canary_id?: string | null;
+}
+
+/** A unified security-event row (IDS / honeypot / honeytoken signal). */
+export interface SecurityEventOut {
+  event_id: string;
+  kind: string;
+  severity: "info" | "low" | "medium" | "high" | "critical";
+  source_ip: string;
+  user_agent: string;
+  user_sub: string;
+  ts: number;
+  event_date: string;
+  details?: Record<string, unknown> | null;
+}
+
+/** Response of GET /{token_id}/hits — events referencing a honeytoken. */
+export interface HoneytokenHitsOut {
+  token_id: string;
+  count: number;
+  events: SecurityEventOut[];
+}
+
+/** Retire (DELETE) response. */
+export interface HoneytokenRetireOut {
+  ok: boolean;
+  token_id: string;
+  retired: boolean;
+}
+
+/**
+ * Aggregated dashboard overview (HNY-013/014). The backend dashboard
+ * aggregation endpoints may not yet be mounted in every environment; the page
+ * tolerates an absent endpoint and renders zeroed sections.
+ */
+export interface SecurityOverviewOut {
+  window?: string;
+  active_threats?: SecurityEventOut[];
+  honeypot_hits?: SecurityEventOut[];
+  honeytoken_trips?: SecurityEventOut[];
+  ids_signals?: SecurityEventOut[];
+  rate_limit_offenders?: Array<{ ip?: string; key?: string; count?: number }>;
+  risk_distribution?: Record<string, number>;
+  counts?: Record<string, number>;
+}
+
+/** Paginated security-events list (HNY-014 GET /events). */
+export interface SecurityEventListOut {
+  events: SecurityEventOut[];
+  cursor?: string | null;
+  next_cursor?: string | null;
+}
+
 // ── KYC-013: User Self-Service Portal ────────────────────────────────────
 export type KycCaseStatus =
   | "draft"
