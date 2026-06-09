@@ -5,6 +5,9 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import androidx.navigation.navigation
 import com.testlogon.android.feature.account.MfaDevicesRoute
+import com.testlogon.android.feature.alerts.AlertPrefsRoute
+import com.testlogon.android.feature.notifications.NotificationCenterRoute
+import com.testlogon.android.feature.notifications.NotificationTarget
 import com.testlogon.android.feature.profile.edit.EditProfileRoute
 import com.testlogon.android.feature.sessions.ActiveSessionsRoute
 import com.testlogon.android.feature.settings.account.AccountSettingsRoute
@@ -48,6 +51,13 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         }
         composable(MainDest.MfaDevices.route) {
             MfaDevicesRoute(onBack = { navController.popBackStack() })
+        }
+        // AND-085: notification center (paged list + deep-link routing).
+        composable(MainDest.Notifications.route) {
+            NotificationCenterRoute(
+                onNavigateTarget = { target -> navController.navigateToNotificationTarget(target) },
+                onBack = { navController.popBackStack() },
+            )
         }
         // AND-077..082: Settings hub + subsections.
         settingsDestinations(navController)
@@ -108,6 +118,16 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     composable(MainDest.SettingsNotifications.route) {
         NotificationPreferencesRoute(onBack = { navController.popBackStack() })
     }
+    // AND-088: alert preferences — email/SMS alert target management. Links to the AND-080
+    // type-preferences screen rather than duplicating the alert event-type matrix.
+    composable(MainDest.SettingsAlerts.route) {
+        AlertPrefsRoute(
+            onBack = { navController.popBackStack() },
+            onOpenTypePreferences = {
+                navController.navigate(MainDest.SettingsNotifications.route) { launchSingleTop = true }
+            },
+        )
+    }
     composable(MainDest.SettingsMedia.route) {
         MediaPreferencesRoute(onBack = { navController.popBackStack() })
     }
@@ -121,5 +141,22 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
             onRequestExport = {},
             onDeleteData = {},
         )
+    }
+}
+
+/**
+ * AND-085 — routes a tapped notification's resolved [NotificationTarget] to an in-app destination.
+ * Targets whose backing route is not yet wired (or that are [NotificationTarget.Unknown]) are
+ * no-oped safely rather than crashing.
+ */
+private fun NavHostController.navigateToNotificationTarget(target: NotificationTarget) {
+    when (target) {
+        is NotificationTarget.Profile ->
+            navigate(PublicProfileDest.build(target.identifier)) { launchSingleTop = true }
+        NotificationTarget.Sessions ->
+            navigate(MainDest.ActiveSessions.route) { launchSingleTop = true }
+        NotificationTarget.Settings ->
+            navigate(MainDest.Settings.route) { launchSingleTop = true }
+        NotificationTarget.Unknown -> Unit
     }
 }

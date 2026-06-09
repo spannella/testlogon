@@ -17,6 +17,12 @@ object MoreRoutes {
     // AND-080: notification prefs now live under the Settings hub.
     val NOTIFICATIONS: String get() = MainDest.SettingsNotifications.route
 
+    // AND-085: the notification center (inbox list).
+    val NOTIFICATION_CENTER: String get() = MainDest.Notifications.route
+
+    // AND-088: alert preferences (email/SMS target management).
+    val ALERT_PREFS: String get() = MainDest.SettingsAlerts.route
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -28,7 +34,9 @@ object MoreRoutes {
             PROFILE,
             SESSIONS,
             MFA_DEVICES,
+            NOTIFICATION_CENTER,
             NOTIFICATIONS,
+            ALERT_PREFS,
             SETTINGS,
             HELP,
             ABOUT,

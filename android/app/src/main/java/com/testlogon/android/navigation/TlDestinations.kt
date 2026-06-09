@@ -225,6 +225,12 @@ sealed class MainDest(val route: String) {
 
     /** Settings → Privacy & data export entry (handoff). (AND-082) */
     data object SettingsPrivacy : MainDest("settings/privacy")
+
+    /** Notification center — paged list of notifications (AND-085). */
+    data object Notifications : MainDest("notifications")
+
+    /** Alert preferences — email/SMS alert TARGET management (AND-088). */
+    data object SettingsAlerts : MainDest("settings/alerts")
 }
 
 /**

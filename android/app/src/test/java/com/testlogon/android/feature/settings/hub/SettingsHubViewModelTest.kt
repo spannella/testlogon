@@ -8,13 +8,14 @@ import org.junit.Test
 class SettingsHubViewModelTest {
 
     @Test
-    fun catalog_hasSixSectionsInFixedOrder() {
+    fun catalog_hasSectionsInFixedOrder() {
         val keys = SettingsHubViewModel.buildCatalog().map { it.key }
         assertEquals(
             listOf(
                 SettingsSectionKey.ACCOUNT,
                 SettingsSectionKey.SECURITY,
                 SettingsSectionKey.NOTIFICATIONS,
+                SettingsSectionKey.ALERTS, // AND-088 — email/SMS alert-target management
                 SettingsSectionKey.MEDIA,
                 SettingsSectionKey.APPEARANCE,
                 SettingsSectionKey.PRIVACY,

@@ -2,6 +2,7 @@ package com.testlogon.android.feature.settings.hub
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PermMedia
@@ -62,6 +63,14 @@ class SettingsHubViewModel @Inject constructor() : ViewModel() {
                 subtitleRes = R.string.settings_section_notifications_subtitle,
                 icon = Icons.Outlined.Notifications,
                 route = MainDest.SettingsNotifications.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.ALERTS,
+                titleRes = R.string.settings_section_alerts_title,
+                subtitleRes = R.string.settings_section_alerts_subtitle,
+                icon = Icons.Outlined.Campaign,
+                route = MainDest.SettingsAlerts.route,
                 available = true,
             ),
             SettingsSection(

@@ -4,6 +4,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Security
@@ -42,6 +43,13 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Security,
             route = MoreRoutes.MFA_DEVICES,
             section = MoreSection.SECURITY,
+        ),
+        MoreEntry(
+            id = "notification_center",
+            labelRes = R.string.more_entry_notification_center,
+            icon = Icons.Outlined.NotificationsActive,
+            route = MoreRoutes.NOTIFICATION_CENTER,
+            section = MoreSection.APP,
         ),
         MoreEntry(
             id = "notifications",

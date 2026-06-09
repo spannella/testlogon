@@ -105,6 +105,10 @@ dependencies {
     // AND-074: Coil for avatar/cover images.
     implementation(libs.coil.compose)
 
+    // AND-085/AND-089: Paging 3 for the notification center list + unread badge.
+    implementation(libs.paging.runtime)
+    implementation(libs.paging.compose)
+
     // AND-062: WebAuthn / passkeys via AndroidX Credential Manager.
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
@@ -125,6 +129,8 @@ dependencies {
     testImplementation(libs.retrofit.moshi)
     // AND-062: a JVM-side android.content.Context mock for passkey repository tests.
     testImplementation(libs.mockito.core)
+    // AND-090: Paging 3 test harness (TestPager / asSnapshot) for the notifications suite.
+    testImplementation(libs.paging.testing)
 
     // UI / navigation tests
     androidTestImplementation(platform(libs.compose.bom))
