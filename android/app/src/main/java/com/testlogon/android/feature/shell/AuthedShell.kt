@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.DynamicFeed
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.DynamicFeed
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
@@ -39,6 +41,7 @@ enum class AuthedTab(
 ) {
     HOME("authed/home", R.string.tab_home, Icons.Filled.Home, Icons.Outlined.Home),
     FEED("authed/feed", R.string.tab_feed, Icons.Filled.DynamicFeed, Icons.Outlined.DynamicFeed),
+    DISCOVER("authed/discover", R.string.tab_discover, Icons.Filled.Explore, Icons.Outlined.Explore),
     ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person),
     MORE("authed/more", R.string.tab_more, Icons.Filled.Apps, Icons.Outlined.Apps);
 
@@ -113,6 +116,23 @@ fun AuthedShellScreen(
                     onAuthorClick = { authorId ->
                         onOpenRoute(com.testlogon.android.navigation.PublicProfileDest.build(authorId))
                     },
+                )
+            }
+            // AND-182/AND-184: Discover (curated creators/tags + "for you" recommendations).
+            composable(AuthedTab.DISCOVER.route) {
+                com.testlogon.android.feature.discover.DiscoverRoute(
+                    onOpenProfile = { userId ->
+                        onOpenRoute(com.testlogon.android.navigation.PublicProfileDest.build(userId))
+                    },
+                    onOpenTag = { tag ->
+                        onOpenRoute(com.testlogon.android.navigation.TagPageDest.build(tag))
+                    },
+                    onOpenSearch = {
+                        onOpenRoute(com.testlogon.android.navigation.MultiSearchDest.ROUTE)
+                    },
+                    // AND-184: the web video-detail route (/gallery/{video_id}) has no Android screen
+                    // yet (owned by AND-182's scope); video taps are a safe no-op until it lands.
+                    onOpenVideo = {},
                 )
             }
             composable(AuthedTab.ME.route) {

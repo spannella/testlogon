@@ -99,6 +99,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         publicProfileDestination(navController)
         // AND-100: read-only post detail (in-app nav + deep link).
         postDetailDestination(navController)
+        // AND-183: tag pages (in-app nav + App Link / dev-host deep links).
+        tagPageDestination(navController)
+        // AND-185: global multi-entity search (distinct from AND-152 message search).
+        multiSearchDestination(navController)
     }
 }
 
