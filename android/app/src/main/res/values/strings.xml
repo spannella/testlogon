@@ -1128,4 +1128,44 @@
     <string name="manage_sub_status_canceled">Canceled</string>
     <string name="manage_sub_status_expired">Expired</string>
     <string name="manage_sub_status_unknown">Unknown</string>
+
+    <!-- AND-238/239/240: fan club (creator community) -->
+    <string name="more_entry_fan_club">My fan clubs</string>
+    <string name="profile_public_open_fanclub">Fan club</string>
+
+    <!-- AND-238: channels list -->
+    <string name="fanclub_channels_title">Fan club</string>
+    <string name="fanclub_channels_loading">Loading channels…</string>
+    <string name="fanclub_channels_empty">No channels yet</string>
+    <string name="fanclub_tier_free">Free</string>
+    <string name="fanclub_tier_members_action">Members</string>
+    <string name="fanclub_channel_locked">Locked</string>
+    <string name="fanclub_tier_header_locked_cd">%1$s tier, locked</string>
+    <string name="fanclub_channel_row_locked_cd">%1$s, locked. Tap to upgrade.</string>
+
+    <!-- AND-239: channel messages -->
+    <string name="fanclub_messages_title">Channel</string>
+    <string name="fanclub_messages_loading">Loading messages…</string>
+    <string name="fanclub_messages_empty">No messages yet</string>
+    <string name="fanclub_messages_error_generic">Couldn\'t load messages.</string>
+    <string name="fanclub_composer_hint">Message</string>
+    <string name="fanclub_composer_disabled">You can\'t post in this channel</string>
+    <string name="fanclub_message_send_cd">Send message</string>
+    <string name="fanclub_message_sending">Sending…</string>
+    <string name="fanclub_message_sent">Sent</string>
+    <string name="fanclub_message_failed">Failed to send</string>
+    <string name="fanclub_message_deleted">Message deleted</string>
+    <string name="fanclub_message_delete">Delete</string>
+    <string name="fanclub_reaction_cd">%1$s, %2$d reactions, tap to toggle</string>
+
+    <!-- AND-240: tier members -->
+    <string name="fanclub_members_title">Members</string>
+    <string name="fanclub_members_loading">Loading members…</string>
+    <string name="fanclub_members_empty">No members yet</string>
+    <string name="fanclub_members_error_generic">Couldn\'t load members.</string>
+    <string name="fanclub_members_append_error">Couldn\'t load more.</string>
+    <plurals name="fanclub_member_count">
+        <item quantity="one">%1$d member</item>
+        <item quantity="other">%1$d members</item>
+    </plurals>
 </resources>

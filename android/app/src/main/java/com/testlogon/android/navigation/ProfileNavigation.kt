@@ -16,7 +16,11 @@ import com.testlogon.android.feature.profile.publicprofile.PublicProfileRoute
  *
  * `identifier` is URL-decoded once by Navigation and passed verbatim to the screen.
  */
-fun NavGraphBuilder.publicProfileDestination(navController: NavHostController) {
+fun NavGraphBuilder.publicProfileDestination(
+    navController: NavHostController,
+    // AND-238: only the authenticated graph wires the fan-club entry (the route is auth-only).
+    onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+) {
     composable(
         route = PublicProfileDest.ROUTE,
         arguments = listOf(
@@ -25,6 +29,7 @@ fun NavGraphBuilder.publicProfileDestination(navController: NavHostController) {
         deepLinks = publicProfileDeepLinks(),
     ) {
         PublicProfileRoute(
+            onOpenFanClub = onOpenFanClub,
             onBack = {
                 // From a deep-link cold start the back stack may be empty; fall back to the start dest.
                 if (!navController.popBackStack()) {

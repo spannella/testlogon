@@ -73,6 +73,10 @@ object MoreRoutes {
     // AND-237: manage / cancel the viewer's current subscription (arg-less route).
     const val MANAGE_SUBSCRIPTION = ManageSubscriptionDest.ROUTE
 
+    // AND-238: "My fan clubs" — self-browse the viewer's fan-club channels (SELF sentinel creator id).
+    // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
+    const val FAN_CLUB = "fanclub/channels/${FanClubChannelsDest.SELF}"
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -103,6 +107,7 @@ object MoreRoutes {
             PAYMENT_METHODS,
             SUBSCRIPTION_TIERS,
             MANAGE_SUBSCRIPTION,
+            FAN_CLUB,
             SETTINGS,
             HELP,
             ABOUT,

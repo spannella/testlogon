@@ -8,6 +8,7 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.History
@@ -156,6 +157,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_manage_subscription,
             icon = Icons.Outlined.CardMembership,
             route = MoreRoutes.MANAGE_SUBSCRIPTION,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "fan_club",
+            labelRes = R.string.more_entry_fan_club,
+            icon = Icons.Outlined.Groups,
+            route = MoreRoutes.FAN_CLUB,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

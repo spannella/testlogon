@@ -96,7 +96,14 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
             EditProfileRoute(onNavigateBack = { navController.popBackStack() })
         }
         // AND-073: public profile (also registered unauthenticated for shared links).
-        publicProfileDestination(navController)
+        publicProfileDestination(
+            navController,
+            onOpenFanClub = { creatorId, displayName ->
+                navController.navigate(FanClubChannelsDest.build(creatorId, displayName)) {
+                    launchSingleTop = true
+                }
+            },
+        )
         // AND-100: read-only post detail (in-app nav + deep link).
         postDetailDestination(navController)
         // AND-183: tag pages (in-app nav + App Link / dev-host deep links).
@@ -143,6 +150,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         subscribeDestination(navController)
         // AND-237: manage / cancel subscription (status/renewal + cancel-at-period-end + resume/renew).
         manageSubscriptionDestination(navController)
+        // AND-238/239/240: fan-club channels list (tier-grouped) + channel messages + tier members.
+        fanClubDestinations(navController)
     }
 }
 

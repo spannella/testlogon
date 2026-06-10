@@ -16,6 +16,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import com.testlogon.android.feature.profile.components.ProfileHeader
 fun PublicProfileRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     viewModel: PublicProfileViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -52,6 +54,7 @@ fun PublicProfileRoute(
         identifier = viewModel.identifier,
         onRetry = viewModel::onRetry,
         onBack = onBack,
+        onOpenFanClub = onOpenFanClub,
         modifier = modifier,
     )
 }
@@ -63,6 +66,7 @@ fun PublicProfileScreen(
     identifier: String,
     onRetry: () -> Unit,
     onBack: () -> Unit,
+    onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val title = (state as? PublicProfileUiState.Content)?.profile?.displayName
@@ -88,7 +92,12 @@ fun PublicProfileScreen(
                 LoadingState(modifier = Modifier.testTag(ProfileTestTags.PUBLIC_LOADING))
 
             is PublicProfileUiState.Content ->
-                PublicContent(profile = state.profile, isStale = state.isStale, onRetry = onRetry)
+                PublicContent(
+                    profile = state.profile,
+                    isStale = state.isStale,
+                    onRetry = onRetry,
+                    onOpenFanClub = onOpenFanClub,
+                )
 
             is PublicProfileUiState.NotFound ->
                 EmptyState(
@@ -121,6 +130,7 @@ private fun PublicContent(
     profile: PublicProfile,
     isStale: Boolean,
     onRetry: () -> Unit,
+    onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
 ) {
     Column(
         modifier = Modifier
@@ -159,6 +169,16 @@ private fun PublicContent(
             modifier = Modifier.padding(horizontal = 16.dp),
         )
         StatsRow(profile = profile, modifier = Modifier.padding(horizontal = 16.dp))
+        // AND-238: entry point into this creator's fan-club channels.
+        OutlinedButton(
+            onClick = { onOpenFanClub(profile.userId, profile.displayName) },
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .testTag("public_open_fanclub"),
+        ) {
+            Text(stringResource(R.string.profile_public_open_fanclub))
+        }
     }
 }
 
