@@ -126,6 +126,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         cartDestination(navController)
         // AND-213: checkout session / order review (reached from the cart "Proceed to checkout").
         orderReviewDestination(navController)
+        // AND-214: address step (saved-address list/add/select/set-primary; no shipping quote backend).
+        addressShippingDestination(navController)
+        // AND-215: carrier tracking for a transaction (standalone; TrackingSection is the embed seam).
+        trackingDestination(navController)
     }
 }
 

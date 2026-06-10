@@ -9,6 +9,9 @@ import androidx.navigation.navArgument
 import com.testlogon.android.feature.cart.CartRoute
 import com.testlogon.android.feature.checkout.CheckoutSessionViewModel
 import com.testlogon.android.feature.checkout.OrderReviewRoute
+import com.testlogon.android.feature.checkout.address.AddressShippingRoute
+import com.testlogon.android.feature.tracking.TrackingRoute
+import com.testlogon.android.feature.tracking.TrackingViewModel
 
 /** AND-211 — the shopping cart screen. */
 data object CartDest {
@@ -58,5 +61,43 @@ fun NavGraphBuilder.orderReviewDestination(navController: NavHostController) {
         ),
     ) {
         OrderReviewRoute(onBack = { navController.popBackStack() })
+    }
+}
+
+/**
+ * AND-214 — the address step (saved-address list / add / select / set-primary). Shipping option/quote is
+ * absent — no backend support. Reached from the order-review flow as the address-selection sub-screen.
+ */
+data object AddressShippingDest {
+    const val ROUTE = "shop/address"
+}
+
+fun NavGraphBuilder.addressShippingDestination(navController: NavHostController) {
+    composable(AddressShippingDest.ROUTE) {
+        AddressShippingRoute(
+            // The payment step (AND-216 payment) is not wired; Applied returns to the prior screen.
+            onContinueToPayment = { navController.popBackStack() },
+            onBack = { navController.popBackStack() },
+        )
+    }
+}
+
+/**
+ * AND-215 — carrier tracking for a transaction. Standalone here (AND-218 PurchaseDetailScreen does not
+ * exist yet); [com.testlogon.android.feature.tracking.TrackingSection] is the embeddable seam.
+ */
+data object TrackingDest {
+    const val ARG_TXN_ID = TrackingViewModel.ARG_TXN_ID
+    const val ROUTE = "shop/tracking/{$ARG_TXN_ID}"
+
+    fun build(txnId: String): String = "shop/tracking/${Uri.encode(txnId)}"
+}
+
+fun NavGraphBuilder.trackingDestination(navController: NavHostController) {
+    composable(
+        route = TrackingDest.ROUTE,
+        arguments = listOf(navArgument(TrackingDest.ARG_TXN_ID) { type = NavType.StringType }),
+    ) {
+        TrackingRoute(onBack = { navController.popBackStack() })
     }
 }

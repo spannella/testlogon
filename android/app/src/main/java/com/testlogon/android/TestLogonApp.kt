@@ -41,6 +41,10 @@ class TestLogonApp : Application(), ImageLoaderFactory {
     @Inject
     lateinit var presenceBootstrap: com.testlogon.android.data.messaging.presence.PresenceLifecycleBootstrap
 
+    /** AND-216 — cart-abandonment lifecycle tracker (ProcessLifecycleOwner observer). */
+    @Inject
+    lateinit var cartAbandonmentTracker: com.testlogon.android.data.analytics.CartAbandonmentTracker
+
     /**
      * AND-135 — the app-wide Coil [ImageLoader] with the animated-image decoder registered so GIF
      * messages and animated-WebP custom emoji animate. Coil picks this up via [ImageLoaderFactory]
@@ -69,6 +73,9 @@ class TestLogonApp : Application(), ImageLoaderFactory {
 
         // AND-145: start the foreground-bound presence heartbeat + SSE presence collector.
         runCatching { presenceBootstrap.start() }
+
+        // AND-216: register the cart-abandonment tracker against the process lifecycle.
+        runCatching { cartAbandonmentTracker.start() }
 
         if (isFirebaseAvailable()) {
             // AND-106/109: start the auth-edge collector that registers the FCM token after login.

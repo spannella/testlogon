@@ -956,4 +956,36 @@
     <string name="checkout_empty_title">Nothing to check out</string>
     <string name="checkout_empty_body">Your cart is empty.</string>
     <string name="checkout_payments_unavailable">Payments are unavailable right now.</string>
+
+    <!-- AND-214: Address / shipping (address management slice; shipping quote/apply has no backend) -->
+    <string name="address_title">Shipping address</string>
+    <string name="address_add">Add address</string>
+    <string name="address_save">Save address</string>
+    <string name="address_continue">Continue</string>
+    <string name="address_primary_label">Primary</string>
+    <string name="address_field_name">Name</string>
+    <string name="address_field_line1">Address line 1</string>
+    <string name="address_field_city">City</string>
+    <string name="address_field_state">State / region</string>
+    <string name="address_field_postal">Postal code</string>
+
+    <!-- AND-215: Carrier tracking -->
+    <string name="tracking_section_title">Shipment tracking</string>
+    <string name="tracking_not_shipped">Not yet shipped</string>
+    <string name="tracking_carrier_label">Carrier</string>
+    <string name="tracking_number_label">Tracking number</string>
+    <string name="tracking_copy_number">Copy tracking number</string>
+    <string name="tracking_open_carrier">Track on carrier site</string>
+    <string name="tracking_estimated_delivery">Estimated delivery</string>
+    <string name="tracking_timeline_title">Tracking history</string>
+    <string name="tracking_status_label">Status: %1$s</string>
+    <string name="tracking_error">Couldn\'t load tracking.</string>
+    <string name="tracking_status_pre_transit">Pre-transit</string>
+    <string name="tracking_status_label_created">Label created</string>
+    <string name="tracking_status_in_transit">In transit</string>
+    <string name="tracking_status_out_for_delivery">Out for delivery</string>
+    <string name="tracking_status_delivered">Delivered</string>
+    <string name="tracking_status_exception">Exception</string>
+    <string name="tracking_status_returned">Returned</string>
+    <string name="tracking_status_unknown">Unknown</string>
 </resources>
