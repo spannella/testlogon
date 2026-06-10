@@ -1017,6 +1017,8 @@
 
     <!-- AND-224: Payment methods management -->
     <string name="more_entry_payment_methods">Payment methods</string>
+    <!-- AND-235: subscription tiers browse -->
+    <string name="more_entry_subscription_tiers">Subscription tiers</string>
     <string name="payment_methods_title">Payment methods</string>
     <string name="payment_methods_empty_title">No payment methods</string>
     <string name="payment_methods_empty_body">Add a card to use it for purchases.</string>
@@ -1067,4 +1069,31 @@
     <string name="verify_microdeposits_submit">Verify</string>
     <string name="verify_microdeposits_success_title">Bank account verified</string>
     <string name="verify_microdeposits_success_body">Your bank account is now ready to use.</string>
+
+    <!-- AND-232: billing error mapping (user-facing, localizable; decline-code dictionary) -->
+    <string name="billing_err_generic">Something went wrong. Please try again.</string>
+    <string name="billing_err_offline">Network error — check your connection and try again.</string>
+    <string name="billing_err_timeout">The request timed out. Please try again.</string>
+    <string name="billing_err_server">We\'re having trouble right now. Please try again.</string>
+    <string name="billing_err_card_declined">Your card was declined. Try a different payment method.</string>
+    <string name="billing_err_insufficient_funds">Your card has insufficient funds. Try a different payment method.</string>
+    <string name="billing_err_expired_card">Your card has expired. Try a different payment method.</string>
+    <string name="billing_err_incorrect_cvc">The security code is incorrect. Try a different payment method.</string>
+    <string name="billing_err_processing">There was a processing error. Please try again.</string>
+    <string name="billing_err_auth_required">Your bank needs to verify this payment. Please complete the verification step.</string>
+    <string name="billing_err_microdeposits_pending">Microdeposit verification is still pending.</string>
+
+    <!-- AND-235: subscription tiers browse -->
+    <string name="subs_tiers_title">Subscription tiers</string>
+    <string name="subs_tiers_empty">This creator has no subscription tiers yet.</string>
+    <string name="subs_tiers_free">Free</string>
+    <string name="subs_tiers_subscribe">Subscribe</string>
+    <string name="subs_tiers_manage">Manage</string>
+    <string name="subs_tiers_current_badge">Current plan</string>
+    <string name="subs_tiers_coming_soon">Subscriptions are coming soon.</string>
+    <string name="subs_tiers_interval_month">/month</string>
+    <string name="subs_tiers_interval_year">/year</string>
+    <string name="subs_tiers_interval_week">/week</string>
+    <string name="subs_tiers_card_cd">%1$s, %2$s</string>
+    <string name="subs_tiers_card_cd_current">%1$s, %2$s, current plan</string>
 </resources>

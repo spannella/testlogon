@@ -137,6 +137,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-227/228/229/230: redirect checkout (hosted/PayPal/CCBill via Custom Tabs, gated by the
         // BillingAuthorizer stub) + US-bank micro-deposit verification.
         paymentsDestinations(navController)
+        // AND-235: subscription tiers browse (tier cards + current-plan badge + flag/stub-gated CTA).
+        subscriptionTiersDestination(navController)
     }
 }
 

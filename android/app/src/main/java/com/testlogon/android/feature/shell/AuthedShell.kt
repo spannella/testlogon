@@ -171,7 +171,9 @@ fun AuthedShellScreen(
                             com.testlogon.android.navigation.MoreRoutes.VIDEOS,
                             com.testlogon.android.navigation.MoreRoutes.VOD_CATALOG,
                             // AND-201: the published video gallery browse grid (outer-graph route).
-                            com.testlogon.android.navigation.MoreRoutes.GALLERY ->
+                            com.testlogon.android.navigation.MoreRoutes.GALLERY,
+                            // AND-235: subscription tiers browse (outer-graph route; self-browse).
+                            com.testlogon.android.navigation.MoreRoutes.SUBSCRIPTION_TIERS ->
                                 onOpenRoute(route)
                             else -> Unit // coming-soon entries are non-interactive
                         }

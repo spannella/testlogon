@@ -1,5 +1,6 @@
 package com.testlogon.android.core.ui.i18n
 
+import android.content.res.Resources
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 
@@ -22,5 +23,14 @@ sealed interface UiText {
 @Composable
 fun UiText.asString(): String = when (this) {
     is UiText.Res -> text(id, *args.toTypedArray())
+    is UiText.Raw -> value
+}
+
+/**
+ * Non-Compose resolver for call sites that hold [Resources] but are not composable (e.g. a
+ * `LaunchedEffect` event collector resolving a one-shot snackbar). ViewModels still must not resolve.
+ */
+fun UiText.resolve(resources: Resources): String = when (this) {
+    is UiText.Res -> resources.getString(id, *args.toTypedArray())
     is UiText.Raw -> value
 }

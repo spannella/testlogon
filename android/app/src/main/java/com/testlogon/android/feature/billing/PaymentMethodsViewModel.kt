@@ -3,8 +3,11 @@ package com.testlogon.android.feature.billing
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.ui.i18n.UiText
 import com.testlogon.android.data.billing.BillingRepository
 import com.testlogon.android.data.billing.PaymentMethod
+import com.testlogon.android.feature.billing.error.BillingError
+import com.testlogon.android.feature.billing.error.BillingErrorMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -20,7 +23,12 @@ import javax.inject.Inject
 sealed interface PaymentMethodsLoadState {
     data object Loading : PaymentMethodsLoadState
     data class Loaded(val methods: List<PaymentMethod>) : PaymentMethodsLoadState
-    data class Error(val message: String, val retryable: Boolean) : PaymentMethodsLoadState
+
+    /** AND-232 — the failure carries a mapped [BillingError] (localizable message + retryable flag). */
+    data class Error(val error: BillingError) : PaymentMethodsLoadState {
+        val message: UiText get() = error.message
+        val retryable: Boolean get() = error.retryable
+    }
 }
 
 /**
@@ -40,7 +48,11 @@ data class PaymentMethodsUiState(
 sealed interface PaymentMethodsEvent {
     data object Removed : PaymentMethodsEvent
     data object DefaultSet : PaymentMethodsEvent
-    data class Failure(val message: String) : PaymentMethodsEvent
+
+    /** AND-232 — failure snackbar carries a mapped, localizable [BillingError] message. */
+    data class Failure(val error: BillingError) : PaymentMethodsEvent {
+        val message: UiText get() = error.message
+    }
 }
 
 /**
@@ -54,6 +66,7 @@ sealed interface PaymentMethodsEvent {
 @HiltViewModel
 class PaymentMethodsViewModel @Inject constructor(
     private val repository: BillingRepository,
+    private val errorMapper: BillingErrorMapper,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PaymentMethodsUiState())
@@ -89,7 +102,7 @@ class PaymentMethodsViewModel @Inject constructor(
                 it.copy(load = newLoad, isRefreshing = false)
             }
             if (result !is ApiResult.Success) {
-                _events.send(PaymentMethodsEvent.Failure(result.messageOrOffline()))
+                _events.send(PaymentMethodsEvent.Failure(errorMapper.map(result)))
             }
         }
     }
@@ -117,30 +130,18 @@ class PaymentMethodsViewModel @Inject constructor(
                     }
                     _events.send(success)
                 }
-                is ApiResult.Failure -> failRow(id, r.error.message)
-                is ApiResult.NetworkError -> failRow(id, OFFLINE_MESSAGE)
+                else -> failRow(id, errorMapper.map(r))
             }
         }
     }
 
-    private suspend fun failRow(id: String, message: String) {
+    private suspend fun failRow(id: String, error: BillingError) {
         _state.update { it.copy(rowInFlight = it.rowInFlight - id) }
-        _events.send(PaymentMethodsEvent.Failure(message))
+        _events.send(PaymentMethodsEvent.Failure(error))
     }
 
     private fun ApiResult<List<PaymentMethod>>.toLoadState(): PaymentMethodsLoadState = when (this) {
         is ApiResult.Success -> PaymentMethodsLoadState.Loaded(data)
-        is ApiResult.Failure -> PaymentMethodsLoadState.Error(error.message, retryable = true)
-        is ApiResult.NetworkError -> PaymentMethodsLoadState.Error(OFFLINE_MESSAGE, retryable = true)
-    }
-
-    private fun ApiResult<List<PaymentMethod>>.messageOrOffline(): String = when (this) {
-        is ApiResult.Success -> ""
-        is ApiResult.Failure -> error.message
-        is ApiResult.NetworkError -> OFFLINE_MESSAGE
-    }
-
-    companion object {
-        private const val OFFLINE_MESSAGE = "You're offline"
+        else -> PaymentMethodsLoadState.Error(errorMapper.map(this))
     }
 }

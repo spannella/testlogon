@@ -3,6 +3,9 @@ package com.testlogon.android.feature.billing
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.testing.MainDispatcherRule
+import com.testlogon.android.core.ui.i18n.UiText
+import com.testlogon.android.feature.billing.error.BillingErrorMapper
+import com.testlogon.android.feature.billing.error.Recoverability
 import com.testlogon.android.data.billing.BillingBalance
 import com.testlogon.android.data.billing.BillingConfig
 import com.testlogon.android.data.billing.BillingRepository
@@ -48,7 +51,7 @@ class PaymentMethodsViewModelTest {
         isDefault = default,
     )
 
-    private fun vm(repo: FakeBillingRepository) = PaymentMethodsViewModel(repo)
+    private fun vm(repo: FakeBillingRepository) = PaymentMethodsViewModel(repo, BillingErrorMapper())
 
     @Test
     fun load_success_populatesMethods() = runTest {
@@ -134,7 +137,8 @@ class PaymentMethodsViewModelTest {
     fun mutationFailure_leavesRow_andEmitsFailure_noListChange() = runTest {
         val repo = FakeBillingRepository().apply {
             methods = ApiResult.Success(listOf(card("pm_1", default = true), card("pm_2")))
-            setDefaultResult = ApiResult.Failure(ApiError(status = 500, message = "boom"))
+            // A validation error (422) -> FATAL, server-normalized message passed through (Raw).
+            setDefaultResult = ApiResult.Failure(ApiError(status = 422, message = "Card on file is invalid"))
         }
         val model = vm(repo)
         val job = launch { model.uiState.collect {} }
@@ -145,11 +149,12 @@ class PaymentMethodsViewModelTest {
         model.setDefault("pm_2")
         advanceUntilIdle()
 
-        // List unchanged; row cleared; Failure event with mapped message.
+        // List unchanged; row cleared; Failure event with a mapped BillingError.
         assertEquals(listOf("pm_1", "pm_2"), model.uiState.value.methods.map { it.id })
         assertTrue(model.uiState.value.rowInFlight.isEmpty())
         val failure = events.single() as PaymentMethodsEvent.Failure
-        assertEquals("boom", failure.message)
+        assertEquals(Recoverability.FATAL, failure.error.recoverability)
+        assertEquals(UiText.Raw("Card on file is invalid"), failure.error.message)
         job.cancel(); ejob.cancel()
     }
 

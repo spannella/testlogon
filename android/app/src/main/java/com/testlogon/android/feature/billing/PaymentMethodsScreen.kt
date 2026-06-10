@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -48,6 +49,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.ui.input.TlButton
+import com.testlogon.android.core.ui.i18n.asString
+import com.testlogon.android.core.ui.i18n.resolve
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -80,12 +83,13 @@ fun PaymentMethodsRoute(
 
     val removedMsg = stringResource(R.string.payment_methods_removed)
     val defaultMsg = stringResource(R.string.payment_methods_default_set)
+    val resources = LocalContext.current.resources
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             val message = when (event) {
                 is PaymentMethodsEvent.Removed -> removedMsg
                 is PaymentMethodsEvent.DefaultSet -> defaultMsg
-                is PaymentMethodsEvent.Failure -> event.message
+                is PaymentMethodsEvent.Failure -> event.message.resolve(resources)
             }
             snackbarHostState.showSnackbar(message)
         }
@@ -136,7 +140,7 @@ fun PaymentMethodsScreen(
                 is PaymentMethodsLoadState.Loading -> LoadingState()
 
                 is PaymentMethodsLoadState.Error -> ErrorState(
-                    message = load.message,
+                    message = load.message.asString(),
                     onRetry = onRetry,
                     modifier = Modifier.testTag(PaymentMethodsTestTags.ERROR),
                 )
