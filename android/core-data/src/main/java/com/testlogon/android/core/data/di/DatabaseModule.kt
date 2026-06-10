@@ -6,7 +6,9 @@ import com.testlogon.android.core.data.BuildConfig
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.db.TestLogonDatabase
 import com.testlogon.android.core.data.db.sample.SampleDao
+import com.testlogon.android.core.data.feed.BookmarkStateDao
 import com.testlogon.android.core.data.feed.PostSuppressionDao
+import com.testlogon.android.core.data.paywall.EntitlementDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -45,4 +47,12 @@ object DatabaseModule {
     @Provides
     fun providePostSuppressionDao(db: TestLogonDatabase): PostSuppressionDao =
         db.postSuppressionDao()
+
+    @Provides
+    fun provideBookmarkStateDao(db: TestLogonDatabase): BookmarkStateDao =
+        db.bookmarkStateDao()
+
+    @Provides
+    fun provideEntitlementDao(db: TestLogonDatabase): EntitlementDao =
+        db.entitlementDao()
 }

@@ -9,16 +9,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Paid
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.ThumbDownOffAlt
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +53,9 @@ object PostActionTestTags {
     const val OVERFLOW = "post_overflow"
     const val MENU_HIDE = "post_menu_hide"
     const val MENU_NOT_INTERESTED = "post_menu_not_interested"
+    const val BOOKMARK = "post_bookmark"
+    const val SHARE = "post_share"
+    const val TIP = "post_tip"
 }
 
 /**
@@ -67,6 +75,13 @@ fun PostActionBar(
     onHide: () -> Unit,
     onNotInterested: () -> Unit,
     modifier: Modifier = Modifier,
+    // AND-176 / AND-178 — share, bookmark, tip affordances.
+    bookmarked: Boolean = false,
+    bookmarkEnabled: Boolean = true,
+    onToggleBookmark: () -> Unit = {},
+    onShare: () -> Unit = {},
+    showTip: Boolean = true,
+    onTip: () -> Unit = {},
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -75,8 +90,58 @@ fun PostActionBar(
     ) {
         LikeButton(liked = liked, likeCount = likeCount, onToggle = onLikeToggle)
         CommentButton(commentCount = commentCount, onClick = onCommentClick)
+        if (showTip) {
+            TipButton(onClick = onTip)
+        }
+        BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
+        ShareButton(onClick = onShare)
         Box(modifier = Modifier.weight(1f))
         PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested)
+    }
+}
+
+@Composable
+fun BookmarkToggle(
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val desc = stringResource(if (checked) R.string.feed_remove_bookmark else R.string.feed_add_bookmark)
+    val tint = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    IconToggleButton(
+        checked = checked,
+        enabled = enabled,
+        onCheckedChange = onCheckedChange,
+        modifier = modifier.size(48.dp).testTag(PostActionTestTags.BOOKMARK),
+    ) {
+        Icon(
+            imageVector = if (checked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+            contentDescription = desc,
+            tint = tint,
+        )
+    }
+}
+
+@Composable
+private fun ShareButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onClick, modifier = modifier.size(48.dp).testTag(PostActionTestTags.SHARE)) {
+        Icon(
+            imageVector = Icons.Outlined.Share,
+            contentDescription = stringResource(R.string.feed_share),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun TipButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onClick, modifier = modifier.size(48.dp).testTag(PostActionTestTags.TIP)) {
+        Icon(
+            imageVector = Icons.Outlined.Paid,
+            contentDescription = stringResource(R.string.tip_action),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

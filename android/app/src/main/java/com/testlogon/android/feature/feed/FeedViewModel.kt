@@ -9,11 +9,16 @@ import androidx.paging.cachedIn
 import androidx.paging.filter
 import androidx.paging.map
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
 import com.testlogon.android.data.feed.FeedPost
 import com.testlogon.android.data.feed.FeedRepository
 import com.testlogon.android.data.feed.LikeState
+import com.testlogon.android.data.feed.Poll
+import com.testlogon.android.data.feed.PollRepository
+import com.testlogon.android.data.feed.PollVoteResult
 import com.testlogon.android.data.feed.PostActionsRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
+import com.testlogon.android.data.feed.applyVote
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -21,9 +26,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -46,12 +55,21 @@ class FeedViewModel @Inject constructor(
     private val repository: FeedRepository,
     private val engagement: PostEngagementRepository,
     private val actions: PostActionsRepository,
+    private val bookmarks: FeedBookmarkRepository,
+    private val polls: PollRepository,
 ) : ViewModel() {
 
     private val refreshTrigger = MutableStateFlow(0L)
 
     private val likeOverrides = MutableStateFlow<Map<String, LikeState>>(emptyMap())
     private val likeJobs = mutableMapOf<String, Job>()
+
+    // AND-176 — per-post bookmark toggle serialization (last-write-wins).
+    private val bookmarkJobs = mutableMapOf<String, Job>()
+
+    // AND-179 — per-post poll vote state + in-flight guard.
+    private val pollStates = MutableStateFlow<Map<String, PollCardState>>(emptyMap())
+    val pollUiStates: StateFlow<Map<String, PollCardState>> = pollStates.asStateFlow()
 
     private val pager: Flow<PagingData<FeedPost>> =
         refreshTrigger
@@ -74,6 +92,10 @@ class FeedViewModel @Inject constructor(
                 .filter { it.id !in suppressed }
                 .map { post -> overrides[post.id]?.let { post.applyLike(it) } ?: post }
         }
+
+    /** AND-176 — reactive set of saved post ids (drives the per-post bookmark icon). */
+    val savedIds: StateFlow<Set<String>> =
+        bookmarks.savedIds.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     private val _events = Channel<FeedEvent>(Channel.BUFFERED)
 
@@ -160,14 +182,106 @@ class FeedViewModel @Inject constructor(
     /** Retry a failed hide/not-interested. */
     fun onRetry(action: FeedAction) = suppress(action)
 
+    // ---- AND-176: bookmark toggle ----
+
+    /**
+     * Optimistic bookmark toggle. [currentlySaved] is the icon state the user tapped from; the desired
+     * end-state is its inverse. Per-post jobs are serialized (a new tap cancels the prior in-flight one)
+     * so the final committed state matches the last intent (FR-7).
+     */
+    fun onToggleBookmark(postId: String, currentlySaved: Boolean) {
+        val desired = !currentlySaved
+        bookmarkJobs.remove(postId)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                when (val r = bookmarks.setBookmarked(postId, desired)) {
+                    is ApiResult.Success -> Unit // Room already reflects the desired state.
+                    is ApiResult.Failure ->
+                        _events.trySend(FeedEvent.BookmarkFailed(postId, desired, BOOKMARK_FAIL_MESSAGE))
+                    is ApiResult.NetworkError ->
+                        _events.trySend(FeedEvent.BookmarkFailed(postId, desired, BOOKMARK_FAIL_MESSAGE))
+                }
+            } catch (e: CancellationException) {
+                throw e // superseded by a newer tap
+            }
+        }
+        bookmarkJobs[postId] = job
+        job.invokeOnCompletion { if (bookmarkJobs[postId] === job) bookmarkJobs.remove(postId) }
+    }
+
+    /** Retry a failed bookmark toggle for the same desired state. */
+    fun onRetryBookmark(postId: String, desired: Boolean) {
+        bookmarkJobs.remove(postId)?.cancel()
+        val job = viewModelScope.launch {
+            when (bookmarks.setBookmarked(postId, desired)) {
+                is ApiResult.Success -> Unit
+                else -> _events.trySend(FeedEvent.BookmarkFailed(postId, desired, BOOKMARK_FAIL_MESSAGE))
+            }
+        }
+        bookmarkJobs[postId] = job
+        job.invokeOnCompletion { if (bookmarkJobs[postId] === job) bookmarkJobs.remove(postId) }
+    }
+
+    // ---- AND-179: poll voting ----
+
+    /** Seed the per-post poll state from the loaded post if not already tracked. Idempotent. */
+    fun ensurePollState(post: FeedPost) {
+        val poll = post.poll ?: return
+        if (pollStates.value.containsKey(post.id)) return
+        pollStates.update { it + (post.id to initialPollStateFor(poll)) }
+    }
+
+    fun onPollOptionSelected(postId: String, questionId: String, optionId: String) {
+        val current = pollStates.value[postId] ?: return
+        val poll = current.poll
+        if (!poll.isInteractive) return // closed -> no-op (FR-6)
+        if (current is PollCardState.Voting) return // FR-3 double-submit guard
+        pollStates.update { it + (postId to PollCardState.Voting(poll, questionId, optionId)) }
+        viewModelScope.launch {
+            val next: PollCardState = when (val r = polls.vote(postId, questionId, optionId)) {
+                is ApiResult.Success -> PollCardState.Results(poll.applyVote(r.data))
+                is ApiResult.Failure -> PollCardState.Error(poll, questionId, r.error.message)
+                is ApiResult.NetworkError -> PollCardState.Error(poll, questionId, OFFLINE_POLL_MESSAGE)
+            }
+            pollStates.update { it + (postId to next) }
+        }
+    }
+
+    /** Retry a failed vote for the same (question, option). */
+    fun onPollRetry(postId: String, questionId: String, optionId: String) {
+        val current = pollStates.value[postId] ?: return
+        pollStates.update { it + (postId to PollCardState.Idle(current.poll)) }
+        onPollOptionSelected(postId, questionId, optionId)
+    }
+
     private companion object {
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 10
         const val INITIAL_LOAD_SIZE = 20
         const val OFFLINE_LIKE_MESSAGE = "Couldn't update like. Try again."
         const val OFFLINE_HIDE_MESSAGE = "Couldn't hide post. Tap to retry."
+        const val BOOKMARK_FAIL_MESSAGE = "Couldn't save post. Retry."
+        const val OFFLINE_POLL_MESSAGE = "Couldn't submit vote. Tap to retry."
     }
 }
+
+/** AND-179 — per-poll UI state held by [FeedViewModel], keyed by post id. */
+sealed interface PollCardState {
+    val poll: Poll
+
+    data class Idle(override val poll: Poll) : PollCardState
+    data class Voting(override val poll: Poll, val questionId: String, val pendingOptionId: String) : PollCardState
+    data class Results(override val poll: Poll) : PollCardState
+    data class Error(override val poll: Poll, val questionId: String, val message: String) : PollCardState
+}
+
+/** Seed state: a closed poll or one already voted on every question opens read-only; else selectable. */
+internal fun initialPollStateFor(poll: Poll): PollCardState =
+    if (poll.closed || (poll.questions.isNotEmpty() && poll.questions.all { it.hasVoted })) {
+        PollCardState.Results(poll)
+    } else {
+        PollCardState.Idle(poll)
+    }
 
 /** A hide / not-interested action carrying the post id and its captured feed index (for rollback). */
 sealed interface FeedAction {
@@ -191,6 +305,9 @@ sealed interface FeedEvent {
 
     /** A hide/not-interested failed; show a Retry snackbar. */
     data class SuppressFailed(val action: FeedAction, val message: String) : FeedEvent
+
+    /** AND-176 — a bookmark toggle failed; show a Retry snackbar for the same desired state. */
+    data class BookmarkFailed(val postId: String, val desired: Boolean, val message: String) : FeedEvent
 }
 
 /** Applies an optimistic / reconciled [LikeState] over a post (AND-173). */

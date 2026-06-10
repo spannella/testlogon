@@ -27,4 +27,9 @@ abstract class BookmarksDataModule {
     @Binds
     @Singleton
     abstract fun bindBookmarksRepository(impl: BookmarksRepositoryImpl): BookmarksRepository
+
+    /** AND-176 — feed bookmark toggle repository (optimistic, Room-backed). */
+    @Binds
+    @Singleton
+    abstract fun bindFeedBookmarkRepository(impl: FeedBookmarkRepositoryImpl): FeedBookmarkRepository
 }

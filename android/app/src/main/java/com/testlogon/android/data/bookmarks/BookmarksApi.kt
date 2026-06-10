@@ -40,8 +40,15 @@ interface BookmarksApi {
         @Path("content_id") contentId: String,
     ): OkDto
 
-    /** Re-create a bookmark (Undo). Mutating POST. */
+    /** Re-create a bookmark (Undo / feed save). Mutating POST. */
     @Headers("Content-Type: application/json")
     @POST("ui/bookmarks")
     suspend fun createBookmark(@Body body: CreateBookmarkDto): OkDto
+
+    /**
+     * AND-176 — batch presence check used to seed the feed's per-post saved icon cheaply.
+     * `ids` is a comma-joined list of content ids. Idempotent GET.
+     */
+    @GET("ui/bookmarks/status")
+    suspend fun bookmarkStatus(@Query("ids") ids: String): BookmarkStatusDto
 }

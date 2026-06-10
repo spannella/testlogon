@@ -32,7 +32,7 @@ class FeedViewModelTest {
                 ),
             ),
         )
-        val vm = FeedViewModel(repo, FakeEngagementRepository(), FakePostActionsRepository())
+        val vm = FeedViewModel(repo, FakeEngagementRepository(), FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
         val items = vm.items.asSnapshot { scrollTo(24) }
         assertEquals(25, items.size)
         assertEquals("p1", items.first().id)
@@ -49,7 +49,7 @@ class FeedViewModelTest {
             ),
         )
         val repo = FakeFeedRepository(pagesByCursor = mapOf(null to FeedPage(listOf(locked), null)))
-        val vm = FeedViewModel(repo, FakeEngagementRepository(), FakePostActionsRepository())
+        val vm = FeedViewModel(repo, FakeEngagementRepository(), FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
         val items = vm.items.asSnapshot()
         assertEquals(1, items.size)
         assertTrue(items[0].isLocked)
@@ -60,7 +60,7 @@ class FeedViewModelTest {
         val repo = FakeFeedRepository(
             pagesByCursor = mapOf(null to FeedPage(listOf(FakeFeedRepository.post("p1")), null)),
         )
-        val vm = FeedViewModel(repo, FakeEngagementRepository(), FakePostActionsRepository())
+        val vm = FeedViewModel(repo, FakeEngagementRepository(), FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
         vm.items.asSnapshot()
         val callsBefore = repo.feedCalls
         vm.refresh()
@@ -70,7 +70,7 @@ class FeedViewModelTest {
 
     @Test
     fun onUnlockClick_emitsUnlockRequestedEvent_once() = runTest {
-        val vm = FeedViewModel(FakeFeedRepository(), FakeEngagementRepository(), FakePostActionsRepository())
+        val vm = FeedViewModel(FakeFeedRepository(), FakeEngagementRepository(), FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
         vm.onUnlockClick("post_42")
         val event = vm.events.first()
         assertTrue(event is FeedEvent.UnlockRequested)

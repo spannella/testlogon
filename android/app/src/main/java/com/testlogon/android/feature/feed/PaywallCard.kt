@@ -19,10 +19,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.testlogon.android.R
 import com.testlogon.android.core.ui.input.TlButton
 import com.testlogon.android.data.feed.LockType
 import com.testlogon.android.data.feed.Paywall
@@ -48,10 +50,20 @@ fun PaywallCard(
     onUnlockClick: () -> Unit,
     modifier: Modifier = Modifier,
     style: PaywallStyle = PaywallStyle.Feed,
+    // AND-177 — unlock flow state driving the CTA (spinner / disabled / sold-out / payments-unavailable).
+    unlockState: UnlockState = UnlockState.Idle,
 ) {
     val priceText = PriceFormatter.format(locked.priceCents)
     val label = labelFor(locked)
     val ctaText = if (priceText != null) "Unlock for $priceText" else "Unlock"
+    val inProgress = unlockState is UnlockState.InProgress
+    val soldOut = locked.unlockLimitReached || unlockState is UnlockState.SoldOut
+    val ctaEnabled = !inProgress && !soldOut && !locked.lockExpired
+    val statusMessage: String? = when (unlockState) {
+        is UnlockState.PaymentsUnavailable -> stringResource(R.string.paywall_payments_unavailable)
+        is UnlockState.Failed -> unlockState.message
+        else -> null
+    }
     val cd = buildString {
         append("Locked post. ").append(label).append(". ").append(ctaText).append(".")
     }
@@ -90,16 +102,25 @@ fun PaywallCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        } else if (locked.unlockLimitReached) {
+        } else if (soldOut) {
             Text(
-                text = "Sold out.",
+                text = stringResource(R.string.paywall_sold_out),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (statusMessage != null) {
+            Text(
+                text = statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         TlButton(
-            text = ctaText,
+            text = if (inProgress) stringResource(R.string.paywall_unlocking) else ctaText,
             onClick = onUnlockClick,
+            enabled = ctaEnabled,
+            loading = inProgress,
             modifier = Modifier.testTag(PaywallTestTags.CTA),
         )
     }

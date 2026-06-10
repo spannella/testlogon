@@ -26,6 +26,8 @@ data class FeedPost(
     val likedByMe: Boolean,
     /** Never null at domain level; derived from the flat lock fields. */
     val paywall: Paywall,
+    /** AND-179 — embedded poll, or null when the post carries no poll_data. */
+    val poll: Poll? = null,
 ) {
     val isLocked: Boolean get() = paywall is Paywall.Locked
 }
@@ -87,6 +89,8 @@ internal fun PostDto.toDomain(): FeedPost {
         commentCount = commentCount,
         likedByMe = likedByMe,
         paywall = paywall,
+        // Polls are content, not protected media: only surface when the post is not locked.
+        poll = if (locked) null else toPoll(),
     )
 }
 

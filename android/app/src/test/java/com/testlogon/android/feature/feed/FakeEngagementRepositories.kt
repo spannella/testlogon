@@ -5,12 +5,17 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.Comment
 import com.testlogon.android.data.feed.CommentPage
 import com.testlogon.android.data.feed.CommentsRepository
+import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
 import com.testlogon.android.data.feed.LikeState
+import com.testlogon.android.data.feed.PollRepository
+import com.testlogon.android.data.feed.PollVoteResult
 import com.testlogon.android.data.feed.PostActionsRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import java.io.IOException
 
 /**
@@ -67,6 +72,70 @@ class FakePostActionsRepository(
         unhideCalls += postId
         if (unhideResult is ApiResult.Success) _suppressed.value = _suppressed.value - postId
         return unhideResult
+    }
+}
+
+/**
+ * AND-176 — fake [FeedBookmarkRepository]. Backs [savedIds] with an in-memory set; setBookmarked
+ * mutates it and returns a configurable result; can be gated to test serialization.
+ */
+class FakeFeedBookmarkRepository(
+    initial: Set<String> = emptySet(),
+    var result: (postId: String, bookmarked: Boolean) -> ApiResult<Unit> = { _, _ -> ApiResult.Success(Unit) },
+) : FeedBookmarkRepository {
+
+    val setCalls = mutableListOf<Pair<String, Boolean>>()
+    var gate: CompletableDeferred<Unit>? = null
+
+    private val _saved = MutableStateFlow(initial)
+    override val savedIds: Flow<Set<String>> = _saved
+
+    override fun isBookmarked(postId: String): Flow<Boolean> = _saved.map { postId in it }
+
+    override suspend fun setBookmarked(postId: String, bookmarked: Boolean): ApiResult<Unit> {
+        setCalls += postId to bookmarked
+        gate?.await()
+        val r = result(postId, bookmarked)
+        if (r is ApiResult.Success) {
+            _saved.value = if (bookmarked) _saved.value + postId else _saved.value - postId
+        }
+        return r
+    }
+
+    override suspend fun hydrate(postIds: List<String>): ApiResult<Unit> = ApiResult.Success(Unit)
+}
+
+/**
+ * AND-179 — fake [PollRepository]. Returns a configurable per-question result; records calls and can be
+ * gated to test the in-flight double-tap guard.
+ */
+class FakePollRepository(
+    var voteResult: (postId: String, questionId: String, optionId: String) -> ApiResult<PollVoteResult> =
+        { _, questionId, optionId ->
+            ApiResult.Success(
+                PollVoteResult(
+                    questionId = questionId,
+                    voteCounts = mapOf(optionId to 1),
+                    totalVotes = 1,
+                    myVoteOptionIds = listOf(optionId),
+                ),
+            )
+        },
+) : PollRepository {
+
+    val voteCalls = mutableListOf<Triple<String, String, String>>()
+    val removeCalls = mutableListOf<Pair<String, String>>()
+    var gate: CompletableDeferred<Unit>? = null
+
+    override suspend fun vote(postId: String, questionId: String, optionId: String): ApiResult<PollVoteResult> {
+        voteCalls += Triple(postId, questionId, optionId)
+        gate?.await()
+        return voteResult(postId, questionId, optionId)
+    }
+
+    override suspend fun removeVote(postId: String, questionId: String): ApiResult<PollVoteResult> {
+        removeCalls += postId to questionId
+        return voteResult(postId, questionId, "")
     }
 }
 

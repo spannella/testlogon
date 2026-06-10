@@ -23,6 +23,12 @@ object FeedApiModule {
     @Singleton
     fun provideEngagementApi(retrofit: Retrofit): EngagementApi =
         retrofit.create(EngagementApi::class.java)
+
+    /** AND-179 — poll vote API on the shared Retrofit. */
+    @Provides
+    @Singleton
+    fun providePollApi(retrofit: Retrofit): PollApi =
+        retrofit.create(PollApi::class.java)
 }
 
 /** AND-097 / AND-173 / AND-174 / AND-175 — binds the feed + engagement repositories. */
@@ -45,4 +51,9 @@ abstract class FeedDataModule {
     @Binds
     @Singleton
     abstract fun bindPostActionsRepository(impl: PostActionsRepositoryImpl): PostActionsRepository
+
+    /** AND-179 — poll vote repository. */
+    @Binds
+    @Singleton
+    abstract fun bindPollRepository(impl: PollRepositoryImpl): PollRepository
 }

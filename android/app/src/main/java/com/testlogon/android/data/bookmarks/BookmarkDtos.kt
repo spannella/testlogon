@@ -52,3 +52,12 @@ data class CreateBookmarkDto(
 data class OkDto(
     @Json(name = "ok") val ok: Boolean = true,
 )
+
+/**
+ * AND-176 — `GET /ui/bookmarks/status?ids=` response: a map of content id -> saved boolean.
+ * Verified: OpenAPI `bookmark_status_ui_bookmarks_status_get`; reference bookmarks.ts getBookmarkStatus.
+ */
+@JsonClass(generateAdapter = true)
+data class BookmarkStatusDto(
+    @Json(name = "statuses") val statuses: Map<String, Boolean> = emptyMap(),
+)

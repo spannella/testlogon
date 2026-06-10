@@ -30,7 +30,7 @@ class FeedEngagementViewModelTest {
     @Test
     fun onLikeToggle_appliesOptimistically_thenReconcilesServerCount() = runTest {
         val engagement = FakeEngagementRepository(result = { _, liked, _ -> ApiResult.Success(LikeState(liked, 99)) })
-        val vm = FeedViewModel(feedRepo(post("p1")), engagement, FakePostActionsRepository())
+        val vm = FeedViewModel(feedRepo(post("p1")), engagement, FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
 
         vm.onLikeToggle(post("p1"))
         advanceUntilIdle()
@@ -45,7 +45,7 @@ class FeedEngagementViewModelTest {
     @Test
     fun onLikeToggle_failure_rollsBack_andEmitsError() = runTest {
         val engagement = FakeEngagementRepository(result = { _, _, _ -> FakeFeedRepository.failure(500) })
-        val vm = FeedViewModel(feedRepo(post("p1", liked = false, likeCount = 10)), engagement, FakePostActionsRepository())
+        val vm = FeedViewModel(feedRepo(post("p1", liked = false, likeCount = 10)), engagement, FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
 
         vm.onLikeToggle(post("p1", liked = false, likeCount = 10))
         advanceUntilIdle()
@@ -58,7 +58,7 @@ class FeedEngagementViewModelTest {
     @Test
     fun onLikeToggle_unlikeAtZero_neverNegative() = runTest {
         val engagement = FakeEngagementRepository()
-        val vm = FeedViewModel(feedRepo(post("p1", liked = true, likeCount = 0)), engagement, FakePostActionsRepository())
+        val vm = FeedViewModel(feedRepo(post("p1", liked = true, likeCount = 0)), engagement, FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
 
         vm.onLikeToggle(post("p1", liked = true, likeCount = 0))
         advanceUntilIdle()
@@ -73,7 +73,7 @@ class FeedEngagementViewModelTest {
         val gate = CompletableDeferred<Unit>()
         val engagement = FakeEngagementRepository(result = { _, liked, count -> ApiResult.Success(LikeState(liked, count)) })
         engagement.gate = gate
-        val vm = FeedViewModel(feedRepo(post("p1")), engagement, FakePostActionsRepository())
+        val vm = FeedViewModel(feedRepo(post("p1")), engagement, FakePostActionsRepository(), FakeFeedBookmarkRepository(), FakePollRepository())
 
         // Three rapid taps before any request completes.
         vm.onLikeToggle(post("p1", liked = false, likeCount = 10))
@@ -90,7 +90,7 @@ class FeedEngagementViewModelTest {
     @Test
     fun onHide_suppressesPost_filtersFromFeed() = runTest {
         val actions = FakePostActionsRepository()
-        val vm = FeedViewModel(feedRepo(post("p1"), post("p2")), FakeEngagementRepository(), actions)
+        val vm = FeedViewModel(feedRepo(post("p1"), post("p2")), FakeEngagementRepository(), actions, FakeFeedBookmarkRepository(), FakePollRepository())
 
         vm.onHide("p1", index = 0)
         advanceUntilIdle()
@@ -104,7 +104,7 @@ class FeedEngagementViewModelTest {
     @Test
     fun onNotInterested_callsNotInterested_suppresses() = runTest {
         val actions = FakePostActionsRepository()
-        val vm = FeedViewModel(feedRepo(post("p1")), FakeEngagementRepository(), actions)
+        val vm = FeedViewModel(feedRepo(post("p1")), FakeEngagementRepository(), actions, FakeFeedBookmarkRepository(), FakePollRepository())
 
         vm.onNotInterested("p1", index = 0)
         advanceUntilIdle()
@@ -116,7 +116,7 @@ class FeedEngagementViewModelTest {
     @Test
     fun onUndo_unhides_restoresPost() = runTest {
         val actions = FakePostActionsRepository(initial = setOf("p1"))
-        val vm = FeedViewModel(feedRepo(post("p1")), FakeEngagementRepository(), actions)
+        val vm = FeedViewModel(feedRepo(post("p1")), FakeEngagementRepository(), actions, FakeFeedBookmarkRepository(), FakePollRepository())
 
         // Initially suppressed -> filtered out.
         assertTrue(vm.items.asSnapshot().none { it.id == "p1" })

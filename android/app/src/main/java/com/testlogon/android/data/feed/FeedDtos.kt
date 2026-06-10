@@ -49,6 +49,10 @@ data class PostDto(
     @Json(name = "unlock_count") val unlockCount: Int? = null,
     @Json(name = "unlock_limit_reached") val unlockLimitReached: Boolean? = null,
     @Json(name = "lock_expired") val lockExpired: Boolean? = null,
+    // --- AND-179 embedded poll (present for post_type "poll"/"survey") ---
+    @Json(name = "poll_data") val pollData: PollDataDto? = null,
+    @Json(name = "poll_vote_counts") val pollVoteCounts: Map<String, Map<String, Int>>? = null,
+    @Json(name = "poll_my_votes") val pollMyVotes: Map<String, List<String>>? = null,
 )
 
 @JsonClass(generateAdapter = true)

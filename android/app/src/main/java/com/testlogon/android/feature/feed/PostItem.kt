@@ -58,6 +58,17 @@ fun PostItem(
     onCommentClick: (FeedPost) -> Unit = {},
     onHide: (FeedPost) -> Unit = {},
     onNotInterested: (FeedPost) -> Unit = {},
+    // AND-176 / AND-178 — share, bookmark, tip.
+    isBookmarked: Boolean = false,
+    onToggleBookmark: (FeedPost) -> Unit = {},
+    onShare: (FeedPost) -> Unit = {},
+    onTip: (FeedPost) -> Unit = {},
+    // AND-177 — unlock flow state driving the paywall CTA.
+    unlockState: UnlockState = UnlockState.Idle,
+    // AND-179 — poll state + vote callbacks; null => render the post's embedded poll read-only.
+    pollState: PollCardState? = null,
+    onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
+    onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
 ) {
     Column(
         modifier = modifier
@@ -81,6 +92,7 @@ fun PostItem(
                     locked = paywall,
                     onUnlockClick = { onUnlockClick(post.id) },
                     style = PaywallStyle.Feed,
+                    unlockState = unlockState,
                 )
                 Paywall.Unlocked -> {
                     val body = post.body
@@ -91,6 +103,16 @@ fun PostItem(
                         FeedMediaGrid(
                             media = post.media,
                             onItemClick = { index -> onMediaClick(post, index) },
+                        )
+                    }
+                    // AND-179 — embedded poll. Use the hoisted vote state when provided; otherwise
+                    // render the post's own poll read-only (Results) so it never crashes a row.
+                    val poll = post.poll
+                    if (poll != null) {
+                        PollCard(
+                            state = pollState ?: PollCardState.Results(poll),
+                            onOptionClick = { q, o -> onPollOptionClick(post.id, q, o) },
+                            onRetry = { q, o -> onPollRetry(post.id, q, o) },
                         )
                     }
                 }
@@ -105,6 +127,10 @@ fun PostItem(
                     onCommentClick = { onCommentClick(post) },
                     onHide = { onHide(post) },
                     onNotInterested = { onNotInterested(post) },
+                    bookmarked = isBookmarked,
+                    onToggleBookmark = { onToggleBookmark(post) },
+                    onShare = { onShare(post) },
+                    onTip = { onTip(post) },
                 )
             }
         }
