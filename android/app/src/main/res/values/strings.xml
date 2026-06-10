@@ -1013,4 +1013,30 @@
     <string name="order_detail_reference">Reference: %1$s</string>
     <string name="order_detail_items_title">Items</string>
     <string name="order_detail_item_qty_price">Qty %1$d · %2$s each</string>
+
+    <!-- AND-224: Payment methods management -->
+    <string name="more_entry_payment_methods">Payment methods</string>
+    <string name="payment_methods_title">Payment methods</string>
+    <string name="payment_methods_empty_title">No payment methods</string>
+    <string name="payment_methods_empty_body">Add a card to use it for purchases.</string>
+    <string name="payment_methods_add">Add payment method</string>
+    <string name="payment_methods_error">Couldn\'t load payment methods.</string>
+    <string name="payment_methods_default_badge">Default</string>
+    <string name="payment_methods_set_default">Set as default</string>
+    <string name="payment_methods_remove">Remove</string>
+    <string name="payment_methods_removed">Payment method removed</string>
+    <string name="payment_methods_default_set">Default payment method updated</string>
+    <string name="payment_methods_remove_confirm_title">Remove payment method?</string>
+    <string name="payment_methods_remove_confirm_body">%1$s will be removed from your account.</string>
+    <string name="payment_methods_card_label">%1$s ending in %2$s</string>
+    <string name="payment_methods_card_no_last4">%1$s</string>
+    <string name="payment_methods_expiry">Expires %1$02d/%2$d</string>
+    <string name="payment_methods_row_cd">%1$s%2$s</string>
+
+    <!-- AND-226: Add card (Stripe) — FLAGGED scaffold; card entry routed through the stub seam -->
+    <string name="add_card_title">Add card</string>
+    <string name="add_card_unavailable_title">Card entry unavailable</string>
+    <string name="add_card_unavailable_body">Payments aren\'t configured yet, so cards can\'t be added on this device.</string>
+    <string name="add_card_button">Add card</string>
+    <string name="add_card_not_configured">Card entry unavailable — payments not configured.</string>
 </resources>

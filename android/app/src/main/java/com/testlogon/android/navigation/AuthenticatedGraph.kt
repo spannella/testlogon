@@ -132,6 +132,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         trackingDestination(navController)
         // AND-219: purchase history list + search (rows open the AND-220 order detail).
         purchaseHistoryDestination(navController)
+        // AND-224/AND-226: saved payment-methods management + add-card (FLAGGED stub card-entry seam).
+        billingDestinations(navController)
     }
 }
 

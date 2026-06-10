@@ -63,6 +63,9 @@ object MoreRoutes {
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
+    // AND-224: saved payment-methods management (list / set-default / remove + add-card CTA).
+    val PAYMENT_METHODS: String get() = PaymentMethodsDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -90,6 +93,7 @@ object MoreRoutes {
             CATALOG,
             CART,
             PURCHASE_HISTORY,
+            PAYMENT_METHODS,
             SETTINGS,
             HELP,
             ABOUT,
