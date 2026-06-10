@@ -2,6 +2,7 @@ package com.testlogon.android.data.messaging.realtime
 
 import com.squareup.moshi.Moshi
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -51,9 +52,72 @@ class SseEnvelopeParserTest {
 
     @Test
     fun otherEventTypeCollapsesToOther() {
-        val event = parser.parse("typing:update", """{"conversation_id":"c1","user_id":"u3"}""")
+        // A genuinely-unhandled event type collapses to Other (used to refresh lists).
+        val event = parser.parse("poll:vote", """{"conversation_id":"c1","poll_id":"p3"}""")
         assertTrue(event is MessagingEvent.Other)
-        assertEquals("typing:update", (event as MessagingEvent.Other).type)
+        assertEquals("poll:vote", (event as MessagingEvent.Other).type)
+    }
+
+    // ---- AND-145: presence:update ----
+
+    @Test
+    fun parsesPresenceUpdate() {
+        val event = parser.parse(
+            eventType = "presence:update",
+            dataJson = """{"user_id":"u9","online":true,"last_seen_at":1749126670}""",
+        )
+        assertTrue(event is MessagingEvent.PresenceUpdate)
+        event as MessagingEvent.PresenceUpdate
+        assertEquals("u9", event.userId)
+        assertTrue(event.online)
+        assertEquals(1749126670L, event.lastSeenAtEpochSeconds)
+    }
+
+    @Test
+    fun presenceUpdate_defaultsOfflineAndNullLastSeen_whenAbsent() {
+        val event = parser.parse("presence:update", """{"user_id":"u9"}""")
+        event as MessagingEvent.PresenceUpdate
+        assertEquals(false, event.online)
+        assertNull(event.lastSeenAtEpochSeconds)
+    }
+
+    @Test
+    fun presenceUpdate_missingUserId_returnsNull() {
+        assertNull(parser.parse("presence:update", """{"online":true}"""))
+    }
+
+    // ---- AND-146: typing:update ----
+
+    @Test
+    fun parsesTypingUpdate() {
+        val event = parser.parse(
+            eventType = "typing:update",
+            dataJson = """{"conversation_id":"c1","user_id":"u3","is_typing":true,"updated_at":1717632000}""",
+        )
+        assertTrue(event is MessagingEvent.Typing)
+        event as MessagingEvent.Typing
+        assertEquals("c1", event.conversationId)
+        assertEquals("u3", event.userId)
+        assertTrue(event.isTyping)
+        assertEquals(1717632000L, event.updatedAtEpochSeconds)
+    }
+
+    @Test
+    fun typingUpdate_failsOpenToTrue_whenIsTypingAbsent() {
+        val event = parser.parse("typing:update", """{"conversation_id":"c1","user_id":"u3"}""")
+        event as MessagingEvent.Typing
+        assertTrue(event.isTyping)
+        assertEquals(0L, event.updatedAtEpochSeconds)
+    }
+
+    @Test
+    fun typingUpdate_stopParsesIsTypingFalse() {
+        val event = parser.parse(
+            "typing:update",
+            """{"conversation_id":"c1","user_id":"u3","is_typing":false,"updated_at":5}""",
+        )
+        event as MessagingEvent.Typing
+        assertFalse(event.isTyping)
     }
 
     @Test

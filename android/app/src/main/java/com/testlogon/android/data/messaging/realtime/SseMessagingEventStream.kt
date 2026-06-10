@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okio.BufferedSource
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -45,27 +44,34 @@ class SseMessagingEventStream @Inject constructor(
             .build()
     }
 
+    private val backoff = SseBackoffPolicy()
+
     override fun events(): Flow<MessagingStreamEvent> = callbackFlow {
         var attempt = 0
         var running = true
+        // AND-143 — retained across reconnects so we replay `Last-Event-ID` and floor the next
+        // backoff on the server `retry:` hint. The pure line parser owns id/retry retention.
+        val lineParser = SseLineParser()
 
         val worker = Thread {
             while (running) {
                 trySend(MessagingStreamEvent.State(StreamConnectionState.CONNECTING))
-                val request = Request.Builder()
+                val builder = Request.Builder()
                     .url(settingsStore.baseUrl.trimEnd('/') + "/" + STREAM_PATH)
                     .header("Accept", "text/event-stream")
-                    .build()
-                val call = streamClient.newCall(request)
+                    .header("Cache-Control", "no-cache")
+                // AND-143 FR-3/FR-5 — resume from the last delivered frame id on reconnect.
+                lineParser.lastEventId?.let { builder.header("Last-Event-ID", it) }
+                val call = streamClient.newCall(builder.build())
                 try {
                     call.execute().use { response ->
                         if (!response.isSuccessful) error("stream HTTP ${response.code}")
                         val body = response.body ?: error("empty stream body")
                         attempt = 0
                         trySend(MessagingStreamEvent.State(StreamConnectionState.CONNECTED))
-                        readFrames(body.source()) { event, data ->
+                        lineParser.readFrames(body.source()) { frame ->
                             if (!running) return@readFrames false
-                            parser.parse(event, data)?.let {
+                            parser.parse(frame.event, frame.data)?.let {
                                 trySend(MessagingStreamEvent.Event(it))
                             }
                             true
@@ -80,8 +86,8 @@ class SseMessagingEventStream @Inject constructor(
                 }
                 if (!running) break
                 trySend(MessagingStreamEvent.State(StreamConnectionState.DISCONNECTED))
-                val backoffMs = minOf(BASE_BACKOFF_MS * (1L shl attempt.coerceAtMost(MAX_SHIFT)), MAX_BACKOFF_MS)
                 attempt++
+                val backoffMs = backoff.nextDelayMillis(attempt, serverRetryMillis = lineParser.retryMillis)
                 try {
                     Thread.sleep(backoffMs)
                 } catch (_: InterruptedException) {
@@ -98,40 +104,8 @@ class SseMessagingEventStream @Inject constructor(
         }
     }
 
-    /**
-     * Reads SSE frames from [source], invoking [onFrame] with the accumulated event type + data per
-     * blank-line-delimited frame. Stops when [onFrame] returns false or the stream ends.
-     */
-    private fun readFrames(source: BufferedSource, onFrame: (event: String, data: String) -> Boolean) {
-        var eventType = ""
-        val data = StringBuilder()
-        while (!source.exhausted()) {
-            val line = source.readUtf8Line() ?: break
-            when {
-                line.isEmpty() -> {
-                    if (data.isNotEmpty() || eventType.isNotEmpty()) {
-                        val keepGoing = onFrame(eventType, data.toString())
-                        if (!keepGoing) return
-                    }
-                    eventType = ""
-                    data.setLength(0)
-                }
-                line.startsWith(":") -> Unit // heartbeat / comment
-                line.startsWith("event:") -> eventType = line.removePrefix("event:").trim()
-                line.startsWith("data:") -> {
-                    if (data.isNotEmpty()) data.append('\n')
-                    data.append(line.removePrefix("data:").trim())
-                }
-                else -> Unit // id:, retry:, unknown fields — ignored
-            }
-        }
-    }
-
     private companion object {
         const val STREAM_PATH = "messaging/events/stream"
-        const val BASE_BACKOFF_MS = 1_000L
-        const val MAX_BACKOFF_MS = 30_000L
-        const val MAX_SHIFT = 5 // 1s,2s,4s,8s,16s,32s->capped at 30s
     }
 }
 

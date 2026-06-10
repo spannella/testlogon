@@ -411,4 +411,20 @@
     <!-- AND-141 — drafts -->
     <string name="draft_discard">Discard draft</string>
     <string name="draft_restored">Draft restored</string>
+
+    <!-- AND-145 — presence -->
+    <string name="presence_online">Online</string>
+    <string name="presence_offline">Offline</string>
+    <string name="presence_online_cd">%1$s, online</string>
+    <string name="presence_offline_cd">%1$s, offline</string>
+    <string name="presence_last_seen_cd">%1$s, last seen %2$s</string>
+    <string name="presence_last_seen_now">Active now</string>
+    <string name="presence_last_seen_at">Last seen %1$s</string>
+
+    <!-- AND-146 — typing indicators -->
+    <string name="typing_one">%1$s is typing…</string>
+    <string name="typing_two">%1$s and %2$s are typing…</string>
+    <string name="typing_several">Several people are typing…</string>
+    <string name="typing_someone">Someone</string>
+    <string name="typing_indicator_cd">Typing indicator</string>
 </resources>

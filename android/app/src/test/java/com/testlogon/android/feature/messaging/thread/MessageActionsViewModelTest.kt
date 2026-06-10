@@ -51,6 +51,7 @@ class MessageActionsViewModelTest {
             com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
             FakeBillingAuthorizer(),
             drafts,
+            com.testlogon.android.feature.messaging.FakeTypingRepository(),
         ).also { it.clock = { 1000L } }
     }
 

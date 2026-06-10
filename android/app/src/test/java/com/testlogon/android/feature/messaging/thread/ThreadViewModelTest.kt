@@ -11,7 +11,9 @@ import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
 import com.testlogon.android.feature.messaging.FakeMessagingEventStream
 import com.testlogon.android.feature.messaging.FakeMessagingRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +31,7 @@ class ThreadViewModelTest {
     private val repo = FakeMessagingRepository()
     private val stream = FakeMessagingEventStream()
     private val auth = FakeAuthStateStore()
+    private val typingRepo = com.testlogon.android.feature.messaging.FakeTypingRepository()
 
     private suspend fun vm(currentUser: String = "me"): ThreadViewModel {
         auth.setAuthenticated(currentUser)
@@ -43,6 +46,7 @@ class ThreadViewModelTest {
             com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
             com.testlogon.android.feature.messaging.FakeBillingAuthorizer(),
             com.testlogon.android.feature.messaging.FakeDraftRepository(),
+            typingRepo,
         ).also { it.clock = { 1000L } }
     }
 
@@ -282,5 +286,81 @@ class ThreadViewModelTest {
         val rows = vm.state.value.messages
         assertTrue(rows.first { it.key == "a" }.isOwn)
         assertFalse(rows.first { it.key == "b" }.isOwn)
+    }
+
+    // ---- AND-146: typing indicators ----
+
+    @Test
+    fun inboundTyping_forThisConversation_showsThenClearsOnStop() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.Typing("c1", "other", isTyping = true, updatedAtEpochSeconds = 1),
+            ),
+        )
+        runCurrent()
+        assertEquals(listOf("other"), vm.typingUsers.value.map { it.userId })
+
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.Typing("c1", "other", isTyping = false, updatedAtEpochSeconds = 2),
+            ),
+        )
+        runCurrent()
+        assertTrue(vm.typingUsers.value.isEmpty())
+    }
+
+    @Test
+    fun inboundTyping_selfEcho_ignored() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.Typing("c1", "me", isTyping = true, updatedAtEpochSeconds = 1),
+            ),
+        )
+        runCurrent()
+        assertTrue(vm.typingUsers.value.isEmpty())
+    }
+
+    @Test
+    fun inboundTyping_otherConversation_ignored() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.Typing("OTHER", "u3", isTyping = true, updatedAtEpochSeconds = 1),
+            ),
+        )
+        runCurrent()
+        assertTrue(vm.typingUsers.value.isEmpty())
+    }
+
+    @Test
+    fun typing_selfClearsViaTtl_withoutStopEvent() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.Typing("c1", "other", isTyping = true, updatedAtEpochSeconds = 1),
+            ),
+        )
+        runCurrent()
+        assertEquals(1, vm.typingUsers.value.size)
+
+        // No refresh event arrives; the per-user TTL job removes the entry after TTL_MS.
+        advanceTimeBy(com.testlogon.android.feature.messaging.typing.TypingConfig.TTL_MS + 500)
+        runCurrent()
+        assertTrue(vm.typingUsers.value.isEmpty())
+    }
+
+    @Test
+    fun composerActivity_sendsTypingStart() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.onDraftChange("hi")
+        runCurrent()
+        assertEquals(listOf("c1"), typingRepo.startCalls)
     }
 }

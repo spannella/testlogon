@@ -123,6 +123,11 @@ class ConversationListViewModel @Inject constructor(
                         is MessagingEvent.MessageMutated,
                         is MessagingEvent.Other,
                         -> refresh()
+                        // AND-145/146 — presence + typing don't change list summaries; ignored here
+                        // (presence is consumed by PresenceRepository; typing by the open thread).
+                        is MessagingEvent.PresenceUpdate,
+                        is MessagingEvent.Typing,
+                        -> Unit
                     }
                 }
             }

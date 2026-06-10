@@ -25,6 +25,12 @@ import com.testlogon.android.data.messaging.StickerPick
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
+import com.testlogon.android.data.messaging.typing.TypingRepository
+import com.testlogon.android.feature.messaging.typing.TypingConfig
+import com.testlogon.android.feature.messaging.typing.TypingInput
+import com.testlogon.android.feature.messaging.typing.TypingReducer
+import com.testlogon.android.feature.messaging.typing.TypingSignalController
+import com.testlogon.android.feature.messaging.typing.TypingUiUser
 import com.testlogon.android.feature.messaging.voice.RecorderLimits
 import com.testlogon.android.feature.messaging.voice.RecorderState
 import com.testlogon.android.feature.messaging.voice.VoicePlayerController
@@ -39,7 +45,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -83,6 +91,7 @@ class ThreadViewModel @Inject constructor(
     private val playerFactory: VoicePlayerFactory,
     private val billing: BillingAuthorizer,
     private val draftRepository: com.testlogon.android.data.messaging.DraftRepository,
+    private val typingRepository: TypingRepository,
 ) : ViewModel() {
 
     /**
@@ -115,6 +124,24 @@ class ThreadViewModel @Inject constructor(
     private val _events = Channel<ThreadEvent>(Channel.BUFFERED)
     val events: Flow<ThreadEvent> = _events.receiveAsFlow()
 
+    // ---- AND-146: typing indicators ----
+
+    private val typing = MutableStateFlow<Map<String, TypingUiUser>>(emptyMap())
+
+    /** Per-user TTL expiry jobs; a fresh typing event cancels+replaces the user's pending expiry. */
+    private val typingExpiryJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+
+    /** Remote typers in this conversation (excludes self), ordered by display name. */
+    val typingUsers: StateFlow<List<TypingUiUser>> =
+        typing
+            .map { TypingReducer.ordered(it) }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
+
+    /** Send-side debounced typing controller. */
+    private val typingController: TypingSignalController by lazy {
+        TypingSignalController(conversationId, typingRepository)
+    }
+
     /** Oldest message id we have loaded, used as the next `before` cursor. */
     private var oldestLoadedId: String? = null
 
@@ -134,6 +161,12 @@ class ThreadViewModel @Inject constructor(
         loadInitial()
         restoreDraft()
         observeDraftSaver()
+        startTyping()
+    }
+
+    /** AND-146 — run the debounced typing send controller. */
+    private fun startTyping() {
+        viewModelScope.launch { typingController.run() }
     }
 
     private fun observeThread() {
@@ -228,6 +261,13 @@ class ThreadViewModel @Inject constructor(
         }
         // AND-141 — persist the composer draft (debounced; empty -> delete).
         draftSaver.tryEmit(text)
+        // AND-146 — drive the debounced typing signal from composer activity.
+        typingController.onInput(if (text.isBlank()) TypingInput.Cleared else TypingInput.Keystroke)
+    }
+
+    /** AND-146 — called from the screen on ON_STOP / leaving so a final typing stop is sent. */
+    fun onScreenStopped() {
+        typingController.onInput(TypingInput.Left)
     }
 
     fun onSend() {
@@ -235,6 +275,8 @@ class ThreadViewModel @Inject constructor(
         val body = composer.draft.trim()
         if (body.isEmpty() || composer.overLimit) return
         val clientId = UUID.randomUUID().toString()
+        // AND-146 — sending the message ends the typing signal.
+        typingController.onInput(TypingInput.Sent)
         // Clear the composer + the persisted draft immediately (AND-141 FR-4).
         _state.update { it.copy(composer = ComposerState(), hasDraft = false, draftSyncState = DraftSyncState.Idle) }
         // Cancel any pending debounced save from the last keystroke (coalesces to a clear), so a
@@ -1143,6 +1185,38 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /**
+     * AND-146 — merge a typing event into the typing map. `is_typing:false` removes the user
+     * immediately; `is_typing:true` (re)adds them and (re)arms a relative TTL expiry job so the entry
+     * self-clears after [TypingConfig.TTL_MS] of silence even if a stop frame is dropped (FR-5).
+     * Display names resolve from the loaded roster; unknown ids fall back to a generic label.
+     */
+    private fun applyTyping(event: MessagingEvent.Typing) {
+        typingExpiryJobs.remove(event.userId)?.cancel()
+        if (!event.isTyping) {
+            typing.update { it - event.userId }
+            return
+        }
+        typing.update { current ->
+            current + (event.userId to TypingUiUser(
+                userId = event.userId,
+                displayName = resolveSenderName(event.userId) ?: TYPING_FALLBACK_NAME,
+                expiresAtMillis = 0L, // expiry is enforced by the per-user job below
+            ))
+        }
+        typingExpiryJobs[event.userId] = viewModelScope.launch {
+            delay(TypingConfig.TTL_MS)
+            typing.update { it - event.userId }
+            typingExpiryJobs.remove(event.userId)
+        }
+    }
+
+    /** Best-effort display name from the loaded roster; null when unknown (UI uses the fallback). */
+    private fun resolveSenderName(userId: String): String? =
+        // The thread model exposes only sender ids today; surface the id itself as a stable label
+        // until a participant roster with names is wired (FR-4 fallback path).
+        userId.takeIf { it.isNotBlank() }
+
     private fun observeRealtime() {
         viewModelScope.launch {
             eventStream.events().collect { streamEvent ->
@@ -1161,6 +1235,14 @@ class ThreadViewModel @Inject constructor(
                         is MessagingEvent.MessageMutated ->
                             if (event.conversationId == conversationId) {
                                 repository.applyMessageMutation(event)
+                            }
+                        // AND-146 — fold typing events for THIS conversation into the typing map,
+                        // excluding self-echo.
+                        is MessagingEvent.Typing ->
+                            if (event.conversationId == conversationId &&
+                                event.userId != authStateStore.userSub.value
+                            ) {
+                                applyTyping(event)
                             }
                         else -> Unit
                     }
@@ -1191,6 +1273,9 @@ class ThreadViewModel @Inject constructor(
 
         /** AND-141 — debounce window for composer draft saves (ms). */
         private const val DRAFT_DEBOUNCE_MS = 800L
+
+        /** AND-146 — label used when a typer's display name can't be resolved. */
+        private const val TYPING_FALLBACK_NAME = "Someone"
     }
 }
 

@@ -122,6 +122,8 @@ fun ThreadRoute(
     viewModel: ThreadViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // AND-146 — remote typers in this conversation.
+    val typingUsers by viewModel.typingUsers.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val imageViewer = rememberImageViewerState()
     val context = LocalContext.current
@@ -182,7 +184,11 @@ fun ThreadRoute(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) viewModel.onThreadVisible()
             // AND-141 — flush the buffered draft immediately on ON_STOP (bypass debounce).
-            if (event == Lifecycle.Event.ON_STOP) viewModel.flushDraft()
+            // AND-146 — and send a final typing stop on leaving the screen.
+            if (event == Lifecycle.Event.ON_STOP) {
+                viewModel.flushDraft()
+                viewModel.onScreenStopped()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -219,6 +225,7 @@ fun ThreadRoute(
         state = state,
         listState = listState,
         voicePlayback = voicePlayback,
+        typingUsers = typingUsers,
         onBack = onBack,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
@@ -297,6 +304,8 @@ fun ThreadScreen(
     state: ThreadUiState,
     listState: androidx.compose.foundation.lazy.LazyListState,
     voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
+    // AND-146 — remote typers shown above the composer.
+    typingUsers: List<com.testlogon.android.feature.messaging.typing.TypingUiUser> = emptyList(),
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onDraftChange: (String) -> Unit,
@@ -416,18 +425,22 @@ fun ThreadScreen(
                     onSend = onSendVoice,
                     modifier = Modifier.navigationBarsPadding().imePadding(),
                 )
-                else -> MessageComposer(
-                    composer = state.composer,
-                    onDraftChange = onDraftChange,
-                    onSend = onSend,
-                    onAttachImage = onAttachImage,
-                    onAttachFile = onAttachFile,
-                    onShareVideo = onShareVideo,
-                    onRecordVoice = onRecordVoice,
-                    onAttachMedia = onOpenMediaPicker,
-                    onAttachPoll = onOpenPollComposer,
-                    onAttachCountdown = onAttachCountdown,
-                )
+                else -> Column {
+                    // AND-146 — typing indicator sits directly above the composer.
+                    com.testlogon.android.feature.messaging.typing.TypingIndicator(users = typingUsers)
+                    MessageComposer(
+                        composer = state.composer,
+                        onDraftChange = onDraftChange,
+                        onSend = onSend,
+                        onAttachImage = onAttachImage,
+                        onAttachFile = onAttachFile,
+                        onShareVideo = onShareVideo,
+                        onRecordVoice = onRecordVoice,
+                        onAttachMedia = onOpenMediaPicker,
+                        onAttachPoll = onOpenPollComposer,
+                        onAttachCountdown = onAttachCountdown,
+                    )
+                }
             }
         },
     ) { padding ->

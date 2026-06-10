@@ -821,6 +821,17 @@ class FakeDraftRepository : com.testlogon.android.data.messaging.DraftRepository
     override suspend fun flushPending() { flushCalls++ }
 }
 
+/** AND-146 — in-memory [com.testlogon.android.data.messaging.typing.TypingRepository] fake. */
+class FakeTypingRepository : com.testlogon.android.data.messaging.typing.TypingRepository {
+    var startCalls = mutableListOf<String>()
+    var stopCalls = mutableListOf<String>()
+    var pollResult: List<com.testlogon.android.data.messaging.typing.TypingUserDto> = emptyList()
+
+    override suspend fun start(conversationId: String) { startCalls += conversationId }
+    override suspend fun stop(conversationId: String) { stopCalls += conversationId }
+    override suspend fun poll(conversationId: String) = pollResult
+}
+
 /**
  * Manually-driven [MessagingEventStream] fake. By default the stream is silent (the realtime
  * collector just suspends). Tests push events via [send]; the flow stays open for further events.

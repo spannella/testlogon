@@ -37,6 +37,10 @@ class TestLogonApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var tokenRegistrar: FcmTokenRegistrar
 
+    /** AND-145 — presence heartbeat + SSE presence collector wiring. */
+    @Inject
+    lateinit var presenceBootstrap: com.testlogon.android.data.messaging.presence.PresenceLifecycleBootstrap
+
     /**
      * AND-135 — the app-wide Coil [ImageLoader] with the animated-image decoder registered so GIF
      * messages and animated-WebP custom emoji animate. Coil picks this up via [ImageLoaderFactory]
@@ -62,6 +66,9 @@ class TestLogonApp : Application(), ImageLoaderFactory {
         // AND-107: channels are local; create them up front so push display works as soon as
         // Firebase is configured.
         runCatching { channelInitializer.ensureChannels() }
+
+        // AND-145: start the foreground-bound presence heartbeat + SSE presence collector.
+        runCatching { presenceBootstrap.start() }
 
         if (isFirebaseAvailable()) {
             // AND-106/109: start the auth-edge collector that registers the FCM token after login.

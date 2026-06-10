@@ -47,6 +47,20 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
                 messageId = data["message_id"] as? String ?: return null,
                 kind = type.removePrefix("message:"),
             )
+            // AND-145 — single-user presence update: { user_id, online, last_seen_at } (epoch seconds).
+            "presence:update" -> MessagingEvent.PresenceUpdate(
+                userId = data["user_id"] as? String ?: return null,
+                online = data["online"] as? Boolean ?: false,
+                lastSeenAtEpochSeconds = (data["last_seen_at"] as? Number)?.toLong(),
+            )
+            // AND-146 — typing start/stop: { conversation_id, user_id, is_typing, updated_at }. The web
+            // client fails open to is_typing=true (expiry clears it) and defaults a missing updated_at.
+            "typing:update" -> MessagingEvent.Typing(
+                conversationId = conversationId ?: return null,
+                userId = data["user_id"] as? String ?: return null,
+                isTyping = data["is_typing"] as? Boolean ?: true,
+                updatedAtEpochSeconds = (data["updated_at"] as? Number)?.toLong() ?: 0L,
+            )
             "" -> null
             else -> MessagingEvent.Other(type, conversationId)
         }

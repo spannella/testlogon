@@ -39,6 +39,28 @@ sealed interface MessagingEvent {
         val kind: String,
     ) : MessagingEvent
 
+    /**
+     * AND-145 — a peer's presence changed. The web stream (useMessagingStream.ts) reads a single
+     * user per `presence:update` frame: `{ user_id, online, last_seen_at }` (epoch seconds, may be 0).
+     */
+    data class PresenceUpdate(
+        val userId: String,
+        val online: Boolean,
+        val lastSeenAtEpochSeconds: Long?,
+    ) : MessagingEvent
+
+    /**
+     * AND-146 — a participant started/stopped typing in a conversation. The web stream reads
+     * `{ conversation_id, user_id, is_typing, updated_at }` (epoch seconds) on a `typing:update` frame;
+     * there is no display name on the wire (resolved client-side from the participant roster).
+     */
+    data class Typing(
+        val conversationId: String,
+        val userId: String,
+        val isTyping: Boolean,
+        val updatedAtEpochSeconds: Long,
+    ) : MessagingEvent
+
     /** Any other event type we observe but do not act on directly (used to refresh lists). */
     data class Other(val type: String, val conversationId: String?) : MessagingEvent
 }
