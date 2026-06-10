@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Slideshow
+import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import com.testlogon.android.R
@@ -108,6 +109,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_gallery,
             icon = Icons.Outlined.PhotoLibrary,
             route = MoreRoutes.GALLERY,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "catalog",
+            labelRes = R.string.more_entry_catalog,
+            icon = Icons.Outlined.Storefront,
+            route = MoreRoutes.CATALOG,
             section = MoreSection.APP,
         ),
         MoreEntry(

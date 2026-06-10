@@ -116,6 +116,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         storyViewerDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
+        // AND-205: storefront catalog / category browse grid (cells open the product detail route).
+        catalogDestination(navController)
+        productDetailDestination(navController)
     }
 }
 

@@ -54,6 +54,9 @@ object MoreRoutes {
     // AND-201: the published video gallery browse grid.
     val GALLERY: String get() = GalleryDest.ROUTE
 
+    // AND-205: the storefront catalog / category browse grid.
+    val CATALOG: String get() = CatalogDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -78,6 +81,7 @@ object MoreRoutes {
             VOD_CATALOG,
             CLIPS,
             GALLERY,
+            CATALOG,
             SETTINGS,
             HELP,
             ABOUT,

@@ -894,4 +894,16 @@
     <string name="gallery_error_generic">Couldn\'t load the gallery.</string>
     <string name="gallery_append_error">Couldn\'t load more.</string>
     <string name="gallery_retry">Retry</string>
+
+    <!-- AND-205: Catalog / category browse -->
+    <string name="catalog_title">Shop</string>
+    <string name="catalog_empty_categories">No categories available</string>
+    <string name="catalog_empty_items">No items in this category yet</string>
+    <string name="catalog_items_error">Couldn\'t load items. Try again.</string>
+    <string name="catalog_append_error">Couldn\'t load more.</string>
+    <string name="catalog_no_image">No image</string>
+    <string name="catalog_item_cd">Catalog item</string>
+    <string name="catalog_item_title">Item</string>
+    <string name="catalog_item_coming_soon">Product detail is coming soon.</string>
+    <string name="more_entry_catalog">Shop</string>
 </resources>
