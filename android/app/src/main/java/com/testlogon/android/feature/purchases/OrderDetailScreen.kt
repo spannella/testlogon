@@ -1,0 +1,226 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package com.testlogon.android.feature.purchases
+
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.R
+import com.testlogon.android.core.ui.state.ErrorState
+import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.cart.CartItem
+import com.testlogon.android.data.purchases.PurchaseDetail
+import com.testlogon.android.feature.tracking.TrackingSection
+
+/** AND-220 — stable test tags for the order-detail screen. */
+object OrderDetailTestTags {
+    const val SCREEN = "order_detail_screen"
+    const val HEADER = "order_detail_header"
+    const val ITEMS = "order_detail_items"
+    const val ITEM_ROW = "order_detail_item_row"
+    const val SUMMARY = "order_detail_summary"
+}
+
+/**
+ * AND-220 — order (transaction) detail route. Renders the header/summary, the resolved cart line items,
+ * and EMBEDS the AND-215 [TrackingSection] (no duplication of carrier parsing / status display). The
+ * "Track package" link is launched via an https-only ACTION_VIEW guard (intent-redirection hardening).
+ */
+@Composable
+fun OrderDetailRoute(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: OrderDetailViewModel = hiltViewModel(),
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    Scaffold(
+        modifier = modifier.testTag(OrderDetailTestTags.SCREEN),
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.order_detail_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                        )
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when (val s = state) {
+                is OrderDetailUiState.Loading -> LoadingState()
+                is OrderDetailUiState.Error ->
+                    ErrorState(
+                        message = s.message,
+                        onRetry = viewModel::retry,
+                    )
+                is OrderDetailUiState.Content ->
+                    OrderDetailContent(
+                        order = s.order,
+                        items = s.items,
+                        tracking = {
+                            // Embed the AND-215 section; its CTA launches the carrier URL (https-only).
+                            TrackingSection(
+                                state = s.tracking,
+                                onRetry = viewModel::retry,
+                                onOpenCarrier = { url -> openCarrierUrl(context, url) },
+                                onCopy = { number -> copyToClipboard(context, number) },
+                            )
+                        },
+                    )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OrderDetailContent(
+    order: PurchaseDetail,
+    items: List<CartItem>,
+    tracking: @Composable () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item { OrderHeader(order) }
+        if (items.isNotEmpty()) {
+            item { OrderItemsCard(items, order.money.currency) }
+        }
+        item { tracking() }
+    }
+}
+
+@Composable
+private fun OrderHeader(order: PurchaseDetail) {
+    val statusLabel = stringResource(orderStatusLabelRes(order.status))
+    Card(Modifier.fillMaxWidth().testTag(OrderDetailTestTags.HEADER)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(order.title, style = MaterialTheme.typography.titleLarge)
+            AssistChip(onClick = {}, label = { Text(statusLabel) })
+            Text(
+                text = stringResource(R.string.order_detail_placed, formatEpochSeconds(order.createdAtEpochSec)),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = formatMoney(order.money),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag(OrderDetailTestTags.SUMMARY),
+            )
+            order.merchantId?.let {
+                Text(
+                    text = stringResource(R.string.order_detail_merchant, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            order.externalRef?.let {
+                Text(
+                    text = stringResource(R.string.order_detail_reference, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OrderItemsCard(items: List<CartItem>, currency: String) {
+    Card(Modifier.fillMaxWidth().testTag(OrderDetailTestTags.ITEMS)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.order_detail_items_title), style = MaterialTheme.typography.titleMedium)
+            items.forEachIndexed { index, item ->
+                if (index > 0) HorizontalDivider()
+                OrderItemRow(item, currency)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OrderItemRow(item: CartItem, currency: String) {
+    Row(
+        Modifier.fillMaxWidth().testTag(OrderDetailTestTags.ITEM_ROW),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.fillMaxWidth(0.7f)) {
+            Text(item.name, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = stringResource(
+                    R.string.order_detail_item_qty_price,
+                    item.quantity,
+                    formatCents(item.unitPriceCents, currency),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(formatCents(item.lineTotalCents, currency), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** Cart line items are integer cents (distinct from the transaction's major-unit amount). */
+private fun formatCents(cents: Long, currency: String): String {
+    return try {
+        val fmt = java.text.NumberFormat.getCurrencyInstance()
+        fmt.currency = java.util.Currency.getInstance(currency)
+        fmt.format(cents / 100.0)
+    } catch (_: IllegalArgumentException) {
+        "%.2f %s".format(cents / 100.0, currency)
+    }
+}
+
+/** Launches [url] in an external browser only when it is an https URL (intent-redirection hardening). */
+internal fun openCarrierUrl(context: Context, url: String) {
+    if (!url.startsWith("https://", ignoreCase = true)) return
+    val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        // No browser available; the CTA is best-effort.
+    }
+}
+
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText("tracking_number", text))
+}

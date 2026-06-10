@@ -940,6 +940,7 @@
     <string name="cart_empty_body">Browse the catalog to add items.</string>
     <string name="cart_browse_catalog">Browse catalog</string>
     <string name="more_entry_cart">Cart</string>
+    <string name="more_entry_purchase_history">Purchase history</string>
 
     <!-- AND-212: In-cart search -->
     <string name="cart_search_hint">Search cart items</string>
@@ -988,4 +989,28 @@
     <string name="tracking_status_exception">Exception</string>
     <string name="tracking_status_returned">Returned</string>
     <string name="tracking_status_unknown">Unknown</string>
+
+    <!-- AND-219: Purchase history + search -->
+    <string name="purchase_history_title">Purchase history</string>
+    <string name="purchase_history_search_label">Search purchases</string>
+    <string name="purchase_history_clear_search">Clear search</string>
+    <string name="purchase_history_empty">No purchases yet</string>
+    <string name="purchase_history_empty_search">No results for \"%1$s\"</string>
+    <string name="purchase_history_error">Couldn\'t load purchases.</string>
+    <string name="purchase_row_cd">%1$s, %2$s, %3$s, status: %4$s</string>
+    <string name="purchase_status_pending">Pending</string>
+    <string name="purchase_status_completed">Completed</string>
+    <string name="purchase_status_cancelled">Cancelled</string>
+    <string name="purchase_status_reverted">Reverted</string>
+    <string name="purchase_status_cancel_requested">Cancellation requested</string>
+    <string name="purchase_status_cancel_denied">Cancellation denied</string>
+    <string name="purchase_status_unknown">Unknown</string>
+
+    <!-- AND-220: Order detail + tracking -->
+    <string name="order_detail_title">Order detail</string>
+    <string name="order_detail_placed">Placed %1$s</string>
+    <string name="order_detail_merchant">Merchant: %1$s</string>
+    <string name="order_detail_reference">Reference: %1$s</string>
+    <string name="order_detail_items_title">Items</string>
+    <string name="order_detail_item_qty_price">Qty %1$d · %2$s each</string>
 </resources>

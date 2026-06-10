@@ -60,6 +60,9 @@ object MoreRoutes {
     // AND-211: the shopping cart.
     val CART: String get() = CartDest.ROUTE
 
+    // AND-219: the purchase history list + search.
+    val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -86,6 +89,7 @@ object MoreRoutes {
             GALLERY,
             CATALOG,
             CART,
+            PURCHASE_HISTORY,
             SETTINGS,
             HELP,
             ABOUT,

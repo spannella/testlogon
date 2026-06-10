@@ -48,6 +48,16 @@ interface CartRepository {
 
     /** AND-211 — deletes the whole cart (DELETE). Never auto-retried. */
     suspend fun clearCart(): ApiResult<OkRespDto>
+
+    /**
+     * AND-220 — reads the line items for a SPECIFIC [cartId] (idempotent GET; safe to retry on
+     * NetworkError). Used by order detail to resolve a transaction's line items from its
+     * metadata.cart_id without touching the active-cart resolution. Returns an empty list when the
+     * cart has no items rather than throwing. Defaults to an empty success so existing fakes that do
+     * not exercise order detail need no change.
+     */
+    suspend fun itemsForCart(cartId: String): ApiResult<List<CartItem>> =
+        ApiResult.Success(emptyList())
 }
 
 @Singleton
@@ -111,6 +121,11 @@ class CartRepositoryImpl @Inject constructor(
                 if (it is ApiResult.Success) cachedCartId = null
             }
         }
+    }
+
+    override suspend fun itemsForCart(cartId: String): ApiResult<List<CartItem>> = withContext(io) {
+        // Reuse the existing list-items GET + mapper; empty list when the cart has no items.
+        call { api.getCartItems(cartId) }.map { resp -> resp.items.orEmpty().map { it.toDomain() } }
     }
 
     /** Loads items + total for [cartId] and composes them into a [FullCart]. */

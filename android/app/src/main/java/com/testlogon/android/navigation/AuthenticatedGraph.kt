@@ -128,8 +128,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         orderReviewDestination(navController)
         // AND-214: address step (saved-address list/add/select/set-primary; no shipping quote backend).
         addressShippingDestination(navController)
-        // AND-215: carrier tracking for a transaction (standalone; TrackingSection is the embed seam).
+        // AND-215/AND-220: order (transaction) detail host that embeds the AND-215 tracking section.
         trackingDestination(navController)
+        // AND-219: purchase history list + search (rows open the AND-220 order detail).
+        purchaseHistoryDestination(navController)
     }
 }
 

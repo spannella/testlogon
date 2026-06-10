@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShoppingCart
+import androidx.compose.material.icons.outlined.ReceiptLong
 import com.testlogon.android.R
 import com.testlogon.android.navigation.MoreRoutes
 import javax.inject.Inject
@@ -124,6 +125,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_cart,
             icon = Icons.Outlined.ShoppingCart,
             route = MoreRoutes.CART,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "purchase_history",
+            labelRes = R.string.more_entry_purchase_history,
+            icon = Icons.Outlined.ReceiptLong,
+            route = MoreRoutes.PURCHASE_HISTORY,
             section = MoreSection.APP,
         ),
         MoreEntry(

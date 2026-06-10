@@ -10,7 +10,7 @@ import com.testlogon.android.feature.cart.CartRoute
 import com.testlogon.android.feature.checkout.CheckoutSessionViewModel
 import com.testlogon.android.feature.checkout.OrderReviewRoute
 import com.testlogon.android.feature.checkout.address.AddressShippingRoute
-import com.testlogon.android.feature.tracking.TrackingRoute
+import com.testlogon.android.feature.purchases.OrderDetailRoute
 import com.testlogon.android.feature.tracking.TrackingViewModel
 
 /** AND-211 — the shopping cart screen. */
@@ -83,8 +83,10 @@ fun NavGraphBuilder.addressShippingDestination(navController: NavHostController)
 }
 
 /**
- * AND-215 — carrier tracking for a transaction. Standalone here (AND-218 PurchaseDetailScreen does not
- * exist yet); [com.testlogon.android.feature.tracking.TrackingSection] is the embeddable seam.
+ * AND-215 / AND-220 — order (transaction) detail for a txn id. The AND-215 standalone tracking host was
+ * replaced (per AND-220) by the real [OrderDetailRoute], which EMBEDS the AND-215
+ * [com.testlogon.android.feature.tracking.TrackingSection]. The route/arg are kept so existing callers
+ * (e.g. the AND-215 deep link) reach the full detail; the value is a txn_id.
  */
 data object TrackingDest {
     const val ARG_TXN_ID = TrackingViewModel.ARG_TXN_ID
@@ -98,6 +100,6 @@ fun NavGraphBuilder.trackingDestination(navController: NavHostController) {
         route = TrackingDest.ROUTE,
         arguments = listOf(navArgument(TrackingDest.ARG_TXN_ID) { type = NavType.StringType }),
     ) {
-        TrackingRoute(onBack = { navController.popBackStack() })
+        OrderDetailRoute(onBack = { navController.popBackStack() })
     }
 }
