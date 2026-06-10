@@ -181,4 +181,17 @@ class FakeCartRepository : CartRepository {
         callCount++
         return result
     }
+
+    // AND-211 cart-surface methods are unused by the product-detail flow; default to an empty cart.
+    override suspend fun loadCart(): ApiResult<com.testlogon.android.data.cart.FullCart> =
+        ApiResult.Success(com.testlogon.android.data.cart.FullCart.empty("cart_test"))
+
+    override suspend fun setQuantity(sku: String, quantity: Int): ApiResult<com.testlogon.android.data.cart.FullCart> =
+        ApiResult.Success(com.testlogon.android.data.cart.FullCart.empty("cart_test"))
+
+    override suspend fun removeLine(sku: String): ApiResult<com.testlogon.android.data.cart.FullCart> =
+        ApiResult.Success(com.testlogon.android.data.cart.FullCart.empty("cart_test"))
+
+    override suspend fun clearCart(): ApiResult<com.testlogon.android.data.cart.OkRespDto> =
+        ApiResult.Success(com.testlogon.android.data.cart.OkRespDto(ok = true))
 }

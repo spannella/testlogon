@@ -59,3 +59,40 @@ data class CartItemOutDto(
     @Json(name = "category_id") val categoryId: String? = null,
     @Json(name = "image_url") val imageUrl: String? = null,
 )
+
+/**
+ * AND-210 — the list-items response (schema ShoppingCartItemsOut). required: cart_id, items.
+ * Items are nullable here only because the dev backend may return a partial payload; the mapper
+ * substitutes an empty list rather than throwing.
+ */
+@JsonClass(generateAdapter = true)
+data class CartItemsRespDto(
+    @Json(name = "cart_id") val cartId: String,
+    @Json(name = "items") val items: List<CartItemOutDto>? = null,
+)
+
+/**
+ * AND-210 — the server-computed grand total (schema ShoppingCartTotalOut). There is no
+ * subtotal/tax/shipping breakdown anywhere in the API — only this single total_cents + currency.
+ */
+@JsonClass(generateAdapter = true)
+data class CartTotalDto(
+    @Json(name = "cart_id") val cartId: String,
+    @Json(name = "total_cents") val totalCents: Long? = null,
+    @Json(name = "currency") val currency: String? = null,
+)
+
+/**
+ * AND-210 — quantity-update request body (schema ShoppingCartUpdateQtyIn). Server bounds the value
+ * to 0..1000 (0 is schema-valid; a dedicated DELETE is used for explicit removal).
+ */
+@JsonClass(generateAdapter = true)
+data class UpdateCartItemQtyRequest(
+    @Json(name = "quantity") val quantity: Int,
+)
+
+/** AND-210 — the `{ "ok": true }` envelope returned by remove-item and delete-cart (schema OkResp). */
+@JsonClass(generateAdapter = true)
+data class OkRespDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+)

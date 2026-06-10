@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -65,6 +66,7 @@ object CatalogTestTags {
     const val SCREEN = "catalog_screen"
     const val GRID = "catalog_grid"
     const val SEARCH = "catalog_search_action"
+    const val CART = "catalog_cart_action"
     const val CATEGORIES = "catalog_categories"
     const val CARD = "catalog_card"
     const val EMPTY = "catalog_empty"
@@ -83,6 +85,7 @@ object CatalogTestTags {
 fun CatalogRoute(
     onItemClick: (categoryId: String, itemId: String) -> Unit,
     onSearch: () -> Unit,
+    onCart: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CatalogViewModel = hiltViewModel(),
@@ -96,6 +99,7 @@ fun CatalogRoute(
         onRetryCategories = viewModel::retryCategories,
         onItemClick = onItemClick,
         onSearch = onSearch,
+        onCart = onCart,
         onRefresh = { items.refresh() },
         onBack = onBack,
         modifier = modifier,
@@ -110,6 +114,7 @@ fun CatalogScreen(
     onRetryCategories: () -> Unit,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
     onSearch: () -> Unit,
+    onCart: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -135,6 +140,15 @@ fun CatalogScreen(
                         Icon(
                             Icons.Filled.Search,
                             contentDescription = stringResource(R.string.catalog_search_field_label),
+                        )
+                    }
+                    IconButton(
+                        onClick = onCart,
+                        modifier = Modifier.testTag(CatalogTestTags.CART),
+                    ) {
+                        Icon(
+                            Icons.Outlined.ShoppingCart,
+                            contentDescription = stringResource(R.string.cart_title),
                         )
                     }
                 },

@@ -30,6 +30,24 @@ interface CartRepository {
      * Returns the created/updated line item on success.
      */
     suspend fun addToCart(item: CatalogItem, quantity: Int = 1): ApiResult<CartItem>
+
+    /**
+     * AND-211 — resolves the active cart (reuse first active, else create), then composes its
+     * line items + server total into a [FullCart]. Idempotent GETs; safe to retry on NetworkError.
+     */
+    suspend fun loadCart(): ApiResult<FullCart>
+
+    /**
+     * AND-211 — updates [sku] to [quantity] (PATCH) then re-fetches items + total. The mutation body
+     * is untyped, so the authoritative cart comes from the re-fetch. Never auto-retried.
+     */
+    suspend fun setQuantity(sku: String, quantity: Int): ApiResult<FullCart>
+
+    /** AND-211 — removes [sku] (full removal, DELETE) then re-fetches the cart. Never auto-retried. */
+    suspend fun removeLine(sku: String): ApiResult<FullCart>
+
+    /** AND-211 — deletes the whole cart (DELETE). Never auto-retried. */
+    suspend fun clearCart(): ApiResult<OkRespDto>
 }
 
 @Singleton
@@ -39,6 +57,10 @@ class CartRepositoryImpl @Inject constructor(
 ) : CartRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
+
+    /** Last resolved active cart id; lets mutations skip a fresh list call. Cleared on clearCart. */
+    @Volatile
+    private var cachedCartId: String? = null
 
     override suspend fun addToCart(item: CatalogItem, quantity: Int): ApiResult<CartItem> =
         withContext(io) {
@@ -62,17 +84,63 @@ class CartRepositoryImpl @Inject constructor(
             }
         }
 
+    override suspend fun loadCart(): ApiResult<FullCart> = withContext(io) {
+        ensureCart().flatMap { cart -> composeCart(cart.cartId) }
+    }
+
+    override suspend fun setQuantity(sku: String, quantity: Int): ApiResult<FullCart> =
+        withContext(io) {
+            resolveCartId().flatMap { cartId ->
+                // PATCH returns an untyped 200 -> reconcile by re-fetching items + total.
+                call { api.updateItemQty(cartId, sku, UpdateCartItemQtyRequest(quantity)) }
+                    .flatMap { composeCart(cartId) }
+            }
+        }
+
+    override suspend fun removeLine(sku: String): ApiResult<FullCart> =
+        withContext(io) {
+            resolveCartId().flatMap { cartId ->
+                // DELETE returns {ok:true} -> reconcile by re-fetching items + total.
+                call { api.removeItem(cartId, sku) }.flatMap { composeCart(cartId) }
+            }
+        }
+
+    override suspend fun clearCart(): ApiResult<OkRespDto> = withContext(io) {
+        resolveCartId().flatMap { cartId ->
+            call { api.deleteCart(cartId) }.also {
+                if (it is ApiResult.Success) cachedCartId = null
+            }
+        }
+    }
+
+    /** Loads items + total for [cartId] and composes them into a [FullCart]. */
+    private suspend fun composeCart(cartId: String): ApiResult<FullCart> =
+        call { api.getCartItems(cartId) }.flatMap { itemsDto ->
+            // The total is best-effort: if it fails, fall back to the derived subtotal rather than
+            // failing the whole load (the item list is the load-bearing payload).
+            val total = (call { api.getCartTotal(cartId) } as? ApiResult.Success)?.data?.toDomain()
+            ApiResult.Success(itemsDto.toDomain(total))
+        }
+
+    /** Returns the cached active cart id, resolving (list-or-create) it once if unknown. */
+    private suspend fun resolveCartId(): ApiResult<String> {
+        cachedCartId?.let { return ApiResult.Success(it) }
+        return ensureCart().map { it.cartId }
+    }
+
     /** Resolves an active cart, creating a new one if the user has none active. */
     private suspend fun ensureCart(): ApiResult<Cart> {
         val existing = call { api.listCarts() }
         return when (existing) {
             is ApiResult.Success -> {
-                val active = existing.data.firstOrNull { it.status == CartApi.STATUS_ACTIVE }
-                if (active != null) {
+                val active = existing.data.firstOrNull { it.status in CartApi.ACTIVE_STATUSES }
+                val resolved = if (active != null) {
                     ApiResult.Success(active.toDomain())
                 } else {
                     call { api.createCart() }.map { it.toDomain() }
                 }
+                if (resolved is ApiResult.Success) cachedCartId = resolved.data.cartId
+                resolved
             }
             is ApiResult.Failure -> existing
             is ApiResult.NetworkError -> existing

@@ -929,4 +929,31 @@
     <string name="catalog_search_prompt">Type to search the catalog</string>
     <string name="catalog_search_empty">No results for \"%1$s\"</string>
     <string name="catalog_search_error">Couldn\'t search. Try again.</string>
+
+    <!-- AND-211: Cart screen -->
+    <string name="cart_title">Cart</string>
+    <string name="cart_total_label">Total</string>
+    <string name="cart_total">Cart total</string>
+    <string name="cart_checkout">Proceed to checkout</string>
+    <string name="cart_unit_price">%1$s each</string>
+    <string name="cart_empty_title">Your cart is empty</string>
+    <string name="cart_empty_body">Browse the catalog to add items.</string>
+    <string name="cart_browse_catalog">Browse catalog</string>
+    <string name="more_entry_cart">Cart</string>
+
+    <!-- AND-212: In-cart search -->
+    <string name="cart_search_hint">Search cart items</string>
+    <string name="cart_search_clear">Clear search</string>
+    <string name="cart_search_clear_action">Clear search</string>
+    <string name="cart_search_matched">%1$d of %2$d items · subtotal %3$s</string>
+    <string name="cart_search_no_results">No items match \"%1$s\"</string>
+
+    <!-- AND-213: Checkout / order review -->
+    <string name="checkout_title">Order review</string>
+    <string name="checkout_total_label">Total</string>
+    <string name="checkout_place_order">Place order</string>
+    <string name="checkout_line_qty">Qty %1$d</string>
+    <string name="checkout_empty_title">Nothing to check out</string>
+    <string name="checkout_empty_body">Your cart is empty.</string>
+    <string name="checkout_payments_unavailable">Payments are unavailable right now.</string>
 </resources>

@@ -42,6 +42,7 @@ fun NavGraphBuilder.catalogDestination(navController: NavHostController) {
                 navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
             },
             onSearch = { navController.navigate(CatalogSearchDest.ROUTE) { launchSingleTop = true } },
+            onCart = { navController.navigate(CartDest.ROUTE) { launchSingleTop = true } },
             onBack = { navController.popBackStack() },
         )
     }
