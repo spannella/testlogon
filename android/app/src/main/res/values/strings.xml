@@ -761,4 +761,15 @@
     <string name="multi_search_cat_contacts">Contacts</string>
     <string name="multi_search_cat_calendar">Calendar</string>
     <string name="multi_search_cat_other">Other</string>
+
+    <!-- AND-186: Search filters, recent searches, and no-results affordances -->
+    <string name="multi_search_open_filters">Filters</string>
+    <string name="multi_search_filter_title">Filter by type</string>
+    <string name="multi_search_filters_active_badge">!</string>
+    <string name="multi_search_clear_filters">Clear filters</string>
+    <string name="multi_search_remove_filter">Remove filter</string>
+    <string name="multi_search_search_all">Search everything</string>
+    <string name="multi_search_recent_title">Recent searches</string>
+    <string name="multi_search_recent_clear_all">Clear all</string>
+    <string name="multi_search_recent_remove">Remove recent search</string>
 </resources>

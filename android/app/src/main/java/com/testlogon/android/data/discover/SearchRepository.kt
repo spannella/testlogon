@@ -22,10 +22,18 @@ import javax.inject.Singleton
  */
 interface SearchRepository {
 
-    suspend fun search(query: String, limit: Int = SearchApi.DEFAULT_LIMIT): ApiResult<SearchResults>
+    /**
+     * [filters] supplies the only server-side refinement (`types`); ALL omits it. The per-query cache
+     * key includes the filter so a filtered + unfiltered query for the same text don't collide.
+     */
+    suspend fun search(
+        query: String,
+        filters: SearchFilters = SearchFilters.DEFAULT,
+        limit: Int = SearchApi.DEFAULT_LIMIT,
+    ): ApiResult<SearchResults>
 
-    /** Last successful results for [query], or null. */
-    fun cached(query: String): SearchResults?
+    /** Last successful results for [query] under [filters], or null. */
+    fun cached(query: String, filters: SearchFilters = SearchFilters.DEFAULT): SearchResults?
 
     fun clearCache()
 }
@@ -44,18 +52,26 @@ class SearchRepositoryImpl @Inject constructor(
             size > CACHE_SIZE
     }
 
-    override fun cached(query: String): SearchResults? = synchronized(lru) { lru[query] }
+    /** Cache key combines the query text and the filter wire form so they never collide. */
+    private fun key(query: String, filters: SearchFilters): String = "${filters.toTypesParam().orEmpty()}|$query"
+
+    override fun cached(query: String, filters: SearchFilters): SearchResults? =
+        synchronized(lru) { lru[key(query, filters)] }
 
     override fun clearCache() {
         synchronized(lru) { lru.clear() }
     }
 
-    override suspend fun search(query: String, limit: Int): ApiResult<SearchResults> = withContext(io) {
+    override suspend fun search(
+        query: String,
+        filters: SearchFilters,
+        limit: Int,
+    ): ApiResult<SearchResults> = withContext(io) {
         val capped = limit.coerceIn(1, SearchApi.MAX_LIMIT)
-        when (val raw = call { api.search(query = query, limit = capped) }) {
+        when (val raw = call { api.search(query = query, types = filters.toTypesParam(), limit = capped) }) {
             is ApiResult.Success -> {
                 val mapped = SearchMapper.toDomain(raw.data)
-                synchronized(lru) { lru[query] = mapped }
+                synchronized(lru) { lru[key(query, filters)] = mapped }
                 ApiResult.Success(mapped)
             }
             is ApiResult.Failure -> raw

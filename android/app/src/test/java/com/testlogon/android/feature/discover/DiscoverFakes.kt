@@ -3,8 +3,11 @@ package com.testlogon.android.feature.discover
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.discover.DiscoverContent
 import com.testlogon.android.data.discover.DiscoverRepository
+import com.testlogon.android.data.discover.RecentSearch
 import com.testlogon.android.data.discover.Recommendations
 import com.testlogon.android.data.discover.RecommendationsRepository
+import com.testlogon.android.data.discover.SearchFilters
+import com.testlogon.android.data.discover.SearchHistoryRepository
 import com.testlogon.android.data.discover.SearchRepository
 import com.testlogon.android.data.discover.SearchResults
 import com.testlogon.android.data.discover.TagPostPage
@@ -40,17 +43,47 @@ class FakeRecommendationsRepository : RecommendationsRepository {
     override fun clearCache() { cachedValue = null }
 }
 
-/** AND-185 — fake search repository for ViewModel tests. */
+/** AND-185 / AND-186 — fake search repository for ViewModel tests. */
 class FakeSearchRepository : SearchRepository {
     var result: ApiResult<SearchResults> = ApiResult.Success(SearchResults("", emptyList()))
     var cachedByQuery: MutableMap<String, SearchResults> = mutableMapOf()
     val queries = mutableListOf<String>()
-    override suspend fun search(query: String, limit: Int): ApiResult<SearchResults> {
+    /** AND-186 — records the `types` filter sent on each call (null = ALL). */
+    val filterTypes = mutableListOf<String?>()
+    override suspend fun search(query: String, filters: SearchFilters, limit: Int): ApiResult<SearchResults> {
         queries += query
+        filterTypes += filters.toTypesParam()
         return result
     }
-    override fun cached(query: String): SearchResults? = cachedByQuery[query]
+    override fun cached(query: String, filters: SearchFilters): SearchResults? = cachedByQuery[query]
     override fun clearCache() { cachedByQuery.clear() }
+}
+
+/** AND-186 — fake search-history repository (server-backed recent searches). */
+class FakeSearchHistoryRepository : SearchHistoryRepository {
+    /** Backing list, most-recent-first. */
+    var items = mutableListOf<RecentSearch>()
+    val recorded = mutableListOf<Pair<String, Int>>()
+    val removed = mutableListOf<String>()
+    var cleared = 0
+    override suspend fun recent(limit: Int): List<RecentSearch> = items.toList()
+    override suspend fun record(query: String, resultCount: Int) {
+        val trimmed = query.trim()
+        if (trimmed.length < SearchHistoryRepository.MIN_RECORD_LEN) return
+        recorded += trimmed to resultCount
+        items.removeAll { it.query.trim().lowercase() == trimmed.lowercase() }
+        items.add(0, RecentSearch(id = "id-${recorded.size}", query = trimmed))
+    }
+    override suspend fun remove(id: String): ApiResult<Unit> {
+        removed += id
+        items.removeAll { it.id == id }
+        return ApiResult.Success(Unit)
+    }
+    override suspend fun clear(): ApiResult<Unit> {
+        cleared++
+        items.clear()
+        return ApiResult.Success(Unit)
+    }
 }
 
 /** AND-183 — fake tag repository for paging-source tests. */

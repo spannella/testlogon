@@ -53,3 +53,41 @@ data class SearchItemDto(
     @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
     @Json(name = "url") val url: String = "",
 )
+
+/**
+ * AND-186 — search-history wire DTOs (GET/POST/DELETE ui/search/history).
+ *
+ * Verified against reference/src/api/endpoints/search.ts (SearchHistoryItem { id, query, ts,
+ * result_count }; RecordSearchHistoryReq { query, result_count }). `ts` is a server epoch (Long); we
+ * never parse it with java.time so it stays JVM-unit-safe.
+ */
+@JsonClass(generateAdapter = true)
+data class SearchHistoryResponseDto(
+    @Json(name = "items") val items: List<SearchHistoryItemDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class SearchHistoryItemDto(
+    @Json(name = "id") val id: String = "",
+    @Json(name = "query") val query: String = "",
+    @Json(name = "ts") val ts: Long = 0L,
+    @Json(name = "result_count") val resultCount: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class RecordSearchHistoryReqDto(
+    @Json(name = "query") val query: String,
+    @Json(name = "result_count") val resultCount: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class RecordSearchHistoryResDto(
+    @Json(name = "ok") val ok: Boolean = true,
+    @Json(name = "id") val id: String = "",
+)
+
+/** Tolerant ack body for the mutating history DELETEs ({ ok } / { ok, deleted_count }). */
+@JsonClass(generateAdapter = true)
+data class SearchHistoryOkDto(
+    @Json(name = "ok") val ok: Boolean = true,
+)

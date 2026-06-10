@@ -61,6 +61,58 @@ data class SearchResults(
     val isEmpty: Boolean get() = categories.all { it.items.isEmpty() }
 }
 
+/**
+ * AND-186 — entity-type filter applied to the global search request via the `types` query param.
+ *
+ * `entityType == null` means ALL (un-scoped — the param is omitted, so the backend returns all nine
+ * sections). A non-null value scopes the server-side request to a single section key. The web client
+ * filters tabs CLIENT-side over the all-categories response (search.ts: globalSearch(q, undefined, 10));
+ * the Android port keeps tabs client-side too, but exposes the filter sheet as the explicit, badge-able
+ * server-scoping control (verified: `types` is the ONLY server-side refinement — there is no `sort` /
+ * `date` / `category` param on GET /ui/search; OpenAPI params are exactly q, types, limit).
+ */
+data class SearchFilters(
+    /** null = ALL (omit `types`); else the single section key sent as `types`. */
+    val entityType: SearchEntityType? = null,
+) {
+    val isDefault: Boolean get() = this == DEFAULT
+
+    /** ALL -> null (omit param); else the plural section key (e.g. USER -> "users"). */
+    fun toTypesParam(): String? = entityType?.let { sectionKey(it) }
+
+    /** The single supported server query param. OTHER never maps to a real section key. */
+    fun toQueryParams(): Map<String, String?> = mapOf("types" to toTypesParam())
+
+    companion object {
+        val DEFAULT = SearchFilters()
+
+        /**
+         * Maps an entity type to its PLURAL section key used by the `types` param. The per-item `type`
+         * field is singular ([SearchEntityType.wire]); the section keys are plural (verified against the
+         * `types` default `calendar,catalog,contacts,files,messages,posts,tickets,users,videos`).
+         */
+        fun sectionKey(type: SearchEntityType): String? = when (type) {
+            SearchEntityType.USER -> "users"
+            SearchEntityType.POST -> "posts"
+            SearchEntityType.CATALOG -> "catalog"
+            SearchEntityType.FILE -> "files"
+            SearchEntityType.MESSAGE -> "messages"
+            SearchEntityType.TICKET -> "tickets"
+            SearchEntityType.CONTACT -> "contacts"
+            SearchEntityType.VIDEO -> "videos"
+            SearchEntityType.CALENDAR -> "calendar"
+            SearchEntityType.OTHER -> null
+        }
+    }
+}
+
+/** AND-186 — one recent-search entry from the server history API. */
+data class RecentSearch(
+    /** Server item id; removal targets this (verified: DELETE ui/search/history/{item_id}). */
+    val id: String,
+    val query: String,
+)
+
 /** AND-185 — pure DTO -> domain mapper, isolated for unit testing. */
 object SearchMapper {
 

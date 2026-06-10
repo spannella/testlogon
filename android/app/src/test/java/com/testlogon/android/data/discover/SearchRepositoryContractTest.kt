@@ -56,6 +56,26 @@ class SearchRepositoryContractTest {
     }
 
     @Test
+    fun search_all_omitsTypesParam() = runTest {
+        backend.enqueue(Fixtures.okBody(multiBody))
+        repo().search("jane", filters = SearchFilters.DEFAULT, limit = 10)
+        val req = backend.takeRequest()
+        assertEquals("/ui/search", req.requestUrl?.encodedPath)
+        // ALL must NOT send a `types` param at all (matches the web default of all nine sections).
+        assertEquals(null, req.requestUrl?.queryParameter("types"))
+        assertEquals(null, req.requestUrl?.queryParameter("sort"))
+        assertEquals(null, req.requestUrl?.queryParameter("cursor"))
+    }
+
+    @Test
+    fun search_withEntityFilter_sendsTypesSectionKey() = runTest {
+        backend.enqueue(Fixtures.okBody(multiBody))
+        repo().search("jane", filters = SearchFilters(SearchEntityType.USER), limit = 10)
+        val req = backend.takeRequest()
+        assertEquals("users", req.requestUrl?.queryParameter("types"))
+    }
+
+    @Test
     fun search_clampsLimitTo20() = runTest {
         backend.enqueue(Fixtures.okBody("""{"query":"x","results":{}}"""))
         repo().search("x", limit = 99)
