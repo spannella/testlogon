@@ -403,7 +403,42 @@ class MessagingRepositoryTest {
 
         override suspend fun getViews(id: String, messageId: String, limit: Int): List<MessageViewOut> =
             emptyList()
+
+        // ---- AND-151 / AND-152: message search ----
+        var searchInConversationResult: List<MessageDto> = emptyList()
+        var searchInConversationCalls = mutableListOf<Triple<String, String, Int>>()
+        var searchAllResult: List<MessageDto> = emptyList()
+        var searchAllCalls = mutableListOf<SearchAllCall>()
+        var searchThrows: Throwable? = null
+
+        override suspend fun searchInConversation(
+            id: String,
+            query: String,
+            limit: Int,
+        ): List<MessageDto> {
+            searchInConversationCalls += Triple(id, query, limit)
+            searchThrows?.let { throw it }
+            return searchInConversationResult
+        }
+
+        override suspend fun searchAllMessages(
+            query: String,
+            senderId: String?,
+            afterTs: Long?,
+            limit: Int,
+        ): List<MessageDto> {
+            searchAllCalls += SearchAllCall(query, senderId, afterTs, limit)
+            searchThrows?.let { throw it }
+            return searchAllResult
+        }
     }
+
+    data class SearchAllCall(
+        val query: String,
+        val senderId: String?,
+        val afterTs: Long?,
+        val limit: Int,
+    )
 
     // ---- AND-130 fakes: uploader + image processor ----
 
@@ -1050,4 +1085,79 @@ class MessagingRepositoryTest {
                 """{"detail":"x"}""".toResponseBody("application/json".toMediaTypeOrNull()),
             ),
         )
+
+    // ---- AND-151 / AND-152: message search repository round-trips ----
+
+    private fun searchDto(id: String, text: String?, createdAt: Long, conv: String = "conv_1") =
+        MessageDto(
+            messageId = id,
+            conversationId = conv,
+            senderId = "usr_1",
+            createdAt = createdAt,
+            kind = "text",
+            text = text,
+        )
+
+    @Test
+    fun searchInConversation_flattensAndSorts_passesTrimmedQueryAndLimit() = runTest {
+        api.searchInConversationResult = listOf(
+            searchDto("m2", "deploy", createdAt = 200),
+            searchDto("m1", "deploy and deploy", createdAt = 100),
+            searchDto("m3", null, createdAt = 150), // dropped (null text)
+        )
+        val result = repo().searchInConversation("conv_1", "  deploy  ")
+        assertTrue(result is ApiResult.Success)
+        val matches = (result as ApiResult.Success).data
+        assertEquals(listOf("m1", "m1", "m2"), matches.map { it.messageId })
+        val (id, q, limit) = api.searchInConversationCalls.single()
+        assertEquals("conv_1", id)
+        assertEquals("deploy", q) // trimmed
+        assertEquals(200, limit) // server default is 50; we pass 200
+    }
+
+    @Test
+    fun searchInConversation_httpError_mapsToFailure() = runTest {
+        api.searchThrows = http(422)
+        val result = repo().searchInConversation("conv_1", "deploy")
+        assertTrue(result is ApiResult.Failure)
+    }
+
+    @Test
+    fun searchInConversation_networkError_mapsToNetworkError() = runTest {
+        api.searchThrows = IOException("offline")
+        val result = repo().searchInConversation("conv_1", "deploy")
+        assertTrue(result is ApiResult.NetworkError)
+    }
+
+    @Test
+    fun searchInConversation_capsQueryAt200Chars() = runTest {
+        api.searchInConversationResult = emptyList()
+        repo().searchInConversation("conv_1", "a".repeat(250))
+        assertEquals(200, api.searchInConversationCalls.single().second.length)
+    }
+
+    @Test
+    fun searchAll_mapsItems_passesFiltersAndBlankSenderBecomesNull() = runTest {
+        api.searchAllResult = listOf(
+            searchDto("m1", "deploy", createdAt = 100, conv = "conv_a"),
+            searchDto("m2", null, createdAt = 110, conv = "conv_b"), // null text tolerated
+        )
+        val result = repo().searchAllMessages("  deploy ", senderId = "  ", afterTs = 1746057600L)
+        assertTrue(result is ApiResult.Success)
+        val items = (result as ApiResult.Success).data
+        assertEquals(2, items.size)
+        assertEquals(setOf("conv_a", "conv_b"), items.map { it.conversationId }.toSet())
+        val call = api.searchAllCalls.single()
+        assertEquals("deploy", call.query)
+        assertNull(call.senderId) // blank -> null
+        assertEquals(1746057600L, call.afterTs)
+        assertEquals(200, call.limit)
+    }
+
+    @Test
+    fun searchAll_networkError_mapsToNetworkError() = runTest {
+        api.searchThrows = IOException("offline")
+        val result = repo().searchAllMessages("deploy")
+        assertTrue(result is ApiResult.NetworkError)
+    }
 }

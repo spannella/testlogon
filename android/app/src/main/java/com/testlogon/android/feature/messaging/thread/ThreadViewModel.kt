@@ -86,7 +86,7 @@ sealed interface ThreadEvent {
  */
 @HiltViewModel
 class ThreadViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     private val repository: MessagingRepository,
     private val authStateStore: AuthStateStore,
     private val eventStream: MessagingEventStream,
@@ -122,11 +122,33 @@ class ThreadViewModel @Inject constructor(
             "missing $ARG_CONVERSATION_ID"
         }
 
+    /** AND-152 — deep-link target message to scroll to on open (consumed once, then cleared). */
+    private var focusMessageId: String? = savedStateHandle.get<String>(ARG_FOCUS_MESSAGE_ID)
+
     private val _state = MutableStateFlow(ThreadUiState(conversationId = conversationId))
     val state: StateFlow<ThreadUiState> = _state.asStateFlow()
 
     private val _events = Channel<ThreadEvent>(Channel.BUFFERED)
     val events: Flow<ThreadEvent> = _events.receiveAsFlow()
+
+    // ---- AND-151: in-conversation search ----
+
+    /** AND-151 — owns the debounced in-conversation search lifecycle (state isolated from the thread). */
+    private val searchController = ThreadSearchController(
+        conversationId = conversationId,
+        repository = repository,
+        saved = savedStateHandle,
+        scope = viewModelScope,
+    )
+
+    /** AND-151 — search UI state (active/query/phase/matches/cursor) for the Thread search bar. */
+    val searchState: StateFlow<ThreadSearchUiState> = searchController.state
+
+    fun onOpenSearch() = searchController.open()
+    fun onCloseSearch() = searchController.close()
+    fun onSearchQueryChange(query: String) = searchController.onQueryChange(query)
+    fun onSearchNext() = searchController.next()
+    fun onSearchPrev() = searchController.prev()
 
     // ---- AND-146: typing indicators ----
 
@@ -200,6 +222,13 @@ class ThreadViewModel @Inject constructor(
                         messages = visible.map { it.toUi(self) },
                         receipts = computeReceipts(visible, self),
                     )
+                }
+                // AND-152 — once the deep-link target message is loaded, scroll to it (once).
+                val target = focusMessageId
+                if (target != null && visible.any { it.id == target || it.clientId == target }) {
+                    focusMessageId = null
+                    savedStateHandle[ARG_FOCUS_MESSAGE_ID] = null
+                    _events.trySend(ThreadEvent.ScrollToMessage(target))
                 }
             }
         }
@@ -1139,6 +1168,11 @@ class ThreadViewModel @Inject constructor(
         _events.trySend(ThreadEvent.ScrollToMessage(messageKey))
     }
 
+    /** AND-151 — scroll the thread to a search-match message id, reusing the jump-to-message effect. */
+    fun onJumpToSearchMatch(messageId: String) {
+        _events.trySend(ThreadEvent.ScrollToMessage(messageId))
+    }
+
     private fun startEdit(messageId: String) {
         val msg = _state.value.messages.firstOrNull { it.key == messageId } ?: return
         if (!msg.isOwn || msg.isTombstone) return
@@ -1416,6 +1450,9 @@ class ThreadViewModel @Inject constructor(
 
     companion object {
         const val ARG_CONVERSATION_ID = "conversationId"
+
+        /** AND-152 — optional deep-link arg: scroll the thread to this message id on open. */
+        const val ARG_FOCUS_MESSAGE_ID = "focusMessageId"
         const val PAGE_SIZE = 30
         private const val OFFLINE_MESSAGE = "You're offline. Showing saved messages."
 

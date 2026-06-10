@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,6 +61,9 @@ object ConversationListTestTags {
     const val ROW = "conv_row"
     const val UNREAD_BADGE = "conv_unread_badge"
     const val STALE_BANNER = "conv_stale_banner"
+
+    /** AND-152 — global message-search entry icon. */
+    const val SEARCH = "conv_list_search"
 }
 
 /** AND-121 — route-level conversation list, reached from the Messages tab / More hub. */
@@ -68,6 +72,7 @@ fun ConversationListRoute(
     onOpenConversation: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenSearch: () -> Unit = {},
     viewModel: ConversationListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -87,6 +92,7 @@ fun ConversationListRoute(
         onRefresh = viewModel::refresh,
         onRetry = viewModel::retry,
         onOpenConversation = onOpenConversation,
+        onOpenSearch = onOpenSearch,
         onBack = onBack,
         modifier = modifier,
     )
@@ -102,6 +108,7 @@ fun ConversationListScreen(
     onOpenConversation: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenSearch: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(ConversationListTestTags.SCREEN),
@@ -113,6 +120,18 @@ fun ConversationListScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
+                        )
+                    }
+                },
+                actions = {
+                    // AND-152 — open global (cross-conversation) message search.
+                    IconButton(
+                        onClick = onOpenSearch,
+                        modifier = Modifier.testTag(ConversationListTestTags.SEARCH),
+                    ) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = stringResource(R.string.search_messages),
                         )
                     }
                 },

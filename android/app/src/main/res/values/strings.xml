@@ -224,6 +224,21 @@
     <string name="language_picker_back">Back</string>
     <string name="language_picker_system_default">System default</string>
 
+    <!-- AND-151/AND-152: message search -->
+    <string name="search_in_conversation">Search in conversation</string>
+    <string name="search_messages">Search messages</string>
+    <string name="search_close">Close search</string>
+    <string name="search_clear">Clear search</string>
+    <string name="search_next_match">Next match</string>
+    <string name="search_prev_match">Previous match</string>
+    <string name="search_min_chars">Type at least 2 characters</string>
+    <string name="search_no_results">0 results</string>
+    <string name="search_no_messages">No messages match</string>
+    <string name="search_prompt_title">Search your messages</string>
+    <string name="search_error_short">Search failed</string>
+    <string name="search_match_cursor">%1$d of %2$d</string>
+    <string name="search_result_count">%1$d results in %2$d conversations</string>
+
     <!-- AND-120..124: messaging (conversation list + thread + composer) -->
     <string name="conv_list_title">Messages</string>
     <string name="conv_list_empty_title">No conversations yet</string>

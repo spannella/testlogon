@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Poll
@@ -124,6 +125,8 @@ fun ThreadRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     // AND-146 — remote typers in this conversation.
     val typingUsers by viewModel.typingUsers.collectAsStateWithLifecycle()
+    // AND-151 — in-conversation search state.
+    val searchUi by viewModel.searchState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val imageViewer = rememberImageViewerState()
     val context = LocalContext.current
@@ -209,6 +212,12 @@ fun ThreadRoute(
         }
     }
 
+    // AND-151 — when the active search match changes, jump the thread to that message (reuses the
+    // existing ScrollToMessage effect). The VM emits the scroll event keyed by message id.
+    LaunchedEffect(searchUi.activeMatch?.messageId) {
+        searchUi.activeMatch?.let { viewModel.onJumpToSearchMatch(it.messageId) }
+    }
+
     // Reverse pagination: when the last (oldest) visible item nears the end, load older history.
     val shouldLoadOlder by remember {
         derivedStateOf {
@@ -288,6 +297,17 @@ fun ThreadRoute(
         onAction = viewModel::onAction,
         onJumpToPinned = viewModel::onJumpToPinned,
         onDiscardDraft = viewModel::onDiscardDraft,
+        searchActive = searchUi.active,
+        onOpenSearch = viewModel::onOpenSearch,
+        searchBar = {
+            ThreadSearchBar(
+                state = searchUi,
+                onQueryChange = viewModel::onSearchQueryChange,
+                onClose = viewModel::onCloseSearch,
+                onNext = viewModel::onSearchNext,
+                onPrev = viewModel::onSearchPrev,
+            )
+        },
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -354,6 +374,10 @@ fun ThreadScreen(
     onAction: (ThreadAction) -> Unit = {},
     onJumpToPinned: (String) -> Unit = {},
     onDiscardDraft: () -> Unit = {},
+    // AND-151 — in-conversation search: when [searchActive] the search bar replaces the app bar.
+    searchActive: Boolean = false,
+    onOpenSearch: () -> Unit = {},
+    searchBar: @Composable () -> Unit = {},
     snackbarHostState: androidx.compose.material3.SnackbarHostState =
         remember { androidx.compose.material3.SnackbarHostState() },
     modifier: Modifier = Modifier,
@@ -364,7 +388,10 @@ fun ThreadScreen(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            if (searchActive) {
+                searchBar()
+            } else {
+                TopAppBar(
                 title = {
                     Text(
                         text = state.title.ifBlank { stringResource(R.string.thread_default_title) },
@@ -381,6 +408,16 @@ fun ThreadScreen(
                     }
                 },
                 actions = {
+                    // AND-151 — open in-conversation search.
+                    IconButton(
+                        onClick = onOpenSearch,
+                        modifier = Modifier.testTag(ThreadSearchTestTags.OPEN),
+                    ) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = stringResource(R.string.search_in_conversation),
+                        )
+                    }
                     // AND-140 — open the pinned-messages sheet.
                     IconButton(
                         onClick = { onAction(ThreadAction.OpenPinsList) },
@@ -404,7 +441,8 @@ fun ThreadScreen(
                         }
                     }
                 },
-            )
+                )
+            }
         },
         bottomBar = {
             // AND-133 — the composer swaps to the recording overlay / preview card while a voice

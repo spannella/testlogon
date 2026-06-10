@@ -503,4 +503,43 @@ interface MessagingApi {
         @Path("messageId") messageId: String,
         @Query("limit") limit: Int = 200,
     ): List<MessageViewOut>
+
+    // ---- AND-151 / AND-152: message search ----
+
+    /**
+     * AND-151 — in-conversation message search.
+     *
+     * Verified against OpenAPI op
+     * `search_messages_in_conversation_messaging_conversations__conversation_id__messages_search_get`
+     * (openapi.index.txt line 345): path `GET /messaging/conversations/{conversation_id}/messages/search`,
+     * params `q` (required, 1..200), `limit` (default 50, max 200), plus optional `sender_id`,
+     * `after_ts`, `kind`. The 200 response is a BARE JSON array of MessageOut (no envelope, no `total`,
+     * no per-occurrence highlight offsets — highlights are computed locally). `text` is nullable;
+     * `created_at` is an epoch-SECONDS integer. We pass `limit=200` explicitly (server default is 50).
+     * Idempotent GET.
+     */
+    @GET("messaging/conversations/{id}/messages/search")
+    suspend fun searchInConversation(
+        @Path("id") id: String,
+        @Query("q") query: String,
+        @Query("limit") limit: Int = 200,
+    ): List<MessageDto>
+
+    /**
+     * AND-152 — global (cross-conversation) message search.
+     *
+     * Verified against OpenAPI op `search_messages_all_conversations_messaging_messages_search_get`
+     * (openapi.index.txt line 412): path `GET /messaging/messages/search`, params `q` (required,
+     * 1..200), `limit` (default 50, max 200), optional `sender_id` (user id, <=64 chars), `after_ts`
+     * (epoch-SECONDS integer, >=0), `kind` (out of scope v1). The 200 response is a BARE JSON array of
+     * MessageOut spanning multiple conversations (no envelope, no cursor — single bounded page).
+     * The web client has NO equivalent call; OpenAPI is the sole contract source. Idempotent GET.
+     */
+    @GET("messaging/messages/search")
+    suspend fun searchAllMessages(
+        @Query("q") query: String,
+        @Query("sender_id") senderId: String? = null,
+        @Query("after_ts") afterTs: Long? = null,
+        @Query("limit") limit: Int = 200,
+    ): List<MessageDto>
 }

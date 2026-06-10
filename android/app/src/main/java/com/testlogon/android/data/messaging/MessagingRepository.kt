@@ -178,6 +178,29 @@ interface MessagingRepository {
      */
     suspend fun retryPendingViews()
 
+    // ---- AND-151 / AND-152: message search ----
+
+    /**
+     * AND-151 — search within a single conversation. Returns matches FLATTENED to one entry per local
+     * occurrence (ordered oldest->newest, then occurrenceIndex) so prev/next can step through every hit.
+     * Highlight offsets are computed locally (the backend supplies none). Idempotent GET.
+     */
+    suspend fun searchInConversation(
+        conversationId: String,
+        query: String,
+    ): ApiResult<List<MessageSearchMatch>>
+
+    /**
+     * AND-152 — cross-conversation message search. Returns a single bounded list of result items
+     * spanning all conversations the user participates in (the endpoint has no pagination). `senderId`
+     * and `afterTs` (epoch seconds) are optional filters. Idempotent GET.
+     */
+    suspend fun searchAllMessages(
+        query: String,
+        senderId: String? = null,
+        afterTs: Long? = null,
+    ): ApiResult<List<MessageSearchResultItem>>
+
     /**
      * AND-127 — find-or-create a 1:1 DM with [peerUserId], resolving to a [Conversation]. Guards
      * against self-DM locally (no network). The returned conversation is upserted into the cache so
@@ -932,6 +955,40 @@ class MessagingRepositoryImpl @Inject constructor(
         snapshot.forEach { (cid, mid) ->
             // reportView re-arms the once-guard + clears the queue entry on success.
             reportView(cid, mid)
+        }
+    }
+
+    // ---- AND-151 / AND-152: message search ----
+
+    override suspend fun searchInConversation(
+        conversationId: String,
+        query: String,
+    ): ApiResult<List<MessageSearchMatch>> = withContext(io) {
+        val trimmed = query.trim().take(SEARCH_QUERY_MAX)
+        when (val r = apiCall { api.searchInConversation(conversationId, trimmed) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.toSearchMatches(trimmed))
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun searchAllMessages(
+        query: String,
+        senderId: String?,
+        afterTs: Long?,
+    ): ApiResult<List<MessageSearchResultItem>> = withContext(io) {
+        val trimmed = query.trim().take(SEARCH_QUERY_MAX)
+        val call = apiCall {
+            api.searchAllMessages(
+                query = trimmed,
+                senderId = senderId?.takeIf { it.isNotBlank() },
+                afterTs = afterTs,
+            )
+        }
+        when (call) {
+            is ApiResult.Success -> ApiResult.Success(call.data.map { it.toSearchResultItem() })
+            is ApiResult.Failure -> call
+            is ApiResult.NetworkError -> call
         }
     }
 
@@ -1910,6 +1967,9 @@ class MessagingRepositoryImpl @Inject constructor(
 
         /** AND-147 — cap on the in-memory failed-view retry queue so a flaky host can't grow it unbounded. */
         const val MAX_PENDING_VIEWS = 256
+
+        /** AND-151/152 — server `q` constraint is maxLength 200; cap client-side to avoid a 422. */
+        const val SEARCH_QUERY_MAX = 200
     }
 }
 

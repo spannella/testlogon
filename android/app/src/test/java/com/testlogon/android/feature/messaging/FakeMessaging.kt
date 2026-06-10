@@ -286,6 +286,35 @@ class FakeMessagingRepository : MessagingRepository {
 
     override suspend fun retryPendingViews() { retryPendingViewsCalls++ }
 
+    // ---- AND-151 / AND-152: message search ----
+
+    /** Recorded in-conversation search calls: (conversationId, query). */
+    var searchInConversationCalls = mutableListOf<Pair<String, String>>()
+    var searchInConversationResult: ApiResult<List<com.testlogon.android.data.messaging.MessageSearchMatch>> =
+        ApiResult.Success(emptyList())
+
+    /** Recorded global search calls: (query, senderId, afterTs). */
+    var searchAllCalls = mutableListOf<Triple<String, String?, Long?>>()
+    var searchAllResult: ApiResult<List<com.testlogon.android.data.messaging.MessageSearchResultItem>> =
+        ApiResult.Success(emptyList())
+
+    override suspend fun searchInConversation(
+        conversationId: String,
+        query: String,
+    ): ApiResult<List<com.testlogon.android.data.messaging.MessageSearchMatch>> {
+        searchInConversationCalls += conversationId to query
+        return searchInConversationResult
+    }
+
+    override suspend fun searchAllMessages(
+        query: String,
+        senderId: String?,
+        afterTs: Long?,
+    ): ApiResult<List<com.testlogon.android.data.messaging.MessageSearchResultItem>> {
+        searchAllCalls += Triple(query, senderId, afterTs)
+        return searchAllResult
+    }
+
     override suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation> {
         findOrCreateDmCalls += peerUserId
         return findOrCreateDmResult
