@@ -85,4 +85,24 @@ class CatalogDtoRoundTripTest {
         assertTrue(page.items.isEmpty())
         assertNull(page.nextToken)
     }
+
+    // AND-206/209: domain mapping — attributes stringified, null values dropped, order preserved.
+    @Test
+    fun toDomain_attributes_stringified_nullsDropped_orderPreserved() {
+        val json = """
+            {"category_id":"c","item_id":"i","name":"n","price_cents":1,"currency":"USD",
+             "image_urls":["a.png","b.png"],
+             "attributes":{"color":"black","rank":3,"missing":null,"featured":true},
+             "stock_count":4,"stock_status":"low_stock","created_at":"t","updated_at":"t"}
+        """.trimIndent()
+        val domain = itemAdapter.fromJson(json)!!.toDomain()
+        // null-valued "missing" dropped; remaining preserved in wire order.
+        assertEquals(
+            listOf("color" to "black", "rank" to "3.0", "featured" to "true"),
+            domain.attributes,
+        )
+        assertEquals("a.png", domain.thumbnailUrl)
+        assertEquals(4, domain.stockCount)
+        assertEquals("low_stock", domain.stockStatus)
+    }
 }

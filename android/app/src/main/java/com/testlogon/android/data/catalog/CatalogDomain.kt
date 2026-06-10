@@ -30,6 +30,8 @@ data class CatalogItem(
     val stockCount: Int? = null,
     val stockStatus: String = "unlimited",
     val position: Int? = null,
+    /** Free-form product attributes (AND-206 detail). Stringified values; insertion order preserved. */
+    val attributes: List<Pair<String, String>> = emptyList(),
 ) {
     /** First image is the grid/detail thumbnail; null when the item has no images. */
     val thumbnailUrl: String? get() = imageUrls.firstOrNull()
@@ -68,6 +70,8 @@ internal fun CatalogItemDto.toDomain(): CatalogItem = CatalogItem(
     stockCount = stockCount,
     stockStatus = stockStatus,
     position = position,
+    // Drop null-valued attributes; stringify the rest, preserving the wire order.
+    attributes = attributes.mapNotNull { (k, v) -> v?.let { k to it.toString() } },
 )
 
 internal fun CatalogCategoryListDto.toDomain(): CatalogCategoryPage = CatalogCategoryPage(

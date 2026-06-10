@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -63,6 +64,7 @@ import com.testlogon.android.data.catalog.CatalogItem
 object CatalogTestTags {
     const val SCREEN = "catalog_screen"
     const val GRID = "catalog_grid"
+    const val SEARCH = "catalog_search_action"
     const val CATEGORIES = "catalog_categories"
     const val CARD = "catalog_card"
     const val EMPTY = "catalog_empty"
@@ -80,6 +82,7 @@ object CatalogTestTags {
 @Composable
 fun CatalogRoute(
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onSearch: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CatalogViewModel = hiltViewModel(),
@@ -92,6 +95,7 @@ fun CatalogRoute(
         onSelectCategory = viewModel::selectCategory,
         onRetryCategories = viewModel::retryCategories,
         onItemClick = onItemClick,
+        onSearch = onSearch,
         onRefresh = { items.refresh() },
         onBack = onBack,
         modifier = modifier,
@@ -105,6 +109,7 @@ fun CatalogScreen(
     onSelectCategory: (String) -> Unit,
     onRetryCategories: () -> Unit,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onSearch: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -119,6 +124,17 @@ fun CatalogScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = onSearch,
+                        modifier = Modifier.testTag(CatalogTestTags.SEARCH),
+                    ) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = stringResource(R.string.catalog_search_field_label),
                         )
                     }
                 },

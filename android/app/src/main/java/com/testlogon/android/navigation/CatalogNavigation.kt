@@ -7,7 +7,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.catalog.CatalogRoute
-import com.testlogon.android.feature.catalog.ProductDetailPlaceholderRoute
+import com.testlogon.android.feature.catalog.CatalogSearchRoute
+import com.testlogon.android.feature.catalog.ProductDetailRoute
 
 /** AND-205 — the storefront catalog / category browse grid. */
 data object CatalogDest {
@@ -28,10 +29,31 @@ data object ProductDetailDest {
         "shop/${Uri.encode(categoryId)}/${Uri.encode(itemId)}"
 }
 
-/** AND-205 — registers the catalog browse grid; its cells open [ProductDetailDest]. */
+/** AND-207 — catalog full-text search route. */
+data object CatalogSearchDest {
+    const val ROUTE = "catalog/search"
+}
+
+/** AND-205 / AND-207 — registers the catalog browse grid; its cells open [ProductDetailDest]. */
 fun NavGraphBuilder.catalogDestination(navController: NavHostController) {
     composable(CatalogDest.ROUTE) {
         CatalogRoute(
+            onItemClick = { categoryId, itemId ->
+                navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
+            },
+            onSearch = { navController.navigate(CatalogSearchDest.ROUTE) { launchSingleTop = true } },
+            onBack = { navController.popBackStack() },
+        )
+    }
+}
+
+/**
+ * AND-207 — registers the catalog search destination; rows open [ProductDetailDest] with both ids
+ * (web detail nav is keyed on category_id + item_id).
+ */
+fun NavGraphBuilder.catalogSearchDestination(navController: NavHostController) {
+    composable(CatalogSearchDest.ROUTE) {
+        CatalogSearchRoute(
             onItemClick = { categoryId, itemId ->
                 navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
             },
@@ -41,8 +63,8 @@ fun NavGraphBuilder.catalogDestination(navController: NavHostController) {
 }
 
 /**
- * AND-205 — registers a placeholder product-detail destination so the browse -> detail nav contract is
- * exercised end to end. AND-206 replaces [ProductDetailPlaceholderRoute] with the real screen.
+ * AND-206 — registers the real product-detail destination. The item is derived from the category-items
+ * list (there is no single-item GET); categoryId/itemId arrive as nav args via SavedStateHandle.
  */
 fun NavGraphBuilder.productDetailDestination(navController: NavHostController) {
     composable(
@@ -52,6 +74,6 @@ fun NavGraphBuilder.productDetailDestination(navController: NavHostController) {
             navArgument(ProductDetailDest.ARG_ITEM_ID) { type = NavType.StringType },
         ),
     ) {
-        ProductDetailPlaceholderRoute(onBack = { navController.popBackStack() })
+        ProductDetailRoute(onBack = { navController.popBackStack() })
     }
 }

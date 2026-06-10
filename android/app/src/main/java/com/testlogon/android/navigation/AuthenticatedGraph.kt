@@ -118,7 +118,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         galleryDestination(navController)
         // AND-205: storefront catalog / category browse grid (cells open the product detail route).
         catalogDestination(navController)
+        // AND-206: real product detail (item derived from the category-items list; add-to-cart).
         productDetailDestination(navController)
+        // AND-207: catalog full-text search (rows open the product detail route).
+        catalogSearchDestination(navController)
     }
 }
 

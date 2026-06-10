@@ -83,12 +83,16 @@ class CatalogItemsPagingSourceTest {
     }
 }
 
-/** Test double for [CatalogRepository] keyed by cursor. */
+/** Test double for [CatalogRepository] keyed by cursor. Shared across the feature-catalog JVM suite. */
 class FakeCatalogRepository : CatalogRepository {
     val itemPages = mutableMapOf<String?, ApiResult<CatalogItemPage>>()
     val searchPages = mutableMapOf<String?, ApiResult<CatalogItemPage>>()
+    val searchQueries = mutableListOf<String>()
     var categoriesResult: ApiResult<CatalogCategoryPage> =
         ApiResult.Success(CatalogCategoryPage(emptyList(), nextToken = null))
+
+    /** Overrides getItem when set; otherwise getItem derives from [itemPages] (list-then-find). */
+    var getItemResult: ApiResult<CatalogItem>? = null
 
     override suspend fun categories(nextToken: String?, pageSize: Int): ApiResult<CatalogCategoryPage> =
         categoriesResult
@@ -96,6 +100,33 @@ class FakeCatalogRepository : CatalogRepository {
     override suspend fun categoryItems(categoryId: String, cursor: String?, limit: Int): ApiResult<CatalogItemPage> =
         itemPages[cursor] ?: ApiResult.Success(CatalogItemPage(emptyList(), nextToken = null))
 
-    override suspend fun search(query: String, cursor: String?, limit: Int): ApiResult<CatalogItemPage> =
-        searchPages[cursor] ?: ApiResult.Success(CatalogItemPage(emptyList(), nextToken = null))
+    override suspend fun search(query: String, cursor: String?, limit: Int): ApiResult<CatalogItemPage> {
+        if (cursor == null) searchQueries += query
+        return searchPages[cursor] ?: ApiResult.Success(CatalogItemPage(emptyList(), nextToken = null))
+    }
+
+    override suspend fun getItem(categoryId: String, itemId: String): ApiResult<CatalogItem> {
+        getItemResult?.let { return it }
+        // Mirror the impl's list-then-find over the seeded itemPages.
+        var cursor: String? = null
+        while (true) {
+            when (val r = categoryItems(categoryId, cursor = cursor)) {
+                is ApiResult.Success -> {
+                    val match = r.data.items.firstOrNull { it.itemId == itemId }
+                    if (match != null) return ApiResult.Success(match)
+                    cursor = r.data.nextToken
+                    if (cursor == null) {
+                        return ApiResult.Failure(
+                            com.testlogon.android.core.model.ApiError(
+                                status = CatalogRepository.STATUS_ITEM_NOT_FOUND,
+                                message = "Item not found",
+                            ),
+                        )
+                    }
+                }
+                is ApiResult.Failure -> return r
+                is ApiResult.NetworkError -> return r
+            }
+        }
+    }
 }

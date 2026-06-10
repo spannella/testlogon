@@ -906,4 +906,27 @@
     <string name="catalog_item_title">Item</string>
     <string name="catalog_item_coming_soon">Product detail is coming soon.</string>
     <string name="more_entry_catalog">Shop</string>
+
+    <!-- AND-206: Product detail -->
+    <string name="catalog_detail_not_found_title">Item not found</string>
+    <string name="catalog_detail_not_found_body">This item is no longer available.</string>
+    <string name="catalog_detail_error">Couldn\'t load this item. Try again.</string>
+    <string name="catalog_detail_no_description">No description available.</string>
+    <string name="catalog_detail_attributes">Details</string>
+    <string name="catalog_detail_in_stock">In stock</string>
+    <string name="catalog_detail_low_stock">Only %1$d left</string>
+    <string name="catalog_detail_out_of_stock">Out of stock</string>
+    <string name="catalog_detail_add_to_cart">Add to cart</string>
+    <string name="catalog_detail_adding">Adding…</string>
+    <string name="catalog_detail_added">Added to cart</string>
+    <string name="catalog_detail_add_failed">Couldn\'t add to cart. Try again.</string>
+    <string name="catalog_detail_image_cd">%1$s, image %2$d of %3$d</string>
+
+    <!-- AND-207: Catalog search -->
+    <string name="catalog_search_title">Search</string>
+    <string name="catalog_search_field_label">Search catalog</string>
+    <string name="catalog_search_clear">Clear search</string>
+    <string name="catalog_search_prompt">Type to search the catalog</string>
+    <string name="catalog_search_empty">No results for \"%1$s\"</string>
+    <string name="catalog_search_error">Couldn\'t search. Try again.</string>
 </resources>
