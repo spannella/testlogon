@@ -103,6 +103,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         tagPageDestination(navController)
         // AND-185: global multi-entity search (distinct from AND-152 message search).
         multiSearchDestination(navController)
+        // AND-189: the caller's videos library grid.
+        videosLibraryDestination(navController)
+        // AND-191: the public VOD catalog (browse on-demand titles).
+        vodCatalogDestination(navController)
+        // AND-190: video detail + reusable player (shared by library, VOD, and discover recs).
+        videoDetailDestination(navController)
     }
 }
 

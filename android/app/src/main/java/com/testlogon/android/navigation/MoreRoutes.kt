@@ -42,6 +42,12 @@ object MoreRoutes {
     // AND-093: achievements (earned/locked + progress).
     val ACHIEVEMENTS: String get() = MainDest.Achievements.route
 
+    // AND-189: the caller's videos library grid.
+    val VIDEOS: String get() = VideosLibraryDest.ROUTE
+
+    // AND-191: the public VOD catalog (browse on-demand titles).
+    val VOD_CATALOG: String get() = VodCatalogDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -62,6 +68,8 @@ object MoreRoutes {
             ACTIVITY,
             SAVED,
             ACHIEVEMENTS,
+            VIDEOS,
+            VOD_CATALOG,
             SETTINGS,
             HELP,
             ABOUT,

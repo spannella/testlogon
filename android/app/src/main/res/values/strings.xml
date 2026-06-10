@@ -54,6 +54,8 @@
     <string name="more_entry_activity">Activity</string>
     <string name="more_entry_saved">Saved</string>
     <string name="more_entry_achievements">Achievements</string>
+    <string name="more_entry_videos">My videos</string>
+    <string name="more_entry_vod_catalog">Browse videos</string>
     <string name="more_entry_help">Help</string>
     <string name="more_entry_about">About</string>
 
@@ -301,6 +303,30 @@
     <string name="player_live_badge">LIVE</string>
     <string name="player_error_connection">Connection problem</string>
     <string name="player_error_unplayable">This video can\'t be played</string>
+
+    <!-- AND-189: videos library -->
+    <string name="videos_library_title">Videos</string>
+    <string name="videos_library_empty">No videos yet</string>
+    <string name="videos_library_error">Couldn\'t load videos. Try again.</string>
+    <string name="videos_append_error">Couldn\'t load more</string>
+    <string name="video_untitled">Untitled</string>
+
+    <!-- AND-190: video detail + player -->
+    <string name="video_detail_like">Like</string>
+    <string name="video_detail_unlike">Unlike</string>
+    <string name="video_detail_share">Share</string>
+    <string name="video_detail_up_next">Up next</string>
+    <string name="video_detail_not_found">Video not found</string>
+    <string name="video_detail_forbidden">You don\'t have access to this video</string>
+    <string name="video_detail_processing">This video is still processing</string>
+    <string name="video_detail_no_source">This video cannot be played right now</string>
+
+    <!-- AND-191: VOD catalog -->
+    <string name="vod_catalog_title">Browse</string>
+    <string name="vod_catalog_empty">No titles available</string>
+    <string name="vod_catalog_error">Couldn\'t load the catalog. Try again.</string>
+    <string name="vod_catalog_append_error">Couldn\'t load more</string>
+    <string name="vod_category_all">All</string>
 
     <!-- AND-169: adaptive quality / data-saver -->
     <string name="cd_video_quality">Video quality</string>
@@ -772,4 +798,6 @@
     <string name="multi_search_recent_title">Recent searches</string>
     <string name="multi_search_recent_clear_all">Clear all</string>
     <string name="multi_search_recent_remove">Remove recent search</string>
+    <!-- AND-190: generic offline message for video detail + reusable states -->
+    <string name="state_offline_message">You\'re offline. Showing saved data.</string>
 </resources>

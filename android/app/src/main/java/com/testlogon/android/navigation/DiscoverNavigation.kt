@@ -97,6 +97,8 @@ internal fun SearchResult.toInAppRoute(): String? {
         when (head) {
             "users", "u", "profile" -> return PublicProfileDest.build(id)
             "posts", "post" -> return PostDetailDest.build(id)
+            // AND-190: the web video-detail page is /gallery/{video_id}.
+            "gallery", "videos", "video", "vod" -> return VideoDetailDest.build(id)
             "discover" -> if (segments.size >= 3 && segments[1] == "tags") return TagPageDest.build(segments[2])
         }
     }
@@ -104,6 +106,8 @@ internal fun SearchResult.toInAppRoute(): String? {
     return when (type) {
         SearchEntityType.USER, SearchEntityType.CONTACT -> PublicProfileDest.build(id)
         SearchEntityType.POST -> PostDetailDest.build(id)
+        // AND-190: video / VOD catalog search hits now open the shared video detail route.
+        SearchEntityType.VIDEO, SearchEntityType.CATALOG -> VideoDetailDest.build(id)
         else -> null // no first-party detail route for this kind yet — safe no-op
     }
 }

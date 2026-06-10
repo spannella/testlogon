@@ -12,8 +12,10 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import com.testlogon.android.R
 import com.testlogon.android.navigation.MoreRoutes
@@ -76,6 +78,20 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_achievements,
             icon = Icons.Outlined.EmojiEvents,
             route = MoreRoutes.ACHIEVEMENTS,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "videos",
+            labelRes = R.string.more_entry_videos,
+            icon = Icons.Outlined.VideoLibrary,
+            route = MoreRoutes.VIDEOS,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "vod_catalog",
+            labelRes = R.string.more_entry_vod_catalog,
+            icon = Icons.Outlined.Movie,
+            route = MoreRoutes.VOD_CATALOG,
             section = MoreSection.APP,
         ),
         MoreEntry(

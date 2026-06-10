@@ -130,9 +130,11 @@ fun AuthedShellScreen(
                     onOpenSearch = {
                         onOpenRoute(com.testlogon.android.navigation.MultiSearchDest.ROUTE)
                     },
-                    // AND-184: the web video-detail route (/gallery/{video_id}) has no Android screen
-                    // yet (owned by AND-182's scope); video taps are a safe no-op until it lands.
-                    onOpenVideo = {},
+                    // AND-184 + AND-190: recommendation taps now open the video detail + player
+                    // route (previously a no-op awaiting AND-190's detail screen).
+                    onOpenVideo = { videoId ->
+                        onOpenRoute(com.testlogon.android.navigation.VideoDetailDest.build(videoId))
+                    },
                 )
             }
             composable(AuthedTab.ME.route) {
@@ -160,7 +162,10 @@ fun AuthedShellScreen(
                             com.testlogon.android.navigation.MoreRoutes.MESSAGES,
                             com.testlogon.android.navigation.MoreRoutes.ACTIVITY,
                             com.testlogon.android.navigation.MoreRoutes.SAVED,
-                            com.testlogon.android.navigation.MoreRoutes.ACHIEVEMENTS ->
+                            com.testlogon.android.navigation.MoreRoutes.ACHIEVEMENTS,
+                            // AND-189 / AND-191: videos library + VOD catalog are outer-graph routes.
+                            com.testlogon.android.navigation.MoreRoutes.VIDEOS,
+                            com.testlogon.android.navigation.MoreRoutes.VOD_CATALOG ->
                                 onOpenRoute(route)
                             else -> Unit // coming-soon entries are non-interactive
                         }
