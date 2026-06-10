@@ -315,4 +315,63 @@ interface MessagingApi {
         @Path("pollId") pollId: String,
         @Body body: PollConfirmReq,
     ): OkResp
+
+    // ---- AND-137: countdown ----
+
+    /**
+     * AND-137 — send a countdown message. Body = SendCountdownMessageIn; returns MessageOut
+     * (kind="countdown", HTTP 201). Non-idempotent POST (no client_id on the wire).
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/countdown")
+    suspend fun sendCountdown(
+        @Path("id") id: String,
+        @Body body: SendCountdownMessageReq,
+    ): MessageDto
+
+    // ---- AND-139: tips / paid-unlockable / lottery ----
+
+    /**
+     * AND-139 — unlock a fixed-price paid message. Body = UnlockMessageIn {payment_method_id?};
+     * returns UnlockOut (RECEIPT only — the revealed body is fetched separately). Non-idempotent.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/unlock")
+    suspend fun unlockMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: UnlockMessageReq,
+    ): UnlockOutDto
+
+    /**
+     * AND-139 — tip a message. Body = SendTipIn {amount_cents, currency, note?, payment_method_id?};
+     * returns TipOut. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/tip")
+    suspend fun tipMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: SendTipReq,
+    ): TipOutDto
+
+    /**
+     * AND-139 — single atomic lottery draw+reveal. EMPTY body (no schema). Conversation is NOT in
+     * the path. Returns LotteryUnlockOut {selected_outcome, lock_state, unlocked_at}.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/messages/{messageId}/lottery/unlock")
+    suspend fun unlockLottery(
+        @Path("messageId") messageId: String,
+        @Body body: Map<String, String> = emptyMap(),
+    ): LotteryUnlockOutDto
+
+    /** AND-139 — hydrate lottery state (idempotent GET). */
+    @GET("messaging/messages/{messageId}/lottery")
+    suspend fun getLottery(
+        @Path("messageId") messageId: String,
+    ): LotteryMessageOutDto
+
+    /** AND-139 — re-fetch a single conversation's recent messages to reveal unlocked content. */
+    // (re-uses listMessages; no separate per-message GET exists.)
 }

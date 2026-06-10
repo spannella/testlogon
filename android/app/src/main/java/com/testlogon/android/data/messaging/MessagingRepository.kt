@@ -280,7 +280,69 @@ interface MessagingRepository {
         pollId: String,
         slotId: String,
     ): ApiResult<MeetingPoll>
+
+    // ---- AND-137: countdown ----
+
+    /** AND-137 — enqueue an optimistic SENDING countdown outbox row (renders + ticks immediately). */
+    suspend fun enqueueOptimisticCountdown(
+        conversationId: String,
+        clientId: String,
+        title: String,
+        targetEpochSeconds: Long,
+        nowSeconds: Long,
+    )
+
+    /** AND-137 — send a countdown message (optimistic insert -> POST -> reconcile). */
+    suspend fun sendCountdown(
+        conversationId: String,
+        clientId: String,
+        draft: CountdownDraft,
+    ): ApiResult<Message>
+
+    // ---- AND-139: tips / paid-unlockable / lottery ----
+
+    /**
+     * AND-139 — unlock a fixed-price paid message: POST /unlock with [paymentMethodId] (receipt
+     * only), then re-fetch the thread to obtain the revealed body and reconcile the row to unlocked.
+     * The billing-authorize step happens in the ViewModel; this is the server unlock + reveal.
+     */
+    suspend fun unlockMessage(
+        conversationId: String,
+        messageId: String,
+        paymentMethodId: String?,
+    ): ApiResult<Message>
+
+    /** AND-139 — single atomic lottery draw+reveal (empty body); writes the revealed outcome to Room. */
+    suspend fun unlockLottery(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Message>
+
+    /** AND-139 — tip a message (server captures); returns the tip receipt. */
+    suspend fun tipMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        currency: String,
+        note: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReceipt>
 }
+
+/** AND-137 — a countdown creation draft (validated by the ViewModel before send). */
+data class CountdownDraft(
+    val title: String,
+    val targetEpochSeconds: Long,
+    val associatedEventType: AssociatedEventType = AssociatedEventType.CUSTOM,
+    val associatedEventId: String? = null,
+)
+
+/** AND-139 — the receipt returned by a successful tip. */
+data class TipReceipt(
+    val tipPaymentId: String?,
+    val amountCents: Long,
+    val currency: String,
+)
 
 /** AND-135 — a GIF the user picked from search/trending, sent verbatim. */
 data class GifSendPayload(
@@ -1237,6 +1299,184 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    // ---- AND-137: countdown ----
+
+    override suspend fun enqueueOptimisticCountdown(
+        conversationId: String,
+        clientId: String,
+        title: String,
+        targetEpochSeconds: Long,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        // Reuse the outbox: `text` carries the title, `voiceDurationSeconds` carries the target epoch
+        // (epoch seconds fit exactly in a Double). No new outbox column needed.
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = title,
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                kind = "countdown",
+                voiceDurationSeconds = targetEpochSeconds.toDouble(),
+            ),
+        )
+    }
+
+    override suspend fun sendCountdown(
+        conversationId: String,
+        clientId: String,
+        draft: CountdownDraft,
+    ): ApiResult<Message> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.sendCountdown(
+                    conversationId,
+                    SendCountdownMessageReq(
+                        title = draft.title,
+                        targetDatetime = draft.targetEpochSeconds,
+                        associatedEventType = draft.associatedEventType.wire(),
+                        associatedEventId = draft.associatedEventId,
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain(clientId = clientId)
+                messageDao.upsert(message.toEntity(clientId = clientId))
+                outboxDao.delete(clientId)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> { markOutboxFailed(clientId); r }
+            is ApiResult.NetworkError -> { markOutboxFailed(clientId); r }
+        }
+    }
+
+    // ---- AND-139: tips / paid-unlockable / lottery ----
+
+    override suspend fun unlockMessage(
+        conversationId: String,
+        messageId: String,
+        paymentMethodId: String?,
+    ): ApiResult<Message> = withContext(io) {
+        when (val r = apiCall { api.unlockMessage(conversationId, messageId, UnlockMessageReq(paymentMethodId)) }) {
+            is ApiResult.Success -> {
+                // UnlockOut is a receipt only; re-fetch the thread to obtain the revealed content.
+                refreshAndReveal(conversationId, messageId)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun unlockLottery(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Message> = withContext(io) {
+        when (val r = apiCall { api.unlockLottery(messageId) }) {
+            is ApiResult.Success -> {
+                val revealed = r.data.selectedOutcome?.textContent
+                // Reconcile the cached row to unlocked + revealed text (server-authoritative).
+                val existing = messageDao.findById(messageId)?.toDomain()
+                if (existing != null) {
+                    val paid = (existing.media as? MessageMedia.Paid)?.monetization
+                    val updated = existing.copy(
+                        media = MessageMedia.Paid(
+                            (paid ?: MessageMonetization(UnlockType.LOTTERY, false, null, "USD", null)).copy(
+                                unlocked = true,
+                                revealedText = revealed,
+                            ),
+                        ),
+                    )
+                    messageDao.upsert(updated.toEntity(clientId = existing.clientId.takeIf { it != messageId }))
+                    ApiResult.Success(updated)
+                } else {
+                    // No cached row (cold deep-link): hydrate via the lottery GET.
+                    refreshLottery(conversationId, messageId)
+                }
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun tipMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        currency: String,
+        note: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReceipt> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.tipMessage(
+                    conversationId,
+                    messageId,
+                    SendTipReq(
+                        amountCents = amountCents,
+                        currency = currency,
+                        note = note?.takeIf { it.isNotBlank() },
+                        paymentMethodId = paymentMethodId,
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> ApiResult.Success(
+                TipReceipt(r.data.tipPaymentId, r.data.amountCents, r.data.currency),
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    /** Re-fetch the newest thread page and reconcile the cache, then return the (now revealed) row. */
+    private suspend fun refreshAndReveal(conversationId: String, messageId: String): ApiResult<Message> {
+        return when (val r = apiCall { api.listMessages(conversationId, limit = 30, before = null) }) {
+            is ApiResult.Success -> {
+                val domain = r.data.map { it.toDomain() }
+                messageDao.upsertAll(domain.map { it.toEntity(clientId = null) })
+                val revealed = domain.firstOrNull { it.id == messageId }
+                    ?: messageDao.findById(messageId)?.toDomain()
+                if (revealed != null) ApiResult.Success(revealed)
+                else ApiResult.Failure(ApiError(status = ApiError.STATUS_PARSE, message = "Message not found after unlock."))
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    private suspend fun refreshLottery(conversationId: String, messageId: String): ApiResult<Message> {
+        return when (val r = apiCall { api.getLottery(messageId) }) {
+            is ApiResult.Success -> {
+                val unlocked = r.data.lockState == "unlocked"
+                val message = Message(
+                    id = messageId,
+                    clientId = messageId,
+                    conversationId = conversationId,
+                    senderId = r.data.senderId,
+                    text = "",
+                    createdAtEpochSeconds = r.data.createdAt,
+                    kind = "lottery_dm",
+                    media = MessageMedia.Paid(
+                        MessageMonetization(
+                            type = UnlockType.LOTTERY,
+                            unlocked = unlocked,
+                            priceMinorUnits = null,
+                            currency = "USD",
+                            teaser = null,
+                            revealedText = r.data.selectedOutcome?.takeIf { unlocked }?.textContent,
+                        ),
+                    ),
+                )
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
     private suspend fun persistPoll(conversationId: String, poll: MeetingPoll) {
         meetingPollDao.replacePoll(
             MeetingPollEntity(
@@ -1330,6 +1570,10 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
     val gif = media as? MessageMedia.Gif
     val sticker = media as? MessageMedia.Sticker
     val poll = media as? MessageMedia.MeetingPoll
+    val countdown = media as? MessageMedia.Countdown
+    val calEvent = media as? MessageMedia.CalendarEvent
+    val calShare = media as? MessageMedia.CalendarShare
+    val paid = (media as? MessageMedia.Paid)?.monetization
     return MessageEntity(
         messageId = id ?: this.clientId,
         conversationId = conversationId,
@@ -1373,6 +1617,31 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         pollCreatorId = poll?.creatorId,
         pollStatus = poll?.status,
         pollConfirmedSlotId = poll?.confirmedSlotId,
+        countdownTitle = countdown?.title,
+        countdownTargetEpochSeconds = countdown?.targetEpochSeconds,
+        countdownEventType = countdown?.associatedEventType?.wire(),
+        countdownEventId = countdown?.associatedEventId,
+        calEventId = calEvent?.eventId,
+        calEventCalendarId = calEvent?.calendarId,
+        calEventName = calEvent?.name,
+        calEventStartUtc = calEvent?.startUtc,
+        calEventEndUtc = calEvent?.endUtc,
+        calEventAllDay = calEvent?.allDay ?: false,
+        calEventAllDayDate = calEvent?.allDayDate,
+        calEventTimezone = calEvent?.timezone,
+        calEventDescription = calEvent?.description,
+        calEventOwner = calEvent?.owner,
+        calShareCalendarId = calShare?.calendarId,
+        calShareName = calShare?.name,
+        calShareOwner = calShare?.owner,
+        calSharePermission = calShare?.permission?.name?.lowercase(java.util.Locale.ROOT),
+        calShareBookingUrl = calShare?.bookingPublicUrl,
+        monetizationType = paid?.type?.name,
+        monetizationUnlocked = paid?.unlocked ?: false,
+        lockPriceCents = paid?.priceMinorUnits,
+        lockCurrency = paid?.currency,
+        lockTeaser = paid?.teaser,
+        revealedText = paid?.revealedText,
     )
 }
 
@@ -1441,6 +1710,31 @@ internal fun MessageEntity.toDomain(): Message = Message(
             status = pollStatus ?: "open",
             confirmedSlotId = pollConfirmedSlotId,
         )
+        "countdown" -> MessageMedia.Countdown(
+            title = countdownTitle.orEmpty(),
+            targetEpochSeconds = countdownTargetEpochSeconds ?: 0L,
+            associatedEventType = countdownEventType.toAssociatedEventType(),
+            associatedEventId = countdownEventId,
+        )
+        "calendar_event" -> MessageMedia.CalendarEvent(
+            eventId = calEventId.orEmpty(),
+            calendarId = calEventCalendarId.orEmpty(),
+            name = calEventName.orEmpty(),
+            startUtc = calEventStartUtc,
+            endUtc = calEventEndUtc,
+            allDay = calEventAllDay,
+            allDayDate = calEventAllDayDate,
+            timezone = calEventTimezone,
+            description = calEventDescription,
+            owner = calEventOwner.orEmpty(),
+        )
+        "calendar_share" -> MessageMedia.CalendarShare(
+            calendarId = calShareCalendarId.orEmpty(),
+            name = calShareName.orEmpty(),
+            owner = calShareOwner.orEmpty(),
+            permission = calSharePermission.toSharePermission(),
+            bookingPublicUrl = calShareBookingUrl,
+        )
         "file", "file_share", "audio", "video" -> MessageMedia.File(
             fileName = fileName ?: "file",
             sizeBytes = fileSizeBytes,
@@ -1448,7 +1742,22 @@ internal fun MessageEntity.toDomain(): Message = Message(
             consumptionPolicy = consumptionPolicy,
             isShare = fileIsShare,
         )
-        else -> MessageMedia.None
+        else -> if (monetizationType != null) {
+            // AND-139 — a paid message (any kind) persisted with monetization columns. Lottery and
+            // fixed-price share the Paid variant; gated body was never persisted while locked.
+            MessageMedia.Paid(
+                MessageMonetization(
+                    type = runCatching { UnlockType.valueOf(monetizationType!!) }.getOrDefault(UnlockType.FIXED),
+                    unlocked = monetizationUnlocked,
+                    priceMinorUnits = lockPriceCents,
+                    currency = lockCurrency ?: "USD",
+                    teaser = lockTeaser,
+                    revealedText = revealedText,
+                ),
+            )
+        } else {
+            MessageMedia.None
+        }
     },
 )
 
@@ -1490,6 +1799,12 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
             callState = null,
             localUri = attachmentLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
+        )
+        "countdown" -> MessageMedia.Countdown(
+            // Optimistic countdown: title in `text`, target epoch in voiceDurationSeconds (Double).
+            title = text,
+            targetEpochSeconds = (voiceDurationSeconds ?: 0.0).toLong(),
+            associatedEventType = AssociatedEventType.CUSTOM,
         )
         else -> MessageMedia.None
     },

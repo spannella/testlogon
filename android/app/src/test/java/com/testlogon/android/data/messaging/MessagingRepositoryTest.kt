@@ -134,7 +134,7 @@ class MessagingRepositoryTest {
         override suspend fun config() = error("unused")
         override suspend fun listConversations(): List<ConversationDto> = error("unused")
         override suspend fun getConversation(id: String): ConversationDto = error("unused")
-        override suspend fun listMessages(id: String, limit: Int?, before: String?): List<MessageDto> = error("unused")
+        override suspend fun listMessages(id: String, limit: Int?, before: String?): List<MessageDto> = listMessagesResult
         override suspend fun sendMessage(id: String, body: SendTextMessageReq): MessageDto = error("unused")
         override suspend fun markRead(id: String, body: MarkReadReq) {
             markReadThrows?.let { throw it }
@@ -277,6 +277,45 @@ class MessagingRepositoryTest {
             confirmCalls += Triple(id, pollId, body)
             return confirmResult
         }
+
+        // AND-137 / AND-139 — countdown / tip / unlock / lottery.
+        var sendCountdownCalls = mutableListOf<Pair<String, SendCountdownMessageReq>>()
+        var sendCountdownResult: MessageDto? = null
+        var sendCountdownThrows: Throwable? = null
+        var unlockCalls = mutableListOf<Triple<String, String, UnlockMessageReq>>()
+        var unlockResult: UnlockOutDto? = null
+        var unlockThrows: Throwable? = null
+        var tipCalls = mutableListOf<Triple<String, String, SendTipReq>>()
+        var tipResult: TipOutDto? = null
+        var tipThrows: Throwable? = null
+        var lotteryUnlockCalls = mutableListOf<String>()
+        var lotteryUnlockResult: LotteryUnlockOutDto? = null
+        var lotteryUnlockThrows: Throwable? = null
+        var getLotteryResult: LotteryMessageOutDto? = null
+        var listMessagesResult: List<MessageDto> = emptyList()
+
+        override suspend fun sendCountdown(id: String, body: SendCountdownMessageReq): MessageDto {
+            sendCountdownCalls += id to body
+            sendCountdownThrows?.let { throw it }
+            return requireNotNull(sendCountdownResult)
+        }
+        override suspend fun unlockMessage(id: String, messageId: String, body: UnlockMessageReq): UnlockOutDto {
+            unlockCalls += Triple(id, messageId, body)
+            unlockThrows?.let { throw it }
+            return requireNotNull(unlockResult)
+        }
+        override suspend fun tipMessage(id: String, messageId: String, body: SendTipReq): TipOutDto {
+            tipCalls += Triple(id, messageId, body)
+            tipThrows?.let { throw it }
+            return requireNotNull(tipResult)
+        }
+        override suspend fun unlockLottery(messageId: String, body: Map<String, String>): LotteryUnlockOutDto {
+            lotteryUnlockCalls += messageId
+            lotteryUnlockThrows?.let { throw it }
+            return requireNotNull(lotteryUnlockResult)
+        }
+        override suspend fun getLottery(messageId: String): LotteryMessageOutDto =
+            requireNotNull(getLotteryResult)
     }
 
     // ---- AND-130 fakes: uploader + image processor ----
@@ -646,5 +685,105 @@ class MessagingRepositoryTest {
         assertTrue(result is ApiResult.Success)
         assertEquals("slot_2", api.confirmCalls.single().third.slotId)
         assertEquals(MeetingPollStatus.CONFIRMED, (result as ApiResult.Success).data.status)
+    }
+
+    // ---- AND-137: countdown ----
+
+    @Test
+    fun sendCountdown_postsDraft_reconcilesAndDropsOutbox() = runTest {
+        outboxDao.rows.value = listOf(
+            OutboxMessageEntity(
+                clientId = "cid1", conversationId = "c1", text = "Launch",
+                createdAtEpochSeconds = 1, status = "SENDING", kind = "countdown",
+                voiceDurationSeconds = 1780000000.0,
+            ),
+        )
+        api.sendCountdownResult = MessageDto(
+            messageId = "msg_cd", conversationId = "c1", senderId = "u1", createdAt = 1780000000,
+            kind = "countdown", countdownTitle = "Launch", targetDatetime = 1780000000,
+        )
+        val r = repo().sendCountdown("c1", "cid1", CountdownDraft(title = "Launch", targetEpochSeconds = 1780000000))
+
+        assertTrue(r is ApiResult.Success)
+        val media = (r as ApiResult.Success).data.media as MessageMedia.Countdown
+        assertEquals(1780000000L, media.targetEpochSeconds)
+        assertEquals("Launch", api.sendCountdownCalls.single().second.title)
+        assertNull(outboxDao.findById("cid1")) // reconciled
+        assertEquals("msg_cd", messageDao.findById("msg_cd")?.messageId)
+    }
+
+    @Test
+    fun sendCountdown_failure_marksOutboxFailed() = runTest {
+        outboxDao.rows.value = listOf(
+            OutboxMessageEntity(clientId = "cid1", conversationId = "c1", text = "Launch", createdAtEpochSeconds = 1, status = "SENDING", kind = "countdown"),
+        )
+        api.sendCountdownThrows = IOException("offline")
+        val r = repo().sendCountdown("c1", "cid1", CountdownDraft("Launch", 1780000000))
+        assertTrue(r is ApiResult.NetworkError)
+        assertEquals("FAILED", outboxDao.findById("cid1")?.status)
+    }
+
+    // ---- AND-139: unlock / tip / lottery ----
+
+    @Test
+    fun unlockMessage_postsPaymentMethodId_thenRefetchesAndRevealsBody() = runTest {
+        api.unlockResult = UnlockOutDto(ok = true, conversationId = "c1", messageId = "m1", unlockPaymentId = "upay_1", amountCents = 500)
+        // The re-fetch returns the now-revealed (unlocked) message.
+        api.listMessagesResult = listOf(
+            MessageDto(messageId = "m1", conversationId = "c1", senderId = "u2", createdAt = 100, kind = "text", text = "revealed", locked = true, isUnlocked = true),
+        )
+        val r = repo().unlockMessage("c1", "m1", "pm_1")
+
+        assertTrue(r is ApiResult.Success)
+        assertEquals("pm_1", api.unlockCalls.single().third.paymentMethodId)
+        assertEquals("revealed", (r as ApiResult.Success).data.text)
+        // Cached row is reconciled (and is no longer a locked teaser).
+        assertEquals("revealed", messageDao.findById("m1")?.text)
+    }
+
+    @Test
+    fun unlockMessage_serverError_isFailure_noReveal() = runTest {
+        api.unlockThrows = retrofit2.HttpException(
+            retrofit2.Response.error<Any>(500, okhttp3.ResponseBody.create(null, """{"detail":"boom"}""")),
+        )
+        val r = repo().unlockMessage("c1", "m1", "pm_1")
+        assertTrue(r is ApiResult.Failure)
+    }
+
+    @Test
+    fun unlockLottery_revealsSelectedOutcome_onCachedRow() = runTest {
+        // Seed a cached locked lottery row.
+        messageDao.upsert(
+            MessageEntity(
+                messageId = "lot1", conversationId = "c1", senderId = "u2", text = "",
+                createdAtEpochSeconds = 100, clientId = null, kind = "lottery_dm",
+                monetizationType = "LOTTERY", monetizationUnlocked = false,
+            ),
+        )
+        api.lotteryUnlockResult = LotteryUnlockOutDto(
+            messageId = "lot1", lockState = "unlocked",
+            selectedOutcome = LotterySelectedOutcomeDto(outcomeId = "o1", payloadType = "text", textContent = "You win"),
+            unlockedAt = 1717600000,
+        )
+        val r = repo().unlockLottery("c1", "lot1")
+
+        assertTrue(r is ApiResult.Success)
+        assertEquals(listOf("lot1"), api.lotteryUnlockCalls)
+        val media = (r as ApiResult.Success).data.media as MessageMedia.Paid
+        assertTrue(media.monetization.unlocked)
+        assertEquals("You win", media.monetization.revealedText)
+    }
+
+    @Test
+    fun tipMessage_postsAmountCents_returnsReceipt() = runTest {
+        api.tipResult = TipOutDto(ok = true, conversationId = "c1", messageId = "m1", tipPaymentId = "tpay_1", amountCents = 500, currency = "USD")
+        val r = repo().tipMessage("c1", "m1", amountCents = 500, currency = "USD", note = "ty", paymentMethodId = "pm_1")
+
+        assertTrue(r is ApiResult.Success)
+        assertEquals("tpay_1", (r as ApiResult.Success).data.tipPaymentId)
+        val call = api.tipCalls.single().third
+        assertEquals(500L, call.amountCents)
+        assertEquals("ty", call.note)
+        assertEquals("pm_1", call.paymentMethodId)
     }
 }

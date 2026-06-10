@@ -3,6 +3,7 @@ package com.testlogon.android.feature.messaging
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.messaging.Conversation
+import com.testlogon.android.data.messaging.CountdownDraft
 import com.testlogon.android.data.messaging.CustomEmojiUi
 import com.testlogon.android.data.messaging.GifResult
 import com.testlogon.android.data.messaging.GifSendPayload
@@ -16,6 +17,7 @@ import com.testlogon.android.data.messaging.ShareableVideo
 import com.testlogon.android.data.messaging.SlotVote
 import com.testlogon.android.data.messaging.StickerCollectionUi
 import com.testlogon.android.data.messaging.StickerPick
+import com.testlogon.android.data.messaging.TipReceipt
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
@@ -532,6 +534,105 @@ class FakeMessagingRepository : MessagingRepository {
         val r = confirmResult
         if (r is ApiResult.Success) emitPoll(r.data)
         return r
+    }
+
+    // ---- AND-137 / AND-139 ----
+
+    /** Recorded countdown sends: (conversationId, clientId, draft). */
+    var countdownSendCalls = mutableListOf<Triple<String, String, CountdownDraft>>()
+    var countdownSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    var enqueuedCountdowns = mutableListOf<Triple<String, String, Long>>() // clientId, title, target
+
+    /** Recorded unlock calls: (conversationId, messageId, paymentMethodId). */
+    var unlockCalls = mutableListOf<Triple<String, String, String?>>()
+    var unlockResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    /** Recorded lottery unlock calls: (conversationId, messageId). */
+    var lotteryUnlockCalls = mutableListOf<Pair<String, String>>()
+    var lotteryUnlockResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    /** Recorded tip calls. */
+    var tipCalls = mutableListOf<TipCall>()
+    var tipResult: ApiResult<TipReceipt> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    data class TipCall(
+        val conversationId: String,
+        val messageId: String,
+        val amountCents: Long,
+        val currency: String,
+        val note: String?,
+        val paymentMethodId: String?,
+    )
+
+    override suspend fun enqueueOptimisticCountdown(
+        conversationId: String,
+        clientId: String,
+        title: String,
+        targetEpochSeconds: Long,
+        nowSeconds: Long,
+    ) {
+        enqueuedCountdowns += Triple(clientId, title, targetEpochSeconds)
+        thread.value = thread.value + Message(
+            id = null,
+            clientId = clientId,
+            conversationId = conversationId,
+            senderId = "",
+            text = "",
+            createdAtEpochSeconds = nowSeconds,
+            sendStatus = SendStatus.SENDING,
+            kind = "countdown",
+            media = MessageMedia.Countdown(title = title, targetEpochSeconds = targetEpochSeconds),
+        )
+    }
+
+    override suspend fun sendCountdown(
+        conversationId: String,
+        clientId: String,
+        draft: CountdownDraft,
+    ): ApiResult<Message> {
+        countdownSendCalls += Triple(conversationId, clientId, draft)
+        return reconcile(clientId, countdownSendResult)
+    }
+
+    override suspend fun unlockMessage(
+        conversationId: String,
+        messageId: String,
+        paymentMethodId: String?,
+    ): ApiResult<Message> {
+        unlockCalls += Triple(conversationId, messageId, paymentMethodId)
+        val r = unlockResult
+        if (r is ApiResult.Success) {
+            thread.value = thread.value.map { if (it.id == messageId || it.clientId == messageId) r.data else it }
+        }
+        return r
+    }
+
+    override suspend fun unlockLottery(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Message> {
+        lotteryUnlockCalls += conversationId to messageId
+        val r = lotteryUnlockResult
+        if (r is ApiResult.Success) {
+            thread.value = thread.value.map { if (it.id == messageId || it.clientId == messageId) r.data else it }
+        }
+        return r
+    }
+
+    override suspend fun tipMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        currency: String,
+        note: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReceipt> {
+        tipCalls += TipCall(conversationId, messageId, amountCents, currency, note, paymentMethodId)
+        return tipResult
     }
 
     private fun reconcile(clientId: String, result: ApiResult<Message>): ApiResult<Message> =

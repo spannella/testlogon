@@ -6,6 +6,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.messaging.AssociatedEventType
+import com.testlogon.android.data.messaging.BillingAuthorizer
+import com.testlogon.android.data.messaging.BillingResult
+import com.testlogon.android.data.messaging.CountdownDraft
 import com.testlogon.android.data.messaging.DownloadProgress
 import com.testlogon.android.data.messaging.GifResult
 import com.testlogon.android.data.messaging.GifSendPayload
@@ -13,6 +17,7 @@ import com.testlogon.android.data.messaging.MeetingPoll
 import com.testlogon.android.data.messaging.MeetingPollDraft
 import com.testlogon.android.data.messaging.Message
 import com.testlogon.android.data.messaging.MessageMedia
+import com.testlogon.android.data.messaging.MessageMonetization
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.ShareableVideo
 import com.testlogon.android.data.messaging.SlotVote
@@ -71,6 +76,7 @@ class ThreadViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     private val recorderFactory: VoiceRecorderFactory,
     private val playerFactory: VoicePlayerFactory,
+    private val billing: BillingAuthorizer,
 ) : ViewModel() {
 
     /**
@@ -715,6 +721,174 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    // ---- AND-137: countdown ----
+
+    fun onOpenCountdownPicker() {
+        _state.update { it.copy(countdownPicker = CountdownPickerState(visible = true)) }
+    }
+
+    fun onDismissCountdownPicker() {
+        _state.update { it.copy(countdownPicker = CountdownPickerState()) }
+    }
+
+    fun onCountdownTitleChange(title: String) {
+        _state.update { it.copy(countdownPicker = it.countdownPicker.copy(title = title, error = null)) }
+    }
+
+    /** [target] is UTC epoch seconds chosen in the picker (device zone -> UTC done in the UI). */
+    fun onCountdownTargetChange(targetEpochSeconds: Long?) {
+        _state.update {
+            it.copy(countdownPicker = it.countdownPicker.copy(targetEpochSeconds = targetEpochSeconds, error = null))
+        }
+    }
+
+    fun onSendCountdown() {
+        val picker = _state.value.countdownPicker
+        val title = picker.title.trim()
+        val target = picker.targetEpochSeconds
+        // Validate: 1..200 chars + strictly-future target.
+        if (title.isEmpty() || title.length > 200) {
+            _state.update { it.copy(countdownPicker = it.countdownPicker.copy(error = "Enter a title (1–200 characters)")) }
+            return
+        }
+        if (target == null || target <= clock()) {
+            _state.update { it.copy(countdownPicker = it.countdownPicker.copy(error = "Pick a future time")) }
+            return
+        }
+        val clientId = UUID.randomUUID().toString()
+        val draft = CountdownDraft(title = title, targetEpochSeconds = target, associatedEventType = AssociatedEventType.CUSTOM)
+        _state.update { it.copy(countdownPicker = CountdownPickerState()) }
+        viewModelScope.launch {
+            // Optimistic countdown bubble through the shared outbox (renders + ticks immediately).
+            repository.enqueueOptimisticCountdown(conversationId, clientId, title, target, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendCountdown(conversationId, clientId, draft)
+        }
+    }
+
+    // ---- AND-139: tips / paid-unlockable / lottery ----
+
+    /** AND-139 — unlock entry point (FIXED runs billing-authorize; LOTTERY is a single server call). */
+    fun onUnlockClick(messageKey: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageKey } ?: return
+        val paid = (msg.media as? MessageMedia.Paid)?.monetization ?: return
+        if (paid.unlocked || msg.isOwn) return
+        when (paid.type) {
+            com.testlogon.android.data.messaging.UnlockType.LOTTERY -> unlockLottery(messageKey)
+            com.testlogon.android.data.messaging.UnlockType.FIXED -> unlockFixed(messageKey, paid)
+        }
+    }
+
+    private fun unlockFixed(messageKey: String, paid: MessageMonetization) {
+        setUnlock(messageKey, UnlockUiState(UnlockPhase.AUTHORIZING))
+        viewModelScope.launch {
+            when (val auth = billing.authorize(paid.priceMinorUnits ?: 0L, paid.currency)) {
+                is BillingResult.Authorized -> {
+                    setUnlock(messageKey, UnlockUiState(UnlockPhase.UNLOCKING))
+                    when (repository.unlockMessage(conversationId, messageKey, auth.paymentMethodId)) {
+                        is ApiResult.Success -> clearUnlock(messageKey)
+                        else -> setUnlock(messageKey, UnlockUiState(UnlockPhase.FAILED, "Couldn't unlock — tap to retry"))
+                    }
+                }
+                BillingResult.Cancelled -> clearUnlock(messageKey)
+                is BillingResult.Declined ->
+                    setUnlock(messageKey, UnlockUiState(UnlockPhase.FAILED, "Payment declined: ${auth.reason}"))
+                is BillingResult.Failed ->
+                    setUnlock(messageKey, UnlockUiState(UnlockPhase.FAILED, "Payment failed — tap to retry"))
+                BillingResult.NotConfigured ->
+                    // STOP-AND-FLAG: no payment provider wired (AND-031). Never call the server / fake a charge.
+                    setUnlock(messageKey, UnlockUiState(UnlockPhase.FAILED, "Payments are not available yet"))
+            }
+        }
+    }
+
+    private fun unlockLottery(messageKey: String) {
+        // No client-side billing-authorize for lottery: the server draws + reveals atomically.
+        setUnlock(messageKey, UnlockUiState(UnlockPhase.UNLOCKING))
+        viewModelScope.launch {
+            when (repository.unlockLottery(conversationId, messageKey)) {
+                is ApiResult.Success -> clearUnlock(messageKey)
+                else -> setUnlock(messageKey, UnlockUiState(UnlockPhase.FAILED, "Unlock failed — tap to retry"))
+            }
+        }
+    }
+
+    private fun setUnlock(messageKey: String, state: UnlockUiState) {
+        _state.update { it.copy(unlocks = it.unlocks + (messageKey to state)) }
+    }
+
+    private fun clearUnlock(messageKey: String) {
+        _state.update { it.copy(unlocks = it.unlocks - messageKey) }
+    }
+
+    fun onTipOpen(messageKey: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageKey } ?: return
+        if (msg.isOwn) return // FR-10: never tip your own message.
+        _state.update { it.copy(tipSheet = TipSheetState(messageId = messageKey)) }
+    }
+
+    fun onTipDismiss() {
+        _state.update { it.copy(tipSheet = TipSheetState()) }
+    }
+
+    fun onTipPresetSelect(cents: Long) {
+        _state.update {
+            it.copy(tipSheet = it.tipSheet.copy(selectedCents = cents, customInput = "", amountError = null))
+        }
+    }
+
+    fun onTipCustomChange(text: String) {
+        _state.update {
+            it.copy(tipSheet = it.tipSheet.copy(customInput = text, selectedCents = null, amountError = null))
+        }
+    }
+
+    fun onTipNoteChange(text: String) {
+        _state.update { it.copy(tipSheet = it.tipSheet.copy(note = text)) }
+    }
+
+    fun onTipConfirm() {
+        val sheet = _state.value.tipSheet
+        val messageId = sheet.messageId ?: return
+        val cents = sheet.amountCents
+        if (cents == null || cents !in TipSheetState.MIN_TIP_CENTS..TipSheetState.MAX_TIP_CENTS) {
+            _state.update { it.copy(tipSheet = it.tipSheet.copy(amountError = "Enter an amount between \$0.01 and \$1000.00")) }
+            return
+        }
+        _state.update { it.copy(tipSheet = it.tipSheet.copy(submitting = true, amountError = null)) }
+        viewModelScope.launch {
+            when (val auth = billing.authorize(cents, TIP_CURRENCY)) {
+                is BillingResult.Authorized -> {
+                    val result = repository.tipMessage(
+                        conversationId, messageId, cents, TIP_CURRENCY,
+                        note = sheet.note.takeIf { it.isNotBlank() },
+                        paymentMethodId = auth.paymentMethodId,
+                    )
+                    when (result) {
+                        is ApiResult.Success ->
+                            _state.update { it.copy(tipSheet = TipSheetState(), transientMessage = "Tip sent") }
+                        else ->
+                            _state.update {
+                                it.copy(tipSheet = it.tipSheet.copy(submitting = false, amountError = "Couldn't send tip — try again"))
+                            }
+                    }
+                }
+                BillingResult.Cancelled ->
+                    _state.update { it.copy(tipSheet = it.tipSheet.copy(submitting = false)) }
+                is BillingResult.Declined ->
+                    _state.update { it.copy(tipSheet = it.tipSheet.copy(submitting = false, amountError = "Payment declined: ${auth.reason}")) }
+                is BillingResult.Failed ->
+                    _state.update { it.copy(tipSheet = it.tipSheet.copy(submitting = false, amountError = "Payment failed — try again")) }
+                BillingResult.NotConfigured ->
+                    _state.update { it.copy(tipSheet = it.tipSheet.copy(submitting = false, amountError = "Payments are not available yet")) }
+            }
+        }
+    }
+
+    fun onTransientMessageShown() {
+        _state.update { it.copy(transientMessage = null) }
+    }
+
     override fun onCleared() {
         super.onCleared()
         recorderOrNull?.release()
@@ -762,6 +936,9 @@ class ThreadViewModel @Inject constructor(
 
         /** AND-134 — AAC-LC / M4A audio voicemail MIME (matches the presign content-type pattern). */
         private const val VOICEMAIL_AUDIO_CONTENT_TYPE = "audio/mp4"
+
+        /** AND-139 — tip currency (USD per the SendTipIn default; future: per-conversation currency). */
+        private const val TIP_CURRENCY = "USD"
     }
 }
 

@@ -89,6 +89,35 @@ class MessagingDaoTest {
         assertEquals(1, conversationDao.observeUnreadConversationCount().first())
     }
 
+    @Test
+    fun messages_monetizationAndCountdownColumns_roundTrip() = runTest {
+        // AND-137/138/139 (DB v5) — new countdown/calendar/monetization columns persist.
+        messageDao.upsert(
+            MessageEntity(
+                messageId = "cd1", conversationId = "c1", senderId = "u1", text = "",
+                createdAtEpochSeconds = 1, clientId = null, kind = "countdown",
+                countdownTitle = "Launch", countdownTargetEpochSeconds = 1780000000,
+                countdownEventType = "custom",
+            ),
+        )
+        messageDao.upsert(
+            MessageEntity(
+                messageId = "paid1", conversationId = "c1", senderId = "u2", text = "",
+                createdAtEpochSeconds = 2, clientId = null, kind = "text",
+                monetizationType = "FIXED", monetizationUnlocked = false,
+                lockPriceCents = 500, lockCurrency = "USD", lockTeaser = "preview",
+            ),
+        )
+        val cd = messageDao.findById("cd1")
+        assertEquals(1780000000L, cd?.countdownTargetEpochSeconds)
+        assertEquals("Launch", cd?.countdownTitle)
+        val paid = messageDao.findById("paid1")
+        assertEquals("FIXED", paid?.monetizationType)
+        assertEquals(500L, paid?.lockPriceCents)
+        assertEquals("preview", paid?.lockTeaser)
+        assertEquals(false, paid?.monetizationUnlocked)
+    }
+
     private fun conversation(id: String, activity: Long, unread: Int = 0) = ConversationEntity(
         conversationId = id, title = id, iconUrl = null, lastMessagePreview = null,
         lastActivityEpochSeconds = activity, unreadCount = unread,

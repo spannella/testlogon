@@ -41,6 +41,7 @@ class ThreadViewModelTest {
             handle, repo, auth, stream, context,
             com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
             com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
+            com.testlogon.android.feature.messaging.FakeBillingAuthorizer(),
         ).also { it.clock = { 1000L } }
     }
 

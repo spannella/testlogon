@@ -37,4 +37,12 @@ abstract class MessagingDataModule {
     @Binds
     @Singleton
     abstract fun bindAttachmentDownloader(impl: DefaultAttachmentDownloader): AttachmentDownloader
+
+    /**
+     * AND-139 — billing seam. Defaults to [StubBillingAuthorizer] (NotConfigured, no faked charge)
+     * until AND-031 supplies a real vendor-backed implementation; swap this @Binds then.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindBillingAuthorizer(impl: StubBillingAuthorizer): BillingAuthorizer
 }

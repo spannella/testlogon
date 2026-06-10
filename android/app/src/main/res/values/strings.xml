@@ -338,4 +338,43 @@
     <string name="poll_duration_minutes">%1$d min</string>
     <string name="poll_slots_count">%1$d slots</string>
     <string name="poll_create">Create poll</string>
+
+    <!-- AND-137: countdown -->
+    <string name="composer_add_countdown">Add countdown</string>
+    <string name="countdown_picker_title">New countdown</string>
+    <string name="countdown_title_hint">What\'s the countdown for?</string>
+    <string name="countdown_pick_when">When</string>
+    <string name="countdown_preset_1h">In 1 hour</string>
+    <string name="countdown_preset_1d">In 1 day</string>
+    <string name="countdown_preset_1w">In 1 week</string>
+    <string name="countdown_send">Send countdown</string>
+    <string name="countdown_done">Event reached</string>
+    <string name="countdown_cd_remaining">Countdown: %1$s, %2$s remaining</string>
+    <string name="countdown_cd_done">Countdown: %1$s, event reached</string>
+
+    <!-- AND-138: calendar event / share -->
+    <string name="calendar_event_label">Calendar event</string>
+    <string name="calendar_event_cd">Calendar event, %1$s, %2$s</string>
+    <string name="calendar_add_to_calendar">Add to calendar</string>
+    <string name="calendar_no_app">No calendar app available</string>
+    <string name="calendar_share_label">Shared calendar</string>
+    <string name="calendar_share_cd">Shared calendar, %1$s, %2$s</string>
+    <string name="calendar_share_permission_read">View only</string>
+    <string name="calendar_share_permission_write">View + Edit</string>
+    <string name="calendar_share_permission_unknown">Shared</string>
+    <string name="calendar_share_accept_soon">Accept share (coming soon)</string>
+
+    <!-- AND-139: tips / paid-unlockable -->
+    <string name="paid_unlock">Unlock</string>
+    <string name="paid_unlock_cd">Unlock for %1$s</string>
+    <string name="paid_unlock_lottery_cd">Unlock surprise</string>
+    <string name="paid_authorizing">Authorizing payment</string>
+    <string name="paid_unlocking">Unlocking</string>
+    <string name="paid_unlocked">Unlocked</string>
+    <string name="paid_lottery_label">Surprise unlock</string>
+    <string name="paid_lottery_price">Tap to unlock</string>
+    <string name="tip_title">Send a tip</string>
+    <string name="tip_custom_amount">Custom amount</string>
+    <string name="tip_note">Note (optional)</string>
+    <string name="tip_send">Send tip</string>
 </resources>

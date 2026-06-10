@@ -35,6 +35,8 @@ class ThreadRichViewModelTest {
     private val stream = FakeMessagingEventStream()
     private val auth = FakeAuthStateStore()
 
+    private val billing = com.testlogon.android.feature.messaging.FakeBillingAuthorizer()
+
     private suspend fun vm(currentUser: String = "me"): ThreadViewModel {
         auth.setAuthenticated(currentUser)
         repo.historyResult = ApiResult.Success(emptyList())
@@ -44,6 +46,7 @@ class ThreadRichViewModelTest {
             handle, repo, auth, stream, context,
             com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
             com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
+            billing,
         ).also { it.clock = { 1000L } }
     }
 
@@ -172,4 +175,224 @@ class ThreadRichViewModelTest {
     )
 
     private fun assertNotNull(value: Any?) = org.junit.Assert.assertNotNull(value)
+
+    // ---- AND-137: countdown VM ----
+
+    @Test
+    fun sendCountdown_validFutureTarget_enqueuesOptimistic_andSends() = runTest {
+        repo.countdownSendResult = ApiResult.Success(
+            Message(id = "cd1", clientId = "cid", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, kind = "countdown",
+                media = MessageMedia.Countdown("Launch", 9999L)),
+        )
+        val v = vm()
+        advanceUntilIdle()
+        v.onOpenCountdownPicker()
+        v.onCountdownTitleChange("Launch")
+        v.onCountdownTargetChange(9999L) // > clock()==1000
+        v.onSendCountdown()
+        advanceUntilIdle()
+        assertFalse(v.state.value.countdownPicker.visible)
+        assertEquals(1, repo.countdownSendCalls.size)
+        assertEquals("Launch", repo.countdownSendCalls.single().third.title)
+        assertEquals(1, repo.enqueuedCountdowns.size)
+    }
+
+    @Test
+    fun sendCountdown_pastTarget_blockedWithInlineError() = runTest {
+        val v = vm()
+        advanceUntilIdle()
+        v.onOpenCountdownPicker()
+        v.onCountdownTitleChange("Launch")
+        v.onCountdownTargetChange(500L) // < clock()==1000
+        v.onSendCountdown()
+        advanceUntilIdle()
+        assertTrue(v.state.value.countdownPicker.visible)
+        assertEquals("Pick a future time", v.state.value.countdownPicker.error)
+        assertTrue(repo.countdownSendCalls.isEmpty())
+    }
+
+    @Test
+    fun sendCountdown_blankTitle_blocked() = runTest {
+        val v = vm()
+        advanceUntilIdle()
+        v.onOpenCountdownPicker()
+        v.onCountdownTargetChange(9999L)
+        v.onSendCountdown()
+        advanceUntilIdle()
+        assertTrue(repo.countdownSendCalls.isEmpty())
+        assertNotNull(v.state.value.countdownPicker.error)
+    }
+
+    // ---- AND-139: unlock / tip / lottery VM ----
+
+    private fun lockedFixed(key: String = "m1", sender: String = "u2") = Message(
+        id = key, clientId = key, conversationId = "c1", senderId = sender,
+        text = "", createdAtEpochSeconds = 1, kind = "text",
+        media = MessageMedia.Paid(
+            com.testlogon.android.data.messaging.MessageMonetization(
+                type = com.testlogon.android.data.messaging.UnlockType.FIXED,
+                unlocked = false, priceMinorUnits = 500, currency = "USD", teaser = "preview",
+            ),
+        ),
+    )
+
+    @Test
+    fun unlockFixed_authorized_callsServerUnlock() = runTest {
+        billing.result = com.testlogon.android.data.messaging.BillingResult.Authorized("pm_1", 0L)
+        repo.unlockResult = ApiResult.Success(lockedFixed().copy(
+            media = MessageMedia.Paid(
+                com.testlogon.android.data.messaging.MessageMonetization(
+                    com.testlogon.android.data.messaging.UnlockType.FIXED, true, 500, "USD", null, "revealed"),
+            ),
+        ))
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onUnlockClick("m1")
+        advanceUntilIdle()
+        assertEquals(1, repo.unlockCalls.size)
+        assertEquals("pm_1", repo.unlockCalls.single().third)
+        // phase cleared on success.
+        assertEquals(UnlockPhase.IDLE, (v.state.value.unlocks["m1"]?.phase ?: UnlockPhase.IDLE))
+    }
+
+    @Test
+    fun unlockFixed_billingCancelled_doesNotCallServer() = runTest {
+        billing.result = com.testlogon.android.data.messaging.BillingResult.Cancelled
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onUnlockClick("m1")
+        advanceUntilIdle()
+        assertTrue(repo.unlockCalls.isEmpty())
+    }
+
+    @Test
+    fun unlockFixed_billingDeclined_failsWithDistinctMessage_noServerCall() = runTest {
+        billing.result = com.testlogon.android.data.messaging.BillingResult.Declined("card_declined")
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onUnlockClick("m1")
+        advanceUntilIdle()
+        assertTrue(repo.unlockCalls.isEmpty())
+        assertEquals(UnlockPhase.FAILED, v.state.value.unlocks["m1"]?.phase)
+        assertTrue(v.state.value.unlocks["m1"]?.error?.contains("declined") == true)
+    }
+
+    @Test
+    fun unlockFixed_notConfigured_flagsPaymentsUnavailable_noServerCall() = runTest {
+        billing.result = com.testlogon.android.data.messaging.BillingResult.NotConfigured
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onUnlockClick("m1")
+        advanceUntilIdle()
+        assertTrue(repo.unlockCalls.isEmpty())
+        assertEquals(UnlockPhase.FAILED, v.state.value.unlocks["m1"]?.phase)
+    }
+
+    @Test
+    fun unlockLottery_singleServerCall_noBillingAuthorize() = runTest {
+        repo.lotteryUnlockResult = ApiResult.Success(
+            Message(id = "lot1", clientId = "lot1", conversationId = "c1", senderId = "u2",
+                text = "", createdAtEpochSeconds = 1, kind = "lottery_dm",
+                media = MessageMedia.Paid(
+                    com.testlogon.android.data.messaging.MessageMonetization(
+                        com.testlogon.android.data.messaging.UnlockType.LOTTERY, true, null, "USD", null, "win"),
+                )),
+        )
+        val lottery = Message(id = "lot1", clientId = "lot1", conversationId = "c1", senderId = "u2",
+            text = "", createdAtEpochSeconds = 1, kind = "lottery_dm",
+            media = MessageMedia.Paid(
+                com.testlogon.android.data.messaging.MessageMonetization(
+                    com.testlogon.android.data.messaging.UnlockType.LOTTERY, false, null, "USD", null),
+            ))
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lottery))
+        advanceUntilIdle()
+        v.onUnlockClick("lot1")
+        advanceUntilIdle()
+        assertEquals(1, repo.lotteryUnlockCalls.size)
+        assertTrue(billing.authorizeCalls.isEmpty()) // no client-side billing for lottery
+    }
+
+    @Test
+    fun ownMessage_unlockIsSuppressed() = runTest {
+        val v = vm(currentUser = "me")
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed(sender = "me")))
+        advanceUntilIdle()
+        v.onUnlockClick("m1")
+        advanceUntilIdle()
+        assertTrue(repo.unlockCalls.isEmpty())
+    }
+
+    @Test
+    fun tip_validAmount_authorizesAndSends_thenConfirms() = runTest {
+        billing.result = com.testlogon.android.data.messaging.BillingResult.Authorized("pm_1", 0L)
+        repo.tipResult = ApiResult.Success(
+            com.testlogon.android.data.messaging.TipReceipt("tpay_1", 500, "USD"),
+        )
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onTipOpen("m1")
+        v.onTipPresetSelect(500)
+        v.onTipConfirm()
+        advanceUntilIdle()
+        assertEquals(1, repo.tipCalls.size)
+        assertEquals(500L, repo.tipCalls.single().amountCents)
+        assertNull(v.state.value.tipSheet.messageId) // sheet closed
+        assertEquals("Tip sent", v.state.value.transientMessage)
+    }
+
+    @Test
+    fun tip_outOfRangeCustomAmount_blocked() = runTest {
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onTipOpen("m1")
+        v.onTipCustomChange("0") // below min
+        v.onTipConfirm()
+        advanceUntilIdle()
+        assertTrue(repo.tipCalls.isEmpty())
+        assertNotNull(v.state.value.tipSheet.amountError)
+        assertNotNull(v.state.value.tipSheet.messageId) // sheet stays open
+    }
+
+    @Test
+    fun tip_failure_keepsSheetOpenWithError() = runTest {
+        billing.result = com.testlogon.android.data.messaging.BillingResult.Authorized("pm_1", 0L)
+        repo.tipResult = FakeMessagingRepository.failure(422, "bad")
+        val v = vm()
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed()))
+        advanceUntilIdle()
+        v.onTipOpen("m1")
+        v.onTipPresetSelect(500)
+        v.onTipConfirm()
+        advanceUntilIdle()
+        assertNotNull(v.state.value.tipSheet.messageId)
+        assertEquals(500L, v.state.value.tipSheet.selectedCents)
+        assertNotNull(v.state.value.tipSheet.amountError)
+    }
+
+    @Test
+    fun tip_ownMessage_doesNotOpenSheet() = runTest {
+        val v = vm(currentUser = "me")
+        advanceUntilIdle()
+        repo.emitThread(listOf(lockedFixed(sender = "me")))
+        advanceUntilIdle()
+        v.onTipOpen("m1")
+        assertNull(v.state.value.tipSheet.messageId)
+    }
 }

@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Poll
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -114,6 +116,17 @@ fun ThreadRoute(
     val listState = rememberLazyListState()
     val imageViewer = rememberImageViewerState()
     val context = LocalContext.current
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+    val routeScope = rememberCoroutineScope()
+    val noCalendarAppMessage = stringResource(R.string.calendar_no_app)
+
+    // AND-139 — surface the one-shot tip confirmation as a snackbar, then clear it.
+    LaunchedEffect(state.transientMessage) {
+        state.transientMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.onTransientMessageShown()
+        }
+    }
 
     // AND-130 — system photo picker (no storage permission on any supported API level).
     val pickImage = rememberLauncherForActivityResult(
@@ -223,6 +236,25 @@ fun ThreadRoute(
         onCreatePoll = viewModel::onCreatePoll,
         onPollVote = viewModel::onPollVote,
         onPollConfirm = viewModel::onPollConfirm,
+        onAttachCountdown = viewModel::onOpenCountdownPicker,
+        onDismissCountdownPicker = viewModel::onDismissCountdownPicker,
+        onCountdownTitleChange = viewModel::onCountdownTitleChange,
+        onCountdownTargetChange = viewModel::onCountdownTargetChange,
+        onSendCountdown = viewModel::onSendCountdown,
+        nowSeconds = System.currentTimeMillis() / 1000L,
+        onUnlock = viewModel::onUnlockClick,
+        onTip = viewModel::onTipOpen,
+        onAddToCalendar = { event ->
+            if (!launchAddToCalendar(context, event)) {
+                routeScope.launch { snackbarHostState.showSnackbar(noCalendarAppMessage) }
+            }
+        },
+        onTipPreset = viewModel::onTipPresetSelect,
+        onTipCustomChange = viewModel::onTipCustomChange,
+        onTipNoteChange = viewModel::onTipNoteChange,
+        onTipConfirm = viewModel::onTipConfirm,
+        onTipDismiss = viewModel::onTipDismiss,
+        snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
 
@@ -269,10 +301,27 @@ fun ThreadScreen(
     onCreatePoll: (com.testlogon.android.data.messaging.MeetingPollDraft) -> Unit,
     onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
     onPollConfirm: (String, String) -> Unit,
+    onAttachCountdown: () -> Unit,
+    onDismissCountdownPicker: () -> Unit,
+    onCountdownTitleChange: (String) -> Unit,
+    onCountdownTargetChange: (Long?) -> Unit,
+    onSendCountdown: () -> Unit,
+    nowSeconds: Long,
+    onUnlock: (String) -> Unit,
+    onTip: (String) -> Unit,
+    onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
+    onTipPreset: (Long) -> Unit,
+    onTipCustomChange: (String) -> Unit,
+    onTipNoteChange: (String) -> Unit,
+    onTipConfirm: () -> Unit,
+    onTipDismiss: () -> Unit,
+    snackbarHostState: androidx.compose.material3.SnackbarHostState =
+        remember { androidx.compose.material3.SnackbarHostState() },
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
+        snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -321,6 +370,7 @@ fun ThreadScreen(
                     onRecordVoice = onRecordVoice,
                     onAttachMedia = onOpenMediaPicker,
                     onAttachPoll = onOpenPollComposer,
+                    onAttachCountdown = onAttachCountdown,
                 )
             }
         },
@@ -349,6 +399,9 @@ fun ThreadScreen(
                     onSeekVoice = onSeekVoice,
                     onPollVote = onPollVote,
                     onPollConfirm = onPollConfirm,
+                    onUnlock = onUnlock,
+                    onTip = onTip,
+                    onAddToCalendar = onAddToCalendar,
                 )
             }
         }
@@ -380,6 +433,28 @@ fun ThreadScreen(
             initialSlots = defaultPollSlots(),
             onSubmit = onCreatePoll,
             onDismiss = onDismissPollComposer,
+        )
+    }
+
+    if (state.countdownPicker.visible) {
+        CountdownPickerSheet(
+            state = state.countdownPicker,
+            nowSeconds = nowSeconds,
+            onTitleChange = onCountdownTitleChange,
+            onTargetChange = onCountdownTargetChange,
+            onSend = onSendCountdown,
+            onDismiss = onDismissCountdownPicker,
+        )
+    }
+
+    if (state.tipSheet.messageId != null) {
+        TipSheet(
+            state = state.tipSheet,
+            onPreset = onTipPreset,
+            onCustomChange = onTipCustomChange,
+            onNoteChange = onTipNoteChange,
+            onConfirm = onTipConfirm,
+            onDismiss = onTipDismiss,
         )
     }
 }
@@ -422,6 +497,9 @@ private fun ThreadList(
     onSeekVoice: (String, Float) -> Unit,
     onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
     onPollConfirm: (String, String) -> Unit,
+    onUnlock: (String) -> Unit,
+    onTip: (String) -> Unit,
+    onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
     val reversed = remember(state.messages) { state.messages.asReversed() }
@@ -442,6 +520,7 @@ private fun ThreadList(
                     download = state.downloads[message.key] ?: FileDownloadUi.NotDownloaded,
                     voicePlayback = voicePlayback,
                     polls = state.polls,
+                    unlock = state.unlocks[message.key] ?: UnlockUiState(),
                     onRetry = { onRetrySend(message.key) },
                     onOpenImage = onOpenImage,
                     onDownloadFile = { onDownloadFile(message) },
@@ -449,6 +528,9 @@ private fun ThreadList(
                     onSeekVoice = onSeekVoice,
                     onPollVote = onPollVote,
                     onPollConfirm = onPollConfirm,
+                    onUnlock = { onUnlock(message.key) },
+                    onTip = { onTip(message.key) },
+                    onAddToCalendar = onAddToCalendar,
                 )
             }
             if (state.isLoadingOlder) {
@@ -479,12 +561,14 @@ private fun ThreadList(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ThreadMessageUi,
     download: FileDownloadUi,
     voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
     polls: Map<String, MeetingPollCardUiState>,
+    unlock: UnlockUiState,
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
     onDownloadFile: () -> Unit,
@@ -492,6 +576,9 @@ private fun MessageBubble(
     onSeekVoice: (String, Float) -> Unit,
     onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
     onPollConfirm: (String, String) -> Unit,
+    onUnlock: () -> Unit,
+    onTip: () -> Unit,
+    onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
 ) {
     val alignment = if (message.isOwn) Alignment.End else Alignment.Start
     val bubbleColor = if (message.isOwn) {
@@ -509,10 +596,17 @@ private fun MessageBubble(
     }
     val tag = if (message.isOwn) ThreadTestTags.OWN_MESSAGE else ThreadTestTags.MESSAGE
 
+    // AND-139 — long-press a received message to open the tip sheet (own messages are not tip-able).
+    val tipModifier = if (!message.isOwn) {
+        Modifier.combinedClickable(onClick = {}, onLongClick = onTip)
+    } else {
+        Modifier
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .then(tipModifier),
         horizontalAlignment = alignment,
     ) {
         when (val media = message.media) {
@@ -539,6 +633,19 @@ private fun MessageBubble(
             )
             is MessageMedia.Gif -> GifBubble(media = media)
             is MessageMedia.Sticker -> StickerBubble(media = media)
+            is MessageMedia.Countdown -> CountdownBubble(media = media, isOwn = message.isOwn)
+            is MessageMedia.CalendarEvent -> CalendarEventBubble(
+                media = media,
+                isOwn = message.isOwn,
+                onAddToCalendar = { onAddToCalendar(media) },
+            )
+            is MessageMedia.CalendarShare -> CalendarShareBubble(media = media, isOwn = message.isOwn)
+            is MessageMedia.Paid -> PaidMessageBubble(
+                monetization = media.monetization,
+                isOwn = message.isOwn,
+                unlock = unlock,
+                onUnlock = onUnlock,
+            )
             is MessageMedia.MeetingPoll -> {
                 val pollState = polls[media.pollId]
                 if (pollState != null) {
@@ -765,6 +872,7 @@ private fun MessageComposer(
     onRecordVoice: () -> Unit,
     onAttachMedia: () -> Unit,
     onAttachPoll: () -> Unit,
+    onAttachCountdown: () -> Unit,
 ) {
     Surface(tonalElevation = 2.dp) {
         Row(
@@ -833,6 +941,16 @@ private fun MessageComposer(
                 Icon(
                     Icons.Filled.Poll,
                     contentDescription = stringResource(R.string.composer_add_poll),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            IconButton(
+                onClick = onAttachCountdown,
+                modifier = Modifier.size(44.dp).testTag(PaidMessageTestTags.COUNTDOWN_BUBBLE + "_attach"),
+            ) {
+                Icon(
+                    Icons.Filled.Timer,
+                    contentDescription = stringResource(R.string.composer_add_countdown),
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }

@@ -77,6 +77,38 @@ data class MessageEntity(
     val pollCreatorId: String? = null,
     val pollStatus: String? = null,
     val pollConfirmedSlotId: String? = null,
+    // AND-137 — countdown columns (DB schema v5). Null for non-countdown kinds.
+    val countdownTitle: String? = null,
+    val countdownTargetEpochSeconds: Long? = null,
+    val countdownEventType: String? = null,
+    val countdownEventId: String? = null,
+    // AND-138 — calendar-event columns (DB schema v5). Null for non-calendar-event kinds.
+    val calEventId: String? = null,
+    val calEventCalendarId: String? = null,
+    val calEventName: String? = null,
+    val calEventStartUtc: String? = null,
+    val calEventEndUtc: String? = null,
+    val calEventAllDay: Boolean = false,
+    val calEventAllDayDate: String? = null,
+    val calEventTimezone: String? = null,
+    val calEventDescription: String? = null,
+    val calEventOwner: String? = null,
+    // AND-138 — calendar-share columns (DB schema v5). Null for non-calendar-share kinds.
+    val calShareCalendarId: String? = null,
+    val calShareName: String? = null,
+    val calShareOwner: String? = null,
+    val calSharePermission: String? = null,
+    val calShareBookingUrl: String? = null,
+    // AND-139 — monetization columns (DB schema v5). Gated content is NEVER persisted while locked.
+    /** "FIXED" | "LOTTERY" (null for non-paid messages). */
+    val monetizationType: String? = null,
+    val monetizationUnlocked: Boolean = false,
+    val lockPriceCents: Long? = null,
+    val lockCurrency: String? = null,
+    /** Safe teaser caption (lock_description); never the gated body. */
+    val lockTeaser: String? = null,
+    /** Revealed text written ONLY after a successful unlock/draw. */
+    val revealedText: String? = null,
 )
 
 /**

@@ -1,0 +1,746 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 5,
+    "identityHash": "00ff364c8c2dcb85ef92dccfe69ece26",
+    "entities": [
+      {
+        "tableName": "conversations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversationId` TEXT NOT NULL, `title` TEXT NOT NULL, `iconUrl` TEXT, `lastMessagePreview` TEXT, `lastActivityEpochSeconds` INTEGER NOT NULL, `unreadCount` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "iconUrl",
+            "columnName": "iconUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastMessagePreview",
+            "columnName": "lastMessagePreview",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastActivityEpochSeconds",
+            "columnName": "lastActivityEpochSeconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unreadCount",
+            "columnName": "unreadCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversationId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`messageId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `senderId` TEXT NOT NULL, `text` TEXT NOT NULL, `createdAtEpochSeconds` INTEGER NOT NULL, `clientId` TEXT, `kind` TEXT NOT NULL, `imageUrl` TEXT, `imageWidth` INTEGER, `imageHeight` INTEGER, `videoId` TEXT, `videoTitle` TEXT, `videoThumbnailUrl` TEXT, `videoDurationSeconds` INTEGER, `videoHlsManifestUrl` TEXT, `videoDrmEnabled` INTEGER NOT NULL, `fileName` TEXT, `fileSizeBytes` INTEGER, `fileMimeType` TEXT, `fileIsShare` INTEGER NOT NULL, `consumptionPolicy` TEXT NOT NULL, `voiceAudioUrl` TEXT, `voiceDurationSeconds` REAL, `voiceWaveformJson` TEXT, `voicemailMediaUrl` TEXT, `voicemailIsVideo` INTEGER NOT NULL, `voicemailCallId` TEXT, `voicemailCallState` TEXT, `gifUrl` TEXT, `gifAltText` TEXT, `gifWidth` INTEGER, `gifHeight` INTEGER, `stickerUrl` TEXT, `stickerAltText` TEXT, `stickerId` TEXT, `stickerCollectionId` TEXT, `pollId` TEXT, `pollTitle` TEXT, `pollCreatorId` TEXT, `pollStatus` TEXT, `pollConfirmedSlotId` TEXT, `countdownTitle` TEXT, `countdownTargetEpochSeconds` INTEGER, `countdownEventType` TEXT, `countdownEventId` TEXT, `calEventId` TEXT, `calEventCalendarId` TEXT, `calEventName` TEXT, `calEventStartUtc` TEXT, `calEventEndUtc` TEXT, `calEventAllDay` INTEGER NOT NULL, `calEventAllDayDate` TEXT, `calEventTimezone` TEXT, `calEventDescription` TEXT, `calEventOwner` TEXT, `calShareCalendarId` TEXT, `calShareName` TEXT, `calShareOwner` TEXT, `calSharePermission` TEXT, `calShareBookingUrl` TEXT, `monetizationType` TEXT, `monetizationUnlocked` INTEGER NOT NULL, `lockPriceCents` INTEGER, `lockCurrency` TEXT, `lockTeaser` TEXT, `revealedText` TEXT, PRIMARY KEY(`messageId`))",
+        "fields": [
+          {
+            "fieldPath": "messageId",
+            "columnName": "messageId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderId",
+            "columnName": "senderId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochSeconds",
+            "columnName": "createdAtEpochSeconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clientId",
+            "columnName": "clientId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "imageUrl",
+            "columnName": "imageUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "imageWidth",
+            "columnName": "imageWidth",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "imageHeight",
+            "columnName": "imageHeight",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "videoId",
+            "columnName": "videoId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "videoTitle",
+            "columnName": "videoTitle",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "videoThumbnailUrl",
+            "columnName": "videoThumbnailUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "videoDurationSeconds",
+            "columnName": "videoDurationSeconds",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "videoHlsManifestUrl",
+            "columnName": "videoHlsManifestUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "videoDrmEnabled",
+            "columnName": "videoDrmEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileSizeBytes",
+            "columnName": "fileSizeBytes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileMimeType",
+            "columnName": "fileMimeType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileIsShare",
+            "columnName": "fileIsShare",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "consumptionPolicy",
+            "columnName": "consumptionPolicy",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "voiceAudioUrl",
+            "columnName": "voiceAudioUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voiceDurationSeconds",
+            "columnName": "voiceDurationSeconds",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voiceWaveformJson",
+            "columnName": "voiceWaveformJson",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voicemailMediaUrl",
+            "columnName": "voicemailMediaUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voicemailIsVideo",
+            "columnName": "voicemailIsVideo",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "voicemailCallId",
+            "columnName": "voicemailCallId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voicemailCallState",
+            "columnName": "voicemailCallState",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gifUrl",
+            "columnName": "gifUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gifAltText",
+            "columnName": "gifAltText",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gifWidth",
+            "columnName": "gifWidth",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gifHeight",
+            "columnName": "gifHeight",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stickerUrl",
+            "columnName": "stickerUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stickerAltText",
+            "columnName": "stickerAltText",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stickerId",
+            "columnName": "stickerId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stickerCollectionId",
+            "columnName": "stickerCollectionId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pollId",
+            "columnName": "pollId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pollTitle",
+            "columnName": "pollTitle",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pollCreatorId",
+            "columnName": "pollCreatorId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pollStatus",
+            "columnName": "pollStatus",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pollConfirmedSlotId",
+            "columnName": "pollConfirmedSlotId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "countdownTitle",
+            "columnName": "countdownTitle",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "countdownTargetEpochSeconds",
+            "columnName": "countdownTargetEpochSeconds",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "countdownEventType",
+            "columnName": "countdownEventType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "countdownEventId",
+            "columnName": "countdownEventId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventId",
+            "columnName": "calEventId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventCalendarId",
+            "columnName": "calEventCalendarId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventName",
+            "columnName": "calEventName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventStartUtc",
+            "columnName": "calEventStartUtc",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventEndUtc",
+            "columnName": "calEventEndUtc",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventAllDay",
+            "columnName": "calEventAllDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "calEventAllDayDate",
+            "columnName": "calEventAllDayDate",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventTimezone",
+            "columnName": "calEventTimezone",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventDescription",
+            "columnName": "calEventDescription",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calEventOwner",
+            "columnName": "calEventOwner",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calShareCalendarId",
+            "columnName": "calShareCalendarId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calShareName",
+            "columnName": "calShareName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calShareOwner",
+            "columnName": "calShareOwner",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calSharePermission",
+            "columnName": "calSharePermission",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "calShareBookingUrl",
+            "columnName": "calShareBookingUrl",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "monetizationType",
+            "columnName": "monetizationType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "monetizationUnlocked",
+            "columnName": "monetizationUnlocked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lockPriceCents",
+            "columnName": "lockPriceCents",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lockCurrency",
+            "columnName": "lockCurrency",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lockTeaser",
+            "columnName": "lockTeaser",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "revealedText",
+            "columnName": "revealedText",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "messageId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "outbox_messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`clientId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, `createdAtEpochSeconds` INTEGER NOT NULL, `status` TEXT NOT NULL, `attemptCount` INTEGER NOT NULL, `kind` TEXT NOT NULL, `imageLocalUri` TEXT, `uploadPercent` INTEGER, `attachmentLocalUri` TEXT, `fileName` TEXT, `fileSizeBytes` INTEGER, `fileMimeType` TEXT, `voiceDurationSeconds` REAL, `voiceWaveformJson` TEXT, PRIMARY KEY(`clientId`))",
+        "fields": [
+          {
+            "fieldPath": "clientId",
+            "columnName": "clientId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochSeconds",
+            "columnName": "createdAtEpochSeconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attemptCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "imageLocalUri",
+            "columnName": "imageLocalUri",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "uploadPercent",
+            "columnName": "uploadPercent",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "attachmentLocalUri",
+            "columnName": "attachmentLocalUri",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileSizeBytes",
+            "columnName": "fileSizeBytes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileMimeType",
+            "columnName": "fileMimeType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voiceDurationSeconds",
+            "columnName": "voiceDurationSeconds",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voiceWaveformJson",
+            "columnName": "voiceWaveformJson",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "clientId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "custom_emoji",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`shortcode` TEXT NOT NULL, `name` TEXT NOT NULL, `imageUrl` TEXT NOT NULL, `animated` INTEGER NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`shortcode`))",
+        "fields": [
+          {
+            "fieldPath": "shortcode",
+            "columnName": "shortcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "imageUrl",
+            "columnName": "imageUrl",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "animated",
+            "columnName": "animated",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "shortcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "meeting_polls",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pollId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `title` TEXT NOT NULL, `durationMinutes` INTEGER NOT NULL, `creatorId` TEXT NOT NULL, `status` TEXT NOT NULL, `confirmedSlotId` TEXT, PRIMARY KEY(`pollId`))",
+        "fields": [
+          {
+            "fieldPath": "pollId",
+            "columnName": "pollId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMinutes",
+            "columnName": "durationMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "creatorId",
+            "columnName": "creatorId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confirmedSlotId",
+            "columnName": "confirmedSlotId",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pollId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "meeting_poll_slots",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`slotId` TEXT NOT NULL, `pollId` TEXT NOT NULL, `position` INTEGER NOT NULL, `startUtc` TEXT NOT NULL, `endUtc` TEXT NOT NULL, `yesCount` INTEGER NOT NULL, `maybeCount` INTEGER NOT NULL, `noCount` INTEGER NOT NULL, `myVote` TEXT, PRIMARY KEY(`slotId`))",
+        "fields": [
+          {
+            "fieldPath": "slotId",
+            "columnName": "slotId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pollId",
+            "columnName": "pollId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startUtc",
+            "columnName": "startUtc",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endUtc",
+            "columnName": "endUtc",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "yesCount",
+            "columnName": "yesCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maybeCount",
+            "columnName": "maybeCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "noCount",
+            "columnName": "noCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "myVote",
+            "columnName": "myVote",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "slotId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '00ff364c8c2dcb85ef92dccfe69ece26')"
+    ]
+  }
+}

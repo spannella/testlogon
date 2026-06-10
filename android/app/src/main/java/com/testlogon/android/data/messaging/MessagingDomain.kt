@@ -122,6 +122,98 @@ sealed interface MessageMedia {
         val status: String,
         val confirmedSlotId: String?,
     ) : MessageMedia
+
+    /**
+     * AND-137 — a countdown. [targetEpochSeconds] is UTC; the live remaining time is DERIVED from
+     * the device clock at render time (never stored), so it self-corrects after backgrounding.
+     */
+    data class Countdown(
+        val title: String,
+        val targetEpochSeconds: Long,
+        val associatedEventType: AssociatedEventType = AssociatedEventType.CUSTOM,
+        val associatedEventId: String? = null,
+    ) : MessageMedia
+
+    /** AND-138 — an inline calendar event (render + add-to-calendar). No title/location/rsvp fields. */
+    data class CalendarEvent(
+        val eventId: String,
+        val calendarId: String,
+        val name: String,
+        val startUtc: String?,
+        val endUtc: String?,
+        val allDay: Boolean,
+        val allDayDate: String?,
+        val timezone: String?,
+        val description: String?,
+        val owner: String,
+    ) : MessageMedia
+
+    /** AND-138 — a shared calendar reference (read-only render + disabled accept). */
+    data class CalendarShare(
+        val calendarId: String,
+        val name: String,
+        val owner: String,
+        val permission: SharePermission,
+        val bookingPublicUrl: String?,
+    ) : MessageMedia
+
+    /**
+     * AND-139 — a paid/unlockable message. While [monetization.unlocked] is false the bubble renders
+     * a locked teaser (price + lock_description ONLY); the gated body/media is NEVER carried here.
+     */
+    data class Paid(
+        val monetization: MessageMonetization,
+    ) : MessageMedia
+}
+
+/** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
+enum class AssociatedEventType { BROADCAST, CALL, CALENDAR, CUSTOM, UNKNOWN }
+
+/** AND-138 — calendar-share permission ("read"|"write" on the wire). */
+enum class SharePermission { READ, WRITE, UNKNOWN }
+
+/**
+ * AND-139 — monetization metadata mapped from the flat lock_* fields (FIXED) or the nested `lottery`
+ * sub-object (LOTTERY). This is an internal mapping convenience, NOT a wire shape. The gated
+ * body/media is never represented here; only the safe teaser caption + price are.
+ */
+data class MessageMonetization(
+    val type: UnlockType,
+    val unlocked: Boolean,
+    /** Fixed-price amount in minor units (cents); null for a lottery (server resolves the price). */
+    val priceMinorUnits: Long?,
+    val currency: String,
+    /** Safe teaser caption (lock_description); never the gated body. */
+    val teaser: String?,
+    /** AND-139 — revealed text content after a successful unlock/draw (else null while locked). */
+    val revealedText: String? = null,
+)
+
+/** AND-139 — fixed-price unlock vs server-resolved lottery unlock. */
+enum class UnlockType { FIXED, LOTTERY }
+
+// ---- AND-137/138/139 enum <-> wire mappers (pure / JVM-testable) ----
+
+internal fun String?.toAssociatedEventType(): AssociatedEventType = when (this) {
+    "broadcast" -> AssociatedEventType.BROADCAST
+    "call" -> AssociatedEventType.CALL
+    "calendar" -> AssociatedEventType.CALENDAR
+    "custom" -> AssociatedEventType.CUSTOM
+    null -> AssociatedEventType.CUSTOM
+    else -> AssociatedEventType.UNKNOWN
+}
+
+internal fun AssociatedEventType.wire(): String = when (this) {
+    AssociatedEventType.BROADCAST -> "broadcast"
+    AssociatedEventType.CALL -> "call"
+    AssociatedEventType.CALENDAR -> "calendar"
+    else -> "custom"
+}
+
+internal fun String?.toSharePermission(): SharePermission = when (this) {
+    "read" -> SharePermission.READ
+    "write" -> SharePermission.WRITE
+    else -> SharePermission.UNKNOWN
 }
 
 /** A single message in a conversation, merged from history + the local outbox at render time. */
@@ -160,18 +252,28 @@ data class Conversation(
 internal fun MessageDto.toDomain(
     clientId: String = messageId,
     sendStatus: SendStatus = SendStatus.SENT,
-): Message = Message(
-    id = messageId,
-    clientId = clientId,
-    conversationId = conversationId,
-    senderId = senderId,
-    // Image/video bubbles render media, not text; keep caption text when present.
-    text = text ?: if (kind == "text") preview ?: "" else "",
-    createdAtEpochSeconds = createdAt,
-    sendStatus = sendStatus,
-    kind = kind,
-    media = toMedia(),
-)
+): Message {
+    val mappedMedia = toMedia()
+    // AND-139 (OQ-3): for a still-locked paid message the wire `text` would be the GATED body.
+    // We must not carry it into the domain/cache — the teaser caption lives in the monetization
+    // model only. Drop the text for a locked Paid bubble so the gated body can never leak.
+    val safeText = if (mappedMedia is MessageMedia.Paid && !mappedMedia.monetization.unlocked) {
+        ""
+    } else {
+        text ?: if (kind == "text") preview ?: "" else ""
+    }
+    return Message(
+        id = messageId,
+        clientId = clientId,
+        conversationId = conversationId,
+        senderId = senderId,
+        text = safeText,
+        createdAtEpochSeconds = createdAt,
+        sendStatus = sendStatus,
+        kind = kind,
+        media = mappedMedia,
+    )
+}
 
 /** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {
@@ -224,6 +326,55 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         creatorId = meetingPoll.creatorId,
         status = meetingPoll.status,
         confirmedSlotId = meetingPoll.confirmedSlotId,
+    )
+    // AND-137 — countdown (flat title + target_datetime).
+    kind == "countdown" && countdownTitle != null && targetDatetime != null -> MessageMedia.Countdown(
+        title = countdownTitle,
+        targetEpochSeconds = targetDatetime,
+        associatedEventType = associatedEventType.toAssociatedEventType(),
+        associatedEventId = associatedEventId,
+    )
+    // AND-138 — calendar event / share (nested attachments).
+    calendarEvent != null -> MessageMedia.CalendarEvent(
+        eventId = calendarEvent.eventId,
+        calendarId = calendarEvent.calendarId,
+        name = calendarEvent.name,
+        startUtc = calendarEvent.startUtc,
+        endUtc = calendarEvent.endUtc,
+        allDay = calendarEvent.allDay,
+        allDayDate = calendarEvent.allDayDate,
+        timezone = calendarEvent.timezone,
+        description = calendarEvent.description,
+        owner = calendarEvent.owner,
+    )
+    calendarShare != null -> MessageMedia.CalendarShare(
+        calendarId = calendarShare.calendarId,
+        name = calendarShare.name,
+        owner = calendarShare.owner,
+        permission = calendarShare.permission.toSharePermission(),
+        bookingPublicUrl = calendarShare.bookingPublicUrl,
+    )
+    // AND-139 — lottery paid message (nested lottery sub-object). Reveal only when unlocked.
+    lottery != null -> MessageMedia.Paid(
+        MessageMonetization(
+            type = UnlockType.LOTTERY,
+            unlocked = lottery.lockState == "unlocked",
+            priceMinorUnits = null,
+            currency = tipCurrency ?: "USD",
+            teaser = lockDescription,
+            revealedText = lottery.selectedOutcome?.takeIf { lottery.lockState == "unlocked" }?.textContent,
+        ),
+    )
+    // AND-139 — fixed-price locked paid message (flat lock_* fields). Gated body never carried while locked.
+    locked == true && isUnlocked != true -> MessageMedia.Paid(
+        MessageMonetization(
+            type = UnlockType.FIXED,
+            unlocked = false,
+            priceMinorUnits = lockPriceCents,
+            currency = tipCurrency ?: "USD",
+            teaser = lockDescription,
+            revealedText = null,
+        ),
     )
     fileShare != null -> fileShare.toFileMedia(consumptionPolicy ?: "none", isShare = true)
     file != null -> file.toFileMedia(consumptionPolicy ?: "none", isShare = false)

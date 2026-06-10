@@ -1,0 +1,164 @@
+package com.testlogon.android.data.messaging
+
+import com.squareup.moshi.Json
+import com.squareup.moshi.JsonClass
+
+/**
+ * AND-137 / AND-138 / AND-139 — wire DTOs for countdown, calendar-event/share, and tips/paid-
+ * unlockable (incl. lottery) messages.
+ *
+ * Shapes verified (2026-06-09) against:
+ *  - reference/openapi.index.txt lines 334-336 (calendar-event / calendar-share / countdown POSTs),
+ *    363-364 (tip / unlock), 411-414 (lottery create / get / unlock).
+ *  - reference/src/api/types.ts: CalendarEventAttachment (912-932), CalendarShareAttachment (912-919),
+ *    SendTipReq (1288-1293), LotterySelectedOutcome (2905-2910), LotteryUnlockResp (2924-2929),
+ *    flat MessageOut paid fields lock_price_cents/lock_description/is_unlocked/locked/tip_* (1211-1216),
+ *    countdown fields countdown_title/target_datetime/associated_event_* (1157-1160), nested
+ *    `lottery` sub-object {message_type, lock_state, selected_outcome} (1171-1184).
+ *  - reference/src/api/endpoints/messaging.ts: sendCountdownMessage (807), unlockMessage (610),
+ *    sendMessageTip (642), unlockLotteryMessage (258), getLotteryMessage (265).
+ *
+ * Conventions reused from the established per-kind pattern:
+ *  - conversation_id / message_id are PATH params (never body fields).
+ *  - created_at / unlocked_at are epoch-SECONDS integers (NOT ISO-8601).
+ *  - MessageOut is a flat object discriminated by `kind`; per-kind fields are flat columns or a
+ *    nested object on the shared [MessageDto].
+ *  - money is integer minor units (cents); never a float/string.
+ */
+
+// ─── AND-137: countdown send request (SendCountdownMessageIn) ───
+
+/**
+ * SendCountdownMessageIn. Required: title (1..200), target_datetime (UTC unix seconds, integer).
+ * associated_event_type defaults to "custom" (pattern ^(broadcast|call|calendar|custom)$);
+ * associated_event_id is <=128|null. There is NO conversation_id/client_id on the wire.
+ */
+@JsonClass(generateAdapter = true)
+data class SendCountdownMessageReq(
+    @Json(name = "title") val title: String,
+    @Json(name = "target_datetime") val targetDatetime: Long,
+    @Json(name = "associated_event_type") val associatedEventType: String = "custom",
+    @Json(name = "associated_event_id") val associatedEventId: String? = null,
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+)
+
+// ─── AND-138: calendar-event / calendar-share attachments (nested on MessageOut) ───
+
+/**
+ * MessageOut.calendar_event (CalendarEventAttachment). start_utc/end_utc are RFC-3339 strings and
+ * OPTIONAL; all_day_date is a date-only string for all-day events. There is NO title/location/rsvp;
+ * the display name field is `name`.
+ */
+@JsonClass(generateAdapter = true)
+data class CalendarEventAttachmentDto(
+    @Json(name = "event_id") val eventId: String = "",
+    @Json(name = "calendar_id") val calendarId: String = "",
+    val name: String = "",
+    @Json(name = "start_utc") val startUtc: String? = null,
+    @Json(name = "end_utc") val endUtc: String? = null,
+    @Json(name = "all_day") val allDay: Boolean = false,
+    @Json(name = "all_day_date") val allDayDate: String? = null,
+    val timezone: String? = null,
+    val description: String? = null,
+    val owner: String = "",
+)
+
+/**
+ * MessageOut.calendar_share (CalendarShareAttachment). permission is "read"|"write" (NOT
+ * viewer/editor). owner exists but the web card omits it. There is NO color field.
+ */
+@JsonClass(generateAdapter = true)
+data class CalendarShareAttachmentDto(
+    @Json(name = "calendar_id") val calendarId: String = "",
+    val name: String = "",
+    val owner: String = "",
+    val permission: String = "read",
+    @Json(name = "booking_link_id") val bookingLinkId: String? = null,
+    @Json(name = "booking_public_url") val bookingPublicUrl: String? = null,
+)
+
+// ─── AND-139: tip / unlock request + receipt DTOs ───
+
+/** UnlockMessageIn — only field is payment_method_id (nullable). No client_id on the wire. */
+@JsonClass(generateAdapter = true)
+data class UnlockMessageReq(
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+/** UnlockOut — receipt only; does NOT carry the revealed body/media (client re-fetches). */
+@JsonClass(generateAdapter = true)
+data class UnlockOutDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "conversation_id") val conversationId: String = "",
+    @Json(name = "message_id") val messageId: String = "",
+    @Json(name = "unlock_payment_id") val unlockPaymentId: String? = null,
+    @Json(name = "amount_cents") val amountCents: Long? = null,
+)
+
+/**
+ * SendTipIn. amount_cents required (server min 1, max 100000). currency defaults "USD"; note max 500;
+ * payment_method_id optional/nullable. No client_id on the wire.
+ */
+@JsonClass(generateAdapter = true)
+data class SendTipReq(
+    @Json(name = "amount_cents") val amountCents: Long,
+    @Json(name = "currency") val currency: String = "USD",
+    @Json(name = "note") val note: String? = null,
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+/** TipOut — tip receipt. */
+@JsonClass(generateAdapter = true)
+data class TipOutDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "conversation_id") val conversationId: String = "",
+    @Json(name = "message_id") val messageId: String = "",
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "amount_cents") val amountCents: Long = 0L,
+    @Json(name = "currency") val currency: String = "USD",
+)
+
+// ─── AND-139: lottery (separate lottery_dm message type) ───
+
+/** LotterySelectedOutcome — the revealed payload after a draw (text or media reference). */
+@JsonClass(generateAdapter = true)
+data class LotterySelectedOutcomeDto(
+    @Json(name = "outcome_id") val outcomeId: String = "",
+    @Json(name = "payload_type") val payloadType: String = "text",
+    @Json(name = "text_content") val textContent: String? = null,
+    @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+)
+
+/**
+ * LotteryUnlockResp — single atomic draw+reveal response. lock_state is "unlocked"; unlocked_at is
+ * epoch-SECONDS integer.
+ */
+@JsonClass(generateAdapter = true)
+data class LotteryUnlockOutDto(
+    @Json(name = "message_id") val messageId: String = "",
+    @Json(name = "lock_state") val lockState: String = "unlocked",
+    @Json(name = "selected_outcome") val selectedOutcome: LotterySelectedOutcomeDto? = null,
+    @Json(name = "unlocked_at") val unlockedAt: Long = 0L,
+)
+
+/** LotteryMessageOut — hydration GET; carries lock_state + (when unlocked) the selected_outcome. */
+@JsonClass(generateAdapter = true)
+data class LotteryMessageOutDto(
+    @Json(name = "message_id") val messageId: String = "",
+    @Json(name = "conversation_id") val conversationId: String = "",
+    @Json(name = "sender_id") val senderId: String = "",
+    @Json(name = "lock_state") val lockState: String = "locked",
+    @Json(name = "selected_outcome") val selectedOutcome: LotterySelectedOutcomeDto? = null,
+    @Json(name = "created_at") val createdAt: Long = 0L,
+)
+
+/**
+ * MessageOut.lottery (nested sub-object on a lottery_dm message). lock_state gates the locked teaser
+ * vs the revealed outcome.
+ */
+@JsonClass(generateAdapter = true)
+data class LotteryAttachmentDto(
+    @Json(name = "message_type") val messageType: String = "lottery_dm",
+    @Json(name = "lock_state") val lockState: String = "locked",
+    @Json(name = "selected_outcome") val selectedOutcome: LotterySelectedOutcomeDto? = null,
+)

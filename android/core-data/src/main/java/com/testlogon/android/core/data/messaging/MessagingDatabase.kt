@@ -30,7 +30,7 @@ import javax.inject.Singleton
         MeetingPollEntity::class,
         MeetingPollSlotEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -144,6 +144,46 @@ abstract class MessagingDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * AND-137 / AND-138 / AND-139 — adds the additive countdown, calendar-event/share, and
+         * monetization columns to `messages`. All new columns are nullable or carry a default, so v4
+         * rows migrate without data loss. (No new outbox columns: countdown sends through the text
+         * outbox path; unlock/tip are non-optimistic writes with no outbox row.)
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // messages — countdown (AND-137)
+                db.execSQL("ALTER TABLE messages ADD COLUMN countdownTitle TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN countdownTargetEpochSeconds INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN countdownEventType TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN countdownEventId TEXT")
+                // messages — calendar event (AND-138)
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventCalendarId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventName TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventStartUtc TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventEndUtc TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventAllDay INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventAllDayDate TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventTimezone TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventDescription TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calEventOwner TEXT")
+                // messages — calendar share (AND-138)
+                db.execSQL("ALTER TABLE messages ADD COLUMN calShareCalendarId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calShareName TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calShareOwner TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calSharePermission TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN calShareBookingUrl TEXT")
+                // messages — monetization (AND-139)
+                db.execSQL("ALTER TABLE messages ADD COLUMN monetizationType TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN monetizationUnlocked INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lockPriceCents INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lockCurrency TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lockTeaser TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedText TEXT")
+            }
+        }
     }
 }
 
@@ -163,6 +203,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_1_2,
             MessagingDatabase.MIGRATION_2_3,
             MessagingDatabase.MIGRATION_3_4,
+            MessagingDatabase.MIGRATION_4_5,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

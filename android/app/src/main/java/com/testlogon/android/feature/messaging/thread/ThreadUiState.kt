@@ -37,7 +37,72 @@ data class ThreadUiState(
     val polls: Map<String, MeetingPollCardUiState> = emptyMap(),
     /** AND-136 — meeting-poll composer sheet (hidden until opened). */
     val pollComposerVisible: Boolean = false,
+    /** AND-137 — countdown picker sheet state (hidden until opened). */
+    val countdownPicker: CountdownPickerState = CountdownPickerState(),
+    /** AND-139 — per-message unlock phase (FIXED or LOTTERY), keyed by message key. */
+    val unlocks: Map<String, UnlockUiState> = emptyMap(),
+    /** AND-139 — tip sheet state (non-null messageId = open). */
+    val tipSheet: TipSheetState = TipSheetState(),
+    /** AND-139 — one-shot user-facing confirmation/snackbar text (cleared after shown). */
+    val transientMessage: String? = null,
 )
+
+/** AND-137 — countdown picker draft + inline validation error. */
+data class CountdownPickerState(
+    val visible: Boolean = false,
+    val title: String = "",
+    /** Chosen target as UTC epoch seconds; null until a future date/time is picked. */
+    val targetEpochSeconds: Long? = null,
+    val error: String? = null,
+) {
+    val isSendEnabled: Boolean
+        get() = title.trim().length in 1..200 && targetEpochSeconds != null
+}
+
+/** AND-139 — per-message unlock progress. */
+enum class UnlockPhase { IDLE, AUTHORIZING, UNLOCKING, FAILED }
+
+data class UnlockUiState(
+    val phase: UnlockPhase = UnlockPhase.IDLE,
+    val error: String? = null,
+)
+
+/** AND-139 — tip sheet (preset/custom amount + optional note). Amounts are integer cents. */
+data class TipSheetState(
+    /** Non-null = sheet open for this message key. */
+    val messageId: String? = null,
+    val presetsCents: List<Long> = listOf(100, 500, 1000, 2000),
+    val selectedCents: Long? = null,
+    val customInput: String = "",
+    val note: String = "",
+    val amountError: String? = null,
+    val submitting: Boolean = false,
+) {
+    /** Effective amount in cents from the selected preset or the parsed custom input. */
+    val amountCents: Long? get() = selectedCents ?: parseDollarsToCents(customInput)
+
+    val isConfirmEnabled: Boolean
+        get() = !submitting && amountCents.let { it != null && it in MIN_TIP_CENTS..MAX_TIP_CENTS } &&
+            note.length <= MAX_NOTE_LENGTH
+
+    companion object {
+        const val MIN_TIP_CENTS = 1L
+        const val MAX_TIP_CENTS = 100_000L
+        const val MAX_NOTE_LENGTH = 500
+    }
+}
+
+/**
+ * AND-139 — parse a locale-simple dollar string ("7.50") to integer cents, mirroring the web
+ * `Math.round(parseFloat(input) * 100)`. Returns null for blank/invalid. Pure / JVM-testable.
+ */
+fun parseDollarsToCents(input: String): Long? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return null
+    val dollars = trimmed.toDoubleOrNull() ?: return null
+    if (dollars < 0.0) return null
+    return Math.round(dollars * 100.0)
+}
 
 /** AND-135 — the three picker tabs. */
 enum class MediaTab { GIF, STICKERS, EMOJI }
@@ -118,6 +183,10 @@ data class ThreadMessageUi(
     val isGif: Boolean get() = media is MessageMedia.Gif
     val isSticker: Boolean get() = media is MessageMedia.Sticker
     val isPoll: Boolean get() = media is MessageMedia.MeetingPoll
+    val isCountdown: Boolean get() = media is MessageMedia.Countdown
+    val isCalendarEvent: Boolean get() = media is MessageMedia.CalendarEvent
+    val isCalendarShare: Boolean get() = media is MessageMedia.CalendarShare
+    val isPaid: Boolean get() = media is MessageMedia.Paid
 }
 
 data class ComposerState(

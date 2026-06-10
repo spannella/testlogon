@@ -89,6 +89,23 @@ data class MessageDto(
     @Json(name = "sticker_alt_text") val stickerAltText: String? = null,
     /** AND-136 — present on kind="meeting_poll": the poll envelope (slots come from the polls GET). */
     @Json(name = "meeting_poll") val meetingPoll: MeetingPollAttachmentDto? = null,
+    /** AND-137 — FLAT countdown fields present on kind="countdown". target_datetime is UTC seconds. */
+    @Json(name = "countdown_title") val countdownTitle: String? = null,
+    @Json(name = "target_datetime") val targetDatetime: Long? = null,
+    @Json(name = "associated_event_type") val associatedEventType: String? = null,
+    @Json(name = "associated_event_id") val associatedEventId: String? = null,
+    /** AND-138 — present on kind="calendar_event"/"calendar_share" (nested attachment objects). */
+    @Json(name = "calendar_event") val calendarEvent: CalendarEventAttachmentDto? = null,
+    @Json(name = "calendar_share") val calendarShare: CalendarShareAttachmentDto? = null,
+    /** AND-139 — FLAT fixed-price paid-message fields (gated content is NEVER shipped while locked). */
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    val locked: Boolean? = null,
+    @Json(name = "is_unlocked") val isUnlocked: Boolean? = null,
+    @Json(name = "tip_amount_cents") val tipAmountCents: Long? = null,
+    @Json(name = "tip_currency") val tipCurrency: String? = null,
+    /** AND-139 — nested lottery sub-object present on a kind="lottery_dm" message. */
+    val lottery: LotteryAttachmentDto? = null,
     /** AND-132/133 — "none" | "view_once" | "listen_once"; gates once-media cache reuse. */
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
 )
