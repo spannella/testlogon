@@ -23,6 +23,7 @@ class PresenceLifecycleBootstrap @Inject constructor(
     private val scheduler: HeartbeatScheduler,
     private val presenceRepository: PresenceRepository,
     private val authStateStore: AuthStateStore,
+    private val foregroundState: com.testlogon.android.data.messaging.realtime.ForegroundState,
     @AppScope private val scope: CoroutineScope,
 ) {
     @Volatile
@@ -38,6 +39,9 @@ class PresenceLifecycleBootstrap @Inject constructor(
             // ProcessLifecycleOwner must be observed on the main thread.
             withContext(Dispatchers.Main.immediate) {
                 ProcessLifecycleOwner.get().lifecycle.addObserver(scheduler)
+                // AND-149 — drive the SSE foreground gate from the same process lifecycle so the
+                // messaging stream connects only while foregrounded and tears down on background.
+                ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundState)
             }
             // Toggle the heartbeat on auth transitions. The StateFlow is already conflated/distinct.
             authStateStore.isAuthenticated.collect { authed ->

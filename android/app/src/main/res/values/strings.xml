@@ -427,4 +427,21 @@
     <string name="typing_several">Several people are typing…</string>
     <string name="typing_someone">Someone</string>
     <string name="typing_indicator_cd">Typing indicator</string>
+
+    <!-- AND-147 — read receipts / views -->
+    <string name="receipt_sending">Sending</string>
+    <string name="receipt_sent">Sent</string>
+    <string name="receipt_delivered">Delivered</string>
+    <string name="receipt_seen">Seen</string>
+    <string name="receipt_failed">Failed to send</string>
+    <string name="receipt_seen_relative">Seen %1$s</string>
+    <string name="receipt_seen_by_open_cd">Seen by %1$d people, double-tap to view</string>
+    <string name="receipt_roster_title">Seen by</string>
+    <string name="receipt_roster_row_cd">%1$s, viewed %2$s</string>
+    <string name="receipt_roster_error">Couldn\'t load viewers</string>
+    <string name="receipt_roster_retry">Retry</string>
+    <plurals name="seen_by_count">
+        <item quantity="one">Seen by %1$d person</item>
+        <item quantity="other">Seen by %1$d people</item>
+    </plurals>
 </resources>

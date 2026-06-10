@@ -65,6 +65,10 @@ data class MessageDto(
     @Json(name = "edited_at") val editedAt: Long? = null,
     @Json(name = "edited_by") val editedBy: String? = null,
     @Json(name = "read_by_count") val readByCount: Int? = null,
+    // AND-147 — delivery/read receipt fields on the message payload (verified src/api/types.ts: Message).
+    @Json(name = "read_by_user_ids") val readByUserIds: List<String>? = null,
+    @Json(name = "delivered_to_count") val deliveredToCount: Int? = null,
+    @Json(name = "delivered_to_user_ids") val deliveredToUserIds: List<String>? = null,
     // AND-140 — reaction summary on the message itself: emoji -> count, plus the emojis I reacted with.
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,

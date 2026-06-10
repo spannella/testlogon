@@ -53,6 +53,23 @@ data class ThreadUiState(
     val hasDraft: Boolean = false,
     /** Last draft sync outcome (non-blocking UX only). */
     val draftSyncState: DraftSyncState = DraftSyncState.Idle,
+    // ---- AND-147: read receipts / views ----
+    /** Per-own-message receipt state (delivered/seen + viewer roster), keyed by server message id. */
+    val receipts: Map<String, com.testlogon.android.data.messaging.realtime.MessageReceipt> = emptyMap(),
+    /** Viewer-roster bottom sheet state (non-null messageId = open). */
+    val viewerRoster: ViewerRosterUiState = ViewerRosterUiState(),
+)
+
+/**
+ * AND-147 — viewer-roster ("Seen by") sheet. Non-null [messageId] = open. [viewers] are most-recent
+ * first; the network fetch is single-shot (no cursor) but live `message:viewed` events fold in while
+ * the sheet is open.
+ */
+data class ViewerRosterUiState(
+    val messageId: String? = null,
+    val loading: Boolean = false,
+    val viewers: List<com.testlogon.android.data.messaging.realtime.MessageViewer> = emptyList(),
+    val error: String? = null,
 )
 
 /** AND-140 — generic async loader state for the read sheets (reaction details / pins / edits). */

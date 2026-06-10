@@ -264,6 +264,28 @@ class FakeMessagingRepository : MessagingRepository {
 
     override fun observeTotalUnread(): Flow<Int> = totalUnread.asStateFlow()
 
+    // ---- AND-147: read receipts / views ----
+
+    /** Recorded reportView calls: (conversationId, messageId). */
+    var reportViewCalls = mutableListOf<Pair<String, String>>()
+    var reportViewResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var getViewersResult: ApiResult<List<com.testlogon.android.data.messaging.realtime.MessageViewer>> =
+        ApiResult.Success(emptyList())
+    var retryPendingViewsCalls = 0
+
+    override suspend fun reportView(conversationId: String, messageId: String): ApiResult<Unit> {
+        reportViewCalls += conversationId to messageId
+        return reportViewResult
+    }
+
+    override suspend fun getViewers(
+        conversationId: String,
+        messageId: String,
+        limit: Int,
+    ): ApiResult<List<com.testlogon.android.data.messaging.realtime.MessageViewer>> = getViewersResult
+
+    override suspend fun retryPendingViews() { retryPendingViewsCalls++ }
+
     override suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation> {
         findOrCreateDmCalls += peerUserId
         return findOrCreateDmResult

@@ -476,4 +476,31 @@ interface MessagingApi {
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int? = null,
     ): HiddenMessagesPageOut
+
+    // ---- AND-147: read receipts / views ----
+
+    /**
+     * AND-147 — report that the local user viewed a message. Body = ViewMessageIn {viewed_at?}; returns
+     * ViewAckOut. Idempotent server-side (repeat reports are coalesced). Non-blocking POST; the CSRF
+     * header rides the shared interceptor chain.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/view")
+    suspend fun reportView(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: ViewMessageIn = ViewMessageIn(),
+    ): ViewAckOut
+
+    /**
+     * AND-147 — viewer roster for a message: a BARE JSON ARRAY of MessageViewOut (no envelope, no
+     * cursor — only `limit`, default 200, max 500). Idempotent GET. Identity (name/avatar) is resolved
+     * client-side from the participant cache.
+     */
+    @GET("messaging/conversations/{id}/messages/{messageId}/views")
+    suspend fun getViews(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Query("limit") limit: Int = 200,
+    ): List<MessageViewOut>
 }

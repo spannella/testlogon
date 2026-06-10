@@ -120,6 +120,37 @@ class SseEnvelopeParserTest {
         assertFalse(event.isTyping)
     }
 
+    // ---- AND-147: message:viewed (read receipt) ----
+
+    @Test
+    fun parsesMessageViewed() {
+        val event = parser.parse(
+            eventType = "message:viewed",
+            dataJson = """{"conversation_id":"c1","message_id":"m7","viewer_id":"u9","viewed_at":1749126680}""",
+        )
+        assertTrue(event is MessagingEvent.MessageViewed)
+        event as MessagingEvent.MessageViewed
+        assertEquals("c1", event.conversationId)
+        assertEquals("m7", event.messageId)
+        assertEquals("u9", event.viewerId)
+        assertEquals(1749126680L, event.viewedAtEpochSeconds)
+    }
+
+    @Test
+    fun messageViewed_missingViewerId_returnsNull() {
+        assertNull(parser.parse("message:viewed", """{"conversation_id":"c1","message_id":"m7"}"""))
+    }
+
+    @Test
+    fun messageViewed_defaultsViewedAtToZero_whenAbsent() {
+        val event = parser.parse(
+            "message:viewed",
+            """{"conversation_id":"c1","message_id":"m7","viewer_id":"u9"}""",
+        )
+        event as MessagingEvent.MessageViewed
+        assertEquals(0L, event.viewedAtEpochSeconds)
+    }
+
     @Test
     fun malformedJson_returnsNull() {
         assertNull(parser.parse("message:new", "{not json"))

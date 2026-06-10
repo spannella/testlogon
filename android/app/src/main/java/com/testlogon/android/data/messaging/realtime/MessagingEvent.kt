@@ -61,6 +61,20 @@ sealed interface MessagingEvent {
         val updatedAtEpochSeconds: Long,
     ) : MessagingEvent
 
+    /**
+     * AND-147 — a counterpart viewed (read) a message. The web stream (useMessagingStream.ts) reads
+     * a single `message:viewed` frame carrying `{ message_id, viewer_id, viewed_at }` (epoch seconds);
+     * `conversation_id` is present on the frame too. This drives the live "seen" marker on the local
+     * user's own outbound messages and the viewer roster. The event NEVER carries a display name —
+     * identity is resolved client-side from the participant cache.
+     */
+    data class MessageViewed(
+        val conversationId: String,
+        val messageId: String,
+        val viewerId: String,
+        val viewedAtEpochSeconds: Long,
+    ) : MessagingEvent
+
     /** Any other event type we observe but do not act on directly (used to refresh lists). */
     data class Other(val type: String, val conversationId: String?) : MessagingEvent
 }

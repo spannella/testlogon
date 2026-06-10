@@ -396,6 +396,13 @@ class MessagingRepositoryTest {
         }
         override suspend fun listHiddenMessages(id: String, cursor: String?, limit: Int?): HiddenMessagesPageOut =
             requireNotNull(hiddenMessagesResult)
+
+        // ---- AND-147 read-receipt fakes ----
+        override suspend fun reportView(id: String, messageId: String, body: ViewMessageIn): ViewAckOut =
+            ViewAckOut(ok = true, conversationId = id, messageId = messageId, viewerId = "me", viewedAt = 0)
+
+        override suspend fun getViews(id: String, messageId: String, limit: Int): List<MessageViewOut> =
+            emptyList()
     }
 
     // ---- AND-130 fakes: uploader + image processor ----

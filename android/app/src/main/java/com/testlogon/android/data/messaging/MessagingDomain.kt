@@ -268,6 +268,13 @@ data class Message(
     val editedAtEpochSeconds: Long? = null,
     /** True when the current user hid this message (server-backed, cached for instant/offline UI). */
     val isHiddenLocal: Boolean = false,
+    // AND-147 — delivery/read receipt counts from the message payload (transient; not Room-persisted).
+    /** Distinct recipients the message was delivered to (delivered_to_count). 0 when unknown. */
+    val deliveredToCount: Int = 0,
+    /** Distinct readers excluding self (read_by_count). 0 when unknown. */
+    val readByCount: Int = 0,
+    /** Reader user ids (read_by_user_ids), for self-exclusion + roster seeding. */
+    val readByUserIds: List<String> = emptyList(),
 )
 
 /** A conversation summary for the inbox list. */
@@ -311,6 +318,10 @@ internal fun MessageDto.toDomain(
         reactions = toReactions(),
         lifecycle = deriveLifecycle(),
         editedAtEpochSeconds = editedAt,
+        // AND-147 — receipt counts ride the message payload (not persisted to Room; recomputed on fetch).
+        deliveredToCount = deliveredToCount ?: 0,
+        readByCount = readByCount ?: 0,
+        readByUserIds = readByUserIds ?: emptyList(),
     )
 }
 

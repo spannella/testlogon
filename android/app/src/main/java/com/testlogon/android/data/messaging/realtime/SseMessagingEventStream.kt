@@ -35,6 +35,7 @@ class SseMessagingEventStream @Inject constructor(
     private val baseClient: OkHttpClient,
     private val settingsStore: SettingsStore,
     private val parser: SseEnvelopeParser,
+    private val foregroundState: ForegroundState,
 ) : MessagingEventStream {
 
     // A dedicated client view with no read timeout so the long-lived stream is not killed at 20s.
@@ -55,6 +56,14 @@ class SseMessagingEventStream @Inject constructor(
 
         val worker = Thread {
             while (running) {
+                // AND-149 FR-6 — lifecycle gate: do not dial while backgrounded. Park (Idle) until the
+                // process returns to the foreground, so no socket/thread is held while background.
+                if (!foregroundState.isForeground.value) {
+                    trySend(MessagingStreamEvent.State(StreamConnectionState.DISCONNECTED))
+                    if (!waitForForeground { running }) break
+                    if (!running) break
+                    attempt = 0 // a clean foreground resume starts backoff from base.
+                }
                 trySend(MessagingStreamEvent.State(StreamConnectionState.CONNECTING))
                 val builder = Request.Builder()
                     .url(settingsStore.baseUrl.trimEnd('/') + "/" + STREAM_PATH)
@@ -63,14 +72,20 @@ class SseMessagingEventStream @Inject constructor(
                 // AND-143 FR-3/FR-5 — resume from the last delivered frame id on reconnect.
                 lineParser.lastEventId?.let { builder.header("Last-Event-ID", it) }
                 val call = streamClient.newCall(builder.build())
+                // AND-149 — classify the failure so a FATAL (4xx) stops dialing instead of looping.
+                var retryability = SseRetryability.RETRYABLE
                 try {
                     call.execute().use { response ->
-                        if (!response.isSuccessful) error("stream HTTP ${response.code}")
+                        if (!response.isSuccessful) {
+                            retryability = SseRetryClassifier.classify(null, response.code)
+                            error("stream HTTP ${response.code}")
+                        }
                         val body = response.body ?: error("empty stream body")
                         attempt = 0
                         trySend(MessagingStreamEvent.State(StreamConnectionState.CONNECTED))
                         lineParser.readFrames(body.source()) { frame ->
-                            if (!running) return@readFrames false
+                            // Stop reading on teardown OR when the process backgrounds (FR-6).
+                            if (!running || !foregroundState.isForeground.value) return@readFrames false
                             parser.parse(frame.event, frame.data)?.let {
                                 trySend(MessagingStreamEvent.Event(it))
                             }
@@ -78,14 +93,18 @@ class SseMessagingEventStream @Inject constructor(
                         }
                     }
                 } catch (_: IOException) {
-                    // transport drop — fall through to backoff + reconnect
+                    retryability = SseRetryClassifier.classify(IOException(), null)
                 } catch (_: IllegalStateException) {
-                    // non-2xx / empty body — fall through to backoff + reconnect
+                    // non-2xx / empty body — retryability already set above (or default RETRYABLE).
                 } finally {
                     call.cancel()
                 }
                 if (!running) break
                 trySend(MessagingStreamEvent.State(StreamConnectionState.DISCONNECTED))
+                // AND-149 — a FATAL (4xx) classification surfaces Offline and stops reconnecting until
+                // re-collected; otherwise back off (jittered, capped) and retry. 401 refresh is handled
+                // by the shared OkHttp authenticator on the next dial.
+                if (retryability == SseRetryability.FATAL) break
                 attempt++
                 val backoffMs = backoff.nextDelayMillis(attempt, serverRetryMillis = lineParser.retryMillis)
                 try {
@@ -104,8 +123,27 @@ class SseMessagingEventStream @Inject constructor(
         }
     }
 
+    /**
+     * Park the worker thread until the process returns to the foreground (or [keepGoing] turns false).
+     * Returns true if it became foreground, false if collection was cancelled while parked. A short
+     * poll keeps the helper transport-free and interrupt-cancellable; no socket is held while parked.
+     */
+    private fun waitForForeground(keepGoing: () -> Boolean): Boolean {
+        while (keepGoing() && !foregroundState.isForeground.value) {
+            try {
+                Thread.sleep(FOREGROUND_POLL_MS)
+            } catch (_: InterruptedException) {
+                return false
+            }
+        }
+        return keepGoing()
+    }
+
     private companion object {
         const val STREAM_PATH = "messaging/events/stream"
+
+        /** AND-149 — poll cadence while parked in the background (cheap; the thread is otherwise idle). */
+        const val FOREGROUND_POLL_MS = 250L
     }
 }
 

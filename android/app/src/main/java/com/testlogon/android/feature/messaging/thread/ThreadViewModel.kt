@@ -22,9 +22,13 @@ import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.ShareableVideo
 import com.testlogon.android.data.messaging.SlotVote
 import com.testlogon.android.data.messaging.StickerPick
+import com.testlogon.android.data.messaging.realtime.MessageReceipt
+import com.testlogon.android.data.messaging.realtime.MessageViewer
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
+import com.testlogon.android.data.messaging.realtime.ReceiptReducer
+import com.testlogon.android.data.messaging.realtime.ReceiptStatus
 import com.testlogon.android.data.messaging.typing.TypingRepository
 import com.testlogon.android.feature.messaging.typing.TypingConfig
 import com.testlogon.android.feature.messaging.typing.TypingInput
@@ -155,6 +159,16 @@ class ThreadViewModel @Inject constructor(
     /** AND-125 — in-session guard: don't re-POST read for an already-read thread (FR-2). */
     private var readMarked: Boolean = false
 
+    /**
+     * AND-147 — locally-known viewers per OWN message id (from live message:viewed events + the roster
+     * fetch). Drives the live "seen" marker and the roster sheet; the server fields remain authoritative
+     * on the next list fetch. The local user is never added (FR-6).
+     */
+    private val viewersByMessage = mutableMapOf<String, List<MessageViewer>>()
+
+    /** AND-147 — server message ids already reported viewed this VM lifetime (once-guard, FR-1/AC-2). */
+    private val reportedViews = mutableSetOf<String>()
+
     init {
         observeThread()
         observeRealtime()
@@ -182,11 +196,48 @@ class ThreadViewModel @Inject constructor(
                     newestMessageEpochSeconds = it.createdAtEpochSeconds
                 }
                 _state.update { prior ->
-                    prior.copy(messages = visible.map { it.toUi(self) })
+                    prior.copy(
+                        messages = visible.map { it.toUi(self) },
+                        receipts = computeReceipts(visible, self),
+                    )
                 }
             }
         }
     }
+
+    /**
+     * AND-147 — derive the receipt state for the local user's OWN confirmed messages from the payload
+     * counts (delivered_to_count / read_by_count) plus any live-known viewers. Pure mapping via the
+     * tested [ReceiptReducer]; only own, server-confirmed rows get an entry.
+     */
+    private fun computeReceipts(
+        messages: List<Message>,
+        self: String?,
+    ): Map<String, MessageReceipt> {
+        val out = mutableMapOf<String, MessageReceipt>()
+        for (m in messages) {
+            val id = m.id ?: continue
+            val isOwn = m.senderId.isEmpty() || m.senderId == self
+            if (!isOwn) continue
+            out[id] = ReceiptReducer.derive(
+                sendStatus = m.sendStatus.toReceiptStatus(),
+                deliveredToCount = m.deliveredToCount,
+                deliveredToUserIds = null,
+                readByCount = m.readByCount,
+                readByUserIds = m.readByUserIds,
+                viewers = viewersByMessage[id].orEmpty(),
+                selfUserId = self,
+            )
+        }
+        return out
+    }
+
+    private fun com.testlogon.android.data.messaging.SendStatus.toReceiptStatus(): ReceiptStatus =
+        when (this) {
+            com.testlogon.android.data.messaging.SendStatus.SENDING -> ReceiptStatus.SENDING
+            com.testlogon.android.data.messaging.SendStatus.FAILED -> ReceiptStatus.FAILED
+            com.testlogon.android.data.messaging.SendStatus.SENT -> ReceiptStatus.SENT
+        }
 
     /**
      * AND-125 — called when the thread becomes visible (ON_START). Marks the conversation read once
@@ -202,6 +253,67 @@ class ThreadViewModel @Inject constructor(
                 lastReadMessageId = newestMessageId,
                 lastReadAtEpochSeconds = newestMessageEpochSeconds,
             )
+        }
+    }
+
+    /**
+     * AND-147 — called by the thread when an inbound (NOT own) message crosses the visibility
+     * threshold. Reports the view at most once per VM lifetime ([reportedViews] guard); own/optimistic
+     * messages (no server id, or authored by me) are never reported (FR-1/FR-6 / AC-2/AC-5).
+     */
+    fun onMessageVisible(messageId: String, authoredByMe: Boolean) {
+        if (authoredByMe) return
+        if (!reportedViews.add(messageId)) return
+        viewModelScope.launch { repository.reportView(conversationId, messageId) }
+    }
+
+    /** AND-147 — open the "Seen by" roster sheet for [messageId] and fetch the (single-shot) roster. */
+    fun openViewers(messageId: String) {
+        _state.update { it.copy(viewerRoster = ViewerRosterUiState(messageId = messageId, loading = true)) }
+        viewModelScope.launch {
+            when (val r = repository.getViewers(conversationId, messageId)) {
+                is ApiResult.Success -> {
+                    viewersByMessage[messageId] = r.data
+                    _state.update {
+                        if (it.viewerRoster.messageId != messageId) it
+                        else it.copy(viewerRoster = it.viewerRoster.copy(loading = false, viewers = r.data.sortedByDescending { v -> v.viewedAtEpochSeconds }, error = null))
+                    }
+                    recomputeReceiptsNow()
+                }
+                is ApiResult.Failure -> setRosterError(messageId, r.error.message)
+                is ApiResult.NetworkError -> setRosterError(messageId, OFFLINE_MESSAGE)
+            }
+        }
+    }
+
+    fun closeViewers() {
+        _state.update { it.copy(viewerRoster = ViewerRosterUiState()) }
+    }
+
+    private fun setRosterError(messageId: String, message: String) {
+        _state.update {
+            if (it.viewerRoster.messageId != messageId) it
+            else it.copy(viewerRoster = it.viewerRoster.copy(loading = false, error = message))
+        }
+    }
+
+    /** AND-147 — re-derive receipts from the current messages + the latest viewer map. */
+    private fun recomputeReceiptsNow() {
+        val self = authStateStore.userSub.value
+        // Re-derive from the domain rows the repository last emitted (mirrored in receipts keys).
+        _state.update { st ->
+            val updated = st.receipts.mapValues { (id, prior) ->
+                ReceiptReducer.derive(
+                    sendStatus = prior.status,
+                    deliveredToCount = prior.deliveredCount,
+                    deliveredToUserIds = null,
+                    readByCount = prior.seenCount,
+                    readByUserIds = null,
+                    viewers = viewersByMessage[id].orEmpty(),
+                    selfUserId = self,
+                )
+            }
+            st.copy(receipts = updated)
         }
     }
 
@@ -1220,6 +1332,12 @@ class ThreadViewModel @Inject constructor(
     private fun observeRealtime() {
         viewModelScope.launch {
             eventStream.events().collect { streamEvent ->
+                // AND-147 FR-8 / AND-149 — on (re)connect, retry any view reports that failed offline.
+                if (streamEvent is MessagingStreamEvent.State &&
+                    streamEvent.state == com.testlogon.android.data.messaging.realtime.StreamConnectionState.CONNECTED
+                ) {
+                    viewModelScope.launch { repository.retryPendingViews() }
+                }
                 if (streamEvent is MessagingStreamEvent.Event) {
                     when (val event = streamEvent.event) {
                         is MessagingEvent.NewMessage ->
@@ -1244,10 +1362,55 @@ class ThreadViewModel @Inject constructor(
                             ) {
                                 applyTyping(event)
                             }
+                        // AND-147 — a counterpart viewed a message: fold into the live roster + seen
+                        // marker for THIS conversation, excluding self-echo (FR-3/FR-6 / AC-1).
+                        is MessagingEvent.MessageViewed ->
+                            if (event.conversationId == conversationId &&
+                                event.viewerId != authStateStore.userSub.value
+                            ) {
+                                applyViewed(event)
+                            }
                         else -> Unit
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * AND-147 — fold a live message:viewed event into the per-message viewer roster (idempotent via
+     * the tested [ReceiptReducer.applyViewed]) and re-derive the seen marker without a refetch (AC-1).
+     */
+    private fun applyViewed(event: MessagingEvent.MessageViewed) {
+        val self = authStateStore.userSub.value
+        val merged = ReceiptReducer.applyViewed(viewersByMessage[event.messageId].orEmpty(), event, self)
+        viewersByMessage[event.messageId] = merged
+        _state.update { st ->
+            val prior = st.receipts[event.messageId]
+            // Only own messages carry a receipt entry; derive SEEN live from the new roster.
+            val receipts = if (prior != null) {
+                st.receipts + (event.messageId to ReceiptReducer.derive(
+                    sendStatus = if (prior.status == ReceiptStatus.SENDING || prior.status == ReceiptStatus.FAILED) {
+                        prior.status
+                    } else {
+                        ReceiptStatus.SENT
+                    },
+                    deliveredToCount = prior.deliveredCount,
+                    deliveredToUserIds = null,
+                    readByCount = prior.seenCount,
+                    readByUserIds = null,
+                    viewers = merged,
+                    selfUserId = self,
+                ))
+            } else {
+                st.receipts
+            }
+            val roster = if (st.viewerRoster.messageId == event.messageId) {
+                st.viewerRoster.copy(viewers = merged.sortedByDescending { v -> v.viewedAtEpochSeconds })
+            } else {
+                st.viewerRoster
+            }
+            st.copy(receipts = receipts, viewerRoster = roster)
         }
     }
 

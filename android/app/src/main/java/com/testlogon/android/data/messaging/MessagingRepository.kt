@@ -152,6 +152,32 @@ interface MessagingRepository {
     /** AND-125 — reactive total of unread conversations (rows with unreadCount > 0). */
     fun observeTotalUnread(): Flow<Int>
 
+    // ---- AND-147: read receipts / views ----
+
+    /**
+     * AND-147 — report that the local user viewed [messageId] (FR-1). Idempotent: a no-op if already
+     * reported this process lifetime (in-memory once-guard). Failures are silent (queued for one retry
+     * on reconnect); never surfaced as a user error. Skips own messages at the call site.
+     */
+    suspend fun reportView(conversationId: String, messageId: String): ApiResult<Unit>
+
+    /**
+     * AND-147 — fetch the viewer roster for [messageId] (FR-5). Returns viewers sorted most-recent
+     * first with the local user excluded (FR-6). The roster is a single bounded fetch (server has no
+     * cursor); name/avatar are resolved by the caller from the participant cache.
+     */
+    suspend fun getViewers(
+        conversationId: String,
+        messageId: String,
+        limit: Int = 200,
+    ): ApiResult<List<com.testlogon.android.data.messaging.realtime.MessageViewer>>
+
+    /**
+     * AND-147 — retry any view reports that failed while offline, on SSE reconnect (FR-8 / AC-6).
+     * Idempotent and best-effort; drains the in-memory pending queue.
+     */
+    suspend fun retryPendingViews()
+
     /**
      * AND-127 — find-or-create a 1:1 DM with [peerUserId], resolving to a [Conversation]. Guards
      * against self-DM locally (no network). The returned conversation is upserted into the cache so
@@ -852,6 +878,62 @@ class MessagingRepositoryImpl @Inject constructor(
     }
 
     override fun observeTotalUnread(): Flow<Int> = conversationDao.observeUnreadConversationCount()
+
+    // ---- AND-147: read receipts / views ----
+
+    /** Once-per-process guard so a message is reported viewed at most once (FR-1 / AC-2). */
+    private val reportedViews = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Bounded in-memory queue of (conversationId, messageId) reports to retry on reconnect (FR-8). */
+    private val pendingViews = java.util.Collections.synchronizedSet(mutableSetOf<Pair<String, String>>())
+
+    override suspend fun reportView(conversationId: String, messageId: String): ApiResult<Unit> =
+        withContext(io) {
+            // Idempotent once-guard: never re-POST a view we already reported this lifetime.
+            if (!reportedViews.add(messageId)) return@withContext ApiResult.Success(Unit)
+            when (apiCall { api.reportView(conversationId, messageId, ViewMessageIn()) }) {
+                is ApiResult.Success -> { pendingViews.remove(conversationId to messageId); ApiResult.Success(Unit) }
+                is ApiResult.Failure, is ApiResult.NetworkError -> {
+                    // Silent to the user; allow a retry on the next reconnect (drop the once-guard so the
+                    // retry can re-attempt, then re-arm it on success via the queue).
+                    reportedViews.remove(messageId)
+                    if (pendingViews.size < MAX_PENDING_VIEWS) pendingViews.add(conversationId to messageId)
+                    ApiResult.Success(Unit) // never surface a receipt error to the UI (FR-8)
+                }
+            }
+        }
+
+    override suspend fun getViewers(
+        conversationId: String,
+        messageId: String,
+        limit: Int,
+    ): ApiResult<List<com.testlogon.android.data.messaging.realtime.MessageViewer>> = withContext(io) {
+        when (val r = apiCall { api.getViews(conversationId, messageId, limit) }) {
+            is ApiResult.Success -> {
+                val self = authStateStore.userSub.value
+                val viewers = r.data.map {
+                    com.testlogon.android.data.messaging.realtime.MessageViewer(
+                        userId = it.userId,
+                        viewedAtEpochSeconds = it.lastViewedAt,
+                        viewCount = it.viewCount,
+                    )
+                }
+                ApiResult.Success(
+                    com.testlogon.android.data.messaging.realtime.ReceiptReducer.fromRoster(viewers, self),
+                )
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun retryPendingViews() = withContext(io) {
+        val snapshot = synchronized(pendingViews) { pendingViews.toList() }
+        snapshot.forEach { (cid, mid) ->
+            // reportView re-arms the once-guard + clears the queue entry on success.
+            reportView(cid, mid)
+        }
+    }
 
     override suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation> = withContext(io) {
         // FR-5: self-DM guard — short-circuit locally with no network request.
@@ -1825,6 +1907,9 @@ class MessagingRepositoryImpl @Inject constructor(
 
         /** Default page size for thread history fetches (mirrors the thread VM PAGE_SIZE). */
         const val PAGE_SIZE = 30
+
+        /** AND-147 — cap on the in-memory failed-view retry queue so a flaky host can't grow it unbounded. */
+        const val MAX_PENDING_VIEWS = 256
     }
 }
 

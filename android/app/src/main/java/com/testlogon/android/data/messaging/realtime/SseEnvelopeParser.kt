@@ -53,6 +53,15 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
                 online = data["online"] as? Boolean ?: false,
                 lastSeenAtEpochSeconds = (data["last_seen_at"] as? Number)?.toLong(),
             )
+            // AND-147 — read receipt: { conversation_id, message_id, viewer_id, viewed_at } (epoch
+            // seconds). The web client (useMessagingStream.ts) reads message_id + viewer_id and
+            // invalidates; we model it as a typed event for the live "seen" reflection.
+            "message:viewed" -> MessagingEvent.MessageViewed(
+                conversationId = conversationId ?: return null,
+                messageId = data["message_id"] as? String ?: return null,
+                viewerId = data["viewer_id"] as? String ?: return null,
+                viewedAtEpochSeconds = (data["viewed_at"] as? Number)?.toLong() ?: 0L,
+            )
             // AND-146 — typing start/stop: { conversation_id, user_id, is_typing, updated_at }. The web
             // client fails open to is_typing=true (expiry clears it) and defaults a missing updated_at.
             "typing:update" -> MessagingEvent.Typing(
