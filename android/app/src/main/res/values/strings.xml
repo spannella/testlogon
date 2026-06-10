@@ -953,6 +953,7 @@
     <string name="checkout_title">Order review</string>
     <string name="checkout_total_label">Total</string>
     <string name="checkout_place_order">Place order</string>
+    <string name="checkout_choose_payment_method">Choose payment method</string>
     <string name="checkout_line_qty">Qty %1$d</string>
     <string name="checkout_empty_title">Nothing to check out</string>
     <string name="checkout_empty_body">Your cart is empty.</string>
@@ -1039,4 +1040,31 @@
     <string name="add_card_unavailable_body">Payments aren\'t configured yet, so cards can\'t be added on this device.</string>
     <string name="add_card_button">Add card</string>
     <string name="add_card_not_configured">Card entry unavailable — payments not configured.</string>
+
+    <!-- AND-227/228/229: redirect checkout (hosted checkout / PayPal / CCBill via Custom Tabs) -->
+    <string name="redirect_checkout_title">Checkout</string>
+    <string name="redirect_checkout_choose_method">Choose how to pay %1$s</string>
+    <string name="redirect_checkout_pay_card">Pay %1$s by card</string>
+    <string name="redirect_checkout_pay_paypal">Pay with PayPal</string>
+    <string name="redirect_checkout_pay_ccbill">Pay with CCBill</string>
+    <string name="redirect_checkout_success_title">Payment complete</string>
+    <string name="redirect_checkout_success_body">Your purchase is confirmed.</string>
+    <string name="redirect_checkout_pending_title">Payment processing</string>
+    <string name="redirect_checkout_pending_body">We\'ll confirm shortly. Check Purchases for the final status.</string>
+    <string name="redirect_checkout_failed_title">Payment didn\'t complete</string>
+    <!-- AND-031 FLAG: payments not configured (stub authorizer; never creates a live session) -->
+    <string name="payments_unavailable_title">Payments unavailable</string>
+    <string name="payments_unavailable_body">Payments aren\'t configured yet, so checkout can\'t be completed on this device.</string>
+
+    <!-- AND-230: US bank micro-deposit verification -->
+    <string name="verify_microdeposits_title">Verify bank account</string>
+    <string name="verify_microdeposits_instructions">Enter the two small deposit amounts (in cents) that appeared on your bank statement.</string>
+    <string name="verify_microdeposits_eta_hint">Deposits can take 1–2 business days to appear.</string>
+    <string name="verify_microdeposits_first_label">First amount</string>
+    <string name="verify_microdeposits_second_label">Second amount</string>
+    <string name="verify_microdeposits_first_cd">First deposit amount, cents</string>
+    <string name="verify_microdeposits_second_cd">Second deposit amount, cents</string>
+    <string name="verify_microdeposits_submit">Verify</string>
+    <string name="verify_microdeposits_success_title">Bank account verified</string>
+    <string name="verify_microdeposits_success_body">Your bank account is now ready to use.</string>
 </resources>

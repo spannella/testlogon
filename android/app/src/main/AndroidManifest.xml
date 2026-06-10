@@ -237,6 +237,42 @@
                     android:scheme="testlogon"
                     android:host="c" />
             </intent-filter>
+
+            <!-- AND-231: payment redirect return App Link on the production host (HTTPS, auto-verified).
+                 Providers (PayPal/CCBill/hosted checkout) 302 the browser back here after authorization.
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/app/billing/return" />
+            </intent-filter>
+
+            <!-- AND-231: custom-scheme payment-return fallback for the plaintext dev host that cannot
+                 serve assetlinks (NOT auto-verified). testlogon://payments/return?provider=...&status=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="payments" />
+            </intent-filter>
+
+            <!-- AND-230: US-bank micro-deposit verification deep link (from a "verify your bank account"
+                 email/notification). com.testlogon.android://billing/us-bank/verify?sid={setup_intent_id} -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="com.testlogon.android"
+                    android:host="billing"
+                    android:pathPrefix="/us-bank/verify" />
+            </intent-filter>
         </activity>
 
         <!-- AND-132: FileProvider for handing downloaded message attachments to external viewers via

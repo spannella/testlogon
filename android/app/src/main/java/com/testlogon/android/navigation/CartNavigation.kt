@@ -60,7 +60,15 @@ fun NavGraphBuilder.orderReviewDestination(navController: NavHostController) {
             navArgument(OrderReviewDest.ARG_CURRENCY) { type = NavType.StringType },
         ),
     ) {
-        OrderReviewRoute(onBack = { navController.popBackStack() })
+        OrderReviewRoute(
+            onBack = { navController.popBackStack() },
+            // AND-227/228/229: open the redirect provider-selection screen for the session total.
+            onChoosePaymentMethod = { totalCents, currency ->
+                navController.navigate(RedirectCheckoutDest.route(totalCents, currency)) {
+                    launchSingleTop = true
+                }
+            },
+        )
     }
 }
 

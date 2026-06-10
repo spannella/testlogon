@@ -20,6 +20,12 @@ import androidx.navigation.NavHostController
 import com.testlogon.android.core.network.AppThemeMode
 import com.testlogon.android.core.network.ThemePreferencesStore
 import com.testlogon.android.core.ui.theme.TestLogonTheme
+import com.testlogon.android.data.payments.PaymentReturnDispatcher
+import com.testlogon.android.data.payments.PaymentReturnHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import com.testlogon.android.feature.health.HealthBannerHost
 import com.testlogon.android.navigation.AppNavHost
 import com.testlogon.android.navigation.deeplink.DeepLinkParser
@@ -45,12 +51,26 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var themePreferencesStore: ThemePreferencesStore
 
+    // AND-231: the provider-agnostic payment redirect/return handler + dispatcher. The handler dedupes,
+    // correlates against the in-flight intent, and (via onParsed) hands the parsed return to the
+    // provider sub-flows through the dispatcher.
+    @Inject
+    lateinit var paymentReturnHandler: PaymentReturnHandler
+
+    @Inject
+    lateinit var paymentReturnDispatcher: PaymentReturnDispatcher
+
+    private val returnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // AND-108: parse a cold-start notification deep link before the NavHost composes; route it
         // once the NavController becomes available (onNavControllerReady below).
         handleNotificationDeepLink(intent)
+        // AND-231: a cold-start payment return (provider -> browser -> app). Dispatched to the provider
+        // sub-flow; generic terminal routing is handled there once the graph is ready.
+        handlePaymentReturn(intent)
         setContent {
             // AND-081: resolve the persisted appearance preference into TestLogonTheme inputs so the
             // whole app (incl. system bars) re-themes immediately when the user changes it.
@@ -96,9 +116,30 @@ class MainActivity : ComponentActivity() {
         // AND-108: a warm-start notification tap arrives here (singleTask). Route immediately.
         handleNotificationDeepLink(intent)
         routePendingNotificationDeepLink()
+        // AND-231: a warm payment return arrives here when the Custom Tab bounces back into the task.
+        handlePaymentReturn(intent)
         if (intent.data != null) {
             navController?.handleDeepLink(intent)
         }
+    }
+
+    /**
+     * AND-231 — feeds a VIEW intent's data URL to the [PaymentReturnHandler]. The handler returns null
+     * for non-billing URLs (so other deep-link handlers run) and for duplicate deliveries (idempotency);
+     * for a recognized billing return it emits the parsed result to the [PaymentReturnDispatcher] so the
+     * originating provider flow (PayPal/CCBill/hosted checkout) reacts. android.net.Uri parsing happens
+     * only here — the pure parser logic uses java.net.URI.
+     */
+    private fun handlePaymentReturn(intent: Intent?) {
+        val url = intent?.data?.toString() ?: return
+        returnScope.launch {
+            paymentReturnHandler.handle(url) { parsed -> paymentReturnDispatcher.emit(parsed) }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        returnScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
     /** AND-108: parse + buffer a notification deep link from [intent], marking it consumed (idempotent). */

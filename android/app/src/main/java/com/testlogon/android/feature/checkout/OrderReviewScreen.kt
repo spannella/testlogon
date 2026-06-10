@@ -54,6 +54,7 @@ object OrderReviewTestTags {
     const val LIST = "order_review_list"
     const val TOTAL = "order_review_total"
     const val PLACE_ORDER = "order_review_place_order"
+    const val CHOOSE_METHOD = "order_review_choose_method"
     const val EMPTY = "order_review_empty"
     const val ERROR = "order_review_error"
 
@@ -68,6 +69,9 @@ object OrderReviewTestTags {
 fun OrderReviewRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    // AND-227/228/229: provider-selection entry point. "Place order" still routes through the
+    // BillingAuthorizer stub (AND-031); this callback opens the redirect checkout (hosted/PayPal/CCBill).
+    onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit = { _, _ -> },
     viewModel: CheckoutSessionViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -89,6 +93,7 @@ fun OrderReviewRoute(
         placing = placing,
         snackbarHostState = snackbarHostState,
         onPlaceOrder = viewModel::placeOrder,
+        onChoosePaymentMethod = onChoosePaymentMethod,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -104,6 +109,7 @@ fun OrderReviewScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit = { _, _ -> },
 ) {
     Scaffold(
         modifier = modifier.testTag(OrderReviewTestTags.SCREEN),
@@ -123,7 +129,12 @@ fun OrderReviewScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             if (state is OrderReviewUiState.Ready) {
-                PlaceOrderBar(session = state.session, placing = placing, onPlaceOrder = onPlaceOrder)
+                PlaceOrderBar(
+                    session = state.session,
+                    placing = placing,
+                    onPlaceOrder = onPlaceOrder,
+                    onChoosePaymentMethod = onChoosePaymentMethod,
+                )
             }
         },
     ) { padding ->
@@ -188,7 +199,12 @@ private fun OrderReviewLine(line: CheckoutLineItem) {
 }
 
 @Composable
-private fun PlaceOrderBar(session: CheckoutSession, placing: Boolean, onPlaceOrder: () -> Unit) {
+private fun PlaceOrderBar(
+    session: CheckoutSession,
+    placing: Boolean,
+    onPlaceOrder: () -> Unit,
+    onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit,
+) {
     Surface(tonalElevation = 3.dp) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -213,6 +229,14 @@ private fun PlaceOrderBar(session: CheckoutSession, placing: Boolean, onPlaceOrd
                     Spacer(Modifier.width(8.dp))
                 }
                 Text(stringResource(R.string.checkout_place_order))
+            }
+            // AND-227/228/229: provider-selection entry — choose a redirect method (hosted/PayPal/CCBill).
+            androidx.compose.material3.OutlinedButton(
+                onClick = { onChoosePaymentMethod(session.totalCents, session.currency) },
+                enabled = !placing,
+                modifier = Modifier.fillMaxWidth().testTag(OrderReviewTestTags.CHOOSE_METHOD),
+            ) {
+                Text(stringResource(R.string.checkout_choose_payment_method))
             }
         }
     }
