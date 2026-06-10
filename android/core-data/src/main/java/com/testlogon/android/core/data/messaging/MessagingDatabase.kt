@@ -30,8 +30,9 @@ import javax.inject.Singleton
         MeetingPollEntity::class,
         MeetingPollSlotEntity::class,
         DraftEntity::class,
+        ParticipantEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -41,6 +42,7 @@ abstract class MessagingDatabase : RoomDatabase() {
     abstract fun customEmojiDao(): CustomEmojiDao
     abstract fun meetingPollDao(): MeetingPollDao
     abstract fun draftDao(): DraftDao
+    abstract fun participantDao(): ParticipantDao
 
     companion object {
         /**
@@ -209,6 +211,22 @@ abstract class MessagingDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * AND-158 — creates the `group_participant` roster cache table. Additive (a new table only),
+         * so v6 rows migrate without data loss. Composite PK (conversationId, userId).
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS group_participant (" +
+                        "conversationId TEXT NOT NULL, userId TEXT NOT NULL, " +
+                        "displayName TEXT, avatarUrl TEXT, role TEXT NOT NULL, " +
+                        "joinedAtEpochSeconds INTEGER NOT NULL, " +
+                        "PRIMARY KEY(conversationId, userId))",
+                )
+            }
+        }
     }
 }
 
@@ -230,6 +248,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_3_4,
             MessagingDatabase.MIGRATION_4_5,
             MessagingDatabase.MIGRATION_5_6,
+            MessagingDatabase.MIGRATION_6_7,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
@@ -252,4 +271,7 @@ object MessagingDatabaseModule {
 
     @Provides
     fun provideDraftDao(db: MessagingDatabase): DraftDao = db.draftDao()
+
+    @Provides
+    fun provideParticipantDao(db: MessagingDatabase): ParticipantDao = db.participantDao()
 }

@@ -38,6 +38,41 @@ interface ConversationDao {
     suspend fun clear()
 }
 
+/**
+ * AND-158 — DAO for the cached group roster. The roster is the single source of truth for the
+ * participants UI: [observe] drives a live Flow; mutations write through (optimistic + reconcile) so
+ * add/remove/role-change reflect immediately and survive process death.
+ */
+@Dao
+interface ParticipantDao {
+
+    /** Live roster for a conversation, admins first then by display name (stable order). */
+    @Query(
+        "SELECT * FROM group_participant WHERE conversationId = :id " +
+            "ORDER BY role ASC, displayName ASC, userId ASC",
+    )
+    fun observe(id: String): Flow<List<ParticipantEntity>>
+
+    @Upsert
+    suspend fun upsertAll(rows: List<ParticipantEntity>)
+
+    @Query("DELETE FROM group_participant WHERE conversationId = :id AND userId = :userId")
+    suspend fun delete(id: String, userId: String)
+
+    @Query("UPDATE group_participant SET role = :role WHERE conversationId = :id AND userId = :userId")
+    suspend fun updateRole(id: String, userId: String, role: String)
+
+    @Query("DELETE FROM group_participant WHERE conversationId = :id")
+    suspend fun clearForConversation(id: String)
+
+    /** Replace the entire roster for one conversation in a single transaction (refresh path). */
+    @Transaction
+    suspend fun replaceRoster(id: String, rows: List<ParticipantEntity>) {
+        clearForConversation(id)
+        upsertAll(rows)
+    }
+}
+
 @Dao
 interface MessageDao {
 

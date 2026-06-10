@@ -1,5 +1,8 @@
 package com.testlogon.android.data.messaging
 
+import com.testlogon.android.data.messaging.group.GroupApi
+import com.testlogon.android.data.messaging.group.GroupRepository
+import com.testlogon.android.data.messaging.group.GroupRepositoryImpl
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -17,6 +20,12 @@ object MessagingApiModule {
     @Singleton
     fun provideMessagingApi(retrofit: Retrofit): MessagingApi =
         retrofit.create(MessagingApi::class.java)
+
+    /** AND-157..159 — provides the group [GroupApi] on the shared Retrofit. */
+    @Provides
+    @Singleton
+    fun provideGroupApi(retrofit: Retrofit): GroupApi =
+        retrofit.create(GroupApi::class.java)
 }
 
 /** AND-120..124 — binds the messaging repository to its implementation. */
@@ -27,6 +36,11 @@ abstract class MessagingDataModule {
     @Binds
     @Singleton
     abstract fun bindMessagingRepository(impl: MessagingRepositoryImpl): MessagingRepository
+
+    /** AND-157..159 — binds the group repository (create / participants / settings). */
+    @Binds
+    @Singleton
+    abstract fun bindGroupRepository(impl: GroupRepositoryImpl): GroupRepository
 
     /** AND-130 — binds the runtime image processor (faked in unit tests). */
     @Binds

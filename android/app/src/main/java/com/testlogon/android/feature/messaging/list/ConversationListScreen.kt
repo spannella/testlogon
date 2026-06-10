@@ -15,10 +15,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +66,9 @@ object ConversationListTestTags {
 
     /** AND-152 — global message-search entry icon. */
     const val SEARCH = "conv_list_search"
+
+    /** AND-157 — new-group FAB. */
+    const val NEW_GROUP = "conv_list_new_group"
 }
 
 /** AND-121 — route-level conversation list, reached from the Messages tab / More hub. */
@@ -73,6 +78,7 @@ fun ConversationListRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenSearch: () -> Unit = {},
+    onNewGroup: () -> Unit = {},
     viewModel: ConversationListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -93,6 +99,7 @@ fun ConversationListRoute(
         onRetry = viewModel::retry,
         onOpenConversation = onOpenConversation,
         onOpenSearch = onOpenSearch,
+        onNewGroup = onNewGroup,
         onBack = onBack,
         modifier = modifier,
     )
@@ -109,9 +116,21 @@ fun ConversationListScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenSearch: () -> Unit = {},
+    onNewGroup: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(ConversationListTestTags.SCREEN),
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = onNewGroup,
+                modifier = Modifier.testTag(ConversationListTestTags.NEW_GROUP),
+            ) {
+                Icon(
+                    Icons.Filled.GroupAdd,
+                    contentDescription = stringResource(R.string.group_new_group_cd),
+                )
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.conv_list_title)) },

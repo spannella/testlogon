@@ -467,4 +467,47 @@
         <item quantity="one">Seen by %1$d person</item>
         <item quantity="other">Seen by %1$d people</item>
     </plurals>
+
+    <!-- AND-157 group create -->
+    <string name="group_new_group_cd">New group</string>
+    <string name="group_create_title">New group</string>
+    <string name="group_create_action_cd">Create group</string>
+    <string name="group_create_name_label">Group name</string>
+    <string name="group_create_search_label">Search people</string>
+    <string name="group_create_row_cd">%1$s</string>
+    <string name="group_create_discard_title">Discard group?</string>
+    <string name="group_create_discard_body">Your name and selected members will be lost.</string>
+    <string name="group_create_discard_confirm">Discard</string>
+
+    <!-- AND-158 group details / participants -->
+    <string name="group_details_title">Members</string>
+    <string name="group_details_cd">Group details</string>
+    <string name="group_settings_cd">Group settings</string>
+    <string name="group_add_people_cd">Add people</string>
+    <string name="group_member_actions_cd">Manage %1$s</string>
+    <string name="group_remove_participant_cd">Remove %1$s</string>
+    <string name="group_role_admin">Admin</string>
+    <string name="group_role_member">Member</string>
+    <string name="group_make_admin">Make admin</string>
+    <string name="group_make_member">Remove admin</string>
+    <string name="group_remove_member">Remove from group</string>
+
+    <!-- AND-159 group settings -->
+    <string name="group_settings_title">Group settings</string>
+    <string name="group_settings_not_found">This group no longer exists.</string>
+    <string name="group_settings_error">Couldn\'t load group settings.</string>
+    <string name="group_mute_label">Mute notifications</string>
+    <string name="group_mute_cd">Mute notifications</string>
+    <string name="group_mute_duration_title">Mute for…</string>
+    <string name="group_mute_8h">8 hours</string>
+    <string name="group_mute_1w">1 week</string>
+    <string name="group_mute_forever">Until I turn it back on</string>
+    <string name="group_leave_action">Leave group</string>
+    <string name="group_leave_confirm_title">Leave group?</string>
+    <string name="group_leave_confirm_body">Leave %1$s? You won\'t receive new messages.</string>
+    <string name="group_leave_confirm_action">Leave</string>
+    <string name="group_left_terminal">You left this group.</string>
+    <string name="group_invite_prompt">You\'ve been invited to this group.</string>
+    <string name="group_accept_invite">Accept invitation</string>
+    <string name="group_decline_invite">Decline</string>
 </resources>

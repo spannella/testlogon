@@ -47,6 +47,11 @@ data class ParticipantDto(
     @Json(name = "display_name") val displayName: String? = null,
     @Json(name = "profile_photo_url") val profilePhotoUrl: String? = null,
     @Json(name = "last_read_at") val lastReadAt: Long = 0L,
+    // AND-158 / AND-159 — additive membership fields (epoch SECONDS; 0 = unset). `joined_at` orders
+    // the roster; `left_at > 0` means the user has left; `muted_until` mirrors per-participant mute.
+    @Json(name = "joined_at") val joinedAt: Long = 0L,
+    @Json(name = "left_at") val leftAt: Long = 0L,
+    @Json(name = "muted_until") val mutedUntil: Long = 0L,
 )
 
 /**
@@ -168,6 +173,8 @@ data class ConversationDto(
     @Json(name = "last_message_preview") val lastMessagePreview: String? = null,
     @Json(name = "unread_count") val unreadCount: Int = 0,
     @Json(name = "last_read_at") val lastReadAt: Long = 0L,
+    // AND-159 — conversation-level mute (epoch SECONDS; default 0 = not muted, NOT nullable per schema).
+    @Json(name = "muted_until") val mutedUntil: Long = 0L,
 )
 
 /** POST messages body = SendTextMessageIn. Field is `text` (1..4000); NO client_id on the wire. */

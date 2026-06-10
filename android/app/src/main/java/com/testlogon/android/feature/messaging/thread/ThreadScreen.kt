@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
@@ -113,6 +114,9 @@ object ThreadTestTags {
     const val TOMBSTONE = "thread_tombstone"
     const val OPEN_PINS = "thread_open_pins"
     const val DISCARD_DRAFT = "thread_discard_draft"
+
+    /** AND-158/159 — open group details/settings. */
+    const val OPEN_GROUP_DETAILS = "thread_open_group_details"
 }
 
 /** AND-123 — route-level thread, reached from the conversation list. */
@@ -120,6 +124,7 @@ object ThreadTestTags {
 fun ThreadRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -236,6 +241,7 @@ fun ThreadRoute(
         voicePlayback = voicePlayback,
         typingUsers = typingUsers,
         onBack = onBack,
+        onOpenGroupDetails = onOpenGroupDetails,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::onSend,
@@ -327,6 +333,8 @@ fun ThreadScreen(
     // AND-146 — remote typers shown above the composer.
     typingUsers: List<com.testlogon.android.feature.messaging.typing.TypingUiUser> = emptyList(),
     onBack: () -> Unit,
+    // AND-158/159 — open the group details/settings surface from the thread top bar.
+    onOpenGroupDetails: () -> Unit = {},
     onRetry: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -416,6 +424,16 @@ fun ThreadScreen(
                         Icon(
                             Icons.Filled.Search,
                             contentDescription = stringResource(R.string.search_in_conversation),
+                        )
+                    }
+                    // AND-158/159 — open group details (participants / settings).
+                    IconButton(
+                        onClick = onOpenGroupDetails,
+                        modifier = Modifier.testTag(ThreadTestTags.OPEN_GROUP_DETAILS),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Info,
+                            contentDescription = stringResource(R.string.group_details_cd),
                         )
                     }
                     // AND-140 — open the pinned-messages sheet.

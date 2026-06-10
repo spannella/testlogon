@@ -21,6 +21,26 @@ data class ConversationEntity(
     val unreadCount: Int,
 )
 
+/**
+ * AND-158 — a cached group participant (roster row). Composite PK (conversationId, userId) so a user
+ * appears at most once per group; the roster is replaced transactionally on each refresh. Persisted so
+ * the roster survives process death and renders before a network round-trip ("persist + reflect").
+ */
+@Entity(
+    tableName = "group_participant",
+    primaryKeys = ["conversationId", "userId"],
+)
+data class ParticipantEntity(
+    val conversationId: String,
+    val userId: String,
+    val displayName: String?,
+    val avatarUrl: String?,
+    /** "ADMIN" | "MEMBER" | "UNKNOWN" (mirrors GroupRole.name). */
+    val role: String,
+    /** Epoch SECONDS the member joined; orders the roster. */
+    val joinedAtEpochSeconds: Long,
+)
+
 @Entity(tableName = "messages")
 data class MessageEntity(
     @PrimaryKey val messageId: String,
