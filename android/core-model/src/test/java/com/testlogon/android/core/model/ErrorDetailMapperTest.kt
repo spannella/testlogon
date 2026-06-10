@@ -1,6 +1,7 @@
 package com.testlogon.android.core.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class ErrorDetailMapperTest {
@@ -58,6 +59,39 @@ class ErrorDetailMapperTest {
         assertEquals(
             ErrorDetailMapper.codeMessages.getValue("helpdesk_claim_required"),
             ErrorDetailMapper.normalize(mapOf("code" to "helpdesk_claim_required")),
+        )
+    }
+
+    // AND-165 — gap-fill: the other two real helpdesk codes (only helpdesk_claim_required was covered).
+    @Test
+    fun `helpdesk assignee_required and claim_not_available map to distinct curated copy`() {
+        assertEquals(
+            ErrorDetailMapper.codeMessages.getValue("helpdesk_assignee_required"),
+            ErrorDetailMapper.normalize(mapOf("code" to "helpdesk_assignee_required")),
+        )
+        assertEquals(
+            ErrorDetailMapper.codeMessages.getValue("helpdesk_claim_not_available"),
+            ErrorDetailMapper.normalize(mapOf("code" to "helpdesk_claim_not_available")),
+        )
+        // Distinct messages (would fail if two codes collapsed to the same copy).
+        assertNotEquals(
+            ErrorDetailMapper.normalize(mapOf("code" to "helpdesk_assignee_required")),
+            ErrorDetailMapper.normalize(mapOf("code" to "helpdesk_claim_not_available")),
+        )
+    }
+
+    // AND-165 — gap-fill: malformed/atypical `detail` shapes degrade to fallback without throwing.
+    @Test
+    fun `malformed numeric detail falls back without crashing`() {
+        assertEquals(ErrorDetailMapper.GENERIC, ErrorDetailMapper.normalize(123))
+        assertEquals(ErrorDetailMapper.GENERIC, ErrorDetailMapper.normalize(true))
+    }
+
+    @Test
+    fun `validation array with no msg falls back`() {
+        assertEquals(
+            ErrorDetailMapper.GENERIC,
+            ErrorDetailMapper.normalize(listOf(mapOf("loc" to listOf("body")))),
         )
     }
 

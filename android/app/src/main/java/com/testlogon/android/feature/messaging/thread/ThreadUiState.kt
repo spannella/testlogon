@@ -102,8 +102,24 @@ sealed interface ThreadAction {
     data class Delete(val messageId: String) : ThreadAction
     data class Revoke(val messageId: String) : ThreadAction
     data class SetHidden(val messageId: String, val hidden: Boolean) : ThreadAction
+
+    /** AND-163 — open the report sheet for a (non-own) message. */
+    data class Report(val messageId: String) : ThreadAction
     data object DismissSheets : ThreadAction
 }
+
+/**
+ * AND-164 — the closed set of client-initiated destructive/mutating message actions, gated centrally so
+ * a hold suppresses them all. (Reactions/report are not destructive and are not gated by a hold.)
+ */
+enum class MessageAction { PIN, EDIT, DELETE, REVOKE, HIDE }
+
+/**
+ * AND-164 — actions allowed for a message: none when [ThreadMessageUi.onHold], the full set otherwise.
+ * Pure function of UI state so the Compose layer stays dumb and the server is never relied upon to reject.
+ */
+fun ThreadMessageUi.allowedActions(): Set<MessageAction> =
+    if (onHold) emptySet() else MessageAction.entries.toSet()
 
 /** AND-140 — auxiliary state for the action sheets + edit mode + transient errors. */
 data class MessageActionsUiState(
@@ -252,6 +268,8 @@ data class ThreadMessageUi(
     val lifecycle: com.testlogon.android.data.messaging.MessageLifecycle =
         com.testlogon.android.data.messaging.MessageLifecycle.ACTIVE,
     val isEdited: Boolean = false,
+    /** AND-164 — true when this message is under an active legal hold (suppresses destructive actions). */
+    val onHold: Boolean = false,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING

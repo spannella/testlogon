@@ -62,6 +62,8 @@ object MessageActionTestTags {
     const val ACTION_DELETE = "msg_action_delete"
     const val ACTION_REVOKE = "msg_action_revoke"
     const val ACTION_HIDE = "msg_action_hide"
+    const val ACTION_REPORT = "msg_action_report"
+    const val HOLD_NOTICE = "msg_action_hold_notice"
 }
 
 /** AND-140 — curated quick-reaction emoji row (matches common chat clients). */
@@ -79,6 +81,8 @@ fun MessageActionsSheet(
     onTip: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // AND-164 — destructive/mutating actions are suppressed entirely when the message is on legal hold.
+    val allowed = message.allowedActions()
     ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.ACTIONS_SHEET)) {
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
             // Quick-reaction emoji row (always available unless the message is a tombstone).
@@ -93,19 +97,32 @@ fun MessageActionsSheet(
                 Divider()
             }
 
-            if (message.isPinned) {
-                ActionRow(
-                    label = stringResource(R.string.msg_action_unpin),
-                    tag = MessageActionTestTags.ACTION_PIN,
-                ) { onAction(ThreadAction.SetPinned(message.key, false)); onDismiss() }
-            } else if (!message.isTombstone) {
-                ActionRow(
-                    label = stringResource(R.string.msg_action_pin),
-                    tag = MessageActionTestTags.ACTION_PIN,
-                ) { onAction(ThreadAction.SetPinned(message.key, true)); onDismiss() }
+            // AND-164 — explain WHY destructive controls are gone (accessible supporting text).
+            if (message.onHold && !message.isTombstone) {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.action_unavailable_legal_hold)) },
+                    modifier = Modifier.fillMaxWidth().testTag(MessageActionTestTags.HOLD_NOTICE)
+                        .semantics { stateDescription = "disabled" },
+                )
             }
 
-            if (message.isOwn && !message.isTombstone && message.media is com.testlogon.android.data.messaging.MessageMedia.None) {
+            if (MessageAction.PIN in allowed) {
+                if (message.isPinned) {
+                    ActionRow(
+                        label = stringResource(R.string.msg_action_unpin),
+                        tag = MessageActionTestTags.ACTION_PIN,
+                    ) { onAction(ThreadAction.SetPinned(message.key, false)); onDismiss() }
+                } else if (!message.isTombstone) {
+                    ActionRow(
+                        label = stringResource(R.string.msg_action_pin),
+                        tag = MessageActionTestTags.ACTION_PIN,
+                    ) { onAction(ThreadAction.SetPinned(message.key, true)); onDismiss() }
+                }
+            }
+
+            if (MessageAction.EDIT in allowed && message.isOwn && !message.isTombstone &&
+                message.media is com.testlogon.android.data.messaging.MessageMedia.None
+            ) {
                 ActionRow(
                     label = stringResource(R.string.msg_action_edit),
                     tag = MessageActionTestTags.ACTION_EDIT,
@@ -125,22 +142,34 @@ fun MessageActionsSheet(
             }
 
             if (!message.isOwn && !message.isTombstone) {
-                ActionRow(
-                    label = stringResource(R.string.msg_action_hide),
-                    tag = MessageActionTestTags.ACTION_HIDE,
-                ) { onAction(ThreadAction.SetHidden(message.key, true)); onDismiss() }
+                if (MessageAction.HIDE in allowed) {
+                    ActionRow(
+                        label = stringResource(R.string.msg_action_hide),
+                        tag = MessageActionTestTags.ACTION_HIDE,
+                    ) { onAction(ThreadAction.SetHidden(message.key, true)); onDismiss() }
+                }
                 ActionRow(label = stringResource(R.string.msg_action_tip)) { onTip(message.key); onDismiss() }
+                // AND-163 — report a non-own message (reporting own messages is hidden in UI). Not gated
+                // by a hold: reporting is non-destructive.
+                ActionRow(
+                    label = stringResource(R.string.msg_action_report),
+                    tag = MessageActionTestTags.ACTION_REPORT,
+                ) { onAction(ThreadAction.Report(message.key)); onDismiss() }
             }
 
             if (message.isOwn && !message.isTombstone) {
-                ActionRow(
-                    label = stringResource(R.string.msg_action_delete),
-                    tag = MessageActionTestTags.ACTION_DELETE,
-                ) { onAction(ThreadAction.Delete(message.key)); onDismiss() }
-                ActionRow(
-                    label = stringResource(R.string.msg_action_revoke),
-                    tag = MessageActionTestTags.ACTION_REVOKE,
-                ) { onAction(ThreadAction.Revoke(message.key)); onDismiss() }
+                if (MessageAction.DELETE in allowed) {
+                    ActionRow(
+                        label = stringResource(R.string.msg_action_delete),
+                        tag = MessageActionTestTags.ACTION_DELETE,
+                    ) { onAction(ThreadAction.Delete(message.key)); onDismiss() }
+                }
+                if (MessageAction.REVOKE in allowed) {
+                    ActionRow(
+                        label = stringResource(R.string.msg_action_revoke),
+                        tag = MessageActionTestTags.ACTION_REVOKE,
+                    ) { onAction(ThreadAction.Revoke(message.key)); onDismiss() }
+                }
             }
         }
     }

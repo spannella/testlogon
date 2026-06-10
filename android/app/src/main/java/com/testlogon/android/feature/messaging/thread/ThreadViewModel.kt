@@ -1105,6 +1105,9 @@ class ThreadViewModel @Inject constructor(
             is ThreadAction.Delete -> deleteMessage(action.messageId)
             is ThreadAction.Revoke -> revokeMessage(action.messageId)
             is ThreadAction.SetHidden -> setHidden(action.messageId, action.hidden)
+            // AND-163 — the report flow is owned by the separate ReportViewModel/ReportSheet hosted by
+            // the screen (like Delete/Revoke confirms in MessageActionsHost), so the thread VM ignores it.
+            is ThreadAction.Report -> Unit
             ThreadAction.DismissSheets -> updateActions {
                 it.copy(
                     pinsSheetVisible = false,

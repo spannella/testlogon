@@ -578,4 +578,31 @@
     <string name="helpdesk_claim_err_not_found">Conversation no longer available</string>
     <string name="helpdesk_claim_err_network">Couldn\'t claim. Check your connection and try again.</string>
     <string name="helpdesk_claim_err_unknown">Couldn\'t claim this conversation</string>
+
+    <!-- AND-163 — report message -->
+    <string name="msg_action_report">Report</string>
+    <string name="report_title">Report message</string>
+    <string name="report_statement_hint">Tell us what\'s wrong</string>
+    <string name="report_counter">%1$d / %2$d</string>
+    <string name="report_submit">Submit report</string>
+    <string name="report_confirmation">Report received - thanks, our team will review it</string>
+    <string name="report_reported_badge">Reported</string>
+    <string name="report_reason_sexual">Sexual content</string>
+    <string name="report_reason_extortion">Extortion</string>
+    <string name="report_reason_criminal">Criminal activity</string>
+    <string name="report_reason_spam">Spam</string>
+    <string name="report_reason_racist">Hate / racism</string>
+
+    <!-- AND-164 — legal holds / compliance (read-only) -->
+    <string name="action_close">Close</string>
+    <string name="legal_hold_badge">On legal hold</string>
+    <string name="legal_hold_badge_short">Hold</string>
+    <string name="legal_hold_banner">This conversation is under legal hold</string>
+    <string name="legal_hold_detail_title">Legal hold</string>
+    <string name="legal_hold_generic_explanation">This content is preserved for a compliance or legal obligation and cannot be deleted or edited.</string>
+    <string name="legal_hold_reason">Reason: %1$s</string>
+    <string name="legal_hold_case_id">Case: %1$s</string>
+    <string name="legal_hold_status">Status: %1$s</string>
+    <string name="legal_hold_created_at">Created: %1$s</string>
+    <string name="action_unavailable_legal_hold">Unavailable: on legal hold</string>
 </resources>

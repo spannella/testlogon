@@ -126,8 +126,12 @@ fun ThreadRoute(
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
+    reportViewModel: com.testlogon.android.feature.messaging.report.ReportViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // AND-163 — report sheet state (owned by the separate ReportViewModel/ReportSheet).
+    val reportState by reportViewModel.uiState.collectAsStateWithLifecycle()
+    val reportConfirmation = stringResource(R.string.report_confirmation)
     // AND-146 — remote typers in this conversation.
     val typingUsers by viewModel.typingUsers.collectAsStateWithLifecycle()
     // AND-151 — in-conversation search state.
@@ -300,7 +304,14 @@ fun ThreadRoute(
         onTipNoteChange = viewModel::onTipNoteChange,
         onTipConfirm = viewModel::onTipConfirm,
         onTipDismiss = viewModel::onTipDismiss,
-        onAction = viewModel::onAction,
+        onAction = { action ->
+            // AND-163 — intercept Report to open the dedicated report sheet; everything else to the VM.
+            if (action is ThreadAction.Report) {
+                reportViewModel.open(state.conversationId, action.messageId)
+            } else {
+                viewModel.onAction(action)
+            }
+        },
         onJumpToPinned = viewModel::onJumpToPinned,
         onDiscardDraft = viewModel::onDiscardDraft,
         searchActive = searchUi.active,
@@ -321,6 +332,23 @@ fun ThreadRoute(
     // AND-130 — full-screen viewer overlay.
     imageViewer.url?.let { url ->
         FullScreenImageViewer(url = url, onClose = { imageViewer.close() })
+    }
+
+    // AND-163 — report sheet + one-shot confirmation snackbar.
+    com.testlogon.android.feature.messaging.report.ReportSheet(
+        state = reportState,
+        onReason = reportViewModel::onReasonSelected,
+        onStatement = reportViewModel::onStatementChanged,
+        onSubmit = reportViewModel::submit,
+        onDismiss = reportViewModel::dismiss,
+    )
+    LaunchedEffect(Unit) {
+        reportViewModel.events.collect { event ->
+            when (event) {
+                com.testlogon.android.feature.messaging.report.ReportEvent.Submitted ->
+                    snackbarHostState.showSnackbar(reportConfirmation)
+            }
+        }
     }
 }
 
