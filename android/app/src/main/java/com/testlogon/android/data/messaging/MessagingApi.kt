@@ -542,4 +542,26 @@ interface MessagingApi {
         @Query("after_ts") afterTs: Long? = null,
         @Query("limit") limit: Int = 200,
     ): List<MessageDto>
+
+    /**
+     * AND-153 — contact (people) search.
+     *
+     * Verified against OpenAPI op `search_contact_messaging_contacts_search_get`
+     * (openapi.index.txt line 311): path `GET /messaging/contacts/search`, params `q` (required,
+     * 1..64), `limit` (default 10, min 1, max 50). No `cursor` param. The 200 response is a BARE JSON
+     * array of Contact (`components.schemas.Contact` = `{user_id, display_name}` only — no username,
+     * avatar_url, or presence). The web client wraps this as `searchUsers` returning
+     * `UserSearchResult[]` (src/api/endpoints/messaging.ts:527, src/api/types.ts:1393). A blank `q`
+     * would 422 server-side, so the repository never issues one. Idempotent GET.
+     */
+    @GET("messaging/contacts/search")
+    suspend fun searchContacts(
+        @Query("q") query: String,
+        @Query("limit") limit: Int = CONTACTS_SEARCH_LIMIT,
+    ): List<ContactDto>
+
+    companion object {
+        /** AND-153 — contacts search page size; server default 10, max 50. Client choice within bounds. */
+        const val CONTACTS_SEARCH_LIMIT = 20
+    }
 }

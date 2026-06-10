@@ -192,3 +192,16 @@ data class MarkReadReq(
 data class FindOrCreateDmReq(
     @Json(name = "user_id") val userId: String,
 )
+
+/**
+ * AND-153 — one contact (people-search) result row.
+ *
+ * Verified against OpenAPI components.schemas.Contact (required `user_id`, `display_name` — no other
+ * fields) and reference src/api/types.ts:1393 UserSearchResult ({ user_id, display_name }). The
+ * endpoint returns a bare JSON array of these.
+ */
+@JsonClass(generateAdapter = true)
+data class ContactDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "display_name") val displayName: String,
+)

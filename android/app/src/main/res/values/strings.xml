@@ -259,6 +259,14 @@
     <string name="dm_message_cd">Start a direct message</string>
     <string name="dm_start_failed">Couldn\'t start the conversation. Try again.</string>
 
+    <!-- AND-153/154/155: contacts (people search + start conversation) -->
+    <string name="contacts_title">New message</string>
+    <string name="contacts_search_hint">Search contacts</string>
+    <string name="contacts_idle_prompt">Search for contacts</string>
+    <string name="contacts_empty_query">No contacts match \"%1$s\"</string>
+    <string name="contacts_clear_cd">Clear search</string>
+    <string name="contacts_row_cd">Message %1$s</string>
+
     <!-- AND-130: image messages -->
     <string name="thread_attach_image">Attach image</string>
     <string name="thread_image_sending">Sending image…</string>

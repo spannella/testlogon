@@ -209,6 +209,14 @@ interface MessagingRepository {
     suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation>
 
     /**
+     * AND-153 — search contacts (people) by display-name token. Returns a single bounded list (the
+     * endpoint has no pagination). A blank/whitespace-only query short-circuits to an empty list with
+     * NO network request (a blank `q` would 422 server-side). The query is trimmed and capped at 64
+     * chars to honour the server `q` maxLength. Idempotent GET.
+     */
+    suspend fun searchContacts(query: String): ApiResult<List<Contact>>
+
+    /**
      * AND-130 — enqueue an optimistic image outbox row (renders a local-thumbnail bubble with
      * progress immediately).
      */
@@ -1009,6 +1017,19 @@ class MessagingRepositoryImpl @Inject constructor(
             }
             is ApiResult.Failure -> result
             is ApiResult.NetworkError -> result
+        }
+    }
+
+    // ---- AND-153: contact search ----
+
+    override suspend fun searchContacts(query: String): ApiResult<List<Contact>> = withContext(io) {
+        // A blank/whitespace-only query is the idle state — never hit the network (blank `q` -> 422).
+        val trimmed = query.trim().take(CONTACTS_QUERY_MAX)
+        if (trimmed.isEmpty()) return@withContext ApiResult.Success(emptyList())
+        when (val call = apiCall { api.searchContacts(query = trimmed) }) {
+            is ApiResult.Success -> ApiResult.Success(call.data.map { it.toDomain() })
+            is ApiResult.Failure -> call
+            is ApiResult.NetworkError -> call
         }
     }
 
@@ -1970,6 +1991,9 @@ class MessagingRepositoryImpl @Inject constructor(
 
         /** AND-151/152 — server `q` constraint is maxLength 200; cap client-side to avoid a 422. */
         const val SEARCH_QUERY_MAX = 200
+
+        /** AND-153 — contacts `q` constraint is maxLength 64; cap client-side to avoid a 422. */
+        const val CONTACTS_QUERY_MAX = 64
     }
 }
 

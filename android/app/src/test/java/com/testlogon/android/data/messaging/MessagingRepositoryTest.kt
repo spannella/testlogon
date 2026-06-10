@@ -431,6 +431,17 @@ class MessagingRepositoryTest {
             searchThrows?.let { throw it }
             return searchAllResult
         }
+
+        // ---- AND-153: contact search ----
+        var searchContactsResult: List<ContactDto> = emptyList()
+        var searchContactsCalls = mutableListOf<Pair<String, Int>>()
+        var searchContactsThrows: Throwable? = null
+
+        override suspend fun searchContacts(query: String, limit: Int): List<ContactDto> {
+            searchContactsCalls += query to limit
+            searchContactsThrows?.let { throw it }
+            return searchContactsResult
+        }
     }
 
     data class SearchAllCall(
@@ -1158,6 +1169,63 @@ class MessagingRepositoryTest {
     fun searchAll_networkError_mapsToNetworkError() = runTest {
         api.searchThrows = IOException("offline")
         val result = repo().searchAllMessages("deploy")
+        assertTrue(result is ApiResult.NetworkError)
+    }
+
+    // ---- AND-153: contact search ----
+
+    @Test
+    fun searchContacts_mapsArrayToDomain_passesTrimmedQueryAndLimit() = runTest {
+        api.searchContactsResult = listOf(
+            ContactDto(userId = "u_1", displayName = "Ada Lovelace"),
+            ContactDto(userId = "u_2", displayName = "Alice Nguyen"),
+        )
+        val result = repo().searchContacts("  ali  ")
+
+        assertTrue(result is ApiResult.Success)
+        val contacts = (result as ApiResult.Success).data
+        assertEquals(listOf("u_1", "u_2"), contacts.map { it.id })
+        assertEquals(listOf("Ada Lovelace", "Alice Nguyen"), contacts.map { it.displayName })
+        val (q, limit) = api.searchContactsCalls.single()
+        assertEquals("ali", q) // trimmed before the request
+        assertEquals(MessagingApi.CONTACTS_SEARCH_LIMIT, limit)
+    }
+
+    @Test
+    fun searchContacts_blankQuery_returnsEmpty_noRequest() = runTest {
+        val result = repo().searchContacts("   ")
+        assertTrue(result is ApiResult.Success)
+        assertTrue((result as ApiResult.Success).data.isEmpty())
+        assertTrue(api.searchContactsCalls.isEmpty()) // never hits the network (blank q -> 422)
+    }
+
+    @Test
+    fun searchContacts_emptyArray_returnsEmptyList() = runTest {
+        api.searchContactsResult = emptyList()
+        val result = repo().searchContacts("zzz")
+        assertTrue(result is ApiResult.Success)
+        assertTrue((result as ApiResult.Success).data.isEmpty())
+        assertEquals(1, api.searchContactsCalls.size)
+    }
+
+    @Test
+    fun searchContacts_capsQueryAt64Chars() = runTest {
+        api.searchContactsResult = emptyList()
+        repo().searchContacts("a".repeat(100))
+        assertEquals(64, api.searchContactsCalls.single().first.length)
+    }
+
+    @Test
+    fun searchContacts_httpError_mapsToFailure() = runTest {
+        api.searchContactsThrows = http(422)
+        val result = repo().searchContacts("ada")
+        assertTrue(result is ApiResult.Failure)
+    }
+
+    @Test
+    fun searchContacts_networkError_mapsToNetworkError() = runTest {
+        api.searchContactsThrows = IOException("offline")
+        val result = repo().searchContacts("ada")
         assertTrue(result is ApiResult.NetworkError)
     }
 }

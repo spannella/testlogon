@@ -320,6 +320,22 @@ class FakeMessagingRepository : MessagingRepository {
         return findOrCreateDmResult
     }
 
+    // ---- AND-153: contact search ----
+
+    /** Recorded searchContacts queries (raw, as passed by the caller). */
+    var searchContactsCalls = mutableListOf<String>()
+    var searchContactsResult: ApiResult<List<com.testlogon.android.data.messaging.Contact>> =
+        ApiResult.Success(emptyList())
+
+    override suspend fun searchContacts(
+        query: String,
+    ): ApiResult<List<com.testlogon.android.data.messaging.Contact>> {
+        // Mirror the real repo: a blank/whitespace query never reaches the network (returns Idle/empty).
+        if (query.trim().isEmpty()) return ApiResult.Success(emptyList())
+        searchContactsCalls += query
+        return searchContactsResult
+    }
+
     // ---- AND-130 / AND-131 ----
 
     /** Recorded image sends: (conversationId, clientId, localUri). */

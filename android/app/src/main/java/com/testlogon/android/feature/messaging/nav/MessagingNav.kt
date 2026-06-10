@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.messaging.contacts.ContactsRoute
 import com.testlogon.android.feature.messaging.dm.StartDmRoute
 import com.testlogon.android.feature.messaging.list.ConversationListRoute
 import com.testlogon.android.feature.messaging.search.GlobalSearchRoute
@@ -28,6 +29,9 @@ object MessagingRoutes {
 
     /** AND-152 — cross-conversation message search screen. */
     const val SEARCH = "messaging/search"
+
+    /** AND-153/AND-154 — contacts (people-search) screen; tapping a contact opens its DM thread. */
+    const val CONTACTS = "messaging/contacts"
 
     /** AND-127 — start-DM entry: resolves a peer user id to a conversation, then opens the thread. */
     const val ARG_PEER_USER_ID = "peerUserId"
@@ -77,6 +81,16 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
             onOpenResult = { conversationId, messageId ->
                 navController.navigate(MessagingRoutes.thread(conversationId, focusMessageId = messageId)) {
                     launchSingleTop = true
+                }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    composable(MessagingRoutes.CONTACTS) {
+        ContactsRoute(
+            onOpenThread = { conversationId ->
+                navController.navigate(MessagingRoutes.thread(conversationId)) {
+                    launchSingleTop = true // FR-5: don't stack duplicate thread destinations
                 }
             },
             onBack = { navController.popBackStack() },

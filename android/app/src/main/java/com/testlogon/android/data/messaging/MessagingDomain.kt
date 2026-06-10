@@ -290,6 +290,20 @@ data class Conversation(
     val isUnread: Boolean get() = unreadCount > 0
 }
 
+/**
+ * AND-153 — a contact (people-search) result. Mapped from [ContactDto]; carries only what the
+ * `/messaging/contacts/search` endpoint returns ([id] from `user_id`, [displayName] from
+ * `display_name`). There is no username / avatar URL / presence on the wire, so the UI renders an
+ * initials-only avatar.
+ */
+data class Contact(
+    val id: String,
+    val displayName: String,
+)
+
+/** AND-153 — wire -> domain for a contact search row. Pure / JVM-testable. */
+internal fun ContactDto.toDomain(): Contact = Contact(id = userId, displayName = displayName)
+
 // ---- Mappers ----
 
 internal fun MessageDto.toDomain(
