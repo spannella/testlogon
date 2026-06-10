@@ -289,6 +289,18 @@
     <string name="video_share_out">Share</string>
     <string name="video_thumbnail_cd">Video thumbnail</string>
 
+    <!-- AND-166/167/168: reusable video player UI -->
+    <string name="player_play">Play</string>
+    <string name="player_pause">Pause</string>
+    <string name="player_rewind_10">Rewind 10 seconds</string>
+    <string name="player_forward_10">Forward 10 seconds</string>
+    <string name="player_fullscreen">Enter fullscreen</string>
+    <string name="player_exit_fullscreen">Exit fullscreen</string>
+    <string name="player_retry">Retry</string>
+    <string name="player_live_badge">LIVE</string>
+    <string name="player_error_connection">Connection problem</string>
+    <string name="player_error_unplayable">This video can\'t be played</string>
+
     <!-- AND-132: file messages -->
     <string name="thread_attach_file">Attach file</string>
     <string name="thread_file_sending">Sending file…</string>

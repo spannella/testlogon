@@ -159,10 +159,13 @@ fun InlineVideoPlayer(
     }
 }
 
-/** AND-131 — appends the short-lived playback token to the HLS manifest (mirrors VideoShareCard). */
-internal fun MessageMedia.VideoShare.tokenizedManifestUrl(): String? {
-    val base = hlsManifestUrl ?: return null
-    val token = playbackToken ?: return base
-    val sep = if (base.contains("?")) "&" else "?"
-    return "$base${sep}token=$token"
-}
+/**
+ * AND-131 — appends the short-lived playback token to the HLS manifest (mirrors VideoShareCard).
+ * Delegates to the shared, JVM-tested [com.testlogon.android.feature.player.MediaSourceResolver.tokenizedManifestUrl]
+ * (AND-167) so the token-append rule lives in one place.
+ */
+internal fun MessageMedia.VideoShare.tokenizedManifestUrl(): String? =
+    com.testlogon.android.feature.player.MediaSourceResolver.tokenizedManifestUrl(
+        manifestUrl = hlsManifestUrl,
+        playbackToken = playbackToken,
+    )

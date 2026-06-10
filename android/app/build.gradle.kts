@@ -134,6 +134,9 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
+    // AND-167: OkHttp-backed Media3 DataSource so HLS manifest/segment loads reuse the shared
+    // core-network OkHttpClient (cookie jar + ~20s timeouts) instead of DefaultHttpDataSource.
+    implementation(libs.media3.datasource.okhttp)
 
     // AND-085/AND-089: Paging 3 for the notification center list + unread badge.
     implementation(libs.paging.runtime)

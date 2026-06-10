@@ -105,6 +105,8 @@ coil-gif = { group = "io.coil-kt", name = "coil-gif", version.ref = "coil" }
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
+# AND-167 — OkHttp-backed Media3 DataSource so HLS manifest/segment loads reuse the shared client.
+media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
 paging-runtime = { group = "androidx.paging", name = "paging-runtime", version.ref = "paging" }
 paging-compose = { group = "androidx.paging", name = "paging-compose", version.ref = "paging" }
 paging-testing = { group = "androidx.paging", name = "paging-testing", version.ref = "paging" }
@@ -131,7 +133,7 @@ detekt-compose-rules = { group = "io.nlopez.compose.rules", name = "detekt", ver
 network = ["retrofit", "retrofit-moshi", "okhttp", "okhttp-logging", "moshi"]
 compose = ["compose-ui", "compose-ui-graphics", "compose-ui-tooling-preview", "compose-material3", "compose-material-icons-extended"]
 room = ["room-runtime", "room-ktx"]
-media3 = ["media3-exoplayer", "media3-exoplayer-hls", "media3-ui"]
+media3 = ["media3-exoplayer", "media3-exoplayer-hls", "media3-ui", "media3-datasource-okhttp"]
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
