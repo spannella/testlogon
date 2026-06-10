@@ -34,11 +34,13 @@ import com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory
 import com.testlogon.android.feature.messaging.voice.Waveform
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -48,6 +50,9 @@ import javax.inject.Inject
 /** One-shot effects for the thread screen. */
 sealed interface ThreadEvent {
     data object ScrollToBottom : ThreadEvent
+
+    /** AND-140 — scroll the thread to a specific message (jump-to-pinned). */
+    data class ScrollToMessage(val messageKey: String) : ThreadEvent
 
     /** AND-130 — open the full-screen image viewer for [url]. */
     data class OpenImageViewer(val url: String) : ThreadEvent
@@ -77,6 +82,7 @@ class ThreadViewModel @Inject constructor(
     private val recorderFactory: VoiceRecorderFactory,
     private val playerFactory: VoicePlayerFactory,
     private val billing: BillingAuthorizer,
+    private val draftRepository: com.testlogon.android.data.messaging.DraftRepository,
 ) : ViewModel() {
 
     /**
@@ -126,6 +132,8 @@ class ThreadViewModel @Inject constructor(
         observeThread()
         observeRealtime()
         loadInitial()
+        restoreDraft()
+        observeDraftSaver()
     }
 
     private fun observeThread() {
@@ -133,13 +141,15 @@ class ThreadViewModel @Inject constructor(
             val currentUser = authStateStore.userSub.value
             repository.observeThread(conversationId).collect { messages ->
                 val self = authStateStore.userSub.value ?: currentUser
+                // AND-140 — hidden-for-me messages are dropped from the rendered thread.
+                val visible = messages.filterNot { it.isHiddenLocal }
                 // Track the newest CONFIRMED (server id present) message as the read marker (AND-125).
-                messages.lastOrNull { it.id != null }?.let {
+                visible.lastOrNull { it.id != null }?.let {
                     newestMessageId = it.id
                     newestMessageEpochSeconds = it.createdAtEpochSeconds
                 }
                 _state.update { prior ->
-                    prior.copy(messages = messages.map { it.toUi(self) })
+                    prior.copy(messages = visible.map { it.toUi(self) })
                 }
             }
         }
@@ -216,6 +226,8 @@ class ThreadViewModel @Inject constructor(
                 ),
             )
         }
+        // AND-141 — persist the composer draft (debounced; empty -> delete).
+        draftSaver.tryEmit(text)
     }
 
     fun onSend() {
@@ -223,12 +235,17 @@ class ThreadViewModel @Inject constructor(
         val body = composer.draft.trim()
         if (body.isEmpty() || composer.overLimit) return
         val clientId = UUID.randomUUID().toString()
-        // Clear the draft immediately.
-        _state.update { it.copy(composer = ComposerState()) }
+        // Clear the composer + the persisted draft immediately (AND-141 FR-4).
+        _state.update { it.copy(composer = ComposerState(), hasDraft = false, draftSyncState = DraftSyncState.Idle) }
+        // Cancel any pending debounced save from the last keystroke (coalesces to a clear), so a
+        // queued save can't re-create the draft after we've sent + cleared it.
+        draftSaver.tryEmit("")
         viewModelScope.launch {
             repository.enqueueOptimistic(conversationId, clientId, body, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            repository.sendOutbox(conversationId, clientId, body)
+            val result = repository.sendOutbox(conversationId, clientId, body)
+            // AND-141 — clear the draft on a successful send.
+            if (result is ApiResult.Success) draftRepository.clearDraft(conversationId)
         }
     }
 
@@ -889,6 +906,227 @@ class ThreadViewModel @Inject constructor(
         _state.update { it.copy(transientMessage = null) }
     }
 
+    // ---- AND-140: per-message actions ----
+
+    /** Dispatches a long-press action intent on viewModelScope. */
+    fun onAction(action: ThreadAction) {
+        when (action) {
+            is ThreadAction.ToggleReaction -> toggleReaction(action.messageId, action.emoji)
+            is ThreadAction.OpenReactionDetails -> openReactionDetails(action.messageId)
+            is ThreadAction.SetPinned -> setPinned(action.messageId, action.pinned)
+            ThreadAction.OpenPinsList -> openPinsList()
+            is ThreadAction.StartEdit -> startEdit(action.messageId)
+            is ThreadAction.SubmitEdit -> submitEdit(action.messageId, action.body)
+            ThreadAction.CancelEdit -> updateActions { it.copy(editing = null) }
+            is ThreadAction.OpenEditHistory -> openEditHistory(action.messageId)
+            is ThreadAction.Delete -> deleteMessage(action.messageId)
+            is ThreadAction.Revoke -> revokeMessage(action.messageId)
+            is ThreadAction.SetHidden -> setHidden(action.messageId, action.hidden)
+            ThreadAction.DismissSheets -> updateActions {
+                it.copy(
+                    pinsSheetVisible = false,
+                    reactionDetailsVisible = false,
+                    editHistoryVisible = false,
+                )
+            }
+        }
+    }
+
+    private fun toggleReaction(messageId: String, emoji: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageId } ?: return
+        val add = msg.reactions.none { it.emoji == emoji && it.reactedByMe }
+        viewModelScope.launch {
+            val result = repository.toggleReaction(conversationId, messageId, emoji, add)
+            if (result is ApiResult.Failure) {
+                updateActions { it.copy(transientError = result.error.message) }
+            } else if (result is ApiResult.NetworkError) {
+                updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
+            }
+        }
+    }
+
+    private fun openReactionDetails(messageId: String) {
+        updateActions { it.copy(reactionDetails = Async.Loading, reactionDetailsVisible = true) }
+        viewModelScope.launch {
+            when (val r = repository.reactionDetails(conversationId, messageId)) {
+                is ApiResult.Success -> updateActions { it.copy(reactionDetails = Async.Success(r.data)) }
+                is ApiResult.Failure -> updateActions { it.copy(reactionDetails = Async.Error(r.error.message)) }
+                is ApiResult.NetworkError -> updateActions { it.copy(reactionDetails = Async.Error(OFFLINE_MESSAGE)) }
+            }
+        }
+    }
+
+    private fun setPinned(messageId: String, pinned: Boolean) {
+        viewModelScope.launch {
+            when (val r = repository.setPinned(conversationId, messageId, pinned)) {
+                is ApiResult.Failure -> updateActions { it.copy(transientError = r.error.message) }
+                is ApiResult.NetworkError -> updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun openPinsList() {
+        updateActions { it.copy(pinned = Async.Loading, pinsSheetVisible = true) }
+        viewModelScope.launch {
+            val self = authStateStore.userSub.value
+            when (val r = repository.pinnedMessages(conversationId)) {
+                is ApiResult.Success ->
+                    updateActions { it.copy(pinned = Async.Success(r.data.map { m -> m.toUi(self) })) }
+                is ApiResult.Failure -> updateActions { it.copy(pinned = Async.Error(r.error.message)) }
+                is ApiResult.NetworkError -> updateActions { it.copy(pinned = Async.Error(OFFLINE_MESSAGE)) }
+            }
+        }
+    }
+
+    /** AND-140 — jump the thread to a pinned message (if loaded). */
+    fun onJumpToPinned(messageKey: String) {
+        updateActions { it.copy(pinsSheetVisible = false) }
+        _events.trySend(ThreadEvent.ScrollToMessage(messageKey))
+    }
+
+    private fun startEdit(messageId: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageId } ?: return
+        if (!msg.isOwn || msg.isTombstone) return
+        updateActions { it.copy(editing = EditTarget(messageId, msg.text)) }
+    }
+
+    private fun submitEdit(messageId: String, body: String) {
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) return
+        updateActions { it.copy(editing = null) }
+        viewModelScope.launch {
+            when (val r = repository.editMessage(conversationId, messageId, trimmed)) {
+                is ApiResult.Failure -> updateActions { it.copy(transientError = r.error.message) }
+                is ApiResult.NetworkError -> updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun openEditHistory(messageId: String) {
+        updateActions { it.copy(editHistory = Async.Loading, editHistoryVisible = true) }
+        viewModelScope.launch {
+            when (val r = repository.editHistory(conversationId, messageId)) {
+                is ApiResult.Success -> updateActions { it.copy(editHistory = Async.Success(r.data)) }
+                is ApiResult.Failure -> updateActions { it.copy(editHistory = Async.Error(r.error.message)) }
+                is ApiResult.NetworkError -> updateActions { it.copy(editHistory = Async.Error(OFFLINE_MESSAGE)) }
+            }
+        }
+    }
+
+    private fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            when (val r = repository.deleteMessage(conversationId, messageId)) {
+                is ApiResult.Failure -> updateActions { it.copy(transientError = r.error.message) }
+                is ApiResult.NetworkError -> updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun revokeMessage(messageId: String) {
+        viewModelScope.launch {
+            when (val r = repository.revokeMessage(conversationId, messageId)) {
+                is ApiResult.Failure -> updateActions {
+                    // 403 = outside the revoke window: surface a precise message.
+                    val message = if (r.error.status == HTTP_FORBIDDEN) "Revoke window expired" else r.error.message
+                    it.copy(transientError = message)
+                }
+                is ApiResult.NetworkError -> updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun setHidden(messageId: String, hidden: Boolean) {
+        viewModelScope.launch {
+            when (val r = repository.setHidden(conversationId, messageId, hidden)) {
+                is ApiResult.Failure -> updateActions { it.copy(transientError = r.error.message) }
+                is ApiResult.NetworkError -> updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
+                else -> Unit
+            }
+        }
+    }
+
+    fun onActionErrorShown() {
+        updateActions { it.copy(transientError = null) }
+    }
+
+    private inline fun updateActions(transform: (MessageActionsUiState) -> MessageActionsUiState) {
+        _state.update { it.copy(actions = transform(it.actions)) }
+    }
+
+    // ---- AND-141: drafts ----
+
+    private val draftSaver = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 64)
+
+    private fun restoreDraft() {
+        viewModelScope.launch {
+            when (val r = draftRepository.loadAndReconcile(conversationId)) {
+                is ApiResult.Success -> {
+                    val draft = r.data
+                    if (draft != null && draft.text.isNotBlank()) {
+                        _state.update {
+                            it.copy(
+                                composer = it.composer.copy(
+                                    draft = draft.text,
+                                    charCount = draft.text.length,
+                                    overLimit = draft.text.length > ComposerState.MAX_LENGTH,
+                                ),
+                                hasDraft = true,
+                                draftSyncState = if (draft.pendingSync) DraftSyncState.SavedLocal else DraftSyncState.Synced,
+                            )
+                        }
+                    }
+                }
+                else -> Unit
+            }
+            // Push any pending-sync rows on open.
+            draftRepository.flushPending()
+        }
+    }
+
+    private fun observeDraftSaver() {
+        viewModelScope.launch {
+            draftSaver
+                .debounceCompat(DRAFT_DEBOUNCE_MS)
+                .collect { text -> persistDraft(text) }
+        }
+    }
+
+    private suspend fun persistDraft(text: String) {
+        if (text.isBlank()) {
+            draftRepository.clearDraft(conversationId)
+            _state.update { it.copy(hasDraft = false, draftSyncState = DraftSyncState.Idle) }
+        } else {
+            _state.update { it.copy(draftSyncState = DraftSyncState.Saving) }
+            val r = draftRepository.saveDraft(conversationId, text)
+            _state.update {
+                it.copy(
+                    hasDraft = true,
+                    draftSyncState = when {
+                        r is ApiResult.Success && !r.data.pendingSync -> DraftSyncState.Synced
+                        else -> DraftSyncState.SavedLocal
+                    },
+                )
+            }
+        }
+    }
+
+    /** AND-141 — flush the buffered draft edit immediately (ON_STOP / leaving the screen). */
+    fun flushDraft() {
+        val text = _state.value.composer.draft
+        viewModelScope.launch { persistDraft(text) }
+    }
+
+    /** AND-141 — discard the draft (composer overflow action). */
+    fun onDiscardDraft() {
+        _state.update { it.copy(composer = ComposerState(), hasDraft = false, draftSyncState = DraftSyncState.Idle) }
+        draftSaver.tryEmit("") // cancel any pending debounced save
+        viewModelScope.launch { draftRepository.clearDraft(conversationId) }
+    }
+
     override fun onCleared() {
         super.onCleared()
         recorderOrNull?.release()
@@ -909,14 +1147,22 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             eventStream.events().collect { streamEvent ->
                 if (streamEvent is MessagingStreamEvent.Event) {
-                    val event = streamEvent.event
-                    if (event is MessagingEvent.NewMessage && event.conversationId == conversationId) {
-                        repository.applyInboundMessage(event)
-                        _events.trySend(ThreadEvent.ScrollToBottom)
-                        // AND-125 FR-2: a new inbound message re-arms the read trigger; since the
-                        // thread is open and visible, mark it read again straight away.
-                        readMarked = false
-                        onThreadVisible()
+                    when (val event = streamEvent.event) {
+                        is MessagingEvent.NewMessage ->
+                            if (event.conversationId == conversationId) {
+                                repository.applyInboundMessage(event)
+                                _events.trySend(ThreadEvent.ScrollToBottom)
+                                // AND-125 FR-2: a new inbound message re-arms the read trigger; since the
+                                // thread is open and visible, mark it read again straight away.
+                                readMarked = false
+                                onThreadVisible()
+                            }
+                        // AND-140 — reaction/edit/revoke on an existing message: reconcile for live reflection.
+                        is MessagingEvent.MessageMutated ->
+                            if (event.conversationId == conversationId) {
+                                repository.applyMessageMutation(event)
+                            }
+                        else -> Unit
                     }
                 }
             }
@@ -939,8 +1185,26 @@ class ThreadViewModel @Inject constructor(
 
         /** AND-139 — tip currency (USD per the SendTipIn default; future: per-conversation currency). */
         private const val TIP_CURRENCY = "USD"
+
+        /** AND-140 — HTTP 403 (revoke window expired / not allowed). */
+        private const val HTTP_FORBIDDEN = 403
+
+        /** AND-141 — debounce window for composer draft saves (ms). */
+        private const val DRAFT_DEBOUNCE_MS = 800L
     }
 }
+
+/**
+ * AND-141 — debounce a Flow without relying on the FlowPreview `debounce` API: emit the latest value
+ * only after [millis] of quiescence. Built on [transformLatest], which cancels the pending delay on a
+ * new upstream value (the coalescing behaviour we want for composer keystrokes). JVM-testable.
+ */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+internal fun <T> Flow<T>.debounceCompat(millis: Long): Flow<T> =
+    transformLatest { value ->
+        delay(millis)
+        emit(value)
+    }
 
 internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMessageUi(
     key = id ?: clientId,
@@ -950,4 +1214,8 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = sendStatus,
     media = media,
+    reactions = reactions,
+    isPinned = isPinned,
+    lifecycle = lifecycle,
+    isEdited = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.EDITED || editedAtEpochSeconds != null,
 )

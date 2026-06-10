@@ -63,7 +63,14 @@ data class MessageDto(
     val text: String? = null,
     val preview: String? = null,
     @Json(name = "edited_at") val editedAt: Long? = null,
+    @Json(name = "edited_by") val editedBy: String? = null,
     @Json(name = "read_by_count") val readByCount: Int? = null,
+    // AND-140 — reaction summary on the message itself: emoji -> count, plus the emojis I reacted with.
+    @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
+    @Json(name = "my_reactions") val myReactions: List<String>? = null,
+    // AND-140 — revoke ("unsend") markers (epoch-INTEGER seconds). edited_at above doubles as the edit marker.
+    @Json(name = "revoked_at") val revokedAt: Long? = null,
+    @Json(name = "revoked_by") val revokedBy: String? = null,
     /** AND-130 — present on kind="image". The display url is `url` else `bucket`/`key`-derived. */
     val image: MessageImageDto? = null,
     /** AND-131 — present on kind="video_share". Carries the HLS manifest + short-lived token. */

@@ -377,4 +377,38 @@
     <string name="tip_custom_amount">Custom amount</string>
     <string name="tip_note">Note (optional)</string>
     <string name="tip_send">Send tip</string>
+
+    <!-- AND-140 — message actions (reactions / pins / edits / delete / revoke / hide) -->
+    <string name="action_cancel">Cancel</string>
+    <string name="msg_action_pin">Pin</string>
+    <string name="msg_action_unpin">Unpin</string>
+    <string name="msg_action_edit">Edit</string>
+    <string name="msg_action_edit_history">Edit history</string>
+    <string name="msg_action_delete">Delete</string>
+    <string name="msg_action_revoke">Unsend for everyone</string>
+    <string name="msg_action_hide">Hide</string>
+    <string name="msg_action_unhide">Unhide</string>
+    <string name="msg_action_tip">Send a tip</string>
+    <string name="msg_action_who_reacted">See who reacted</string>
+    <string name="msg_reaction_you_reacted">You reacted</string>
+    <string name="msg_reaction_chip_cd">%1$s reacted by %2$d people</string>
+    <string name="msg_pinned_indicator">Pinned</string>
+    <string name="msg_edited_label">edited</string>
+    <string name="msg_pins_title">Pinned messages</string>
+    <string name="msg_pins_empty">No pinned messages</string>
+    <string name="msg_pins_media">Attachment</string>
+    <string name="msg_edit_history_title">Edit history</string>
+    <string name="msg_edit_history_empty">No earlier versions</string>
+    <string name="msg_edit_title">Edit message</string>
+    <string name="msg_edit_save">Save</string>
+    <string name="msg_delete_title">Delete message?</string>
+    <string name="msg_delete_body">This removes the message for you. Others can still see it.</string>
+    <string name="msg_revoke_title">Unsend for everyone?</string>
+    <string name="msg_revoke_body">This retracts the message for all participants.</string>
+    <string name="msg_tombstone_deleted">You deleted this message</string>
+    <string name="msg_tombstone_revoked">This message was deleted</string>
+
+    <!-- AND-141 — drafts -->
+    <string name="draft_discard">Discard draft</string>
+    <string name="draft_restored">Draft restored</string>
 </resources>

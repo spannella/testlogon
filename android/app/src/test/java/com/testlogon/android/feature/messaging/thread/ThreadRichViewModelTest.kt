@@ -47,6 +47,7 @@ class ThreadRichViewModelTest {
             com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
             com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
             billing,
+            com.testlogon.android.feature.messaging.FakeDraftRepository(),
         ).also { it.clock = { 1000L } }
     }
 

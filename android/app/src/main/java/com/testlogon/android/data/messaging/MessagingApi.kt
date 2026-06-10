@@ -2,8 +2,10 @@ package com.testlogon.android.data.messaging
 
 import okhttp3.ResponseBody
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Headers
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -374,4 +376,104 @@ interface MessagingApi {
 
     /** AND-139 — re-fetch a single conversation's recent messages to reveal unlocked content. */
     // (re-uses listMessages; no separate per-message GET exists.)
+
+    // ---- AND-140: reactions / pins / edits / delete / revoke / hide ----
+
+    /**
+     * AND-140 — toggle a reaction. ONE endpoint: body = ReactIn{emoji, action:"add"|"remove"}.
+     * Response is an empty 200 (NOT a Message); the client reconciles by re-fetching the message.
+     * Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/reactions")
+    suspend fun react(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: ReactIn,
+    )
+
+    /** AND-140 — reactor details grouped by emoji. Idempotent GET. */
+    @GET("messaging/conversations/{id}/messages/{messageId}/reactions/details")
+    suspend fun reactionDetails(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): ReactionDetailsOut
+
+    /** AND-140 — pin a message. Returns MessageControlActionOut (ok/action/updated_at). Non-idempotent. */
+    @POST("messaging/conversations/{id}/messages/{messageId}/pin")
+    suspend fun pinMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): MessageControlActionOut
+
+    /** AND-140 — unpin a message (DELETE …/pin). Returns MessageControlActionOut. Non-idempotent. */
+    @DELETE("messaging/conversations/{id}/messages/{messageId}/pin")
+    suspend fun unpinMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): MessageControlActionOut
+
+    /** AND-140 — pinned-message refs for a conversation (cursor-paginated). Idempotent GET. */
+    @GET("messaging/conversations/{id}/pins")
+    suspend fun listPins(
+        @Path("id") id: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): ConversationPinsPageOut
+
+    /** AND-140 — edit a message body. PATCH body field is `text` (required). Returns MessageOut. */
+    @Headers("Content-Type: application/json")
+    @PATCH("messaging/conversations/{id}/messages/{messageId}")
+    suspend fun editMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: EditMessageIn,
+    ): MessageDto
+
+    /**
+     * AND-140 — edit history. The OpenAPI response schema is unpinned (empty 200); we read the raw
+     * body and parse tolerantly (bare array or {items:[...]}). Idempotent GET.
+     */
+    @GET("messaging/conversations/{id}/messages/{messageId}/edits")
+    suspend fun editHistory(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Query("limit") limit: Int? = null,
+    ): ResponseBody
+
+    /** AND-140 — delete a message FOR ME. Returns an empty 200 (no tombstone payload). Non-idempotent. */
+    @DELETE("messaging/conversations/{id}/messages/{messageId}")
+    suspend fun deleteMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    )
+
+    /** AND-140 — revoke ("unsend") a message FOR ALL. DELETE …/revoke; returns MessageOut. Non-idempotent. */
+    @DELETE("messaging/conversations/{id}/messages/{messageId}/revoke")
+    suspend fun revokeMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): MessageDto
+
+    /** AND-140 — hide a message FOR ME (server-backed). Returns MessageControlActionOut. Non-idempotent. */
+    @POST("messaging/conversations/{id}/messages/{messageId}/hide")
+    suspend fun hideMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): MessageControlActionOut
+
+    /** AND-140 — unhide a message FOR ME (DELETE …/hide). Returns MessageControlActionOut. Non-idempotent. */
+    @DELETE("messaging/conversations/{id}/messages/{messageId}/hide")
+    suspend fun unhideMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): MessageControlActionOut
+
+    /** AND-140 — the current user's hidden messages for a conversation (cursor-paginated). Idempotent GET. */
+    @GET("messaging/conversations/{id}/hidden-messages")
+    suspend fun listHiddenMessages(
+        @Path("id") id: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): HiddenMessagesPageOut
 }

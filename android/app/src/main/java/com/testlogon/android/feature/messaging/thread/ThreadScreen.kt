@@ -26,8 +26,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Poll
@@ -50,8 +52,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -103,6 +107,11 @@ object ThreadTestTags {
     const val IMAGE_BUBBLE = "thread_image_bubble"
     const val VIDEO_BUBBLE = "thread_video_bubble"
     const val VIDEO_PICKER = "thread_video_picker"
+
+    // AND-140 / AND-141
+    const val TOMBSTONE = "thread_tombstone"
+    const val OPEN_PINS = "thread_open_pins"
+    const val DISCARD_DRAFT = "thread_discard_draft"
 }
 
 /** AND-123 — route-level thread, reached from the conversation list. */
@@ -125,6 +134,14 @@ fun ThreadRoute(
         state.transientMessage?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.onTransientMessageShown()
+        }
+    }
+
+    // AND-140 — surface a one-shot action error (rollback feedback) as a snackbar, then clear it.
+    LaunchedEffect(state.actions.transientError) {
+        state.actions.transientError?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.onActionErrorShown()
         }
     }
 
@@ -164,6 +181,8 @@ fun ThreadRoute(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) viewModel.onThreadVisible()
+            // AND-141 — flush the buffered draft immediately on ON_STOP (bypass debounce).
+            if (event == Lifecycle.Event.ON_STOP) viewModel.flushDraft()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -175,6 +194,11 @@ fun ThreadRoute(
                 is ThreadEvent.ScrollToBottom -> listState.animateScrollToItem(0)
                 is ThreadEvent.OpenImageViewer -> imageViewer.open(event.url)
                 is ThreadEvent.OpenFile -> openDownloadedFile(context, event.localPath, event.mimeType)
+                is ThreadEvent.ScrollToMessage -> {
+                    // AND-140 — jump-to-pinned: the list is reverseLayout, so map the key to its index.
+                    val idx = state.messages.indexOfFirst { it.key == event.messageKey }
+                    if (idx >= 0) listState.animateScrollToItem(state.messages.size - 1 - idx)
+                }
             }
         }
     }
@@ -254,6 +278,9 @@ fun ThreadRoute(
         onTipNoteChange = viewModel::onTipNoteChange,
         onTipConfirm = viewModel::onTipConfirm,
         onTipDismiss = viewModel::onTipDismiss,
+        onAction = viewModel::onAction,
+        onJumpToPinned = viewModel::onJumpToPinned,
+        onDiscardDraft = viewModel::onDiscardDraft,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -315,10 +342,15 @@ fun ThreadScreen(
     onTipNoteChange: (String) -> Unit,
     onTipConfirm: () -> Unit,
     onTipDismiss: () -> Unit,
+    onAction: (ThreadAction) -> Unit = {},
+    onJumpToPinned: (String) -> Unit = {},
+    onDiscardDraft: () -> Unit = {},
     snackbarHostState: androidx.compose.material3.SnackbarHostState =
         remember { androidx.compose.material3.SnackbarHostState() },
     modifier: Modifier = Modifier,
 ) {
+    // AND-140 — the message whose long-press action sheet is open (null = closed).
+    var actionTarget by remember { mutableStateOf<ThreadMessageUi?>(null) }
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
@@ -337,6 +369,30 @@ fun ThreadScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
                         )
+                    }
+                },
+                actions = {
+                    // AND-140 — open the pinned-messages sheet.
+                    IconButton(
+                        onClick = { onAction(ThreadAction.OpenPinsList) },
+                        modifier = Modifier.testTag(ThreadTestTags.OPEN_PINS),
+                    ) {
+                        Icon(
+                            Icons.Filled.PushPin,
+                            contentDescription = stringResource(R.string.msg_pins_title),
+                        )
+                    }
+                    // AND-141 — discard the current draft (enabled only when a draft exists).
+                    if (state.hasDraft) {
+                        IconButton(
+                            onClick = onDiscardDraft,
+                            modifier = Modifier.testTag(ThreadTestTags.DISCARD_DRAFT),
+                        ) {
+                            Icon(
+                                Icons.Filled.DeleteOutline,
+                                contentDescription = stringResource(R.string.draft_discard),
+                            )
+                        }
                     }
                 },
             )
@@ -402,10 +458,22 @@ fun ThreadScreen(
                     onUnlock = onUnlock,
                     onTip = onTip,
                     onAddToCalendar = onAddToCalendar,
+                    onAction = onAction,
+                    onMessageLongPress = { actionTarget = it },
                 )
             }
         }
     }
+
+    // AND-140 — long-press action sheet + confirm dialogs + read sheets.
+    MessageActionsHost(
+        target = actionTarget,
+        actions = state.actions,
+        onAction = onAction,
+        onTip = onTip,
+        onJumpToPinned = onJumpToPinned,
+        onCloseSheet = { actionTarget = null },
+    )
 
     if (state.videoPicker.visible) {
         VideoPickerSheet(
@@ -500,6 +568,8 @@ private fun ThreadList(
     onUnlock: (String) -> Unit,
     onTip: (String) -> Unit,
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
+    onAction: (ThreadAction) -> Unit,
+    onMessageLongPress: (ThreadMessageUi) -> Unit,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
     val reversed = remember(state.messages) { state.messages.asReversed() }
@@ -531,6 +601,10 @@ private fun ThreadList(
                     onUnlock = { onUnlock(message.key) },
                     onTip = { onTip(message.key) },
                     onAddToCalendar = onAddToCalendar,
+                    onLongPress = { onMessageLongPress(message) },
+                    onToggleReaction = { emoji -> onAction(ThreadAction.ToggleReaction(message.key, emoji)) },
+                    onSeeWhoReacted = { onAction(ThreadAction.OpenReactionDetails(message.key)) },
+                    onOpenEditHistory = { onAction(ThreadAction.OpenEditHistory(message.key)) },
                 )
             }
             if (state.isLoadingOlder) {
@@ -579,6 +653,10 @@ private fun MessageBubble(
     onUnlock: () -> Unit,
     onTip: () -> Unit,
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
+    onLongPress: () -> Unit = {},
+    onToggleReaction: (String) -> Unit = {},
+    onSeeWhoReacted: () -> Unit = {},
+    onOpenEditHistory: () -> Unit = {},
 ) {
     val alignment = if (message.isOwn) Alignment.End else Alignment.Start
     val bubbleColor = if (message.isOwn) {
@@ -596,19 +674,45 @@ private fun MessageBubble(
     }
     val tag = if (message.isOwn) ThreadTestTags.OWN_MESSAGE else ThreadTestTags.MESSAGE
 
-    // AND-139 — long-press a received message to open the tip sheet (own messages are not tip-able).
-    val tipModifier = if (!message.isOwn) {
-        Modifier.combinedClickable(onClick = {}, onLongClick = onTip)
-    } else {
-        Modifier
+    // AND-140 — a revoked/deleted message renders a tombstone bubble and offers no further actions.
+    if (message.isTombstone) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalAlignment = alignment,
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.widthIn(max = 280.dp).testTag(ThreadTestTags.TOMBSTONE),
+            ) {
+                Text(
+                    text = tombstoneLabel(message),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
+        return
     }
+
+    // AND-140 — long-press any message to open the action sheet (reactions / pin / edit / etc.).
+    val pressModifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
-            .then(tipModifier),
+            .then(pressModifier),
         horizontalAlignment = alignment,
     ) {
+        if (message.isPinned) {
+            Text(
+                text = stringResource(R.string.msg_pinned_indicator),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.semantics { stateDescription = "Pinned" },
+            )
+        }
         when (val media = message.media) {
             is MessageMedia.Image -> ImageBubble(media = media, onOpenImage = onOpenImage)
             is MessageMedia.VideoShare -> VideoBubble(media = media)
@@ -710,7 +814,23 @@ private fun MessageBubble(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // AND-140 — "edited" marker; tapping opens the edit-history sheet.
+            if (message.isEdited) {
+                Text(
+                    text = "  ${stringResource(R.string.msg_edited_label)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.combinedClickable(onClick = onOpenEditHistory, onLongClick = {})
+                        .semantics { contentDescription = "Edited; open edit history" },
+                )
+            }
         }
+        // AND-140 — under-bubble reaction chip row.
+        ReactionChipsRow(
+            reactions = message.reactions,
+            onToggle = onToggleReaction,
+            onSeeWhoReacted = onSeeWhoReacted,
+        )
     }
 }
 

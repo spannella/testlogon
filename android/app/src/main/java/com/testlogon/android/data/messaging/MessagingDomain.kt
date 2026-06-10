@@ -216,6 +216,31 @@ internal fun String?.toSharePermission(): SharePermission = when (this) {
     else -> SharePermission.UNKNOWN
 }
 
+/**
+ * AND-140 — a single emoji reaction summary on a message: the emoji, its total count, and whether
+ * the current user reacted with it. Derived in the mapper from MessageOut.reactions_counts +
+ * my_reactions (there is no per-emoji `reacted_by_me` array on the wire).
+ */
+data class Reaction(val emoji: String, val count: Int, val reactedByMe: Boolean)
+
+/** AND-140 — a reactor row for the reaction-details sheet (flattened from emoji -> reactor list). */
+data class Reactor(
+    val userSub: String,
+    val displayName: String,
+    val profilePhotoUrl: String?,
+    val emoji: String,
+)
+
+/** AND-140 — one prior revision of an edited message (newest-first in the history sheet). */
+data class MessageEdit(val revision: Int, val body: String, val editedAtEpochSeconds: Long?)
+
+/**
+ * AND-140 — derived message lifecycle. The wire has no `state` field; REVOKED is signalled by a
+ * non-null `revoked_at`, EDITED by a non-null `edited_at`, and DELETED is applied locally after a
+ * delete-for-me 200 (no tombstone payload).
+ */
+enum class MessageLifecycle { ACTIVE, EDITED, DELETED, REVOKED }
+
 /** A single message in a conversation, merged from history + the local outbox at render time. */
 data class Message(
     /** Server message id; null until a send is acked (outbox rows have no server id yet). */
@@ -232,6 +257,17 @@ data class Message(
     val kind: String = "text",
     /** AND-130/131 — media payload; [MessageMedia.None] for text. */
     val media: MessageMedia = MessageMedia.None,
+    // AND-140 — moderation / engagement state (defaults keep older callers green).
+    /** Reaction chips (emoji + count + reactedByMe), derived from the wire summary. */
+    val reactions: List<Reaction> = emptyList(),
+    /** True when this message is pinned in the conversation. */
+    val isPinned: Boolean = false,
+    /** Derived lifecycle: ACTIVE / EDITED / DELETED (local) / REVOKED. */
+    val lifecycle: MessageLifecycle = MessageLifecycle.ACTIVE,
+    /** Epoch SECONDS of the last edit (drives the "edited" marker), null if never edited. */
+    val editedAtEpochSeconds: Long? = null,
+    /** True when the current user hid this message (server-backed, cached for instant/offline UI). */
+    val isHiddenLocal: Boolean = false,
 )
 
 /** A conversation summary for the inbox list. */
@@ -272,8 +308,52 @@ internal fun MessageDto.toDomain(
         sendStatus = sendStatus,
         kind = kind,
         media = mappedMedia,
+        reactions = toReactions(),
+        lifecycle = deriveLifecycle(),
+        editedAtEpochSeconds = editedAt,
     )
 }
+
+/**
+ * AND-140 — derives the reaction chip list by zipping `reactions_counts` (emoji -> count) with
+ * `my_reactions` (emojis the current user reacted with). Pure / JVM-testable. Stable order: by
+ * descending count then emoji so the chip row does not jitter on reconcile.
+ */
+internal fun MessageDto.toReactions(): List<Reaction> {
+    val counts = reactionsCounts ?: return emptyList()
+    val mine = myReactions?.toSet() ?: emptySet()
+    return counts
+        .filterValues { it > 0 }
+        .map { (emoji, count) -> Reaction(emoji, count, reactedByMe = emoji in mine) }
+        .sortedWith(compareByDescending<Reaction> { it.count }.thenBy { it.emoji })
+}
+
+/**
+ * AND-140 — derives [MessageLifecycle] from the wire markers (there is no `state` field): a non-null
+ * `revoked_at` wins (REVOKED), else a non-null `edited_at` (EDITED), else ACTIVE. DELETED is applied
+ * locally after a delete-for-me 200, never from a wire payload. Pure / JVM-testable.
+ */
+internal fun MessageDto.deriveLifecycle(): MessageLifecycle = when {
+    revokedAt != null -> MessageLifecycle.REVOKED
+    editedAt != null -> MessageLifecycle.EDITED
+    else -> MessageLifecycle.ACTIVE
+}
+
+/** AND-140 — flattens ReactionDetailsOut (emoji -> reactor list) to a flat [Reactor] list. */
+internal fun ReactionDetailsOut.toReactors(): List<Reactor> =
+    reactions.entries.flatMap { (emoji, users) ->
+        users.map { Reactor(it.userSub, it.displayName, it.profilePhotoUrl, emoji) }
+    }
+
+/** AND-140 — maps a tolerant edit-history entry to the domain [MessageEdit]; newest-first sorted. */
+internal fun List<EditHistoryEntryDto>.toMessageEdits(): List<MessageEdit> =
+    mapIndexed { index, dto ->
+        MessageEdit(
+            revision = dto.revision ?: (size - index),
+            body = dto.text ?: dto.body.orEmpty(),
+            editedAtEpochSeconds = dto.editedAt ?: dto.createdAt,
+        )
+    }.sortedByDescending { it.editedAtEpochSeconds ?: it.revision.toLong() }
 
 /** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {

@@ -19,6 +19,8 @@ import com.testlogon.android.data.auth.FakeAuthStateStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.ResponseBody.Companion.toResponseBody
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -63,6 +65,14 @@ class MessagingRepositoryTest {
         override suspend fun upsertAll(messages: List<MessageEntity>) { messages.forEach { upsert(it) } }
         override suspend fun findById(messageId: String): MessageEntity? =
             rows.value.firstOrNull { it.messageId == messageId }
+        override suspend fun setHidden(messageId: String, hidden: Boolean) {
+            rows.value = rows.value.map { if (it.messageId == messageId) it.copy(isHidden = hidden) else it }
+        }
+        override suspend fun setPinned(messageId: String, pinned: Boolean) {
+            rows.value = rows.value.map { if (it.messageId == messageId) it.copy(isPinned = pinned) else it }
+        }
+        override suspend fun pinnedForConversation(conversationId: String): List<MessageEntity> =
+            rows.value.filter { it.conversationId == conversationId && it.isPinned }
     }
 
     private class FakeOutboxDao : OutboxDao {
@@ -316,6 +326,76 @@ class MessagingRepositoryTest {
         }
         override suspend fun getLottery(messageId: String): LotteryMessageOutDto =
             requireNotNull(getLotteryResult)
+
+        // ---- AND-140: reactions / pins / edits / delete / revoke / hide ----
+        var reactCalls = mutableListOf<Triple<String, String, ReactIn>>()
+        var reactThrows: Throwable? = null
+        var reactionDetailsResult: ReactionDetailsOut? = null
+        var pinCalls = mutableListOf<Pair<String, String>>()
+        var unpinCalls = mutableListOf<Pair<String, String>>()
+        var pinThrows: Throwable? = null
+        var controlResult = MessageControlActionOut(true, "c1", "m1", "pinned", 1)
+        var listPinsResult: ConversationPinsPageOut? = null
+        var editCalls = mutableListOf<Triple<String, String, EditMessageIn>>()
+        var editResult: MessageDto? = null
+        var editThrows: Throwable? = null
+        var editHistoryBody: String = "[]"
+        var deleteCalls = mutableListOf<Pair<String, String>>()
+        var deleteThrows: Throwable? = null
+        var revokeCalls = mutableListOf<Pair<String, String>>()
+        var revokeResult: MessageDto? = null
+        var revokeThrows: Throwable? = null
+        var hideCalls = mutableListOf<Pair<String, String>>()
+        var unhideCalls = mutableListOf<Pair<String, String>>()
+        var hideThrows: Throwable? = null
+        var hiddenMessagesResult: HiddenMessagesPageOut? = null
+
+        override suspend fun react(id: String, messageId: String, body: ReactIn) {
+            reactCalls += Triple(id, messageId, body)
+            reactThrows?.let { throw it }
+        }
+        override suspend fun reactionDetails(id: String, messageId: String): ReactionDetailsOut =
+            requireNotNull(reactionDetailsResult)
+        override suspend fun pinMessage(id: String, messageId: String): MessageControlActionOut {
+            pinCalls += id to messageId
+            pinThrows?.let { throw it }
+            return controlResult
+        }
+        override suspend fun unpinMessage(id: String, messageId: String): MessageControlActionOut {
+            unpinCalls += id to messageId
+            pinThrows?.let { throw it }
+            return controlResult.copy(action = "unpinned")
+        }
+        override suspend fun listPins(id: String, cursor: String?, limit: Int?): ConversationPinsPageOut =
+            requireNotNull(listPinsResult)
+        override suspend fun editMessage(id: String, messageId: String, body: EditMessageIn): MessageDto {
+            editCalls += Triple(id, messageId, body)
+            editThrows?.let { throw it }
+            return requireNotNull(editResult)
+        }
+        override suspend fun editHistory(id: String, messageId: String, limit: Int?): okhttp3.ResponseBody =
+            editHistoryBody.toResponseBody("application/json".toMediaTypeOrNull())
+        override suspend fun deleteMessage(id: String, messageId: String) {
+            deleteCalls += id to messageId
+            deleteThrows?.let { throw it }
+        }
+        override suspend fun revokeMessage(id: String, messageId: String): MessageDto {
+            revokeCalls += id to messageId
+            revokeThrows?.let { throw it }
+            return requireNotNull(revokeResult)
+        }
+        override suspend fun hideMessage(id: String, messageId: String): MessageControlActionOut {
+            hideCalls += id to messageId
+            hideThrows?.let { throw it }
+            return controlResult.copy(action = "hidden")
+        }
+        override suspend fun unhideMessage(id: String, messageId: String): MessageControlActionOut {
+            unhideCalls += id to messageId
+            hideThrows?.let { throw it }
+            return controlResult.copy(action = "visible")
+        }
+        override suspend fun listHiddenMessages(id: String, cursor: String?, limit: Int?): HiddenMessagesPageOut =
+            requireNotNull(hiddenMessagesResult)
     }
 
     // ---- AND-130 fakes: uploader + image processor ----
@@ -388,6 +468,7 @@ class MessagingRepositoryTest {
         uriMetadata = uriMetadata,
         storageClient = storageClient,
         attachmentDownloader = attachmentDownloader,
+        moshi = Moshi.Builder().build(),
     )
 
     private fun convEntity(id: String, unread: Int) = ConversationEntity(
@@ -786,4 +867,180 @@ class MessagingRepositoryTest {
         assertEquals("ty", call.note)
         assertEquals("pm_1", call.paymentMethodId)
     }
+
+    // ---- AND-140: reactions / pins / edits / delete / revoke / hide ----
+
+    private fun seedMessage(
+        id: String = "m1",
+        text: String = "hi",
+        isPinned: Boolean = false,
+        isHidden: Boolean = false,
+        reactionsJson: String? = null,
+    ) = MessageEntity(
+        messageId = id, conversationId = "c1", senderId = "u2", text = text,
+        createdAtEpochSeconds = 100, clientId = null, kind = "text",
+        isPinned = isPinned, isHidden = isHidden, reactionsJson = reactionsJson,
+    )
+
+    @Test
+    fun toggleReaction_optimisticThenReconciles_onEmpty200() = runTest {
+        messageDao.upsert(seedMessage())
+        // Reaction POST returns empty 200; the re-fetch list carries the authoritative count.
+        api.listMessagesResult = listOf(
+            MessageDto(
+                messageId = "m1", conversationId = "c1", senderId = "u2", createdAt = 100,
+                kind = "text", text = "hi", reactionsCounts = mapOf("👍" to 1), myReactions = listOf("👍"),
+            ),
+        )
+        val r = repo().toggleReaction("c1", "m1", "👍", add = true)
+
+        assertTrue(r is ApiResult.Success)
+        assertEquals(ReactIn("👍", "add"), api.reactCalls.single().third)
+        val cached = messageDao.findById("m1")!!.toDomain()
+        assertEquals(1, cached.reactions.single().count)
+        assertTrue(cached.reactions.single().reactedByMe)
+    }
+
+    @Test
+    fun toggleReaction_rollsBackCachedEntity_onError() = runTest {
+        messageDao.upsert(seedMessage(reactionsJson = null))
+        api.reactThrows = http(422)
+        val r = repo().toggleReaction("c1", "m1", "👍", add = true)
+
+        assertTrue(r is ApiResult.Failure)
+        // Restored to the captured prior entity (no reactions).
+        assertTrue(messageDao.findById("m1")!!.toDomain().reactions.isEmpty())
+    }
+
+    @Test
+    fun setPinned_togglesCachedFlag_thenReverts_onError() = runTest {
+        messageDao.upsert(seedMessage(isPinned = false))
+        val ok = repo().setPinned("c1", "m1", pinned = true)
+        assertTrue(ok is ApiResult.Success)
+        assertEquals(listOf("c1" to "m1"), api.pinCalls)
+        assertTrue(messageDao.findById("m1")!!.isPinned)
+
+        // Now fail the unpin: the optimistic flag must revert to true.
+        api.pinThrows = http(403)
+        val failed = repo().setPinned("c1", "m1", pinned = false)
+        assertTrue(failed is ApiResult.Failure)
+        assertTrue(messageDao.findById("m1")!!.isPinned)
+    }
+
+    @Test
+    fun pinnedMessages_resolvesRefs_fetchingRowsNotInCache() = runTest {
+        messageDao.upsert(seedMessage(id = "m1"))
+        api.listPinsResult = ConversationPinsPageOut(
+            items = listOf(
+                ConversationPinOut("c1", "m1", "u2", pinnedAt = 200, isActive = true),
+                ConversationPinOut("c1", "m2", "u2", pinnedAt = 300, isActive = true),
+            ),
+        )
+        // m2 not in cache -> resolved via a list re-fetch.
+        api.listMessagesResult = listOf(
+            MessageDto(messageId = "m2", conversationId = "c1", senderId = "u2", createdAt = 50, kind = "text", text = "two"),
+        )
+        val r = repo().pinnedMessages("c1")
+
+        assertTrue(r is ApiResult.Success)
+        val ids = (r as ApiResult.Success).data.map { it.id }
+        // newest pin first (m2 pinned_at=300, m1=200).
+        assertEquals(listOf("m2", "m1"), ids)
+    }
+
+    @Test
+    fun editMessage_patchesText_setsEditedLifecycle() = runTest {
+        messageDao.upsert(seedMessage())
+        api.editResult = MessageDto(
+            messageId = "m1", conversationId = "c1", senderId = "u2", createdAt = 100,
+            kind = "text", text = "hi there", editedAt = 200,
+        )
+        val r = repo().editMessage("c1", "m1", "hi there")
+
+        assertTrue(r is ApiResult.Success)
+        assertEquals(EditMessageIn("hi there"), api.editCalls.single().third)
+        val cached = messageDao.findById("m1")!!.toDomain()
+        assertEquals("hi there", cached.text)
+        assertEquals(MessageLifecycle.EDITED, cached.lifecycle)
+    }
+
+    @Test
+    fun editHistory_parsesBareArray_newestFirst() = runTest {
+        api.editHistoryBody = """[{"revision":1,"text":"v1","edited_at":100},{"revision":2,"text":"v2","edited_at":200}]"""
+        val r = repo().editHistory("c1", "m1")
+        assertTrue(r is ApiResult.Success)
+        assertEquals(listOf("v2", "v1"), (r as ApiResult.Success).data.map { it.body })
+    }
+
+    @Test
+    fun deleteMessage_emptyOk_marksDeletedTombstone() = runTest {
+        messageDao.upsert(seedMessage())
+        val r = repo().deleteMessage("c1", "m1")
+        assertTrue(r is ApiResult.Success)
+        assertEquals(MessageLifecycle.DELETED, messageDao.findById("m1")!!.toDomain().lifecycle)
+    }
+
+    @Test
+    fun deleteMessage_404_reconcilesToTombstone() = runTest {
+        messageDao.upsert(seedMessage())
+        api.deleteThrows = http(404)
+        val r = repo().deleteMessage("c1", "m1")
+        assertTrue(r is ApiResult.Success) // 404 treated as success (already gone)
+        assertEquals(MessageLifecycle.DELETED, messageDao.findById("m1")!!.toDomain().lifecycle)
+    }
+
+    @Test
+    fun revokeMessage_setsRevokedLifecycle() = runTest {
+        messageDao.upsert(seedMessage())
+        api.revokeResult = MessageDto(
+            messageId = "m1", conversationId = "c1", senderId = "u2", createdAt = 100,
+            kind = "text", text = "x", revokedAt = 300,
+        )
+        val r = repo().revokeMessage("c1", "m1")
+        assertTrue(r is ApiResult.Success)
+        assertEquals(MessageLifecycle.REVOKED, messageDao.findById("m1")!!.toDomain().lifecycle)
+    }
+
+    @Test
+    fun revokeMessage_403_rollsBack() = runTest {
+        messageDao.upsert(seedMessage())
+        api.revokeThrows = http(403)
+        val r = repo().revokeMessage("c1", "m1")
+        assertTrue(r is ApiResult.Failure)
+        assertEquals(MessageLifecycle.ACTIVE, messageDao.findById("m1")!!.toDomain().lifecycle)
+    }
+
+    @Test
+    fun setHidden_serverBacked_setsFlag_thenReverts_onError() = runTest {
+        messageDao.upsert(seedMessage(isHidden = false))
+        val ok = repo().setHidden("c1", "m1", hidden = true)
+        assertTrue(ok is ApiResult.Success)
+        assertEquals(listOf("c1" to "m1"), api.hideCalls) // a real POST .../hide is made
+        assertTrue(messageDao.findById("m1")!!.isHidden)
+
+        api.hideThrows = http(403)
+        val failed = repo().setHidden("c1", "m1", hidden = false)
+        assertTrue(failed is ApiResult.Failure)
+        assertTrue(messageDao.findById("m1")!!.isHidden) // reverted to the prior (hidden) state
+    }
+
+    @Test
+    fun reconcile_preservesLocalHideFlag_throughEdit() = runTest {
+        messageDao.upsert(seedMessage(isHidden = true))
+        api.editResult = MessageDto(
+            messageId = "m1", conversationId = "c1", senderId = "u2", createdAt = 100,
+            kind = "text", text = "edited", editedAt = 200,
+        )
+        repo().editMessage("c1", "m1", "edited")
+        // The server upsert must NOT clobber the local hide flag (R5 merge rule).
+        assertTrue(messageDao.findById("m1")!!.isHidden)
+    }
+
+    private fun http(code: Int): retrofit2.HttpException =
+        retrofit2.HttpException(
+            retrofit2.Response.error<Any>(
+                code,
+                """{"detail":"x"}""".toResponseBody("application/json".toMediaTypeOrNull()),
+            ),
+        )
 }

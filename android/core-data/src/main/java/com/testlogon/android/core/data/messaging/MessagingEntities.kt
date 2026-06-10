@@ -109,6 +109,32 @@ data class MessageEntity(
     val lockTeaser: String? = null,
     /** Revealed text written ONLY after a successful unlock/draw. */
     val revealedText: String? = null,
+    // AND-140 — reactions / pins / edits / lifecycle / hide columns (DB schema v6).
+    /** Moshi-serialized List<Reaction> (emoji+count+reactedByMe) for the chip row. */
+    val reactionsJson: String? = null,
+    val isPinned: Boolean = false,
+    /** "ACTIVE" | "EDITED" | "DELETED" | "REVOKED" (mirrors MessageLifecycle). */
+    val lifecycle: String = "ACTIVE",
+    val editedAtEpochSeconds: Long? = null,
+    /** Per-user hide flag (server-backed; cached for instant/offline UI + cross-restart persistence). */
+    val isHidden: Boolean = false,
+)
+
+/**
+ * AND-141 — per-conversation composer draft (client policy: one ACTIVE draft per conversation,
+ * keyed by [conversationId]). Mirrors the server's most-recent draft; [remoteId] holds the server
+ * `draft_id` once synced. Draft bodies are user content and live only in the app-private DB.
+ */
+@Entity(tableName = "drafts")
+data class DraftEntity(
+    @PrimaryKey val conversationId: String,
+    val text: String,
+    val updatedAtEpochMs: Long,
+    val version: Int = 1,
+    /** Server `draft_id`; null while local-only (never PATCHed/DELETEd on the wire). */
+    val remoteId: String? = null,
+    /** True when a local change has not yet been pushed to the server. */
+    val pendingSync: Boolean = false,
 )
 
 /**

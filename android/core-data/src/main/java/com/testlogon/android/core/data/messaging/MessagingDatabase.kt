@@ -29,8 +29,9 @@ import javax.inject.Singleton
         CustomEmojiEntity::class,
         MeetingPollEntity::class,
         MeetingPollSlotEntity::class,
+        DraftEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -39,6 +40,7 @@ abstract class MessagingDatabase : RoomDatabase() {
     abstract fun outboxDao(): OutboxDao
     abstract fun customEmojiDao(): CustomEmojiDao
     abstract fun meetingPollDao(): MeetingPollDao
+    abstract fun draftDao(): DraftDao
 
     companion object {
         /**
@@ -184,6 +186,29 @@ abstract class MessagingDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE messages ADD COLUMN revealedText TEXT")
             }
         }
+
+        /**
+         * AND-140 / AND-141 — adds the additive moderation/engagement columns to `messages`
+         * (reactions / pins / edits / lifecycle / hide) and creates the AND-141 `drafts` table. All
+         * new message columns are nullable or carry a default, so v5 rows migrate without data loss.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // messages — reactions / pins / edits / lifecycle / hide (AND-140)
+                db.execSQL("ALTER TABLE messages ADD COLUMN reactionsJson TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'ACTIVE'")
+                db.execSQL("ALTER TABLE messages ADD COLUMN editedAtEpochSeconds INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN isHidden INTEGER NOT NULL DEFAULT 0")
+                // New drafts table (AND-141)
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS drafts (" +
+                        "conversationId TEXT NOT NULL PRIMARY KEY, text TEXT NOT NULL, " +
+                        "updatedAtEpochMs INTEGER NOT NULL, version INTEGER NOT NULL, " +
+                        "remoteId TEXT, pendingSync INTEGER NOT NULL)",
+                )
+            }
+        }
     }
 }
 
@@ -204,6 +229,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_2_3,
             MessagingDatabase.MIGRATION_3_4,
             MessagingDatabase.MIGRATION_4_5,
+            MessagingDatabase.MIGRATION_5_6,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
@@ -223,4 +249,7 @@ object MessagingDatabaseModule {
 
     @Provides
     fun provideMeetingPollDao(db: MessagingDatabase): MeetingPollDao = db.meetingPollDao()
+
+    @Provides
+    fun provideDraftDao(db: MessagingDatabase): DraftDao = db.draftDao()
 }

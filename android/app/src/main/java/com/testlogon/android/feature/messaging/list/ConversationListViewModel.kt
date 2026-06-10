@@ -120,6 +120,7 @@ class ConversationListViewModel @Inject constructor(
                     when (streamEvent.event) {
                         is MessagingEvent.NewMessage,
                         is MessagingEvent.ConversationUpdated,
+                        is MessagingEvent.MessageMutated,
                         is MessagingEvent.Other,
                         -> refresh()
                     }

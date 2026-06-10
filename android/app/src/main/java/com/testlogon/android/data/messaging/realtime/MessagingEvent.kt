@@ -27,6 +27,18 @@ sealed interface MessagingEvent {
     /** A conversation's summary changed (unread counts / last-message preview). */
     data class ConversationUpdated(val conversationId: String?) : MessagingEvent
 
+    /**
+     * AND-140 — an existing message changed server-side (a reaction toggled, an edit, or a revoke).
+     * The web client only reads `conversation_id` + `message_id` from these frames and refetches; we
+     * mirror that by re-fetching the affected message to reconcile the cache for live reflection.
+     * [kind] ∈ "reaction" | "edited" | "revoked" (parsed from the SSE event type).
+     */
+    data class MessageMutated(
+        val conversationId: String,
+        val messageId: String,
+        val kind: String,
+    ) : MessagingEvent
+
     /** Any other event type we observe but do not act on directly (used to refresh lists). */
     data class Other(val type: String, val conversationId: String?) : MessagingEvent
 }

@@ -40,6 +40,13 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
                 createdAtEpochSeconds = (data["created_at"] as? Number)?.toLong() ?: 0L,
             )
             "conversation_updated" -> MessagingEvent.ConversationUpdated(conversationId)
+            // AND-140 — reaction / edit / revoke mutations on an existing message. The web client
+            // (useMessagingStream.ts) reads only conversation_id + message_id from these frames.
+            "message:reaction", "message:edited", "message:revoked" -> MessagingEvent.MessageMutated(
+                conversationId = conversationId ?: return null,
+                messageId = data["message_id"] as? String ?: return null,
+                kind = type.removePrefix("message:"),
+            )
             "" -> null
             else -> MessagingEvent.Other(type, conversationId)
         }

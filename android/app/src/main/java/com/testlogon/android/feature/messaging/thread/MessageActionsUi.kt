@@ -1,0 +1,449 @@
+@file:OptIn(
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+)
+
+package com.testlogon.android.feature.messaging.thread
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
+import com.testlogon.android.R
+import com.testlogon.android.data.messaging.MessageEdit
+import com.testlogon.android.data.messaging.Reaction
+import com.testlogon.android.data.messaging.Reactor
+
+/** AND-140 — test tags for the message-action UI (used by Compose UI tests). */
+object MessageActionTestTags {
+    const val ACTIONS_SHEET = "msg_actions_sheet"
+    const val EMOJI_PICKER = "msg_emoji_picker"
+    const val REACTION_CHIPS = "msg_reaction_chips"
+    const val REACTION_DETAILS_SHEET = "msg_reaction_details_sheet"
+    const val PINS_SHEET = "msg_pins_sheet"
+    const val EDIT_HISTORY_SHEET = "msg_edit_history_sheet"
+    const val EDIT_DIALOG = "msg_edit_dialog"
+    const val DELETE_DIALOG = "msg_delete_dialog"
+    const val REVOKE_DIALOG = "msg_revoke_dialog"
+    const val ACTION_PIN = "msg_action_pin"
+    const val ACTION_EDIT = "msg_action_edit"
+    const val ACTION_DELETE = "msg_action_delete"
+    const val ACTION_REVOKE = "msg_action_revoke"
+    const val ACTION_HIDE = "msg_action_hide"
+}
+
+/** AND-140 — curated quick-reaction emoji row (matches common chat clients). */
+internal val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
+
+/**
+ * AND-140 — the long-press action sheet for a message. Edit/Delete/Revoke are gated by [message.isOwn];
+ * reactions and hide are available on any (non-tombstone) message. Tip is offered for others' messages
+ * (reusing the AND-139 tip flow). Dismisses itself after dispatching the chosen action.
+ */
+@Composable
+fun MessageActionsSheet(
+    message: ThreadMessageUi,
+    onAction: (ThreadAction) -> Unit,
+    onTip: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.ACTIONS_SHEET)) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+            // Quick-reaction emoji row (always available unless the message is a tombstone).
+            if (!message.isTombstone) {
+                EmojiReactionPicker(
+                    selected = message.reactions.filter { it.reactedByMe }.map { it.emoji }.toSet(),
+                    onPick = { emoji ->
+                        onAction(ThreadAction.ToggleReaction(message.key, emoji))
+                        onDismiss()
+                    },
+                )
+                Divider()
+            }
+
+            if (message.isPinned) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_unpin),
+                    tag = MessageActionTestTags.ACTION_PIN,
+                ) { onAction(ThreadAction.SetPinned(message.key, false)); onDismiss() }
+            } else if (!message.isTombstone) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_pin),
+                    tag = MessageActionTestTags.ACTION_PIN,
+                ) { onAction(ThreadAction.SetPinned(message.key, true)); onDismiss() }
+            }
+
+            if (message.isOwn && !message.isTombstone && message.media is com.testlogon.android.data.messaging.MessageMedia.None) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_edit),
+                    tag = MessageActionTestTags.ACTION_EDIT,
+                ) { onAction(ThreadAction.StartEdit(message.key)); onDismiss() }
+            }
+
+            if (message.isEdited) {
+                ActionRow(label = stringResource(R.string.msg_action_edit_history)) {
+                    onAction(ThreadAction.OpenEditHistory(message.key)); onDismiss()
+                }
+            }
+
+            if (message.reactions.isNotEmpty()) {
+                ActionRow(label = stringResource(R.string.msg_action_who_reacted)) {
+                    onAction(ThreadAction.OpenReactionDetails(message.key)); onDismiss()
+                }
+            }
+
+            if (!message.isOwn && !message.isTombstone) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_hide),
+                    tag = MessageActionTestTags.ACTION_HIDE,
+                ) { onAction(ThreadAction.SetHidden(message.key, true)); onDismiss() }
+                ActionRow(label = stringResource(R.string.msg_action_tip)) { onTip(message.key); onDismiss() }
+            }
+
+            if (message.isOwn && !message.isTombstone) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_delete),
+                    tag = MessageActionTestTags.ACTION_DELETE,
+                ) { onAction(ThreadAction.Delete(message.key)); onDismiss() }
+                ActionRow(
+                    label = stringResource(R.string.msg_action_revoke),
+                    tag = MessageActionTestTags.ACTION_REVOKE,
+                ) { onAction(ThreadAction.Revoke(message.key)); onDismiss() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionRow(label: String, tag: String? = null, onClick: () -> Unit) {
+    val base = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+    ListItem(
+        headlineContent = { Text(label) },
+        modifier = (if (tag != null) base.testTag(tag) else base)
+            .toggleable(value = false, onValueChange = { onClick() }),
+    )
+}
+
+/** AND-140 — a short curated emoji row; tapping toggles the current user's reaction for that emoji. */
+@Composable
+fun EmojiReactionPicker(
+    selected: Set<String>,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth().padding(12.dp).testTag(MessageActionTestTags.EMOJI_PICKER),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val youReacted = stringResource(R.string.msg_reaction_you_reacted)
+        QUICK_REACTIONS.forEach { emoji ->
+            val isSelected = emoji in selected
+            FilterChip(
+                selected = isSelected,
+                onClick = { onPick(emoji) },
+                label = { Text(emoji) },
+                modifier = Modifier.semantics {
+                    contentDescription = emoji
+                    if (isSelected) stateDescription = youReacted
+                },
+            )
+        }
+    }
+}
+
+/**
+ * AND-140 — under-bubble reaction chip row. Each chip shows emoji + count and highlights when the
+ * current user reacted; tapping toggles, long-pressing (here mapped to the chip's secondary affordance)
+ * opens the reactor-details sheet.
+ */
+@Composable
+fun ReactionChipsRow(
+    reactions: List<Reaction>,
+    onToggle: (String) -> Unit,
+    onSeeWhoReacted: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (reactions.isEmpty()) return
+    FlowRow(
+        modifier = modifier.padding(top = 4.dp).testTag(MessageActionTestTags.REACTION_CHIPS),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val youReacted = stringResource(R.string.msg_reaction_you_reacted)
+        reactions.forEach { r ->
+            val cd = stringResource(R.string.msg_reaction_chip_cd, r.emoji, r.count)
+            FilterChip(
+                selected = r.reactedByMe,
+                onClick = { onToggle(r.emoji) },
+                label = { Text("${r.emoji} ${r.count}") },
+                modifier = Modifier.semantics {
+                    contentDescription = cd
+                    if (r.reactedByMe) stateDescription = youReacted
+                },
+            )
+        }
+        AssistChip(
+            onClick = onSeeWhoReacted,
+            label = { Text(stringResource(R.string.msg_action_who_reacted)) },
+            colors = AssistChipDefaults.assistChipColors(),
+        )
+    }
+}
+
+/** AND-140 — reactor-details sheet: reactors grouped by emoji. */
+@Composable
+fun ReactionDetailsSheet(
+    state: Async<List<Reactor>>,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.REACTION_DETAILS_SHEET)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(stringResource(R.string.msg_action_who_reacted))
+            when (state) {
+                Async.Idle, Async.Loading -> CenterLoader()
+                is Async.Error -> Text(state.message)
+                is Async.Success -> {
+                    val grouped = state.data.groupBy { it.emoji }
+                    LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                        grouped.forEach { (emoji, reactors) ->
+                            item(key = "h_$emoji") { Text("$emoji ${reactors.size}") }
+                            items(reactors, key = { "${emoji}_${it.userSub}" }) { reactor ->
+                                ListItem(headlineContent = { Text(reactor.displayName) })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** AND-140 — pinned-messages sheet; tapping a row jumps the thread to that message. */
+@Composable
+fun PinnedMessagesSheet(
+    state: Async<List<ThreadMessageUi>>,
+    onJumpTo: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.PINS_SHEET)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(stringResource(R.string.msg_pins_title))
+            when (state) {
+                Async.Idle, Async.Loading -> CenterLoader()
+                is Async.Error -> Text(state.message)
+                is Async.Success -> {
+                    if (state.data.isEmpty()) {
+                        Text(stringResource(R.string.msg_pins_empty))
+                    } else {
+                        LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                            items(state.data, key = { it.key }) { msg ->
+                                ListItem(
+                                    headlineContent = { Text(msg.text.ifBlank { stringResource(R.string.msg_pins_media) }) },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                        .toggleable(value = false, onValueChange = { onJumpTo(msg.key) }),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** AND-140 — edit-history sheet, newest revision first. */
+@Composable
+fun EditHistorySheet(
+    state: Async<List<MessageEdit>>,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.EDIT_HISTORY_SHEET)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(stringResource(R.string.msg_edit_history_title))
+            when (state) {
+                Async.Idle, Async.Loading -> CenterLoader()
+                is Async.Error -> Text(state.message)
+                is Async.Success -> {
+                    if (state.data.isEmpty()) {
+                        Text(stringResource(R.string.msg_edit_history_empty))
+                    } else {
+                        LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                            items(state.data, key = { it.revision }) { edit -> Text(edit.body) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** AND-140 — edit composer dialog pre-filled with the original text. */
+@Composable
+fun EditMessageDialog(
+    target: EditTarget,
+    onSubmit: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var value by rememberSaveable(target.messageId, stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(target.originalText, androidx.compose.ui.text.TextRange(target.originalText.length)))
+    }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        modifier = Modifier.testTag(MessageActionTestTags.EDIT_DIALOG),
+        title = { Text(stringResource(R.string.msg_edit_title)) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSubmit(value.text) },
+                enabled = value.text.isNotBlank(),
+            ) { Text(stringResource(R.string.msg_edit_save)) }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+/** AND-140 — delete-for-me confirmation dialog. */
+@Composable
+fun DeleteMessageDialog(onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        modifier = Modifier.testTag(MessageActionTestTags.DELETE_DIALOG),
+        title = { Text(stringResource(R.string.msg_delete_title)) },
+        text = { Text(stringResource(R.string.msg_delete_body)) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.msg_action_delete)) } },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+/** AND-140 — revoke-for-everyone confirmation dialog. */
+@Composable
+fun RevokeMessageDialog(onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        modifier = Modifier.testTag(MessageActionTestTags.REVOKE_DIALOG),
+        title = { Text(stringResource(R.string.msg_revoke_title)) },
+        text = { Text(stringResource(R.string.msg_revoke_body)) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.msg_action_revoke)) } },
+        dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+/**
+ * AND-140 — single host that owns the action sheet + confirm dialogs + read sheets for the thread.
+ * [target] is the message whose action sheet is open (null = closed); confirmations capture the
+ * pending message id locally so the right id is dispatched on confirm.
+ */
+@Composable
+fun MessageActionsHost(
+    target: ThreadMessageUi?,
+    actions: MessageActionsUiState,
+    onAction: (ThreadAction) -> Unit,
+    onTip: (String) -> Unit,
+    onJumpToPinned: (String) -> Unit,
+    onCloseSheet: () -> Unit,
+) {
+    var pendingDelete by remember { mutableStateOf<String?>(null) }
+    var pendingRevoke by remember { mutableStateOf<String?>(null) }
+
+    target?.let { msg ->
+        MessageActionsSheet(
+            message = msg,
+            onAction = { action ->
+                when (action) {
+                    is ThreadAction.Delete -> pendingDelete = action.messageId
+                    is ThreadAction.Revoke -> pendingRevoke = action.messageId
+                    else -> onAction(action)
+                }
+            },
+            onTip = onTip,
+            onDismiss = onCloseSheet,
+        )
+    }
+
+    pendingDelete?.let { id ->
+        DeleteMessageDialog(
+            onConfirm = { onAction(ThreadAction.Delete(id)); pendingDelete = null },
+            onCancel = { pendingDelete = null },
+        )
+    }
+    pendingRevoke?.let { id ->
+        RevokeMessageDialog(
+            onConfirm = { onAction(ThreadAction.Revoke(id)); pendingRevoke = null },
+            onCancel = { pendingRevoke = null },
+        )
+    }
+
+    actions.editing?.let { editTarget ->
+        EditMessageDialog(
+            target = editTarget,
+            onSubmit = { onAction(ThreadAction.SubmitEdit(editTarget.messageId, it)) },
+            onCancel = { onAction(ThreadAction.CancelEdit) },
+        )
+    }
+
+    if (actions.reactionDetailsVisible) {
+        ReactionDetailsSheet(state = actions.reactionDetails, onDismiss = { onAction(ThreadAction.DismissSheets) })
+    }
+    if (actions.pinsSheetVisible) {
+        PinnedMessagesSheet(
+            state = actions.pinned,
+            onJumpTo = onJumpToPinned,
+            onDismiss = { onAction(ThreadAction.DismissSheets) },
+        )
+    }
+    if (actions.editHistoryVisible) {
+        EditHistorySheet(state = actions.editHistory, onDismiss = { onAction(ThreadAction.DismissSheets) })
+    }
+}
+
+@Composable
+private fun CenterLoader() {
+    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
+        CircularProgressIndicator(Modifier.sizeIn(maxWidth = 32.dp, maxHeight = 32.dp))
+    }
+}
+
+/** AND-140 — tombstone bubble text for a deleted/revoked message. */
+@Composable
+fun tombstoneLabel(message: ThreadMessageUi): String = when {
+    message.isRevoked -> stringResource(R.string.msg_tombstone_revoked)
+    message.isDeleted -> stringResource(R.string.msg_tombstone_deleted)
+    else -> ""
+}

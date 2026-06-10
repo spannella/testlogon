@@ -45,6 +45,63 @@ data class ThreadUiState(
     val tipSheet: TipSheetState = TipSheetState(),
     /** AND-139 — one-shot user-facing confirmation/snackbar text (cleared after shown). */
     val transientMessage: String? = null,
+    // ---- AND-140: per-message actions (reactions / pins / edits / delete / revoke / hide) ----
+    /** Auxiliary action-sheet + edit-mode state. */
+    val actions: MessageActionsUiState = MessageActionsUiState(),
+    // ---- AND-141: drafts ----
+    /** True when a non-blank draft exists for this conversation (gates "Discard draft"). */
+    val hasDraft: Boolean = false,
+    /** Last draft sync outcome (non-blocking UX only). */
+    val draftSyncState: DraftSyncState = DraftSyncState.Idle,
+)
+
+/** AND-140 — generic async loader state for the read sheets (reaction details / pins / edits). */
+sealed interface Async<out T> {
+    data object Idle : Async<Nothing>
+    data object Loading : Async<Nothing>
+    data class Success<T>(val data: T) : Async<T>
+    data class Error(val message: String) : Async<Nothing>
+}
+
+/** AND-141 — non-blocking draft sync indicator. */
+enum class DraftSyncState { Idle, Saving, SavedLocal, Synced, Error }
+
+/** AND-140 — the message currently being edited (composer is pre-filled with [originalText]). */
+data class EditTarget(val messageId: String, val originalText: String)
+
+/**
+ * AND-140 — one-shot intents from the message long-press action surface. Dispatched through
+ * [ThreadViewModel.onAction] on viewModelScope.
+ */
+sealed interface ThreadAction {
+    data class ToggleReaction(val messageId: String, val emoji: String) : ThreadAction
+    data class OpenReactionDetails(val messageId: String) : ThreadAction
+    data class SetPinned(val messageId: String, val pinned: Boolean) : ThreadAction
+    data object OpenPinsList : ThreadAction
+    data class StartEdit(val messageId: String) : ThreadAction
+    data class SubmitEdit(val messageId: String, val body: String) : ThreadAction
+    data object CancelEdit : ThreadAction
+    data class OpenEditHistory(val messageId: String) : ThreadAction
+    data class Delete(val messageId: String) : ThreadAction
+    data class Revoke(val messageId: String) : ThreadAction
+    data class SetHidden(val messageId: String, val hidden: Boolean) : ThreadAction
+    data object DismissSheets : ThreadAction
+}
+
+/** AND-140 — auxiliary state for the action sheets + edit mode + transient errors. */
+data class MessageActionsUiState(
+    val reactionDetails: Async<List<com.testlogon.android.data.messaging.Reactor>> = Async.Idle,
+    val pinned: Async<List<ThreadMessageUi>> = Async.Idle,
+    val editHistory: Async<List<com.testlogon.android.data.messaging.MessageEdit>> = Async.Idle,
+    /** Non-null while editing one of the user's own messages. */
+    val editing: EditTarget? = null,
+    /** Whether the pins-list sheet is open. */
+    val pinsSheetVisible: Boolean = false,
+    /** Whether the reaction-details sheet is open. */
+    val reactionDetailsVisible: Boolean = false,
+    /** Whether the edit-history sheet is open. */
+    val editHistoryVisible: Boolean = false,
+    val transientError: String? = null,
 )
 
 /** AND-137 — countdown picker draft + inline validation error. */
@@ -172,9 +229,21 @@ data class ThreadMessageUi(
     val sendStatus: SendStatus,
     /** AND-130/131 — media payload; [MessageMedia.None] for plain text. */
     val media: MessageMedia = MessageMedia.None,
+    // AND-140 — moderation / engagement render state.
+    val reactions: List<com.testlogon.android.data.messaging.Reaction> = emptyList(),
+    val isPinned: Boolean = false,
+    val lifecycle: com.testlogon.android.data.messaging.MessageLifecycle =
+        com.testlogon.android.data.messaging.MessageLifecycle.ACTIVE,
+    val isEdited: Boolean = false,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
+    /** AND-140 — a revoked message renders a tombstone bubble. */
+    val isRevoked: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.REVOKED
+    /** AND-140 — a deleted-for-me message renders a tombstone bubble. */
+    val isDeleted: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.DELETED
+    /** AND-140 — a tombstone (deleted or revoked) is rendered specially and offers no further actions. */
+    val isTombstone: Boolean get() = isRevoked || isDeleted
     val isImage: Boolean get() = media is MessageMedia.Image
     val isVideo: Boolean get() = media is MessageMedia.VideoShare
     val isFile: Boolean get() = media is MessageMedia.File

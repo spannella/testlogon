@@ -18,6 +18,7 @@ import com.testlogon.android.data.messaging.SlotVote
 import com.testlogon.android.data.messaging.StickerCollectionUi
 import com.testlogon.android.data.messaging.StickerPick
 import com.testlogon.android.data.messaging.TipReceipt
+import com.testlogon.android.data.messaging.withReactionToggled
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
@@ -134,6 +135,123 @@ class FakeMessagingRepository : MessagingRepository {
             sendStatus = SendStatus.SENT,
         )
     }
+
+    // ---- AND-140: reactions / pins / edits / delete / revoke / hide ----
+
+    var mutationsApplied = mutableListOf<MessagingEvent.MessageMutated>()
+    var toggleReactionCalls = mutableListOf<ReactionCall>()
+    var toggleReactionResult: ApiResult<Message>? = null
+    var reactionDetailsResult: ApiResult<List<com.testlogon.android.data.messaging.Reactor>> =
+        ApiResult.Success(emptyList())
+    var setPinnedCalls = mutableListOf<Pair<String, Boolean>>()
+    var setPinnedResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var pinnedMessagesResult: ApiResult<List<Message>> = ApiResult.Success(emptyList())
+    var editCalls = mutableListOf<Pair<String, String>>()
+    var editResult: ApiResult<Message>? = null
+    var editHistoryResult: ApiResult<List<com.testlogon.android.data.messaging.MessageEdit>> =
+        ApiResult.Success(emptyList())
+    var deleteCalls = mutableListOf<String>()
+    var deleteResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var revokeCalls = mutableListOf<String>()
+    var revokeResult: ApiResult<Message>? = null
+    var setHiddenCalls = mutableListOf<Pair<String, Boolean>>()
+    var setHiddenResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var hiddenMessagesResult: ApiResult<List<Message>> = ApiResult.Success(emptyList())
+
+    data class ReactionCall(val messageId: String, val emoji: String, val add: Boolean)
+
+    private fun threadMessage(messageId: String): Message? =
+        thread.value.firstOrNull { it.id == messageId || it.clientId == messageId }
+
+    private fun updateThread(messageId: String, transform: (Message) -> Message) {
+        thread.value = thread.value.map {
+            if (it.id == messageId || it.clientId == messageId) transform(it) else it
+        }
+    }
+
+    override suspend fun applyMessageMutation(event: MessagingEvent.MessageMutated) {
+        mutationsApplied += event
+    }
+
+    override suspend fun toggleReaction(
+        conversationId: String,
+        messageId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Message> {
+        toggleReactionCalls += ReactionCall(messageId, emoji, add)
+        val current = threadMessage(messageId)
+        if (current != null) {
+            updateThread(messageId) { it.withReactionToggled(emoji, add) }
+        }
+        return toggleReactionResult ?: (threadMessage(messageId)?.let { ApiResult.Success(it) }
+            ?: failure())
+    }
+
+    override suspend fun reactionDetails(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<List<com.testlogon.android.data.messaging.Reactor>> = reactionDetailsResult
+
+    override suspend fun setPinned(
+        conversationId: String,
+        messageId: String,
+        pinned: Boolean,
+    ): ApiResult<Unit> {
+        setPinnedCalls += messageId to pinned
+        if (setPinnedResult is ApiResult.Success) updateThread(messageId) { it.copy(isPinned = pinned) }
+        return setPinnedResult
+    }
+
+    override suspend fun pinnedMessages(conversationId: String, cursor: String?): ApiResult<List<Message>> =
+        pinnedMessagesResult
+
+    override suspend fun editMessage(
+        conversationId: String,
+        messageId: String,
+        text: String,
+    ): ApiResult<Message> {
+        editCalls += messageId to text
+        val r = editResult
+        if (r is ApiResult.Success) updateThread(messageId) { r.data }
+        return r ?: failure()
+    }
+
+    override suspend fun editHistory(
+        conversationId: String,
+        messageId: String,
+        limit: Int,
+    ): ApiResult<List<com.testlogon.android.data.messaging.MessageEdit>> = editHistoryResult
+
+    override suspend fun deleteMessage(conversationId: String, messageId: String): ApiResult<Unit> {
+        deleteCalls += messageId
+        if (deleteResult is ApiResult.Success) {
+            updateThread(messageId) {
+                it.copy(text = "", lifecycle = com.testlogon.android.data.messaging.MessageLifecycle.DELETED)
+            }
+        }
+        return deleteResult
+    }
+
+    override suspend fun revokeMessage(conversationId: String, messageId: String): ApiResult<Message> {
+        revokeCalls += messageId
+        val r = revokeResult
+        if (r is ApiResult.Success) updateThread(messageId) { r.data }
+        return r ?: failure()
+    }
+
+    override suspend fun setHidden(
+        conversationId: String,
+        messageId: String,
+        hidden: Boolean,
+    ): ApiResult<Unit> {
+        setHiddenCalls += messageId to hidden
+        if (setHiddenResult is ApiResult.Success) updateThread(messageId) { it.copy(isHiddenLocal = hidden) }
+        return setHiddenResult
+    }
+
+    override suspend fun hiddenMessages(conversationId: String, cursor: String?): ApiResult<List<Message>> =
+        hiddenMessagesResult
 
     override suspend fun markRead(
         conversationId: String,
@@ -655,6 +773,52 @@ class FakeMessagingRepository : MessagingRepository {
         fun failure(status: Int = 500, message: String = "boom"): ApiResult<Nothing> =
             ApiResult.Failure(ApiError(status = status, message = message))
     }
+}
+
+/** AND-141 — in-memory [com.testlogon.android.data.messaging.DraftRepository] fake. */
+class FakeDraftRepository : com.testlogon.android.data.messaging.DraftRepository {
+    private val drafts =
+        MutableStateFlow<Map<String, com.testlogon.android.data.messaging.Draft>>(emptyMap())
+
+    var saveCalls = mutableListOf<Pair<String, String>>()
+    var clearCalls = mutableListOf<String>()
+    var flushCalls = 0
+    var loadResult: ApiResult<com.testlogon.android.data.messaging.Draft?>? = null
+
+    fun seed(draft: com.testlogon.android.data.messaging.Draft) {
+        drafts.value = drafts.value + (draft.conversationId to draft)
+    }
+
+    override fun observeDraft(conversationId: String): Flow<com.testlogon.android.data.messaging.Draft?> =
+        kotlinx.coroutines.flow.MutableStateFlow(drafts.value[conversationId])
+
+    override suspend fun loadAndReconcile(
+        conversationId: String,
+    ): ApiResult<com.testlogon.android.data.messaging.Draft?> =
+        loadResult ?: ApiResult.Success(drafts.value[conversationId])
+
+    override suspend fun saveDraft(
+        conversationId: String,
+        text: String,
+    ): ApiResult<com.testlogon.android.data.messaging.Draft> {
+        saveCalls += conversationId to text
+        val draft = com.testlogon.android.data.messaging.Draft(
+            conversationId = conversationId,
+            text = text,
+            updatedAtEpochMs = 0L,
+            pendingSync = false,
+        )
+        drafts.value = drafts.value + (conversationId to draft)
+        return ApiResult.Success(draft)
+    }
+
+    override suspend fun clearDraft(conversationId: String): ApiResult<Unit> {
+        clearCalls += conversationId
+        drafts.value = drafts.value - conversationId
+        return ApiResult.Success(Unit)
+    }
+
+    override suspend fun flushPending() { flushCalls++ }
 }
 
 /**

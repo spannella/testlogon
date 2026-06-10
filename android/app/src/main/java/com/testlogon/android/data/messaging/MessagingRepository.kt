@@ -76,6 +76,67 @@ interface MessagingRepository {
     suspend fun applyInboundMessage(event: MessagingEvent.NewMessage)
 
     /**
+     * AND-140 — apply an inbound realtime mutation (reaction/edit/revoke) by re-fetching the affected
+     * message and reconciling the cache, so the open thread reflects the change live. Best-effort.
+     */
+    suspend fun applyMessageMutation(event: MessagingEvent.MessageMutated)
+
+    // ---- AND-140: reactions / pins / edits / delete / revoke / hide ----
+
+    /**
+     * AND-140 — toggle a reaction optimistically (chip count + reactedByMe) then POST …/reactions
+     * with action add/remove. The endpoint returns an empty 200, so on success we re-fetch the
+     * message to reconcile authoritative counts; on error we restore the captured prior entity.
+     */
+    suspend fun toggleReaction(
+        conversationId: String,
+        messageId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Message>
+
+    /** AND-140 — reactor details grouped by emoji (read-through; not persisted). */
+    suspend fun reactionDetails(conversationId: String, messageId: String): ApiResult<List<Reactor>>
+
+    /**
+     * AND-140 — pin/unpin a message. POST/DELETE …/pin return a control ack (not a Message); we
+     * apply the pinned flag to the cached entity optimistically and reconcile/roll back.
+     */
+    suspend fun setPinned(conversationId: String, messageId: String, pinned: Boolean): ApiResult<Unit>
+
+    /** AND-140 — pinned messages (resolves pin refs against the cache, fetching any miss). */
+    suspend fun pinnedMessages(conversationId: String, cursor: String? = null): ApiResult<List<Message>>
+
+    /** AND-140 — edit a message body (PATCH field `text`); reconciles the cached row to EDITED. */
+    suspend fun editMessage(conversationId: String, messageId: String, text: String): ApiResult<Message>
+
+    /** AND-140 — edit history (newest-first; read-through, not persisted). */
+    suspend fun editHistory(
+        conversationId: String,
+        messageId: String,
+        limit: Int = 50,
+    ): ApiResult<List<MessageEdit>>
+
+    /**
+     * AND-140 — delete a message FOR ME. Empty 200 -> mark DELETED locally; a 404 reconciles to the
+     * same tombstone rather than rolling back.
+     */
+    suspend fun deleteMessage(conversationId: String, messageId: String): ApiResult<Unit>
+
+    /** AND-140 — revoke ("unsend") a message FOR ALL; reconciles the cached row to REVOKED. */
+    suspend fun revokeMessage(conversationId: String, messageId: String): ApiResult<Message>
+
+    /**
+     * AND-140 — hide/unhide a message FOR ME (server-backed). Applies the local hide flag
+     * optimistically, POSTs/DELETEs …/hide, and rolls back on error. The hide flag is set via a
+     * targeted column update so an unrelated MessageOut upsert never clobbers it.
+     */
+    suspend fun setHidden(conversationId: String, messageId: String, hidden: Boolean): ApiResult<Unit>
+
+    /** AND-140 — the current user's hidden messages for a conversation. */
+    suspend fun hiddenMessages(conversationId: String, cursor: String? = null): ApiResult<List<Message>>
+
+    /**
      * AND-125 — mark a conversation read. Optimistically clears the local unread count/badge first,
      * then POSTs the read marker. The web client sends `last_read_at` (the newest loaded message's
      * created_at epoch); we mirror that. Failures keep the optimistic clear (read intent not lost)
@@ -430,6 +491,7 @@ class MessagingRepositoryImpl @Inject constructor(
     private val uriMetadata: com.testlogon.android.data.upload.UriMetadata,
     private val storageClient: com.testlogon.android.data.upload.StorageUploadClient,
     private val attachmentDownloader: AttachmentDownloader,
+    private val moshi: com.squareup.moshi.Moshi,
 ) : MessagingRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -534,6 +596,236 @@ class MessagingRepositoryImpl @Inject constructor(
                 // Media fields (urls) arrive on the next list refresh; the SSE frame carries no url.
             ),
         )
+    }
+
+    override suspend fun applyMessageMutation(event: MessagingEvent.MessageMutated) = withContext(io) {
+        // Re-fetch the affected message and reconcile the cache (mirrors the web refetch-on-event).
+        when (val r = apiCall { api.listMessages(event.conversationId, limit = PAGE_SIZE, before = null) }) {
+            is ApiResult.Success -> {
+                val fresh = r.data.firstOrNull { it.messageId == event.messageId } ?: return@withContext
+                reconcilePreservingLocalFlags(fresh.toDomain())
+            }
+            else -> Unit // best-effort; a later list refresh reconciles
+        }
+    }
+
+    // ---- AND-140: reactions / pins / edits / delete / revoke / hide ----
+
+    override suspend fun toggleReaction(
+        conversationId: String,
+        messageId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Message> = withContext(io) {
+        val prior = messageDao.findById(messageId)
+            ?: return@withContext ApiResult.Failure(
+                ApiError(status = ApiError.STATUS_PARSE, message = "Message not found"),
+            )
+        // Optimistic chip update so the thread Flow emits before the network returns.
+        val optimistic = prior.toDomain().withReactionToggled(emoji, add)
+        messageDao.upsert(optimistic.toEntity(clientId = prior.clientId))
+        when (val r = apiCall { api.react(conversationId, messageId, ReactIn(emoji, if (add) "add" else "remove")) }) {
+            is ApiResult.Success -> {
+                // Empty 200 — re-fetch to reconcile authoritative counts (server is the source of truth).
+                refetchAndReconcile(conversationId, messageId, fallback = optimistic)
+            }
+            is ApiResult.Failure -> { messageDao.upsert(prior); r }
+            is ApiResult.NetworkError -> { messageDao.upsert(prior); r }
+        }
+    }
+
+    override suspend fun reactionDetails(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<List<Reactor>> = withContext(io) {
+        when (val r = apiCall { api.reactionDetails(conversationId, messageId) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.toReactors())
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun setPinned(
+        conversationId: String,
+        messageId: String,
+        pinned: Boolean,
+    ): ApiResult<Unit> = withContext(io) {
+        val prior = messageDao.findById(messageId)
+        // Optimistic local pin flag (targeted update so the rest of the row is untouched).
+        if (prior != null) messageDao.setPinned(messageId, pinned)
+        val call = if (pinned) {
+            apiCall { api.pinMessage(conversationId, messageId) }
+        } else {
+            apiCall { api.unpinMessage(conversationId, messageId) }
+        }
+        when (call) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.Failure -> { if (prior != null) messageDao.setPinned(messageId, prior.isPinned); call }
+            is ApiResult.NetworkError -> { if (prior != null) messageDao.setPinned(messageId, prior.isPinned); call }
+        }
+    }
+
+    override suspend fun pinnedMessages(
+        conversationId: String,
+        cursor: String?,
+    ): ApiResult<List<Message>> = withContext(io) {
+        when (val r = apiCall { api.listPins(conversationId, cursor = cursor) }) {
+            is ApiResult.Success -> {
+                // Pins endpoint returns REFS; resolve each against the cache, fetching any miss.
+                val active = r.data.items.filter { it.isActive }.sortedByDescending { it.pinnedAt }
+                val resolved = active.mapNotNull { ref ->
+                    messageDao.findById(ref.messageId)?.toDomain() ?: fetchSingleMessage(conversationId, ref.messageId)
+                }
+                ApiResult.Success(resolved)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun editMessage(
+        conversationId: String,
+        messageId: String,
+        text: String,
+    ): ApiResult<Message> = withContext(io) {
+        when (val r = apiCall { api.editMessage(conversationId, messageId, EditMessageIn(text)) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                reconcilePreservingLocalFlags(message)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun editHistory(
+        conversationId: String,
+        messageId: String,
+        limit: Int,
+    ): ApiResult<List<MessageEdit>> = withContext(io) {
+        when (val r = apiCall { api.editHistory(conversationId, messageId, limit) }) {
+            is ApiResult.Success -> {
+                val entries = parseEditHistory(r.data.string())
+                ApiResult.Success(entries.toMessageEdits())
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun deleteMessage(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Unit> = withContext(io) {
+        when (val r = apiCall { api.deleteMessage(conversationId, messageId) }) {
+            is ApiResult.Success -> { markDeletedLocally(messageId); ApiResult.Success(Unit) }
+            is ApiResult.Failure -> {
+                // 404 (already deleted server-side) reconciles to a tombstone rather than rolling back.
+                if (r.error.status == HTTP_NOT_FOUND) { markDeletedLocally(messageId); ApiResult.Success(Unit) } else r
+            }
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun revokeMessage(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Message> = withContext(io) {
+        when (val r = apiCall { api.revokeMessage(conversationId, messageId) }) {
+            is ApiResult.Success -> {
+                // Map the returned MessageOut; revoked_at -> REVOKED. Gated body never carried.
+                val message = r.data.toDomain().copy(text = "", lifecycle = MessageLifecycle.REVOKED)
+                reconcilePreservingLocalFlags(message)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun setHidden(
+        conversationId: String,
+        messageId: String,
+        hidden: Boolean,
+    ): ApiResult<Unit> = withContext(io) {
+        val prior = messageDao.findById(messageId)
+        if (prior != null) messageDao.setHidden(messageId, hidden) // optimistic, targeted update
+        val call = if (hidden) {
+            apiCall { api.hideMessage(conversationId, messageId) }
+        } else {
+            apiCall { api.unhideMessage(conversationId, messageId) }
+        }
+        when (call) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.Failure -> { if (prior != null) messageDao.setHidden(messageId, prior.isHidden); call }
+            is ApiResult.NetworkError -> { if (prior != null) messageDao.setHidden(messageId, prior.isHidden); call }
+        }
+    }
+
+    override suspend fun hiddenMessages(
+        conversationId: String,
+        cursor: String?,
+    ): ApiResult<List<Message>> = withContext(io) {
+        when (val r = apiCall { api.listHiddenMessages(conversationId, cursor = cursor) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.items.map { it.toDomain().copy(isHiddenLocal = true) })
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    /** Re-fetch the message page and reconcile the named message; [fallback] kept if the fetch misses. */
+    private suspend fun refetchAndReconcile(
+        conversationId: String,
+        messageId: String,
+        fallback: Message,
+    ): ApiResult<Message> {
+        return when (val r = apiCall { api.listMessages(conversationId, limit = PAGE_SIZE, before = null) }) {
+            is ApiResult.Success -> {
+                val fresh = r.data.firstOrNull { it.messageId == messageId }?.toDomain()
+                val reconciled = fresh ?: fallback
+                reconcilePreservingLocalFlags(reconciled)
+                ApiResult.Success(reconciled)
+            }
+            // Network/parse issue on the read-back: keep the optimistic state (already written).
+            else -> ApiResult.Success(fallback)
+        }
+    }
+
+    /** Upsert a server-authoritative message while preserving the local hide flag (R5 / merge rule). */
+    private suspend fun reconcilePreservingLocalFlags(message: Message) {
+        val priorHidden = messageDao.findById(message.id ?: return)?.isHidden ?: false
+        messageDao.upsert(message.toEntity(clientId = null).copy(isHidden = priorHidden))
+    }
+
+    private suspend fun markDeletedLocally(messageId: String) {
+        val prior = messageDao.findById(messageId) ?: return
+        messageDao.upsert(prior.copy(text = "", lifecycle = MessageLifecycle.DELETED.name))
+    }
+
+    private suspend fun fetchSingleMessage(conversationId: String, messageId: String): Message? {
+        val r = apiCall { api.listMessages(conversationId, limit = PAGE_SIZE, before = null) }
+        if (r !is ApiResult.Success) return null
+        val dto = r.data.firstOrNull { it.messageId == messageId } ?: return null
+        val message = dto.toDomain()
+        messageDao.upsert(message.toEntity(clientId = null))
+        return message
+    }
+
+    /** Parse the unpinned GET …/edits body: a bare array or {items:[...]}. Tolerant of garbage. */
+    private fun parseEditHistory(body: String): List<EditHistoryEntryDto> {
+        if (body.isBlank()) return emptyList()
+        val trimmed = body.trimStart()
+        return runCatching {
+            if (trimmed.startsWith("[")) {
+                val type = com.squareup.moshi.Types.newParameterizedType(
+                    List::class.java, EditHistoryEntryDto::class.java,
+                )
+                moshi.adapter<List<EditHistoryEntryDto>>(type).fromJson(body) ?: emptyList()
+            } else {
+                moshi.adapter(EditHistoryPageOut::class.java).fromJson(body)?.items ?: emptyList()
+            }
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun markRead(
@@ -1527,7 +1819,37 @@ class MessagingRepositoryImpl @Inject constructor(
 
         /** AND-133 — AAC-LC / M4A container MIME (matches the recorder + the presign content-type pattern). */
         const val VOICE_CONTENT_TYPE = "audio/mp4"
+
+        /** AND-140 — HTTP 404 (message already deleted server-side -> reconcile to a tombstone). */
+        const val HTTP_NOT_FOUND = 404
+
+        /** Default page size for thread history fetches (mirrors the thread VM PAGE_SIZE). */
+        const val PAGE_SIZE = 30
     }
+}
+
+/**
+ * AND-140 — pure optimistic reaction toggle on a [Message]'s chip list: bumps/decrements the count
+ * for [emoji] and flips reactedByMe, removing the chip when the count hits zero. JVM-testable.
+ */
+internal fun Message.withReactionToggled(emoji: String, add: Boolean): Message {
+    val existing = reactions.firstOrNull { it.emoji == emoji }
+    val next: List<Reaction> = when {
+        add && existing == null -> reactions + Reaction(emoji, 1, reactedByMe = true)
+        add && existing != null && !existing.reactedByMe ->
+            reactions.map { if (it.emoji == emoji) it.copy(count = it.count + 1, reactedByMe = true) else it }
+        !add && existing != null && existing.reactedByMe -> {
+            val newCount = existing.count - 1
+            if (newCount <= 0) {
+                reactions.filterNot { it.emoji == emoji }
+            } else {
+                reactions.map { if (it.emoji == emoji) it.copy(count = newCount, reactedByMe = false) else it }
+            }
+        }
+        // add when already reacted, or remove when not reacted: idempotent no-op.
+        else -> reactions
+    }
+    return copy(reactions = next.sortedWith(compareByDescending<Reaction> { it.count }.thenBy { it.emoji }))
 }
 
 // ---- merge + entity mappers ----
@@ -1642,8 +1964,41 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         lockCurrency = paid?.currency,
         lockTeaser = paid?.teaser,
         revealedText = paid?.revealedText,
+        // AND-140 — moderation / engagement columns.
+        reactionsJson = reactionsToJson(reactions),
+        isPinned = isPinned,
+        lifecycle = lifecycle.name,
+        editedAtEpochSeconds = editedAtEpochSeconds,
+        isHidden = isHiddenLocal,
     )
 }
+
+/**
+ * AND-140 — serialize the reaction chip list to a compact JSON array string for the Room TEXT
+ * column. Pure / JVM-testable; null for an empty list so legacy rows stay null. Emoji are
+ * JSON-string-escaped minimally (quote + backslash).
+ */
+internal fun reactionsToJson(reactions: List<Reaction>): String? {
+    if (reactions.isEmpty()) return null
+    return reactions.joinToString(prefix = "[", postfix = "]") { r ->
+        val emoji = r.emoji.replace("\\", "\\\\").replace("\"", "\\\"")
+        "{\"e\":\"$emoji\",\"c\":${r.count},\"m\":${r.reactedByMe}}"
+    }
+}
+
+/** AND-140 — parse the reactions JSON column back into chips; tolerant of null/blank/garbage. */
+internal fun reactionsFromJson(json: String?): List<Reaction> {
+    if (json.isNullOrBlank() || json == "[]") return emptyList()
+    return ReactionJsonRegex.findAll(json).mapNotNull { match ->
+        val emoji = match.groupValues[1].replace("\\\"", "\"").replace("\\\\", "\\")
+        val count = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+        val mine = match.groupValues[3].toBooleanStrictOrNull() ?: false
+        Reaction(emoji, count, mine)
+    }.toList()
+}
+
+private val ReactionJsonRegex =
+    Regex("\\{\"e\":\"((?:[^\"\\\\]|\\\\.)*)\",\"c\":(\\d+),\"m\":(true|false)\\}")
 
 /** Serializes a normalized waveform (0..1) to a compact JSON number[] string for the Room TEXT column. */
 internal fun waveformToJson(values: List<Float>): String =
@@ -1666,6 +2021,11 @@ internal fun MessageEntity.toDomain(): Message = Message(
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = SendStatus.SENT,
     kind = kind,
+    reactions = reactionsFromJson(reactionsJson),
+    isPinned = isPinned,
+    lifecycle = runCatching { MessageLifecycle.valueOf(lifecycle) }.getOrDefault(MessageLifecycle.ACTIVE),
+    editedAtEpochSeconds = editedAtEpochSeconds,
+    isHiddenLocal = isHidden,
     media = when (kind) {
         "image" -> MessageMedia.Image(url = imageUrl, width = imageWidth, height = imageHeight)
         "video_share" -> MessageMedia.VideoShare(

@@ -55,6 +55,41 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE messageId = :messageId LIMIT 1")
     suspend fun findById(messageId: String): MessageEntity?
+
+    /** AND-140 — set the per-user hide flag without rewriting the rest of the row (merge-safe). */
+    @Query("UPDATE messages SET isHidden = :hidden WHERE messageId = :messageId")
+    suspend fun setHidden(messageId: String, hidden: Boolean)
+
+    /** AND-140 — set the pinned flag without rewriting the rest of the row. */
+    @Query("UPDATE messages SET isPinned = :pinned WHERE messageId = :messageId")
+    suspend fun setPinned(messageId: String, pinned: Boolean)
+
+    /** AND-140 — pinned messages for a conversation (newest pin order is resolved by the repo). */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND isPinned = 1")
+    suspend fun pinnedForConversation(conversationId: String): List<MessageEntity>
+}
+
+/** AND-141 — per-conversation composer draft cache (single source of truth for restore). */
+@Dao
+interface DraftDao {
+
+    @Query("SELECT * FROM drafts WHERE conversationId = :id LIMIT 1")
+    fun observe(id: String): Flow<DraftEntity?>
+
+    @Query("SELECT * FROM drafts WHERE conversationId = :id LIMIT 1")
+    suspend fun get(id: String): DraftEntity?
+
+    @Upsert
+    suspend fun upsert(entity: DraftEntity)
+
+    @Query("DELETE FROM drafts WHERE conversationId = :id")
+    suspend fun delete(id: String)
+
+    @Query("SELECT * FROM drafts WHERE pendingSync = 1")
+    suspend fun pending(): List<DraftEntity>
+
+    @Query("DELETE FROM drafts")
+    suspend fun clear()
 }
 
 @Dao
