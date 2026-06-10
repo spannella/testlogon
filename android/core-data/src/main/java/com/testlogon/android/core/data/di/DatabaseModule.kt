@@ -6,6 +6,7 @@ import com.testlogon.android.core.data.BuildConfig
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.db.TestLogonDatabase
 import com.testlogon.android.core.data.db.sample.SampleDao
+import com.testlogon.android.core.data.feed.PostSuppressionDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -40,4 +41,8 @@ object DatabaseModule {
     @Provides
     fun provideCacheMaintenanceDao(db: TestLogonDatabase): CacheMaintenanceDao =
         db.cacheMaintenanceDao()
+
+    @Provides
+    fun providePostSuppressionDao(db: TestLogonDatabase): PostSuppressionDao =
+        db.postSuppressionDao()
 }

@@ -633,4 +633,49 @@
     <string name="legal_hold_status">Status: %1$s</string>
     <string name="legal_hold_created_at">Created: %1$s</string>
     <string name="action_unavailable_legal_hold">Unavailable: on legal hold</string>
+
+    <!-- Feed content engagement: like (AND-173) -->
+    <string name="feed_like">Like</string>
+    <string name="feed_unlike">Unlike</string>
+    <string name="feed_liked_state">Liked</string>
+    <string name="feed_not_liked_state">Not liked</string>
+    <plurals name="feed_like_count_desc">
+        <item quantity="one">%1$s, %2$d like</item>
+        <item quantity="other">%1$s, %2$d likes</item>
+    </plurals>
+
+    <!-- Feed content engagement: comments (AND-174) -->
+    <string name="feed_comment">Comment</string>
+    <plurals name="feed_comment_count">
+        <item quantity="one">%1$d comment</item>
+        <item quantity="other">%1$d comments</item>
+    </plurals>
+    <string name="comments_title">Comments</string>
+    <string name="comments_empty">No comments yet — be the first</string>
+    <string name="comments_loading">Loading comments…</string>
+    <string name="comments_error_generic">Couldn\'t load comments.</string>
+    <string name="comments_retry">Retry</string>
+    <string name="comments_send">Send</string>
+    <string name="comments_input_hint">Add a comment…</string>
+    <string name="comments_reply_action">Reply</string>
+    <string name="comments_replying_to">Replying to %1$s</string>
+    <string name="comments_cancel_reply">Cancel reply</string>
+    <string name="comments_delete">Delete</string>
+    <string name="comments_delete_confirm_title">Delete comment?</string>
+    <string name="comments_delete_confirm_body">This comment will be permanently deleted.</string>
+    <string name="comments_delete_cancel">Cancel</string>
+    <string name="comments_pending">Sending</string>
+    <string name="comments_failed">Failed to post — double tap to retry</string>
+    <string name="comments_discard">Discard</string>
+    <string name="comments_deleted_tombstone">Comment deleted</string>
+    <string name="comments_edited">(edited)</string>
+
+    <!-- Feed content engagement: hide / not-interested (AND-175) -->
+    <string name="feed_action_more">More actions</string>
+    <string name="feed_action_hide">Hide this post</string>
+    <string name="feed_action_not_interested">Not interested</string>
+    <string name="feed_hidden_snackbar">Post hidden</string>
+    <string name="feed_not_interested_snackbar">We\'ll show fewer posts like this</string>
+    <string name="feed_action_undo">Undo</string>
+    <string name="feed_hide_error_retry">Couldn\'t hide post. Tap to retry.</string>
 </resources>

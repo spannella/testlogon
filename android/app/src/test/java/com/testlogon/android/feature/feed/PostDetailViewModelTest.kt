@@ -7,6 +7,7 @@ import com.testlogon.android.navigation.PostDetailDest
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -17,8 +18,15 @@ class PostDetailViewModelTest {
     @get:Rule
     val mainRule = MainDispatcherRule()
 
-    private fun vm(repo: FakeFeedRepository, postId: String = "post_1") =
-        PostDetailViewModel(repo, SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to postId)))
+    private fun vm(
+        repo: FakeFeedRepository,
+        engagement: FakeEngagementRepository = FakeEngagementRepository(),
+        postId: String = "post_1",
+    ) = PostDetailViewModel(
+        repo,
+        engagement,
+        SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to postId)),
+    )
 
     @Test
     fun success_emitsContent() = runTest {
@@ -93,5 +101,51 @@ class PostDetailViewModelTest {
         sut.refresh()
         advanceUntilIdle()
         assertTrue(repo.postCalls > before)
+    }
+
+    @Test
+    fun onLikeToggle_optimistic_thenReconcilesServerCount() = runTest {
+        val post = FakeFeedRepository.post("post_1").copy(likedByMe = false, likeCount = 10)
+        val repo = FakeFeedRepository(postResult = ApiResult.Success(post))
+        val engagement = FakeEngagementRepository(result = { _, liked, _ ->
+            ApiResult.Success(com.testlogon.android.data.feed.LikeState(liked, 99))
+        })
+        val sut = vm(repo, engagement)
+        advanceUntilIdle()
+
+        sut.onLikeToggle()
+        advanceUntilIdle()
+
+        val content = sut.uiState.value as PostDetailUiState.Content
+        assertTrue(content.post.likedByMe)
+        assertEquals(99, content.post.likeCount)
+    }
+
+    @Test
+    fun onLikeToggle_failure_rollsBack() = runTest {
+        val post = FakeFeedRepository.post("post_1").copy(likedByMe = false, likeCount = 10)
+        val repo = FakeFeedRepository(postResult = ApiResult.Success(post))
+        val engagement = FakeEngagementRepository(result = { _, _, _ -> FakeFeedRepository.failure(500) })
+        val sut = vm(repo, engagement)
+        advanceUntilIdle()
+
+        sut.onLikeToggle()
+        advanceUntilIdle()
+
+        val content = sut.uiState.value as PostDetailUiState.Content
+        assertFalse(content.post.likedByMe)
+        assertEquals(10, content.post.likeCount)
+    }
+
+    @Test
+    fun onCommentCountChanged_adjustsCount() = runTest {
+        val post = FakeFeedRepository.post("post_1").copy(commentCount = 3)
+        val sut = vm(FakeFeedRepository(postResult = ApiResult.Success(post)))
+        advanceUntilIdle()
+
+        sut.onCommentCountChanged(+1)
+        assertEquals(4, (sut.uiState.value as PostDetailUiState.Content).post.commentCount)
+        sut.onCommentCountChanged(-1)
+        assertEquals(3, (sut.uiState.value as PostDetailUiState.Content).post.commentCount)
     }
 }

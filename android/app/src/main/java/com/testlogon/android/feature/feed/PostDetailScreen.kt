@@ -7,15 +7,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -44,13 +49,22 @@ fun PostDetailRoute(
     viewModel: PostDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            if (effect is PostDetailEffect.ShowError) snackbarHostState.showSnackbar(effect.message)
+        }
+    }
     PostDetailScreen(
         state = state,
         onBack = onBack,
         onRetry = viewModel::retry,
         onRefresh = viewModel::refresh,
+        snackbarHostState = snackbarHostState,
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
+        onLikeToggle = { viewModel.onLikeToggle() },
+        onCommentCountChanged = viewModel::onCommentCountChanged,
         modifier = modifier,
     )
 }
@@ -63,11 +77,18 @@ fun PostDetailScreen(
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
+    onLikeToggle: () -> Unit = {},
+    onCommentCountChanged: (delta: Int) -> Unit = {},
+    commentsContent: (@Composable (onCommentCountChanged: (Int) -> Unit) -> Unit)? = {
+        CommentsSection(onCommentCountChanged = it)
+    },
 ) {
     Scaffold(
         modifier = modifier.testTag(PostDetailTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Post") },
@@ -105,18 +126,23 @@ fun PostDetailScreen(
                     onRefresh = onRefresh,
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    Box(
+                    Column(
                         Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                             .testTag(PostDetailTestTags.CONTENT),
                     ) {
-                        // Detail reuses PostItem; body is un-clamped here (no truncation in M2 either way).
+                        // Detail reuses PostItem; like/comment/overflow wired here (AND-173/174/175).
                         PostItem(
                             post = state.post,
                             onAuthorClick = onAuthorClick,
                             onLinkClick = onLinkClick,
+                            onLikeToggle = { onLikeToggle() },
+                            // Comment icon on detail is a no-op (the section is already below).
+                            onCommentClick = {},
                         )
+                        // AND-174 — embedded comments surface. Host count updates flow back up.
+                        commentsContent?.invoke(onCommentCountChanged)
                     }
                 }
             }

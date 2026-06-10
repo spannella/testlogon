@@ -51,6 +51,13 @@ fun PostItem(
     onMediaClick: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
+    // AND-173 / AND-174 / AND-175 — content-engagement affordances. Null => hide the action bar
+    // (e.g. in pure-render preview/test contexts that don't wire engagement).
+    showActionBar: Boolean = true,
+    onLikeToggle: (FeedPost) -> Unit = {},
+    onCommentClick: (FeedPost) -> Unit = {},
+    onHide: (FeedPost) -> Unit = {},
+    onNotInterested: (FeedPost) -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -87,6 +94,18 @@ fun PostItem(
                         )
                     }
                 }
+            }
+
+            if (showActionBar) {
+                PostActionBar(
+                    liked = post.likedByMe,
+                    likeCount = post.likeCount,
+                    commentCount = post.commentCount,
+                    onLikeToggle = { onLikeToggle(post) },
+                    onCommentClick = { onCommentClick(post) },
+                    onHide = { onHide(post) },
+                    onNotInterested = { onNotInterested(post) },
+                )
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

@@ -8,6 +8,8 @@ import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.cache.CacheTables
 import com.testlogon.android.core.data.db.sample.CachedSampleEntity
 import com.testlogon.android.core.data.db.sample.SampleDao
+import com.testlogon.android.core.data.feed.PostSuppressionDao
+import com.testlogon.android.core.data.feed.PostSuppressionEntity
 
 /**
  * AND-115 — the app-wide on-device cache store.
@@ -28,10 +30,11 @@ import com.testlogon.android.core.data.db.sample.SampleDao
  * Version history:
  * - v1 — AND-115 baseline: [CachedSampleEntity] with id/payload/updated_at.
  * - v2 — AND-118: adds fetched_at, last_accessed_at, user_scope, approx_bytes + LRU/user indices.
+ * - v3 — AND-175: adds the post_suppression table (hide / not-interested durable set).
  */
 @Database(
-    entities = [CachedSampleEntity::class],
-    version = 2,
+    entities = [CachedSampleEntity::class, PostSuppressionEntity::class],
+    version = 3,
     exportSchema = true,
 )
 abstract class TestLogonDatabase : RoomDatabase() {
@@ -39,6 +42,9 @@ abstract class TestLogonDatabase : RoomDatabase() {
 
     /** AND-118 — generic, table-name-parameterized maintenance surface (sweep/evict/per-user clear). */
     abstract fun cacheMaintenanceDao(): CacheMaintenanceDao
+
+    /** AND-175 — hide / not-interested durable suppression set. */
+    abstract fun postSuppressionDao(): PostSuppressionDao
 
     companion object {
         const val NAME = "testlogon-cache.db"
@@ -61,7 +67,23 @@ abstract class TestLogonDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * AND-175 — additive migration creating the post_suppression table. Purely additive (a new
+         * table), so no existing rows are touched.
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS post_suppression (" +
+                        "post_id TEXT NOT NULL PRIMARY KEY, " +
+                        "kind TEXT NOT NULL, " +
+                        "created_at_epoch_ms INTEGER NOT NULL, " +
+                        "pending INTEGER NOT NULL)",
+                )
+            }
+        }
+
         /** Registered migrations; grows as the schema evolves. */
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
     }
 }

@@ -12,15 +12,21 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -28,6 +34,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
+import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -56,17 +63,56 @@ fun FeedRoute(
     onLinkClick: (url: String) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
 ) {
-    // Drain one-shot events (e.g. unlock CTA) so they don't buffer; M2 has no UI effect yet.
-    LaunchedEffect(viewModel) { viewModel.events.collect { /* TODO(AND-E24): purchase flow */ } }
-
     val items = viewModel.items.collectAsLazyPagingItems()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val hiddenLabel = stringResource(R.string.feed_hidden_snackbar)
+    val notInterestedLabel = stringResource(R.string.feed_not_interested_snackbar)
+    val undoLabel = stringResource(R.string.feed_action_undo)
+    val retryLabel = stringResource(R.string.comments_retry)
+
+    // Drain one-shot effects: unlock CTA (deferred), like errors, and hide Undo / Retry snackbars.
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is FeedEvent.UnlockRequested -> Unit // TODO(AND-E24): purchase flow
+                is FeedEvent.ShowError ->
+                    snackbarHostState.showSnackbar(event.message)
+                is FeedEvent.Suppressed -> {
+                    val msg = when (event.action) {
+                        is FeedAction.Hide -> hiddenLabel
+                        is FeedAction.NotInterested -> notInterestedLabel
+                    }
+                    val result = snackbarHostState.showSnackbar(
+                        message = msg,
+                        actionLabel = undoLabel,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.onUndo(event.action)
+                }
+                is FeedEvent.SuppressFailed -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = event.message,
+                        actionLabel = retryLabel,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.onRetry(event.action)
+                }
+            }
+        }
+    }
+
     FeedScreen(
         items = items,
+        snackbarHostState = snackbarHostState,
         onRefresh = { items.refresh() },
         onPostClick = { post -> onPostClick(post.id) },
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
         onUnlockClick = viewModel::onUnlockClick,
+        onLikeToggle = viewModel::onLikeToggle,
+        onCommentClick = { post -> onPostClick(post.id) },
+        onHide = { post, index -> viewModel.onHide(post.id, index) },
+        onNotInterested = { post, index -> viewModel.onNotInterested(post.id, index) },
         modifier = modifier,
     )
 }
@@ -78,14 +124,20 @@ fun FeedScreen(
     onRefresh: () -> Unit,
     onPostClick: (FeedPost) -> Unit,
     modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
+    onLikeToggle: (FeedPost) -> Unit = {},
+    onCommentClick: (FeedPost) -> Unit = {},
+    onHide: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
+    onNotInterested: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
 ) {
     val listState = rememberLazyListState()
     Scaffold(
         modifier = modifier.testTag(FeedTestTags.SCREEN),
         topBar = { TopAppBar(title = { Text("Feed") }) },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         val refreshState = items.loadState.refresh
         val isRefreshing = refreshState is LoadState.Loading && items.itemCount > 0
@@ -122,6 +174,10 @@ fun FeedScreen(
                         onAuthorClick = onAuthorClick,
                         onLinkClick = onLinkClick,
                         onUnlockClick = onUnlockClick,
+                        onLikeToggle = onLikeToggle,
+                        onCommentClick = onCommentClick,
+                        onHide = onHide,
+                        onNotInterested = onNotInterested,
                     )
                 }
             }
@@ -137,6 +193,10 @@ private fun FeedList(
     onAuthorClick: (authorId: String) -> Unit,
     onLinkClick: (url: String) -> Unit,
     onUnlockClick: (postId: String) -> Unit,
+    onLikeToggle: (FeedPost) -> Unit,
+    onCommentClick: (FeedPost) -> Unit,
+    onHide: (post: FeedPost, index: Int) -> Unit,
+    onNotInterested: (post: FeedPost, index: Int) -> Unit,
 ) {
     LazyColumn(
         state = listState,
@@ -152,6 +212,10 @@ private fun FeedList(
                     onMediaClick = { post, _ -> onPostClick(post) },
                     onLinkClick = onLinkClick,
                     onUnlockClick = onUnlockClick,
+                    onLikeToggle = onLikeToggle,
+                    onCommentClick = onCommentClick,
+                    onHide = { post -> onHide(post, index) },
+                    onNotInterested = { post -> onNotInterested(post, index) },
                 )
             }
         }
