@@ -26,6 +26,11 @@ android {
         // value and supports an in-app override). Flavors are deferred — see android/README.md.
         // Third arg is literal generated source, so the String needs its own escaped quotes.
         buildConfigField("String", "API_BASE_URL", "\"http://18.222.237.167:8000/\"")
+
+        // AND-161 — configured helpdesk group id (web uses VITE_HELPDESK_GROUP_ID, default
+        // "e2e-helpdesk"). Required `group_id` query param for the helpdesk queue. See AND-161 OQ-5;
+        // swap to remote/per-env config when the production group-id scheme is finalized.
+        buildConfigField("String", "HELPDESK_GROUP_ID", "\"e2e-helpdesk\"")
     }
 
     buildTypes {

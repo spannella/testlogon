@@ -175,6 +175,15 @@ data class ConversationDto(
     @Json(name = "last_read_at") val lastReadAt: Long = 0L,
     // AND-159 — conversation-level mute (epoch SECONDS; default 0 = not muted, NOT nullable per schema).
     @Json(name = "muted_until") val mutedUntil: Long = 0L,
+    // AND-161/AND-162 — helpdesk routing/assignment fields on ConversationOut (all nullable/optional;
+    // present when the conversation is a helpdesk-bridge convo). Verified against
+    // reference/openapi.pretty.json components.schemas.ConversationOut.
+    @Json(name = "routing_mode") val routingMode: String? = null,
+    @Json(name = "routing_group_id") val routingGroupId: String? = null,
+    @Json(name = "routing_state") val routingState: String? = null,
+    @Json(name = "active_agent_user_id") val activeAgentUserId: String? = null,
+    @Json(name = "active_agent_claimed_at") val activeAgentClaimedAt: Long? = null,
+    @Json(name = "assignment_version") val assignmentVersion: Int? = null,
 )
 
 /** POST messages body = SendTextMessageIn. Field is `text` (1..4000); NO client_id on the wire. */

@@ -8,6 +8,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.messaging.contacts.ContactsRoute
 import com.testlogon.android.feature.messaging.dm.StartDmRoute
+import com.testlogon.android.data.messaging.helpdesk.ClaimState
+import com.testlogon.android.feature.messaging.helpdesk.HelpdeskDetailRoute
+import com.testlogon.android.feature.messaging.helpdesk.HelpdeskDetailViewModel
+import com.testlogon.android.feature.messaging.helpdesk.HelpdeskQueueRoute
+import com.testlogon.android.feature.messaging.mass.MassMessagesRoute as MassMessagesScreenRoute
 import com.testlogon.android.feature.messaging.groupcreate.GroupCreateRoute
 import com.testlogon.android.feature.messaging.groupdetails.GroupDetailsRoute
 import com.testlogon.android.feature.messaging.groupsettings.GroupSettingsRoute
@@ -51,6 +56,20 @@ object MessagingRoutes {
 
     /** AND-159 — group settings (mute / leave / accept). */
     const val GROUP_SETTINGS = "messaging/group/settings/{$ARG_CONVERSATION_ID}"
+
+    /** AND-160 — mass messages (broadcast campaigns) list + create sheet. */
+    const val MASS_MESSAGES = "messaging/mass"
+
+    /** AND-161 — agent-facing helpdesk queue. */
+    const val HELPDESK_QUEUE = "messaging/helpdesk/queue"
+
+    /** AND-162 — helpdesk conversation detail (claim + reply). Carries the row's claim state. */
+    const val ARG_CLAIM_STATE = HelpdeskDetailViewModel.ARG_CLAIM_STATE
+    const val HELPDESK_DETAIL =
+        "messaging/helpdesk/conversation/{$ARG_CONVERSATION_ID}?$ARG_CLAIM_STATE={$ARG_CLAIM_STATE}"
+
+    fun helpdeskDetail(conversationId: String, claimStateArg: String): String =
+        "messaging/helpdesk/conversation/${Uri.encode(conversationId)}?$ARG_CLAIM_STATE=${Uri.encode(claimStateArg)}"
 
     fun groupDetails(conversationId: String): String =
         "messaging/group/details/${Uri.encode(conversationId)}"
@@ -198,4 +217,46 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
             onBack = { navController.popBackStack() },
         )
     }
+    // AND-160 — mass messages (broadcast campaigns). Self-gates on the mass-send capability.
+    composable(MessagingRoutes.MASS_MESSAGES) {
+        MassMessagesScreenRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-161 — helpdesk queue. Row tap opens the AND-162 detail (claim + reply).
+    composable(MessagingRoutes.HELPDESK_QUEUE) {
+        HelpdeskQueueRoute(
+            onOpenConversation = { conversationId, claimState ->
+                navController.navigate(
+                    MessagingRoutes.helpdeskDetail(
+                        conversationId = conversationId,
+                        claimStateArg = HelpdeskDetailViewModel.encodeAssignment(claimState.toAssignment()),
+                    ),
+                ) { launchSingleTop = true }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    // AND-162 — helpdesk conversation detail (claim + reply).
+    composable(
+        route = MessagingRoutes.HELPDESK_DETAIL,
+        arguments = listOf(
+            navArgument(MessagingRoutes.ARG_CONVERSATION_ID) { type = NavType.StringType },
+            navArgument(MessagingRoutes.ARG_CLAIM_STATE) {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            },
+        ),
+    ) {
+        HelpdeskDetailRoute(
+            onBack = { navController.popBackStack() },
+        )
+    }
 }
+
+/** AND-162 — map the queue row's [ClaimState] to the detail's initial assignment. */
+private fun ClaimState.toAssignment(): com.testlogon.android.data.messaging.helpdesk.HelpdeskAssignment =
+    when (this) {
+        ClaimState.UNASSIGNED -> com.testlogon.android.data.messaging.helpdesk.HelpdeskAssignment.UNCLAIMED
+        ClaimState.CLAIMED_BY_ME -> com.testlogon.android.data.messaging.helpdesk.HelpdeskAssignment.ASSIGNED_TO_ME
+        ClaimState.CLAIMED_BY_OTHER -> com.testlogon.android.data.messaging.helpdesk.HelpdeskAssignment.ASSIGNED_TO_OTHER
+    }

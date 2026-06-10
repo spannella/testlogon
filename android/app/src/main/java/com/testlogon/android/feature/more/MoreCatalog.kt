@@ -4,8 +4,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NotificationsActive
@@ -40,6 +42,20 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.ChatBubbleOutline,
             route = MoreRoutes.MESSAGES,
             section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "mass_messages",
+            labelRes = R.string.more_entry_mass_messages,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.MASS_MESSAGES,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "helpdesk_queue",
+            labelRes = R.string.more_entry_helpdesk_queue,
+            icon = Icons.Outlined.SupportAgent,
+            route = MoreRoutes.HELPDESK_QUEUE,
+            section = MoreSection.SUPPORT,
         ),
         MoreEntry(
             id = "activity",

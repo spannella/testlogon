@@ -510,4 +510,72 @@
     <string name="group_invite_prompt">You\'ve been invited to this group.</string>
     <string name="group_accept_invite">Accept invitation</string>
     <string name="group_decline_invite">Decline</string>
+
+    <!-- Shared action -->
+    <string name="action_dismiss">Dismiss</string>
+
+    <!-- More hub entries (AND-160 / AND-161) -->
+    <string name="more_entry_mass_messages">Mass messages</string>
+    <string name="more_entry_helpdesk_queue">Helpdesk queue</string>
+
+    <!-- AND-160 — mass messages -->
+    <string name="mass_messages_title">Mass messages</string>
+    <string name="mass_messages_new">New campaign</string>
+    <string name="mass_messages_send">Send</string>
+    <string name="mass_messages_empty">No campaigns yet</string>
+    <string name="mass_messages_error">Couldn\'t load campaigns</string>
+    <string name="mass_messages_unavailable">Mass messages aren\'t available for your account.</string>
+    <string name="mass_messages_text_label">Message</string>
+    <string name="mass_messages_recipients_label">Search recipients</string>
+    <string name="mass_messages_mode_immediate">Send now</string>
+    <string name="mass_messages_mode_scheduled">Schedule</string>
+    <string name="mass_messages_progress">Sent %1$d, queued %2$d, failed %3$d, cancelled %4$d of %5$d</string>
+    <string name="mass_messages_created_snack">Campaign created</string>
+    <string name="mass_messages_created_partial_snack">Campaign created with some recipients skipped</string>
+    <string name="mass_messages_cancelled_snack">Campaign cancelled</string>
+    <string name="mass_messages_cancel_action">Cancel</string>
+    <string name="mass_messages_cancel_title">Cancel campaign?</string>
+    <string name="mass_messages_cancel_body">Queued recipients won\'t receive this message.</string>
+    <string name="mass_messages_cancel_confirm">Cancel campaign</string>
+    <string name="mass_messages_status_pending">Pending</string>
+    <string name="mass_messages_status_scheduled">Scheduled</string>
+    <string name="mass_messages_status_processing">Processing</string>
+    <string name="mass_messages_status_completed">Completed</string>
+    <string name="mass_messages_status_failed">Failed</string>
+    <string name="mass_messages_status_cancelled">Cancelled</string>
+    <string name="mass_messages_status_unknown">Unknown</string>
+
+    <!-- AND-161 — helpdesk queue -->
+    <string name="helpdesk_queue_title">Helpdesk</string>
+    <string name="helpdesk_queue_empty">Queue is clear</string>
+    <string name="helpdesk_queue_not_authorized">You don\'t have access to the helpdesk queue.</string>
+    <string name="helpdesk_queue_refresh_cd">Refresh queue</string>
+    <string name="helpdesk_queue_untitled">Conversation</string>
+    <string name="helpdesk_queue_claimed">Claimed</string>
+    <string name="helpdesk_queue_unread">%1$d unread</string>
+    <string name="helpdesk_badge_waiting">Waiting</string>
+    <string name="helpdesk_badge_assigned">Assigned</string>
+    <string name="helpdesk_badge_paused">Paused</string>
+    <string name="helpdesk_badge_closed">Closed</string>
+    <string name="helpdesk_badge_unknown">—</string>
+
+    <!-- AND-162 — helpdesk claim + reply -->
+    <string name="helpdesk_detail_title">Helpdesk conversation</string>
+    <string name="helpdesk_claim">Claim</string>
+    <string name="helpdesk_header_unclaimed">Unclaimed</string>
+    <string name="helpdesk_header_assigned_me">Assigned to you</string>
+    <string name="helpdesk_header_assigned_other">Claimed by %1$s</string>
+    <string name="helpdesk_header_closed">This conversation is closed</string>
+    <string name="helpdesk_reply_hint">Type a reply</string>
+    <string name="helpdesk_reply_disabled_unclaimed">Claim this conversation to reply</string>
+    <string name="helpdesk_reply_disabled_other">Claimed by another agent</string>
+    <string name="helpdesk_reply_disabled_closed">This conversation is closed</string>
+    <string name="helpdesk_reply_send_cd">Send reply</string>
+    <string name="helpdesk_claim_err_already">Already claimed by another agent</string>
+    <string name="helpdesk_claim_err_closed">This conversation is closed</string>
+    <string name="helpdesk_claim_err_forbidden">You don\'t have permission to claim</string>
+    <string name="helpdesk_claim_err_not_available">You need to be online and available to claim</string>
+    <string name="helpdesk_claim_err_not_found">Conversation no longer available</string>
+    <string name="helpdesk_claim_err_network">Couldn\'t claim. Check your connection and try again.</string>
+    <string name="helpdesk_claim_err_unknown">Couldn\'t claim this conversation</string>
 </resources>

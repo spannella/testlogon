@@ -24,6 +24,12 @@ object MoreRoutes {
     // AND-120..124: the messaging conversation list (inbox), first M3 two-user feature.
     val MESSAGES: String get() = MessagingRoutes.LIST
 
+    // AND-160: mass messages (broadcast campaigns). Screen self-gates on the mass-send capability.
+    val MASS_MESSAGES: String get() = MessagingRoutes.MASS_MESSAGES
+
+    // AND-161/AND-162: agent-facing helpdesk queue. Screen self-gates via the 403 role signal.
+    val HELPDESK_QUEUE: String get() = MessagingRoutes.HELPDESK_QUEUE
+
     // AND-088: alert preferences (email/SMS target management).
     val ALERT_PREFS: String get() = MainDest.SettingsAlerts.route
 
@@ -46,6 +52,8 @@ object MoreRoutes {
         get() = setOf(
             PROFILE,
             MESSAGES,
+            MASS_MESSAGES,
+            HELPDESK_QUEUE,
             SESSIONS,
             MFA_DEVICES,
             NOTIFICATION_CENTER,
