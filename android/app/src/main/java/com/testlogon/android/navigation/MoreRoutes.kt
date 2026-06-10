@@ -48,6 +48,9 @@ object MoreRoutes {
     // AND-191: the public VOD catalog (browse on-demand titles).
     val VOD_CATALOG: String get() = VodCatalogDest.ROUTE
 
+    // AND-196: the clips vertical-pager feed.
+    val CLIPS: String get() = ClipsFeedDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -70,6 +73,7 @@ object MoreRoutes {
             ACHIEVEMENTS,
             VIDEOS,
             VOD_CATALOG,
+            CLIPS,
             SETTINGS,
             HELP,
             ABOUT,

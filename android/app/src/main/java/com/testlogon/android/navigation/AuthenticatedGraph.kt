@@ -109,6 +109,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         vodCatalogDestination(navController)
         // AND-190: video detail + reusable player (shared by library, VOD, and discover recs).
         videoDetailDestination(navController)
+        // AND-196: clips vertical pager (gallery feed) + public single-clip viewer (deep link).
+        clipsFeedDestination(navController)
+        publicClipDestination(navController)
     }
 }
 

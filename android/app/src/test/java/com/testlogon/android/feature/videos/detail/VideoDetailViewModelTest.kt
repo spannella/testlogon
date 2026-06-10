@@ -30,10 +30,12 @@ class VideoDetailViewModelTest {
     private val repo = FakeVideosRepository()
     private val controller = FakeVideoController()
     private val provider = VideoControllerProvider { controller }
+    private val authState = com.testlogon.android.feature.videos.FakeAuthStateProvider(authenticated = true)
 
     private fun vm(id: String = "vid_1") = VideoDetailViewModel(
         repository = repo,
         controllerProvider = provider,
+        authStateProvider = authState,
         savedStateHandle = SavedStateHandle(mapOf(VideoDetailViewModel.ARG_VIDEO_ID to id)),
     )
 
@@ -67,11 +69,30 @@ class VideoDetailViewModelTest {
     }
 
     @Test
-    fun notEntitled_blocksPlayback() = runTest {
-        repo.detailResult = ApiResult.Success(FakeVideosRepository.detail("v", isEntitled = false))
+    fun notEntitled_ppv_blocksPlayback_withPurchaseRequiredEntitlement() = runTest {
+        // A "ready" PPV title the viewer does not own resolves to PurchaseRequired -> FORBIDDEN block.
+        repo.detailResult = ApiResult.Success(
+            FakeVideosRepository.detail("v", isEntitled = false, accessMode = "ppv", priceCents = 499),
+        )
+        repo.accessResult = ApiResult.Success(
+            FakeVideosRepository.access(entitled = false, accessMode = "ppv", priceCents = 499),
+        )
         val vm = vm()
         advanceUntilIdle()
+        assertNull(vm.uiState.value.playbackUrl)
         assertEquals(PlaybackBlock.FORBIDDEN, vm.uiState.value.playbackBlock)
+        assertTrue(vm.uiState.value.entitlement is Entitlement.PurchaseRequired)
+    }
+
+    @Test
+    fun accessGrant_overridesInlineFlag_enablesPlayback() = runTest {
+        // Inline flag says not entitled, but the authoritative access check grants -> Granted.
+        repo.detailResult = ApiResult.Success(FakeVideosRepository.detail("vid_1", isEntitled = false))
+        repo.accessResult = ApiResult.Success(FakeVideosRepository.access(entitled = true))
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals("http://h/master.m3u8?token=tok", vm.uiState.value.playbackUrl)
+        assertTrue(vm.uiState.value.entitlement is Entitlement.Granted)
     }
 
     @Test

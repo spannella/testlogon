@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import com.testlogon.android.R
@@ -92,6 +93,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_vod_catalog,
             icon = Icons.Outlined.Movie,
             route = MoreRoutes.VOD_CATALOG,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "clips",
+            labelRes = R.string.more_entry_clips,
+            icon = Icons.Outlined.Slideshow,
+            route = MoreRoutes.CLIPS,
             section = MoreSection.APP,
         ),
         MoreEntry(

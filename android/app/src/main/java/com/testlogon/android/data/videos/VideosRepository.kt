@@ -42,6 +42,9 @@ interface VideosRepository {
 
     /** Toggles like and returns the new (liked, likeCount) pair (POST ui/videos/{video_id}/like). */
     suspend fun toggleLike(videoId: String): ApiResult<LikeState>
+
+    /** AND-197 — the authoritative per-video access check (GET ui/videos/{video_id}/access). */
+    suspend fun checkAccess(videoId: String): ApiResult<VideoAccess>
 }
 
 /** AND-190 — like state surfaced to the detail screen. */
@@ -80,6 +83,10 @@ class VideosRepositoryImpl @Inject constructor(
 
     override suspend fun toggleLike(videoId: String): ApiResult<LikeState> = withContext(io) {
         call { api.toggleLike(videoId) }.map { LikeState(liked = it.liked, likeCount = it.likeCount) }
+    }
+
+    override suspend fun checkAccess(videoId: String): ApiResult<VideoAccess> = withContext(io) {
+        call { api.checkAccess(videoId) }.map { it.toDomain() }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

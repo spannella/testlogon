@@ -48,6 +48,14 @@ interface VideosApi {
     @POST("ui/videos/{video_id}/like")
     suspend fun toggleLike(@Path("video_id") videoId: String): LikeToggleDto
 
+    /**
+     * AND-197 — the authoritative per-video access check.
+     * op=check_video_access_ui_videos__video_id__access_get -> VodAccessOut. `user_sub` is intentionally
+     * omitted so the server derives identity from the session (prevents client identity spoofing).
+     */
+    @GET("ui/videos/{video_id}/access")
+    suspend fun checkAccess(@Path("video_id") videoId: String): VodAccessDto
+
     companion object {
         // Server `limit` default is 50, min 1, max 200; the app page size stays small for fast paint.
         const val LIBRARY_PAGE_SIZE = 24

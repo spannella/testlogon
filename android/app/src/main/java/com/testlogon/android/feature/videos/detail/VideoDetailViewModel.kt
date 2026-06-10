@@ -3,14 +3,17 @@ package com.testlogon.android.feature.videos.detail
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.testlogon.android.auth.AuthStateProvider
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.videos.VideoAccess
 import com.testlogon.android.data.videos.VideoDetail
 import com.testlogon.android.data.videos.VideoSummary
 import com.testlogon.android.data.videos.VideosRepository
 import com.testlogon.android.feature.player.MediaSourceSpec
 import com.testlogon.android.feature.player.VideoPlayerController
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +31,7 @@ data class VideoDetailUiState(
     val detail: VideoDetail? = null,
     val playbackUrl: String? = null,
     val playbackBlock: PlaybackBlock? = null,
+    val entitlement: Entitlement? = null,
     val liked: Boolean = false,
     val related: List<VideoSummary> = emptyList(),
     val detailError: DetailError? = null,
@@ -51,6 +55,7 @@ data class DetailError(val message: String, val retryable: Boolean)
 class VideoDetailViewModel @Inject constructor(
     private val repository: VideosRepository,
     private val controllerProvider: VideoControllerProvider,
+    private val authStateProvider: AuthStateProvider,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -74,8 +79,13 @@ class VideoDetailViewModel @Inject constructor(
     fun load() {
         _uiState.update { it.copy(isLoading = true, detailError = null) }
         viewModelScope.launch {
-            when (val result = repository.getVideoDetail(videoId)) {
-                is ApiResult.Success -> onDetailLoaded(result.data)
+            // AND-197 — detail + the authoritative access check load concurrently; if only access fails
+            // the resolver runs with access = null (fail-closed inline fallback), never upgrading.
+            val detailDeferred = async { repository.getVideoDetail(videoId) }
+            val accessDeferred = async { repository.checkAccess(videoId) }
+            val accessResult = accessDeferred.await()
+            when (val result = detailDeferred.await()) {
+                is ApiResult.Success -> onDetailLoaded(result.data, accessResult.accessOrNull())
                 is ApiResult.Failure -> _uiState.update {
                     it.copy(isLoading = false, detailError = mapFailure(result.error))
                 }
@@ -88,6 +98,9 @@ class VideoDetailViewModel @Inject constructor(
             }
         }
     }
+
+    private fun ApiResult<VideoAccess>.accessOrNull(): VideoAccess? =
+        (this as? ApiResult.Success)?.data
 
     fun retryDetail() = load()
 
@@ -122,24 +135,41 @@ class VideoDetailViewModel @Inject constructor(
         )
     }
 
-    private fun onDetailLoaded(detail: VideoDetail) {
+    private fun onDetailLoaded(detail: VideoDetail, access: VideoAccess?) {
+        // AND-197 — resolve entitlement (fail-closed: access==null falls back to the inline flag).
+        val entitlement = EntitlementResolver.resolve(
+            detail = detail,
+            access = access,
+            isAuthenticated = authStateProvider.isAuthenticated.value,
+        )
+        // FR-5 — only Entitlement.Granted exposes a non-null playback id, and only then if a real
+        // source/manifest exists. Map the gated outcomes onto the screen's PlaybackBlock.
+        val granted = entitlement is Entitlement.Granted
         val block = when {
-            !detail.isEntitled -> PlaybackBlock.FORBIDDEN
+            !granted -> entitlement.toPlaybackBlock()
             detail.isProcessing -> PlaybackBlock.PROCESSING
             detail.playbackUrl == null -> PlaybackBlock.NO_SOURCE
             else -> null
         }
-        val playable = if (block == null) detail.playbackUrl else null
+        val playable = if (granted && block == null) detail.playbackUrl else null
         _uiState.update {
             it.copy(
                 isLoading = false,
                 detail = detail,
                 playbackUrl = playable,
                 playbackBlock = block,
+                entitlement = entitlement,
                 detailError = null,
             )
         }
         loadLikeAndRelated()
+    }
+
+    /** Maps a non-Granted entitlement onto the screen's coarse PlaybackBlock affordance. */
+    private fun Entitlement.toPlaybackBlock(): PlaybackBlock = when (this) {
+        is Entitlement.Unavailable ->
+            if (reason == UnavailableReason.NOT_READY) PlaybackBlock.PROCESSING else PlaybackBlock.NO_SOURCE
+        else -> PlaybackBlock.FORBIDDEN
     }
 
     private fun loadLikeAndRelated() {

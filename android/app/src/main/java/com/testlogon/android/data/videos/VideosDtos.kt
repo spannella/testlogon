@@ -65,6 +65,11 @@ data class VideoDetailDto(
     @Json(name = "is_entitled") val isEntitled: Boolean? = null,
     @Json(name = "access_mode") val accessMode: String? = null,
     @Json(name = "access_reason") val accessReason: String? = null,
+    // AND-197 — flat pay-per-view / subscription gating fields (no nested pricing object).
+    @Json(name = "price_cents") val priceCents: Int? = null,
+    @Json(name = "purchase_available") val purchaseAvailable: Boolean? = null,
+    @Json(name = "subscription_available") val subscriptionAvailable: Boolean? = null,
+    @Json(name = "subscription_upsell") val subscriptionUpsell: Boolean? = null,
 )
 
 /** SimilarVideosResponse = { videos: VideoListItem[]-ish }. Modelled defensively as a list. */
@@ -77,6 +82,26 @@ data class SimilarVideosResponseDto(
 @JsonClass(generateAdapter = true)
 data class LikeCheckDto(
     @Json(name = "liked") val liked: Boolean = false,
+)
+
+/**
+ * AND-197 — VodAccessOut (the per-video access check). Required: `entitled`, `reason`. The rest carry
+ * server defaults. `reason`/`access_mode` are FREE-FORM strings (no fixed enum); the resolver keys off
+ * the typed booleans + `access_mode` literals, never `reason`. There is NO `granted`/`status`/`video_id`
+ * and NO nested pricing/currency on this DTO (verified openapi.pretty.json lines 82127-82212).
+ */
+@JsonClass(generateAdapter = true)
+data class VodAccessDto(
+    @Json(name = "entitled") val entitled: Boolean = false,
+    @Json(name = "reason") val reason: String = "none",
+    @Json(name = "access_mode") val accessMode: String? = null,
+    @Json(name = "price_cents") val priceCents: Int? = null,
+    @Json(name = "purchase_type") val purchaseType: String = "permanent",
+    @Json(name = "purchase_available") val purchaseAvailable: Boolean = false,
+    @Json(name = "subscription_available") val subscriptionAvailable: Boolean = false,
+    @Json(name = "subscription_upsell") val subscriptionUpsell: Boolean = false,
+    @Json(name = "expires_at") val expiresAt: Long? = null,
+    @Json(name = "views_remaining") val viewsRemaining: Int = -1,
 )
 
 /** LikeToggleOut = { liked, like_count }. */

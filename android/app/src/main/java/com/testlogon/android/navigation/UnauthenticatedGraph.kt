@@ -323,6 +323,8 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         }
         // AND-073: public profile via the /u/{identifier} App Link works while signed out too.
         publicProfileDestination(navController)
+        // AND-196: public clip via the /c/{clipId} App Link works while signed out too.
+        publicClipDestination(navController)
     }
 }
 

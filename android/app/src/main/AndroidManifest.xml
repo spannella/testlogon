@@ -203,6 +203,40 @@
                     android:scheme="testlogon"
                     android:host="gallery" />
             </intent-filter>
+
+            <!-- AND-196: public clip App Link on the production host (HTTPS, auto-verified), mirroring
+                 the web /c/{clipId} share page. Works for unauthenticated users. Requires
+                 assetlinks.json (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/c/" />
+            </intent-filter>
+
+            <!-- AND-196: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/c/" />
+            </intent-filter>
+
+            <!-- AND-196: custom-scheme public-clip fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="c" />
+            </intent-filter>
         </activity>
 
         <!-- AND-132: FileProvider for handing downloaded message attachments to external viewers via

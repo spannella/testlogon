@@ -44,6 +44,11 @@ data class VideoDetail(
     val reviewStatus: String?,
     val isEntitled: Boolean,
     val accessMode: String?,
+    // AND-197 — flat pay-per-view / subscription gating fields (consumed by EntitlementResolver).
+    val priceCentsOrNull: Int? = null,
+    val purchaseAvailableOrFalse: Boolean = false,
+    val subscriptionAvailableOrFalse: Boolean = false,
+    val subscriptionUpsellOrFalse: Boolean = false,
 ) {
     /** True while the asset is still being prepared server-side; no manifest yet. */
     val isProcessing: Boolean get() = status in PROCESSING_STATUSES
@@ -57,7 +62,36 @@ data class VideoDetail(
     }
 }
 
+/**
+ * AND-197 — the per-video access decision (mapped from VodAccessOut). Pure data (no Android types).
+ * [reason] is carried verbatim for telemetry/debug but the entitlement resolver keys off [entitled] +
+ * [accessMode] + the purchase/subscription flags, never [reason].
+ */
+data class VideoAccess(
+    val entitled: Boolean,
+    val reason: String,
+    val accessMode: String?,
+    val priceCents: Int?,
+    val purchaseAvailable: Boolean,
+    val subscriptionAvailable: Boolean,
+    val subscriptionUpsell: Boolean,
+    val expiresAtEpochSeconds: Long?,
+    val viewsRemaining: Int,
+)
+
 // ---- Mappers ----
+
+fun VodAccessDto.toDomain(): VideoAccess = VideoAccess(
+    entitled = entitled,
+    reason = reason,
+    accessMode = accessMode?.takeIf { it.isNotBlank() },
+    priceCents = priceCents,
+    purchaseAvailable = purchaseAvailable,
+    subscriptionAvailable = subscriptionAvailable,
+    subscriptionUpsell = subscriptionUpsell,
+    expiresAtEpochSeconds = expiresAt,
+    viewsRemaining = viewsRemaining,
+)
 
 fun VideoListItemDto.toSummary(): VideoSummary = VideoSummary(
     id = videoId,
@@ -98,4 +132,8 @@ fun VideoDetailDto.toDomain(): VideoDetail = VideoDetail(
     reviewStatus = reviewStatus?.takeIf { it.isNotBlank() },
     isEntitled = isEntitled ?: true,
     accessMode = accessMode?.takeIf { it.isNotBlank() },
+    priceCentsOrNull = priceCents,
+    purchaseAvailableOrFalse = purchaseAvailable ?: false,
+    subscriptionAvailableOrFalse = subscriptionAvailable ?: false,
+    subscriptionUpsellOrFalse = subscriptionUpsell ?: false,
 )
