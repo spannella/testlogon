@@ -3,6 +3,12 @@ package com.testlogon.android.data.messaging
 import android.net.Uri
 import com.testlogon.android.core.data.messaging.ConversationDao
 import com.testlogon.android.core.data.messaging.ConversationEntity
+import com.testlogon.android.core.data.messaging.CustomEmojiDao
+import com.testlogon.android.core.data.messaging.CustomEmojiEntity
+import com.testlogon.android.core.data.messaging.MeetingPollDao
+import com.testlogon.android.core.data.messaging.MeetingPollEntity
+import com.testlogon.android.core.data.messaging.MeetingPollSlotEntity
+import com.testlogon.android.core.data.messaging.MeetingPollWithSlots
 import com.testlogon.android.core.data.messaging.MessageDao
 import com.testlogon.android.core.data.messaging.MessageEntity
 import com.testlogon.android.core.data.messaging.OutboxDao
@@ -185,7 +191,159 @@ interface MessagingRepository {
         durationSeconds: Double,
         waveform: List<Float>,
     ): ApiResult<Message>
+
+    // ---- AND-134: voicemail ----
+
+    /** AND-134 — enqueue an optimistic voicemail outbox row (waveform/duration bubble + progress). */
+    suspend fun enqueueOptimisticVoicemail(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        isVideo: Boolean,
+        nowSeconds: Long,
+    )
+
+    /**
+     * AND-134 — send a recorded voicemail clip tied to [callId]: presign -> PUT (AND-129 transport)
+     * -> create. Reconciles the optimistic row or marks it FAILED. A retry re-issues create with the
+     * same message_id/s3_key.
+     */
+    suspend fun sendVoicemailOutbox(
+        conversationId: String,
+        clientId: String,
+        callId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        contentType: String,
+        isVideo: Boolean,
+    ): ApiResult<Message>
+
+    // ---- AND-135: gifs / stickers / custom emoji ----
+
+    /** AND-135 — send a GIF message (optimistic insert -> POST -> reconcile against the MessageOut). */
+    suspend fun sendGif(
+        conversationId: String,
+        clientId: String,
+        payload: GifSendPayload,
+    ): ApiResult<Message>
+
+    /** AND-135 — send a sticker message (optimistic insert -> POST -> reconcile). */
+    suspend fun sendSticker(
+        conversationId: String,
+        clientId: String,
+        sticker: StickerPick,
+    ): ApiResult<Message>
+
+    /** AND-135 — GIF search (empty query => trending). Single bounded page; no cursor. */
+    suspend fun searchGifs(query: String, limit: Int = 20): ApiResult<List<GifResult>>
+
+    /** AND-135 — sticker collections (with their stickers). */
+    suspend fun stickerCollections(): ApiResult<List<StickerCollectionUi>>
+
+    /** AND-135 — Room-backed, stale-first custom-emoji catalog (single source for picker + render). */
+    fun observeCustomEmoji(): Flow<List<CustomEmojiUi>>
+
+    /** AND-135 — refresh the custom-emoji catalog from the network into Room. */
+    suspend fun refreshCustomEmoji(): ApiResult<Unit>
+
+    // ---- AND-136: meeting poll ----
+
+    /** AND-136 — observe a cached poll (Room single source of truth) by id. */
+    fun observeMeetingPoll(pollId: String): Flow<MeetingPoll?>
+
+    /** AND-136 — create a meeting poll message; inserts it into the thread + caches the poll. */
+    suspend fun createMeetingPoll(
+        conversationId: String,
+        draft: MeetingPollDraft,
+    ): ApiResult<MeetingPoll>
+
+    /** AND-136 — refresh authoritative poll state (idempotent GET) into Room. */
+    suspend fun refreshMeetingPoll(conversationId: String, pollId: String): ApiResult<MeetingPoll>
+
+    /**
+     * AND-136 — set/clear the caller's response for [slotId] (null clears it). POSTs the vote then
+     * re-fetches the canonical [MeetingPoll] (vote returns only {ok}). Writes the result to Room.
+     */
+    suspend fun voteMeetingPoll(
+        conversationId: String,
+        pollId: String,
+        slotId: String,
+        vote: SlotVote?,
+    ): ApiResult<MeetingPoll>
+
+    /** AND-136 — confirm a winning slot (creator); POSTs then re-fetches the canonical poll. */
+    suspend fun confirmMeetingPoll(
+        conversationId: String,
+        pollId: String,
+        slotId: String,
+    ): ApiResult<MeetingPoll>
 }
+
+/** AND-135 — a GIF the user picked from search/trending, sent verbatim. */
+data class GifSendPayload(
+    val url: String,
+    val altText: String?,
+    val width: Int?,
+    val height: Int?,
+)
+
+/** AND-135 — a sticker the user picked from a collection. */
+data class StickerPick(
+    val stickerId: String,
+    val collectionId: String,
+    val url: String,
+    val altText: String?,
+)
+
+/** AND-135 — a GIF search/trending result for the picker grid. */
+data class GifResult(
+    val id: String,
+    val url: String,
+    val altText: String?,
+    val width: Int?,
+    val height: Int?,
+)
+
+/** AND-135 — a sticker (for the picker grid). */
+data class StickerUi(
+    val stickerId: String,
+    val collectionId: String,
+    val url: String,
+    val altText: String?,
+)
+
+/** AND-135 — a sticker collection (for the picker). */
+data class StickerCollectionUi(
+    val collectionId: String,
+    val name: String,
+    val thumbnailUrl: String?,
+    val stickers: List<StickerUi>,
+)
+
+/** AND-135 — a custom emoji (picker grid + inline render). [animated] is inferred from content_type. */
+data class CustomEmojiUi(
+    val shortcode: String,
+    val name: String,
+    val imageUrl: String,
+    val animated: Boolean,
+)
+
+/** AND-136 — a candidate slot in the meeting-poll composer. */
+data class MeetingPollSlotDraft(
+    val startUtc: String,
+    val endUtc: String,
+)
+
+/** AND-136 — a meeting-poll creation draft (validated by the ViewModel before send). */
+data class MeetingPollDraft(
+    val title: String,
+    val durationMinutes: Int,
+    val slots: List<MeetingPollSlotDraft>,
+    val text: String? = null,
+)
 
 /** AND-131 — a video the current user can share, for the picker. */
 data class ShareableVideo(
@@ -201,6 +359,8 @@ class MessagingRepositoryImpl @Inject constructor(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
     private val outboxDao: OutboxDao,
+    private val customEmojiDao: CustomEmojiDao,
+    private val meetingPollDao: MeetingPollDao,
     private val errorParser: ApiErrorParser,
     private val authStateStore: AuthStateStore,
     private val uploader: AttachmentUploader,
@@ -755,6 +915,355 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    // ---- AND-134: voicemail ----
+
+    override suspend fun enqueueOptimisticVoicemail(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        isVideo: Boolean,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                kind = "voicemail",
+                attachmentLocalUri = localFilePath,
+                voiceDurationSeconds = durationSeconds,
+                voiceWaveformJson = waveformToJson(waveform),
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    override suspend fun sendVoicemailOutbox(
+        conversationId: String,
+        clientId: String,
+        callId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        contentType: String,
+        isVideo: Boolean,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            val clip = java.io.File(localFilePath)
+            if (!clip.exists() || clip.length() <= 0L) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    ApiError(status = ApiError.STATUS_PARSE, message = "Recording is missing."),
+                )
+            }
+            val sizeBytes = clip.length()
+            val mode = if (isVideo) "video" else "audio"
+
+            // 1. Presign (server allocates message_id + s3_key + upload_url).
+            val presign = when (
+                val p = apiCall {
+                    api.presignVoicemail(
+                        conversationId,
+                        PresignVoicemailReq(callId, contentType, sizeBytes, mode),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> p.data
+                is ApiResult.Failure -> { markOutboxFailed(clientId); return@withContext p }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); return@withContext p }
+            }
+
+            // 2. PUT bytes to the presigned url via the COOKIELESS storage client (AND-129 transport).
+            val putResult = try {
+                val body = clip.asRequestBody(contentType.toMediaTypeOrNull())
+                storageClient.put(presign.uploadUrl, contentType, body)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+            }
+            if (!putResult.success) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    ApiError(status = putResult.httpStatus, message = "Voicemail upload failed"),
+                )
+            }
+            outboxDao.updateUploadPercent(clientId, 100)
+
+            // 3. Create the voicemail (carries duration + waveform_data + call_id). A retry re-issues
+            //    create with the SAME message_id/s3_key so the already-uploaded object is reused.
+            when (
+                val created = apiCall {
+                    api.createVoicemail(
+                        conversationId,
+                        CreateVoicemailReq(
+                            messageId = presign.messageId,
+                            callId = callId,
+                            s3Key = presign.s3Key,
+                            contentType = contentType,
+                            sizeBytes = sizeBytes,
+                            durationSeconds = durationSeconds,
+                            waveformData = waveform,
+                            mode = mode,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    clip.delete()
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    // ---- AND-135: gifs / stickers / custom emoji ----
+
+    override suspend fun sendGif(
+        conversationId: String,
+        clientId: String,
+        payload: GifSendPayload,
+    ): ApiResult<Message> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.sendGifMessage(
+                    conversationId,
+                    SendGifMessageReq(
+                        gifUrl = payload.url,
+                        gifAltText = payload.altText,
+                        gifWidth = payload.width,
+                        gifHeight = payload.height,
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain(clientId = clientId)
+                messageDao.upsert(message.toEntity(clientId = clientId))
+                outboxDao.delete(clientId)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> { markOutboxFailed(clientId); r }
+            is ApiResult.NetworkError -> { markOutboxFailed(clientId); r }
+        }
+    }
+
+    override suspend fun sendSticker(
+        conversationId: String,
+        clientId: String,
+        sticker: StickerPick,
+    ): ApiResult<Message> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.sendStickerMessage(
+                    conversationId,
+                    SendStickerMessageReq(
+                        stickerId = sticker.stickerId,
+                        stickerCollectionId = sticker.collectionId,
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain(clientId = clientId)
+                messageDao.upsert(message.toEntity(clientId = clientId))
+                outboxDao.delete(clientId)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> { markOutboxFailed(clientId); r }
+            is ApiResult.NetworkError -> { markOutboxFailed(clientId); r }
+        }
+    }
+
+    override suspend fun searchGifs(query: String, limit: Int): ApiResult<List<GifResult>> =
+        withContext(io) {
+            val clamped = limit.coerceIn(1, 50)
+            val call = if (query.isBlank()) {
+                apiCall { api.trendingGifs(clamped) }
+            } else {
+                apiCall { api.searchGifs(query, clamped) }
+            }
+            when (call) {
+                is ApiResult.Success -> ApiResult.Success(
+                    call.data.map { GifResult(it.id, it.url, it.altText, it.width, it.height) },
+                )
+                is ApiResult.Failure -> call
+                is ApiResult.NetworkError -> call
+            }
+        }
+
+    override suspend fun stickerCollections(): ApiResult<List<StickerCollectionUi>> = withContext(io) {
+        when (val r = apiCall { api.stickerCollections() }) {
+            is ApiResult.Success -> ApiResult.Success(
+                r.data.collections.map { c ->
+                    StickerCollectionUi(
+                        collectionId = c.collectionId,
+                        name = c.name,
+                        thumbnailUrl = c.thumbnailUrl,
+                        stickers = c.stickers.sortedBy { it.sortOrder }.map { s ->
+                            StickerUi(s.stickerId, c.collectionId, s.imageUrl, s.altText)
+                        },
+                    )
+                },
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override fun observeCustomEmoji(): Flow<List<CustomEmojiUi>> =
+        customEmojiDao.observeAll().map { rows ->
+            rows.map { CustomEmojiUi(it.shortcode, it.name, it.imageUrl, it.animated) }
+        }
+
+    override suspend fun refreshCustomEmoji(): ApiResult<Unit> = withContext(io) {
+        when (val r = apiCall { api.customEmoji() }) {
+            is ApiResult.Success -> {
+                val now = System.currentTimeMillis() / 1000L
+                val rows = r.data.emojis.map {
+                    CustomEmojiEntity(
+                        shortcode = it.shortcode,
+                        name = it.name,
+                        imageUrl = it.imageUrl,
+                        animated = isAnimatedContentType(it.contentType),
+                        fetchedAt = now,
+                    )
+                }
+                customEmojiDao.upsertAll(rows)
+                customEmojiDao.deleteStale(now)
+                ApiResult.Success(Unit)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    // ---- AND-136: meeting poll ----
+
+    override fun observeMeetingPoll(pollId: String): Flow<MeetingPoll?> =
+        meetingPollDao.observePoll(pollId).map { it?.toDomain() }
+
+    override suspend fun createMeetingPoll(
+        conversationId: String,
+        draft: MeetingPollDraft,
+    ): ApiResult<MeetingPoll> = withContext(io) {
+        val createResult = apiCall {
+            api.createMeetingPoll(
+                conversationId,
+                CreateMeetingPollReq(
+                    title = draft.title,
+                    durationMinutes = draft.durationMinutes,
+                    slots = draft.slots.map { MeetingPollSlotInDto(it.startUtc, it.endUtc) },
+                    text = draft.text?.takeIf { it.isNotBlank() },
+                ),
+            )
+        }
+        when (createResult) {
+            is ApiResult.Success -> {
+                // Insert the poll message into the thread so it renders immediately.
+                val message = createResult.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                val pollId = (message.media as? MessageMedia.MeetingPoll)?.pollId
+                // Reconcile canonical slots/counts via the GET (the create body has no slots).
+                if (pollId != null) {
+                    refreshMeetingPoll(conversationId, pollId)
+                } else {
+                    ApiResult.Failure(
+                        ApiError(status = ApiError.STATUS_PARSE, message = "Poll id missing in response."),
+                    )
+                }
+            }
+            is ApiResult.Failure -> createResult
+            is ApiResult.NetworkError -> createResult
+        }
+    }
+
+    override suspend fun refreshMeetingPoll(
+        conversationId: String,
+        pollId: String,
+    ): ApiResult<MeetingPoll> = withContext(io) {
+        when (val r = apiCall { api.getMeetingPoll(conversationId, pollId) }) {
+            is ApiResult.Success -> {
+                val poll = r.data.toDomain()
+                persistPoll(conversationId, poll)
+                ApiResult.Success(poll)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun voteMeetingPoll(
+        conversationId: String,
+        pollId: String,
+        slotId: String,
+        vote: SlotVote?,
+    ): ApiResult<MeetingPoll> = withContext(io) {
+        // Build the votes map: every slot the caller has responded to, with this slot updated.
+        val current = meetingPollDao.observePollOnce(pollId)?.toDomain()
+        val votesMap = buildVotesMap(current, slotId, vote)
+        when (val r = apiCall { api.voteMeetingPoll(conversationId, pollId, PollVoteReq(votesMap)) }) {
+            is ApiResult.Success ->
+                // Vote returns only {ok}; re-fetch the canonical poll to reconcile tallies.
+                refreshMeetingPoll(conversationId, pollId)
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun confirmMeetingPoll(
+        conversationId: String,
+        pollId: String,
+        slotId: String,
+    ): ApiResult<MeetingPoll> = withContext(io) {
+        when (
+            val r = apiCall { api.confirmMeetingPoll(conversationId, pollId, PollConfirmReq(slotId)) }
+        ) {
+            is ApiResult.Success -> refreshMeetingPoll(conversationId, pollId)
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    private suspend fun persistPoll(conversationId: String, poll: MeetingPoll) {
+        meetingPollDao.replacePoll(
+            MeetingPollEntity(
+                pollId = poll.pollId,
+                conversationId = conversationId,
+                title = poll.title,
+                durationMinutes = poll.durationMinutes,
+                creatorId = poll.creatorId,
+                status = poll.status.name.lowercase(java.util.Locale.ROOT),
+                confirmedSlotId = poll.confirmedSlotId,
+            ),
+            poll.slots.mapIndexed { i, s ->
+                MeetingPollSlotEntity(
+                    slotId = s.slotId,
+                    pollId = poll.pollId,
+                    position = i,
+                    startUtc = s.startUtc,
+                    endUtc = s.endUtc,
+                    yesCount = s.yesCount,
+                    maybeCount = s.maybeCount,
+                    noCount = s.noCount,
+                    myVote = s.myVote?.wire(),
+                )
+            },
+        )
+    }
+
     private suspend fun markOutboxFailed(clientId: String) {
         val current = outboxDao.findById(clientId) ?: return
         outboxDao.upsert(
@@ -817,6 +1326,10 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
     val video = media as? MessageMedia.VideoShare
     val file = media as? MessageMedia.File
     val voice = media as? MessageMedia.Voice
+    val voicemail = media as? MessageMedia.Voicemail
+    val gif = media as? MessageMedia.Gif
+    val sticker = media as? MessageMedia.Sticker
+    val poll = media as? MessageMedia.MeetingPoll
     return MessageEntity(
         messageId = id ?: this.clientId,
         conversationId = conversationId,
@@ -840,8 +1353,26 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         fileIsShare = file?.isShare ?: false,
         consumptionPolicy = file?.consumptionPolicy ?: "none",
         voiceAudioUrl = voice?.audioUrl,
-        voiceDurationSeconds = voice?.durationSeconds,
-        voiceWaveformJson = voice?.waveform?.let(::waveformToJson),
+        // Reuse the generic duration/waveform columns for voicemail too (both are audio peaks 0..1).
+        voiceDurationSeconds = voice?.durationSeconds ?: voicemail?.durationSeconds,
+        voiceWaveformJson = (voice?.waveform ?: voicemail?.waveform)?.let(::waveformToJson),
+        voicemailMediaUrl = voicemail?.mediaUrl,
+        voicemailIsVideo = voicemail?.isVideo ?: false,
+        voicemailCallId = voicemail?.callId,
+        voicemailCallState = voicemail?.callState,
+        gifUrl = gif?.url,
+        gifAltText = gif?.altText,
+        gifWidth = gif?.width,
+        gifHeight = gif?.height,
+        stickerUrl = sticker?.url,
+        stickerAltText = sticker?.altText,
+        stickerId = sticker?.stickerId,
+        stickerCollectionId = sticker?.collectionId,
+        pollId = poll?.pollId,
+        pollTitle = poll?.title,
+        pollCreatorId = poll?.creatorId,
+        pollStatus = poll?.status,
+        pollConfirmedSlotId = poll?.confirmedSlotId,
     )
 }
 
@@ -883,6 +1414,33 @@ internal fun MessageEntity.toDomain(): Message = Message(
             durationSeconds = voiceDurationSeconds ?: 0.0,
             waveform = waveformFromJson(voiceWaveformJson),
         )
+        "voicemail" -> MessageMedia.Voicemail(
+            mediaUrl = voicemailMediaUrl,
+            isVideo = voicemailIsVideo,
+            durationSeconds = voiceDurationSeconds ?: 0.0,
+            waveform = waveformFromJson(voiceWaveformJson),
+            callId = voicemailCallId.orEmpty(),
+            callState = voicemailCallState,
+        )
+        "gif" -> MessageMedia.Gif(
+            url = gifUrl.orEmpty(),
+            altText = gifAltText,
+            width = gifWidth,
+            height = gifHeight,
+        )
+        "sticker" -> MessageMedia.Sticker(
+            url = stickerUrl.orEmpty(),
+            altText = stickerAltText,
+            stickerId = stickerId,
+            collectionId = stickerCollectionId,
+        )
+        "meeting_poll" -> MessageMedia.MeetingPoll(
+            pollId = pollId.orEmpty(),
+            title = pollTitle.orEmpty(),
+            creatorId = pollCreatorId.orEmpty(),
+            status = pollStatus ?: "open",
+            confirmedSlotId = pollConfirmedSlotId,
+        )
         "file", "file_share", "audio", "video" -> MessageMedia.File(
             fileName = fileName ?: "file",
             sizeBytes = fileSizeBytes,
@@ -920,6 +1478,16 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
             audioUrl = null,
             durationSeconds = voiceDurationSeconds ?: 0.0,
             waveform = waveformFromJson(voiceWaveformJson),
+            localUri = attachmentLocalUri,
+            uploadProgress = uploadPercent?.let { it / 100f },
+        )
+        "voicemail" -> MessageMedia.Voicemail(
+            mediaUrl = null,
+            isVideo = false,
+            durationSeconds = voiceDurationSeconds ?: 0.0,
+            waveform = waveformFromJson(voiceWaveformJson),
+            callId = "",
+            callState = null,
             localUri = attachmentLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
         )

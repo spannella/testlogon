@@ -2,6 +2,12 @@ package com.testlogon.android.data.messaging
 
 import com.testlogon.android.core.data.messaging.ConversationDao
 import com.testlogon.android.core.data.messaging.ConversationEntity
+import com.testlogon.android.core.data.messaging.CustomEmojiDao
+import com.testlogon.android.core.data.messaging.CustomEmojiEntity
+import com.testlogon.android.core.data.messaging.MeetingPollDao
+import com.testlogon.android.core.data.messaging.MeetingPollEntity
+import com.testlogon.android.core.data.messaging.MeetingPollSlotEntity
+import com.testlogon.android.core.data.messaging.MeetingPollWithSlots
 import com.testlogon.android.core.data.messaging.MessageDao
 import com.testlogon.android.core.data.messaging.MessageEntity
 import com.testlogon.android.core.data.messaging.OutboxDao
@@ -76,6 +82,44 @@ class MessagingRepositoryTest {
                 if (it.clientId == clientId) it.copy(uploadPercent = percent) else it
             }
         }
+    }
+
+    private class FakeCustomEmojiDao : CustomEmojiDao {
+        val rows = MutableStateFlow<List<CustomEmojiEntity>>(emptyList())
+        override fun observeAll(): Flow<List<CustomEmojiEntity>> = rows
+        override suspend fun upsertAll(items: List<CustomEmojiEntity>) {
+            val byCode = rows.value.associateBy { it.shortcode }.toMutableMap()
+            items.forEach { byCode[it.shortcode] = it }
+            rows.value = byCode.values.toList()
+        }
+        override suspend fun deleteStale(before: Long) {
+            rows.value = rows.value.filterNot { it.fetchedAt < before }
+        }
+        override suspend fun clear() { rows.value = emptyList() }
+    }
+
+    private class FakeMeetingPollDao : MeetingPollDao {
+        val polls = MutableStateFlow<List<MeetingPollEntity>>(emptyList())
+        val slots = MutableStateFlow<List<MeetingPollSlotEntity>>(emptyList())
+        private fun build(pollId: String): MeetingPollWithSlots? =
+            polls.value.firstOrNull { it.pollId == pollId }
+                ?.let { MeetingPollWithSlots(it, slots.value.filter { s -> s.pollId == pollId }) }
+        override fun observePoll(pollId: String): Flow<MeetingPollWithSlots?> =
+            polls.map { build(pollId) }
+        override suspend fun observePollOnce(pollId: String): MeetingPollWithSlots? = build(pollId)
+        override suspend fun upsertPoll(poll: MeetingPollEntity) {
+            polls.value = polls.value.filterNot { it.pollId == poll.pollId } + poll
+        }
+        override suspend fun upsertSlots(s: List<MeetingPollSlotEntity>) {
+            val byId = slots.value.associateBy { it.slotId }.toMutableMap()
+            s.forEach { byId[it.slotId] = it }
+            slots.value = byId.values.toList()
+        }
+        override suspend fun deleteSlots(pollId: String) {
+            slots.value = slots.value.filterNot { it.pollId == pollId }
+        }
+        override suspend fun clearPolls() { polls.value = emptyList() }
+        override suspend fun clearSlots() { slots.value = emptyList() }
     }
 
     // ---- API fake ----
@@ -165,6 +209,74 @@ class MessagingRepositoryTest {
             createVoiceCalls += id to body
             return requireNotNull(createVoiceResult)
         }
+
+        // AND-134 / AND-135 / AND-136 — rich message endpoints.
+        var presignVoicemailResult: PresignVoicemailResp? = null
+        var createVoicemailCalls = mutableListOf<Pair<String, CreateVoicemailReq>>()
+        var createVoicemailResult: MessageDto? = null
+        var sendGifCalls = mutableListOf<Pair<String, SendGifMessageReq>>()
+        var sendGifResult: MessageDto? = null
+        var sendGifThrows: Throwable? = null
+        var sendStickerCalls = mutableListOf<Pair<String, SendStickerMessageReq>>()
+        var sendStickerResult: MessageDto? = null
+        var searchGifsResult: List<GifSearchResultDto> = emptyList()
+        var trendingGifsResult: List<GifSearchResultDto> = emptyList()
+        var searchGifsCalls = mutableListOf<Pair<String, Int>>()
+        var trendingGifsCalls = mutableListOf<Int>()
+        var collectionsResult: StickerCollectionListRespDto? = null
+        var customEmojiResult: CustomEmojiListRespDto? = null
+        var createPollCalls = mutableListOf<Pair<String, CreateMeetingPollReq>>()
+        var createPollResult: MessageDto? = null
+        var getPollResults = ArrayDeque<MeetingPollStateDto>()
+        var voteCalls = mutableListOf<Triple<String, String, PollVoteReq>>()
+        var voteResult: OkResp = OkResp(ok = true)
+        var voteThrows: Throwable? = null
+        var confirmCalls = mutableListOf<Triple<String, String, PollConfirmReq>>()
+        var confirmResult: OkResp = OkResp(ok = true)
+
+        override suspend fun presignVoicemail(id: String, body: PresignVoicemailReq): PresignVoicemailResp =
+            requireNotNull(presignVoicemailResult)
+        override suspend fun createVoicemail(id: String, body: CreateVoicemailReq): MessageDto {
+            createVoicemailCalls += id to body
+            return requireNotNull(createVoicemailResult)
+        }
+        override suspend fun sendGifMessage(id: String, body: SendGifMessageReq): MessageDto {
+            sendGifCalls += id to body
+            sendGifThrows?.let { throw it }
+            return requireNotNull(sendGifResult)
+        }
+        override suspend fun sendStickerMessage(id: String, body: SendStickerMessageReq): MessageDto {
+            sendStickerCalls += id to body
+            return requireNotNull(sendStickerResult)
+        }
+        override suspend fun searchGifs(q: String, limit: Int): List<GifSearchResultDto> {
+            searchGifsCalls += q to limit
+            return searchGifsResult
+        }
+        override suspend fun trendingGifs(limit: Int): List<GifSearchResultDto> {
+            trendingGifsCalls += limit
+            return trendingGifsResult
+        }
+        override suspend fun stickerCollections(): StickerCollectionListRespDto =
+            requireNotNull(collectionsResult)
+        override suspend fun collectionStickers(collectionId: String): StickerListRespDto = error("unused")
+        override suspend fun customEmoji(): CustomEmojiListRespDto = requireNotNull(customEmojiResult)
+        override suspend fun resolveShortcodes(codes: String): ResolveShortcodesRespDto = error("unused")
+        override suspend fun createMeetingPoll(id: String, body: CreateMeetingPollReq): MessageDto {
+            createPollCalls += id to body
+            return requireNotNull(createPollResult)
+        }
+        override suspend fun getMeetingPoll(id: String, pollId: String): MeetingPollStateDto =
+            getPollResults.removeFirstOrNull() ?: error("no scripted poll state")
+        override suspend fun voteMeetingPoll(id: String, pollId: String, body: PollVoteReq): OkResp {
+            voteCalls += Triple(id, pollId, body)
+            voteThrows?.let { throw it }
+            return voteResult
+        }
+        override suspend fun confirmMeetingPoll(id: String, pollId: String, body: PollConfirmReq): OkResp {
+            confirmCalls += Triple(id, pollId, body)
+            return confirmResult
+        }
     }
 
     // ---- AND-130 fakes: uploader + image processor ----
@@ -204,6 +316,8 @@ class MessagingRepositoryTest {
     }
 
     private val conversationDao = FakeConversationDao()
+    private val customEmojiDao = FakeCustomEmojiDao()
+    private val meetingPollDao = FakeMeetingPollDao()
     private val messageDao = FakeMessageDao()
     private val outboxDao = FakeOutboxDao()
     private val api = FakeApi()
@@ -226,6 +340,8 @@ class MessagingRepositoryTest {
         conversationDao = conversationDao,
         messageDao = messageDao,
         outboxDao = outboxDao,
+        customEmojiDao = customEmojiDao,
+        meetingPollDao = meetingPollDao,
         errorParser = ApiErrorParser(Moshi.Builder().build()),
         authStateStore = auth,
         uploader = uploader,
@@ -396,5 +512,139 @@ class MessagingRepositoryTest {
         assertTrue(message.media is MessageMedia.File)
         assertTrue((message.media as MessageMedia.File).isShare)
         assertEquals("msg_fs", messageDao.findById("msg_fs")?.messageId)
+    }
+
+    // ---- AND-135: gif / sticker ----
+
+    @Test
+    fun sendGif_postsFlatBody_cachesGifMessage() = runTest {
+        api.sendGifResult = MessageDto(
+            messageId = "msg_g", conversationId = "c1", senderId = "u1", createdAt = 100, kind = "gif",
+            gifUrl = "https://media/x.gif", gifAltText = "cat", gifWidth = 480, gifHeight = 270,
+        )
+        val result = repo().sendGif("c1", "client-1", GifSendPayload("https://media/x.gif", "cat", 480, 270))
+
+        assertTrue(result is ApiResult.Success)
+        val (cid, body) = api.sendGifCalls.single()
+        assertEquals("c1", cid)
+        assertEquals("https://media/x.gif", body.gifUrl)
+        val message = (result as ApiResult.Success).data
+        assertTrue(message.media is MessageMedia.Gif)
+        assertEquals("msg_g", messageDao.findById("msg_g")?.messageId)
+    }
+
+    @Test
+    fun sendGif_failure_returnsError_doesNotCache() = runTest {
+        api.sendGifThrows = IOException("offline")
+        val result = repo().sendGif("c1", "client-1", GifSendPayload("https://media/x.gif", null, null, null))
+        assertTrue(result is ApiResult.NetworkError)
+        assertNull(messageDao.findById("msg_g"))
+    }
+
+    @Test
+    fun sendSticker_postsCollectionId_cachesStickerMessage() = runTest {
+        api.sendStickerResult = MessageDto(
+            messageId = "msg_s", conversationId = "c1", senderId = "u1", createdAt = 100, kind = "sticker",
+            stickerUrl = "https://s/st.png", stickerId = "st_42", stickerCollectionId = "col_1",
+        )
+        val result = repo().sendSticker(
+            "c1", "client-2", StickerPick("st_42", "col_1", "https://s/st.png", "wave"),
+        )
+        assertTrue(result is ApiResult.Success)
+        val (_, body) = api.sendStickerCalls.single()
+        assertEquals("st_42", body.stickerId)
+        assertEquals("col_1", body.stickerCollectionId)
+        assertTrue((result as ApiResult.Success).data.media is MessageMedia.Sticker)
+    }
+
+    @Test
+    fun searchGifs_blankQuery_usesTrending() = runTest {
+        api.trendingGifsResult = listOf(GifSearchResultDto("a", "https://g/1.gif", "cat", 1, 1))
+        val result = repo().searchGifs("", 20)
+        assertTrue(result is ApiResult.Success)
+        assertEquals(1, api.trendingGifsCalls.size)
+        assertTrue(api.searchGifsCalls.isEmpty())
+        assertEquals("a", (result as ApiResult.Success).data.single().id)
+    }
+
+    @Test
+    fun refreshCustomEmoji_inferAnimated_fromContentType_writesRoom() = runTest {
+        api.customEmojiResult = CustomEmojiListRespDto(
+            emojis = listOf(
+                CustomEmojiDto("e1", "partyparrot", "Party", "https://e/p.gif", "image/gif", "global"),
+                CustomEmojiDto("e2", "static", "Static", "https://e/s.png", "image/png", "global"),
+            ),
+        )
+        val result = repo().refreshCustomEmoji()
+        assertTrue(result is ApiResult.Success)
+        val rows = customEmojiDao.rows.value.associateBy { it.shortcode }
+        assertTrue(rows["partyparrot"]!!.animated)
+        assertTrue(!rows["static"]!!.animated)
+    }
+
+    // ---- AND-136: meeting poll ----
+
+    @Test
+    fun createMeetingPoll_postsSlots_reconcilesViaGet_writesRoom() = runTest {
+        api.createPollResult = MessageDto(
+            messageId = "msg_p", conversationId = "c1", senderId = "u1", createdAt = 100, kind = "meeting_poll",
+            meetingPoll = MeetingPollAttachmentDto(pollId = "poll_9", creatorId = "u1", title = "T", status = "open"),
+        )
+        api.getPollResults.add(
+            MeetingPollStateDto(
+                pollId = "poll_9", title = "T", creatorId = "u1", status = "open",
+                slots = listOf(MeetingPollSlotStateDto("slot_1", "2026-06-08T15:00:00Z", "2026-06-08T15:30:00Z", 0, 0, 0, null)),
+            ),
+        )
+        val result = repo().createMeetingPoll(
+            "c1",
+            MeetingPollDraft("T", 30, listOf(MeetingPollSlotDraft("2026-06-08T15:00:00Z", "2026-06-08T15:30:00Z"), MeetingPollSlotDraft("2026-06-09T15:00:00Z", "2026-06-09T15:30:00Z"))),
+        )
+        assertTrue(result is ApiResult.Success)
+        assertEquals(2, api.createPollCalls.single().second.slots.size)
+        // Poll cached with its slots via the reconcile GET.
+        assertEquals("poll_9", meetingPollDao.polls.value.single().pollId)
+        assertEquals(1, meetingPollDao.slots.value.size)
+    }
+
+    @Test
+    fun voteMeetingPoll_postsVotesMap_thenReconcilesViaGet() = runTest {
+        // Seed a cached poll so buildVotesMap has prior state.
+        api.getPollResults.add(
+            MeetingPollStateDto(
+                pollId = "poll_9", title = "T", creatorId = "u1", status = "open",
+                slots = listOf(MeetingPollSlotStateDto("slot_1", "s", "e", 1, 0, 0, "yes")),
+            ),
+        )
+        val result = repo().voteMeetingPoll("c1", "poll_9", "slot_1", SlotVote.NO)
+        assertTrue(result is ApiResult.Success)
+        val (_, pollId, body) = api.voteCalls.single()
+        assertEquals("poll_9", pollId)
+        assertEquals("no", body.votes["slot_1"])
+        // Reconciled state written to Room.
+        assertEquals(SlotVote.YES, (result as ApiResult.Success).data.slots.single().myVote)
+    }
+
+    @Test
+    fun voteMeetingPoll_postFails_returnsError_noReconcile() = runTest {
+        api.voteThrows = IOException("offline")
+        val result = repo().voteMeetingPoll("c1", "poll_9", "slot_1", SlotVote.YES)
+        assertTrue(result is ApiResult.NetworkError)
+        assertTrue(meetingPollDao.polls.value.isEmpty())
+    }
+
+    @Test
+    fun confirmMeetingPoll_postsSlotId_reconciles() = runTest {
+        api.confirmResult = OkResp(ok = true, eventId = "evt_1")
+        api.getPollResults.add(
+            MeetingPollStateDto(
+                pollId = "poll_9", title = "T", creatorId = "u1", status = "confirmed", confirmedSlotId = "slot_2",
+                slots = listOf(MeetingPollSlotStateDto("slot_2", "s", "e", 3, 0, 0, "yes")),
+            ),
+        )
+        val result = repo().confirmMeetingPoll("c1", "poll_9", "slot_2")
+        assertTrue(result is ApiResult.Success)
+        assertEquals("slot_2", api.confirmCalls.single().third.slotId)
+        assertEquals(MeetingPollStatus.CONFIRMED, (result as ApiResult.Success).data.status)
     }
 }

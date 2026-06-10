@@ -25,9 +25,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -208,6 +210,19 @@ fun ThreadRoute(
         onSendVoice = viewModel::onSendVoice,
         onToggleVoice = viewModel::onToggleVoice,
         onSeekVoice = viewModel::onSeekVoice,
+        onOpenMediaPicker = viewModel::openMediaPicker,
+        onCloseMediaPicker = viewModel::closeMediaPicker,
+        onMediaTab = viewModel::selectMediaTab,
+        onGifQuery = viewModel::onGifQueryChange,
+        onGifSelect = viewModel::onGifSelected,
+        onSelectCollection = viewModel::onSelectCollection,
+        onStickerSelect = viewModel::onStickerSelected,
+        onEmojiSelect = viewModel::onCustomEmojiSelected,
+        onOpenPollComposer = viewModel::onOpenPollComposer,
+        onDismissPollComposer = viewModel::onDismissPollComposer,
+        onCreatePoll = viewModel::onCreatePoll,
+        onPollVote = viewModel::onPollVote,
+        onPollConfirm = viewModel::onPollConfirm,
         modifier = modifier,
     )
 
@@ -241,6 +256,19 @@ fun ThreadScreen(
     onSendVoice: () -> Unit,
     onToggleVoice: (String, String?) -> Unit,
     onSeekVoice: (String, Float) -> Unit,
+    onOpenMediaPicker: () -> Unit,
+    onCloseMediaPicker: () -> Unit,
+    onMediaTab: (MediaTab) -> Unit,
+    onGifQuery: (String) -> Unit,
+    onGifSelect: (com.testlogon.android.data.messaging.GifResult) -> Unit,
+    onSelectCollection: (String) -> Unit,
+    onStickerSelect: (String, String, String, String?) -> Unit,
+    onEmojiSelect: (String) -> Unit,
+    onOpenPollComposer: () -> Unit,
+    onDismissPollComposer: () -> Unit,
+    onCreatePoll: (com.testlogon.android.data.messaging.MeetingPollDraft) -> Unit,
+    onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
+    onPollConfirm: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -291,6 +319,8 @@ fun ThreadScreen(
                     onAttachFile = onAttachFile,
                     onShareVideo = onShareVideo,
                     onRecordVoice = onRecordVoice,
+                    onAttachMedia = onOpenMediaPicker,
+                    onAttachPoll = onOpenPollComposer,
                 )
             }
         },
@@ -317,6 +347,8 @@ fun ThreadScreen(
                     onDownloadFile = onDownloadFile,
                     onToggleVoice = onToggleVoice,
                     onSeekVoice = onSeekVoice,
+                    onPollVote = onPollVote,
+                    onPollConfirm = onPollConfirm,
                 )
             }
         }
@@ -329,6 +361,53 @@ fun ThreadScreen(
             onPick = onPickVideo,
         )
     }
+
+    if (state.mediaPicker.visible) {
+        MediaPickerSheet(
+            state = state.mediaPicker,
+            onTab = onMediaTab,
+            onGifQuery = onGifQuery,
+            onGifSelect = onGifSelect,
+            onSelectCollection = onSelectCollection,
+            onStickerSelect = onStickerSelect,
+            onEmojiSelect = onEmojiSelect,
+            onDismiss = onCloseMediaPicker,
+        )
+    }
+
+    if (state.pollComposerVisible) {
+        MeetingPollComposerSheet(
+            initialSlots = defaultPollSlots(),
+            onSubmit = onCreatePoll,
+            onDismiss = onDismissPollComposer,
+        )
+    }
+}
+
+/**
+ * AND-136 — two sensible default candidate slots (tomorrow + the day after, 30-min windows) so the
+ * composer opens valid (>=2 slots). ISO-8601 UTC; a fuller date/time picker is a follow-up.
+ */
+private fun defaultPollSlots(): List<com.testlogon.android.data.messaging.MeetingPollSlotDraft> {
+    fun slot(daysAhead: Int, hour: Int): com.testlogon.android.data.messaging.MeetingPollSlotDraft {
+        val dayMs = 24L * 60 * 60 * 1000
+        val base = System.currentTimeMillis() + daysAhead * dayMs
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+            timeInMillis = base
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.ROOT).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }
+        val start = fmt.format(cal.time)
+        cal.add(java.util.Calendar.MINUTE, 30)
+        val end = fmt.format(cal.time)
+        return com.testlogon.android.data.messaging.MeetingPollSlotDraft(start, end)
+    }
+    return listOf(slot(1, 15), slot(2, 21))
 }
 
 @Composable
@@ -341,6 +420,8 @@ private fun ThreadList(
     onDownloadFile: (ThreadMessageUi) -> Unit,
     onToggleVoice: (String, String?) -> Unit,
     onSeekVoice: (String, Float) -> Unit,
+    onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
+    onPollConfirm: (String, String) -> Unit,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
     val reversed = remember(state.messages) { state.messages.asReversed() }
@@ -360,11 +441,14 @@ private fun ThreadList(
                     message = message,
                     download = state.downloads[message.key] ?: FileDownloadUi.NotDownloaded,
                     voicePlayback = voicePlayback,
+                    polls = state.polls,
                     onRetry = { onRetrySend(message.key) },
                     onOpenImage = onOpenImage,
                     onDownloadFile = { onDownloadFile(message) },
                     onToggleVoice = onToggleVoice,
                     onSeekVoice = onSeekVoice,
+                    onPollVote = onPollVote,
+                    onPollConfirm = onPollConfirm,
                 )
             }
             if (state.isLoadingOlder) {
@@ -400,11 +484,14 @@ private fun MessageBubble(
     message: ThreadMessageUi,
     download: FileDownloadUi,
     voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
+    polls: Map<String, MeetingPollCardUiState>,
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
     onDownloadFile: () -> Unit,
     onToggleVoice: (String, String?) -> Unit,
     onSeekVoice: (String, Float) -> Unit,
+    onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
+    onPollConfirm: (String, String) -> Unit,
 ) {
     val alignment = if (message.isOwn) Alignment.End else Alignment.Start
     val bubbleColor = if (message.isOwn) {
@@ -445,6 +532,34 @@ private fun MessageBubble(
                 onTogglePlay = { onToggleVoice(message.key, media.audioUrl ?: media.localUri) },
                 onSeek = { f -> onSeekVoice(message.key, f) },
             )
+            is MessageMedia.Voicemail -> VoicemailBubble(
+                media = media,
+                isOwn = message.isOwn,
+                onPlay = { onToggleVoice(message.key, media.mediaUrl ?: media.localUri) },
+            )
+            is MessageMedia.Gif -> GifBubble(media = media)
+            is MessageMedia.Sticker -> StickerBubble(media = media)
+            is MessageMedia.MeetingPoll -> {
+                val pollState = polls[media.pollId]
+                if (pollState != null) {
+                    MeetingPollCard(
+                        state = pollState,
+                        onVote = { slotId, vote -> onPollVote(media.pollId, slotId, vote) },
+                        onConfirm = { slotId -> onPollConfirm(media.pollId, slotId) },
+                    )
+                } else {
+                    Surface(
+                        color = bubbleColor,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.widthIn(max = 280.dp),
+                    ) {
+                        Text(
+                            text = media.title.ifBlank { stringResource(R.string.poll_label) },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
             MessageMedia.None -> Surface(
                 color = bubbleColor,
                 shape = MaterialTheme.shapes.medium,
@@ -648,6 +763,8 @@ private fun MessageComposer(
     onAttachFile: () -> Unit,
     onShareVideo: () -> Unit,
     onRecordVoice: () -> Unit,
+    onAttachMedia: () -> Unit,
+    onAttachPoll: () -> Unit,
 ) {
     Surface(tonalElevation = 2.dp) {
         Row(
@@ -696,6 +813,26 @@ private fun MessageComposer(
                 Icon(
                     Icons.Filled.Mic,
                     contentDescription = stringResource(R.string.thread_record_voice),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            IconButton(
+                onClick = onAttachMedia,
+                modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_MEDIA),
+            ) {
+                Icon(
+                    Icons.Filled.EmojiEmotions,
+                    contentDescription = stringResource(R.string.composer_add_media),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            IconButton(
+                onClick = onAttachPoll,
+                modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_POLL),
+            ) {
+                Icon(
+                    Icons.Filled.Poll,
+                    contentDescription = stringResource(R.string.composer_add_poll),
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }

@@ -118,6 +118,10 @@ dependencies {
     // AND-074 / AND-130: Coil for avatar/cover/message images.
     implementation(libs.coil.compose)
 
+    // AND-135: animated-GIF / animated-WebP decoder for GIF & custom-emoji messages. Registered on
+    // the app ImageLoader (ImageDecoderDecoder on API 28+, GifDecoder on API 24-27).
+    implementation(libs.coil.gif)
+
     // AND-131: Media3 / ExoPlayer (+ HLS) for inline video-share playback. The player is created
     // per-screen and lifecycle-scoped (never an eager singleton @Provides).
     implementation(libs.media3.exoplayer)

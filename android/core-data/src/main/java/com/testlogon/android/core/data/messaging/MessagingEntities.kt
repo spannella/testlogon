@@ -55,6 +55,72 @@ data class MessageEntity(
     val voiceDurationSeconds: Double? = null,
     /** Normalized waveform peaks (0..1) stored as a JSON number[] string. */
     val voiceWaveformJson: String? = null,
+    // AND-134 — voicemail columns (DB schema v4). Null for non-voicemail kinds.
+    /** Signed audio_url/video_url (short-lived); a play attempt re-fetches the message if expired. */
+    val voicemailMediaUrl: String? = null,
+    val voicemailIsVideo: Boolean = false,
+    val voicemailCallId: String? = null,
+    val voicemailCallState: String? = null,
+    // AND-135 — gif columns (DB schema v4). Null for non-gif kinds.
+    val gifUrl: String? = null,
+    val gifAltText: String? = null,
+    val gifWidth: Int? = null,
+    val gifHeight: Int? = null,
+    // AND-135 — sticker columns (DB schema v4). Null for non-sticker kinds.
+    val stickerUrl: String? = null,
+    val stickerAltText: String? = null,
+    val stickerId: String? = null,
+    val stickerCollectionId: String? = null,
+    // AND-136 — meeting-poll envelope columns (DB schema v4). Null for non-poll kinds.
+    val pollId: String? = null,
+    val pollTitle: String? = null,
+    val pollCreatorId: String? = null,
+    val pollStatus: String? = null,
+    val pollConfirmedSlotId: String? = null,
+)
+
+/**
+ * AND-135 — cached workspace custom emoji (single source of truth for the picker grid and inline
+ * `:shortcode:` substitution in the message list). Keyed by shortcode. `fetchedAt` gates refresh.
+ */
+@Entity(tableName = "custom_emoji")
+data class CustomEmojiEntity(
+    @PrimaryKey val shortcode: String,
+    val name: String,
+    val imageUrl: String,
+    /** Inferred from content_type (image/gif|image/webp); there is no `animated` field on the wire. */
+    val animated: Boolean,
+    val fetchedAt: Long,
+)
+
+/**
+ * AND-136 — cached meeting-poll envelope (Room single source of truth for the card). Slots live in
+ * [MeetingPollSlotEntity], ordered by [position].
+ */
+@Entity(tableName = "meeting_polls")
+data class MeetingPollEntity(
+    @PrimaryKey val pollId: String,
+    val conversationId: String,
+    val title: String,
+    val durationMinutes: Int,
+    val creatorId: String,
+    /** "open" | "confirmed" | "cancelled". */
+    val status: String,
+    val confirmedSlotId: String?,
+)
+
+@Entity(tableName = "meeting_poll_slots")
+data class MeetingPollSlotEntity(
+    @PrimaryKey val slotId: String,
+    val pollId: String,
+    val position: Int,
+    val startUtc: String,
+    val endUtc: String,
+    val yesCount: Int,
+    val maybeCount: Int,
+    val noCount: Int,
+    /** "yes" | "maybe" | "no" | null (caller's own response). */
+    val myVote: String?,
 )
 
 @Entity(tableName = "outbox_messages")

@@ -74,6 +74,54 @@ sealed interface MessageMedia {
         val localUri: String? = null,
         val uploadProgress: Float? = null,
     ) : MessageMedia
+
+    /**
+     * AND-134 — a voicemail (call-tied async audio/video drop). [mediaUrl] is the short-lived signed
+     * audio_url (audio mode) or video_url (video mode); null while an optimistic outbox row uploads.
+     * [callState] ∈ "missed"|"declined"|"busy". [waveform] is the server-provided peaks (0..1).
+     */
+    data class Voicemail(
+        val mediaUrl: String?,
+        val isVideo: Boolean,
+        val durationSeconds: Double,
+        val waveform: List<Float>,
+        val callId: String,
+        val callState: String?,
+        val localUri: String? = null,
+        val uploadProgress: Float? = null,
+    ) : MessageMedia
+
+    /**
+     * AND-135 — an animated GIF. [url] is the provider GIF url (animated via the Coil GIF decoder);
+     * [width]/[height] drive the bubble aspect ratio. [altText] is the accessibility label.
+     */
+    data class Gif(
+        val url: String,
+        val altText: String?,
+        val width: Int?,
+        val height: Int?,
+        val provider: String? = null,
+    ) : MessageMedia
+
+    /** AND-135 — a sticker (fixed-size image). [url] is the sticker image_url; [altText] the label. */
+    data class Sticker(
+        val url: String,
+        val altText: String?,
+        val stickerId: String? = null,
+        val collectionId: String? = null,
+    ) : MessageMedia
+
+    /**
+     * AND-136 — a meeting poll. Carries the poll envelope (id/title/status); per-slot counts +
+     * my_vote are loaded on demand via the polls GET and surfaced through the ViewModel, not Room.
+     */
+    data class MeetingPoll(
+        val pollId: String,
+        val title: String,
+        val creatorId: String,
+        val status: String,
+        val confirmedSlotId: String?,
+    ) : MessageMedia
 }
 
 /** A single message in a conversation, merged from history + the local outbox at render time. */
@@ -148,6 +196,34 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         audioUrl = voiceMessage.audioUrl?.takeIf { it.isNotBlank() },
         durationSeconds = voiceMessage.durationSeconds ?: 0.0,
         waveform = voiceMessage.waveformData ?: emptyList(),
+    )
+    voicemail != null -> MessageMedia.Voicemail(
+        mediaUrl = (voicemail.videoUrl ?: voicemail.audioUrl)?.takeIf { it.isNotBlank() },
+        isVideo = voicemail.mode == "video",
+        durationSeconds = voicemail.durationSeconds ?: 0.0,
+        waveform = voicemail.waveformData ?: emptyList(),
+        callId = voicemail.callId,
+        callState = voicemail.callState,
+    )
+    gifUrl != null -> MessageMedia.Gif(
+        url = gifUrl,
+        altText = gifAltText,
+        width = gifWidth,
+        height = gifHeight,
+        provider = gifProvider,
+    )
+    stickerUrl != null -> MessageMedia.Sticker(
+        url = stickerUrl,
+        altText = stickerAltText,
+        stickerId = stickerId,
+        collectionId = stickerCollectionId,
+    )
+    meetingPoll != null -> MessageMedia.MeetingPoll(
+        pollId = meetingPoll.pollId,
+        title = meetingPoll.title,
+        creatorId = meetingPoll.creatorId,
+        status = meetingPoll.status,
+        confirmedSlotId = meetingPoll.confirmedSlotId,
     )
     fileShare != null -> fileShare.toFileMedia(consumptionPolicy ?: "none", isShare = true)
     file != null -> file.toFileMedia(consumptionPolicy ?: "none", isShare = false)

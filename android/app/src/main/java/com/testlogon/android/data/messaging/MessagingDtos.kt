@@ -74,6 +74,21 @@ data class MessageDto(
     @Json(name = "file_share") val fileShare: MessageFileDto? = null,
     /** AND-133 — present on kind="voice_message". Signed audio url + duration + waveform. */
     @Json(name = "voice_message") val voiceMessage: VoiceMessageDto? = null,
+    /** AND-134 — present on kind="voicemail". Nested object (audio_url/video_url + call metadata). */
+    val voicemail: VoicemailDto? = null,
+    /** AND-135 — FLAT fields present on kind="gif" (no nested object on the wire). */
+    @Json(name = "gif_url") val gifUrl: String? = null,
+    @Json(name = "gif_alt_text") val gifAltText: String? = null,
+    @Json(name = "gif_width") val gifWidth: Int? = null,
+    @Json(name = "gif_height") val gifHeight: Int? = null,
+    @Json(name = "gif_provider") val gifProvider: String? = null,
+    /** AND-135 — FLAT fields present on kind="sticker". */
+    @Json(name = "sticker_id") val stickerId: String? = null,
+    @Json(name = "sticker_collection_id") val stickerCollectionId: String? = null,
+    @Json(name = "sticker_url") val stickerUrl: String? = null,
+    @Json(name = "sticker_alt_text") val stickerAltText: String? = null,
+    /** AND-136 — present on kind="meeting_poll": the poll envelope (slots come from the polls GET). */
+    @Json(name = "meeting_poll") val meetingPoll: MeetingPollAttachmentDto? = null,
     /** AND-132/133 — "none" | "view_once" | "listen_once"; gates once-media cache reuse. */
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
 )

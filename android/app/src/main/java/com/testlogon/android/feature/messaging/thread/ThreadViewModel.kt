@@ -7,10 +7,16 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.messaging.DownloadProgress
+import com.testlogon.android.data.messaging.GifResult
+import com.testlogon.android.data.messaging.GifSendPayload
+import com.testlogon.android.data.messaging.MeetingPoll
+import com.testlogon.android.data.messaging.MeetingPollDraft
 import com.testlogon.android.data.messaging.Message
 import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.ShareableVideo
+import com.testlogon.android.data.messaging.SlotVote
+import com.testlogon.android.data.messaging.StickerPick
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
@@ -469,6 +475,246 @@ class ThreadViewModel @Inject constructor(
         voicePlayer.seekTo(messageId, fraction)
     }
 
+    // ---- AND-135: GIF / sticker / custom-emoji picker ----
+
+    private var gifSearchJob: kotlinx.coroutines.Job? = null
+    private val pollObservers = mutableSetOf<String>()
+
+    init {
+        observeCustomEmoji()
+        observePollsInThread()
+    }
+
+    private fun observeCustomEmoji() {
+        viewModelScope.launch {
+            repository.observeCustomEmoji().collect { catalog ->
+                _state.update {
+                    it.copy(customEmoji = catalog, mediaPicker = it.mediaPicker.copy(emoji = catalog))
+                }
+            }
+        }
+        // Stale-first: surface cached rows immediately, then refresh in the background.
+        viewModelScope.launch { repository.refreshCustomEmoji() }
+    }
+
+    fun openMediaPicker() {
+        _state.update { it.copy(mediaPicker = it.mediaPicker.copy(visible = true)) }
+        // Lazy-load the default tab content.
+        onGifQueryChange(_state.value.mediaPicker.gifQuery)
+        loadStickerCollections()
+    }
+
+    fun closeMediaPicker() {
+        gifSearchJob?.cancel()
+        _state.update { it.copy(mediaPicker = it.mediaPicker.copy(visible = false)) }
+    }
+
+    fun selectMediaTab(tab: MediaTab) {
+        _state.update { it.copy(mediaPicker = it.mediaPicker.copy(tab = tab)) }
+        if (tab == MediaTab.STICKERS && _state.value.mediaPicker.collections.isEmpty()) {
+            loadStickerCollections()
+        }
+    }
+
+    fun onGifQueryChange(query: String) {
+        _state.update { it.copy(mediaPicker = it.mediaPicker.copy(gifQuery = query, gifLoading = true)) }
+        gifSearchJob?.cancel()
+        gifSearchJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(GIF_DEBOUNCE_MS) // empty query => trending
+            when (val r = repository.searchGifs(query)) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(mediaPicker = it.mediaPicker.copy(gifLoading = false, gifResults = r.data, gifError = null))
+                }
+                is ApiResult.Failure -> _state.update {
+                    it.copy(mediaPicker = it.mediaPicker.copy(gifLoading = false, gifError = r.error.message))
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(mediaPicker = it.mediaPicker.copy(gifLoading = false, gifError = OFFLINE_MESSAGE))
+                }
+            }
+        }
+    }
+
+    private fun loadStickerCollections() {
+        if (_state.value.mediaPicker.collectionsLoading) return
+        _state.update { it.copy(mediaPicker = it.mediaPicker.copy(collectionsLoading = true, collectionsError = null)) }
+        viewModelScope.launch {
+            when (val r = repository.stickerCollections()) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(
+                        mediaPicker = it.mediaPicker.copy(
+                            collectionsLoading = false,
+                            collections = r.data,
+                            selectedCollectionId = it.mediaPicker.selectedCollectionId ?: r.data.firstOrNull()?.collectionId,
+                        ),
+                    )
+                }
+                is ApiResult.Failure -> _state.update {
+                    it.copy(mediaPicker = it.mediaPicker.copy(collectionsLoading = false, collectionsError = r.error.message))
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(mediaPicker = it.mediaPicker.copy(collectionsLoading = false, collectionsError = OFFLINE_MESSAGE))
+                }
+            }
+        }
+    }
+
+    fun onSelectCollection(collectionId: String) {
+        _state.update { it.copy(mediaPicker = it.mediaPicker.copy(selectedCollectionId = collectionId)) }
+    }
+
+    /** AND-135 — selecting a GIF sends immediately and closes the sheet. */
+    fun onGifSelected(gif: GifResult) {
+        closeMediaPicker()
+        val clientId = UUID.randomUUID().toString()
+        viewModelScope.launch {
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendGif(
+                conversationId,
+                clientId,
+                GifSendPayload(gif.url, gif.altText, gif.width, gif.height),
+            )
+        }
+    }
+
+    /** AND-135 — selecting a sticker sends immediately and closes the sheet. */
+    fun onStickerSelected(collectionId: String, stickerId: String, url: String, altText: String?) {
+        closeMediaPicker()
+        val clientId = UUID.randomUUID().toString()
+        viewModelScope.launch {
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendSticker(conversationId, clientId, StickerPick(stickerId, collectionId, url, altText))
+        }
+    }
+
+    /** AND-135 — inserting a custom emoji adds its ":shortcode:" token to the draft (does NOT send). */
+    fun onCustomEmojiSelected(shortcode: String) {
+        _state.update {
+            val current = it.composer.draft
+            val next = "$current:$shortcode:"
+            it.copy(composer = it.composer.copy(draft = next, charCount = next.length, overLimit = next.length > ComposerState.MAX_LENGTH))
+        }
+    }
+
+    // ---- AND-134: voicemail ----
+
+    /**
+     * AND-134 — send the just-recorded clip as a voicemail tied to [callId]. Reuses the AND-133
+     * recorder pipeline (currentClipPath/Duration/Amplitudes); audio mode by default.
+     */
+    fun onSendVoicemail(callId: String, isVideo: Boolean = false) {
+        val path = currentClipPath ?: return
+        val durationSeconds = currentClipDurationMs / 1000.0
+        val wire = Waveform.normalize(currentClipRawAmplitudes, Waveform.DEFAULT_BUCKETS)
+        val clientId = UUID.randomUUID().toString()
+        val contentType = if (isVideo) "video/mp4" else VOICEMAIL_AUDIO_CONTENT_TYPE
+        _state.update { it.copy(voice = VoiceComposerUiState.Sending(0f)) }
+        viewModelScope.launch {
+            repository.enqueueOptimisticVoicemail(conversationId, clientId, path, durationSeconds, wire, isVideo, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            val result = repository.sendVoicemailOutbox(
+                conversationId, clientId, callId, path, durationSeconds, wire, contentType, isVideo,
+            )
+            _state.update {
+                it.copy(
+                    voice = if (result is ApiResult.Success) VoiceComposerUiState.Idle
+                    else VoiceComposerUiState.Failed("Couldn't send voicemail"),
+                )
+            }
+            if (result is ApiResult.Success) currentClipPath = null
+        }
+    }
+
+    // ---- AND-136: meeting poll ----
+
+    /** Observe poll state for every meeting-poll message currently in the thread. */
+    private fun observePollsInThread() {
+        viewModelScope.launch {
+            state.collect { st ->
+                val me = authStateStore.userSub.value
+                st.messages.forEach { ui ->
+                    val poll = ui.media as? MessageMedia.MeetingPoll ?: return@forEach
+                    if (poll.pollId.isNotBlank() && pollObservers.add(poll.pollId)) {
+                        observeOnePoll(poll.pollId, me)
+                        // Hydrate canonical counts.
+                        viewModelScope.launch { repository.refreshMeetingPoll(conversationId, poll.pollId) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun observeOnePoll(pollId: String, currentUser: String?) {
+        viewModelScope.launch {
+            repository.observeMeetingPoll(pollId).collect { poll ->
+                if (poll == null) return@collect
+                _state.update {
+                    val prior = it.polls[pollId]
+                    it.copy(
+                        polls = it.polls + (
+                            pollId to (prior?.copy(poll = poll, canManage = poll.creatorId == currentUser)
+                                ?: MeetingPollCardUiState(poll = poll, canManage = poll.creatorId == currentUser))
+                            ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun onOpenPollComposer() { _state.update { it.copy(pollComposerVisible = true) } }
+    fun onDismissPollComposer() { _state.update { it.copy(pollComposerVisible = false) } }
+
+    fun onCreatePoll(draft: MeetingPollDraft) {
+        _state.update { it.copy(pollComposerVisible = false) }
+        viewModelScope.launch {
+            repository.createMeetingPoll(conversationId, draft)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    fun onPollVote(pollId: String, slotId: String, vote: SlotVote?) {
+        setPollMutating(pollId, true)
+        viewModelScope.launch {
+            val result = repository.voteMeetingPoll(conversationId, pollId, slotId, vote)
+            _state.update {
+                val prior = it.polls[pollId] ?: return@update it
+                it.copy(
+                    polls = it.polls + (
+                        pollId to prior.copy(
+                            isMutating = false,
+                            inlineError = if (result is ApiResult.Success) null else "Couldn't save your vote — tap to retry",
+                        )
+                        ),
+                )
+            }
+        }
+    }
+
+    fun onPollConfirm(pollId: String, slotId: String) {
+        setPollMutating(pollId, true)
+        viewModelScope.launch {
+            val result = repository.confirmMeetingPoll(conversationId, pollId, slotId)
+            _state.update {
+                val prior = it.polls[pollId] ?: return@update it
+                it.copy(
+                    polls = it.polls + (
+                        pollId to prior.copy(
+                            isMutating = false,
+                            inlineError = if (result is ApiResult.Success) null else "Couldn't confirm — tap to retry",
+                        )
+                        ),
+                )
+            }
+        }
+    }
+
+    private fun setPollMutating(pollId: String, mutating: Boolean) {
+        _state.update {
+            val prior = it.polls[pollId] ?: return@update it
+            it.copy(polls = it.polls + (pollId to prior.copy(isMutating = mutating, inlineError = null)))
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         recorderOrNull?.release()
@@ -510,6 +756,12 @@ class ThreadViewModel @Inject constructor(
 
         /** AND-133 — cap the live-waveform peak buffer so the overlay scrolls a fixed window. */
         private const val MAX_LIVE_PEAKS = 64
+
+        /** AND-135 — debounce window for GIF search keystrokes. */
+        private const val GIF_DEBOUNCE_MS = 300L
+
+        /** AND-134 — AAC-LC / M4A audio voicemail MIME (matches the presign content-type pattern). */
+        private const val VOICEMAIL_AUDIO_CONTENT_TYPE = "audio/mp4"
     }
 }
 

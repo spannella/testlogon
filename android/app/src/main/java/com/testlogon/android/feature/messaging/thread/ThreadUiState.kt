@@ -1,7 +1,11 @@
 package com.testlogon.android.feature.messaging.thread
 
+import com.testlogon.android.data.messaging.CustomEmojiUi
+import com.testlogon.android.data.messaging.GifResult
+import com.testlogon.android.data.messaging.MeetingPoll
 import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.SendStatus
+import com.testlogon.android.data.messaging.StickerCollectionUi
 
 /**
  * AND-123 / AND-124 — thread (message list) UI state.
@@ -25,6 +29,40 @@ data class ThreadUiState(
     val voice: VoiceComposerUiState = VoiceComposerUiState.Idle,
     /** AND-132 — per-message file download state, keyed by server message id. */
     val downloads: Map<String, FileDownloadUi> = emptyMap(),
+    /** AND-135 — unified GIF/sticker/emoji media picker state (hidden until opened). */
+    val mediaPicker: MediaPickerState = MediaPickerState(),
+    /** AND-135 — Room-backed custom-emoji catalog (single source for picker + inline render). */
+    val customEmoji: List<CustomEmojiUi> = emptyList(),
+    /** AND-136 — per-poll card state (counts/my_vote/mutating/error), keyed by poll id. */
+    val polls: Map<String, MeetingPollCardUiState> = emptyMap(),
+    /** AND-136 — meeting-poll composer sheet (hidden until opened). */
+    val pollComposerVisible: Boolean = false,
+)
+
+/** AND-135 — the three picker tabs. */
+enum class MediaTab { GIF, STICKERS, EMOJI }
+
+/** AND-135 — unified media-picker (GIF / sticker / custom-emoji) state. */
+data class MediaPickerState(
+    val visible: Boolean = false,
+    val tab: MediaTab = MediaTab.GIF,
+    val gifQuery: String = "",
+    val gifLoading: Boolean = false,
+    val gifResults: List<GifResult> = emptyList(),
+    val gifError: String? = null,
+    val collectionsLoading: Boolean = false,
+    val collections: List<StickerCollectionUi> = emptyList(),
+    val selectedCollectionId: String? = null,
+    val collectionsError: String? = null,
+    val emoji: List<CustomEmojiUi> = emptyList(),
+)
+
+/** AND-136 — meeting-poll card render + interaction state. */
+data class MeetingPollCardUiState(
+    val poll: MeetingPoll,
+    val isMutating: Boolean = false,
+    val inlineError: String? = null,
+    val canManage: Boolean = false,
 )
 
 /** AND-133 — voice composer UI state (Idle until the user starts recording). */
@@ -76,6 +114,10 @@ data class ThreadMessageUi(
     val isVideo: Boolean get() = media is MessageMedia.VideoShare
     val isFile: Boolean get() = media is MessageMedia.File
     val isVoice: Boolean get() = media is MessageMedia.Voice
+    val isVoicemail: Boolean get() = media is MessageMedia.Voicemail
+    val isGif: Boolean get() = media is MessageMedia.Gif
+    val isSticker: Boolean get() = media is MessageMedia.Sticker
+    val isPoll: Boolean get() = media is MessageMedia.MeetingPoll
 }
 
 data class ComposerState(

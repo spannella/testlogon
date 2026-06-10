@@ -1,7 +1,10 @@
 package com.testlogon.android.core.data.messaging
 
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Query
+import androidx.room.Relation
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -72,4 +75,64 @@ interface OutboxDao {
     /** AND-130 — update the live upload progress (0..100) of an optimistic image row. */
     @Query("UPDATE outbox_messages SET uploadPercent = :percent WHERE clientId = :clientId")
     suspend fun updateUploadPercent(clientId: String, percent: Int)
+}
+
+/** AND-135 — custom-emoji catalog cache. */
+@Dao
+interface CustomEmojiDao {
+
+    @Query("SELECT * FROM custom_emoji ORDER BY shortcode ASC")
+    fun observeAll(): Flow<List<CustomEmojiEntity>>
+
+    @Upsert
+    suspend fun upsertAll(items: List<CustomEmojiEntity>)
+
+    @Query("DELETE FROM custom_emoji WHERE fetchedAt < :before")
+    suspend fun deleteStale(before: Long)
+
+    @Query("DELETE FROM custom_emoji")
+    suspend fun clear()
+}
+
+/** AND-136 — a poll with its slots (Room @Relation). */
+data class MeetingPollWithSlots(
+    @Embedded val poll: MeetingPollEntity,
+    @Relation(parentColumn = "pollId", entityColumn = "pollId")
+    val slots: List<MeetingPollSlotEntity>,
+)
+
+/** AND-136 — meeting-poll cache. */
+@Dao
+interface MeetingPollDao {
+
+    @Transaction
+    @Query("SELECT * FROM meeting_polls WHERE pollId = :pollId LIMIT 1")
+    fun observePoll(pollId: String): Flow<MeetingPollWithSlots?>
+
+    @Transaction
+    @Query("SELECT * FROM meeting_polls WHERE pollId = :pollId LIMIT 1")
+    suspend fun observePollOnce(pollId: String): MeetingPollWithSlots?
+
+    @Upsert
+    suspend fun upsertPoll(poll: MeetingPollEntity)
+
+    @Upsert
+    suspend fun upsertSlots(slots: List<MeetingPollSlotEntity>)
+
+    @Query("DELETE FROM meeting_poll_slots WHERE pollId = :pollId")
+    suspend fun deleteSlots(pollId: String)
+
+    /** Replace the poll + its slots atomically (server state is authoritative). */
+    @Transaction
+    suspend fun replacePoll(poll: MeetingPollEntity, slots: List<MeetingPollSlotEntity>) {
+        upsertPoll(poll)
+        deleteSlots(poll.pollId)
+        upsertSlots(slots)
+    }
+
+    @Query("DELETE FROM meeting_polls")
+    suspend fun clearPolls()
+
+    @Query("DELETE FROM meeting_poll_slots")
+    suspend fun clearSlots()
 }

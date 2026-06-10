@@ -196,4 +196,123 @@ interface MessagingApi {
         @Path("id") id: String,
         @Body body: CreateVoiceReq,
     ): MessageDto
+
+    // ---- AND-134: voicemail ----
+
+    /**
+     * AND-134 — presign a voicemail upload. Server allocates message_id + s3_key + upload_url.
+     * Body = PresignVoicemailRequest {call_id, content_type, size_bytes, mode}. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/voicemail/presign")
+    suspend fun presignVoicemail(
+        @Path("id") id: String,
+        @Body body: PresignVoicemailReq,
+    ): PresignVoicemailResp
+
+    /**
+     * AND-134 — create the voicemail record after the PUT. Body = CreateVoicemailRequest. Returns
+     * MessageOut (kind="voicemail"). A retry re-issues create with the SAME message_id/s3_key.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/voicemail")
+    suspend fun createVoicemail(
+        @Path("id") id: String,
+        @Body body: CreateVoicemailReq,
+    ): MessageDto
+
+    // ---- AND-135: GIFs / stickers / custom emoji ----
+
+    /** AND-135 — send a GIF message. Body = SendGifMessageIn; returns MessageOut (kind="gif", HTTP 201). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/gif")
+    suspend fun sendGifMessage(
+        @Path("id") id: String,
+        @Body body: SendGifMessageReq,
+    ): MessageDto
+
+    /** AND-135 — send a sticker message. Body = SendStickerMessageIn; returns MessageOut (kind="sticker"). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/sticker")
+    suspend fun sendStickerMessage(
+        @Path("id") id: String,
+        @Body body: SendStickerMessageReq,
+    ): MessageDto
+
+    /** AND-135 — GIF search via the configured provider. Bare array; idempotent GET. limit max 50. */
+    @GET("ui/stickers/gifs/search")
+    suspend fun searchGifs(
+        @Query("q") q: String,
+        @Query("limit") limit: Int = 20,
+    ): List<GifSearchResultDto>
+
+    /** AND-135 — trending GIFs (used when the query is empty). Bare array; idempotent GET. */
+    @GET("ui/stickers/gifs/trending")
+    suspend fun trendingGifs(
+        @Query("limit") limit: Int = 20,
+    ): List<GifSearchResultDto>
+
+    /** AND-135 — list sticker collections (with their stickers). Idempotent GET. */
+    @GET("ui/stickers/collections")
+    suspend fun stickerCollections(): StickerCollectionListRespDto
+
+    /** AND-135 — stickers for one collection (lazy fetch). Idempotent GET. */
+    @GET("ui/stickers/collections/{collectionId}/stickers")
+    suspend fun collectionStickers(
+        @Path("collectionId") collectionId: String,
+    ): StickerListRespDto
+
+    /** AND-135 — workspace custom-emoji catalog. Idempotent GET. */
+    @GET("ui/emojis/custom")
+    suspend fun customEmoji(): CustomEmojiListRespDto
+
+    /** AND-135 — resolve specific shortcodes to image urls (comma-joined). Idempotent GET. */
+    @GET("ui/emojis/custom/resolve")
+    suspend fun resolveShortcodes(
+        @Query("codes") codes: String,
+    ): ResolveShortcodesRespDto
+
+    // ---- AND-136: meeting poll ----
+
+    /**
+     * AND-136 — create a meeting poll message. Body = CreateMeetingPollMessageIn; returns MessageOut
+     * (kind="meeting_poll", HTTP 200). Slots/counts are fetched separately via [getMeetingPoll].
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/meeting-poll")
+    suspend fun createMeetingPoll(
+        @Path("id") id: String,
+        @Body body: CreateMeetingPollReq,
+    ): MessageDto
+
+    /** AND-136 — authoritative poll state (per-slot counts + my_vote). Idempotent GET. */
+    @GET("messaging/conversations/{id}/polls/{pollId}")
+    suspend fun getMeetingPoll(
+        @Path("id") id: String,
+        @Path("pollId") pollId: String,
+    ): MeetingPollStateDto
+
+    /**
+     * AND-136 — cast/change availability. Body = PollVoteIn {votes:{slot_id:state}}; response {ok}.
+     * Re-fetch via [getMeetingPoll] to reconcile authoritative counts. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/polls/{pollId}/vote")
+    suspend fun voteMeetingPoll(
+        @Path("id") id: String,
+        @Path("pollId") pollId: String,
+        @Body body: PollVoteReq,
+    ): OkResp
+
+    /**
+     * AND-136 — confirm a winning slot (creator). Body = PollConfirmIn {slot_id}; response
+     * {ok, event_id?}. Re-fetch to see status=confirmed. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/polls/{pollId}/confirm")
+    suspend fun confirmMeetingPoll(
+        @Path("id") id: String,
+        @Path("pollId") pollId: String,
+        @Body body: PollConfirmReq,
+    ): OkResp
 }

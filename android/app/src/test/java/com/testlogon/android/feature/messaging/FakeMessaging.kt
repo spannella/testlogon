@@ -3,11 +3,19 @@ package com.testlogon.android.feature.messaging
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.messaging.Conversation
+import com.testlogon.android.data.messaging.CustomEmojiUi
+import com.testlogon.android.data.messaging.GifResult
+import com.testlogon.android.data.messaging.GifSendPayload
+import com.testlogon.android.data.messaging.MeetingPoll
+import com.testlogon.android.data.messaging.MeetingPollDraft
 import com.testlogon.android.data.messaging.Message
 import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.SendStatus
 import com.testlogon.android.data.messaging.ShareableVideo
+import com.testlogon.android.data.messaging.SlotVote
+import com.testlogon.android.data.messaging.StickerCollectionUi
+import com.testlogon.android.data.messaging.StickerPick
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
 import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
@@ -367,6 +375,180 @@ class FakeMessagingRepository : MessagingRepository {
             }
         }
     }
+
+    // ---- AND-134 / AND-135 / AND-136 ----
+
+    var voicemailSendCalls = mutableListOf<Triple<String, String, String>>() // conversationId, clientId, callId
+    var voicemailSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    var gifSendCalls = mutableListOf<Pair<String, GifSendPayload>>()
+    var gifSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    var stickerSendCalls = mutableListOf<Pair<String, StickerPick>>()
+    var stickerSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    var gifSearchResult: ApiResult<List<GifResult>> = ApiResult.Success(emptyList())
+    var gifSearchCalls = mutableListOf<String>()
+    var stickerCollectionsResult: ApiResult<List<StickerCollectionUi>> = ApiResult.Success(emptyList())
+    private val customEmoji = MutableStateFlow<List<CustomEmojiUi>>(emptyList())
+    fun emitCustomEmoji(list: List<CustomEmojiUi>) { customEmoji.value = list }
+    var refreshCustomEmojiResult: ApiResult<Unit> = ApiResult.Success(Unit)
+
+    private val polls = mutableMapOf<String, MutableStateFlow<MeetingPoll?>>()
+    fun emitPoll(poll: MeetingPoll) { pollFlow(poll.pollId).value = poll }
+    private fun pollFlow(pollId: String) = polls.getOrPut(pollId) { MutableStateFlow(null) }
+
+    var createPollResult: ApiResult<MeetingPoll> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    var voteCalls = mutableListOf<Triple<String, String, SlotVote?>>() // pollId, slotId, vote
+    var voteResult: ApiResult<MeetingPoll> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    var confirmCalls = mutableListOf<Pair<String, String>>() // pollId, slotId
+    var confirmResult: ApiResult<MeetingPoll> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    override suspend fun enqueueOptimisticVoicemail(
+        conversationId: String,
+        clientId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        isVideo: Boolean,
+        nowSeconds: Long,
+    ) {
+        thread.value = thread.value + Message(
+            id = null,
+            clientId = clientId,
+            conversationId = conversationId,
+            senderId = "",
+            text = "",
+            createdAtEpochSeconds = nowSeconds,
+            sendStatus = SendStatus.SENDING,
+            kind = "voicemail",
+            media = MessageMedia.Voicemail(
+                mediaUrl = null,
+                isVideo = isVideo,
+                durationSeconds = durationSeconds,
+                waveform = waveform,
+                callId = "",
+                callState = null,
+                localUri = localFilePath,
+                uploadProgress = 0f,
+            ),
+        )
+    }
+
+    override suspend fun sendVoicemailOutbox(
+        conversationId: String,
+        clientId: String,
+        callId: String,
+        localFilePath: String,
+        durationSeconds: Double,
+        waveform: List<Float>,
+        contentType: String,
+        isVideo: Boolean,
+    ): ApiResult<Message> {
+        voicemailSendCalls += Triple(conversationId, clientId, callId)
+        return reconcile(clientId, voicemailSendResult)
+    }
+
+    override suspend fun sendGif(
+        conversationId: String,
+        clientId: String,
+        payload: GifSendPayload,
+    ): ApiResult<Message> {
+        gifSendCalls += conversationId to payload
+        return when (val r = gifSendResult) {
+            is ApiResult.Success -> { thread.value = thread.value + r.data; r }
+            else -> r
+        }
+    }
+
+    override suspend fun sendSticker(
+        conversationId: String,
+        clientId: String,
+        sticker: StickerPick,
+    ): ApiResult<Message> {
+        stickerSendCalls += conversationId to sticker
+        return when (val r = stickerSendResult) {
+            is ApiResult.Success -> { thread.value = thread.value + r.data; r }
+            else -> r
+        }
+    }
+
+    override suspend fun searchGifs(query: String, limit: Int): ApiResult<List<GifResult>> {
+        gifSearchCalls += query
+        return gifSearchResult
+    }
+
+    override suspend fun stickerCollections(): ApiResult<List<StickerCollectionUi>> =
+        stickerCollectionsResult
+
+    override fun observeCustomEmoji(): Flow<List<CustomEmojiUi>> = customEmoji.asStateFlow()
+
+    override suspend fun refreshCustomEmoji(): ApiResult<Unit> = refreshCustomEmojiResult
+
+    override fun observeMeetingPoll(pollId: String): Flow<MeetingPoll?> = pollFlow(pollId).asStateFlow()
+
+    override suspend fun createMeetingPoll(
+        conversationId: String,
+        draft: MeetingPollDraft,
+    ): ApiResult<MeetingPoll> {
+        val r = createPollResult
+        if (r is ApiResult.Success) emitPoll(r.data)
+        return r
+    }
+
+    override suspend fun refreshMeetingPoll(
+        conversationId: String,
+        pollId: String,
+    ): ApiResult<MeetingPoll> {
+        val r = voteResult
+        if (r is ApiResult.Success) emitPoll(r.data)
+        return r
+    }
+
+    override suspend fun voteMeetingPoll(
+        conversationId: String,
+        pollId: String,
+        slotId: String,
+        vote: SlotVote?,
+    ): ApiResult<MeetingPoll> {
+        voteCalls += Triple(pollId, slotId, vote)
+        val r = voteResult
+        if (r is ApiResult.Success) emitPoll(r.data)
+        return r
+    }
+
+    override suspend fun confirmMeetingPoll(
+        conversationId: String,
+        pollId: String,
+        slotId: String,
+    ): ApiResult<MeetingPoll> {
+        confirmCalls += pollId to slotId
+        val r = confirmResult
+        if (r is ApiResult.Success) emitPoll(r.data)
+        return r
+    }
+
+    private fun reconcile(clientId: String, result: ApiResult<Message>): ApiResult<Message> =
+        when (result) {
+            is ApiResult.Success -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) result.data.copy(clientId = clientId) else it
+                }
+                result
+            }
+            else -> {
+                thread.value = thread.value.map {
+                    if (it.clientId == clientId) it.copy(sendStatus = SendStatus.FAILED) else it
+                }
+                result
+            }
+        }
 
     companion object {
         fun failure(status: Int = 500, message: String = "boom"): ApiResult<Nothing> =

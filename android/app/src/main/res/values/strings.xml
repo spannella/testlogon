@@ -295,4 +295,47 @@
     <string name="voice_perm_settings">Open settings</string>
     <string name="voice_send_failed">Couldn\'t send voice message</string>
     <string name="voice_sending">Sending…</string>
+
+    <!-- AND-134: voicemail -->
+    <string name="voicemail_label">Voicemail</string>
+    <string name="voicemail_play">Play voicemail</string>
+    <string name="voicemail_state_missed">Missed call</string>
+    <string name="voicemail_state_declined">Call declined</string>
+    <string name="voicemail_state_busy">Busy</string>
+    <string name="voicemail_duration">%1$d sec</string>
+    <string name="voicemail_bubble_cd">Voicemail, %1$s, %2$d seconds</string>
+
+    <!-- AND-135: GIFs / stickers / custom emoji -->
+    <string name="composer_add_media">Add GIF, sticker, or emoji</string>
+    <string name="media_tab_gif">GIF</string>
+    <string name="media_tab_stickers">Stickers</string>
+    <string name="media_tab_emoji">Emoji</string>
+    <string name="gif_search_hint">Search GIFs</string>
+    <string name="gif_empty">No GIFs found</string>
+    <string name="stickers_empty">No sticker packs</string>
+    <string name="emoji_empty">No custom emoji</string>
+    <string name="thread_gif_cd">GIF, %1$s</string>
+    <string name="thread_gif_cd_generic">GIF</string>
+    <string name="thread_sticker_cd">Sticker, %1$s</string>
+    <string name="thread_sticker_cd_generic">Sticker</string>
+
+    <!-- AND-136: polls -->
+    <string name="composer_add_poll">Attach meeting poll</string>
+    <string name="poll_label">Meeting poll</string>
+    <string name="poll_status_open">Open for responses</string>
+    <string name="poll_status_confirmed">Confirmed</string>
+    <string name="poll_status_cancelled">Cancelled</string>
+    <string name="poll_vote_yes">Yes</string>
+    <string name="poll_vote_maybe">Maybe</string>
+    <string name="poll_vote_no">No</string>
+    <string name="poll_vote_none">Respond</string>
+    <string name="poll_counts">Yes %1$d · Maybe %2$d · No %3$d</string>
+    <string name="poll_slot_cd">%1$s. Yes %2$d, Maybe %3$d, No %4$d</string>
+    <string name="poll_confirm">Confirm</string>
+    <string name="poll_confirmed_slot">Confirmed slot</string>
+    <string name="poll_composer_title">New meeting poll</string>
+    <string name="poll_title_hint">What\'s this poll about?</string>
+    <string name="poll_duration_minutes">%1$d min</string>
+    <string name="poll_slots_count">%1$d slots</string>
+    <string name="poll_create">Create poll</string>
 </resources>

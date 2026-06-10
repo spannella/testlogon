@@ -26,14 +26,19 @@ import javax.inject.Singleton
         ConversationEntity::class,
         MessageEntity::class,
         OutboxMessageEntity::class,
+        CustomEmojiEntity::class,
+        MeetingPollEntity::class,
+        MeetingPollSlotEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
     abstract fun outboxDao(): OutboxDao
+    abstract fun customEmojiDao(): CustomEmojiDao
+    abstract fun meetingPollDao(): MeetingPollDao
 
     companion object {
         /**
@@ -88,6 +93,57 @@ abstract class MessagingDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE outbox_messages ADD COLUMN voiceWaveformJson TEXT")
             }
         }
+
+        /**
+         * AND-134 / AND-135 / AND-136 — adds the additive voicemail + gif + sticker + meeting-poll
+         * columns to `messages`. All new columns are nullable or carry a default, so v3 rows migrate
+         * without data loss. (No new outbox columns: voicemail reuses the AND-133 voice outbox
+         * shape; gif/sticker send synchronously without an optimistic upload row.)
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // messages — voicemail (AND-134)
+                db.execSQL("ALTER TABLE messages ADD COLUMN voicemailMediaUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN voicemailIsVideo INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN voicemailCallId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN voicemailCallState TEXT")
+                // messages — gif (AND-135)
+                db.execSQL("ALTER TABLE messages ADD COLUMN gifUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN gifAltText TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN gifWidth INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN gifHeight INTEGER")
+                // messages — sticker (AND-135)
+                db.execSQL("ALTER TABLE messages ADD COLUMN stickerUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN stickerAltText TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN stickerId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN stickerCollectionId TEXT")
+                // messages — meeting poll envelope (AND-136)
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollTitle TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollCreatorId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollStatus TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollConfirmedSlotId TEXT")
+                // New cache tables (AND-135 custom emoji, AND-136 meeting polls).
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS custom_emoji (" +
+                        "shortcode TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, " +
+                        "imageUrl TEXT NOT NULL, animated INTEGER NOT NULL, fetchedAt INTEGER NOT NULL)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS meeting_polls (" +
+                        "pollId TEXT NOT NULL PRIMARY KEY, conversationId TEXT NOT NULL, " +
+                        "title TEXT NOT NULL, durationMinutes INTEGER NOT NULL, " +
+                        "creatorId TEXT NOT NULL, status TEXT NOT NULL, confirmedSlotId TEXT)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS meeting_poll_slots (" +
+                        "slotId TEXT NOT NULL PRIMARY KEY, pollId TEXT NOT NULL, " +
+                        "position INTEGER NOT NULL, startUtc TEXT NOT NULL, endUtc TEXT NOT NULL, " +
+                        "yesCount INTEGER NOT NULL, maybeCount INTEGER NOT NULL, " +
+                        "noCount INTEGER NOT NULL, myVote TEXT)",
+                )
+            }
+        }
     }
 }
 
@@ -103,7 +159,11 @@ object MessagingDatabaseModule {
             MessagingDatabase::class.java,
             "messaging.db",
         )
-        builder.addMigrations(MessagingDatabase.MIGRATION_1_2, MessagingDatabase.MIGRATION_2_3)
+        builder.addMigrations(
+            MessagingDatabase.MIGRATION_1_2,
+            MessagingDatabase.MIGRATION_2_3,
+            MessagingDatabase.MIGRATION_3_4,
+        )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
     }
@@ -116,4 +176,10 @@ object MessagingDatabaseModule {
 
     @Provides
     fun provideOutboxDao(db: MessagingDatabase): OutboxDao = db.outboxDao()
+
+    @Provides
+    fun provideCustomEmojiDao(db: MessagingDatabase): CustomEmojiDao = db.customEmojiDao()
+
+    @Provides
+    fun provideMeetingPollDao(db: MessagingDatabase): MeetingPollDao = db.meetingPollDao()
 }

@@ -1,7 +1,12 @@
 package com.testlogon.android
 
 import android.app.Application
+import android.os.Build
 import android.util.Log
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 import com.google.firebase.FirebaseApp
 import com.testlogon.android.data.push.FcmTokenRegistrar
 import com.testlogon.android.notifications.NotificationChannelInitializer
@@ -26,11 +31,27 @@ import javax.inject.Inject
  *  - The token registrar's auth-edge collector is started only when Firebase is available.
  */
 @HiltAndroidApp
-class TestLogonApp : Application() {
+class TestLogonApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var channelInitializer: NotificationChannelInitializer
 
     @Inject lateinit var tokenRegistrar: FcmTokenRegistrar
+
+    /**
+     * AND-135 — the app-wide Coil [ImageLoader] with the animated-image decoder registered so GIF
+     * messages and animated-WebP custom emoji animate. Coil picks this up via [ImageLoaderFactory]
+     * (no per-call decoder wiring needed). `ImageDecoderDecoder` covers API 28+, `GifDecoder` the
+     * minSdk 24-27 range.
+     */
+    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
+        .components {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                add(ImageDecoderDecoder.Factory())
+            } else {
+                add(GifDecoder.Factory())
+            }
+        }
+        .build()
 
     override fun onCreate() {
         super.onCreate()
