@@ -17,7 +17,9 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +62,7 @@ object VideoPlayerTestTags {
     const val RETRY = "video_player_retry"
     const val FULLSCREEN = "video_player_fullscreen"
     const val LIVE_BADGE = "video_player_live_badge"
+    const val QUALITY = "video_player_quality"
 }
 
 /** AND-168 §3 — declarative config for the control overlay. */
@@ -79,8 +82,15 @@ data class VideoPlayerControlsConfig(
  * @param controller the lifecycle-scoped controller whose [VideoPlayerController.state] drives the UI.
  * @param isFullscreen hoisted fullscreen flag (the host owns orientation; see [onFullscreenToggle]).
  * @param onFullscreenToggle emitted on the fullscreen affordance; the host flips immersive mode.
+ * @param watermark AND-170 forensic-overlay hook; defaults to NotRequired (no overlay node, FR-3).
+ *   Hosts opt in by passing [WatermarkUiState.Required]/[WatermarkUiState.PendingIdentity].
+ * @param compactWatermark AND-170 — true in PiP to render the reduced-size overlay variant (FR-5).
+ * @param quality AND-169 quality-selector hook; when non-null an overflow affordance opens the
+ *   [QualitySheet]. Defaults to null (no quality UI) so existing call sites are unaffected.
+ * @param onQualitySelected AND-169 — fired when the user picks a quality option.
+ * @param onCapToggled AND-169 — fired when the user toggles the metered cap.
  */
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun VideoPlayer(
     controller: VideoPlayerController,
@@ -88,8 +98,14 @@ fun VideoPlayer(
     config: VideoPlayerControlsConfig = VideoPlayerControlsConfig(),
     isFullscreen: Boolean = false,
     onFullscreenToggle: (Boolean) -> Unit = {},
+    watermark: WatermarkUiState = WatermarkUiState.NotRequired,
+    compactWatermark: Boolean = false,
+    quality: QualitySheetState? = null,
+    onQualitySelected: (VideoQuality) -> Unit = {},
+    onCapToggled: (Boolean) -> Unit = {},
 ) {
     val uiState by controller.state.collectAsStateWithLifecycle()
+    var showQualitySheet by remember { mutableStateOf(false) }
 
     // Pause on ON_STOP; unbind the surface on dispose (player release is the controller owner's job).
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -120,6 +136,10 @@ fun VideoPlayer(
             onReset = { it.player = null },
             onRelease = { it.player = null },
         )
+
+        // AND-170 — forensic overlay sits ABOVE the video frame but BELOW the control chrome; it is
+        // touch pass-through so controls remain operable, and absent entirely when not required (FR-3).
+        WatermarkOverlay(state = watermark, compact = compactWatermark)
 
         when {
             uiState.error != null -> ErrorPanel(
@@ -155,6 +175,32 @@ fun VideoPlayer(
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .testTag(VideoPlayerTestTags.LIVE_BADGE),
             )
+        }
+
+        // AND-169 — quality affordance + sheet (only when the host opts in by passing `quality`).
+        if (quality != null && uiState.error == null) {
+            val qualityCd = stringResource(R.string.cd_video_quality)
+            IconButton(
+                onClick = { showQualitySheet = true },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .testTag(VideoPlayerTestTags.QUALITY),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.HighQuality,
+                    contentDescription = qualityCd,
+                    tint = Color.White,
+                    modifier = Modifier.semantics { role = Role.Button; contentDescription = qualityCd },
+                )
+            }
+            if (showQualitySheet) {
+                QualitySheet(
+                    state = quality,
+                    onSelect = onQualitySelected,
+                    onToggleCap = onCapToggled,
+                    onDismiss = { showQualitySheet = false },
+                )
+            }
         }
     }
 }

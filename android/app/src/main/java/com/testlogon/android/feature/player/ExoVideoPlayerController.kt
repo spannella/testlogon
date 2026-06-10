@@ -133,6 +133,17 @@ class ExoVideoPlayerController(
         player.volume = volume.coerceIn(0f, 1f)
     }
 
+    override fun applyQuality(quality: EffectiveQuality) {
+        val params = quality.toTrackParams()
+        val builder = player.trackSelectionParameters.buildUpon()
+        when {
+            params.forceLowest -> builder.setMaxVideoSize(1, 1)
+            params.maxHeightPx != null -> builder.setMaxVideoSize(Int.MAX_VALUE, params.maxHeightPx)
+            else -> builder.clearVideoSizeConstraints()
+        }
+        player.trackSelectionParameters = builder.build()
+    }
+
     override fun retry() {
         _state.value = _state.value.copy(error = null)
         player.seekToDefaultPosition()

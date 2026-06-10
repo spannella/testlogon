@@ -301,6 +301,22 @@
     <string name="player_error_connection">Connection problem</string>
     <string name="player_error_unplayable">This video can\'t be played</string>
 
+    <!-- AND-169: adaptive quality / data-saver -->
+    <string name="cd_video_quality">Video quality</string>
+    <string name="quality_sheet_title">Video quality</string>
+    <string name="quality_auto">Auto</string>
+    <string name="quality_1080p">1080p</string>
+    <string name="quality_720p">720p</string>
+    <string name="quality_480p">480p</string>
+    <string name="quality_360p">360p</string>
+    <string name="quality_data_saver">Data saver</string>
+    <string name="quality_cap_metered_title">Cap quality on mobile data</string>
+    <string name="quality_capped_caption">Capped to %1$dp on mobile data</string>
+    <string name="quality_unbounded_caption">Auto — best available quality</string>
+
+    <!-- AND-170: forensic watermark overlay -->
+    <string name="watermark_protected_content">Protected content</string>
+
     <!-- AND-132: file messages -->
     <string name="thread_attach_file">Attach file</string>
     <string name="thread_file_sending">Sending file…</string>

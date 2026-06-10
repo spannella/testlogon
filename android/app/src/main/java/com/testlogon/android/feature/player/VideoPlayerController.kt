@@ -43,6 +43,13 @@ interface VideoPlayerController {
     /** Sets volume 0f..1f. */
     fun setVolume(volume: Float)
 
+    /**
+     * AND-169 — applies the resolved [EffectiveQuality] to the underlying ABR track selector live,
+     * without recreating the player or restarting playback position (FR-4). Maps to
+     * TrackSelectionParameters max-video-size / clear constraints via the pure [QualityTrackParams].
+     */
+    fun applyQuality(quality: EffectiveQuality)
+
     /** Re-prepares after an error (AND-168 Retry / AND-167 bounded recovery). */
     fun retry()
 
