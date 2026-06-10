@@ -152,6 +152,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         manageSubscriptionDestination(navController)
         // AND-238/239/240: fan-club channels list (tier-grouped) + channel messages + tier members.
         fanClubDestinations(navController)
+        // AND-243: invoices list (paged) + invoice detail (line items/totals + email + view-PDF).
+        invoicesDestinations(navController)
     }
 }
 

@@ -66,6 +66,9 @@ object MoreRoutes {
     // AND-224: saved payment-methods management (list / set-default / remove + add-card CTA).
     val PAYMENT_METHODS: String get() = PaymentMethodsDest.ROUTE
 
+    // AND-243: the invoices list (paged number/date/amount/status + detail/email/PDF).
+    const val INVOICES = InvoicesListDest.ROUTE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -105,6 +108,7 @@ object MoreRoutes {
             CART,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
+            INVOICES,
             SUBSCRIPTION_TIERS,
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,

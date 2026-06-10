@@ -1168,4 +1168,28 @@
         <item quantity="one">%1$d member</item>
         <item quantity="other">%1$d members</item>
     </plurals>
+
+    <!-- AND-243: invoices -->
+    <string name="more_entry_invoices">Invoices</string>
+    <string name="invoices_title">Invoices</string>
+    <string name="invoices_loading">Loading invoices…</string>
+    <string name="invoices_empty">No invoices yet</string>
+    <string name="invoices_error_generic">Couldn\'t load invoices.</string>
+    <string name="invoices_append_error">Couldn\'t load more.</string>
+    <string name="invoices_date_unknown">Date unavailable</string>
+    <string name="invoices_status_emailed">Emailed</string>
+    <string name="invoice_detail_title">Invoice</string>
+    <string name="invoice_detail_loading">Loading invoice…</string>
+    <string name="invoice_detail_seller">Seller</string>
+    <string name="invoice_detail_buyer">Billed to</string>
+    <string name="invoice_detail_payment_method">Payment method</string>
+    <string name="invoice_detail_quantity">Qty %1$d</string>
+    <string name="invoice_detail_subtotal">Subtotal</string>
+    <string name="invoice_detail_tax">Tax</string>
+    <string name="invoice_detail_total">Total</string>
+    <string name="invoices_email_action">Email invoice</string>
+    <string name="invoices_email_sending">Sending…</string>
+    <string name="invoices_email_sent_to">Invoice emailed to %1$s</string>
+    <string name="invoices_email_sent_generic">Invoice emailed</string>
+    <string name="invoices_pdf_action">View / download PDF</string>
 </resources>
