@@ -66,11 +66,14 @@ fun FeedRoute(
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
+    onOpenStory: (userId: String) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
     paywallViewModel: PaywallViewModel = hiltViewModel(),
     tipViewModel: TipViewModel = hiltViewModel(),
+    storiesTrayViewModel: com.testlogon.android.feature.stories.StoriesTrayViewModel = hiltViewModel(),
 ) {
     val items = viewModel.items.collectAsLazyPagingItems()
+    val storyTray by storiesTrayViewModel.tray.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -145,12 +148,17 @@ fun FeedRoute(
         if (anyUnlocked) items.refresh()
     }
 
+    // AND-199 — refresh the stories bar when the feed becomes active (web parity: poll/refresh on view).
+    LaunchedEffect(storiesTrayViewModel) { storiesTrayViewModel.refresh() }
+
     FeedScreen(
         items = items,
         snackbarHostState = snackbarHostState,
         savedIds = savedIds,
         pollStates = pollStates,
         unlockStates = unlockStates,
+        storyTray = storyTray,
+        onOpenStory = onOpenStory,
         onRefresh = { items.refresh() },
         onPostClick = { post -> onPostClick(post.id) },
         onAuthorClick = onAuthorClick,
@@ -193,6 +201,9 @@ fun FeedScreen(
     savedIds: Set<String> = emptySet(),
     pollStates: Map<String, PollCardState> = emptyMap(),
     unlockStates: Map<String, UnlockState> = emptyMap(),
+    storyTray: com.testlogon.android.core.model.ApiResult<List<com.testlogon.android.data.stories.StoryBarItem>> =
+        com.testlogon.android.core.model.ApiResult.Success(emptyList()),
+    onOpenStory: (userId: String) -> Unit = {},
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
@@ -220,7 +231,13 @@ fun FeedScreen(
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
-            Box(Modifier.fillMaxSize()) {
+            androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+                // AND-199 — stories tray above the feed (collapses to 0 height when empty).
+                com.testlogon.android.feature.stories.StoriesTray(
+                    state = storyTray,
+                    onRingClick = onOpenStory,
+                )
+                Box(Modifier.fillMaxSize()) {
                 when {
                     refreshState is LoadState.Loading && items.itemCount == 0 -> LoadingState()
 
@@ -262,6 +279,7 @@ fun FeedScreen(
                         onPollOptionClick = onPollOptionClick,
                         onPollRetry = onPollRetry,
                     )
+                }
                 }
             }
         }

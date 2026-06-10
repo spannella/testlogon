@@ -116,6 +116,10 @@ fun AuthedShellScreen(
                     onAuthorClick = { authorId ->
                         onOpenRoute(com.testlogon.android.navigation.PublicProfileDest.build(authorId))
                     },
+                    // AND-199 — open the full-screen story viewer for the tapped author.
+                    onOpenStory = { userId ->
+                        onOpenRoute(com.testlogon.android.navigation.StoryViewerDest.build(userId))
+                    },
                 )
             }
             // AND-182/AND-184: Discover (curated creators/tags + "for you" recommendations).
@@ -165,7 +169,9 @@ fun AuthedShellScreen(
                             com.testlogon.android.navigation.MoreRoutes.ACHIEVEMENTS,
                             // AND-189 / AND-191: videos library + VOD catalog are outer-graph routes.
                             com.testlogon.android.navigation.MoreRoutes.VIDEOS,
-                            com.testlogon.android.navigation.MoreRoutes.VOD_CATALOG ->
+                            com.testlogon.android.navigation.MoreRoutes.VOD_CATALOG,
+                            // AND-201: the published video gallery browse grid (outer-graph route).
+                            com.testlogon.android.navigation.MoreRoutes.GALLERY ->
                                 onOpenRoute(route)
                             else -> Unit // coming-soon entries are non-interactive
                         }

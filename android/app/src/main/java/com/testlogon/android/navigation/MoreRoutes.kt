@@ -51,6 +51,9 @@ object MoreRoutes {
     // AND-196: the clips vertical-pager feed.
     val CLIPS: String get() = ClipsFeedDest.ROUTE
 
+    // AND-201: the published video gallery browse grid.
+    val GALLERY: String get() = GalleryDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -74,6 +77,7 @@ object MoreRoutes {
             VIDEOS,
             VOD_CATALOG,
             CLIPS,
+            GALLERY,
             SETTINGS,
             HELP,
             ABOUT,

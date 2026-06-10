@@ -867,4 +867,31 @@
     <string name="clip_action_bookmark">Bookmark</string>
     <string name="clip_action_mute">Mute</string>
     <string name="clip_action_unmute">Unmute</string>
+
+    <!-- AND-199 / AND-200: Stories tray + viewer -->
+    <string name="more_entry_gallery">Gallery</string>
+    <string name="story_ring_unseen">Story from %1$s, unseen</string>
+    <string name="story_ring_seen">Story from %1$s, seen</string>
+    <string name="story_close">Close stories</string>
+    <string name="story_image_cd">Story photo</string>
+    <string name="story_progress_cd">Story segment %1$d of %2$d</string>
+    <string name="story_react">React to story</string>
+    <string name="story_reply_hint">Reply to story…</string>
+    <string name="story_reply_send">Send reply</string>
+    <string name="story_views_count">%1$d views</string>
+
+    <!-- AND-201: Gallery browsing -->
+    <string name="gallery_title">Gallery</string>
+    <string name="gallery_all">All</string>
+    <string name="gallery_search_hint">Search videos…</string>
+    <string name="gallery_ppv">PPV</string>
+    <string name="gallery_no_thumbnail">No thumbnail</string>
+    <string name="gallery_video_cd">Gallery video</string>
+    <string name="gallery_counts">%1$s views · %2$s likes · %3$s comments</string>
+    <string name="gallery_empty_title">No videos found</string>
+    <string name="gallery_empty_browse">No videos have been published to the gallery yet.</string>
+    <string name="gallery_empty_search">Try a different search term.</string>
+    <string name="gallery_error_generic">Couldn\'t load the gallery.</string>
+    <string name="gallery_append_error">Couldn\'t load more.</string>
+    <string name="gallery_retry">Retry</string>
 </resources>

@@ -112,6 +112,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-196: clips vertical pager (gallery feed) + public single-clip viewer (deep link).
         clipsFeedDestination(navController)
         publicClipDestination(navController)
+        // AND-199/AND-200: full-screen story viewer (opened from the feed stories tray).
+        storyViewerDestination(navController)
+        // AND-201: published video gallery browse grid (tiles open the shared video detail route).
+        galleryDestination(navController)
     }
 }
 

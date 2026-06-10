@@ -14,6 +14,7 @@ import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.VideoLibrary
@@ -100,6 +101,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_clips,
             icon = Icons.Outlined.Slideshow,
             route = MoreRoutes.CLIPS,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "gallery",
+            labelRes = R.string.more_entry_gallery,
+            icon = Icons.Outlined.PhotoLibrary,
+            route = MoreRoutes.GALLERY,
             section = MoreSection.APP,
         ),
         MoreEntry(
