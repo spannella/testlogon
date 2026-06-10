@@ -12,6 +12,8 @@ import com.testlogon.android.core.data.feed.BookmarkStateDao
 import com.testlogon.android.core.data.feed.BookmarkStateEntity
 import com.testlogon.android.core.data.feed.PostSuppressionDao
 import com.testlogon.android.core.data.feed.PostSuppressionEntity
+import com.testlogon.android.core.data.download.DownloadDao
+import com.testlogon.android.core.data.download.DownloadEntity
 import com.testlogon.android.core.data.paywall.EntitlementDao
 import com.testlogon.android.core.data.paywall.EntitlementEntity
 
@@ -37,6 +39,7 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
  * - v3 — AND-175: adds the post_suppression table (hide / not-interested durable set).
  * - v4 — AND-176/AND-177: adds the bookmark_state table (feed bookmark toggle) and the entitlement
  *        table (paywall unlock entitlements, keyed by user_sub+post_id).
+ * - v5 — AND-195: adds the vod_download table (watermarked VOD downloads, keyed by video_id).
  */
 @Database(
     entities = [
@@ -44,8 +47,9 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
         PostSuppressionEntity::class,
         BookmarkStateEntity::class,
         EntitlementEntity::class,
+        DownloadEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class TestLogonDatabase : RoomDatabase() {
@@ -62,6 +66,9 @@ abstract class TestLogonDatabase : RoomDatabase() {
 
     /** AND-177 — paywall unlock entitlements (per user_sub). */
     abstract fun entitlementDao(): EntitlementDao
+
+    /** AND-195 — watermarked VOD downloads (per video_id). */
+    abstract fun downloadDao(): DownloadDao
 
     companion object {
         const val NAME = "testlogon-cache.db"
@@ -126,7 +133,32 @@ abstract class TestLogonDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * AND-195 — additive migration creating the vod_download table. Purely additive (a new table),
+         * so no existing rows are touched.
+         */
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS vod_download (" +
+                        "video_id TEXT NOT NULL PRIMARY KEY, " +
+                        "status TEXT NOT NULL, " +
+                        "percent INTEGER NOT NULL DEFAULT 0, " +
+                        "local_uri TEXT, " +
+                        "size_bytes INTEGER NOT NULL DEFAULT 0, " +
+                        "watermarked INTEGER NOT NULL DEFAULT 0, " +
+                        "strategy TEXT NOT NULL DEFAULT 'SERVER_BURNED_IN', " +
+                        "identity_id TEXT NOT NULL DEFAULT '', " +
+                        "watermark_payload TEXT, " +
+                        "error TEXT, " +
+                        "completed_at_epoch_ms INTEGER NOT NULL DEFAULT 0, " +
+                        "updated_at_epoch_ms INTEGER NOT NULL DEFAULT 0)",
+                )
+            }
+        }
+
         /** Registered migrations; grows as the schema evolves. */
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        val ALL_MIGRATIONS: Array<Migration> =
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
     }
 }

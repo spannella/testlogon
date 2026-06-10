@@ -6,6 +6,7 @@ import com.testlogon.android.core.data.BuildConfig
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.db.TestLogonDatabase
 import com.testlogon.android.core.data.db.sample.SampleDao
+import com.testlogon.android.core.data.download.DownloadDao
 import com.testlogon.android.core.data.feed.BookmarkStateDao
 import com.testlogon.android.core.data.feed.PostSuppressionDao
 import com.testlogon.android.core.data.paywall.EntitlementDao
@@ -55,4 +56,8 @@ object DatabaseModule {
     @Provides
     fun provideEntitlementDao(db: TestLogonDatabase): EntitlementDao =
         db.entitlementDao()
+
+    @Provides
+    fun provideDownloadDao(db: TestLogonDatabase): DownloadDao =
+        db.downloadDao()
 }

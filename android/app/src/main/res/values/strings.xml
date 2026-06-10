@@ -800,4 +800,56 @@
     <string name="multi_search_recent_remove">Remove recent search</string>
     <!-- AND-190: generic offline message for video detail + reusable states -->
     <string name="state_offline_message">You\'re offline. Showing saved data.</string>
+
+    <!-- AND-192: VOD rental flow -->
+    <string name="vod_rent">Rent</string>
+    <string name="vod_rent_with_price">Rent · %1$s</string>
+    <string name="vod_view_once">View once</string>
+    <string name="vod_rent_play">Play</string>
+    <string name="vod_rental_active">Rented</string>
+    <string name="vod_rental_expires_in">Expires in %1$s</string>
+    <string name="vod_rental_expired">Your rental has expired</string>
+    <string name="vod_rental_renting">Renting…</string>
+    <string name="vod_rental_starting_playback">Starting…</string>
+    <string name="vod_rental_countdown_cd">Rental expires in %1$s</string>
+    <string name="vod_payments_unavailable">Payments are unavailable right now</string>
+
+    <!-- AND-193: VOD purchase tiers -->
+    <string name="vod_unlock">Unlock</string>
+    <string name="vod_unlock_from">Unlock from %1$s</string>
+    <string name="vod_purchase_choose">Choose how to unlock</string>
+    <string name="vod_purchase_confirm">Confirm purchase</string>
+    <string name="vod_purchase_processing">Processing…</string>
+    <string name="vod_purchase_retry">Retry</string>
+    <string name="vod_purchase_success">Unlocked</string>
+    <string name="vod_tier_view_once">View once</string>
+    <string name="vod_tier_rental">Rent</string>
+    <string name="vod_tier_permanent">Buy — own forever</string>
+    <string name="vod_tier_download">Download</string>
+    <string name="vod_tier_free">Free</string>
+
+    <!-- AND-194: VOD ad-supported -->
+    <string name="avod_ad_badge">Ad</string>
+    <string name="avod_ad_progress">Ad %1$d of %2$d</string>
+    <string name="avod_skip_in">Skip in %1$d</string>
+    <string name="avod_skip_ad">Skip Ad</string>
+    <string name="avod_ad_remaining">%1$d seconds remaining</string>
+    <string name="avod_error">Couldn\'t start ad-supported playback</string>
+    <string name="avod_retry">Retry</string>
+    <string name="avod_skip_cd">Skip the ad</string>
+    <string name="avod_skip_disabled_cd">Skip available in %1$d seconds</string>
+
+    <!-- AND-195: Watermark download -->
+    <string name="vod_download">Download</string>
+    <string name="vod_download_queued">Queued…</string>
+    <string name="vod_download_downloading">Downloading, %1$d percent</string>
+    <string name="vod_download_watermarking">Finalizing…</string>
+    <string name="vod_download_completed">Downloaded</string>
+    <string name="vod_download_delete">Delete download</string>
+    <string name="vod_download_retry">Retry download</string>
+    <string name="vod_download_cancel">Cancel download</string>
+    <string name="vod_download_failed">Download failed</string>
+    <string name="vod_download_failed_watermark">Couldn\'t watermark file</string>
+    <string name="vod_download_failed_not_entitled">Not available for download</string>
+    <string name="vod_download_not_available">Not available for download</string>
 </resources>

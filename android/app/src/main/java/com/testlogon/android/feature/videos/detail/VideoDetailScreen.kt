@@ -41,6 +41,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -51,6 +54,11 @@ import com.testlogon.android.data.videos.VideoSummary
 import com.testlogon.android.feature.player.VideoPlayer
 import com.testlogon.android.feature.videos.VideoDurationFormat
 import com.testlogon.android.feature.videos.VideoTile
+import com.testlogon.android.feature.videos.purchase.PurchaseEvent
+import com.testlogon.android.feature.videos.purchase.PurchaseTierSheet
+import com.testlogon.android.feature.videos.purchase.PurchaseViewModel
+import com.testlogon.android.feature.vod.rental.VodRentalPanel
+import com.testlogon.android.feature.vod.rental.VodRentalViewModel
 
 /** AND-190 — stable test tags. */
 object VideoDetailTestTags {
@@ -76,12 +84,31 @@ fun VideoDetailRoute(
     onOpenVideo: (videoId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: VideoDetailViewModel = hiltViewModel(),
+    rentalViewModel: VodRentalViewModel = hiltViewModel(),
+    purchaseViewModel: PurchaseViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val rentalState by rentalViewModel.state.collectAsStateWithLifecycle()
+    val purchaseState by purchaseViewModel.uiState.collectAsStateWithLifecycle()
 
     // Hand the resolved HLS source to the reused player once it is available.
     LaunchedEffect(state.playbackUrl) {
         if (state.playbackUrl != null) viewModel.setPlaybackSource()
+    }
+
+    // AND-193 — the purchase sheet opens on the "Unlock" entry point; on Unlocked the Room-backed
+    // entitlement flips the detail to unlocked (server-authoritative; no optimistic unlock).
+    var showPurchaseSheet by remember { mutableStateOf(false) }
+    LaunchedEffect(purchaseViewModel) {
+        purchaseViewModel.events.collect { event ->
+            when (event) {
+                is PurchaseEvent.Unlocked -> {
+                    showPurchaseSheet = false
+                    viewModel.retryDetail()
+                }
+                else -> Unit
+            }
+        }
     }
 
     VideoDetailScreen(
@@ -92,6 +119,32 @@ fun VideoDetailRoute(
                 controller = viewModel.controller,
                 modifier = playerModifier.testTag(VideoDetailTestTags.PLAYER),
             )
+        },
+        monetizationContent = {
+            // AND-192/193 — gating affordances under the player. When the title is locked
+            // (not entitled) the rent/unlock affordances show; entitled play is owned by the player.
+            if (state.detail?.isEntitled == false) {
+                VodRentalPanel(
+                    state = rentalState,
+                    onRent = { tier -> rentalViewModel.rent(tier) },
+                    onPlay = { rentalViewModel.beginPlayback() },
+                )
+                androidx.compose.material3.TextButton(onClick = {
+                    showPurchaseSheet = true
+                    purchaseViewModel.loadTiers()
+                }) {
+                    Text(stringResource(R.string.vod_unlock))
+                }
+            }
+            if (showPurchaseSheet) {
+                PurchaseTierSheet(
+                    state = purchaseState,
+                    onTierSelected = purchaseViewModel::onTierSelected,
+                    onConfirm = purchaseViewModel::onConfirm,
+                    onRetry = purchaseViewModel::retry,
+                    onDismiss = { showPurchaseSheet = false },
+                )
+            }
         },
         onBack = onBack,
         onRetryDetail = viewModel::retryDetail,
@@ -110,6 +163,7 @@ fun VideoDetailScreen(
     onToggleLike: () -> Unit,
     onOpenVideo: (videoId: String) -> Unit,
     modifier: Modifier = Modifier,
+    monetizationContent: @Composable () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(VideoDetailTestTags.SCREEN),
@@ -143,6 +197,7 @@ fun VideoDetailScreen(
                 state.detail != null -> DetailContent(
                     state = state,
                     playerContent = playerContent,
+                    monetizationContent = monetizationContent,
                     onToggleLike = onToggleLike,
                     onOpenVideo = onOpenVideo,
                 )
@@ -155,6 +210,7 @@ fun VideoDetailScreen(
 private fun DetailContent(
     state: VideoDetailUiState,
     playerContent: @Composable (Modifier) -> Unit,
+    monetizationContent: @Composable () -> Unit,
     onToggleLike: () -> Unit,
     onOpenVideo: (videoId: String) -> Unit,
 ) {
@@ -181,6 +237,9 @@ private fun DetailContent(
         }
 
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // AND-192/193 — rent/unlock gating affordances (hidden when the title is entitled).
+            monetizationContent()
+
             Text(
                 text = detail.title.ifBlank { stringResource(R.string.video_untitled) },
                 style = MaterialTheme.typography.titleLarge,
