@@ -47,6 +47,21 @@ interface SubscriptionsRepository {
         subscriptionId: String,
         body: CancelSubscriptionReqDto = CancelSubscriptionReqDto(),
     ): ApiResult<CreatorSubscription>
+
+    /**
+     * AND-237 — clear a scheduled cancellation / re-enable auto-renew on [subscriptionId] (X-User-Id).
+     * No new payment is taken; the server returns the updated subscription.
+     */
+    suspend fun renew(
+        subscriptionId: String,
+        body: RenewalReqDto = RenewalReqDto(),
+    ): ApiResult<CreatorSubscription>
+
+    /** AND-237 — reactivate a paused/canceled (no-new-payment) [subscriptionId] (X-User-Id). */
+    suspend fun resume(
+        subscriptionId: String,
+        body: ResumeSubscriptionReqDto = ResumeSubscriptionReqDto(),
+    ): ApiResult<CreatorSubscription>
 }
 
 @Singleton
@@ -89,6 +104,22 @@ class SubscriptionsRepositoryImpl @Inject constructor(
     ): ApiResult<CreatorSubscription> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
         call { api.cancel(userId, subscriptionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun renew(
+        subscriptionId: String,
+        body: RenewalReqDto,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.renewal(userId, subscriptionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun resume(
+        subscriptionId: String,
+        body: ResumeSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.resume(userId, subscriptionId, body) }.map { it.toDomain() }
     }
 
     private suspend fun currentUserId(): String? = authStateStore.userSub.first()?.takeIf { it.isNotBlank() }

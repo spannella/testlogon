@@ -1019,6 +1019,8 @@
     <string name="more_entry_payment_methods">Payment methods</string>
     <!-- AND-235: subscription tiers browse -->
     <string name="more_entry_subscription_tiers">Subscription tiers</string>
+    <!-- AND-237: manage / cancel subscription -->
+    <string name="more_entry_manage_subscription">Manage subscription</string>
     <string name="payment_methods_title">Payment methods</string>
     <string name="payment_methods_empty_title">No payment methods</string>
     <string name="payment_methods_empty_body">Add a card to use it for purchases.</string>
@@ -1096,4 +1098,34 @@
     <string name="subs_tiers_interval_week">/week</string>
     <string name="subs_tiers_card_cd">%1$s, %2$s</string>
     <string name="subs_tiers_card_cd_current">%1$s, %2$s, current plan</string>
+
+    <!-- AND-236: subscribe confirmation flow -->
+    <string name="subscribe_title">Subscribe</string>
+    <string name="subscribe_confirm">Confirm subscription</string>
+    <string name="subscribe_review_blurb">You\'ll be charged at the start of each billing period. Cancel anytime.</string>
+    <string name="subscribe_success_title">Subscription active</string>
+    <string name="subscribe_success_body">You\'re all set. Your subscription is now active.</string>
+    <string name="subscribe_unavailable_title">Payments unavailable</string>
+
+    <!-- AND-237: manage / cancel subscription -->
+    <string name="manage_sub_title">Manage subscription</string>
+    <string name="manage_sub_empty_title">No active subscription</string>
+    <string name="manage_sub_empty_body">You don\'t have a subscription yet.</string>
+    <string name="manage_sub_status_label">Status: %1$s</string>
+    <string name="manage_sub_renews_on">Renews on %1$s</string>
+    <string name="manage_sub_will_end_on">Your subscription will end on %1$s.</string>
+    <string name="manage_sub_period_end_fallback">the end of the current period</string>
+    <string name="manage_sub_cancel_action">Cancel subscription</string>
+    <string name="manage_sub_keep_action">Keep subscription</string>
+    <string name="manage_sub_reactivate_action">Reactivate</string>
+    <string name="manage_sub_confirm_title">Cancel subscription?</string>
+    <string name="manage_sub_confirm_body">Your access continues until the end of the current billing period. You won\'t be charged again.</string>
+    <string name="manage_sub_confirm_yes">Cancel subscription</string>
+    <string name="manage_sub_confirm_no">Keep it</string>
+    <string name="manage_sub_status_active">Active</string>
+    <string name="manage_sub_status_trialing">Trial</string>
+    <string name="manage_sub_status_past_due">Past due</string>
+    <string name="manage_sub_status_canceled">Canceled</string>
+    <string name="manage_sub_status_expired">Expired</string>
+    <string name="manage_sub_status_unknown">Unknown</string>
 </resources>

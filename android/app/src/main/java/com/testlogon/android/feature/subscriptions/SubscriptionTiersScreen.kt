@@ -68,7 +68,8 @@ object SubscriptionTiersTestTags {
  */
 @Composable
 fun SubscriptionTiersRoute(
-    onNavigateToCheckout: (tierId: String) -> Unit,
+    onNavigateToCheckout: (SubscriptionsEvent.NavigateToCheckout) -> Unit,
+    onNavigateToManage: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SubscriptionTiersViewModel = hiltViewModel(),
@@ -80,7 +81,8 @@ fun SubscriptionTiersRoute(
     androidx.compose.runtime.LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                is SubscriptionsEvent.NavigateToCheckout -> onNavigateToCheckout(event.tierId)
+                is SubscriptionsEvent.NavigateToCheckout -> onNavigateToCheckout(event)
+                is SubscriptionsEvent.NavigateToManage -> onNavigateToManage()
                 is SubscriptionsEvent.PaymentsUnavailable -> snackbarHostState.showSnackbar(comingSoon)
                 is SubscriptionsEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
             }
@@ -91,6 +93,7 @@ fun SubscriptionTiersRoute(
         state = state,
         snackbarHostState = snackbarHostState,
         onSubscribeClick = viewModel::onSubscribeClick,
+        onManageClick = viewModel::onManageClick,
         onRetry = viewModel::onRetry,
         onRefresh = viewModel::onRefresh,
         onBack = onBack,
@@ -103,6 +106,7 @@ fun SubscriptionTiersScreen(
     state: SubscriptionTiersUiState,
     snackbarHostState: SnackbarHostState,
     onSubscribeClick: (String) -> Unit,
+    onManageClick: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
@@ -150,7 +154,11 @@ fun SubscriptionTiersScreen(
                         onRefresh = onRefresh,
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        TierList(tiers = state.tiers, onSubscribeClick = onSubscribeClick)
+                        TierList(
+                            tiers = state.tiers,
+                            onSubscribeClick = onSubscribeClick,
+                            onManageClick = onManageClick,
+                        )
                     }
             }
         }
@@ -161,6 +169,7 @@ fun SubscriptionTiersScreen(
 private fun TierList(
     tiers: List<TierUiModel>,
     onSubscribeClick: (String) -> Unit,
+    onManageClick: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(SubscriptionTiersTestTags.LIST),
@@ -168,7 +177,7 @@ private fun TierList(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(items = tiers, key = { it.id }) { tier ->
-            TierCard(tier = tier, onSubscribeClick = onSubscribeClick)
+            TierCard(tier = tier, onSubscribeClick = onSubscribeClick, onManageClick = onManageClick)
         }
     }
 }
@@ -177,6 +186,7 @@ private fun TierList(
 private fun TierCard(
     tier: TierUiModel,
     onSubscribeClick: (String) -> Unit,
+    onManageClick: () -> Unit,
 ) {
     val freeLabel = stringResource(R.string.subs_tiers_free)
     val price = formatTierPrice(tier.priceCents, tier.currency, freeLabel)
@@ -256,8 +266,7 @@ private fun TierCard(
 
             if (tier.isCurrent) {
                 OutlinedButton(
-                    onClick = {},
-                    enabled = false,
+                    onClick = onManageClick,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)

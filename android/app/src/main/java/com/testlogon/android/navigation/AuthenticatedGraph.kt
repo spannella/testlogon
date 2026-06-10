@@ -139,6 +139,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         paymentsDestinations(navController)
         // AND-235: subscription tiers browse (tier cards + current-plan badge + flag/stub-gated CTA).
         subscriptionTiersDestination(navController)
+        // AND-236: subscribe confirmation flow (review tier -> BillingAuthorizer-gated pay -> subscribe).
+        subscribeDestination(navController)
+        // AND-237: manage / cancel subscription (status/renewal + cancel-at-period-end + resume/renew).
+        manageSubscriptionDestination(navController)
     }
 }
 

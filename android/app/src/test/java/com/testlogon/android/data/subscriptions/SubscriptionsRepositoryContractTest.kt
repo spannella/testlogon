@@ -8,6 +8,7 @@ import com.testlogon.android.core.testing.net.MockBackendRule
 import com.testlogon.android.core.testing.net.retrofit
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -183,6 +184,50 @@ class SubscriptionsRepositoryContractTest {
         assertEquals("/api/subscriptions/sub_1/cancel", req.requestUrl?.encodedPath)
         val body = req.body.readUtf8()
         assertTrue(body.contains("\"cancel_at_period_end\":true"))
+    }
+
+    @Test
+    fun renew_postsToRenewalPath_withAutoRenewTrue() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"subscription_id":"sub_1","plan_id":"plan_basic","creator_id":"usr_42",
+                   "status":"active","cancel_at_period_end":false}""",
+            ),
+        )
+        val result = repo("usr_me").renew("sub_1", RenewalReqDto(autoRenew = true))
+        assertTrue(result is ApiResult.Success)
+        assertFalse((result as ApiResult.Success).data.cancelAtPeriodEnd)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/api/subscriptions/sub_1/renewal", req.requestUrl?.encodedPath)
+        assertEquals("usr_me", req.getHeader("X-User-Id"))
+        val body = req.body.readUtf8()
+        assertTrue(body.contains("\"auto_renew\":true"))
+    }
+
+    @Test
+    fun resume_postsToResumePath_returnsSubscriptionOut() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"subscription_id":"sub_1","plan_id":"plan_basic","creator_id":"usr_42","status":"active"}""",
+            ),
+        )
+        val result = repo("usr_me").resume("sub_1", ResumeSubscriptionReqDto())
+        assertTrue(result is ApiResult.Success)
+        assertEquals(SubscriptionState.ACTIVE, (result as ApiResult.Success).data.status)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/api/subscriptions/sub_1/resume", req.requestUrl?.encodedPath)
+        assertEquals("usr_me", req.getHeader("X-User-Id"))
+    }
+
+    @Test
+    fun renew_unauthenticated_failsWithoutRequest() = runTest {
+        val result = repo(userSub = null).renew("sub_1")
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(0, backend.requestCount)
     }
 
     @Test

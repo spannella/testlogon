@@ -26,6 +26,8 @@ import retrofit2.http.Query
  *  - POST api/plans/{plan_id}/subscribe              req=SubscribeIn  resp=SubscriptionOut  x-user-id
  *  - POST api/subscriptions/{subscription_id}/change-plan req=SubscriptionChangePlanIn       x-user-id
  *  - POST api/subscriptions/{subscription_id}/cancel req=SubscriptionCancelIn resp=SubscriptionOut x-user-id
+ *  - POST api/subscriptions/{subscription_id}/renewal req=SubscriptionRenewalIn resp=SubscriptionOut x-user-id (AND-237)
+ *  - POST api/subscriptions/{subscription_id}/resume  req=SubscriptionResumeIn  resp=SubscriptionOut x-user-id (AND-237)
  *
  * AUTH NOTE: session cookies + Authorization Bearer + X-CSRF-Token are attached by the shared
  * core-network interceptors. The subscription server ALSO requires X-User-Id on the authenticated
@@ -80,6 +82,30 @@ interface SubscriptionsApi {
         @Header("X-User-Id") userId: String,
         @Path("subscriptionId") subscriptionId: String,
         @Body body: CancelSubscriptionReqDto,
+    ): SubscriptionOutDto
+
+    /**
+     * AND-237 — clear a scheduled cancellation / toggle auto-renew (POST .../renewal -> updated
+     * SubscriptionOut). Sending auto_renew=true un-cancels an active cancel-at-period-end sub.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("api/subscriptions/{subscriptionId}/renewal")
+    suspend fun renewal(
+        @Header("X-User-Id") userId: String,
+        @Path("subscriptionId") subscriptionId: String,
+        @Body body: RenewalReqDto,
+    ): SubscriptionOutDto
+
+    /**
+     * AND-237 — reactivate a paused/canceled (no-new-payment) subscription (POST .../resume ->
+     * updated SubscriptionOut).
+     */
+    @Headers("Content-Type: application/json")
+    @POST("api/subscriptions/{subscriptionId}/resume")
+    suspend fun resume(
+        @Header("X-User-Id") userId: String,
+        @Path("subscriptionId") subscriptionId: String,
+        @Body body: ResumeSubscriptionReqDto,
     ): SubscriptionOutDto
 }
 
@@ -178,5 +204,24 @@ data class ChangePlanReqDto(
 @JsonClass(generateAdapter = true)
 data class CancelSubscriptionReqDto(
     @Json(name = "cancel_at_period_end") val cancelAtPeriodEnd: Boolean = true,
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/**
+ * AND-237 — renewal request. Verified: SubscriptionRenewalIn (subscriptions.ts updateRenewal —
+ * `auto_renew` required; effective/renewal_policy/reason optional). Sending auto_renew=true clears a
+ * scheduled cancel.
+ */
+@JsonClass(generateAdapter = true)
+data class RenewalReqDto(
+    @Json(name = "auto_renew") val autoRenew: Boolean = true,
+    @Json(name = "effective") val effective: String? = null,
+    @Json(name = "renewal_policy") val renewalPolicy: String? = null,
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/** AND-237 — resume request. Verified: SubscriptionResumeIn (subscriptions.ts resumeSubscription — reason only). */
+@JsonClass(generateAdapter = true)
+data class ResumeSubscriptionReqDto(
     @Json(name = "reason") val reason: String? = null,
 )

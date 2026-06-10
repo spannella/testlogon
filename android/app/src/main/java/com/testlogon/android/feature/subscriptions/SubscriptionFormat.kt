@@ -1,8 +1,10 @@
 package com.testlogon.android.feature.subscriptions
 
 import com.testlogon.android.data.subscriptions.BillingInterval
+import java.text.DateFormat
 import java.text.NumberFormat
 import java.util.Currency
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -40,3 +42,15 @@ fun intervalSuffix(interval: BillingInterval, monthLabel: String, yearLabel: Str
         BillingInterval.WEEK -> weekLabel
         BillingInterval.UNKNOWN -> ""
     }
+
+/**
+ * AND-237 — pure, JVM-testable epoch-seconds -> localized medium date string (renewal / period-end).
+ *
+ * Uses [DateFormat] / [Date] (NOT java.time, which is API26+) so this stays runnable in plain JVM unit
+ * tests. Returns null when [epochSeconds] is null so callers can render a fallback label.
+ */
+fun formatEpochDate(epochSeconds: Long?, locale: Locale = Locale.getDefault()): String? {
+    if (epochSeconds == null) return null
+    val df = DateFormat.getDateInstance(DateFormat.MEDIUM, locale)
+    return df.format(Date(epochSeconds * 1000L))
+}

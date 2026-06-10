@@ -52,11 +52,25 @@ data class SubscriptionTiersUiState(
 
 /** AND-235 — one-shot effects. Delivered over a Channel so rotation cannot replay them. */
 sealed interface SubscriptionsEvent {
-    /** Checkout enabled — navigate to the (future) checkout route for [tierId]. */
-    data class NavigateToCheckout(val tierId: String) : SubscriptionsEvent
+    /**
+     * Checkout enabled — navigate to the AND-236 subscribe confirmation flow for [tierId] (the plan
+     * id). Carries the tier display fields so the confirm sheet can render without a re-fetch.
+     */
+    data class NavigateToCheckout(
+        val tierId: String,
+        val creatorId: String,
+        val name: String,
+        val priceCents: Long,
+        val currency: String,
+        val interval: BillingInterval,
+        val description: String?,
+    ) : SubscriptionsEvent
 
     /** FLAGGED: payments unavailable (BillingAuthorizer stub NotConfigured / checkout flag off). */
     data object PaymentsUnavailable : SubscriptionsEvent
+
+    /** AND-237 — open the manage / cancel screen for the current subscription. */
+    data object NavigateToManage : SubscriptionsEvent
 
     /** Generic transient snackbar (e.g. refresh failed). */
     data class ShowMessage(val message: String) : SubscriptionsEvent
@@ -166,7 +180,17 @@ class SubscriptionTiersViewModel @Inject constructor(
             // Route through the billing authorizer stub: NotConfigured -> payments unavailable, NEVER
             // a faked charge and NEVER a subscribe call.
             when (billingAuthorizer.authorize(tier.priceCents, tier.currency, memo = tier.name)) {
-                is BillingResult.Authorized -> _events.send(SubscriptionsEvent.NavigateToCheckout(tierId))
+                is BillingResult.Authorized -> _events.send(
+                    SubscriptionsEvent.NavigateToCheckout(
+                        tierId = tierId,
+                        creatorId = creatorId,
+                        name = tier.name,
+                        priceCents = tier.priceCents,
+                        currency = tier.currency,
+                        interval = tier.interval,
+                        description = tier.description,
+                    ),
+                )
                 is BillingResult.NotConfigured -> _events.send(SubscriptionsEvent.PaymentsUnavailable)
                 is BillingResult.Cancelled -> Unit
                 is BillingResult.Declined,
@@ -174,6 +198,11 @@ class SubscriptionTiersViewModel @Inject constructor(
                 -> _events.send(SubscriptionsEvent.PaymentsUnavailable)
             }
         }
+    }
+
+    /** AND-237 — open the manage / cancel screen for the viewer's current subscription. */
+    fun onManageClick() {
+        viewModelScope.launch { _events.send(SubscriptionsEvent.NavigateToManage) }
     }
 
     private suspend fun currentTierIdOrNull(): String? =

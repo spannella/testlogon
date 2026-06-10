@@ -253,4 +253,16 @@ private class FakeSubscriptionsRepository : SubscriptionsRepository {
         body: CancelSubscriptionReqDto,
     ): ApiResult<CreatorSubscription> =
         ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
+
+    override suspend fun renew(
+        subscriptionId: String,
+        body: com.testlogon.android.data.subscriptions.RenewalReqDto,
+    ): ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
+
+    override suspend fun resume(
+        subscriptionId: String,
+        body: com.testlogon.android.data.subscriptions.ResumeSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
 }

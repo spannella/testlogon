@@ -70,6 +70,9 @@ object MoreRoutes {
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
 
+    // AND-237: manage / cancel the viewer's current subscription (arg-less route).
+    const val MANAGE_SUBSCRIPTION = ManageSubscriptionDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -99,6 +102,7 @@ object MoreRoutes {
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             SUBSCRIPTION_TIERS,
+            MANAGE_SUBSCRIPTION,
             SETTINGS,
             HELP,
             ABOUT,
