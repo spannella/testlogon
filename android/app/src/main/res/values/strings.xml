@@ -1654,4 +1654,61 @@
     <string name="promo_err_discount_value">Enter a discount value greater than 0.</string>
     <string name="promo_err_percent_range">Percentage must be between 1 and 100.</string>
     <string name="promo_err_trial_days">Enter the number of trial days.</string>
+
+    <!-- AND-279: browse / scheduled broadcasts -->
+    <string name="more_entry_broadcasts">Live broadcasts</string>
+    <string name="broadcast_browse_title">Broadcasts</string>
+    <string name="broadcast_bucket_live">Live</string>
+    <string name="broadcast_bucket_upcoming">Upcoming</string>
+    <string name="broadcast_bucket_past">Past</string>
+    <string name="broadcast_status_live">LIVE</string>
+    <string name="broadcast_status_scheduled">SCHEDULED</string>
+    <string name="broadcast_status_ended">ENDED</string>
+    <string name="broadcast_empty_live">No broadcasts are live right now.</string>
+    <string name="broadcast_empty_upcoming">No upcoming broadcasts scheduled.</string>
+    <string name="broadcast_empty_past">No past broadcasts yet.</string>
+    <string name="broadcast_empty_title">Nothing here yet</string>
+    <string name="broadcast_error_generic">Couldn\'t load broadcasts.</string>
+    <string name="broadcast_reminder_set">Remind me</string>
+    <string name="broadcast_reminder_on">Reminder set</string>
+    <string name="broadcast_reminder_failed">Couldn\'t update reminder. Try again.</string>
+    <string name="broadcast_reminder_cd">Remind me for %1$s</string>
+    <string name="broadcast_host">Hosted by %1$s</string>
+    <string name="broadcast_started_at">Started %1$s</string>
+    <string name="broadcast_scheduled_at">Starts %1$s</string>
+    <string name="broadcast_ended_label">Ended</string>
+    <string name="broadcast_thumbnail_cd">Broadcast thumbnail</string>
+    <plurals name="broadcast_viewer_count">
+        <item quantity="one">%1$d viewer</item>
+        <item quantity="other">%1$d viewers</item>
+    </plurals>
+
+    <!-- AND-280: viewer playback (HLS) -->
+    <string name="viewer_back_cd">Back</string>
+    <string name="viewer_retry">Retry</string>
+    <string name="viewer_offline">You\'re offline. Check your connection and try again.</string>
+    <string name="viewer_error_generic">Something went wrong playing this broadcast.</string>
+    <string name="viewer_unavailable_not_authorized">You don\'t have access to this broadcast.</string>
+    <string name="viewer_unavailable_ended">This broadcast has ended.</string>
+    <string name="viewer_unavailable_not_started">This broadcast hasn\'t started yet.</string>
+    <string name="viewer_unavailable_generic">This broadcast isn\'t available right now.</string>
+    <string name="viewer_go_live">Go live</string>
+    <string name="viewer_loading">Connecting to broadcast…</string>
+
+    <!-- AND-281: live chat -->
+    <string name="live_chat_title">Live chat</string>
+    <string name="live_chat_composer_hint">Say something…</string>
+    <string name="live_chat_send">Send</string>
+    <string name="live_chat_send_cd">Send message</string>
+    <string name="live_chat_empty">Be the first to say something</string>
+    <string name="live_chat_connecting">Connecting…</string>
+    <string name="live_chat_reconnecting">Reconnecting…</string>
+    <string name="live_chat_offline">Offline — tap to retry</string>
+    <string name="live_chat_send_disabled">Sending is paused while disconnected.</string>
+    <string name="live_chat_message_failed">Message failed — tap to retry</string>
+    <string name="live_chat_host_badge">HOST</string>
+    <string name="live_chat_you">You</string>
+    <string name="live_chat_jump_latest">Jump to latest</string>
+    <string name="live_chat_error_generic">Couldn\'t load chat.</string>
+    <string name="live_chat_react_cd">React to message</string>
 </resources>

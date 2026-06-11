@@ -189,6 +189,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         contentCalendarDestination(navController)
         // AND-275: scheduler (list + create/edit sheet for scheduled actions).
         schedulerDestinations(navController)
+        // AND-279/AND-280/AND-281: broadcast browse + viewer playback (HLS) + live chat panel.
+        broadcastDestinations(navController)
     }
 }
 

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Loyalty
 import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
@@ -74,6 +75,13 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Campaign,
             route = MoreRoutes.MASS_MESSAGES,
             section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "broadcasts",
+            labelRes = R.string.more_entry_broadcasts,
+            icon = Icons.Outlined.LiveTv,
+            route = MoreRoutes.BROADCASTS,
+            section = MoreSection.APP,
         ),
         MoreEntry(
             id = "helpdesk_queue",

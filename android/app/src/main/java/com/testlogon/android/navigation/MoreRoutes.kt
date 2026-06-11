@@ -27,6 +27,9 @@ object MoreRoutes {
     // AND-160: mass messages (broadcast campaigns). Screen self-gates on the mass-send capability.
     val MASS_MESSAGES: String get() = MessagingRoutes.MASS_MESSAGES
 
+    // AND-279/AND-280/AND-281: browse live + scheduled broadcasts (-> viewer playback + live chat).
+    const val BROADCASTS = BroadcastBrowseDest.ROUTE
+
     // AND-161/AND-162: agent-facing helpdesk queue. Screen self-gates via the 403 role signal.
     val HELPDESK_QUEUE: String get() = MessagingRoutes.HELPDESK_QUEUE
 
@@ -150,6 +153,7 @@ object MoreRoutes {
             PROFILE,
             MESSAGES,
             MASS_MESSAGES,
+            BROADCASTS,
             HELPDESK_QUEUE,
             SESSIONS,
             MFA_DEVICES,
