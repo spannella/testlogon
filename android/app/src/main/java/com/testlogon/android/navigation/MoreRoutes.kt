@@ -51,6 +51,9 @@ object MoreRoutes {
     // AND-196: the clips vertical-pager feed.
     val CLIPS: String get() = ClipsFeedDest.ROUTE
 
+    // AND-271: the calendar Month/Week/Agenda views.
+    const val CALENDAR = CalendarDest.ROUTE
+
     // AND-201: the published video gallery browse grid.
     val GALLERY: String get() = GalleryDest.ROUTE
 
@@ -150,6 +153,7 @@ object MoreRoutes {
             VIDEOS,
             VOD_CATALOG,
             CLIPS,
+            CALENDAR,
             GALLERY,
             CATALOG,
             CART,

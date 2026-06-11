@@ -443,6 +443,38 @@
     <string name="calendar_share_permission_unknown">Shared</string>
     <string name="calendar_share_accept_soon">Accept share (coming soon)</string>
 
+    <!-- AND-271/AND-272: calendar views + event detail -->
+    <string name="more_entry_calendar">Calendar</string>
+    <string name="calendar_title">Calendar</string>
+    <string name="calendar_view_month">Month</string>
+    <string name="calendar_view_week">Week</string>
+    <string name="calendar_view_agenda">Agenda</string>
+    <string name="calendar_nav_previous">Previous</string>
+    <string name="calendar_nav_next">Next</string>
+    <string name="calendar_today">Today</string>
+    <string name="calendar_empty_title">No events</string>
+    <string name="calendar_empty_body">There are no events in this range.</string>
+    <string name="calendar_zone_mismatch">Times shown in %1$s (not your device zone).</string>
+    <string name="calendar_more_events">+%1$d more</string>
+    <string name="calendar_all_day">All day</string>
+    <string name="calendar_day_events_cd">%1$s, %2$d events</string>
+    <string name="event_detail_title">Event</string>
+    <string name="event_detail_when">When</string>
+    <string name="event_detail_description">Description</string>
+    <string name="event_detail_attendees">Attendees</string>
+    <string name="event_detail_attendee_count">%1$d attending</string>
+    <string name="event_detail_recurring">Repeats</string>
+    <string name="event_detail_share">Share</string>
+    <string name="event_detail_add_to_calendar">Add to calendar</string>
+    <string name="event_detail_share_subject">%1$s on TestLogon</string>
+    <string name="event_detail_unavailable_title">Event unavailable</string>
+    <string name="event_detail_unavailable_body">This event could not be found or the link has expired.</string>
+    <string name="event_detail_forbidden_title">You don\'t have access</string>
+    <string name="event_detail_forbidden_body">This event is private.</string>
+    <string name="event_detail_no_share_app">No app available to share</string>
+    <string name="event_detail_no_calendar_app">No calendar app available</string>
+    <string name="calendar_share_chooser_title">Share event</string>
+
     <!-- AND-139: tips / paid-unlockable -->
     <string name="paid_unlock">Unlock</string>
     <string name="paid_unlock_cd">Unlock for %1$s</string>

@@ -6,6 +6,7 @@ import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -118,6 +119,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_clips,
             icon = Icons.Outlined.Slideshow,
             route = MoreRoutes.CLIPS,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "calendar",
+            labelRes = R.string.more_entry_calendar,
+            icon = Icons.Outlined.CalendarMonth,
+            route = MoreRoutes.CALENDAR,
             section = MoreSection.APP,
         ),
         MoreEntry(

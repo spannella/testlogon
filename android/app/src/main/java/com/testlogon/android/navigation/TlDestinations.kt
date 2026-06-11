@@ -265,6 +265,34 @@ data object PublicProfileDest {
 }
 
 /**
+ * Calendar views (AND-271), `calendar`. The Month/Week/Agenda screen, reached from the More hub.
+ */
+data object CalendarDest {
+    const val ROUTE = "calendar"
+}
+
+/**
+ * Event detail + public event (AND-272).
+ *
+ * In-app route `calendar/event/{calendarId}/{eventId}?isPublic={isPublic}` and a public App Link
+ * mirroring the web route `/event/{calendarId}/{eventId}`. Registered in BOTH graphs (like public
+ * profile / public clip) so a shared link resolves whether or not the viewer is signed in. The public
+ * deep link sets `isPublic=true` so the unauthenticated reduced payload is fetched.
+ */
+data object EventDetailDest {
+    const val ROUTE = "calendar/event/{calendarId}/{eventId}?isPublic={isPublic}"
+    const val ARG_CALENDAR_ID = "calendarId"
+    const val ARG_EVENT_ID = "eventId"
+    const val ARG_IS_PUBLIC = "isPublic"
+
+    /** Web path the App Link mirrors: https://HOST/event/:calendarId/:eventId. */
+    const val DEEP_LINK_PATH = "/event"
+
+    fun build(calendarId: String, eventId: String, isPublic: Boolean = false): String =
+        "calendar/event/${Uri.encode(calendarId)}/${Uri.encode(eventId)}?isPublic=$isPublic"
+}
+
+/**
  * Read-only post detail by id (AND-100), `post/{postId}`.
  *
  * Reachable in-app from the feed and by deep link (`testlogon://post/{postId}`, the production HTTPS

@@ -238,6 +238,40 @@
                     android:host="c" />
             </intent-filter>
 
+            <!-- AND-272: public event App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /event/{calendarId}/{eventId} page. Works for unauthenticated
+                 users. Requires assetlinks.json (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/event/" />
+            </intent-filter>
+
+            <!-- AND-272: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/event/" />
+            </intent-filter>
+
+            <!-- AND-272: custom-scheme public-event fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="event" />
+            </intent-filter>
+
             <!-- AND-231: payment redirect return App Link on the production host (HTTPS, auto-verified).
                  Providers (PayPal/CCBill/hosted checkout) 302 the browser back here after authorization.
                  Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->

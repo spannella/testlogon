@@ -179,6 +179,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         promoDestination(navController)
         // AND-267: affiliate discounts (read-only list of discounts attached to the caller's ad creatives).
         discountsDestination(navController)
+        // AND-271: calendar Month/Week/Agenda views (reached from the More hub).
+        calendarDestination(navController)
+        // AND-272: event detail + public event (also registered unauthenticated for shared links).
+        eventDetailDestination(navController)
     }
 }
 
