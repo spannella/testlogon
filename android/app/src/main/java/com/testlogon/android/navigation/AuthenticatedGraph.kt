@@ -177,6 +177,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         affiliatesDestination(navController)
         // AND-266: promo codes (list + create via plain CRUD; deactivate; usage/expiry/discount).
         promoDestination(navController)
+        // AND-267: affiliate discounts (read-only list of discounts attached to the caller's ad creatives).
+        discountsDestination(navController)
     }
 }
 

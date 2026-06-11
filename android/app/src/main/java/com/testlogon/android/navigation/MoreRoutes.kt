@@ -113,6 +113,9 @@ object MoreRoutes {
     // AND-266: promo codes (list + create via plain CRUD; deactivate).
     const val PROMO_CODES = PromoDest.ROUTE
 
+    // AND-267: affiliate discounts (read-only list of discounts attached to the caller's ad creatives).
+    const val DISCOUNTS = DiscountsDest.ROUTE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -158,6 +161,7 @@ object MoreRoutes {
             REFERRALS,
             AFFILIATES,
             PROMO_CODES,
+            DISCOUNTS,
             PAYOUTS,
             PAYOUT_SETUP,
             BULK_PAYOUTS,

@@ -219,6 +219,13 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "discounts",
+            labelRes = R.string.more_entry_discounts,
+            icon = Icons.Outlined.Loyalty,
+            route = MoreRoutes.DISCOUNTS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "invoices",
             labelRes = R.string.more_entry_invoices,
             icon = Icons.Outlined.Receipt,

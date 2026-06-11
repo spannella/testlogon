@@ -1478,10 +1478,11 @@
     <string name="bulk_batch_status_canceled">Canceled</string>
     <string name="bulk_batch_status_unknown">Unknown</string>
 
-    <!-- AND-264..266 More hub entries (creator growth tools). -->
+    <!-- AND-264..267 More hub entries (creator growth tools). -->
     <string name="more_entry_referrals">Referrals</string>
     <string name="more_entry_affiliates">Affiliates</string>
     <string name="more_entry_promo_codes">Promo codes</string>
+    <string name="more_entry_discounts">Affiliate discounts</string>
 
     <!-- AND-264 Referrals. -->
     <string name="referrals_title">Referrals</string>
@@ -1526,6 +1527,23 @@
     <string name="affiliates_chart_title">Commission earned per link</string>
     <string name="affiliates_status_unknown">Unknown</string>
     <string name="affiliates_link_metrics">%1$s clicks · %2$s conversions · %3$s commission · %4$s earned</string>
+
+    <!-- AND-267 Affiliate discounts (read-only list attached to the caller\'s ad creatives). -->
+    <string name="discounts_title">Affiliate discounts</string>
+    <string name="discounts_error_generic">Couldn\'t load your affiliate discounts.</string>
+    <string name="discounts_share_chooser_title">Share this discount</string>
+    <string name="discounts_action_share">Share discount link</string>
+    <string name="discounts_action_copy">Copy code</string>
+    <string name="discounts_code_copied">Code copied</string>
+    <string name="discounts_refresh_failed_stale">Showing saved data — couldn\'t refresh.</string>
+    <string name="discounts_empty_title">No affiliate discounts yet</string>
+    <string name="discounts_empty_body">Discounts attached to your ad creatives will appear here.</string>
+    <string name="discounts_no_code">No code</string>
+    <string name="discounts_row_metrics">%1$s clicks · %2$s redemptions</string>
+    <string name="discounts_filter_all">All</string>
+    <string name="discounts_filter_percent">Percent</string>
+    <string name="discounts_filter_fixed">Fixed</string>
+    <string name="discounts_filter_free_trial">Free trial</string>
 
     <!-- AND-266 Promo codes. -->
     <string name="promo_title">Promo codes</string>
