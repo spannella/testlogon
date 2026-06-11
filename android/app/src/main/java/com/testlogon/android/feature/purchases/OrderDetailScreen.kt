@@ -51,6 +51,9 @@ object OrderDetailTestTags {
     const val ITEMS = "order_detail_items"
     const val ITEM_ROW = "order_detail_item_row"
     const val SUMMARY = "order_detail_summary"
+    const val BILLING_ACTIONS = "order_detail_billing_actions"
+    const val REQUEST_REFUND = "order_detail_request_refund"
+    const val OPEN_DISPUTE = "order_detail_open_dispute"
 }
 
 /**
@@ -63,6 +66,10 @@ fun OrderDetailRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: OrderDetailViewModel = hiltViewModel(),
+    // AND-244/AND-245: billing-adjacent entry points. Default to no-op so existing callers compile;
+    // the nav graph wires them to the refund-submit / file-dispute routes (keyed by the txn id).
+    onRequestRefund: (transactionEntryId: String) -> Unit = {},
+    onOpenDispute: (transactionEntryId: String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -94,6 +101,8 @@ fun OrderDetailRoute(
                     OrderDetailContent(
                         order = s.order,
                         items = s.items,
+                        onRequestRefund = { onRequestRefund(s.order.id) },
+                        onOpenDispute = { onOpenDispute(s.order.id) },
                         tracking = {
                             // Embed the AND-215 section; its CTA launches the carrier URL (https-only).
                             TrackingSection(
@@ -113,6 +122,8 @@ fun OrderDetailRoute(
 private fun OrderDetailContent(
     order: PurchaseDetail,
     items: List<CartItem>,
+    onRequestRefund: () -> Unit,
+    onOpenDispute: () -> Unit,
     tracking: @Composable () -> Unit,
 ) {
     LazyColumn(
@@ -125,6 +136,26 @@ private fun OrderDetailContent(
             item { OrderItemsCard(items, order.money.currency) }
         }
         item { tracking() }
+        // AND-244/AND-245: billing-adjacent actions against this transaction.
+        item { OrderBillingActions(onRequestRefund = onRequestRefund, onOpenDispute = onOpenDispute) }
+    }
+}
+
+/** AND-244/AND-245 — "Request a refund" / "Open a dispute" actions, reachable from the order detail. */
+@Composable
+private fun OrderBillingActions(onRequestRefund: () -> Unit, onOpenDispute: () -> Unit) {
+    Card(Modifier.fillMaxWidth().testTag(OrderDetailTestTags.BILLING_ACTIONS)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.order_detail_billing_help), style = MaterialTheme.typography.titleMedium)
+            androidx.compose.material3.TextButton(
+                onClick = onRequestRefund,
+                modifier = Modifier.testTag(OrderDetailTestTags.REQUEST_REFUND),
+            ) { Text(stringResource(R.string.order_detail_request_refund)) }
+            androidx.compose.material3.TextButton(
+                onClick = onOpenDispute,
+                modifier = Modifier.testTag(OrderDetailTestTags.OPEN_DISPUTE),
+            ) { Text(stringResource(R.string.order_detail_open_dispute)) }
+        }
     }
 }
 

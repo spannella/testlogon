@@ -108,6 +108,16 @@ fun NavGraphBuilder.trackingDestination(navController: NavHostController) {
         route = TrackingDest.ROUTE,
         arguments = listOf(navArgument(TrackingDest.ARG_TXN_ID) { type = NavType.StringType }),
     ) {
-        OrderDetailRoute(onBack = { navController.popBackStack() })
+        OrderDetailRoute(
+            onBack = { navController.popBackStack() },
+            // AND-244: open the refund-submit form, keyed by this transaction.
+            onRequestRefund = { entryId ->
+                navController.navigate(RefundSubmitDest.build(entryId)) { launchSingleTop = true }
+            },
+            // AND-245: open the file-dispute form, keyed by this transaction.
+            onOpenDispute = { entryId ->
+                navController.navigate(DisputeFileDest.build(entryId)) { launchSingleTop = true }
+            },
+        )
     }
 }

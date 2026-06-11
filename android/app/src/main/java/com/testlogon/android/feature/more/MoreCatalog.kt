@@ -8,6 +8,8 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.SupportAgent
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Loyalty
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -151,6 +154,27 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_invoices,
             icon = Icons.Outlined.Receipt,
             route = MoreRoutes.INVOICES,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "refunds",
+            labelRes = R.string.more_entry_refunds,
+            icon = Icons.Outlined.Paid,
+            route = MoreRoutes.REFUNDS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "disputes",
+            labelRes = R.string.more_entry_disputes,
+            icon = Icons.Outlined.Gavel,
+            route = MoreRoutes.DISPUTES,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "tax_documents",
+            labelRes = R.string.more_entry_tax_documents,
+            icon = Icons.Outlined.Description,
+            route = MoreRoutes.TAX_DOCUMENTS,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

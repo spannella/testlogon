@@ -1192,4 +1192,75 @@
     <string name="invoices_email_sent_to">Invoice emailed to %1$s</string>
     <string name="invoices_email_sent_generic">Invoice emailed</string>
     <string name="invoices_pdf_action">View / download PDF</string>
+
+    <!-- AND-244: refund requests -->
+    <string name="more_entry_refunds">Refund requests</string>
+    <string name="refunds_title">Refund requests</string>
+    <string name="refunds_loading">Loading refund requests…</string>
+    <string name="refunds_empty">No refund requests yet</string>
+    <string name="refunds_date_unknown">Date unavailable</string>
+    <string name="refunds_stale_banner">Showing saved list — couldn\'t refresh.</string>
+    <string name="refunds_status_pending">Pending</string>
+    <string name="refunds_status_approved">Approved</string>
+    <string name="refunds_status_completed">Completed</string>
+    <string name="refunds_status_denied">Denied</string>
+    <string name="refunds_status_unknown">Status unknown</string>
+    <string name="refunds_submit_title">Request a refund</string>
+    <string name="refunds_submit_intro">Tell us why you\'re requesting a refund for this transaction. You can optionally request a partial amount.</string>
+    <string name="refunds_field_reason">Reason</string>
+    <string name="refunds_field_reason_hint">At least 10 characters.</string>
+    <string name="refunds_field_amount">Amount (cents, optional)</string>
+    <string name="refunds_field_amount_hint">Leave blank for a full refund.</string>
+    <string name="refunds_error_reason_too_short">Please enter at least 10 characters.</string>
+    <string name="refunds_error_reason_too_long">Reason is too long (max 2000 characters).</string>
+    <string name="refunds_error_amount_invalid">Enter a whole number of cents (1 or more).</string>
+    <string name="refunds_submit_action">Submit request</string>
+    <string name="refunds_submit_sending">Submitting…</string>
+    <string name="refunds_detail_title">Refund request</string>
+    <string name="refunds_detail_requested_on">Requested on %1$s</string>
+    <string name="refunds_detail_reason_label">Reason</string>
+    <string name="refunds_detail_admin_notes_label">Decision note</string>
+
+    <!-- AND-245: disputes -->
+    <string name="more_entry_disputes">Disputes</string>
+    <string name="disputes_title">Disputes</string>
+    <string name="disputes_loading">Loading disputes…</string>
+    <string name="disputes_empty">No disputes</string>
+    <string name="disputes_not_found">Dispute not found</string>
+    <string name="disputes_date_unknown">Date unavailable</string>
+    <string name="disputes_status_open">Open</string>
+    <string name="disputes_status_under_review">Under review</string>
+    <string name="disputes_status_resolved">Resolved</string>
+    <string name="disputes_status_unknown">Status unknown</string>
+    <string name="disputes_detail_title">Dispute</string>
+    <string name="disputes_detail_opened_on">Opened on %1$s</string>
+    <string name="disputes_detail_evidence_due">Evidence due by %1$s</string>
+    <string name="disputes_detail_reason_label">Reason</string>
+    <string name="disputes_detail_resolution_label">Resolution</string>
+    <string name="disputes_file_title">Open a dispute</string>
+    <string name="disputes_file_intro">Open a dispute (chargeback) against this transaction. Describe the issue in detail.</string>
+    <string name="disputes_field_amount">Amount (cents)</string>
+    <string name="disputes_field_amount_hint">The disputed amount in cents.</string>
+    <string name="disputes_field_reason">Reason</string>
+    <string name="disputes_field_reason_hint">At least 10 characters.</string>
+    <string name="disputes_error_reason_too_short">Please enter at least 10 characters.</string>
+    <string name="disputes_error_amount_invalid">Enter a whole number of cents (1 or more).</string>
+    <string name="disputes_file_action">Open dispute</string>
+    <string name="disputes_file_sending">Submitting…</string>
+
+    <!-- AND-246: tax documents -->
+    <string name="more_entry_tax_documents">Tax documents</string>
+    <string name="tax_docs_title">Tax documents</string>
+    <string name="tax_docs_loading">Loading tax documents…</string>
+    <string name="tax_docs_empty">No documents generated yet</string>
+    <string name="tax_docs_year_unknown">—</string>
+    <string name="tax_docs_row_title">%1$s Annual Tax Statement</string>
+    <string name="tax_docs_row_subtitle">%1$s · %2$d transactions</string>
+    <string name="tax_docs_download_cd">Download %1$s tax statement</string>
+    <string name="tax_docs_no_viewer">No app available to open this file.</string>
+
+    <!-- AND-244/AND-245: order-detail billing actions -->
+    <string name="order_detail_billing_help">Need help with this order?</string>
+    <string name="order_detail_request_refund">Request a refund</string>
+    <string name="order_detail_open_dispute">Open a dispute</string>
 </resources>

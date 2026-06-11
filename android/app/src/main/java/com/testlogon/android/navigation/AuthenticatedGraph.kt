@@ -154,6 +154,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         fanClubDestinations(navController)
         // AND-243: invoices list (paged) + invoice detail (line items/totals + email + view-PDF).
         invoicesDestinations(navController)
+        // AND-244: refund-requests list + submit (from order/txn detail) + detail (status tracking).
+        refundsDestinations(navController)
+        // AND-245: disputes list + file (open a dispute from order/txn detail) + detail (status).
+        disputesDestinations(navController)
+        // AND-246: tax-documents list + view/download PDF (Custom Tabs, reusing the AND-243 launcher).
+        taxDocsDestination(navController)
     }
 }
 

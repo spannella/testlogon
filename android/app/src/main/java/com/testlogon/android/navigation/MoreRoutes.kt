@@ -69,6 +69,15 @@ object MoreRoutes {
     // AND-243: the invoices list (paged number/date/amount/status + detail/email/PDF).
     const val INVOICES = InvoicesListDest.ROUTE
 
+    // AND-244: the refund-requests list (submit from order detail; status tracking).
+    const val REFUNDS = RefundsListDest.ROUTE
+
+    // AND-245: the disputes list (file a dispute from order detail; status detail).
+    const val DISPUTES = DisputesListDest.ROUTE
+
+    // AND-246: the tax-documents list (year/type + view/download PDF via Custom Tabs).
+    const val TAX_DOCUMENTS = TaxDocsDest.ROUTE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -109,6 +118,9 @@ object MoreRoutes {
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             INVOICES,
+            REFUNDS,
+            DISPUTES,
+            TAX_DOCUMENTS,
             SUBSCRIPTION_TIERS,
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,
