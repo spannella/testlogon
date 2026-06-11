@@ -169,6 +169,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         earningsDestinations(navController)
         // AND-254: creator engagement-rate analytics (server rate + trend chart + breakdown).
         engagementDestinations(navController)
+        // AND-258/259/260: creator payouts — setup (+ FLAGGED KYC gate) + paged history + detail.
+        payoutsDestinations(navController)
     }
 }
 

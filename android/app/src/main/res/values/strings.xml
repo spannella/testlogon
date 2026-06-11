@@ -1397,4 +1397,67 @@
     <string name="per_content_sort_published">Published</string>
     <string name="per_content_source_ads">Ads</string>
     <string name="per_content_source_vod">VOD</string>
+
+    <!-- AND-258/259/260 — creator payouts -->
+    <string name="more_entry_payouts">Payout history</string>
+    <string name="more_entry_payout_setup">Request a payout</string>
+
+    <!-- Payout status labels (AND-260) -->
+    <string name="payout_status_requested">Requested</string>
+    <string name="payout_status_approved">Approved</string>
+    <string name="payout_status_processing">Processing</string>
+    <string name="payout_status_completed">Completed</string>
+    <string name="payout_status_rejected">Rejected</string>
+    <string name="payout_status_cancelled">Cancelled</string>
+    <string name="payout_status_unknown">Unknown</string>
+    <string name="payout_status_cd">Status: %1$s</string>
+
+    <!-- Payout method labels (AND-259/260) -->
+    <string name="payout_method_bank_transfer">Bank Transfer</string>
+    <string name="payout_method_paypal">PayPal</string>
+    <string name="payout_method_card">Card</string>
+    <string name="payout_method_unknown">Other</string>
+
+    <!-- Payout history (AND-260) -->
+    <string name="payout_history_title">Payouts</string>
+    <string name="payout_history_loading">Loading payouts…</string>
+    <string name="payout_history_empty">No payouts yet</string>
+    <string name="payout_history_error_generic">Couldn\'t load your payouts.</string>
+    <string name="payout_history_append_error">Couldn\'t load more.</string>
+    <string name="payout_date_unknown">Date unavailable</string>
+
+    <!-- Payout detail (AND-260) -->
+    <string name="payout_detail_title">Payout detail</string>
+    <string name="payout_detail_method">Method</string>
+    <string name="payout_detail_created">Requested</string>
+    <string name="payout_detail_updated">Updated</string>
+    <string name="payout_detail_completed">Completed</string>
+    <string name="payout_detail_notes">Notes</string>
+    <string name="payout_detail_reject_reason">Reason for rejection</string>
+    <string name="payout_detail_not_found_title">Payout unavailable</string>
+    <string name="payout_detail_not_found_body">Reopen this payout from your history.</string>
+
+    <!-- Payout setup + KYC gate (AND-259) -->
+    <string name="payout_setup_title">Request a payout</string>
+    <string name="payout_setup_loading">Loading…</string>
+    <string name="payout_setup_error_generic">Couldn\'t load payout setup.</string>
+    <string name="payout_balance_available">Available to withdraw</string>
+    <string name="payout_balance_minimum">Minimum payout: %1$s</string>
+    <string name="payout_amount_label">Amount</string>
+    <string name="payout_amount_invalid">Enter a valid amount.</string>
+    <string name="payout_amount_below_min">Amount is below the minimum payout.</string>
+    <string name="payout_amount_above_available">Amount exceeds your available balance.</string>
+    <string name="payout_method_label">Payout method</string>
+    <string name="payout_notes_label">Notes (optional)</string>
+    <string name="payout_request_action">Request payout</string>
+    <string name="payout_request_submitted">Payout requested.</string>
+    <string name="payout_request_declined">Payout authorization was declined.</string>
+    <string name="payout_request_unavailable">Payouts are unavailable right now.</string>
+    <string name="payout_gate_title">Identity verification required</string>
+    <string name="payout_gate_tiers">Your tier: %1$d · Required: %2$d</string>
+    <string name="payout_gate_missing">Outstanding: %1$s</string>
+    <string name="payout_gate_unavailable">Identity verification is currently unavailable.</string>
+    <string name="payout_gate_verify_action">Verify identity</string>
+    <string name="payout_gate_unknown_title">Verification status unavailable</string>
+    <string name="payout_gate_unknown_body">We couldn\'t confirm your verification status. Payouts are disabled until we can.</string>
 </resources>

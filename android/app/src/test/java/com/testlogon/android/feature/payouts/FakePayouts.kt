@@ -1,0 +1,132 @@
+package com.testlogon.android.feature.payouts
+
+import com.testlogon.android.core.model.ApiError
+import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.payouts.KycRepository
+import com.testlogon.android.data.payouts.KycTier
+import com.testlogon.android.data.payouts.Payout
+import com.testlogon.android.data.payouts.PayoutActionResult
+import com.testlogon.android.data.payouts.PayoutBalance
+import com.testlogon.android.data.payouts.PayoutCreateResult
+import com.testlogon.android.data.payouts.PayoutMoney
+import com.testlogon.android.data.payouts.PayoutPage
+import com.testlogon.android.data.payouts.PayoutRequestDraft
+import com.testlogon.android.data.payouts.PayoutRequestOutcome
+import com.testlogon.android.data.payouts.PayoutSetupData
+import com.testlogon.android.data.payouts.PayoutSetupRepository
+import com.testlogon.android.data.payouts.PayoutStatus
+import com.testlogon.android.data.payouts.PayoutsRepository
+import com.testlogon.android.data.payouts.TierStatus
+
+/**
+ * AND-258/259/260 — configurable test doubles for the payout repositories. Sample builders are named
+ * [samplePayout] / [sampleBalance] / [sampleTierStatus] (NOT after interface members, per the gotcha).
+ */
+class FakePayoutsRepository : PayoutsRepository {
+
+    /** cursor -> page result. null key is the first page. */
+    var pages: MutableMap<String?, ApiResult<PayoutPage>> = mutableMapOf(
+        null to ApiResult.Success(PayoutPage(emptyList(), null)),
+    )
+    var balanceResult: ApiResult<PayoutBalance> = ApiResult.Success(sampleBalance())
+    var createResult: ApiResult<PayoutCreateResult> = ApiResult.Success(
+        PayoutCreateResult(ok = true, payoutId = "po_new", amount = PayoutMoney(50000, "USD"), status = PayoutStatus.REQUESTED),
+    )
+    var cancelResult: ApiResult<PayoutActionResult> =
+        ApiResult.Success(PayoutActionResult(ok = true, payoutId = "po_1", status = PayoutStatus.CANCELLED))
+
+    val requestedCursors = mutableListOf<String?>()
+    var requestPayoutCalls = 0
+        private set
+
+    override suspend fun getBalance(): ApiResult<PayoutBalance> = balanceResult
+
+    override suspend fun getPayouts(cursor: String?, limit: Int): ApiResult<PayoutPage> {
+        requestedCursors += cursor
+        return pages[cursor] ?: ApiResult.Failure(ApiError(status = 500, message = "no page for $cursor"))
+    }
+
+    override suspend fun requestPayout(
+        amountCents: Long,
+        method: String,
+        notes: String,
+        currency: String,
+    ): ApiResult<PayoutCreateResult> {
+        requestPayoutCalls++
+        return createResult
+    }
+
+    override suspend fun cancelPayout(payoutId: String): ApiResult<PayoutActionResult> = cancelResult
+}
+
+/**
+ * AND-259 — a [PayoutSetupRepository] double that records whether the backend payout was reached. The
+ * default [requestOutcome] is [PayoutRequestOutcome.NotConfigured] to mirror the BillingAuthorizer stub
+ * (no real payout executed).
+ */
+class FakePayoutSetupRepository : PayoutSetupRepository {
+
+    var setupResult: ApiResult<PayoutSetupData> = ApiResult.Success(
+        PayoutSetupData(balance = sampleBalance(), recentPayouts = emptyList(), tierStatus = sampleTierStatus(eligible = true)),
+    )
+    var refreshResult: ApiResult<TierStatus> = ApiResult.Success(sampleTierStatus(eligible = true))
+    var requestOutcome: PayoutRequestOutcome = PayoutRequestOutcome.NotConfigured
+
+    var requestPayoutCalls = 0
+        private set
+    var lastDraft: PayoutRequestDraft? = null
+        private set
+
+    override suspend fun loadSetup(requiredTier: Int): ApiResult<PayoutSetupData> = setupResult
+
+    override suspend fun refreshTier(requiredTier: Int): ApiResult<TierStatus> = refreshResult
+
+    override suspend fun requestPayout(draft: PayoutRequestDraft, currency: String): PayoutRequestOutcome {
+        requestPayoutCalls++
+        lastDraft = draft
+        return requestOutcome
+    }
+}
+
+class FakeKycRepository : KycRepository {
+    var loadResult: ApiResult<TierStatus> = ApiResult.Success(sampleTierStatus(eligible = true))
+    var evaluateResult: ApiResult<TierStatus> = ApiResult.Success(sampleTierStatus(eligible = true))
+    override suspend fun loadTierStatus(requiredTier: Int): ApiResult<TierStatus> = loadResult
+    override suspend fun evaluateTierStatus(requiredTier: Int): ApiResult<TierStatus> = evaluateResult
+}
+
+fun samplePayout(id: String = "po_1", status: PayoutStatus = PayoutStatus.COMPLETED): Payout = Payout(
+    payoutId = id,
+    userId = "usr_1",
+    amount = PayoutMoney(4500, "USD"),
+    status = status,
+    method = "bank_transfer",
+    createdAtEpochSeconds = 1_748_628_251L,
+    updatedAtEpochSeconds = 1_748_800_800L,
+    completedAtEpochSeconds = if (status == PayoutStatus.COMPLETED) 1_748_800_800L else null,
+    notes = "",
+    rejectReason = if (status == PayoutStatus.REJECTED) "insufficient docs" else "",
+    approvedBy = "admin_1",
+)
+
+fun sampleBalance(available: Long = 50000, min: Long = 1000): PayoutBalance = PayoutBalance(
+    availableCents = available,
+    pendingCents = 0,
+    totalEarnedCents = 120000,
+    holdCents = 0,
+    currency = "USD",
+    minimumPayoutCents = min,
+)
+
+fun sampleTierStatus(
+    current: Int = 1,
+    required: Int = 1,
+    eligible: Boolean? = null,
+    unmet: List<String> = emptyList(),
+): TierStatus = TierStatus(
+    currentTier = KycTier(current),
+    tierName = "basic",
+    requiredTierForPayouts = KycTier(required),
+    eligibleForPayoutTier = eligible,
+    unmetRequirements = unmet,
+)

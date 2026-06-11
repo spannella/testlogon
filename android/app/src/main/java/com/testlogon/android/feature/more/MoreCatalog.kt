@@ -1,6 +1,8 @@
 package com.testlogon.android.feature.more
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
@@ -162,6 +164,20 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_per_content_revenue,
             icon = Icons.Outlined.ReceiptLong,
             route = MoreRoutes.PER_CONTENT_REVENUE,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "payout_setup",
+            labelRes = R.string.more_entry_payout_setup,
+            icon = Icons.Outlined.AccountBalance,
+            route = MoreRoutes.PAYOUT_SETUP,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "payouts",
+            labelRes = R.string.more_entry_payouts,
+            icon = Icons.Outlined.AccountBalanceWallet,
+            route = MoreRoutes.PAYOUTS,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

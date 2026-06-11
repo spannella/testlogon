@@ -91,6 +91,12 @@ object MoreRoutes {
     // AND-253: the per-content revenue list (sortable, cursor-paged).
     const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
 
+    // AND-260: the creator payout history list (paged amount/status/date + detail).
+    const val PAYOUTS = PayoutHistoryDest.ROUTE
+
+    // AND-259: the payout setup + KYC gate (request a payout; FLAGGED identity-verification gate).
+    const val PAYOUT_SETUP = PayoutSetupDest.ROUTE
+
     // AND-254: the creator engagement-rate analytics (server rate + trend chart). Base route (no arg);
     // the registered composable route carries an optional `?period=` deep-link arg.
     const val ENGAGEMENT = EngagementDest.ROUTE_BASE
@@ -137,6 +143,8 @@ object MoreRoutes {
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
+            PAYOUTS,
+            PAYOUT_SETUP,
             INVOICES,
             REFUNDS,
             DISPUTES,
