@@ -160,6 +160,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         disputesDestinations(navController)
         // AND-246: tax-documents list + view/download PDF (Custom Tabs, reusing the AND-243 launcher).
         taxDocsDestination(navController)
+        // AND-247: 1099-NEC tax-forms list + download PDF (resolves download_url, reuses the launcher).
+        form1099Destination(navController)
+        // AND-248: admin billing-config read-only view (effective config; root-gated server-side).
+        billingConfigDestination(navController)
     }
 }
 

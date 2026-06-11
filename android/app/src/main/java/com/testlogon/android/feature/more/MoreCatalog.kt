@@ -178,6 +178,20 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "tax_forms_1099",
+            labelRes = R.string.more_entry_tax_forms_1099,
+            icon = Icons.Outlined.ReceiptLong,
+            route = MoreRoutes.TAX_FORMS_1099,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "billing_config",
+            labelRes = R.string.more_entry_billing_config,
+            icon = Icons.Outlined.Paid,
+            route = MoreRoutes.BILLING_CONFIG,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "subscription_tiers",
             labelRes = R.string.more_entry_subscription_tiers,
             icon = Icons.Outlined.Loyalty,

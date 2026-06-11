@@ -1259,6 +1259,52 @@
     <string name="tax_docs_download_cd">Download %1$s tax statement</string>
     <string name="tax_docs_no_viewer">No app available to open this file.</string>
 
+    <!-- AND-247: 1099-NEC tax forms -->
+    <string name="more_entry_tax_forms_1099">1099 tax forms</string>
+    <string name="form1099_title">1099 Forms (1099-NEC)</string>
+    <string name="form1099_loading">Loading 1099 forms…</string>
+    <string name="form1099_empty_title">No 1099 forms issued</string>
+    <string name="form1099_empty_subtitle">A 1099-NEC is issued only when your reportable earnings meet the IRS threshold for a tax year.</string>
+    <string name="form1099_row_title">%1$s Form 1099-NEC</string>
+    <string name="form1099_row_subtitle">%1$s · %2$s</string>
+    <string name="form1099_status_corrected">Corrected</string>
+    <string name="form1099_download_cd">Download %1$s 1099-NEC</string>
+    <string name="form1099_no_viewer">No app available to open this file.</string>
+
+    <!-- AND-248: billing config (read-only) -->
+    <string name="more_entry_billing_config">Billing configuration</string>
+    <string name="billing_config_title">Billing configuration</string>
+    <string name="billing_config_loading">Loading billing configuration…</string>
+    <string name="billing_config_empty">No billing configuration</string>
+    <string name="billing_config_enabled">Enabled</string>
+    <string name="billing_config_disabled">Disabled</string>
+    <string name="billing_config_section_fees">Platform fees</string>
+    <string name="billing_config_fee_tips">Tips fee</string>
+    <string name="billing_config_fee_unlocks">Unlocks fee</string>
+    <string name="billing_config_fee_subscriptions">Subscriptions fee</string>
+    <string name="billing_config_fee_catalog">Catalog fee</string>
+    <string name="billing_config_fee_ad_revenue">Ad-revenue fee</string>
+    <string name="billing_config_section_payouts">Payout settings</string>
+    <string name="billing_config_min_payout">Minimum payout</string>
+    <string name="billing_config_payout_fee">Per-payout fee</string>
+    <string name="billing_config_payout_schedule">Payout schedule</string>
+    <string name="billing_config_auto_payout">Auto-payout</string>
+    <string name="billing_config_schedule_daily">Daily</string>
+    <string name="billing_config_schedule_weekly">Weekly</string>
+    <string name="billing_config_schedule_monthly">Monthly</string>
+    <string name="billing_config_section_deposits">Deposit settings</string>
+    <string name="billing_config_min_deposit">Minimum deposit</string>
+    <string name="billing_config_max_deposit">Maximum deposit</string>
+    <string name="billing_config_deposit_fee">Deposit fee</string>
+    <string name="billing_config_section_currency">Currency</string>
+    <string name="billing_config_default_currency">Default currency</string>
+    <string name="billing_config_supported_currencies">Supported currencies</string>
+    <string name="billing_config_section_tax">Tax settings</string>
+    <string name="billing_config_tax_enabled">Tax collection</string>
+    <string name="billing_config_default_tax_rate">Default tax rate</string>
+    <string name="billing_config_section_updated">Last updated</string>
+    <string name="billing_config_updated_by">Updated by</string>
+
     <!-- AND-244/AND-245: order-detail billing actions -->
     <string name="order_detail_billing_help">Need help with this order?</string>
     <string name="order_detail_request_refund">Request a refund</string>

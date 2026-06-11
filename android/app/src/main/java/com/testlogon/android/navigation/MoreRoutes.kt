@@ -78,6 +78,12 @@ object MoreRoutes {
     // AND-246: the tax-documents list (year/type + view/download PDF via Custom Tabs).
     const val TAX_DOCUMENTS = TaxDocsDest.ROUTE
 
+    // AND-247: the 1099-NEC tax-forms list (year/earnings/status + download PDF via Custom Tabs).
+    const val TAX_FORMS_1099 = Form1099Dest.ROUTE
+
+    // AND-248: the read-only billing-config view (root-gated server-side; 403 surfaces as an error).
+    const val BILLING_CONFIG = BillingConfigDest.ROUTE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -121,6 +127,8 @@ object MoreRoutes {
             REFUNDS,
             DISPUTES,
             TAX_DOCUMENTS,
+            TAX_FORMS_1099,
+            BILLING_CONFIG,
             SUBSCRIPTION_TIERS,
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,

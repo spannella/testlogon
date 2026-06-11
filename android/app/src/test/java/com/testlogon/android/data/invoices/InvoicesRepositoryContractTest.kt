@@ -150,6 +150,28 @@ class InvoicesRepositoryContractTest {
     }
 
     @Test
+    fun getInvoiceTax_reusesDetailEndpoint_andProjectsFlatBreakdown() = runTest {
+        // AND-249: tax is derived from GET ui/invoices/{n} (no dedicated tax endpoint).
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"invoice_id":"in_1","invoice_number":"INV-1","invoice_type":"subscription",
+                   "user_sub":"u1","amount_cents":120000,"tax_cents":9900,"total_cents":129900,
+                   "currency":"usd","status":"generated"}""",
+            ),
+        )
+        val result = repo().getInvoiceTax("INV-1")
+        assertTrue(result is ApiResult.Success)
+        val tax = (result as ApiResult.Success).data
+        assertEquals(120000L, tax.subtotal.cents)
+        assertEquals(9900L, tax.tax.cents)
+        assertEquals(129900L, tax.total.cents)
+
+        val req = backend.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/ui/invoices/INV-1", req.requestUrl?.encodedPath)
+    }
+
+    @Test
     fun pdfUrl_buildsAbsoluteEncodedUrl() {
         assertEquals(
             "http://dev.example/ui/invoices/INV-2026-001052/pdf",

@@ -8,6 +8,7 @@ import com.testlogon.android.data.invoices.InvoiceMoney
 import com.testlogon.android.data.invoices.InvoicePage
 import com.testlogon.android.data.invoices.InvoiceStatus
 import com.testlogon.android.data.invoices.InvoiceSummary
+import com.testlogon.android.data.invoices.InvoiceTax
 import com.testlogon.android.data.invoices.InvoicesRepository
 
 /**
@@ -24,6 +25,9 @@ class FakeInvoicesRepository : InvoicesRepository {
         null to ApiResult.Success(InvoicePage(emptyList(), null)),
     )
     var detailResult: ApiResult<InvoiceDetail> = ApiResult.Success(sampleInvoiceDetail())
+
+    /** AND-249/250 — programmable tax projection. Defaults to deriving from [detailResult] when Success. */
+    var taxResult: ApiResult<InvoiceTax>? = null
     var emailResult: ApiResult<EmailInvoiceResult> =
         ApiResult.Success(EmailInvoiceResult(ok = true, emailedTo = "x@y.com", message = "ok"))
 
@@ -37,6 +41,20 @@ class FakeInvoicesRepository : InvoicesRepository {
     }
 
     override suspend fun getInvoice(invoiceNumber: String): ApiResult<InvoiceDetail> = detailResult
+
+    override suspend fun getInvoiceTax(invoiceNumber: String): ApiResult<InvoiceTax> =
+        taxResult ?: when (val d = detailResult) {
+            is ApiResult.Success -> ApiResult.Success(
+                InvoiceTax(
+                    invoiceNumber = d.data.invoiceNumber,
+                    subtotal = d.data.amount,
+                    tax = d.data.tax,
+                    total = d.data.total,
+                ),
+            )
+            is ApiResult.Failure -> d
+            is ApiResult.NetworkError -> d
+        }
 
     override suspend fun emailInvoice(invoiceNumber: String): ApiResult<EmailInvoiceResult> {
         emailCalls++

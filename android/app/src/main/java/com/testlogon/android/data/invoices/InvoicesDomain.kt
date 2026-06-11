@@ -76,6 +76,18 @@ data class InvoicePage(
     val nextCursor: String?,
 )
 
+/**
+ * AND-249 — a flat, read-only tax breakdown derived from a single invoice's scalar fields. There is NO
+ * dedicated tax endpoint and NO per-rate tax lines in the contract (verified absent from the OpenAPI
+ * spec): taxable subtotal = amount_cents, total tax = tax_cents, grand total = total_cents.
+ */
+data class InvoiceTax(
+    val invoiceNumber: String,
+    val subtotal: InvoiceMoney,
+    val tax: InvoiceMoney,
+    val total: InvoiceMoney,
+)
+
 /** Result of the email-invoice action (the recipient + the server message). */
 data class EmailInvoiceResult(
     val ok: Boolean,
@@ -116,6 +128,14 @@ internal fun InvoiceDto.toDetail(): InvoiceDetail = InvoiceDetail(
     tax = InvoiceMoney(taxCents, currency),
     total = InvoiceMoney(totalCents, currency),
     createdAtEpochSeconds = createdAt.epochSecondsOrNull(),
+)
+
+/** AND-249 — derive the flat tax breakdown from the full invoice (no extra fetch, no per-rate lines). */
+internal fun InvoiceDetail.toTax(): InvoiceTax = InvoiceTax(
+    invoiceNumber = invoiceNumber,
+    subtotal = amount,
+    tax = tax,
+    total = total,
 )
 
 internal fun InvoiceListDto.toPage(): InvoicePage = InvoicePage(

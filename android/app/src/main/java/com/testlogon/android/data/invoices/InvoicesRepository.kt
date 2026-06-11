@@ -32,6 +32,12 @@ interface InvoicesRepository {
     /** A single invoice's full detail (line items + totals). Idempotent GET. */
     suspend fun getInvoice(invoiceNumber: String): ApiResult<InvoiceDetail>
 
+    /**
+     * AND-249 — the flat tax breakdown for an invoice (subtotal/tax/total), derived from [getInvoice]
+     * (there is no dedicated tax endpoint). Idempotent GET.
+     */
+    suspend fun getInvoiceTax(invoiceNumber: String): ApiResult<InvoiceTax>
+
     /** Email a copy of the invoice (recipient is server-determined). Non-idempotent. */
     suspend fun emailInvoice(invoiceNumber: String): ApiResult<EmailInvoiceResult>
 
@@ -63,6 +69,10 @@ class InvoicesRepositoryImpl @Inject constructor(
 
     override suspend fun getInvoice(invoiceNumber: String): ApiResult<InvoiceDetail> = withContext(io) {
         call { api.getInvoice(invoiceNumber) }.map { it.toDetail() }
+    }
+
+    override suspend fun getInvoiceTax(invoiceNumber: String): ApiResult<InvoiceTax> = withContext(io) {
+        call { api.getInvoice(invoiceNumber) }.map { it.toDetail().toTax() }
     }
 
     override suspend fun emailInvoice(invoiceNumber: String): ApiResult<EmailInvoiceResult> =

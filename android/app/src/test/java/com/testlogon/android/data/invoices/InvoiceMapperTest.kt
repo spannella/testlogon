@@ -82,4 +82,15 @@ class InvoiceMapperTest {
         assertEquals("x@y.com", result.emailedTo)
         assertEquals("done", result.message)
     }
+
+    @Test
+    fun toTax_derivesFlatBreakdownFromScalars() {
+        // AND-249: subtotal = amount, tax = tax, total = total; no per-rate lines exist on the wire.
+        val tax = dto().toDetail().toTax()
+        assertEquals("INV-2026-001052", tax.invoiceNumber)
+        assertEquals(4500L, tax.subtotal.cents)
+        assertEquals(400L, tax.tax.cents)
+        assertEquals(4900L, tax.total.cents)
+        assertEquals(tax.total.cents, tax.subtotal.cents + tax.tax.cents)
+    }
 }
