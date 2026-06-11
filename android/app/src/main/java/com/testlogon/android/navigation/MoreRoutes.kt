@@ -91,6 +91,10 @@ object MoreRoutes {
     // AND-253: the per-content revenue list (sortable, cursor-paged).
     const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
 
+    // AND-254: the creator engagement-rate analytics (server rate + trend chart). Base route (no arg);
+    // the registered composable route carries an optional `?period=` deep-link arg.
+    const val ENGAGEMENT = EngagementDest.ROUTE_BASE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -132,6 +136,7 @@ object MoreRoutes {
             PAYMENT_METHODS,
             EARNINGS,
             PER_CONTENT_REVENUE,
+            ENGAGEMENT,
             INVOICES,
             REFUNDS,
             DISPUTES,

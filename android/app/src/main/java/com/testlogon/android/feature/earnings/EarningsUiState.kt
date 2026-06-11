@@ -22,11 +22,19 @@ data class EarningsUiState(
     val selectedPoint: Int? = null,
     val isRefreshing: Boolean = false,
     val isStale: Boolean = false,
+    /**
+     * AND-256 — client fetch/cache time (epoch millis) of the shown [dashboard], or null when none.
+     * The backend supplies no `as_of`; this is the local fetch time from [EarningsDashboard].
+     */
+    val lastUpdated: Long? = null,
     val errorMessage: String? = null,
 ) {
     enum class Phase { Loading, Content, Empty, Error, Offline }
 
     val canRetry: Boolean get() = phase == Phase.Error || phase == Phase.Offline
+
+    /** AND-256 — true when the load succeeded but the window has no revenue activity. */
+    val isEmpty: Boolean get() = phase == Phase.Empty
 }
 
 /**

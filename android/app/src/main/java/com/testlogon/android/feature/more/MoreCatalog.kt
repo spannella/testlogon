@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Loyalty
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
@@ -161,6 +162,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_per_content_revenue,
             icon = Icons.Outlined.ReceiptLong,
             route = MoreRoutes.PER_CONTENT_REVENUE,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "engagement",
+            labelRes = R.string.more_entry_engagement,
+            icon = Icons.Outlined.Insights,
+            route = MoreRoutes.ENGAGEMENT,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

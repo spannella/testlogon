@@ -144,6 +144,39 @@ class EarningsViewModelTest {
     }
 
     @Test
+    fun success_exposesLastUpdated_andIsEmptyFlag() = runTest(mainRule.dispatcher) {
+        val repo = FakeRepo().apply {
+            result = ApiResult.Success(sampleDashboard().copy(fetchedAtEpochMs = 1_700_000_000_000L))
+        }
+        val sut = vm(repo, FakePrefs())
+        advanceUntilIdle()
+        // AND-256: lastUpdated (client fetch time) and the derived isEmpty flag are exposed.
+        assertEquals(1_700_000_000_000L, sut.uiState.value.lastUpdated)
+        assertEquals(false, sut.uiState.value.isEmpty)
+    }
+
+    @Test
+    fun emptyData_isEmptyFlagTrue() = runTest(mainRule.dispatcher) {
+        val repo = FakeRepo().apply { result = ApiResult.Success(sampleDashboard(empty = true)) }
+        val sut = vm(repo, FakePrefs())
+        advanceUntilIdle()
+        assertTrue(sut.uiState.value.isEmpty)
+    }
+
+    @Test
+    fun refresh_withContent_keepsContentVisible() = runTest(mainRule.dispatcher) {
+        val repo = FakeRepo().apply { result = ApiResult.Success(sampleDashboard()) }
+        val sut = vm(repo, FakePrefs())
+        advanceUntilIdle()
+        sut.onRefresh()
+        // After settling, content is retained (refresh of the same range), refreshing cleared.
+        advanceUntilIdle()
+        assertEquals(EarningsUiState.Phase.Content, sut.uiState.value.phase)
+        assertEquals(false, sut.uiState.value.isRefreshing)
+        assertNull(sut.uiState.value.errorMessage)
+    }
+
+    @Test
     fun onChartTypeToggled_flipsAndResetsSelection() = runTest(mainRule.dispatcher) {
         val repo = FakeRepo().apply { result = ApiResult.Success(sampleDashboard()) }
         val sut = vm(repo, FakePrefs())

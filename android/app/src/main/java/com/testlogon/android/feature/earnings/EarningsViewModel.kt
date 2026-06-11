@@ -103,6 +103,7 @@ class EarningsViewModel @Inject constructor(
                 dashboard = if (data.isEmpty) null else data,
                 isRefreshing = false,
                 isStale = false,
+                lastUpdated = data.fetchedAtEpochMs,
                 errorMessage = null,
             )
         }
@@ -118,6 +119,7 @@ class EarningsViewModel @Inject constructor(
                     dashboard = cached.asStale(),
                     isRefreshing = false,
                     isStale = true,
+                    lastUpdated = cached.fetchedAtEpochMs,
                     errorMessage = null,
                 )
             }

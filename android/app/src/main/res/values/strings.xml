@@ -1313,6 +1313,7 @@
     <!-- AND-251/252/253: creator earnings dashboard + per-content revenue -->
     <string name="more_entry_earnings">Earnings</string>
     <string name="more_entry_per_content_revenue">Per-content revenue</string>
+    <string name="more_entry_engagement">Engagement rate</string>
 
     <string name="earnings_title">Earnings</string>
     <string name="earnings_loading">Loading earnings…</string>
@@ -1347,6 +1348,43 @@
     <string name="earnings_source_vod_purchases">VOD purchases</string>
     <string name="earnings_source_other">Other</string>
     <string name="earnings_per_content_cta">View per-content revenue</string>
+
+    <!-- AND-254: engagement-rate analytics -->
+    <string name="engagement_title">Engagement rate</string>
+    <string name="engagement_loading">Loading engagement…</string>
+    <string name="engagement_error_generic">Couldn\'t load your engagement.</string>
+    <string name="engagement_empty_title">No engagement data</string>
+    <string name="engagement_empty_body">There\'s no engagement data for this period. Try a wider range.</string>
+    <string name="engagement_offline_title">You\'re offline</string>
+    <string name="engagement_offline_body">Connect to the internet to see your engagement.</string>
+
+    <string name="engagement_period_7d">7D</string>
+    <string name="engagement_period_14d">14D</string>
+    <string name="engagement_period_30d">30D</string>
+    <string name="engagement_period_60d">60D</string>
+    <string name="engagement_period_90d">90D</string>
+
+    <string name="engagement_headline_label">Engagement rate</string>
+    <!-- %1$s = rate, %2$s = trend direction word, %3$s = signed delta -->
+    <string name="engagement_headline_cd">Engagement rate %1$s, %2$s %3$s points</string>
+    <string name="engagement_trend_up">up</string>
+    <string name="engagement_trend_down">down</string>
+    <string name="engagement_trend_flat">flat</string>
+    <string name="engagement_trend_unknown">no change</string>
+
+    <string name="engagement_trend_title">Engagement rate over time</string>
+    <string name="engagement_trend_no_data">No trend data for this period</string>
+    <string name="engagement_chart_show_bars">Show bar chart</string>
+    <string name="engagement_chart_show_line">Show line chart</string>
+
+    <string name="engagement_breakdown_title">Interactions</string>
+    <string name="engagement_row_likes">Likes</string>
+    <string name="engagement_row_comments">Comments</string>
+    <string name="engagement_row_shares">Shares</string>
+    <string name="engagement_row_tips">Tips</string>
+    <string name="engagement_row_total">Total interactions</string>
+    <string name="engagement_row_followers">Followers</string>
+    <string name="engagement_row_posts">Posts in period</string>
 
     <string name="per_content_title">Per-content revenue</string>
     <string name="per_content_loading">Loading…</string>
