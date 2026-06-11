@@ -1753,4 +1753,12 @@
     <string name="qa_featured_label">Featured</string>
     <string name="qa_upvote_cd">Upvote, %1$d votes</string>
     <string name="qa_upvoted_cd">Remove upvote, %1$d votes</string>
+
+    <!-- AND-288: host go-live broadcasting entry + CAMERA/RECORD_AUDIO permission flow. -->
+    <string name="golive_title">Go live</string>
+    <string name="golive_action">Start broadcasting</string>
+    <string name="golive_perm_rationale">Camera and microphone access is needed to broadcast live. Enable them in Settings to continue.</string>
+    <string name="golive_perm_settings">Open settings</string>
+    <string name="golive_broadcasting_unavailable">Live broadcasting is not available yet.</string>
+    <string name="golive_failed">Couldn\'t start your broadcast. Please try again.</string>
 </resources>

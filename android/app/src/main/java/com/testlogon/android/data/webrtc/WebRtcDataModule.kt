@@ -1,0 +1,80 @@
+package com.testlogon.android.data.webrtc
+
+import dagger.Binds
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import retrofit2.Retrofit
+import javax.inject.Singleton
+
+/**
+ * AND-288..291 — provides the dedicated signaling + ICE-credentials APIs on the shared (authenticated)
+ * Retrofit, binds the implementable repositories/provider, and binds the FOUR FLAGGED engine seams to
+ * their NotConfigured stubs.
+ *
+ * What is REAL (plain network reads with verified backend endpoints): [SignalingApi]/[SignalingRepository]
+ * (broadcast publish SDP exchange + 1:1 call signaling send) and [IceServersApi]/[IceServersRepository]/
+ * [IceServersProvider] (TURN/STUN credential fetch -> domain). What is FLAGGED (no WebRTC Gradle
+ * dependency; never starts capture/peer/media): [BroadcastPublisher] -> [StubBroadcastPublisher],
+ * [PeerConnectionController] -> [StubPeerConnectionController], [SignalingTransport] ->
+ * [StubSignalingTransport].
+ */
+@Module
+@InstallIn(SingletonComponent::class)
+object WebRtcApiModule {
+
+    @Provides
+    @Singleton
+    fun provideSignalingApi(retrofit: Retrofit): SignalingApi =
+        retrofit.create(SignalingApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideIceServersApi(retrofit: Retrofit): IceServersApi =
+        retrofit.create(IceServersApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideTurnFetchConfig(): TurnFetchConfig = TurnFetchConfig()
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class WebRtcDataModule {
+
+    // ── Implementable (real backend endpoints) ──────────────────────────────────────────────────
+
+    @Binds
+    @Singleton
+    abstract fun bindSignalingRepository(impl: SignalingRepositoryImpl): SignalingRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindIceServersRepository(impl: DefaultIceServersRepository): IceServersRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindIceServersProvider(impl: DefaultIceServersProvider): IceServersProvider
+
+    // ── FLAGGED engine seams (native WebRTC SDK not configured; never start capture/peer/media) ──
+
+    /**
+     * AND-288 — go-live engine. Defaults to [StubBroadcastPublisher] (NotConfigured, never opens
+     * camera/mic / creates a peer) until the native WebRTC SDK decision is made; swap this @Binds to the
+     * real engine then. The WebRTC Gradle dependency is intentionally NOT added.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindBroadcastPublisher(impl: StubBroadcastPublisher): BroadcastPublisher
+
+    /** AND-289 — PeerConnection wrapper. Defaults to the no-op [StubPeerConnectionController]. */
+    @Binds
+    @Singleton
+    abstract fun bindPeerConnectionController(impl: StubPeerConnectionController): PeerConnectionController
+
+    /** AND-290 — signaling transport. Defaults to the never-connect [StubSignalingTransport]. */
+    @Binds
+    @Singleton
+    abstract fun bindSignalingTransport(impl: StubSignalingTransport): SignalingTransport
+}
