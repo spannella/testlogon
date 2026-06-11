@@ -84,6 +84,13 @@ object MoreRoutes {
     // AND-248: the read-only billing-config view (root-gated server-side; 403 surfaces as an error).
     const val BILLING_CONFIG = BillingConfigDest.ROUTE
 
+    // AND-252: the creator earnings dashboard (totals + chart + breakdown). Base route (no range arg);
+    // the registered composable route carries an optional `?range=` deep-link arg.
+    const val EARNINGS = EarningsDest.ROUTE_BASE
+
+    // AND-253: the per-content revenue list (sortable, cursor-paged).
+    const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -123,6 +130,8 @@ object MoreRoutes {
             CART,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
+            EARNINGS,
+            PER_CONTENT_REVENUE,
             INVOICES,
             REFUNDS,
             DISPUTES,

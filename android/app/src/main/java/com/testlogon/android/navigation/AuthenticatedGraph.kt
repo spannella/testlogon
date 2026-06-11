@@ -164,6 +164,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         form1099Destination(navController)
         // AND-248: admin billing-config read-only view (effective config; root-gated server-side).
         billingConfigDestination(navController)
+        // AND-252/253: creator earnings dashboard (totals + Canvas chart + breakdown) and the
+        // per-content revenue list (cursor-paged, sortable).
+        earningsDestinations(navController)
     }
 }
 

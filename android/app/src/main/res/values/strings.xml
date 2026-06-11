@@ -1309,4 +1309,54 @@
     <string name="order_detail_billing_help">Need help with this order?</string>
     <string name="order_detail_request_refund">Request a refund</string>
     <string name="order_detail_open_dispute">Open a dispute</string>
+
+    <!-- AND-251/252/253: creator earnings dashboard + per-content revenue -->
+    <string name="more_entry_earnings">Earnings</string>
+    <string name="more_entry_per_content_revenue">Per-content revenue</string>
+
+    <string name="earnings_title">Earnings</string>
+    <string name="earnings_loading">Loading earnings…</string>
+    <string name="earnings_error_generic">Couldn\'t load your earnings.</string>
+    <string name="earnings_empty_title">No earnings yet</string>
+    <string name="earnings_empty_body">There\'s no revenue for this period. Try a wider range.</string>
+    <string name="earnings_offline_title">You\'re offline</string>
+    <string name="earnings_offline_body">Connect to the internet to see your earnings.</string>
+    <string name="earnings_stale_banner">Showing saved data</string>
+    <string name="earnings_refresh_failed_stale">Couldn\'t refresh — showing saved data.</string>
+
+    <string name="earnings_range_7d">7D</string>
+    <string name="earnings_range_30d">30D</string>
+    <string name="earnings_range_90d">90D</string>
+    <string name="earnings_range_1y">1Y</string>
+    <string name="earnings_range_all">All</string>
+
+    <string name="earnings_kpi_all_time">All time</string>
+    <string name="earnings_kpi_period">This period</string>
+    <string name="earnings_kpi_this_month">This month</string>
+    <string name="earnings_kpi_pending">Pending payout</string>
+
+    <string name="earnings_chart_title">Earnings over time</string>
+    <string name="earnings_chart_no_data">No revenue data for this period</string>
+    <string name="earnings_chart_show_bars">Show bar chart</string>
+    <string name="earnings_chart_show_line">Show line chart</string>
+
+    <string name="earnings_breakdown_title">Revenue by source</string>
+    <string name="earnings_source_subscriptions">Subscriptions</string>
+    <string name="earnings_source_tips">Tips</string>
+    <string name="earnings_source_unlocks">Unlocks</string>
+    <string name="earnings_source_vod_purchases">VOD purchases</string>
+    <string name="earnings_source_other">Other</string>
+    <string name="earnings_per_content_cta">View per-content revenue</string>
+
+    <string name="per_content_title">Per-content revenue</string>
+    <string name="per_content_loading">Loading…</string>
+    <string name="per_content_error_generic">Couldn\'t load content revenue.</string>
+    <string name="per_content_empty">No content revenue to show.</string>
+    <string name="per_content_append_error">Couldn\'t load more.</string>
+    <string name="per_content_date_unknown">Date unavailable</string>
+    <string name="per_content_total_items">%1$d items</string>
+    <string name="per_content_sort_total">Total</string>
+    <string name="per_content_sort_published">Published</string>
+    <string name="per_content_source_ads">Ads</string>
+    <string name="per_content_source_vod">VOD</string>
 </resources>

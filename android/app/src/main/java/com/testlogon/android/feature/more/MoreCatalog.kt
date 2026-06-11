@@ -150,6 +150,20 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "earnings",
+            labelRes = R.string.more_entry_earnings,
+            icon = Icons.Outlined.Paid,
+            route = MoreRoutes.EARNINGS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "per_content_revenue",
+            labelRes = R.string.more_entry_per_content_revenue,
+            icon = Icons.Outlined.ReceiptLong,
+            route = MoreRoutes.PER_CONTENT_REVENUE,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "invoices",
             labelRes = R.string.more_entry_invoices,
             icon = Icons.Outlined.Receipt,
