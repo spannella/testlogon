@@ -357,3 +357,11 @@ any state other than `paid_out`. Plus **file attachments** on tickets.
 - **D4 — Assignee abandonment.** `unclaim` returns the ticket to the board, escrow
   stays held (TBT-005). Alternative: auto-refund after N days idle. *Recommend manual
   unclaim for v1; idle-sweep is a follow-up.*
+- **D5 — Cancel-and-repost cap** *(surfaced by the pass-3 review)*. A poster can cancel
+  an unclaimed bounty (refund) and repost. To prevent abuse, **defaulted to a cap of 3**
+  via `S.ticket_bounty_max_reposts` (TBT-001), tracked by `bounty_repost_count` on the
+  ticket (TBT-002) and enforced in `post_bounty` (TBT-003). Set to a large number / 0
+  to effectively disable. *Adjustable; flag if you want unlimited.*
+- **D6 — Currency.** v1 is **USD-only**; the escrow record + `bounty_currency` field
+  are reserved so multi-currency can be added later without a schema change. *Recommend
+  USD-only for launch.*
