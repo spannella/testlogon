@@ -104,6 +104,15 @@ object MoreRoutes {
     // the registered composable route carries an optional `?period=` deep-link arg.
     const val ENGAGEMENT = EngagementDest.ROUTE_BASE
 
+    // AND-264: referrals dashboard (referral code/link + stats + share/copy + create-code).
+    const val REFERRALS = ReferralsDest.ROUTE
+
+    // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + affiliate links).
+    const val AFFILIATES = AffiliatesDest.ROUTE
+
+    // AND-266: promo codes (list + create via plain CRUD; deactivate).
+    const val PROMO_CODES = PromoDest.ROUTE
+
     // AND-235: subscription tiers browse (self-browse from the hub via the SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val SUBSCRIPTION_TIERS = "subscriptions/tiers/${SubscriptionTiersDest.SELF}"
@@ -146,6 +155,9 @@ object MoreRoutes {
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
+            REFERRALS,
+            AFFILIATES,
+            PROMO_CODES,
             PAYOUTS,
             PAYOUT_SETUP,
             BULK_PAYOUTS,

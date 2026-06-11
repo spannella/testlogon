@@ -1477,4 +1477,81 @@
     <string name="bulk_batch_status_failed">Failed</string>
     <string name="bulk_batch_status_canceled">Canceled</string>
     <string name="bulk_batch_status_unknown">Unknown</string>
+
+    <!-- AND-264..266 More hub entries (creator growth tools). -->
+    <string name="more_entry_referrals">Referrals</string>
+    <string name="more_entry_affiliates">Affiliates</string>
+    <string name="more_entry_promo_codes">Promo codes</string>
+
+    <!-- AND-264 Referrals. -->
+    <string name="referrals_title">Referrals</string>
+    <string name="referrals_error_generic">Couldn\'t load your referrals.</string>
+    <string name="referrals_share_chooser_title">Share your referral link</string>
+    <string name="referrals_action_share">Share</string>
+    <string name="referrals_action_copy">Copy link</string>
+    <string name="referrals_link_copied">Referral link copied</string>
+    <string name="referrals_code_created">New referral code created</string>
+    <string name="referrals_create_failed">Couldn\'t create a referral code. Try again.</string>
+    <string name="referrals_refresh_failed_stale">Showing saved data — couldn\'t refresh.</string>
+    <string name="referrals_new_code">New code</string>
+    <string name="referrals_empty_title">No referral codes yet</string>
+    <string name="referrals_empty_body">Create a code to start sharing and earning.</string>
+    <string name="referrals_session_expired_title">Session expired</string>
+    <string name="referrals_session_expired_body">Please sign in again to view your referrals.</string>
+    <string name="referrals_stat_total">Total referrals</string>
+    <string name="referrals_stat_total_sub">%1$d confirmed, %2$d pending</string>
+    <string name="referrals_stat_earned">Total earned</string>
+    <string name="referrals_stat_pending">Pending</string>
+    <string name="referrals_stat_available">Available</string>
+    <string name="referrals_stat_paid">Paid</string>
+    <string name="referrals_code_active">Active</string>
+    <string name="referrals_code_inactive">Inactive</string>
+    <string name="referrals_code_count">%1$d referrals</string>
+
+    <!-- AND-265 Affiliates dashboard. -->
+    <string name="affiliates_title">Affiliates</string>
+    <string name="affiliates_error_generic">Couldn\'t load your affiliate dashboard.</string>
+    <string name="affiliates_share_chooser_title">Share your affiliate link</string>
+    <string name="affiliates_action_share">Share link</string>
+    <string name="affiliates_action_copy">Copy link</string>
+    <string name="affiliates_link_copied">Affiliate link copied</string>
+    <string name="affiliates_refresh_failed_stale">Showing saved data — couldn\'t refresh.</string>
+    <string name="affiliates_empty_title">No affiliate links yet</string>
+    <string name="affiliates_empty_body">Your affiliate links and earnings will appear here.</string>
+    <string name="affiliates_kpi_earned">Total earned</string>
+    <string name="affiliates_kpi_revenue">Total revenue</string>
+    <string name="affiliates_kpi_links">Links</string>
+    <string name="affiliates_kpi_clicks">Clicks</string>
+    <string name="affiliates_kpi_conversions">Conversions</string>
+    <string name="affiliates_chart_title">Commission earned per link</string>
+    <string name="affiliates_status_unknown">Unknown</string>
+    <string name="affiliates_link_metrics">%1$s clicks · %2$s conversions · %3$s commission · %4$s earned</string>
+
+    <!-- AND-266 Promo codes. -->
+    <string name="promo_title">Promo codes</string>
+    <string name="promo_create">Create code</string>
+    <string name="promo_deactivate">Deactivate</string>
+    <string name="promo_error_generic">Couldn\'t load your promo codes.</string>
+    <string name="promo_empty_title">No promo codes yet</string>
+    <string name="promo_empty_body">Create a code to offer a discount or free trial.</string>
+    <string name="promo_create_success">Promo code created</string>
+    <string name="promo_create_failed">Couldn\'t create the promo code. Try again.</string>
+    <string name="promo_deactivate_success">Promo code deactivated</string>
+    <string name="promo_deactivate_failed">Couldn\'t deactivate the code. Try again.</string>
+    <string name="promo_status_active">Active</string>
+    <string name="promo_status_inactive">Inactive</string>
+    <string name="promo_usage">Used: %1$s</string>
+    <string name="promo_expiry">Expires: %1$s</string>
+    <string name="promo_field_code">Code</string>
+    <string name="promo_field_discount_value">Discount value</string>
+    <string name="promo_field_trial_days">Trial days</string>
+    <string name="promo_field_max_uses">Max uses (0 = unlimited)</string>
+    <string name="promo_discount_percentage">Percentage</string>
+    <string name="promo_discount_fixed">Fixed amount</string>
+    <string name="promo_discount_trial">Free trial</string>
+    <string name="promo_err_code_required">Enter a code.</string>
+    <string name="promo_err_code_length">Code must be 3–30 characters.</string>
+    <string name="promo_err_discount_value">Enter a discount value greater than 0.</string>
+    <string name="promo_err_percent_range">Percentage must be between 1 and 100.</string>
+    <string name="promo_err_trial_days">Enter the number of trial days.</string>
 </resources>

@@ -171,6 +171,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         engagementDestinations(navController)
         // AND-258/259/260: creator payouts — setup (+ FLAGGED KYC gate) + paged history + detail.
         payoutsDestinations(navController)
+        // AND-264: referrals dashboard (code/link + stats + share/copy + create-code CTA).
+        referralsDestination(navController)
+        // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + links list).
+        affiliatesDestination(navController)
+        // AND-266: promo codes (list + create via plain CRUD; deactivate; usage/expiry/discount).
+        promoDestination(navController)
     }
 }
 

@@ -19,6 +19,9 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Loyalty
+import androidx.compose.material.icons.outlined.GroupAdd
+import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Paid
@@ -192,6 +195,27 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_engagement,
             icon = Icons.Outlined.Insights,
             route = MoreRoutes.ENGAGEMENT,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "referrals",
+            labelRes = R.string.more_entry_referrals,
+            icon = Icons.Outlined.GroupAdd,
+            route = MoreRoutes.REFERRALS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "affiliates",
+            labelRes = R.string.more_entry_affiliates,
+            icon = Icons.Outlined.Hub,
+            route = MoreRoutes.AFFILIATES,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "promo_codes",
+            labelRes = R.string.more_entry_promo_codes,
+            icon = Icons.Outlined.LocalOffer,
+            route = MoreRoutes.PROMO_CODES,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
