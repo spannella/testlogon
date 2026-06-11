@@ -48,9 +48,9 @@ class BroadcastViewerCountRepository @Inject constructor(
     private val api: BroadcastViewerCountApi,
     private val errorParser: ApiErrorParser,
 ) {
-    private val io: CoroutineDispatcher = Dispatchers.IO
-
-    suspend fun viewerCount(sessionId: String): ApiResult<Int> = withContext(io) {
+    // Retrofit suspend calls are already main-safe (OkHttp dispatches I/O), so no withContext(IO) hop —
+    // that hop made the VM's fire-and-forget seed poll non-deterministic under virtual time.
+    suspend fun viewerCount(sessionId: String): ApiResult<Int> =
         try {
             ApiResult.Success(api.viewerCount(sessionId).viewerCount)
         } catch (e: CancellationException) {
@@ -60,7 +60,6 @@ class BroadcastViewerCountRepository @Inject constructor(
         } catch (e: IOException) {
             ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
         }
-    }
 }
 
 @Module

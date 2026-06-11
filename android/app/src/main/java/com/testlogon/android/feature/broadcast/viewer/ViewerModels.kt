@@ -49,3 +49,16 @@ sealed interface ViewerUiState {
     data class Error(val retryable: Boolean) : ViewerUiState
     data object Offline : ViewerUiState
 }
+
+/**
+ * AND-286 §4 (FR-10) — one-shot viewer effects, consumed exactly once via a Channel-backed flow
+ * (NEVER a StateFlow / distinctUntilChanged). Transient notices that should not be replayed on
+ * recomposition or config change.
+ */
+sealed interface ViewerEffect {
+    /** A non-fatal notice (e.g. presence/count temporarily unavailable). */
+    data class Notice(val reason: ViewerNotice) : ViewerEffect
+}
+
+/** Typed, localizable reasons for a transient [ViewerEffect.Notice] (no hardcoded copy in the VM). */
+enum class ViewerNotice { PRESENCE_DEGRADED }

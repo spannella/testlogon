@@ -13,6 +13,12 @@ import com.testlogon.android.data.broadcast.BroadcastScheduledPage
 import com.testlogon.android.data.broadcast.BroadcastSession
 import com.testlogon.android.data.broadcast.BroadcastSessionPage
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
+import com.testlogon.android.data.broadcast.BroadcastViewerCountApi
+import com.testlogon.android.data.broadcast.BroadcastViewerCountRepository
+import com.testlogon.android.data.broadcast.ViewerCountDto
+import com.testlogon.android.data.broadcast.ViewerPresence
+import com.squareup.moshi.Moshi
+import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.feature.player.VideoPlayerController
 import com.testlogon.android.feature.player.VideoPlayerFactory
 import androidx.lifecycle.LifecycleOwner
@@ -77,7 +83,25 @@ class ViewerViewModelTest {
         }
     }
 
-    private fun viewModel(repo: BroadcastRepository): ViewerViewModel {
+    private val presence = ViewerPresence()
+
+    private val errorParser = ApiErrorParser(Moshi.Builder().build())
+
+    /** A real count repo over a fake API: returns [count] (or throws to simulate a failed poll). */
+    private fun countRepo(count: Int? = null): BroadcastViewerCountRepository {
+        val api = object : BroadcastViewerCountApi {
+            override suspend fun viewerCount(sessionId: String): ViewerCountDto {
+                if (count == null) throw java.io.IOException("count poll unavailable")
+                return ViewerCountDto(sessionId = sessionId, viewerCount = count)
+            }
+        }
+        return BroadcastViewerCountRepository(api, errorParser)
+    }
+
+    private fun viewModel(
+        repo: BroadcastRepository,
+        viewerCountRepo: BroadcastViewerCountRepository = countRepo(),
+    ): ViewerViewModel {
         val controller = mock(VideoPlayerController::class.java)
         val factory = mock(VideoPlayerFactory::class.java)
         `when`(factory.create()).thenReturn(controller)
@@ -86,6 +110,8 @@ class ViewerViewModelTest {
             repo = repo,
             playerFactory = factory,
             reporter = noopReporter,
+            presence = presence,
+            viewerCountRepo = viewerCountRepo,
             clock = fixedClock,
         )
     }
@@ -158,5 +184,44 @@ class ViewerViewModelTest {
         advanceUntilIdle()
         // expires at now+120s -> remaining 120s -> 75% = 90s.
         assertEquals(90_000L, vm.refreshDelayMs())
+    }
+
+    // --- AND-285/287: viewer-count presence surfacing (no second loop; observes ViewerPresence) ---
+
+    @Test
+    fun ready_seedsViewerCountFromPoll() = runTest {
+        val repo = FakeRepo(ApiResult.Success(session(BroadcastSessionStatus.LIVE)))
+        val vm = viewModel(repo, viewerCountRepo = countRepo(count = 7))
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state is ViewerUiState.Ready)
+        assertEquals(7, (state as ViewerUiState.Ready).viewerCount)
+    }
+
+    @Test
+    fun heartbeatPresenceCount_isMergedIntoReady() = runTest {
+        val repo = FakeRepo(ApiResult.Success(session(BroadcastSessionStatus.LIVE)))
+        // No poll seed (count poll fails); the count must arrive from the reused heartbeat presence.
+        val vm = viewModel(repo, viewerCountRepo = countRepo(count = null))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value is ViewerUiState.Ready)
+
+        // Simulate the heartbeat sink publishing the latest join/heartbeat viewer_count.
+        presence.update(42)
+        advanceUntilIdle()
+
+        assertEquals(42, (vm.uiState.value as ViewerUiState.Ready).viewerCount)
+    }
+
+    @Test
+    fun presenceCount_whileNotReady_doesNotCorruptState() = runTest {
+        val repo = FakeRepo(ApiResult.Success(session(BroadcastSessionStatus.STOPPED)))
+        val vm = viewModel(repo)
+        advanceUntilIdle()
+        // A stray presence update must not flip an Unavailable state into Ready.
+        presence.update(99)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value is ViewerUiState.Unavailable)
     }
 }

@@ -1,6 +1,7 @@
 package com.testlogon.android.data.analytics
 
 import com.testlogon.android.data.auth.AppScope
+import com.testlogon.android.data.broadcast.ViewerPresence
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
@@ -48,6 +49,7 @@ fun interface OfflineGate {
 class CoroutineHeartbeatSink @Inject constructor(
     private val api: PlaybackAnalyticsApi,
     private val offlineGate: OfflineGate,
+    private val presence: ViewerPresence,
     @AppScope private val scope: CoroutineScope,
 ) : HeartbeatSink {
 
@@ -100,12 +102,18 @@ class CoroutineHeartbeatSink @Inject constructor(
     private suspend fun processBroadcast(snapshot: PlaybackSnapshot, target: PlaybackTarget.Broadcast) {
         when (snapshot.phase) {
             HeartbeatPhase.START -> {
-                val join = send { api.viewerJoin(target.id) }
-                activeViewerId = join?.body()?.viewerId
+                // New watch session: clear any count carried over from a prior session (AND-285 FR-5).
+                presence.reset()
+                val join = send { api.viewerJoin(target.id) }?.body()
+                activeViewerId = join?.viewerId
+                // Surface the authoritative count from the join response (AND-285 FR-4) — no extra call.
+                join?.let { presence.update(it.viewerCount) }
             }
             HeartbeatPhase.HEARTBEAT -> {
                 val viewerId = activeViewerId ?: return
-                send { api.viewerHeartbeat(target.id, viewerId) }
+                val beat = send { api.viewerHeartbeat(target.id, viewerId) }?.body()
+                // Each heartbeat keeps presence alive AND refreshes the count (AND-285 FR-2/FR-4).
+                beat?.let { presence.update(it.viewerCount) }
             }
             HeartbeatPhase.STOP -> {
                 val viewerId = activeViewerId
@@ -113,6 +121,7 @@ class CoroutineHeartbeatSink @Inject constructor(
                     send { api.viewerLeave(target.id, viewerId) }
                 }
                 activeViewerId = null
+                presence.reset()
             }
         }
     }

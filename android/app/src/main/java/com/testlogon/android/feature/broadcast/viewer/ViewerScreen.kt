@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.broadcast.viewer
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -21,7 +23,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -98,6 +105,15 @@ fun ViewerScreen(
                         tint = Color.White,
                     )
                 }
+
+                // AND-285 FR-4 — live viewer-count badge, fed by the reused heartbeat presence count.
+                val count = (state as? ViewerUiState.Ready)?.viewerCount
+                if (count != null) {
+                    ViewerCountBadge(
+                        count = count,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                    )
+                }
             }
 
             val ready = state as? ViewerUiState.Ready
@@ -152,6 +168,31 @@ private fun UnavailablePanel(reason: PlaybackUnavailable, onBack: () -> Unit) {
     ) {
         Text(stringResource(message), style = MaterialTheme.typography.bodyLarge, color = Color.White)
         Button(onClick = onBack) { Text(stringResource(R.string.viewer_back_cd)) }
+    }
+}
+
+/**
+ * AND-285 FR-4 / AC-8 — live viewer-count badge overlaid on the player. Uses the existing
+ * `broadcast_viewer_count` plurals for a localized "N viewers" label + a polite live region so
+ * TalkBack announces count changes without stealing focus from the playback controls.
+ */
+@Composable
+fun ViewerCountBadge(count: Int, modifier: Modifier = Modifier) {
+    val label = pluralStringResource(R.plurals.broadcast_viewer_count, count, count)
+    Box(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .semantics {
+                contentDescription = label
+                liveRegion = LiveRegionMode.Polite
+            },
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White,
+        )
     }
 }
 

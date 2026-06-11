@@ -1,5 +1,6 @@
 package com.testlogon.android.data.analytics
 
+import com.testlogon.android.data.broadcast.ViewerPresence
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -79,7 +80,7 @@ class CoroutineHeartbeatSinkTest {
     fun content_start_recordsViewOnce() = runTest {
         val api = FakeApi(viewResponse = { Response.success(ViewRecordDto(1, true)) })
         val scope = sinkScope()
-        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, scope)
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, ViewerPresence(), scope)
         sink.enqueue(snapshot(PlaybackTarget.Content("vid"), HeartbeatPhase.START))
         sink.enqueue(snapshot(PlaybackTarget.Content("vid"), HeartbeatPhase.HEARTBEAT))
         sink.enqueue(snapshot(PlaybackTarget.Content("vid"), HeartbeatPhase.STOP))
@@ -92,7 +93,7 @@ class CoroutineHeartbeatSinkTest {
     fun broadcast_joinHeartbeatLeave_reusesViewerId() = runTest {
         val api = FakeApi(viewResponse = { Response.success(ViewRecordDto(0, false)) })
         val scope = sinkScope()
-        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, scope)
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, ViewerPresence(), scope)
         val target = PlaybackTarget.Broadcast("sess")
         sink.enqueue(snapshot(target, HeartbeatPhase.START))
         advanceUntilIdle()
@@ -108,10 +109,37 @@ class CoroutineHeartbeatSinkTest {
     }
 
     @Test
+    fun broadcast_publishesViewerCount_fromJoinAndHeartbeat_clearsOnLeave() = runTest {
+        // AND-285 FR-4: the reused presence loop surfaces the latest viewer_count to ViewerPresence.
+        val api = FakeApi(
+            viewResponse = { Response.success(ViewRecordDto(0, false)) },
+            joinResponse = { Response.success(ViewerJoinDto("vwr_1", "sess", 11)) },
+            heartbeatResponse = { Response.success(ViewerHeartbeatDto(true, 12)) },
+        )
+        val presence = ViewerPresence()
+        val scope = sinkScope()
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, presence, scope)
+        val target = PlaybackTarget.Broadcast("sess")
+
+        sink.enqueue(snapshot(target, HeartbeatPhase.START))
+        advanceUntilIdle()
+        assertEquals(11, presence.viewerCount.value) // join count
+
+        sink.enqueue(snapshot(target, HeartbeatPhase.HEARTBEAT))
+        advanceUntilIdle()
+        assertEquals(12, presence.viewerCount.value) // heartbeat count
+
+        sink.enqueue(snapshot(target, HeartbeatPhase.STOP))
+        advanceUntilIdle()
+        assertEquals(null, presence.viewerCount.value) // cleared on leave (no stale carry-over)
+        scope.cancel()
+    }
+
+    @Test
     fun offline_dropsHeartbeat_butNotStart() = runTest {
         val api = FakeApi(viewResponse = { Response.success(ViewRecordDto(1, true)) })
         val scope = sinkScope()
-        val sink = CoroutineHeartbeatSink(api, OfflineGate { true }, scope)
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { true }, ViewerPresence(), scope)
         sink.enqueue(snapshot(PlaybackTarget.Broadcast("sess"), HeartbeatPhase.HEARTBEAT))
         advanceUntilIdle()
         assertEquals(0, api.heartbeatCalls.get())
@@ -127,7 +155,7 @@ class CoroutineHeartbeatSinkTest {
             Response.error(422, emptyJson)
         })
         val scope = sinkScope()
-        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, scope)
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, ViewerPresence(), scope)
         sink.enqueue(snapshot(PlaybackTarget.Content("vid"), HeartbeatPhase.START))
         advanceUntilIdle()
         assertEquals(1, attempts.get()) // no retry on 4xx
@@ -143,7 +171,7 @@ class CoroutineHeartbeatSinkTest {
             Response.error(500, emptyJson)
         })
         val scope = sinkScope()
-        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, scope)
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, ViewerPresence(), scope)
         sink.enqueue(snapshot(PlaybackTarget.Content("vid"), HeartbeatPhase.START))
         advanceUntilIdle()
         // initial + MAX_RETRIES retries = 3 attempts.
@@ -160,7 +188,7 @@ class CoroutineHeartbeatSinkTest {
             throw IOException("boom")
         })
         val scope = sinkScope()
-        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, scope)
+        val sink = CoroutineHeartbeatSink(api, OfflineGate { false }, ViewerPresence(), scope)
         sink.enqueue(snapshot(PlaybackTarget.Content("vid"), HeartbeatPhase.START))
         advanceUntilIdle()
         assertEquals(1 + CoroutineHeartbeatSink.MAX_RETRIES, attempts.get())
