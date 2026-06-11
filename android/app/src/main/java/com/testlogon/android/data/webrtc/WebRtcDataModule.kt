@@ -37,6 +37,16 @@ object WebRtcApiModule {
     @Provides
     @Singleton
     fun provideTurnFetchConfig(): TurnFetchConfig = TurnFetchConfig()
+
+    /**
+     * AND-293 — video-renderer seam. Provides the FLAGGED [PlaceholderVideoRenderer] (paints a placeholder,
+     * never hosts a SurfaceViewRenderer / opens a camera) until the native WebRTC SDK decision is made.
+     * Provided (not @Binds) because [PlaceholderVideoRenderer] is a Kotlin object.
+     */
+    @Provides
+    @Singleton
+    fun provideVideoRenderer(): com.testlogon.android.core.webrtc.ui.VideoRenderer =
+        com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
 }
 
 @Module
@@ -56,6 +66,17 @@ abstract class WebRtcDataModule {
     @Binds
     @Singleton
     abstract fun bindIceServersProvider(impl: DefaultIceServersProvider): IceServersProvider
+
+    // ── Device enumeration (AND-292) ────────────────────────────────────────────────────────────
+
+    /**
+     * AND-292 — device-enumeration seam. Defaults to [StubMediaDeviceProvider] (EMPTY inventory — never
+     * touches Camera2/AudioManager / opens hardware) until the native WebRTC SDK decision is made. Even a
+     * real provider only *enumerates*; capture START stays behind the FLAGGED [BroadcastPublisher].
+     */
+    @Binds
+    @Singleton
+    abstract fun bindMediaDeviceProvider(impl: StubMediaDeviceProvider): MediaDeviceProvider
 
     // ── FLAGGED engine seams (native WebRTC SDK not configured; never start capture/peer/media) ──
 

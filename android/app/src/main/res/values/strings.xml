@@ -1761,4 +1761,23 @@
     <string name="golive_perm_settings">Open settings</string>
     <string name="golive_broadcasting_unavailable">Live broadcasting is not available yet.</string>
     <string name="golive_failed">Couldn\'t start your broadcast. Please try again.</string>
+
+    <!-- AND-292: local media capture + device selection controls. -->
+    <string name="capture_title">Camera &amp; microphone</string>
+    <string name="capture_camera_on">Turn camera on</string>
+    <string name="capture_camera_off">Turn camera off</string>
+    <string name="capture_mute">Mute microphone</string>
+    <string name="capture_unmute">Unmute microphone</string>
+    <string name="capture_switch_camera">Switch camera</string>
+    <string name="capture_res_480">480p</string>
+    <string name="capture_res_720">720p</string>
+    <string name="capture_res_1080">1080p</string>
+    <string name="capture_start">Start capture</string>
+    <string name="capture_unavailable">Camera capture is not available yet.</string>
+    <string name="capture_failed">Couldn\'t start capture. Please try again.</string>
+
+    <!-- AND-293: video renderer placeholder + a11y descriptions. -->
+    <string name="video_local_preview">Local camera preview</string>
+    <string name="video_remote_feed">Remote video</string>
+    <string name="video_preview_unavailable">Video preview unavailable — broadcasting not configured</string>
 </resources>
