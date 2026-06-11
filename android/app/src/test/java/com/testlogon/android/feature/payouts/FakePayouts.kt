@@ -2,9 +2,13 @@ package com.testlogon.android.feature.payouts
 
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.payouts.BulkPayoutsRepository
 import com.testlogon.android.data.payouts.KycRepository
 import com.testlogon.android.data.payouts.KycTier
 import com.testlogon.android.data.payouts.Payout
+import com.testlogon.android.data.payouts.PayoutBatch
+import com.testlogon.android.data.payouts.PayoutBatchItem
+import com.testlogon.android.data.payouts.PayoutBatchStatus
 import com.testlogon.android.data.payouts.PayoutActionResult
 import com.testlogon.android.data.payouts.PayoutBalance
 import com.testlogon.android.data.payouts.PayoutCreateResult
@@ -88,6 +92,35 @@ class FakePayoutSetupRepository : PayoutSetupRepository {
     }
 }
 
+/**
+ * AND-261/263 — a [BulkPayoutsRepository] double. Programmable list/detail results + call counts so
+ * the VM stale/retry/empty/error transitions are assertable. The builder is named [sampleBatch] (NOT
+ * after an interface member, per the gotcha).
+ */
+class FakeBulkPayoutsRepository : BulkPayoutsRepository {
+
+    var batchesResult: ApiResult<List<PayoutBatch>> = ApiResult.Success(listOf(sampleBatch()))
+    var batchResult: ApiResult<PayoutBatch> = ApiResult.Success(sampleBatch())
+
+    var getBatchesCalls = 0
+        private set
+    var getBatchCalls = 0
+        private set
+    var lastBatchId: String? = null
+        private set
+
+    override suspend fun getBatches(): ApiResult<List<PayoutBatch>> {
+        getBatchesCalls++
+        return batchesResult
+    }
+
+    override suspend fun getBatch(batchId: String): ApiResult<PayoutBatch> {
+        getBatchCalls++
+        lastBatchId = batchId
+        return batchResult
+    }
+}
+
 class FakeKycRepository : KycRepository {
     var loadResult: ApiResult<TierStatus> = ApiResult.Success(sampleTierStatus(eligible = true))
     var evaluateResult: ApiResult<TierStatus> = ApiResult.Success(sampleTierStatus(eligible = true))
@@ -116,6 +149,31 @@ fun sampleBalance(available: Long = 50000, min: Long = 1000): PayoutBalance = Pa
     holdCents = 0,
     currency = "USD",
     minimumPayoutCents = min,
+)
+
+fun sampleBatch(
+    id: String = "bat_1",
+    status: PayoutBatchStatus = PayoutBatchStatus.COMPLETED,
+    items: List<PayoutBatchItem> = listOf(
+        PayoutBatchItem(
+            refId = "po_1",
+            amount = com.testlogon.android.data.payouts.PayoutMoney(4500, "USD"),
+            status = PayoutStatus.COMPLETED,
+            recipient = "creator_88",
+            reason = "",
+        ),
+    ),
+): PayoutBatch = PayoutBatch(
+    id = id,
+    kind = "payout",
+    status = status,
+    itemCount = items.size,
+    total = com.testlogon.android.data.payouts.PayoutMoney(5_764_500, "USD"),
+    successCount = 124,
+    failureCount = 4,
+    createdAtEpochSeconds = 1_748_729_400L,
+    createdBy = "admin_42",
+    items = items,
 )
 
 fun sampleTierStatus(

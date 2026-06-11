@@ -97,6 +97,9 @@ object MoreRoutes {
     // AND-259: the payout setup + KYC gate (request a payout; FLAGGED identity-verification gate).
     const val PAYOUT_SETUP = PayoutSetupDest.ROUTE
 
+    // AND-261: the READ-ONLY bulk/batch payout tools (admin batch list + detail; no execute action).
+    const val BULK_PAYOUTS = BulkPayoutsDest.ROUTE
+
     // AND-254: the creator engagement-rate analytics (server rate + trend chart). Base route (no arg);
     // the registered composable route carries an optional `?period=` deep-link arg.
     const val ENGAGEMENT = EngagementDest.ROUTE_BASE
@@ -145,6 +148,7 @@ object MoreRoutes {
             ENGAGEMENT,
             PAYOUTS,
             PAYOUT_SETUP,
+            BULK_PAYOUTS,
             INVOICES,
             REFUNDS,
             DISPUTES,

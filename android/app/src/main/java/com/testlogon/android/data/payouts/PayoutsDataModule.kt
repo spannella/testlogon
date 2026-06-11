@@ -22,6 +22,12 @@ object PayoutsApiModule {
     @Singleton
     fun provideKycApi(retrofit: Retrofit): KycApi =
         retrofit.create(KycApi::class.java)
+
+    // AND-261 — the READ-ONLY bulk/batch payout API on the same shared (authenticated) Retrofit.
+    @Provides
+    @Singleton
+    fun provideBulkPayoutsApi(retrofit: Retrofit): BulkPayoutsApi =
+        retrofit.create(BulkPayoutsApi::class.java)
 }
 
 /**
@@ -51,4 +57,9 @@ abstract class PayoutsDataModule {
     @Binds
     @Singleton
     abstract fun bindKycVerifier(impl: StubKycVerifier): KycVerifier
+
+    // AND-261 — READ-ONLY bulk-payout repository (no mutating endpoints bound).
+    @Binds
+    @Singleton
+    abstract fun bindBulkPayoutsRepository(impl: BulkPayoutsRepositoryImpl): BulkPayoutsRepository
 }

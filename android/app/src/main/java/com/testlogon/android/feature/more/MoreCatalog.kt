@@ -181,6 +181,13 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "bulk_payouts",
+            labelRes = R.string.more_entry_bulk_payouts,
+            icon = Icons.Outlined.AccountBalance,
+            route = MoreRoutes.BULK_PAYOUTS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "engagement",
             labelRes = R.string.more_entry_engagement,
             icon = Icons.Outlined.Insights,

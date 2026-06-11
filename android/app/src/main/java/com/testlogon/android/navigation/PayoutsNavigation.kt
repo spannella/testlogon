@@ -6,6 +6,9 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.payouts.BulkPayoutDetailRoute
+import com.testlogon.android.feature.payouts.BulkPayoutDetailViewModel
+import com.testlogon.android.feature.payouts.BulkPayoutsListRoute
 import com.testlogon.android.feature.payouts.PayoutDetailRoute
 import com.testlogon.android.feature.payouts.PayoutDetailViewModel
 import com.testlogon.android.feature.payouts.PayoutHistoryRoute
@@ -27,6 +30,19 @@ data object PayoutDetailDest {
 /** AND-259 — the payout setup + KYC gate route. */
 data object PayoutSetupDest {
     const val ROUTE = "payouts/setup"
+}
+
+/** AND-261 — the READ-ONLY bulk/batch payout list route. */
+data object BulkPayoutsDest {
+    const val ROUTE = "payouts/bulk"
+}
+
+/** AND-261 — the READ-ONLY bulk/batch payout detail route; arg is the STRING batch_id. */
+data object BulkPayoutDetailDest {
+    const val ARG_BATCH_ID = BulkPayoutDetailViewModel.ARG_BATCH_ID
+    const val ROUTE = "payouts/bulk/{$ARG_BATCH_ID}"
+
+    fun build(batchId: String): String = "payouts/bulk/${Uri.encode(batchId)}"
 }
 
 /**
@@ -61,5 +77,22 @@ fun NavGraphBuilder.payoutsDestinations(navController: NavHostController) {
             onNavigateToKyc = { /* no-op until the KYC verification route lands */ },
             onBack = { navController.popBackStack() },
         )
+    }
+    // AND-261 — READ-ONLY bulk/batch payout list + detail (no mutating affordances).
+    composable(BulkPayoutsDest.ROUTE) {
+        BulkPayoutsListRoute(
+            onBatchClick = { batchId ->
+                navController.navigate(BulkPayoutDetailDest.build(batchId)) { launchSingleTop = true }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    composable(
+        route = BulkPayoutDetailDest.ROUTE,
+        arguments = listOf(
+            navArgument(BulkPayoutDetailDest.ARG_BATCH_ID) { type = NavType.StringType },
+        ),
+    ) {
+        BulkPayoutDetailRoute(onBack = { navController.popBackStack() })
     }
 }
