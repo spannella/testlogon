@@ -5,4 +5,8 @@
     <cache-path
         name="attachments"
         path="attachments/" />
+    <!-- AND-276: exported .ics documents shared via ACTION_SEND (text/calendar). -->
+    <cache-path
+        name="ics"
+        path="ics/" />
 </paths>

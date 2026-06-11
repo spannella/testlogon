@@ -37,6 +37,11 @@ data class EventCalendarInsert(
     val beginMillis: Long?,
     val endMillis: Long?,
     val allDay: Boolean,
+    /**
+     * AND-276 — optional device-calendar reminder lead in minutes. When non-null, the inserted event is
+     * prefilled with a CalendarContract reminder this many minutes before start (0 = at start).
+     */
+    val reminderMinutes: Int? = null,
 )
 
 /**
@@ -72,9 +77,34 @@ class EventIntents @Inject constructor() {
                 putExtra(CalendarContract.EXTRA_EVENT_END_TIME, it)
             }
             if (insert.allDay) putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, true)
+            // AND-276: prefill a device-calendar reminder (minutes before start; 0 = at start).
+            insert.reminderMinutes?.let {
+                putExtra(CalendarContract.Reminders.MINUTES, it)
+                putExtra(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
+            }
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return launch(context, intent)
+    }
+
+    /**
+     * AND-276 — shares an exported `.ics` document (a FileProvider content URI) via the system chooser
+     * (ACTION_SEND, MIME text/calendar) with a transient read grant. Returns false when no app can
+     * handle it so the caller can show a Snackbar instead of crashing.
+     */
+    fun shareIcs(context: Context, uri: android.net.Uri, subject: String?): Boolean {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/calendar"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            subject?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(send, context.getString(R.string.calendar_share_chooser_title))
+            .apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        return launch(context, chooser)
     }
 
     private fun launch(context: Context, intent: Intent): Boolean = try {
