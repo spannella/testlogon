@@ -1711,4 +1711,46 @@
     <string name="live_chat_jump_latest">Jump to latest</string>
     <string name="live_chat_error_generic">Couldn\'t load chat.</string>
     <string name="live_chat_react_cd">React to message</string>
+
+    <!-- Broadcast tips + goals (AND-282) -->
+    <string name="bcast_tip_action">Tip</string>
+    <string name="bcast_tip_sheet_title">Send a tip</string>
+    <string name="bcast_tip_custom_amount">Custom amount</string>
+    <string name="bcast_tip_note">Note (optional)</string>
+    <string name="bcast_tip_send">Send tip</string>
+    <string name="bcast_tip_cancel">Cancel</string>
+    <string name="bcast_tip_dismiss">Dismiss</string>
+    <string name="bcast_tip_sent">Tip sent</string>
+    <string name="bcast_tip_failed">Couldn\'t send tip — try again</string>
+    <string name="bcast_tip_payments_unavailable">Payments are unavailable right now.</string>
+    <string name="bcast_tips_summary">%1$s · %2$d tips</string>
+    <string name="bcast_tips_summary_empty">No tips yet</string>
+    <string name="bcast_goal_percent">%1$d%%</string>
+    <string name="bcast_goal_reached">Reached!</string>
+    <string name="bcast_goal_amounts">%1$s of %2$s</string>
+    <string name="bcast_goal_state_cd">%1$s goal, %2$d percent, %3$s of %4$s</string>
+
+    <!-- Broadcast products shelf (AND-283) -->
+    <string name="shelf_title">Shop</string>
+    <string name="shelf_show">Show products</string>
+    <string name="shelf_hide">Hide products</string>
+    <string name="shelf_buy">Buy</string>
+    <string name="shelf_empty">No products</string>
+    <string name="shelf_error">Couldn\'t load products.</string>
+    <string name="shelf_retry">Retry</string>
+    <string name="shelf_card_cd">%1$s, %2$s</string>
+
+    <!-- Broadcast live Q&amp;A (AND-284) -->
+    <string name="qa_title">Q&amp;A</string>
+    <string name="qa_loading">Loading questions…</string>
+    <string name="qa_empty">No questions yet — be the first to ask</string>
+    <string name="qa_disabled">Q&amp;A is currently off</string>
+    <string name="qa_error_generic">Couldn\'t load questions.</string>
+    <string name="qa_retry">Retry</string>
+    <string name="qa_ask_hint">Ask a question…</string>
+    <string name="qa_ask_submit">Ask</string>
+    <string name="qa_char_counter">%1$d/%2$d</string>
+    <string name="qa_featured_label">Featured</string>
+    <string name="qa_upvote_cd">Upvote, %1$d votes</string>
+    <string name="qa_upvoted_cd">Remove upvote, %1$d votes</string>
 </resources>

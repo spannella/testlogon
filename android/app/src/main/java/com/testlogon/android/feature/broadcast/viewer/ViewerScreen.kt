@@ -29,7 +29,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
+import com.testlogon.android.feature.broadcast.qna.LiveQaPanel
+import com.testlogon.android.feature.broadcast.shelf.ProductsShelfPanel
+import com.testlogon.android.feature.broadcast.tips.TipsGoalsPanel
 import com.testlogon.android.feature.player.VideoPlayer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.delay
 
 /**
@@ -42,6 +47,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun ViewerScreen(
     onBack: () -> Unit,
+    onBuyProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
     viewModel: ViewerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -63,7 +69,7 @@ fun ViewerScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -101,9 +107,28 @@ fun ViewerScreen(
                 }
             }
 
-            // AND-281 — the live chat panel for the same session, beneath the player (portrait).
             if (ready != null) {
+                // AND-283 — the products shelf overlay (hidden by default; toggled on the chrome).
+                ProductsShelfPanel(
+                    sessionId = viewModel.sessionId,
+                    onBuy = onBuyProduct,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+
+                // AND-282 — tips summary + goals + a tip composer for the same session.
+                TipsGoalsPanel(
+                    sessionId = viewModel.sessionId,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+
+                // AND-281 — the live chat panel for the same session, beneath the player (portrait).
                 LiveChatPanel(
+                    sessionId = viewModel.sessionId,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+
+                // AND-284 — the live Q&A panel (separate pollable surface; not on the chat SSE).
+                LiveQaPanel(
                     sessionId = viewModel.sessionId,
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 )

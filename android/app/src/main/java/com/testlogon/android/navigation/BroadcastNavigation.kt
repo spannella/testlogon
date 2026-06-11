@@ -38,6 +38,12 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             navArgument(ViewerViewModel.ARG_SESSION_ID) { type = NavType.StringType },
         ),
     ) {
-        ViewerScreen(onBack = { navController.popBackStack() })
+        ViewerScreen(
+            onBack = { navController.popBackStack() },
+            // AND-283 — Buy from the products shelf routes to the AND-206 product detail.
+            onBuyProduct = { categoryId, itemId ->
+                navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
+            },
+        )
     }
 }
