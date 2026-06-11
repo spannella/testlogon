@@ -475,6 +475,56 @@
     <string name="event_detail_no_calendar_app">No calendar app available</string>
     <string name="calendar_share_chooser_title">Share event</string>
 
+    <!-- AND-274: content calendar (read-only scheduled-content schedule view) -->
+    <string name="more_entry_content_calendar">Content calendar</string>
+    <string name="content_calendar_title">Content calendar</string>
+    <string name="content_calendar_empty_title">No scheduled content</string>
+    <string name="content_calendar_empty_body">No scheduled content for this period.</string>
+    <string name="content_calendar_type_post">Post</string>
+    <string name="content_calendar_type_broadcast">Broadcast</string>
+    <string name="content_calendar_type_vod">Video</string>
+    <string name="content_calendar_type_unknown">Content</string>
+    <string name="content_calendar_status_scheduled">Scheduled</string>
+    <string name="content_calendar_status_overdue">Overdue</string>
+    <string name="content_calendar_status_cancelled">Cancelled</string>
+    <string name="content_calendar_status_unknown">Unknown</string>
+
+    <!-- AND-275: scheduler (scheduled-actions list + create/edit) -->
+    <string name="more_entry_scheduler">Scheduler</string>
+    <string name="scheduler_title">Scheduler</string>
+    <string name="scheduler_create">Schedule</string>
+    <string name="scheduler_create_title">Schedule content</string>
+    <string name="scheduler_edit_title">Reschedule</string>
+    <string name="scheduler_cancel">Cancel</string>
+    <string name="scheduler_submit">Save</string>
+    <string name="scheduler_next">Next</string>
+    <string name="action_done">Done</string>
+    <string name="scheduler_empty_title">Nothing scheduled</string>
+    <string name="scheduler_empty_body">Tap + to schedule content for later.</string>
+    <string name="scheduler_field_type">Action type</string>
+    <string name="scheduler_field_title">Title</string>
+    <string name="scheduler_field_description">Description</string>
+    <string name="scheduler_pick_datetime">Pick date and time</string>
+
+    <!-- AND-273: Google Calendar integration (connect / link status) -->
+    <string name="more_entry_google_calendar">Google Calendar</string>
+    <string name="gcal_title">Google Calendar</string>
+    <string name="gcal_connect">Connect Google Calendar</string>
+    <string name="gcal_connecting">Connecting to Google Calendar</string>
+    <string name="gcal_disconnect">Disconnect</string>
+    <string name="gcal_disconnect_title">Disconnect Google Calendar?</string>
+    <string name="gcal_disconnect_body">Your external calendars will no longer be synced.</string>
+    <string name="gcal_disconnected_label">Not connected</string>
+    <string name="gcal_disconnected_body">Connect your Google Calendar to sync external calendars.</string>
+    <string name="gcal_connected_label">Connected</string>
+    <string name="gcal_reauth_required">Reconnection required. Please connect again.</string>
+    <string name="gcal_run_sync">Run sync</string>
+    <string name="gcal_no_calendars">No external calendars found.</string>
+    <string name="gcal_calendars_error">Couldn\'t load external calendars.</string>
+    <string name="gcal_badge_primary">Primary</string>
+    <string name="gcal_map_to">Map to calendar</string>
+    <string name="gcal_unmapped">Unmapped</string>
+
     <!-- AND-139: tips / paid-unlockable -->
     <string name="paid_unlock">Unlock</string>
     <string name="paid_unlock_cd">Unlock for %1$s</string>

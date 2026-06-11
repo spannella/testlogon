@@ -296,6 +296,33 @@
                     android:host="payments" />
             </intent-filter>
 
+            <!-- AND-273: Google Calendar OAuth return App Link on the production host (HTTPS,
+                 auto-verified). The backend 302s the browser back here after consent. Requires
+                 /.well-known/assetlinks.json with the release cert fingerprint (web/ops). The PRIMARY
+                 return path is Custom-Tab-return -> refreshStatus; this deep link is the optional path
+                 used only if the backend registers it as the redirect URI. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/app/calendar/integrations/google/callback" />
+            </intent-filter>
+
+            <!-- AND-273: custom-scheme Google Calendar OAuth-return fallback for the plaintext dev host
+                 that cannot serve assetlinks (NOT auto-verified).
+                 testlogon://calendar-integrations/google/callback?code=&state=&error= -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="calendar-integrations" />
+            </intent-filter>
+
             <!-- AND-230: US-bank micro-deposit verification deep link (from a "verify your bank account"
                  email/notification). com.testlogon.android://billing/us-bank/verify?sid={setup_intent_id} -->
             <intent-filter>

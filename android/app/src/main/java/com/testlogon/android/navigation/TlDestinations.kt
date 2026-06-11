@@ -293,6 +293,46 @@ data object EventDetailDest {
 }
 
 /**
+ * Content calendar (AND-274), `content_calendar`. A read-only scheduled-content schedule/agenda view,
+ * reached from the More hub. Row taps hand off to the AND-275 scheduler edit route.
+ */
+data object ContentCalendarDest {
+    const val ROUTE = "content_calendar"
+}
+
+/**
+ * Scheduler list (AND-275), `scheduler`. The list of scheduled actions with create (FAB) + cancel +
+ * reschedule (edit). Reached from the More hub and from the content calendar.
+ */
+data object SchedulerListDest {
+    const val ROUTE = "scheduler"
+}
+
+/**
+ * Scheduler create/edit sheet (AND-275),
+ * `scheduler/edit?actionId={actionId}&scheduledAt={epochSec}&actionType={type}`. All args optional:
+ * actionId present -> Edit mode; scheduledAt/actionType seed Create mode.
+ */
+data object SchedulerEditDest {
+    const val ROUTE = "scheduler/edit?actionId={actionId}&scheduledAt={scheduledAt}&actionType={actionType}"
+    const val ARG_ACTION_ID = "actionId"
+    const val ARG_SCHEDULED_AT = "scheduledAt"
+    const val ARG_ACTION_TYPE = "actionType"
+
+    fun create(): String = "scheduler/edit"
+
+    fun edit(actionId: String): String = "scheduler/edit?actionId=${Uri.encode(actionId)}"
+}
+
+/**
+ * Google Calendar integration (AND-273), `calendar/integrations/google`. Connect/link-status screen +
+ * the backend-mediated OAuth Custom-Tab handoff. Reached from the More hub.
+ */
+data object GoogleCalendarDest {
+    const val ROUTE = "calendar/integrations/google"
+}
+
+/**
  * Read-only post detail by id (AND-100), `post/{postId}`.
  *
  * Reachable in-app from the feed and by deep link (`testlogon://post/{postId}`, the production HTTPS

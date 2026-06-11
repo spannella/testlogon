@@ -54,6 +54,15 @@ object MoreRoutes {
     // AND-271: the calendar Month/Week/Agenda views.
     const val CALENDAR = CalendarDest.ROUTE
 
+    // AND-273: Google Calendar integration (connect / link status; backend OAuth Custom-Tab handoff).
+    const val GOOGLE_CALENDAR = GoogleCalendarDest.ROUTE
+
+    // AND-274: the content calendar (read-only scheduled-content schedule view).
+    const val CONTENT_CALENDAR = ContentCalendarDest.ROUTE
+
+    // AND-275: the scheduler (scheduled-actions list + create/edit).
+    const val SCHEDULER = SchedulerListDest.ROUTE
+
     // AND-201: the published video gallery browse grid.
     val GALLERY: String get() = GalleryDest.ROUTE
 
@@ -154,6 +163,9 @@ object MoreRoutes {
             VOD_CATALOG,
             CLIPS,
             CALENDAR,
+            GOOGLE_CALENDAR,
+            CONTENT_CALENDAR,
+            SCHEDULER,
             GALLERY,
             CATALOG,
             CART,

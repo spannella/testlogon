@@ -20,6 +20,7 @@ import androidx.navigation.NavHostController
 import com.testlogon.android.core.network.AppThemeMode
 import com.testlogon.android.core.network.ThemePreferencesStore
 import com.testlogon.android.core.ui.theme.TestLogonTheme
+import com.testlogon.android.data.gcal.GoogleCalendarReturnHandler
 import com.testlogon.android.data.payments.PaymentReturnDispatcher
 import com.testlogon.android.data.payments.PaymentReturnHandler
 import kotlinx.coroutines.CoroutineScope
@@ -60,6 +61,12 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var paymentReturnDispatcher: PaymentReturnDispatcher
 
+    // AND-273: optional custom-scheme Google Calendar OAuth return handler (mirrors the AND-231 pattern).
+    // The primary return path is Custom-Tab-return -> refreshStatus on the connect screen; this handles a
+    // deep-link return if the backend registers the custom scheme as the redirect URI.
+    @Inject
+    lateinit var googleCalendarReturnHandler: GoogleCalendarReturnHandler
+
     private val returnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +78,8 @@ class MainActivity : ComponentActivity() {
         // AND-231: a cold-start payment return (provider -> browser -> app). Dispatched to the provider
         // sub-flow; generic terminal routing is handled there once the graph is ready.
         handlePaymentReturn(intent)
+        // AND-273: a cold-start Google Calendar OAuth return (optional custom-scheme deep link).
+        handleGoogleCalendarReturn(intent)
         setContent {
             // AND-081: resolve the persisted appearance preference into TestLogonTheme inputs so the
             // whole app (incl. system bars) re-themes immediately when the user changes it.
@@ -118,6 +127,8 @@ class MainActivity : ComponentActivity() {
         routePendingNotificationDeepLink()
         // AND-231: a warm payment return arrives here when the Custom Tab bounces back into the task.
         handlePaymentReturn(intent)
+        // AND-273: a warm Google Calendar OAuth return (optional custom-scheme deep link).
+        handleGoogleCalendarReturn(intent)
         if (intent.data != null) {
             navController?.handleDeepLink(intent)
         }
@@ -135,6 +146,16 @@ class MainActivity : ComponentActivity() {
         returnScope.launch {
             paymentReturnHandler.handle(url) { parsed -> paymentReturnDispatcher.emit(parsed) }
         }
+    }
+
+    /**
+     * AND-273 — feeds a VIEW intent's data URL to the [GoogleCalendarReturnHandler]. Returns true (and
+     * stops) only for a recognized Google-Calendar return URL; otherwise other deep-link handlers run.
+     * android.net.Uri parsing happens only here — the pure parser uses java.net.URI.
+     */
+    private fun handleGoogleCalendarReturn(intent: Intent?): Boolean {
+        val url = intent?.data?.toString() ?: return false
+        return googleCalendarReturnHandler.handle(url)
     }
 
     override fun onDestroy() {

@@ -183,6 +183,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         calendarDestination(navController)
         // AND-272: event detail + public event (also registered unauthenticated for shared links).
         eventDetailDestination(navController)
+        // AND-273: Google Calendar integration (backend OAuth redirect; Custom-Tab connect/link status).
+        googleCalendarDestination(navController)
+        // AND-274: content calendar (read-only scheduled-content schedule/agenda view).
+        contentCalendarDestination(navController)
+        // AND-275: scheduler (list + create/edit sheet for scheduled actions).
+        schedulerDestinations(navController)
     }
 }
 

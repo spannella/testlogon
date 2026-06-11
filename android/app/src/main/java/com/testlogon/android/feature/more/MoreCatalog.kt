@@ -7,6 +7,9 @@ import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.EditCalendar
+import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -126,6 +129,27 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_calendar,
             icon = Icons.Outlined.CalendarMonth,
             route = MoreRoutes.CALENDAR,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "content_calendar",
+            labelRes = R.string.more_entry_content_calendar,
+            icon = Icons.Outlined.EventNote,
+            route = MoreRoutes.CONTENT_CALENDAR,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "scheduler",
+            labelRes = R.string.more_entry_scheduler,
+            icon = Icons.Outlined.Schedule,
+            route = MoreRoutes.SCHEDULER,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "google_calendar",
+            labelRes = R.string.more_entry_google_calendar,
+            icon = Icons.Outlined.EditCalendar,
+            route = MoreRoutes.GOOGLE_CALENDAR,
             section = MoreSection.APP,
         ),
         MoreEntry(
