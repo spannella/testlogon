@@ -79,7 +79,52 @@ class InCallViewModelTest {
     )
 
     private fun vm(callManager: CallManager): InCallViewModel =
-        InCallViewModel(callManager, CallStatsSampler(), SavedStateHandle())
+        InCallViewModel(callManager, CallStatsSampler(), recordingController(), SavedStateHandle())
+
+    /**
+     * AND-302 — a [RecordingController] backed by a no-op repo + the FLAGGED stub capturer + an in-memory
+     * pending DAO. The VM tests only need it constructible (the recording sub-state stays Idle); the
+     * recording behaviour itself is covered by RecordingStateMachineTest / RecordingRepositoryContractTest.
+     */
+    private fun recordingController(): com.testlogon.android.feature.call.recording.RecordingController =
+        com.testlogon.android.feature.call.recording.RecordingController(
+            repository = object : com.testlogon.android.data.call.recording.RecordingRepository {
+                override suspend fun request(callId: String) =
+                    ApiResult.Success(
+                        com.testlogon.android.data.call.recording.RecordingRequest("r1", "requested", 0),
+                    )
+                override suspend fun consent(callId: String) =
+                    ApiResult.Success(
+                        com.testlogon.android.data.call.recording.RecordingConsent("r1", "granted", 1),
+                    )
+                override suspend fun decline(callId: String) = ApiResult.Success(true)
+                override suspend fun presign(callId: String, contentType: String, fileSizeBytes: Long) =
+                    ApiResult.Success(
+                        com.testlogon.android.data.call.recording.RecordingPresign("http://x", "r1", "k", 0),
+                    )
+                override suspend fun complete(callId: String, recordingId: String, durationSeconds: Float) =
+                    ApiResult.Success(
+                        com.testlogon.android.data.call.recording.RecordingComplete("r1", "ready", null, null),
+                    )
+            },
+            capturer = com.testlogon.android.data.call.recording.StubRecordingCapturer(),
+            pendingDao = FakePendingRecordingDao(),
+            storageClient = com.testlogon.android.data.upload.StorageUploadClient(okhttp3.OkHttpClient()),
+            clock = Clock { 0L },
+            scope = CoroutineScope(UnconfinedTestDispatcher()),
+        )
+
+    private class FakePendingRecordingDao :
+        com.testlogon.android.core.data.call.PendingRecordingDao {
+        private val rows = mutableMapOf<String, com.testlogon.android.core.data.call.PendingRecordingEntity>()
+        override suspend fun upsert(entity: com.testlogon.android.core.data.call.PendingRecordingEntity) {
+            rows[entity.recordingId] = entity
+        }
+        override suspend fun getAll() = rows.values.toList()
+        override fun observe() = kotlinx.coroutines.flow.flowOf(rows.values.toList())
+        override suspend fun get(recordingId: String) = rows[recordingId]
+        override suspend fun delete(recordingId: String) { rows.remove(recordingId) }
+    }
 
     @Test
     fun connectedVideo_mapsLifecycleAndIsVideo_withDuration() = runTest {

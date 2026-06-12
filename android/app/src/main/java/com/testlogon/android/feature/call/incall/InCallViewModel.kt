@@ -10,6 +10,8 @@ import com.testlogon.android.feature.call.domain.CallEndReason
 import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallPhase
 import com.testlogon.android.feature.call.domain.CallSessionState
+import com.testlogon.android.feature.call.recording.RecordingController
+import com.testlogon.android.feature.call.recording.RecordingUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,8 +46,16 @@ import javax.inject.Inject
 class InCallViewModel @Inject constructor(
     private val callManager: CallManager,
     private val statsSampler: CallStatsSampler,
+    private val recordingController: RecordingController,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
+
+    /**
+     * AND-302 — the call-recording consent + upload sub-state (additive to the call lifecycle). The screen
+     * mounts the Record control / consent dialog / upload status off this. Capture is FLAGGED, so this stays
+     * Idle in production until consent succeeds; on Granted the controller surfaces "recording unavailable".
+     */
+    val recordingState: StateFlow<RecordingUiState> = recordingController.state
 
     /** Local, optimistic UI-control state (not part of the domain call state). */
     private data class LocalUi(
@@ -155,6 +165,35 @@ class InCallViewModel @Inject constructor(
                 callManager.endCall(CallEndReason.HANGUP)
             }
         }
+    }
+
+    // ─── AND-302: call-recording sub-state actions (delegate to RecordingController) ───────────────
+
+    /** Requester taps Record (after RECORD_AUDIO is granted, handled in the Route). No-op if no active call. */
+    fun onRecordRequest() {
+        val callId = callManager.state.value.call?.callId ?: return
+        recordingController.request(callId)
+    }
+
+    /** Callee accepts the consent prompt -> POST consent (the server consent GATE). */
+    fun onRecordConsent() {
+        val callId = callManager.state.value.call?.callId ?: return
+        recordingController.consent(callId)
+    }
+
+    /** Either side declines the recording. */
+    fun onRecordDecline() {
+        val callId = callManager.state.value.call?.callId ?: return
+        recordingController.decline(callId)
+    }
+
+    /** Cancel an in-flight/queued recording upload. */
+    fun onRecordCancel() = recordingController.cancel()
+
+    /** Retry a failed recording upload (re-runs presign -> PUT -> complete from the durable queue). */
+    fun onRecordRetry() {
+        val callId = callManager.state.value.call?.callId ?: return
+        recordingController.retry(callId)
     }
 
     private fun isVideoCall(): Boolean = callManager.state.value.call?.mode == CallMode.VIDEO

@@ -6,6 +6,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.cache.CacheTables
+import com.testlogon.android.core.data.call.PendingRecordingDao
+import com.testlogon.android.core.data.call.PendingRecordingEntity
 import com.testlogon.android.core.data.db.sample.CachedSampleEntity
 import com.testlogon.android.core.data.db.sample.SampleDao
 import com.testlogon.android.core.data.feed.BookmarkStateDao
@@ -40,6 +42,8 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
  * - v4 — AND-176/AND-177: adds the bookmark_state table (feed bookmark toggle) and the entitlement
  *        table (paywall unlock entitlements, keyed by user_sub+post_id).
  * - v5 — AND-195: adds the vod_download table (watermarked VOD downloads, keyed by video_id).
+ * - v6 — AND-302: adds the pending_recording table (durable call-recording upload queue, keyed by
+ *        recording_id).
  */
 @Database(
     entities = [
@@ -48,8 +52,9 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
         BookmarkStateEntity::class,
         EntitlementEntity::class,
         DownloadEntity::class,
+        PendingRecordingEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class TestLogonDatabase : RoomDatabase() {
@@ -69,6 +74,9 @@ abstract class TestLogonDatabase : RoomDatabase() {
 
     /** AND-195 — watermarked VOD downloads (per video_id). */
     abstract fun downloadDao(): DownloadDao
+
+    /** AND-302 — durable call-recording upload queue (per recording_id). */
+    abstract fun pendingRecordingDao(): PendingRecordingDao
 
     companion object {
         const val NAME = "testlogon-cache.db"
@@ -157,8 +165,28 @@ abstract class TestLogonDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * AND-302 — additive migration creating the pending_recording table (durable upload queue). Purely
+         * additive (a new table), so no existing rows are touched.
+         */
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS pending_recording (" +
+                        "recording_id TEXT NOT NULL PRIMARY KEY, " +
+                        "call_id TEXT NOT NULL, " +
+                        "file_path TEXT NOT NULL, " +
+                        "size_bytes INTEGER NOT NULL DEFAULT 0, " +
+                        "duration_ms INTEGER NOT NULL DEFAULT 0, " +
+                        "phase TEXT NOT NULL, " +
+                        "attempts INTEGER NOT NULL DEFAULT 0, " +
+                        "created_at INTEGER NOT NULL DEFAULT 0)",
+                )
+            }
+        }
+
         /** Registered migrations; grows as the schema evolves. */
         val ALL_MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
     }
 }

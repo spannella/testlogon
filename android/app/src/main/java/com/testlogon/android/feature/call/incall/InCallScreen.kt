@@ -47,6 +47,12 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
@@ -54,6 +60,11 @@ import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
 import com.testlogon.android.core.webrtc.ui.RemoteVideoView
 import com.testlogon.android.feature.call.billing.FinalCostSummary
 import com.testlogon.android.feature.call.billing.RunningCostOverlay
+import com.testlogon.android.feature.call.recording.RecordingConsentDialog
+import com.testlogon.android.feature.call.recording.RecordingControl
+import com.testlogon.android.feature.call.recording.RecordingPhase
+import com.testlogon.android.feature.call.recording.RecordingUiState
+import com.testlogon.android.feature.call.recording.RecordingUploadStatus
 
 /**
  * AND-298 — in-call (1:1) screen.
@@ -70,16 +81,46 @@ fun InCallRoute(
     viewModel: InCallViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val recording by viewModel.recordingState.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.callEnded.collect { onCallEnded() }
     }
-    InCallScreen(state = state, onAction = viewModel::onAction)
+
+    // AND-302: RECORD_AUDIO is requested just-in-time on the requester side; only kick off the record
+    // request once the permission is granted (the FLAGGED capturer then surfaces "recording unavailable").
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) viewModel.onRecordRequest() }
+
+    InCallScreen(
+        state = state,
+        onAction = viewModel::onAction,
+        recording = recording,
+        onRecord = {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (granted) viewModel.onRecordRequest() else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        },
+        onRecordConsent = viewModel::onRecordConsent,
+        onRecordDecline = viewModel::onRecordDecline,
+        onRecordCancel = viewModel::onRecordCancel,
+        onRecordRetry = viewModel::onRecordRetry,
+    )
 }
 
 @Composable
 fun InCallScreen(
     state: InCallUiState,
     onAction: (InCallAction) -> Unit,
+    recording: RecordingUiState = RecordingUiState(),
+    onRecord: () -> Unit = {},
+    onRecordConsent: () -> Unit = {},
+    onRecordDecline: () -> Unit = {},
+    onRecordCancel: () -> Unit = {},
+    onRecordRetry: () -> Unit = {},
 ) {
     // Auto-hide the controls after 4s of inactivity in video mode; in audio-only they stay visible.
     LaunchedEffect(state.controlsVisible, state.isVideoCall) {
@@ -162,11 +203,41 @@ fun InCallScreen(
             ControlBar(
                 state = state,
                 onAction = onAction,
+                recordingPhase = recording.phase,
+                onRecord = onRecord,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .padding(24.dp),
+            )
+        }
+
+        // AND-302: recording upload status / "unavailable" notice, shown above the control bar when there is
+        // recording activity (queued/uploading/failed) or capture was unavailable (FLAGGED).
+        val showUploadStatus = recording.phase == RecordingPhase.PendingUpload ||
+            recording.phase == RecordingPhase.Uploading ||
+            recording.phase == RecordingPhase.Failed ||
+            recording.mediaUnavailable
+        if (showUploadStatus) {
+            RecordingUploadStatus(
+                state = recording,
+                onCancel = onRecordCancel,
+                onRetry = onRecordRetry,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 96.dp),
+            )
+        }
+
+        // AND-302: consent prompt (callee side) when the peer requested to record.
+        if (recording.phase == RecordingPhase.ConsentPrompt) {
+            RecordingConsentDialog(
+                requesterName = recording.requesterName,
+                onAccept = onRecordConsent,
+                onDecline = onRecordDecline,
             )
         }
     }
@@ -299,6 +370,8 @@ private fun QualityGlyph(quality: ConnectionQuality) {
 private fun ControlBar(
     state: InCallUiState,
     onAction: (InCallAction) -> Unit,
+    recordingPhase: RecordingPhase,
+    onRecord: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val micCd = stringResource(if (state.micEnabled) R.string.call_mute_cd else R.string.call_unmute_cd)
@@ -341,6 +414,10 @@ private fun ControlBar(
             tag = "incall_flip",
             enabled = state.hasMultipleCameras && state.cameraEnabled,
             onClick = { onAction(InCallAction.FlipCamera) },
+        )
+        RecordingControl(
+            phase = recordingPhase,
+            onRecord = onRecord,
         )
         ControlButton(
             icon = Icons.Filled.CallEnd,

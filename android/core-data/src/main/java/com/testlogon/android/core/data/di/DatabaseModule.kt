@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.testlogon.android.core.data.BuildConfig
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
+import com.testlogon.android.core.data.call.PendingRecordingDao
 import com.testlogon.android.core.data.db.TestLogonDatabase
 import com.testlogon.android.core.data.db.sample.SampleDao
 import com.testlogon.android.core.data.download.DownloadDao
@@ -60,4 +61,8 @@ object DatabaseModule {
     @Provides
     fun provideDownloadDao(db: TestLogonDatabase): DownloadDao =
         db.downloadDao()
+
+    @Provides
+    fun providePendingRecordingDao(db: TestLogonDatabase): PendingRecordingDao =
+        db.pendingRecordingDao()
 }

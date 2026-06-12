@@ -700,6 +700,17 @@
     <string name="call_weak_connection">Weak connection</string>
     <string name="call_reconnecting">Reconnecting…</string>
 
+    <!-- AND-302 — call recording (consent + upload) -->
+    <string name="recording_request">Record call</string>
+    <string name="recording_consent_title">%1$s wants to record this call</string>
+    <string name="recording_consent_accept">Allow</string>
+    <string name="recording_consent_decline">Don\'t allow</string>
+    <string name="recording_unavailable">Recording unavailable (media not configured)</string>
+    <string name="recording_uploading">Uploading recording…</string>
+    <string name="recording_upload_failed">Recording upload failed</string>
+    <string name="recording_cancel">Cancel</string>
+    <string name="recording_retry">Retry</string>
+
     <!-- AND-301 — call billing (paid 1:1 calls) -->
     <string name="billing_rate_per_min">%1$s/min</string>
     <string name="billing_start_paid_call">Start Paid Call</string>
