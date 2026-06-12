@@ -10,6 +10,8 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -54,7 +56,18 @@ class FeedScreenTest {
     ) {
         rule.setContent {
             TestLogonTheme {
-                val paging = remember { flowOf(PagingData.from(items)) }
+                val paging = remember {
+                    flowOf(
+                        PagingData.from(
+                            items,
+                            sourceLoadStates = LoadStates(
+                                refresh = LoadState.NotLoading(endOfPaginationReached = items.isEmpty()),
+                                prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                                append = LoadState.NotLoading(endOfPaginationReached = true),
+                            ),
+                        ),
+                    )
+                }
                 val lazyItems = paging.collectAsLazyPagingItems()
                 FeedScreen(
                     items = lazyItems,
@@ -78,10 +91,11 @@ class FeedScreenTest {
         launch(listOf(lockedPost("p1", secret = "TOP SECRET BODY")))
         // Paging loads asynchronously; wait for the locked row to appear before asserting.
         rule.waitUntil(timeoutMillis = 5_000) {
-            rule.onAllNodesWithTag(PostItemTestTags.LOCKED_BADGE).fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithTag(PostItemTestTags.LOCKED_BADGE, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        rule.onNodeWithTag(PostItemTestTags.LOCKED_BADGE).assertIsDisplayed()
-        rule.onNodeWithTag(PaywallTestTags.CARD).assertIsDisplayed()
+        rule.onNodeWithTag(PostItemTestTags.LOCKED_BADGE, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag(PaywallTestTags.CARD, useUnmergedTree = true).assertIsDisplayed()
         // Non-leakage: the protected body string never appears in the tree.
         rule.onAllNodesWithText("TOP SECRET BODY").assertCountEquals(0)
     }
@@ -120,8 +134,9 @@ class FeedScreenTest {
         launch(emptyList())
         // The empty state renders only after the paging flow's first (empty) load completes.
         rule.waitUntil(timeoutMillis = 5_000) {
-            rule.onAllNodesWithTag(FeedTestTags.EMPTY).fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithTag(FeedTestTags.EMPTY, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        rule.onNodeWithTag(FeedTestTags.EMPTY).assertIsDisplayed()
+        rule.onNodeWithTag(FeedTestTags.EMPTY, useUnmergedTree = true).assertIsDisplayed()
     }
 }

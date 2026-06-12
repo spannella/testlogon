@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -43,7 +45,18 @@ class NotificationCenterScreenTest {
     ) {
         rule.setContent {
             TestLogonTheme {
-                val paging = remember { flowOf(PagingData.from(items)) }
+                val paging = remember {
+                    flowOf(
+                        PagingData.from(
+                            items,
+                            sourceLoadStates = LoadStates(
+                                refresh = LoadState.NotLoading(endOfPaginationReached = items.isEmpty()),
+                                prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                                append = LoadState.NotLoading(endOfPaginationReached = true),
+                            ),
+                        ),
+                    )
+                }
                 val lazyItems = paging.collectAsLazyPagingItems()
                 NotificationCenterScreen(
                     badge = badge,
@@ -71,8 +84,8 @@ class NotificationCenterScreenTest {
         rule.waitUntil(timeoutMillis = 5_000) {
             rule.onAllNodesWithTag(NotifTestTags.ROW).fetchSemanticsNodes().size == 2
         }
-        // exactly one unread dot for the single unread row.
-        rule.onAllNodesWithTag(NotifTestTags.UNREAD_DOT).assertCountEquals(1)
+        // exactly one unread dot for the single unread row (the dot lives in the unmerged tree).
+        rule.onAllNodesWithTag(NotifTestTags.UNREAD_DOT, useUnmergedTree = true).assertCountEquals(1)
     }
 
     @Test

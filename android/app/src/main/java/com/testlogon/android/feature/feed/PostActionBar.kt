@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -164,12 +165,16 @@ fun LikeButton(
 
     Row(
         modifier = modifier
+            // testTag must precede clearAndSetSemantics, which otherwise clears the tag off the node and
+            // makes the merged Button unfindable; onClick re-exposes the inner IconButton's (cleared)
+            // click action so the labelled Button is activatable by accessibility services and tests.
+            .testTag(PostActionTestTags.LIKE)
             .clearAndSetSemantics {
                 role = Role.Button
                 stateDescription = state
                 contentDescription = countDesc
-            }
-            .testTag(PostActionTestTags.LIKE),
+                onClick(label = action) { onToggle(); true }
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onToggle, modifier = Modifier.size(48.dp)) {

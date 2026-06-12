@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -41,7 +43,18 @@ class ActivityFeedScreenTest {
     private fun launch(items: List<ActivityEvent>) {
         rule.setContent {
             TestLogonTheme {
-                val paging = remember { flowOf(PagingData.from(items)) }
+                val paging = remember {
+                    flowOf(
+                        PagingData.from(
+                            items,
+                            sourceLoadStates = LoadStates(
+                                refresh = LoadState.NotLoading(endOfPaginationReached = items.isEmpty()),
+                                prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                                append = LoadState.NotLoading(endOfPaginationReached = true),
+                            ),
+                        ),
+                    )
+                }
                 ActivityFeedScreen(
                     items = paging.collectAsLazyPagingItems(),
                     onRefresh = {},

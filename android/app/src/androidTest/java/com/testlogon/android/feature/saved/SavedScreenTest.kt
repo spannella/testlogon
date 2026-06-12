@@ -10,6 +10,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -45,7 +47,18 @@ class SavedScreenTest {
     ) {
         rule.setContent {
             TestLogonTheme {
-                val paging = remember { flowOf(PagingData.from(items)) }
+                val paging = remember {
+                    flowOf(
+                        PagingData.from(
+                            items,
+                            sourceLoadStates = LoadStates(
+                                refresh = LoadState.NotLoading(endOfPaginationReached = items.isEmpty()),
+                                prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                                append = LoadState.NotLoading(endOfPaginationReached = true),
+                            ),
+                        ),
+                    )
+                }
                 SavedScreen(
                     items = paging.collectAsLazyPagingItems(),
                     state = state,
