@@ -21,6 +21,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -135,7 +136,10 @@ class CallManagerTest {
         val mgr = CallManager(repo, fakeIce, peer, StubSignalingTransport(), fakeClock, scope, CallTiming())
 
         mgr.placeCall("conv_1", "peer_1", CallMode.AUDIO)
-        advanceUntilIdle()
+        // AND-296: the ring timeout now (correctly) OUTLIVES setup, so it is a pending bounded delay.
+        // Use runCurrent (not advanceUntilIdle) to settle the eager invite/negotiate WITHOUT advancing
+        // virtual time past the ring-timeout delay (advanceUntilIdle would fire it and end the call).
+        runCurrent()
 
         assertEquals(CallPhase.Ringing, mgr.state.value.phase)
         assertEquals("peer_1", mgr.state.value.call?.peerUserId)
@@ -153,7 +157,8 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming(ringTimeoutMs = 1_000))
 
         mgr.placeCall("conv", "peer")
-        advanceUntilIdle()
+        // Settle setup without advancing past the (now-surviving) 1s ring-timeout delay.
+        runCurrent()
         assertEquals(CallPhase.Ringing, mgr.state.value.phase)
 
         advanceTimeBy(1_500)
@@ -171,7 +176,8 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming())
 
         mgr.placeCall("conv", "peer")
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before injecting the remote decline.
+        runCurrent()
         val callId = mgr.state.value.call!!.callId
 
         mgr.onCallEvent(CallEvent.Declined(callId))
@@ -189,7 +195,8 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming())
 
         mgr.placeCall("conv", "peer")
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before injecting the remote end.
+        runCurrent()
         val callId = mgr.state.value.call!!.callId
 
         mgr.onCallEvent(CallEvent.Ended(callId))
@@ -206,7 +213,9 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming())
 
         mgr.placeCall("conv", "peer")
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) — advanceUntilIdle would time the call out first, making
+        // endCall a no-op against an already-terminal phase.
+        runCurrent()
 
         mgr.endCall(CallEndReason.HANGUP)
         advanceUntilIdle()
@@ -244,7 +253,8 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming(heartbeatIntervalMs = 1_000))
 
         mgr.placeCall("conv", "peer")
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before answering; onConnected cancels the ring timeout.
+        runCurrent()
         mgr.onConnected()
         assertTrue(mgr.state.value.phase is CallPhase.Connected)
 
@@ -263,11 +273,12 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming())
 
         mgr.placeCall("conv_a", "peer_a")
-        advanceUntilIdle()
+        // Stay at Ringing (busy) — advanceUntilIdle would time the first call out, dropping isBusy().
+        runCurrent()
         assertTrue(mgr.isBusy())
 
         mgr.placeCall("conv_b", "peer_b")
-        advanceUntilIdle()
+        runCurrent()
 
         // The first call remains; the second was rejected (single-active invariant).
         assertEquals("peer_a", mgr.state.value.call?.peerUserId)
@@ -285,10 +296,14 @@ class CallManagerTest {
         val mgr = manager(scope, repo, CallTiming(heartbeatIntervalMs = 1_000))
 
         mgr.placeCall("conv", "peer")
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before answering; onConnected cancels the ring timeout.
+        runCurrent()
         mgr.onConnected()
         advanceTimeBy(1_500)
-        advanceUntilIdle()
+        // One heartbeat fired at 1s (advanceTimeBy above). Do NOT advanceUntilIdle here: with
+        // shouldTerminate=false the bounded-by-phase heartbeat loop has no terminal, so advanceUntilIdle
+        // would walk delay(1s) forever. runCurrent settles the already-fired heartbeat without looping.
+        runCurrent()
 
         assertEquals(30L, mgr.state.value.elapsedSeconds)
         assertTrue(mgr.state.value.warnLowBalance)

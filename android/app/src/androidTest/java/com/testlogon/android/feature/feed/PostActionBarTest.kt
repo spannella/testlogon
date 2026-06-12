@@ -5,9 +5,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.ui.theme.TestLogonTheme
 import org.junit.Assert.assertEquals
@@ -40,7 +42,14 @@ class PostActionBarTest {
             }
         }
         rule.onNodeWithTag(PostActionTestTags.LIKE).assertIsDisplayed()
-        rule.onNodeWithTag(PostActionTestTags.LIKE).performClick()
+        // The like Row uses clearAndSetSemantics, so the tagged node spans the icon AND the count
+        // text; the clickable IconButton only occupies the left 48dp. A default performClick taps the
+        // Row's center, which (with a count chip present) lands past the button and never toggles.
+        // Click the left (icon) region explicitly so the gesture hits the IconButton.
+        rule.onNodeWithTag(PostActionTestTags.LIKE).performTouchInput {
+            click(percentOffset(0.08f, 0.5f))
+        }
+        rule.waitForIdle()
         rule.runOnIdle { assertEquals(1, toggles) }
     }
 

@@ -3,8 +3,8 @@ package com.testlogon.android.feature.more
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.ui.test.assertHasClickAction
-import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -63,7 +63,10 @@ class MoreScreenTest {
                 )
             }
         }
-        rule.onNodeWithTag("more_entry_b").assertIsDisplayed().assertHasNoClickAction()
+        // A disabled Material3 Card still exposes an (inert) OnClick semantics action, so it is
+        // "not enabled" rather than "no click action". Assert the disabled state, which is the
+        // real not-clickable behavior the screen implements (Card enabled = !disabled).
+        rule.onNodeWithTag("more_entry_b").assertIsDisplayed().assertIsNotEnabled()
     }
 
     @Test

@@ -21,6 +21,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -126,7 +127,9 @@ class IncomingCallControllerTest {
         val controller = controller(scope, repo, ringer, notifier)
 
         controller.onInvite(invite())
-        advanceUntilIdle()
+        // AND-297: the ring timeout is a pending bounded delay; runCurrent settles the eager ring/notify
+        // work WITHOUT advancing virtual time past it (advanceUntilIdle would fire it and dismiss).
+        runCurrent()
 
         assertTrue(controller.state.value is IncomingCallState.Ringing)
         assertEquals(1, ringer.startCount)
@@ -156,7 +159,8 @@ class IncomingCallControllerTest {
 
         controller.onInvite(invite("a"))
         controller.onInvite(invite("b"))
-        advanceUntilIdle()
+        // Settle the busy auto-decline without advancing past the first call's ring timeout.
+        runCurrent()
 
         assertEquals(1, repo.declineCount)
         assertEquals("busy", repo.declineReasons.first())
@@ -172,7 +176,8 @@ class IncomingCallControllerTest {
         val controller = controller(scope, repo, ringer, notifier)
 
         controller.onInvite(invite("c_acc"))
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before accepting; accept() cancels it via stopRinging.
+        runCurrent()
         controller.accept()
         advanceUntilIdle()
 
@@ -189,7 +194,8 @@ class IncomingCallControllerTest {
         val controller = controller(scope, repo, ringer, notifier)
 
         controller.onInvite(invite())
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before accepting; accept() cancels it via stopRinging.
+        runCurrent()
         controller.accept()
         advanceUntilIdle()
 
@@ -204,7 +210,8 @@ class IncomingCallControllerTest {
         val controller = controller(scope, repo, ringer, notifier)
 
         controller.onInvite(invite())
-        advanceUntilIdle()
+        // Stay at Ringing (ring timeout pending) before declining; decline() cancels it via stopRinging.
+        runCurrent()
         controller.decline()
         advanceUntilIdle()
 

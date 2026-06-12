@@ -16,7 +16,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.testlogon.android.HiltTestRunner"
         vectorDrawables { useSupportLibrary = true }
 
         // AND-006 — backend base URL exposed as a compile-time constant.
@@ -170,7 +170,10 @@ dependencies {
     // UI / navigation tests
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)
+    androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.navigation.testing)
+    androidTestImplementation(libs.hilt.android.testing)
+    kspAndroidTest(libs.hilt.compiler)
     debugImplementation(libs.compose.ui.test.manifest)
 }

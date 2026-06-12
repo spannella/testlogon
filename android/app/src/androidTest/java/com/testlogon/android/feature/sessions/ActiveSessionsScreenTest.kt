@@ -2,9 +2,11 @@ package com.testlogon.android.feature.sessions
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -30,12 +32,14 @@ class ActiveSessionsScreenTest {
     fun currentRow_hasBadge_andNoRevoke_otherRow_revokesViaConfirm() {
         rule.setContent {
             TestLogonTheme {
-                var state by mutableStateOf(
-                    ActiveSessionsUiState(
-                        rows = listOf(row("cur", true), row("a", false)),
-                        loaded = true,
-                    ),
-                )
+                var state by remember {
+                    mutableStateOf(
+                        ActiveSessionsUiState(
+                            rows = listOf(row("cur", true), row("a", false)),
+                            loaded = true,
+                        ),
+                    )
+                }
                 ActiveSessionsScreen(
                     state = state,
                     onRetry = {},
@@ -58,8 +62,16 @@ class ActiveSessionsScreenTest {
         rule.onNodeWithTag("session_revoke_cur").assertDoesNotExist()
 
         rule.onNodeWithTag("session_revoke_a").performClick()
+        // The confirm dialog appears a recomposition after the revoke click; wait for it.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag("sessions_confirm_dialog").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithTag("sessions_confirm_dialog").assertIsDisplayed()
         rule.onNodeWithTag("sessions_confirm").performClick()
+        // Confirm removes the row asynchronously; wait until it's gone.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag("session_row_a").fetchSemanticsNodes().isEmpty()
+        }
         rule.onNodeWithTag("session_row_a").assertDoesNotExist()
     }
 }

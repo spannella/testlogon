@@ -21,7 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -88,7 +88,9 @@ class OutgoingCallViewModelTest {
         val viewModel = vm(scope)
         // Active collector before reading stateIn(WhileSubscribed).value.
         val job = launch { viewModel.uiState.collect {} }
-        advanceUntilIdle()
+        // Settle the eager placeCall/negotiate work without advancing the clock — advanceUntilIdle would
+        // walk the now-surviving 45s ring timeout and end the call before we read RINGING.
+        runCurrent()
 
         val state = viewModel.uiState.value
         assertEquals("Alex", state.peerName)

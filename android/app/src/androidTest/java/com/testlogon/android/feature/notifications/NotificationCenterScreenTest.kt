@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -66,6 +67,10 @@ class NotificationCenterScreenTest {
     @Test
     fun unreadRow_showsDot_readRowDoesNot() {
         launch(listOf(ui("n1", read = false), ui("n2", read = true)))
+        // Paging loads asynchronously; wait for both rows to render before counting dots.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag(NotifTestTags.ROW).fetchSemanticsNodes().size == 2
+        }
         // exactly one unread dot for the single unread row.
         rule.onAllNodesWithTag(NotifTestTags.UNREAD_DOT).assertCountEquals(1)
     }
@@ -89,6 +94,10 @@ class NotificationCenterScreenTest {
     @Test
     fun emptyState_rendersWhenNoItems() {
         launch(emptyList(), badge = UnreadBadgeUiState(count = 0, isLoading = false))
+        // The empty state renders only after the paging flow's first (empty) load completes.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithText("No notifications yet").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("No notifications yet").assertIsDisplayed()
     }
 }

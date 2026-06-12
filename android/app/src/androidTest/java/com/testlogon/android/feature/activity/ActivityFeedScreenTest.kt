@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.paging.PagingData
@@ -60,6 +61,10 @@ class ActivityFeedScreenTest {
     @Test
     fun emptyState_rendersWhenNoItems() {
         launch(emptyList())
+        // The empty state renders only after the paging flow's first (empty) load completes.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithText("No activity yet").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("No activity yet").assertIsDisplayed()
     }
 }

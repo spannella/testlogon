@@ -86,13 +86,12 @@ class CallManager @Inject constructor(
             call = active,
             peerName = peerName,
         )
-        orchestrationJob = scope.launch {
-            try {
-                runOutgoing(active)
-            } finally {
-                cancelTimers()
-            }
-        }
+        // AND-296: the orchestration coroutine only DRIVES setup (invite -> Ringing -> negotiate). It must
+        // NOT cancel the ring-timeout/heartbeat in a finally: in the FLAGGED-media path negotiate() returns
+        // promptly, so this coroutine completes almost immediately. The ring timeout has to OUTLIVE that
+        // setup completion (a no-answer call must still time out) — it is cancelled only on answer/decline/
+        // remote-end/teardown by the event handlers, onConnected(), and teardown(), never here.
+        orchestrationJob = scope.launch { runOutgoing(active) }
     }
 
     /**
@@ -106,13 +105,9 @@ class CallManager @Inject constructor(
             call = active,
             peerName = peerName,
         )
-        orchestrationJob = scope.launch {
-            try {
-                negotiate(active)
-            } finally {
-                cancelTimers()
-            }
-        }
+        // As above (AND-297): do NOT cancel timers when this setup coroutine finishes. The heartbeat is
+        // armed later by onConnected() and must survive; teardown()/endCall() own the terminal cancellation.
+        orchestrationJob = scope.launch { negotiate(active) }
     }
 
     private suspend fun runOutgoing(active: ActiveCall) {

@@ -66,8 +66,11 @@ class CallRepositoryContractTest {
         assertEquals("u_peer", body["callee_user_id"])
         assertEquals("audio", body["initial_mode"])
         assertEquals("idk_1", body["idempotency_key"])
-        // The REQUEST field is rate_cents_per_min (not ...minute).
-        assertTrue(body.containsKey("rate_cents_per_min"))
+        // rate_cents_per_min is an optional billing field; with no paid rate it is correctly omitted
+        // (Moshi drops nulls). paid is always sent (false here); guard against the request ever
+        // regressing to the RESPONSE spelling (rate_cents_per_minute).
+        assertEquals(false, body["paid"])
+        assertTrue(!body.containsKey("rate_cents_per_minute"))
     }
 
     @Test

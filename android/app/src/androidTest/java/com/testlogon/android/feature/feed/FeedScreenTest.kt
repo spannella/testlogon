@@ -76,6 +76,10 @@ class FeedScreenTest {
     @Test
     fun lockedPost_showsLockedBadge_andPaywallCard_noContent() {
         launch(listOf(lockedPost("p1", secret = "TOP SECRET BODY")))
+        // Paging loads asynchronously; wait for the locked row to appear before asserting.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag(PostItemTestTags.LOCKED_BADGE).fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithTag(PostItemTestTags.LOCKED_BADGE).assertIsDisplayed()
         rule.onNodeWithTag(PaywallTestTags.CARD).assertIsDisplayed()
         // Non-leakage: the protected body string never appears in the tree.
@@ -101,13 +105,23 @@ class FeedScreenTest {
     fun lockedCta_invokesUnlockClick() {
         var unlockedId: String? = null
         launch(listOf(lockedPost("p1", secret = "x")), onUnlockClick = { unlockedId = it })
-        rule.onNodeWithTag(PaywallTestTags.CTA).performClick()
+        // Paging loads asynchronously; wait for the paywall CTA (which lives in the unmerged tree)
+        // before clicking it.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag(PaywallTestTags.CTA, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag(PaywallTestTags.CTA, useUnmergedTree = true).performClick()
         rule.runOnIdle { assertEquals("p1", unlockedId) }
     }
 
     @Test
     fun emptyFeed_showsEmptyState() {
         launch(emptyList())
+        // The empty state renders only after the paging flow's first (empty) load completes.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag(FeedTestTags.EMPTY).fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithTag(FeedTestTags.EMPTY).assertIsDisplayed()
     }
 }

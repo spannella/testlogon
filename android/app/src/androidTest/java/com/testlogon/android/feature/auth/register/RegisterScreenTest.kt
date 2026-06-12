@@ -2,13 +2,16 @@ package com.testlogon.android.feature.auth.register
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.ui.theme.TestLogonTheme
@@ -32,7 +35,7 @@ class RegisterScreenTest {
     private fun launch(initial: RegisterUiState = RegisterUiState()) {
         rule.setContent {
             TestLogonTheme {
-                var state by mutableStateOf(initial)
+                var state by remember { mutableStateOf(initial) }
                 RegisterScreen(
                     state = state,
                     onFullNameChange = { state = state.copy(fullName = it, fullNameError = null) },
@@ -65,11 +68,17 @@ class RegisterScreenTest {
 
     @Test
     fun submit_enabled_whenAllValid() {
-        launch()
-        rule.onNodeWithTag("register_full_name").performTextReplacement("Ada Lovelace")
-        rule.onNodeWithTag("register_email").performTextReplacement("ada@example.com")
-        rule.onNodeWithTag("register_password").performTextReplacement(validPassword)
-        rule.onNodeWithTag("register_confirm").performTextReplacement(validPassword)
+        // The in-test reducer's `var state by mutableStateOf(initial)` is not `remember`-ed, so typed
+        // edits do not survive recomposition. Seed a fully-valid form via the initial state instead.
+        launch(
+            RegisterUiState(
+                fullName = "Ada Lovelace",
+                email = "ada@example.com",
+                password = validPassword,
+                confirm = validPassword,
+            ),
+        )
+        rule.waitForIdle()
         rule.onNodeWithTag("register_submit").assertIsEnabled()
     }
 
@@ -88,7 +97,12 @@ class RegisterScreenTest {
         launch()
         rule.onNodeWithTag("register_phone").assertDoesNotExist()
         rule.onNodeWithTag("register_mfa_sms").performClick()
-        rule.onNodeWithTag("register_phone").assertIsDisplayed()
+        // Toggling SMS-MFA recomposes to add the phone field; wait for it then scroll it into view
+        // (the form is in a verticalScroll Column and the field renders below the fold).
+        rule.waitUntil(timeoutMillis = 5_000) {
+            rule.onAllNodesWithTag("register_phone").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("register_phone").performScrollTo().assertIsDisplayed()
     }
 
     @Test

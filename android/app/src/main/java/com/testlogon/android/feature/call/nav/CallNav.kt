@@ -7,6 +7,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.call.history.CallHistoryRoute
+import com.testlogon.android.feature.call.incall.InCallRoute
 import com.testlogon.android.feature.call.ui.OutgoingCallRoute
 import com.testlogon.android.feature.call.ui.OutgoingCallViewModel
 
@@ -18,6 +19,11 @@ import com.testlogon.android.feature.call.ui.OutgoingCallViewModel
  */
 object CallRoutes {
     const val HISTORY = "call/history"
+
+    // AND-298 — in-call (1:1) destination, reached once a call is connected.
+    const val INCALL = "call/incall/{callId}"
+
+    fun incall(callId: String): String = "call/incall/${Uri.encode(callId)}"
 
     const val ARG_CONVERSATION_ID = OutgoingCallViewModel.ARG_CONVERSATION_ID
     const val ARG_CALLEE_USER_ID = OutgoingCallViewModel.ARG_CALLEE_USER_ID
@@ -66,5 +72,13 @@ fun NavGraphBuilder.callGraph(navController: NavHostController) {
         ),
     ) {
         OutgoingCallRoute(onFinished = { navController.popBackStack() })
+    }
+    composable(
+        route = CallRoutes.INCALL,
+        arguments = listOf(
+            navArgument("callId") { type = NavType.StringType },
+        ),
+    ) {
+        InCallRoute(onCallEnded = { navController.popBackStack() })
     }
 }

@@ -683,6 +683,22 @@
     <string name="call_unknown_caller">Unknown caller</string>
     <string name="call_kind_audio">Audio call</string>
     <string name="call_kind_video">Video call</string>
+    <!-- AND-298 — in-call (1:1) controls + status -->
+    <string name="call_mute_cd">Mute microphone</string>
+    <string name="call_unmute_cd">Unmute microphone</string>
+    <string name="call_camera_off_cd">Turn camera off</string>
+    <string name="call_camera_on_cd">Turn camera on</string>
+    <string name="call_speaker_on_cd">Speaker on</string>
+    <string name="call_speaker_off_cd">Speaker off</string>
+    <string name="call_flip_camera_cd">Flip camera</string>
+    <string name="call_route_earpiece_cd">Earpiece</string>
+    <string name="call_route_speaker_cd">Speaker</string>
+    <string name="call_quality_excellent">Excellent connection</string>
+    <string name="call_quality_good">Good connection</string>
+    <string name="call_quality_poor">Poor connection</string>
+    <string name="call_quality_lost">Connection lost</string>
+    <string name="call_weak_connection">Weak connection</string>
+    <string name="call_reconnecting">Reconnecting…</string>
 
     <!-- AND-160 — mass messages -->
     <string name="mass_messages_title">Mass messages</string>

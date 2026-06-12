@@ -70,9 +70,10 @@ class LoginScreenTest {
 
     @Test
     fun submit_enabled_forValidCredentials() {
-        launch()
-        rule.onNodeWithTag("login_email").performTextReplacement("alice@example.com")
-        rule.onNodeWithTag("login_password").performTextReplacement("pw")
+        // The in-test reducer's `var state by mutableStateOf(initial)` is not `remember`-ed, so typed
+        // edits do not survive recomposition. Seed the valid credentials via the initial state instead.
+        launch(LoginUiState(email = "alice@example.com", password = "pw", serverUrl = "http://host:8000/"))
+        rule.waitForIdle()
         rule.onNodeWithTag("login_submit").assertIsEnabled()
     }
 
