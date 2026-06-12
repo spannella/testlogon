@@ -700,6 +700,14 @@
     <string name="call_weak_connection">Weak connection</string>
     <string name="call_reconnecting">Reconnecting…</string>
 
+    <!-- AND-299 — group calls -->
+    <string name="group_call_title">Group call</string>
+    <string name="group_call_participant_count">%1$d in call</string>
+    <string name="group_call_waiting">Waiting for others to join</string>
+    <string name="group_call_leave_cd">Leave call</string>
+    <string name="participant_muted_cd">%1$s muted</string>
+    <string name="participant_speaking_cd">%1$s speaking</string>
+
     <!-- AND-160 — mass messages -->
     <string name="mass_messages_title">Mass messages</string>
     <string name="mass_messages_new">New campaign</string>

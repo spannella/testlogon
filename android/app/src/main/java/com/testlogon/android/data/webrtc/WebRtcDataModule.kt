@@ -98,4 +98,13 @@ abstract class WebRtcDataModule {
     @Binds
     @Singleton
     abstract fun bindSignalingTransport(impl: StubSignalingTransport): SignalingTransport
+
+    /**
+     * AND-299 — group-call full-mesh manager. Defaults to the no-op [StubMeshConnectionManager]
+     * (NotConfigured, never creates a peer / opens media, events never emit) until the native WebRTC SDK
+     * decision is made; swap this @Binds to the real mesh then.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindMeshConnectionManager(impl: StubMeshConnectionManager): MeshConnectionManager
 }
