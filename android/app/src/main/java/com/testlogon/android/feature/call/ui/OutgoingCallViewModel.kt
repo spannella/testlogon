@@ -12,6 +12,7 @@ import com.testlogon.android.feature.call.domain.CallEndReason
 import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallPhase
 import com.testlogon.android.feature.call.domain.CallSessionState
+import com.testlogon.android.feature.call.telecom.TelecomCallController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,6 +54,9 @@ class OutgoingCallViewModel @Inject constructor(
     // balance is unknown -> the confirm dialog shows the rate, flags the balance as unavailable, and still
     // allows Start (do NOT block start on an unknown balance; no payment SDK is invoked).
     private val billingAuthorizer: BillingAuthorizer,
+    // AND-304: best-effort self-managed Telecom modeling, UNDER the AND-296 flow. Optional/guarded — a
+    // Telecom failure never affects placing the call (the control-plane invite below is authoritative).
+    private val telecomCallController: TelecomCallController,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -122,6 +126,16 @@ class OutgoingCallViewModel @Inject constructor(
         // AND-301: a paid call only starts once the user has confirmed the gate (Confirmed); a free call
         // starts immediately. This guard makes start() safe to call from both init and onConfirmPaidCall.
         if (paid && _billing.value.confirm !is PaidCallConfirmState.Confirmed) return
+        // AND-304: model the call to the OS via self-managed Telecom (audio focus / DND / headset). This is
+        // additive and fully guarded: placeOutgoing() returns false (and no-ops) on unsupported devices or
+        // any OEM failure, so the AND-296 placeCall() below ALWAYS runs and remains the source of truth.
+        runCatching {
+            telecomCallController.placeOutgoing(
+                callId = com.testlogon.android.data.call.CallId.new(),
+                displayName = peerName,
+                video = mode == CallMode.VIDEO,
+            )
+        }
         callManager.placeCall(
             conversationId = conversationId,
             calleeUserId = calleeUserId,

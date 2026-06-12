@@ -14,8 +14,12 @@ import com.testlogon.android.data.webrtc.IceServer
 import com.testlogon.android.data.webrtc.IceServersProvider
 import com.testlogon.android.data.webrtc.StubPeerConnectionController
 import com.testlogon.android.data.webrtc.StubSignalingTransport
+import android.content.Context
 import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallTiming
+import com.testlogon.android.feature.call.telecom.ConnectionRegistry
+import com.testlogon.android.feature.call.telecom.TelecomCapabilities
+import com.testlogon.android.feature.call.telecom.TelecomCallController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -26,6 +30,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mockito.Mockito.mock
 
 /**
  * AND-297 — receive-side state-machine tests with fake [CallRepository] + fake [Ringer] + fake
@@ -129,7 +134,25 @@ class IncomingCallControllerTest {
             clock = fakeClock,
             scope = scope,
             timing = CallTiming(ringTimeoutMs = 1_000),
+            // AND-304: no-op Telecom on the JVM (SDK_INT=0 -> isSupported() false; reportIncoming no-ops).
+            telecomCallController = noOpTelecom(),
         )
+
+    /**
+     * AND-304 — a TelecomCallController that always degrades to no-op in a JVM unit test: Build.VERSION.SDK_INT
+     * is 0 here so TelecomCapabilities.isSupported() is false and every method short-circuits before touching
+     * the (mocked, never-used) Context. This asserts the graceful-degradation gate keeps AND-297 intact.
+     */
+    private fun noOpTelecom(): TelecomCallController {
+        val context = mock(Context::class.java)
+        val capabilities = TelecomCapabilities(telecomManager = null)
+        return TelecomCallController(
+            context = context,
+            telecomManager = null,
+            capabilities = capabilities,
+            registry = ConnectionRegistry(),
+        )
+    }
 
     @Test
     fun invite_rings_andShowsNotification() = runTest {

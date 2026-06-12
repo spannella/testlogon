@@ -8,6 +8,8 @@ import com.testlogon.android.data.call.IdempotencyKey
 import com.testlogon.android.feature.call.domain.ActiveCall
 import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallTiming
+import com.testlogon.android.data.call.CallMode
+import com.testlogon.android.feature.call.telecom.TelecomCallController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -41,6 +43,8 @@ class IncomingCallController @Inject constructor(
     private val clock: Clock,
     private val scope: CoroutineScope,
     private val timing: CallTiming,
+    // AND-304: best-effort self-managed Telecom modeling for the receive side, UNDER the AND-297 flow.
+    private val telecomCallController: TelecomCallController,
 ) {
 
     private val _state = MutableStateFlow<IncomingCallState>(IncomingCallState.Idle)
@@ -67,6 +71,19 @@ class IncomingCallController @Inject constructor(
 
         val deadline = computeDeadline(invite)
         _state.value = IncomingCallState.Ringing(invite, deadline)
+
+        // AND-304: model the incoming call to the OS via self-managed Telecom (focus / DND / headset answer),
+        // UNDER the AND-297 flow. Fully guarded + additive: reportIncoming() returns false (and no-ops) on
+        // unsupported devices or any OEM failure. The self-managed account does NOT bring its own incoming UI,
+        // so the AND-297 ringer + full-screen notification below ALWAYS run as the user-facing fallback.
+        runCatching {
+            telecomCallController.reportIncoming(
+                callId = invite.callId,
+                displayName = invite.callerName,
+                video = invite.mode == CallMode.VIDEO,
+            )
+        }
+
         ringer.start()
         notifier.showRinging(invite)
         armTimeout(invite, deadline)

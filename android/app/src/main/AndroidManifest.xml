@@ -12,6 +12,11 @@
          AND-288: also used by the host go-live broadcasting flow (RECORD_AUDIO, requested at runtime). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- AND-304: self-managed Telecom (ConnectionService). Lets the app model its 1:1 calls to the OS
+         (audio focus, DND, headset/Bluetooth answer) UNDER the AND-296/297 flow. Self-managed is API 26+;
+         on unsupported devices the integration no-ops and the AND-297 full-screen path remains the fallback. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+
     <!-- AND-288: camera for host live broadcasting (requested at runtime via activity-result). The
          go-live engine (BroadcastPublisher) is FLAGGED/stubbed until the native WebRTC SDK decision is
          made, so this permission is inert today — nothing opens the camera. -->
@@ -389,6 +394,19 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- AND-304: self-managed Telecom ConnectionService. exported=true + the
+             BIND_TELECOM_CONNECTION_SERVICE permission so ONLY the OS Telecom subsystem can bind it. The
+             OS instantiates it when TelecomCallController places/reports a self-managed call (API 26+); it
+             is inert on older OS and degrades gracefully (the AND-296/297 flow is the fallback). -->
+        <service
+            android:name=".feature.call.telecom.TestLogonConnectionService"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
             </intent-filter>
         </service>
 

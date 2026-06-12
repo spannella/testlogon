@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.call.ui
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import com.testlogon.android.MainDispatcherRule
 import com.testlogon.android.core.data.cache.Clock
@@ -19,6 +20,9 @@ import com.testlogon.android.data.webrtc.StubPeerConnectionController
 import com.testlogon.android.data.webrtc.StubSignalingTransport
 import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallTiming
+import com.testlogon.android.feature.call.telecom.ConnectionRegistry
+import com.testlogon.android.feature.call.telecom.TelecomCapabilities
+import com.testlogon.android.feature.call.telecom.TelecomCallController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -29,6 +33,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.mockito.Mockito.mock
 
 /**
  * AND-296 — [OutgoingCallViewModel] mapping tests. Drives a real [CallManager] with fakes/stubs and
@@ -97,7 +102,15 @@ class OutgoingCallViewModelTest {
             override suspend fun authorize(amountMinorUnits: Long, currency: String, memo: String?) =
                 BillingResult.NotConfigured
         }
-        return OutgoingCallViewModel(manager, authorizer, saved)
+        // AND-304: no-op Telecom on the JVM (SDK_INT=0 -> isSupported() false; placeOutgoing no-ops), so the
+        // AND-296 placeCall path is unaffected and the existing mapping assertions still hold.
+        val telecom = TelecomCallController(
+            context = mock(Context::class.java),
+            telecomManager = null,
+            capabilities = TelecomCapabilities(telecomManager = null),
+            registry = ConnectionRegistry(),
+        )
+        return OutgoingCallViewModel(manager, authorizer, telecom, saved)
     }
 
     @Test
