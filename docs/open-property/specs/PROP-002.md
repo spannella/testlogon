@@ -760,13 +760,13 @@ Every assumption in this spec was checked against the live codebase at `/home/ub
 | §7.3: "enforced... via `enforce_cookie_csrf` at `app/auth/policy.py:95`" | `enforce_cookie_csrf` is **defined** at line 71; line 95 is an `HTTPException` raise inside the function body. Corrected to "defined at `:71`; called from `:105`". | §7.3 bullet |
 | §2.9 and §4.1.4: "import `compute_property_occupancy` inside the `update_unit` body with `try/except ImportError`" — uses `from app.services.property_mgmt import compute_property_occupancy` (self-import) | Since `compute_property_occupancy` lands in the **same** `property_mgmt.py` module (PROP-003), a `from module import name` self-import is always resolvable and never raises `ImportError`. The correct guard is a bare call inside `try/except Exception`, which catches `NameError` before PROP-003 ships. | §2.9 prose and §4.1.4 code block corrected |
 
-### UNCONFIRMED (cannot verify without PROP-001 being implemented)
+### FORWARD_DEP (sibling-spec dependency — artifact defined by PROP-001/PROP-003, not yet in code)
 
-| Claim | Status | Risk |
+| Claim | Status | Evidence |
 |---|---|---|
-| PROP-001 creates `property_mgmt.py` with `_flag_on()`, `_require_enabled()`, `_audit()`, `_property_id()`, and four property service functions | UNCONFIRMED — PROP-001 is a future deliverable, not yet in the codebase | LOW RISK: PROP-001's own verified spec defines all these exactly; the dependency is clearly documented |
-| PROP-001 adds `S.property_mgmt_enabled` / `S.properties_table_name` to `settings.py` and `T.properties` to `tables.py` | UNCONFIRMED — same reason | LOW RISK: PROP-001 spec §4.1–4.2 specifies these exactly with correct insertion points confirmed above |
-| `compute_property_occupancy` (PROP-003) will be in `property_mgmt.py` | CONFIRMED by PROP-003 spec §4.1 line: "The functions live in `app/services/property_mgmt.py`" | No risk |
+| PROP-001 creates `property_mgmt.py` with `_flag_on()`, `_require_enabled()`, `_audit()`, `_property_id()`, and four property service functions | **FORWARD_DEP** — PROP-001 | Sibling spec `docs/open-property/specs/PROP-001.md` §4.3 defines `_flag_on`/`_require_enabled` (lines ~230–235), `_audit` (~237–242), `_property_id` (~244–246), and the four service functions `create_property`/`get_property`/`update_property`/`archive_property` (§4.3) in the new file `app/services/property_mgmt.py`. PROP-001's own Verification Log §12 is VERIFIED. |
+| PROP-001 adds `S.property_mgmt_enabled` / `S.properties_table_name` to `settings.py` and `T.properties` to `tables.py` | **FORWARD_DEP** — PROP-001 | Sibling spec `docs/open-property/specs/PROP-001.md` §4.1 (settings keys at insertion point `settings.py:846–847`, both VERIFIED in PROP-001 §12 item 14) and §4.2 (`T.properties` handle at `tables.py:319`/`:571`, VERIFIED in PROP-001 §12 item 16). |
+| `compute_property_occupancy` (PROP-003) will be in `property_mgmt.py` | **FORWARD_DEP** — PROP-003 | Sibling spec `docs/open-property/specs/PROP-003.md` §4.1: "The functions live in `app/services/property_mgmt.py`". |
 
 ### MONEY-SAFETY VERDICT
 
