@@ -15,6 +15,8 @@ import com.testlogon.android.feature.broadcast.host.IngestRoute
 import com.testlogon.android.feature.broadcast.host.IngestViewModel
 import com.testlogon.android.feature.broadcast.inputs.InputsRoute
 import com.testlogon.android.feature.broadcast.inputs.InputsViewModel
+import com.testlogon.android.feature.broadcast.layout.LayoutRoute
+import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 
@@ -56,6 +58,13 @@ data object BroadcastInputsDest {
     const val ROUTE = "broadcast/{${InputsViewModel.ARG_SESSION_ID}}/inputs"
 
     fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/inputs"
+}
+
+/** AND-311 — the layout-management (mode chooser: single / side_by_side / pip / grid) destination. */
+data object BroadcastLayoutDest {
+    const val ROUTE = "broadcast/{${LayoutViewModel.ARG_SESSION_ID}}/layout"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/layout"
 }
 
 /** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
@@ -106,6 +115,10 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onManageInputs = {
                 navController.navigate(BroadcastInputsDest.build(sessionId)) { launchSingleTop = true }
             },
+            // AND-311 — the host can manage this broadcast's composition layout (mode chooser).
+            onManageLayout = {
+                navController.navigate(BroadcastLayoutDest.build(sessionId)) { launchSingleTop = true }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -116,6 +129,15 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         ),
     ) {
         InputsRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-311 — the layout-management destination (choose the broadcast composition mode).
+    composable(
+        route = BroadcastLayoutDest.ROUTE,
+        arguments = listOf(
+            navArgument(LayoutViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        LayoutRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(

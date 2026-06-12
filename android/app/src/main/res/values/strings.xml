@@ -1972,4 +1972,24 @@
     <string name="inputs_stale_banner">Offline — showing last-known inputs</string>
     <string name="inputs_retry">Retry</string>
     <string name="inputs_unnamed">Untitled input</string>
+
+    <!-- AND-311 — layout management (broadcast composition modes) -->
+    <string name="layout_title">Layout</string>
+    <string name="layout_back_cd">Back</string>
+    <string name="host_control_manage_layout">Manage layout</string>
+    <string name="layout_error_title">Couldn\'t load layout</string>
+    <string name="layout_retry">Retry</string>
+    <string name="layout_current_mode_cd">Current layout: %1$s</string>
+    <string name="layout_live_badge">LIVE</string>
+    <string name="layout_live_badge_cd">%1$s is the current layout</string>
+    <string name="layout_switch_cd">Switch to %1$s layout</string>
+    <string name="layout_pending_cd">Switching to %1$s…</string>
+    <string name="layout_needs_source">Add a source to see this layout on air.</string>
+    <string name="layout_stale_banner">Offline — showing last-known layout</string>
+    <string name="layout_active_inputs">%1$d active source(s)</string>
+    <string name="layout_mode_single">Full screen</string>
+    <string name="layout_mode_side_by_side">Side by side</string>
+    <string name="layout_mode_pip">Picture-in-picture</string>
+    <string name="layout_mode_grid">Grid</string>
+    <string name="layout_mode_unknown">Unknown</string>
 </resources>

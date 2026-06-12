@@ -51,4 +51,15 @@ abstract class BroadcastDataModule {
     @Binds
     @Singleton
     abstract fun bindInputsRepository(impl: InputsRepositoryImpl): InputsRepository
+
+    /**
+     * AND-311 — separate layout-management repository. THIN: reuses the AND-310 [InputsApi] (getLayout /
+     * switchLayout) + [com.testlogon.android.core.data.broadcast.InputsDao] layout cache; kept distinct from
+     * InputsRepository so its fakes are untouched. No new API/DAO/migration.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindLayoutRepository(
+        impl: com.testlogon.android.feature.broadcast.layout.LayoutRepositoryImpl,
+    ): com.testlogon.android.feature.broadcast.layout.LayoutRepository
 }
