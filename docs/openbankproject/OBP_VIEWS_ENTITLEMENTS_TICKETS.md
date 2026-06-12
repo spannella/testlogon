@@ -107,7 +107,7 @@ queue"* (`OBP_GAP_ANALYSIS.md` §A, §C).
 
 ---
 
-## VEW-001: Account **View** entity — DDB model, field-grant catalog, view CRUD
+### VEW-001: Account **View** entity — DDB model, field-grant catalog, view CRUD
 
 **Type:** Feature · **Priority:** P1 · **Estimate:** 3 d · **Flag:** `account_views_enabled`
 
@@ -227,7 +227,7 @@ field, all default `False`), `ViewCreateIn` (`name`, `grants: ViewGrantsMatrix`,
 
 ---
 
-## VEW-002: Grant / revoke a View to a grantee + **unauthenticated public view**
+### VEW-002: Grant / revoke a View to a grantee + **unauthenticated public view**
 
 **Type:** Feature · **Priority:** P1 · **Estimate:** 3 d · **Flag:** `account_views_enabled`
 
@@ -332,7 +332,7 @@ GET    /ui/views/public/{token}   → resolve_public_view → VEW-003 projected 
 
 ---
 
-## VEW-003: Field-level **projection enforcement** when reading through a View
+### VEW-003: Field-level **projection enforcement** when reading through a View
 
 **Type:** Feature · **Priority:** P1 · **Estimate:** 2 d · **Flag:** `account_views_enabled`
 
@@ -419,7 +419,7 @@ public view doesn't grant.
 
 ---
 
-## VEW-004: **Entitlement-request workflow** — self-service request → admin approval queue → STU-ACL grant
+### VEW-004: **Entitlement-request workflow** — self-service request → admin approval queue → STU-ACL grant
 
 **Type:** Feature · **Priority:** P1 · **Estimate:** 3 d · **Flag:** `entitlement_requests_enabled`
 
@@ -538,7 +538,7 @@ no path-capture collision.
 
 ---
 
-## VEW-005: Tests, table init, docs, and flag wiring (consolidation)
+### VEW-005: Tests, table init, docs, and flag wiring (consolidation)
 
 **Type:** Chore/Test · **Priority:** P2 · **Estimate:** 2 d · **Flags:** both
 
