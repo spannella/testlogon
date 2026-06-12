@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.call.incall
 
+import com.testlogon.android.feature.call.billing.BillingCondition
 import com.testlogon.android.feature.call.domain.CallEndReason
 
 /**
@@ -33,6 +34,18 @@ data class InCallUiState(
     val controlsVisible: Boolean = true,
     val localTileCorner: PipCorner = PipCorner.TOP_END,
     val endedReason: CallEndReason? = null,
+    /**
+     * AND-301 — paid-call billing for the running-cost overlay + final-cost summary. [paid] gates the
+     * overlay; [runningCostCents] is authoritative (heartbeat) when [isEstimate] is false; [finalCostCents]
+     * is set on Ended ([finalIsEstimate] when it falls back to the local estimate). All default to the
+     * free-call zero so non-paid calls render unchanged.
+     */
+    val paid: Boolean = false,
+    val runningCostCents: Int = 0,
+    val isEstimate: Boolean = false,
+    val billingCondition: BillingCondition = BillingCondition.None,
+    val finalCostCents: Int? = null,
+    val finalIsEstimate: Boolean = false,
 )
 
 /** Coarse, UI-rendered lifecycle derived from the domain [com.testlogon.android.feature.call.domain.CallPhase]. */

@@ -52,6 +52,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
 import com.testlogon.android.core.webrtc.ui.RemoteVideoView
+import com.testlogon.android.feature.call.billing.FinalCostSummary
+import com.testlogon.android.feature.call.billing.RunningCostOverlay
 
 /**
  * AND-298 — in-call (1:1) screen.
@@ -227,6 +229,15 @@ private fun TopOverlay(
                 .testTag("incall_duration")
                 .semantics { liveRegion = LiveRegionMode.Polite },
         )
+        // AND-301: running-cost overlay for a paid call (authoritative heartbeat cost / local estimate).
+        if (state.paid) {
+            Spacer(Modifier.height(4.dp))
+            RunningCostOverlay(
+                runningCostCents = state.runningCostCents,
+                isEstimate = state.isEstimate,
+                condition = state.billingCondition,
+            )
+        }
         if (state.mediaUnavailable) {
             Spacer(Modifier.height(8.dp))
             Banner(
@@ -384,6 +395,15 @@ private fun EndedOverlay(
             Text(
                 text = state.durationLabel,
                 style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        // AND-301: final-cost summary for a paid call (authoritative billed total, or last running value
+        // labelled an estimate when the billing read was unavailable).
+        if (state.paid && state.finalCostCents != null) {
+            Spacer(Modifier.height(4.dp))
+            FinalCostSummary(
+                finalCostCents = state.finalCostCents,
+                finalIsEstimate = state.finalIsEstimate,
             )
         }
     }

@@ -71,6 +71,8 @@ class CallManager @Inject constructor(
         calleeUserId: String,
         mode: CallMode = CallMode.AUDIO,
         peerName: String? = null,
+        paid: Boolean = false,
+        rateCentsPerMin: Int? = null,
     ) {
         if (isBusy()) return
         val idk = IdempotencyKey.newKey()
@@ -85,6 +87,10 @@ class CallManager @Inject constructor(
             phase = CallPhase.Inviting,
             call = active,
             peerName = peerName,
+            // AND-301: optimistic paid/rate from the entry point; reconciled with the invite RESPONSE
+            // (authoritative paid/rate_cents_per_minute) in runOutgoing().
+            paid = paid,
+            rateCentsPerMinute = rateCentsPerMin ?: 0,
         )
         // AND-296: the orchestration coroutine only DRIVES setup (invite -> Ringing -> negotiate). It must
         // NOT cancel the ring-timeout/heartbeat in a finally: in the FLAGGED-media path negotiate() returns
@@ -111,6 +117,7 @@ class CallManager @Inject constructor(
     }
 
     private suspend fun runOutgoing(active: ActiveCall) {
+        val current = _state.value
         when (
             val invited = callRepository.invite(
                 callId = active.callId,
@@ -118,10 +125,21 @@ class CallManager @Inject constructor(
                 calleeUserId = active.peerUserId,
                 mode = active.mode,
                 idempotencyKey = active.idempotencyKey,
+                paid = current.paid,
+                rateCentsPerMin = current.rateCentsPerMinute.takeIf { it > 0 },
             )
         ) {
             is ApiResult.Success -> {
-                _state.update { it.copy(phase = CallPhase.Ringing) }
+                // AND-301: adopt the AUTHORITATIVE paid/rate from the invite response (web also relies on
+                // the server echo) so the billing UI uses server-confirmed values.
+                val data = invited.data
+                _state.update {
+                    it.copy(
+                        phase = CallPhase.Ringing,
+                        paid = data.paid,
+                        rateCentsPerMinute = data.rateCentsPerMinute ?: it.rateCentsPerMinute,
+                    )
+                }
                 armRingTimeout(active)
                 negotiate(active)
             }
@@ -215,6 +233,10 @@ class CallManager @Inject constructor(
                                 elapsedSeconds = data.elapsedSeconds,
                                 warnLowBalance = data.warnLowBalance,
                                 minutesRemaining = data.minutesRemaining,
+                                // AND-301: authoritative billing values (cents fit Int; server caps a call).
+                                totalCostCents = data.totalCostCents.toInt(),
+                                balanceRemainingCents = data.balanceRemainingCents.toInt(),
+                                maxDurationWarning = data.maxDurationWarning,
                             )
                         }
                         if (data.shouldTerminate) {

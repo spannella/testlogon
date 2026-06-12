@@ -26,6 +26,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.ui.input.TlButton
 import com.testlogon.android.core.ui.input.TlButtonVariant
+import com.testlogon.android.feature.call.billing.CallBillingUiState
+import com.testlogon.android.feature.call.billing.PaidCallConfirmDialog
+import com.testlogon.android.feature.call.billing.PaidCallConfirmState
+import com.testlogon.android.feature.call.billing.RunningCostOverlay
 
 /**
  * AND-296 — outgoing-call screen (peer name + phase label + duration once connected + a single End/Close).
@@ -39,6 +43,7 @@ fun OutgoingCallRoute(
     viewModel: OutgoingCallViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val billing by viewModel.billing.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.effect.collect { effect ->
             when (effect) {
@@ -48,9 +53,12 @@ fun OutgoingCallRoute(
     }
     OutgoingCallScreen(
         state = state,
+        billing = billing,
         onHangUp = viewModel::onHangUp,
         onClose = viewModel::onClose,
         onRetry = viewModel::start,
+        onConfirmPaidCall = viewModel::onConfirmPaidCall,
+        onCancelPaidCall = viewModel::onCancelPaidCall,
         modifier = modifier,
     )
 }
@@ -58,14 +66,30 @@ fun OutgoingCallRoute(
 @Composable
 fun OutgoingCallScreen(
     state: CallUiState,
+    billing: CallBillingUiState,
     onHangUp: () -> Unit,
     onClose: () -> Unit,
     onRetry: () -> Unit,
+    onConfirmPaidCall: () -> Unit,
+    onCancelPaidCall: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val peerName = state.peerName ?: stringResource(R.string.call_unknown_caller)
     val phaseLabel = phaseLabel(state)
     val endCd = stringResource(R.string.call_end_cd)
+
+    // AND-301: pre-start paid-call confirm. Shown while the gate is AwaitingConfirm (before the call is
+    // placed). Start -> proceed; Cancel -> end/cancel via the VM's existing end path.
+    val confirm = billing.confirm
+    if (confirm is PaidCallConfirmState.AwaitingConfirm) {
+        PaidCallConfirmDialog(
+            rateCentsPerMinute = confirm.rateCentsPerMinute,
+            balanceRemainingCents = confirm.balanceRemainingCents,
+            onConfirm = onConfirmPaidCall,
+            onCancel = onCancelPaidCall,
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -94,6 +118,15 @@ fun OutgoingCallScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.testTag("outgoing_call_media_unavailable"),
+            )
+        }
+        // AND-301: running-cost overlay for a paid call once the gate is open (Confirmed).
+        if (billing.paid && billing.confirm is PaidCallConfirmState.Confirmed) {
+            Spacer(Modifier.height(8.dp))
+            RunningCostOverlay(
+                runningCostCents = billing.runningCostCents,
+                isEstimate = billing.isEstimate,
+                condition = billing.condition,
             )
         }
         Spacer(Modifier.height(48.dp))

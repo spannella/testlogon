@@ -11,6 +11,8 @@ import com.testlogon.android.data.call.CallHistoryPage
 import com.testlogon.android.data.call.CallInvited
 import com.testlogon.android.data.call.CallMode
 import com.testlogon.android.data.call.CallRepository
+import com.testlogon.android.data.messaging.BillingAuthorizer
+import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.webrtc.IceServer
 import com.testlogon.android.data.webrtc.IceServersProvider
 import com.testlogon.android.data.webrtc.StubPeerConnectionController
@@ -79,7 +81,12 @@ class OutgoingCallViewModelTest {
                 OutgoingCallViewModel.ARG_PEER_NAME to "Alex",
             ),
         )
-        return OutgoingCallViewModel(manager, saved)
+        // AND-301: the FLAGGED wallet seam always returns NotConfigured (no real charge).
+        val authorizer = object : BillingAuthorizer {
+            override suspend fun authorize(amountMinorUnits: Long, currency: String, memo: String?) =
+                BillingResult.NotConfigured
+        }
+        return OutgoingCallViewModel(manager, authorizer, saved)
     }
 
     @Test

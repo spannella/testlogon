@@ -4,6 +4,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.data.call.CallMode
+import com.testlogon.android.feature.call.billing.BillingCalculator
+import com.testlogon.android.feature.call.billing.BillingCondition
 import com.testlogon.android.feature.call.domain.CallEndReason
 import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallPhase
@@ -188,6 +190,22 @@ class InCallViewModel @Inject constructor(
             frozenDurationSeconds = baseSeconds
             CallDurationFormatter.format(baseSeconds)
         }
+        // AND-301: billing for the running-cost overlay. The authoritative cost/balance/warnings are
+        // copied from each heartbeat into the session (CallManager); between heartbeats we bridge with the
+        // local estimate (ceil(elapsed/60) * rate). On Ended we surface the final cost (authoritative if
+        // billed, otherwise the last running value labelled an estimate).
+        val hasHeartbeat = totalCostCents > 0 || balanceRemainingCents > 0
+        val runningCost = if (hasHeartbeat) {
+            totalCostCents
+        } else {
+            BillingCalculator.estimateCents(baseSeconds, rateCentsPerMinute)
+        }
+        val billingCondition = when {
+            maxDurationWarning -> BillingCondition.MaxDurationWarning
+            warnLowBalance -> BillingCondition.LowBalance
+            else -> BillingCondition.None
+        }
+        val ended = phase is CallPhase.Ended
         return InCallUiState(
             callId = call?.callId.orEmpty(),
             peerName = peerName,
@@ -209,6 +227,12 @@ class InCallViewModel @Inject constructor(
             controlsVisible = if (video) local.controlsVisible else true,
             localTileCorner = local.pipCorner,
             endedReason = (phase as? CallPhase.Ended)?.reason ?: (phase as? CallPhase.Failed)?.reason,
+            paid = paid,
+            runningCostCents = runningCost,
+            isEstimate = !hasHeartbeat,
+            billingCondition = billingCondition,
+            finalCostCents = if (ended && paid) runningCost else null,
+            finalIsEstimate = !hasHeartbeat,
         )
     }
 

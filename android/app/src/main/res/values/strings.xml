@@ -700,6 +700,19 @@
     <string name="call_weak_connection">Weak connection</string>
     <string name="call_reconnecting">Reconnecting…</string>
 
+    <!-- AND-301 — call billing (paid 1:1 calls) -->
+    <string name="billing_rate_per_min">%1$s/min</string>
+    <string name="billing_start_paid_call">Start Paid Call</string>
+    <string name="billing_cancel">Cancel</string>
+    <string name="billing_paid_call_title">This is a paid call</string>
+    <string name="billing_running_cost_cd">Call cost %1$s</string>
+    <string name="billing_estimate_suffix">estimated</string>
+    <string name="billing_low_balance">Low balance</string>
+    <string name="billing_max_duration">Approaching max duration</string>
+    <string name="billing_balance_unavailable">Balance check unavailable</string>
+    <string name="billing_balance_remaining">Balance: %1$s</string>
+    <string name="billing_final_cost">Total: %1$s</string>
+
     <!-- AND-299 — group calls -->
     <string name="group_call_title">Group call</string>
     <string name="group_call_participant_count">%1$d in call</string>

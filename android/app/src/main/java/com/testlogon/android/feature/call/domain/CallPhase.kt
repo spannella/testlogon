@@ -58,4 +58,15 @@ data class CallSessionState(
      * surface "call media unavailable" while the CONTROL PLANE still functioned.
      */
     val mediaUnavailable: Boolean = false,
+    /**
+     * AND-301 — billing snapshot for a PAID call. [paid] / [rateCentsPerMinute] are captured from the
+     * invite; [totalCostCents], [balanceRemainingCents] and [maxDurationWarning] are the authoritative
+     * values copied from each server heartbeat (alongside the existing elapsedSeconds/warnLowBalance/
+     * minutesRemaining). All default to the free-call zero so non-paid calls are unaffected.
+     */
+    val paid: Boolean = false,
+    val rateCentsPerMinute: Int = 0,
+    val totalCostCents: Int = 0,
+    val balanceRemainingCents: Int = 0,
+    val maxDurationWarning: Boolean = false,
 )
