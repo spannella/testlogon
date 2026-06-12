@@ -70,6 +70,15 @@ interface CallRepository {
 
     /** GET /ui/calls/history (paged). */
     suspend fun history(cursor: String? = null, limit: Int? = null): ApiResult<CallHistoryPage>
+
+    /** AND-303 — GET ui/calls/history/{callId}: a single history record (same shape as a list row). */
+    suspend fun detail(callId: String): ApiResult<CallHistoryEntry>
+
+    /** AND-303 — DELETE ui/calls/history/{callId}: remove one record (200 body ignored). */
+    suspend fun deleteRecord(callId: String): ApiResult<Unit>
+
+    /** AND-303 — GET ui/calls/stats: aggregate counts/durations for the history header. */
+    suspend fun stats(): ApiResult<CallStats>
 }
 
 @Singleton
@@ -149,6 +158,18 @@ class CallRepositoryImpl @Inject constructor(
         withContext(io) {
             call { api.history(cursor = cursor, limit = limit) }.map { it.toDomain() }
         }
+
+    override suspend fun detail(callId: String): ApiResult<CallHistoryEntry> = withContext(io) {
+        call { api.historyRecord(callId) }.map { it.toDomain() }
+    }
+
+    override suspend fun deleteRecord(callId: String): ApiResult<Unit> = withContext(io) {
+        call { api.deleteHistoryRecord(callId) }
+    }
+
+    override suspend fun stats(): ApiResult<CallStats> = withContext(io) {
+        call { api.stats() }.map { it.toDomain() }
+    }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

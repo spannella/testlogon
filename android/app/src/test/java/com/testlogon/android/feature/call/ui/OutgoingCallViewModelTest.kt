@@ -57,6 +57,17 @@ class OutgoingCallViewModelTest {
             ApiResult.Success(CallBillingStatus(callId, false, 0, 0, 0, 0, 0, ""))
         override suspend fun history(cursor: String?, limit: Int?) =
             ApiResult.Success(CallHistoryPage(emptyList(), null))
+        override suspend fun detail(callId: String) =
+            ApiResult.Success(
+                com.testlogon.android.data.call.CallHistoryEntry(
+                    callId, "self", "peer", CallMode.AUDIO,
+                    com.testlogon.android.data.call.CallDirection.OUTGOING,
+                    com.testlogon.android.data.call.CallStatus.COMPLETED, 0L, 0L, "completed",
+                ),
+            )
+        override suspend fun deleteRecord(callId: String) = ApiResult.Success(Unit)
+        override suspend fun stats() =
+            ApiResult.Success(com.testlogon.android.data.call.CallStats(0, emptyMap(), emptyMap(), 0L))
         private fun ok(callId: String): ApiResult<CallAction> =
             ApiResult.Success(CallAction(callId, "conv", "ended", 0, null, null, false))
     }

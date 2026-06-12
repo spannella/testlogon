@@ -99,6 +99,19 @@ data class CallHistoryPage(
     val nextCursor: String?,
 )
 
+/**
+ * AND-303 — aggregate call statistics (GET ui/calls/stats) for the history-screen header card.
+ *
+ * Pure (no android./java.time): totals are Int counts and Long SECONDS; the by-status / by-type maps keep
+ * the raw wire keys (e.g. "completed", "audio") so the UI layer owns labelling.
+ */
+data class CallStats(
+    val totalCalls: Int,
+    val callsByStatus: Map<String, Int>,
+    val callsByType: Map<String, Int>,
+    val totalDurationSeconds: Long,
+)
+
 // ─── DTO -> domain mappers ───────────────────────────────────────────────────────────────────────
 
 internal fun CallInviteOutDto.toDomain(): CallInvited = CallInvited(
@@ -166,6 +179,13 @@ internal fun CallRecordOutDto.toDomain(): CallHistoryEntry = CallHistoryEntry(
 internal fun CallHistoryResponseDto.toDomain(): CallHistoryPage = CallHistoryPage(
     entries = items.map { it.toDomain() },
     nextCursor = nextCursor,
+)
+
+internal fun CallStatsOutDto.toDomain(): CallStats = CallStats(
+    totalCalls = totalCalls,
+    callsByStatus = callsByStatus,
+    callsByType = callsByType,
+    totalDurationSeconds = totalDurationSeconds,
 )
 
 internal fun String?.toCallStatus(): CallStatus = when (this?.lowercase()) {

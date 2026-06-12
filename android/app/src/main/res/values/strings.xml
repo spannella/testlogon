@@ -664,6 +664,27 @@
     <string name="call_history_empty">No calls yet</string>
     <string name="call_history_load_more">Load more</string>
     <string name="call_history_subtitle">%1$s · %2$d s</string>
+    <!-- AND-303 — call history detail / actions / stats -->
+    <string name="call_history_detail_title">Call details</string>
+    <string name="call_history_callback">Call back</string>
+    <string name="call_history_delete">Delete</string>
+    <string name="call_history_load_more_retry">Couldn\'t load more. Tap to retry</string>
+    <string name="call_history_status_completed">Completed</string>
+    <string name="call_history_status_missed">Missed</string>
+    <string name="call_history_status_declined">Declined</string>
+    <string name="call_history_status_no_answer">No answer</string>
+    <string name="call_history_status_failed">Failed</string>
+    <string name="call_history_direction_incoming">Incoming</string>
+    <string name="call_history_direction_outgoing">Outgoing</string>
+    <string name="call_history_type_audio">Audio</string>
+    <string name="call_history_type_video">Video</string>
+    <string name="call_history_duration_none">—</string>
+    <string name="call_history_callback_unavailable">Call back isn\'t available for this record</string>
+    <string name="call_history_stats_total">%1$d calls</string>
+    <string name="call_history_stats_duration">Total %1$s</string>
+    <string name="call_history_detail_caller">Caller</string>
+    <string name="call_history_detail_callee">Callee</string>
+    <string name="call_history_detail_started">Started</string>
     <string name="call_status_calling">Calling…</string>
     <string name="call_status_ringing">Ringing…</string>
     <string name="call_status_connecting">Connecting…</string>

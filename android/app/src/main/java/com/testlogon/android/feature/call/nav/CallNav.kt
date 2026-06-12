@@ -8,6 +8,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.call.group.GroupCallRoute
 import com.testlogon.android.feature.call.group.GroupCallViewModel
+import com.testlogon.android.feature.call.history.CallHistoryDetailRoute
+import com.testlogon.android.feature.call.history.CallHistoryDetailViewModel
 import com.testlogon.android.feature.call.history.CallHistoryRoute
 import com.testlogon.android.feature.call.incall.InCallRoute
 import com.testlogon.android.feature.call.ui.OutgoingCallRoute
@@ -21,6 +23,12 @@ import com.testlogon.android.feature.call.ui.OutgoingCallViewModel
  */
 object CallRoutes {
     const val HISTORY = "call/history"
+
+    // AND-303 — single call-history record detail, keyed by the history record's call_id.
+    const val ARG_HISTORY_CALL_ID = CallHistoryDetailViewModel.ARG_CALL_ID
+    const val HISTORY_DETAIL = "call/history/{$ARG_HISTORY_CALL_ID}"
+
+    fun historyDetail(callId: String): String = "call/history/${Uri.encode(callId)}"
 
     // AND-298 — in-call (1:1) destination, reached once a call is connected.
     const val INCALL = "call/incall/{callId}"
@@ -71,8 +79,16 @@ fun NavGraphBuilder.callGraph(navController: NavHostController) {
     composable(CallRoutes.HISTORY) {
         CallHistoryRoute(
             onBack = { navController.popBackStack() },
-            onCallBack = { /* AND-296 entry: resolving conversation for a redial is upstream. */ },
+            onOpenDetail = { callId -> navController.navigate(CallRoutes.historyDetail(callId)) },
         )
+    }
+    composable(
+        route = CallRoutes.HISTORY_DETAIL,
+        arguments = listOf(
+            navArgument(CallRoutes.ARG_HISTORY_CALL_ID) { type = NavType.StringType },
+        ),
+    ) {
+        CallHistoryDetailRoute(onBack = { navController.popBackStack() })
     }
     composable(
         route = CallRoutes.OUTGOING,

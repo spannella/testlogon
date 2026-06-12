@@ -1,6 +1,7 @@
 package com.testlogon.android.data.call
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -76,4 +77,22 @@ interface CallApi {
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int? = null,
     ): CallHistoryResponseDto
+
+    /**
+     * AND-303 — GET ui/calls/history/{id}: a single history record (same CallRecordOut shape as a list
+     * item). The {callId} path segment is URL-encoded by Retrofit.
+     */
+    @GET("ui/calls/history/{callId}")
+    suspend fun historyRecord(@Path("callId") callId: String): CallRecordOutDto
+
+    /**
+     * AND-303 — DELETE ui/calls/history/{id}: removes one record. The 200 body is ignorable (an {ok}-style
+     * ack), so the call returns Unit and the repository only cares about success vs. failure.
+     */
+    @DELETE("ui/calls/history/{callId}")
+    suspend fun deleteHistoryRecord(@Path("callId") callId: String)
+
+    /** AND-303 — GET ui/calls/stats: aggregate call counts/durations for the history header. */
+    @GET("ui/calls/stats")
+    suspend fun stats(): CallStatsOutDto
 }

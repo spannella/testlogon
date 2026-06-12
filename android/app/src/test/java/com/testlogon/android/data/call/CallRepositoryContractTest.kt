@@ -209,6 +209,80 @@ class CallRepositoryContractTest {
     }
 
     @Test
+    fun detail_getsRecordById_mapsDomain() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"call_id":"c_z","caller_id":"u1","callee_id":"u2","call_type":"video",
+                    "direction":"outgoing","status":"completed","duration_seconds":125,
+                    "created_at":1733400000}""",
+            ),
+        )
+        val result = repo().detail("c_z")
+        assertTrue(result is ApiResult.Success)
+        val entry = (result as ApiResult.Success).data
+        assertEquals("c_z", entry.callId)
+        assertEquals(CallMode.VIDEO, entry.mode)
+        assertEquals(CallDirection.OUTGOING, entry.direction)
+        assertEquals(CallStatus.COMPLETED, entry.status)
+        assertEquals(125L, entry.durationSeconds)
+
+        val req = backend.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/ui/calls/history/c_z", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun deleteRecord_usesDelete_ignoresBody() = runTest {
+        backend.enqueue(Fixtures.okBody("""{"ok":true}"""))
+        val result = repo().deleteRecord("c_del")
+        assertTrue(result is ApiResult.Success)
+
+        val req = backend.takeRequest()
+        assertEquals("DELETE", req.method)
+        assertEquals("/ui/calls/history/c_del", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun stats_getsAggregates_mapsDomain() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"total_calls":7,"calls_by_status":{"completed":5,"missed":2},
+                    "calls_by_type":{"audio":4,"video":3},"total_duration_seconds":3600}""",
+            ),
+        )
+        val result = repo().stats()
+        assertTrue(result is ApiResult.Success)
+        val stats = (result as ApiResult.Success).data
+        assertEquals(7, stats.totalCalls)
+        assertEquals(5, stats.callsByStatus["completed"])
+        assertEquals(3, stats.callsByType["video"])
+        assertEquals(3600L, stats.totalDurationSeconds)
+
+        val req = backend.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/ui/calls/stats", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun stats_partialPayload_defaultsEmpty() = runTest {
+        backend.enqueue(Fixtures.okBody("""{"total_calls":2}"""))
+        val result = repo().stats()
+        assertTrue(result is ApiResult.Success)
+        val stats = (result as ApiResult.Success).data
+        assertEquals(2, stats.totalCalls)
+        assertTrue(stats.callsByStatus.isEmpty())
+        assertEquals(0L, stats.totalDurationSeconds)
+    }
+
+    @Test
+    fun deleteRecord_404_mapsToFailure() = runTest {
+        backend.enqueue(Fixtures.error("\"not found\"", 404))
+        val result = repo().deleteRecord("missing")
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(404, (result as ApiResult.Failure).error.status)
+    }
+
+    @Test
     fun invite_422_mapsToFailure_neverThrows() = runTest {
         backend.enqueue(Fixtures.error("""[{"msg":"field required","type":"value_error.missing"}]""", 422))
         val result = repo().invite("c", "conv", "callee")

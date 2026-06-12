@@ -150,3 +150,17 @@ data class CallHistoryResponseDto(
     @Json(name = "items") val items: List<CallRecordOutDto> = emptyList(),
     @Json(name = "next_cursor") val nextCursor: String? = null,
 )
+
+/**
+ * AND-303 — CallStatsOut (GET ui/calls/stats). Aggregate counts/durations for the history-screen header.
+ *
+ * Mapped defensively: every field has a Kotlin default so a partial/renamed payload still decodes (absent
+ * maps fall back to empty, totals to 0). total_duration_seconds is Long SECONDS (no money here).
+ */
+@JsonClass(generateAdapter = true)
+data class CallStatsOutDto(
+    @Json(name = "total_calls") val totalCalls: Int = 0,
+    @Json(name = "calls_by_status") val callsByStatus: Map<String, Int> = emptyMap(),
+    @Json(name = "calls_by_type") val callsByType: Map<String, Int> = emptyMap(),
+    @Json(name = "total_duration_seconds") val totalDurationSeconds: Long = 0,
+)
