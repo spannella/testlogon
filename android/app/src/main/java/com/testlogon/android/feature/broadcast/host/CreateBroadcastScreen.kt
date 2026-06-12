@@ -60,12 +60,14 @@ object CreateBroadcastTestTags {
 fun CreateBroadcastRoute(
     onFinished: () -> Unit,
     viewModel: CreateBroadcastViewModel = hiltViewModel(),
+    // AND-308 — after a session is created/scheduled, the host can move on to the ingest (publish) screen.
+    onSessionReady: (String) -> Unit = { onFinished() },
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.effects.collectLatest { effect ->
             when (effect) {
-                is CreateBroadcastEffect.Finished -> onFinished()
+                is CreateBroadcastEffect.Finished -> onSessionReady(effect.sessionId)
             }
         }
     }

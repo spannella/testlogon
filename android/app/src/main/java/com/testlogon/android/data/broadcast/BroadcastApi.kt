@@ -1,6 +1,7 @@
 package com.testlogon.android.data.broadcast
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -62,4 +63,41 @@ interface BroadcastApi {
     /** Cancel a pending schedule (no body); the session returns to cancelled with cancelled_at set. */
     @POST("broadcast/sessions/{sessionId}/cancel-schedule")
     suspend fun cancelSchedule(@Path("sessionId") sessionId: String): BroadcastSessionDto
+
+    // ---- AND-308 host broadcast INPUTS control plane (the ingest inputs) ----
+
+    /**
+     * Create an ingest input for [sessionId]. Returns the allocated input (ingest_url / stream_key /
+     * AWS input ARN). Use input_type "primary" for the host's own camera/mic. Returns 201.
+     */
+    @POST("broadcast/sessions/{sessionId}/inputs")
+    suspend fun createInput(
+        @Path("sessionId") sessionId: String,
+        @Body body: BroadcastInputCreateInDto,
+    ): BroadcastInputCreateOutDto
+
+    /** Activate an input (mark it the active publishing feed). No body. */
+    @POST("broadcast/sessions/{sessionId}/inputs/{inputId}/activate")
+    suspend fun activateInput(
+        @Path("sessionId") sessionId: String,
+        @Path("inputId") inputId: String,
+    )
+
+    /** Deactivate an input. No body. */
+    @POST("broadcast/sessions/{sessionId}/inputs/{inputId}/deactivate")
+    suspend fun deactivateInput(
+        @Path("sessionId") sessionId: String,
+        @Path("inputId") inputId: String,
+    )
+
+    /** Remove an input entirely. */
+    @DELETE("broadcast/sessions/{sessionId}/inputs/{inputId}")
+    suspend fun removeInput(
+        @Path("sessionId") sessionId: String,
+        @Path("inputId") inputId: String,
+    )
+
+    // NOTE: the per-input host-publish SDP exchange (POST .../inputs/{inputId}/webrtc-offer) is NOT
+    // declared here — it ALREADY exists as SignalingApi.sendBroadcastOffer (AND-290) and is driven via
+    // SignalingRepository.exchangeBroadcastOffer. AND-308 REUSES that path rather than duplicating it.
 }

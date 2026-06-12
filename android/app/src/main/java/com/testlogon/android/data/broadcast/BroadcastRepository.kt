@@ -58,6 +58,27 @@ interface BroadcastRepository {
 
     /** Cancels a pending schedule on [sessionId]. */
     suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession>
+
+    // ---- AND-308 host broadcast INPUTS control plane (the ingest inputs) ----
+
+    /**
+     * Creates an ingest [inputType] input (e.g. "primary" for the host's own camera/mic) on [sessionId],
+     * returning the allocated [BroadcastInput] (ingest URL / stream key). Pure control plane — no media.
+     */
+    suspend fun createInput(
+        sessionId: String,
+        inputType: String,
+        label: String?,
+    ): ApiResult<BroadcastInput>
+
+    /** Activates [inputId] on [sessionId] (marks it the active publishing feed). */
+    suspend fun activateInput(sessionId: String, inputId: String): ApiResult<Unit>
+
+    /** Deactivates [inputId] on [sessionId]. */
+    suspend fun deactivateInput(sessionId: String, inputId: String): ApiResult<Unit>
+
+    /** Removes [inputId] from [sessionId]. */
+    suspend fun removeInput(sessionId: String, inputId: String): ApiResult<Unit>
 }
 
 @Singleton
@@ -115,6 +136,30 @@ class BroadcastRepositoryImpl @Inject constructor(
     override suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession> =
         withContext(io) {
             call { api.cancelSchedule(sessionId) }.map { it.toDomain() }
+        }
+
+    override suspend fun createInput(
+        sessionId: String,
+        inputType: String,
+        label: String?,
+    ): ApiResult<BroadcastInput> = withContext(io) {
+        val body = BroadcastInputCreateInDto(inputType = inputType, label = label)
+        call { api.createInput(sessionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun activateInput(sessionId: String, inputId: String): ApiResult<Unit> =
+        withContext(io) {
+            call { api.activateInput(sessionId, inputId) }
+        }
+
+    override suspend fun deactivateInput(sessionId: String, inputId: String): ApiResult<Unit> =
+        withContext(io) {
+            call { api.deactivateInput(sessionId, inputId) }
+        }
+
+    override suspend fun removeInput(sessionId: String, inputId: String): ApiResult<Unit> =
+        withContext(io) {
+            call { api.removeInput(sessionId, inputId) }
         }
 
     /**

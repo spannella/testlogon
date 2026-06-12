@@ -184,6 +184,68 @@ class BroadcastRepositoryContractTest {
         assertEquals(422, (result as ApiResult.Failure).error.status)
     }
 
+    // ---- AND-308 host broadcast INPUTS control plane ----
+
+    @Test
+    fun createInput_postsTypeAndLabel_decodesInput() = runTest {
+        backend.enqueue(Fixtures.okBody(INPUT_CREATE_JSON, code = 201))
+        val result = repo().createInput("bcs_1", "primary", "Host camera")
+        assertTrue(result is ApiResult.Success)
+        val input = (result as ApiResult.Success).data
+        assertEquals("in_1", input.inputId)
+        assertEquals("bcs_1", input.sessionId)
+        assertEquals("primary", input.inputType)
+        assertEquals("Host camera", input.label)
+        assertEquals("rtmps://ingest.testlogon.dev/app", input.ingestUrl)
+        assertEquals("sk_live_abc", input.streamKey)
+        assertEquals(0, input.position)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/sessions/bcs_1/inputs", req.requestUrl?.encodedPath)
+        val body = req.bodyJson()
+        assertEquals("primary", body["input_type"])
+        assertEquals("Host camera", body["label"])
+    }
+
+    @Test
+    fun activateInput_postsToActivatePath() = runTest {
+        backend.enqueue(Fixtures.okBody("{}"))
+        val result = repo().activateInput("bcs_1", "in_1")
+        assertTrue(result is ApiResult.Success)
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/sessions/bcs_1/inputs/in_1/activate", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun deactivateInput_postsToDeactivatePath() = runTest {
+        backend.enqueue(Fixtures.okBody("{}"))
+        val result = repo().deactivateInput("bcs_1", "in_1")
+        assertTrue(result is ApiResult.Success)
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/sessions/bcs_1/inputs/in_1/deactivate", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun removeInput_deletesInputPath() = runTest {
+        backend.enqueue(Fixtures.okBody("{}"))
+        val result = repo().removeInput("bcs_1", "in_1")
+        assertTrue(result is ApiResult.Success)
+        val req = backend.takeRequest()
+        assertEquals("DELETE", req.method)
+        assertEquals("/broadcast/sessions/bcs_1/inputs/in_1", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun createInput_403_mapsToFailure() = runTest {
+        backend.enqueue(Fixtures.error("\"forbidden\"", 403))
+        val result = repo().createInput("bcs_1", "primary", null)
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(403, (result as ApiResult.Failure).error.status)
+    }
+
     @Test
     fun listSessions_401_mapsToFailure() = runTest {
         backend.enqueue(Fixtures.error("\"unauthorized\"", 401))
@@ -237,6 +299,12 @@ class BroadcastRepositoryContractTest {
             {"id":"bcs_new","profile_id":"prof_9","status":"scheduled","name":"Album party",
              "description":"Listen in","created_by":"usr_42","created_at":"2026-06-09T12:00:00Z",
              "updated_at":"2026-06-09T12:01:00Z","scheduled_at":1749319200,"schedule_status":"scheduled"}
+        """
+
+        const val INPUT_CREATE_JSON = """
+            {"input_id":"in_1","session_id":"bcs_1","input_type":"primary","label":"Host camera",
+             "ingest_url":"rtmps://ingest.testlogon.dev/app","stream_key":"sk_live_abc","position":0,
+             "aws_input_arn":"arn:aws:medialive:us-east-2:111:input/in_1"}
         """
 
         const val CANCELLED_SESSION_JSON = """

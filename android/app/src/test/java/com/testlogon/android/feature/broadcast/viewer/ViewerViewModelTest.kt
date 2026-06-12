@@ -7,6 +7,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.testing.MainDispatcherRule
 import com.testlogon.android.data.analytics.PlaybackReporter
 import com.testlogon.android.data.analytics.PlaybackTarget
+import com.testlogon.android.data.broadcast.BroadcastInput
 import com.testlogon.android.data.broadcast.BroadcastPlaybackUrl
 import com.testlogon.android.data.broadcast.BroadcastRepository
 import com.testlogon.android.data.broadcast.BroadcastScheduledPage
@@ -92,6 +93,18 @@ class ViewerViewModelTest {
             description: String?,
         ): ApiResult<BroadcastSession> = ApiResult.Failure(ApiError(404, "nope"))
         override suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        // AND-308 inputs control plane — unused by the viewer; stubbed.
+        override suspend fun createInput(
+            sessionId: String,
+            inputType: String,
+            label: String?,
+        ): ApiResult<BroadcastInput> = ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun activateInput(sessionId: String, inputId: String): ApiResult<Unit> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun deactivateInput(sessionId: String, inputId: String): ApiResult<Unit> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun removeInput(sessionId: String, inputId: String): ApiResult<Unit> =
             ApiResult.Failure(ApiError(404, "nope"))
     }
 

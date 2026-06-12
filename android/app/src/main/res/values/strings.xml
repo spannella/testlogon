@@ -1797,6 +1797,16 @@
     <string name="broadcast_no_profile">No broadcast profile is available.</string>
     <string name="broadcast_scheduled_at_past">Pick a time further in the future.</string>
 
+    <!-- AND-308: host broadcast ingest (camera/mic publish) -->
+    <string name="ingest_title">Broadcast</string>
+    <string name="ingest_go_live">Go Live</string>
+    <string name="ingest_start">Start broadcasting</string>
+    <string name="ingest_stop">Stop</string>
+    <string name="ingest_preview_cd">Camera preview</string>
+    <string name="ingest_unavailable">Broadcasting unavailable — not configured</string>
+    <string name="ingest_failed">Couldn\'t start your broadcast. Try again.</string>
+    <string name="ingest_perm_required">Camera and microphone access is needed to broadcast.</string>
+
     <!-- AND-280: viewer playback (HLS) -->
     <string name="viewer_back_cd">Back</string>
     <string name="viewer_retry">Retry</string>
