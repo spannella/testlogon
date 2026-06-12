@@ -5,7 +5,9 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.testing.net.Fixtures
 import com.testlogon.android.core.testing.net.MockBackendRule
+import com.testlogon.android.core.testing.net.bodyJson
 import com.testlogon.android.core.testing.net.retrofit
+import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,6 +115,75 @@ class BroadcastRepositoryContractTest {
         assertEquals("/broadcast/sessions/bcs_01HX1/playback-url", req.requestUrl?.encodedPath)
     }
 
+    // ---- AND-307 host (broadcasting) control-plane mutations ----
+
+    @Test
+    fun create_postsProfileId_decodesDraft() = runTest {
+        backend.enqueue(Fixtures.okBody(DRAFT_SESSION_JSON, code = 201))
+        val result = repo().create("prof_9")
+        assertTrue(result is ApiResult.Success)
+        val session = (result as ApiResult.Success).data
+        assertEquals("bcs_new", session.id)
+        assertEquals(BroadcastSessionStatus.DRAFT, session.status)
+        assertEquals("prof_9", session.profileId)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/sessions", req.requestUrl?.encodedPath)
+        assertEquals("prof_9", req.bodyJson()["profile_id"])
+    }
+
+    @Test
+    fun schedule_postsScheduledAtNameDescription_decodesScheduled() = runTest {
+        backend.enqueue(Fixtures.okBody(SCHEDULED_SESSION_JSON))
+        val result = repo().schedule(
+            sessionId = "bcs_new",
+            scheduledAtEpochSeconds = 1749319200L,
+            name = "Album party",
+            description = "Listen in",
+        )
+        assertTrue(result is ApiResult.Success)
+        val session = (result as ApiResult.Success).data
+        assertEquals(BroadcastSessionStatus.SCHEDULED, session.status)
+        assertEquals("scheduled", session.scheduleStatus)
+        assertEquals(Instant.ofEpochSecond(1749319200L), session.scheduledAt)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/sessions/bcs_new/schedule", req.requestUrl?.encodedPath)
+        val body = req.bodyJson()
+        // scheduled_at decodes to a JSON number (Double via Moshi's loose map).
+        assertEquals(1749319200.0, body["scheduled_at"])
+        assertEquals("Album party", body["name"])
+        assertEquals("Listen in", body["description"])
+    }
+
+    @Test
+    fun cancelSchedule_postsNoBody_decodesCancelled() = runTest {
+        backend.enqueue(Fixtures.okBody(CANCELLED_SESSION_JSON))
+        val result = repo().cancelSchedule("bcs_new")
+        assertTrue(result is ApiResult.Success)
+        assertEquals(BroadcastSessionStatus.CANCELLED, (result as ApiResult.Success).data.status)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/sessions/bcs_new/cancel-schedule", req.requestUrl?.encodedPath)
+        assertTrue(req.bodyJson().isEmpty())
+    }
+
+    @Test
+    fun schedule_422_mapsToFailureWithBody() = runTest {
+        backend.enqueue(
+            Fixtures.error(
+                """[{"loc":["body","scheduled_at"],"msg":"in the past","type":"value_error"}]""",
+                422,
+            ),
+        )
+        val result = repo().schedule("bcs_new", 1L, name = null, description = null)
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(422, (result as ApiResult.Failure).error.status)
+    }
+
     @Test
     fun listSessions_401_mapsToFailure() = runTest {
         backend.enqueue(Fixtures.error("\"unauthorized\"", 401))
@@ -155,6 +226,23 @@ class BroadcastRepositoryContractTest {
              "created_by":"usr_42","created_at":"2026-06-05T22:00:00Z","updated_at":"2026-06-05T23:00:05Z",
              "started_at":"2026-06-05T23:00:00Z",
              "cloudfront_playback_url":"https://stream.testlogon.dev/bcs_01HX1/index.m3u8"}
+        """
+
+        const val DRAFT_SESSION_JSON = """
+            {"id":"bcs_new","profile_id":"prof_9","status":"draft","created_by":"usr_42",
+             "created_at":"2026-06-09T12:00:00Z","updated_at":"2026-06-09T12:00:00Z"}
+        """
+
+        const val SCHEDULED_SESSION_JSON = """
+            {"id":"bcs_new","profile_id":"prof_9","status":"scheduled","name":"Album party",
+             "description":"Listen in","created_by":"usr_42","created_at":"2026-06-09T12:00:00Z",
+             "updated_at":"2026-06-09T12:01:00Z","scheduled_at":1749319200,"schedule_status":"scheduled"}
+        """
+
+        const val CANCELLED_SESSION_JSON = """
+            {"id":"bcs_new","profile_id":"prof_9","status":"cancelled","created_by":"usr_42",
+             "created_at":"2026-06-09T12:00:00Z","updated_at":"2026-06-09T12:02:00Z",
+             "cancelled_at":"2026-06-09T12:02:00Z","schedule_status":"cancelled"}
         """
     }
 }

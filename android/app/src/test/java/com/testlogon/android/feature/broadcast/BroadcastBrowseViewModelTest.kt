@@ -41,6 +41,7 @@ class BroadcastBrowseViewModelTest {
         status = BroadcastSessionStatus.SCHEDULED,
         createdBy = "host",
         scheduledAt = now.plusSeconds(3600),
+        scheduleStatus = "scheduled",
         startedAt = null,
         stoppedAt = null,
         cancelledAt = null,
@@ -63,6 +64,17 @@ class BroadcastBrowseViewModelTest {
         override suspend fun session(sessionId: String): ApiResult<BroadcastSession> =
             ApiResult.Failure(ApiError(404, "nope"))
         override suspend fun mintPlaybackUrl(sessionId: String): ApiResult<BroadcastPlaybackUrl> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        // AND-307 host mutations — unused by browse; stubbed.
+        override suspend fun create(profileId: String): ApiResult<BroadcastSession> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun schedule(
+            sessionId: String,
+            scheduledAtEpochSeconds: Long,
+            name: String?,
+            description: String?,
+        ): ApiResult<BroadcastSession> = ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession> =
             ApiResult.Failure(ApiError(404, "nope"))
     }
 

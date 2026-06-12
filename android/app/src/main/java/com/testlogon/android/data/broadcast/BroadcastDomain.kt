@@ -30,6 +30,8 @@ data class BroadcastSession(
     val status: BroadcastSessionStatus,
     val createdBy: String,
     val scheduledAt: Instant?,
+    // AND-307 — the host schedule sub-state ("scheduled"/"cancelled"/...), distinct from lifecycle status.
+    val scheduleStatus: String?,
     val startedAt: Instant?,
     val stoppedAt: Instant?,
     val cancelledAt: Instant?,

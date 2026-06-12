@@ -39,6 +39,25 @@ interface BroadcastRepository {
 
     /** Mints a fresh short-lived signed playback URL for [sessionId]. */
     suspend fun mintPlaybackUrl(sessionId: String): ApiResult<BroadcastPlaybackUrl>
+
+    // ---- AND-307 host (broadcasting) control-plane mutations ----
+
+    /** Creates a host session (draft) for [profileId]. */
+    suspend fun create(profileId: String): ApiResult<BroadcastSession>
+
+    /**
+     * Schedules [sessionId] for [scheduledAtEpochSeconds] (Unix epoch SECONDS), optionally overriding
+     * name/description. The server rejects past / under-min-lead instants with a 422.
+     */
+    suspend fun schedule(
+        sessionId: String,
+        scheduledAtEpochSeconds: Long,
+        name: String?,
+        description: String?,
+    ): ApiResult<BroadcastSession>
+
+    /** Cancels a pending schedule on [sessionId]. */
+    suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession>
 }
 
 @Singleton
@@ -72,6 +91,30 @@ class BroadcastRepositoryImpl @Inject constructor(
     override suspend fun mintPlaybackUrl(sessionId: String): ApiResult<BroadcastPlaybackUrl> =
         withContext(io) {
             call { api.mintPlaybackUrl(sessionId) }.map { it.toDomain() }
+        }
+
+    override suspend fun create(profileId: String): ApiResult<BroadcastSession> =
+        withContext(io) {
+            call { api.createSession(BroadcastSessionCreateInDto(profileId = profileId)) }.map { it.toDomain() }
+        }
+
+    override suspend fun schedule(
+        sessionId: String,
+        scheduledAtEpochSeconds: Long,
+        name: String?,
+        description: String?,
+    ): ApiResult<BroadcastSession> = withContext(io) {
+        val body = BroadcastScheduleInDto(
+            scheduledAt = scheduledAtEpochSeconds,
+            name = name,
+            description = description,
+        )
+        call { api.scheduleSession(sessionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession> =
+        withContext(io) {
+            call { api.cancelSchedule(sessionId) }.map { it.toDomain() }
         }
 
     /**

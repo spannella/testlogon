@@ -60,6 +60,7 @@ class ViewerViewModelTest {
         thumbnailUrl = null,
         tipTotalCents = null,
         tipCount = null,
+        scheduleStatus = null,
         createdAt = Instant.EPOCH,
         updatedAt = Instant.EPOCH,
     )
@@ -81,6 +82,17 @@ class ViewerViewModelTest {
             mintCalls++
             return mintResult
         }
+        // AND-307 host mutations — unused by the viewer; stubbed.
+        override suspend fun create(profileId: String): ApiResult<BroadcastSession> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun schedule(
+            sessionId: String,
+            scheduledAtEpochSeconds: Long,
+            name: String?,
+            description: String?,
+        ): ApiResult<BroadcastSession> = ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun cancelSchedule(sessionId: String): ApiResult<BroadcastSession> =
+            ApiResult.Failure(ApiError(404, "nope"))
     }
 
     private val presence = ViewerPresence()

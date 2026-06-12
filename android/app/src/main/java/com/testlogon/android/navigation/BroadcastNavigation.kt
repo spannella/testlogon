@@ -7,6 +7,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.broadcast.BroadcastBrowseRoute
+import com.testlogon.android.feature.broadcast.host.CreateBroadcastRoute
+import com.testlogon.android.feature.broadcast.host.CreateBroadcastViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 
@@ -22,8 +24,23 @@ data object BroadcastViewerDest {
     fun build(sessionId: String): String = "broadcast/viewer/${Uri.encode(sessionId)}"
 }
 
-/** AND-279/AND-280 — registers the broadcast browse + viewer destinations. */
+/** AND-307 — the host create/schedule (Go Live) destination, keyed by the broadcast profile id. */
+data object BroadcastCreateDest {
+    const val ROUTE = "broadcast/create/{${CreateBroadcastViewModel.ARG_PROFILE_ID}}"
+
+    fun build(profileId: String): String = "broadcast/create/${Uri.encode(profileId)}"
+}
+
+/** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
 fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
+    composable(
+        route = BroadcastCreateDest.ROUTE,
+        arguments = listOf(
+            navArgument(CreateBroadcastViewModel.ARG_PROFILE_ID) { type = NavType.StringType },
+        ),
+    ) {
+        CreateBroadcastRoute(onFinished = { navController.popBackStack() })
+    }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(
             onBack = { navController.popBackStack() },

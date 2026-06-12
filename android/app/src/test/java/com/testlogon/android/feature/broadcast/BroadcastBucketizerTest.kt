@@ -31,6 +31,7 @@ class BroadcastBucketizerTest {
         status = status,
         createdBy = "host_$id",
         scheduledAt = scheduledAt,
+        scheduleStatus = null,
         startedAt = startedAt,
         stoppedAt = stoppedAt,
         cancelledAt = cancelledAt,

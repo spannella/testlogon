@@ -42,6 +42,28 @@ data class BroadcastSessionDto(
     @Json(name = "tip_count") val tipCount: Int? = null,
 )
 
+/**
+ * AND-307 — request body for POST `broadcast/sessions` (create). Control-plane only: the verified
+ * `BroadcastSessionCreateIn` requires `profile_id`; optional ingest/stream-key/ad config is intentionally
+ * omitted (kept minimal, and not modeled on the existing DTOs). NO `title` field (title is `name`).
+ */
+@JsonClass(generateAdapter = true)
+data class BroadcastSessionCreateInDto(
+    @Json(name = "profile_id") val profileId: String,
+)
+
+/**
+ * AND-307 — request body for POST `broadcast/sessions/{sessionId}/schedule`. `scheduled_at` is a Unix
+ * epoch-SECOND integer (NOT ISO) and must be >= now + min-lead (server-enforced; 422 otherwise). `name`
+ * (<= 200) and `description` (<= 2000) are optional overrides.
+ */
+@JsonClass(generateAdapter = true)
+data class BroadcastScheduleInDto(
+    @Json(name = "scheduled_at") val scheduledAt: Long,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "description") val description: String? = null,
+)
+
 /** BroadcastSessionListOut = { items, has_more } (NOT a cursor). */
 @JsonClass(generateAdapter = true)
 data class BroadcastSessionListRespDto(

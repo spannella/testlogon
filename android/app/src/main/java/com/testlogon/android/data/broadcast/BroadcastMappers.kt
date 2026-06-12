@@ -45,6 +45,7 @@ fun BroadcastSessionDto.toDomain(): BroadcastSession = BroadcastSession(
     status = status.toBroadcastStatus(),
     createdBy = createdBy,
     scheduledAt = scheduledAt.epochSecondToInstant(),
+    scheduleStatus = scheduleStatus,
     startedAt = parseInstantOrNull(startedAt),
     stoppedAt = parseInstantOrNull(stoppedAt),
     cancelledAt = parseInstantOrNull(cancelledAt),

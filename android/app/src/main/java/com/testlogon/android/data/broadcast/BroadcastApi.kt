@@ -1,5 +1,6 @@
 package com.testlogon.android.data.broadcast
 
+import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -44,4 +45,21 @@ interface BroadcastApi {
 
     @POST("broadcast/sessions/{sessionId}/playback-url")
     suspend fun mintPlaybackUrl(@Path("sessionId") sessionId: String): BroadcastPlaybackUrlDto
+
+    // ---- AND-307 host (broadcasting) control-plane mutations (extends AND-278) ----
+
+    /** Create a host session (draft). Returns the same BroadcastSessionOut superset shape. */
+    @POST("broadcast/sessions")
+    suspend fun createSession(@Body body: BroadcastSessionCreateInDto): BroadcastSessionDto
+
+    /** Schedule a session for a future Unix epoch-second instant (sets name/scheduled_at/schedule_status). */
+    @POST("broadcast/sessions/{sessionId}/schedule")
+    suspend fun scheduleSession(
+        @Path("sessionId") sessionId: String,
+        @Body body: BroadcastScheduleInDto,
+    ): BroadcastSessionDto
+
+    /** Cancel a pending schedule (no body); the session returns to cancelled with cancelled_at set. */
+    @POST("broadcast/sessions/{sessionId}/cancel-schedule")
+    suspend fun cancelSchedule(@Path("sessionId") sessionId: String): BroadcastSessionDto
 }

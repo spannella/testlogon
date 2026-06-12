@@ -1784,6 +1784,19 @@
         <item quantity="other">%1$d viewers</item>
     </plurals>
 
+    <!-- AND-307: host create/schedule (Go Live) -->
+    <string name="broadcast_go_live_title">Go Live</string>
+    <string name="broadcast_go_live_back_cd">Back</string>
+    <string name="broadcast_title_label">Title</string>
+    <string name="broadcast_description_label">Description</string>
+    <string name="broadcast_schedule_later">Schedule for later</string>
+    <string name="broadcast_scheduled_at_label">Start time (epoch seconds)</string>
+    <string name="broadcast_create">Create</string>
+    <string name="broadcast_schedule">Schedule</string>
+    <string name="broadcast_cancel_schedule">Cancel schedule</string>
+    <string name="broadcast_no_profile">No broadcast profile is available.</string>
+    <string name="broadcast_scheduled_at_past">Pick a time further in the future.</string>
+
     <!-- AND-280: viewer playback (HLS) -->
     <string name="viewer_back_cd">Back</string>
     <string name="viewer_retry">Retry</string>
