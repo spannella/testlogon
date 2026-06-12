@@ -8,12 +8,12 @@ plugins {
 
 android {
     namespace = "com.testlogon.android"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.testlogon.android"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "com.testlogon.android.HiltTestRunner"
@@ -171,6 +171,10 @@ dependencies {
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
+    // Force the AndroidX Test 1.7.0 / Espresso 3.7.0 stack (the version compose-ui-test pulls
+    // transitively, 3.6.1, calls the hidden InputManager.getInstance() removed in Android 16/API 36).
+    androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.navigation.testing)
     androidTestImplementation(libs.hilt.android.testing)
