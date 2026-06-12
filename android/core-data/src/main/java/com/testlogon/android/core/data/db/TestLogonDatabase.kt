@@ -2,8 +2,13 @@ package com.testlogon.android.core.data.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.testlogon.android.core.data.broadcast.BroadcastInputEntity
+import com.testlogon.android.core.data.broadcast.BroadcastLayoutEntity
+import com.testlogon.android.core.data.broadcast.InputsDao
+import com.testlogon.android.core.data.broadcast.LayoutListConverters
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.cache.CacheTables
 import com.testlogon.android.core.data.call.PendingRecordingDao
@@ -44,6 +49,8 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
  * - v5 — AND-195: adds the vod_download table (watermarked VOD downloads, keyed by video_id).
  * - v6 — AND-302: adds the pending_recording table (durable call-recording upload queue, keyed by
  *        recording_id).
+ * - v7 — AND-310: adds the broadcast_input table (cached ingest inputs, keyed by session_id+input_id) and
+ *        the broadcast_layout table (cached session layout, keyed by session_id).
  */
 @Database(
     entities = [
@@ -53,10 +60,13 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
         EntitlementEntity::class,
         DownloadEntity::class,
         PendingRecordingEntity::class,
+        BroadcastInputEntity::class,
+        BroadcastLayoutEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
+@TypeConverters(LayoutListConverters::class)
 abstract class TestLogonDatabase : RoomDatabase() {
     abstract fun sampleDao(): SampleDao
 
@@ -77,6 +87,9 @@ abstract class TestLogonDatabase : RoomDatabase() {
 
     /** AND-302 — durable call-recording upload queue (per recording_id). */
     abstract fun pendingRecordingDao(): PendingRecordingDao
+
+    /** AND-310 — cached broadcast inputs + layout for the inputs-management surface. */
+    abstract fun inputsDao(): InputsDao
 
     companion object {
         const val NAME = "testlogon-cache.db"
@@ -185,8 +198,40 @@ abstract class TestLogonDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * AND-310 — additive migration creating the broadcast_input + broadcast_layout cache tables. Purely
+         * additive (two new tables), so no existing rows are touched. input_ids is stored as a single
+         * newline-joined string via LayoutListConverters.
+         */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS broadcast_input (" +
+                        "session_id TEXT NOT NULL, " +
+                        "input_id TEXT NOT NULL, " +
+                        "input_type TEXT NOT NULL, " +
+                        "label TEXT, " +
+                        "is_live INTEGER NOT NULL DEFAULT 0, " +
+                        "position INTEGER NOT NULL DEFAULT 0, " +
+                        "connected_at INTEGER, " +
+                        "disconnected_at INTEGER, " +
+                        "created_by TEXT NOT NULL DEFAULT '', " +
+                        "created_at TEXT, " +
+                        "updated_at TEXT, " +
+                        "PRIMARY KEY(session_id, input_id))",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS broadcast_layout (" +
+                        "session_id TEXT NOT NULL PRIMARY KEY, " +
+                        "mode TEXT NOT NULL, " +
+                        "primary_input_id TEXT, " +
+                        "input_ids TEXT NOT NULL DEFAULT '')",
+                )
+            }
+        }
+
         /** Registered migrations; grows as the schema evolves. */
         val ALL_MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
     }
 }

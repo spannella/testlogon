@@ -67,8 +67,42 @@ data class BroadcastWebRTCOfferOutDto(
 )
 
 /**
+ * AND-310 — broadcast input TYPE enum derived from the wire `input_type` string. Unknown / absent values
+ * coerce to [UNKNOWN] (never throw). The domain model keeps [BroadcastInput.inputType] as the raw String
+ * (AND-308 + IngestViewModel pass "primary" as a String); [BroadcastInput.inputTypeEnum] exposes this
+ * derived enum for type-safe UI branching (icon selection) without breaking the existing String usages.
+ */
+enum class InputType {
+    PRIMARY,
+    GUEST,
+    SCREEN,
+    UNKNOWN,
+    ;
+
+    companion object {
+        /** Coerces a wire `input_type` string to an [InputType]; unknown / null -> [UNKNOWN] (never throws). */
+        fun fromWire(value: String?): InputType = when (value?.lowercase()) {
+            BroadcastInputType.PRIMARY -> PRIMARY
+            BroadcastInputType.GUEST -> GUEST
+            BroadcastInputType.SCREEN -> SCREEN
+            else -> UNKNOWN
+        }
+    }
+}
+
+/**
  * AND-308 — canonical (DTO-free) ingest input. The host's primary input carries the
  * [ingestUrl] / [streamKey] the engine would publish to. Redaction-safe domain shape.
+ *
+ * AND-310 EXTENDS this shape with the inputs-management fields ([isLive], [connectedAt], [disconnectedAt],
+ * [createdBy], [createdAt], [updatedAt]) plus a client-derived [isProgram] flag. ALL new fields carry
+ * DEFAULTS and are appended AFTER the original positional fields, so AND-308's
+ * [BroadcastInputCreateOutDto.toDomain] (which omits them) and the existing positional construction in tests
+ * still compile unchanged.
+ *
+ * [inputType] stays a raw String (AND-308 contract); [inputTypeEnum] is the derived [InputType] for UI use.
+ * [isProgram] is NOT a wire field — the inputs surface derives it by joining the input against the layout's
+ * `primary_input_id` (the input whose id == layout.primaryInputId is the live program source).
  */
 data class BroadcastInput(
     val inputId: String,
@@ -78,7 +112,18 @@ data class BroadcastInput(
     val ingestUrl: String?,
     val streamKey: String?,
     val position: Int,
-)
+    // ── AND-310 inputs-management fields (defaulted; appended so AND-308 construction still compiles) ──
+    val isLive: Boolean = false,
+    val isProgram: Boolean = false,
+    val connectedAt: Long? = null,
+    val disconnectedAt: Long? = null,
+    val createdBy: String = "",
+    val createdAt: java.time.Instant? = null,
+    val updatedAt: java.time.Instant? = null,
+) {
+    /** AND-310 — derived [InputType] for type-safe UI branching; [inputType] stays the raw wire String. */
+    val inputTypeEnum: InputType get() = InputType.fromWire(inputType)
+}
 
 // ─── DTO -> domain mappers (pure; android-free) ──────────────────────────────────────────────────
 

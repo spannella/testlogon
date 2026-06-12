@@ -78,6 +78,9 @@ object HostControlTestTags {
     const val STALE_BANNER = "host_stale_banner"
     const val STOP_CONFIRM = "host_stop_confirm"
     const val STATUS_CHIP = "host_status_chip"
+
+    /** AND-310 — opens the inputs-management surface. */
+    const val MANAGE_INPUTS = "host_manage_inputs"
 }
 
 /**
@@ -87,6 +90,8 @@ object HostControlTestTags {
 @Composable
 fun HostControlRoute(
     onBack: () -> Unit,
+    // AND-310 — open the inputs-management surface (list / activate / make-live) for this session.
+    onManageInputs: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -103,6 +108,7 @@ fun HostControlRoute(
         onResume = viewModel::onResume,
         onReschedule = viewModel::onReschedule,
         onRetryHealth = viewModel::retryHealth,
+        onManageInputs = onManageInputs,
         onBack = onBack,
     )
 }
@@ -123,6 +129,8 @@ fun HostControlScreen(
     onReschedule: (Long) -> Unit,
     onRetryHealth: () -> Unit,
     onBack: () -> Unit,
+    // AND-310 — open the inputs-management surface; defaulted so existing call sites/tests are unaffected.
+    onManageInputs: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -171,6 +179,17 @@ fun HostControlScreen(
                 onResume = onResume,
                 onReschedule = onReschedule,
             )
+
+            // AND-310 — manage this broadcast's inputs (list / activate / promote to live program).
+            OutlinedButton(
+                onClick = onManageInputs,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_INPUTS),
+            ) {
+                Text(stringResource(R.string.host_control_manage_inputs))
+            }
         }
     }
 

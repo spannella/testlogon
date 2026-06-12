@@ -3,6 +3,7 @@ package com.testlogon.android.core.data.di
 import android.content.Context
 import androidx.room.Room
 import com.testlogon.android.core.data.BuildConfig
+import com.testlogon.android.core.data.broadcast.InputsDao
 import com.testlogon.android.core.data.cache.CacheMaintenanceDao
 import com.testlogon.android.core.data.call.PendingRecordingDao
 import com.testlogon.android.core.data.db.TestLogonDatabase
@@ -65,4 +66,8 @@ object DatabaseModule {
     @Provides
     fun providePendingRecordingDao(db: TestLogonDatabase): PendingRecordingDao =
         db.pendingRecordingDao()
+
+    @Provides
+    fun provideInputsDao(db: TestLogonDatabase): InputsDao =
+        db.inputsDao()
 }

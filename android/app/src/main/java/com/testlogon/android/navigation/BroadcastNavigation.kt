@@ -13,6 +13,8 @@ import com.testlogon.android.feature.broadcast.host.HostControlRoute
 import com.testlogon.android.feature.broadcast.host.HostControlViewModel
 import com.testlogon.android.feature.broadcast.host.IngestRoute
 import com.testlogon.android.feature.broadcast.host.IngestViewModel
+import com.testlogon.android.feature.broadcast.inputs.InputsRoute
+import com.testlogon.android.feature.broadcast.inputs.InputsViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 
@@ -47,6 +49,13 @@ data object BroadcastHostControlDest {
     const val ROUTE = "broadcast/host/{${HostControlViewModel.ARG_SESSION_ID}}"
 
     fun build(sessionId: String): String = "broadcast/host/${Uri.encode(sessionId)}"
+}
+
+/** AND-310 — the inputs-management (list / activate / make-live) destination, keyed by sessionId. */
+data object BroadcastInputsDest {
+    const val ROUTE = "broadcast/{${InputsViewModel.ARG_SESSION_ID}}/inputs"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/inputs"
 }
 
 /** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
@@ -89,8 +98,24 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         arguments = listOf(
             navArgument(HostControlViewModel.ARG_SESSION_ID) { type = NavType.StringType },
         ),
+    ) { entry ->
+        val sessionId = entry.arguments?.getString(HostControlViewModel.ARG_SESSION_ID).orEmpty()
+        HostControlRoute(
+            onBack = { navController.popBackStack() },
+            // AND-310 — the host can manage this broadcast's inputs (list / activate / make-live).
+            onManageInputs = {
+                navController.navigate(BroadcastInputsDest.build(sessionId)) { launchSingleTop = true }
+            },
+        )
+    }
+    // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
+    composable(
+        route = BroadcastInputsDest.ROUTE,
+        arguments = listOf(
+            navArgument(InputsViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
     ) {
-        HostControlRoute(onBack = { navController.popBackStack() })
+        InputsRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(

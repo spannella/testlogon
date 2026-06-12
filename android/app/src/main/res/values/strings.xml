@@ -1810,6 +1810,7 @@
     <!-- AND-309: host LIVE control (start/stop/resume/reschedule + health) -->
     <string name="host_control_title">Host controls</string>
     <string name="host_control_open">Manage broadcast</string>
+    <string name="host_control_manage_inputs">Manage inputs</string>
     <string name="host_control_untitled">Untitled broadcast</string>
     <string name="host_control_live_for">Live for %1$s</string>
     <string name="host_control_start">Start</string>
@@ -1947,4 +1948,28 @@
     <string name="video_local_preview">Local camera preview</string>
     <string name="video_remote_feed">Remote video</string>
     <string name="video_preview_unavailable">Video preview unavailable — broadcasting not configured</string>
+
+    <!-- AND-310: broadcast inputs management. -->
+    <string name="inputs_title">Inputs</string>
+    <string name="inputs_back_cd">Back</string>
+    <string name="inputs_status_live">Live</string>
+    <string name="inputs_status_offline">Offline</string>
+    <string name="inputs_program_badge">LIVE</string>
+    <string name="inputs_program_badge_cd">Live program source</string>
+    <string name="inputs_make_live">Make live</string>
+    <string name="inputs_make_live_cd">Make %1$s the live program</string>
+    <string name="inputs_toggle_active_cd">Activate %1$s</string>
+    <string name="inputs_toggle_inactive_cd">Deactivate %1$s</string>
+    <string name="inputs_toggle_program_disabled_cd">The live program source cannot be deactivated</string>
+    <string name="inputs_pending_cd">Updating %1$s…</string>
+    <string name="inputs_type_primary">Primary</string>
+    <string name="inputs_type_guest">Guest</string>
+    <string name="inputs_type_screen">Screen share</string>
+    <string name="inputs_type_unknown">Input</string>
+    <string name="inputs_empty_title">No inputs yet</string>
+    <string name="inputs_empty_body">Inputs you add to this broadcast will appear here.</string>
+    <string name="inputs_error_title">Couldn\'t load inputs</string>
+    <string name="inputs_stale_banner">Offline — showing last-known inputs</string>
+    <string name="inputs_retry">Retry</string>
+    <string name="inputs_unnamed">Untitled input</string>
 </resources>

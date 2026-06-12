@@ -26,6 +26,12 @@ object BroadcastApiModule {
     @Singleton
     fun provideHostControlApi(retrofit: Retrofit): HostControlApi =
         retrofit.create(HostControlApi::class.java)
+
+    /** AND-310 — inputs-management (list / activate / deactivate / layout) on the SAME shared Retrofit. */
+    @Provides
+    @Singleton
+    fun provideInputsApi(retrofit: Retrofit): InputsApi =
+        retrofit.create(InputsApi::class.java)
 }
 
 @Module
@@ -40,4 +46,9 @@ abstract class BroadcastDataModule {
     @Binds
     @Singleton
     abstract fun bindHostControlRepository(impl: HostControlRepositoryImpl): HostControlRepository
+
+    /** AND-310 — separate inputs-management repository (keeps the shared BroadcastRepository fakes untouched). */
+    @Binds
+    @Singleton
+    abstract fun bindInputsRepository(impl: InputsRepositoryImpl): InputsRepository
 }
