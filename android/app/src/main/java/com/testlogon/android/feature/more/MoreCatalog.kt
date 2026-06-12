@@ -77,6 +77,13 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "call_history",
+            labelRes = R.string.more_entry_call_history,
+            icon = Icons.Outlined.History,
+            route = MoreRoutes.CALL_HISTORY,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "broadcasts",
             labelRes = R.string.more_entry_broadcasts,
             icon = Icons.Outlined.LiveTv,

@@ -1,5 +1,6 @@
 package com.testlogon.android.navigation
 
+import com.testlogon.android.feature.call.nav.CallRoutes
 import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 import com.testlogon.android.feature.shell.AuthedTab
 
@@ -26,6 +27,9 @@ object MoreRoutes {
 
     // AND-160: mass messages (broadcast campaigns). Screen self-gates on the mass-send capability.
     val MASS_MESSAGES: String get() = MessagingRoutes.MASS_MESSAGES
+
+    // AND-295/296: 1:1 call history (GET /ui/calls/history).
+    const val CALL_HISTORY = CallRoutes.HISTORY
 
     // AND-279/AND-280/AND-281: browse live + scheduled broadcasts (-> viewer playback + live chat).
     const val BROADCASTS = BroadcastBrowseDest.ROUTE
@@ -153,6 +157,7 @@ object MoreRoutes {
             PROFILE,
             MESSAGES,
             MASS_MESSAGES,
+            CALL_HISTORY,
             BROADCASTS,
             HELPDESK_QUEUE,
             SESSIONS,

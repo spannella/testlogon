@@ -9,6 +9,7 @@ import com.testlogon.android.feature.achievements.AchievementsRoute
 import com.testlogon.android.feature.achievements.LeaderboardRoute
 import com.testlogon.android.feature.activity.ActivityFeedRoute
 import com.testlogon.android.feature.alerts.AlertPrefsRoute
+import com.testlogon.android.feature.call.nav.callGraph
 import com.testlogon.android.feature.messaging.nav.messagingGraph
 import com.testlogon.android.feature.notifications.NotificationCenterRoute
 import com.testlogon.android.feature.notifications.NotificationTarget
@@ -71,6 +72,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         }
         // AND-120..124: messaging (conversation list + thread). First M3 two-user feature.
         messagingGraph(navController)
+        // AND-295..297: 1:1 calling — outgoing-call screen + call history. The incoming full-screen UI
+        // is a separate lock-screen Activity (IncomingCallActivity), launched by the call notification.
+        callGraph(navController)
         // AND-092: saved / bookmarks (paged + unsave). Row-open is delegated to E14/E24 detail
         // screens that are not yet wired, so it is a safe no-op for now.
         composable(MainDest.Saved.route) {

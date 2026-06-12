@@ -214,6 +214,8 @@
     <string name="notif_channel_messages_name">Messages</string>
     <string name="notif_channel_broadcasts_name">Broadcasts</string>
     <string name="notif_channel_alerts_name">Alerts</string>
+    <!-- AND-297: incoming-call channel name. -->
+    <string name="notif_channel_calls_name">Calls</string>
     <!-- FCM default channel id for system-displayed notification-type messages (AND-105). Maps to
          the Broadcasts channel created by DefaultNotificationChannelInitializer. -->
     <string name="default_notification_channel_id" translatable="false">tl_broadcasts</string>
@@ -655,6 +657,32 @@
     <!-- More hub entries (AND-160 / AND-161) -->
     <string name="more_entry_mass_messages">Mass messages</string>
     <string name="more_entry_helpdesk_queue">Helpdesk queue</string>
+
+    <!-- AND-295/296/297 — 1:1 calling -->
+    <string name="more_entry_call_history">Call history</string>
+    <string name="call_history_title">Call history</string>
+    <string name="call_history_empty">No calls yet</string>
+    <string name="call_history_load_more">Load more</string>
+    <string name="call_history_subtitle">%1$s · %2$d s</string>
+    <string name="call_status_calling">Calling…</string>
+    <string name="call_status_ringing">Ringing…</string>
+    <string name="call_status_connecting">Connecting…</string>
+    <string name="call_status_ending">Ending…</string>
+    <string name="call_status_ended">Call ended</string>
+    <string name="call_status_failed">Call failed</string>
+    <string name="call_media_unavailable">Call media unavailable</string>
+    <string name="call_end">End</string>
+    <string name="call_end_cd">End call</string>
+    <string name="call_start_cd">Call</string>
+    <string name="call_close">Close</string>
+    <string name="call_retry">Retry</string>
+    <string name="call_accept">Accept</string>
+    <string name="call_decline">Decline</string>
+    <string name="call_accept_cd">Accept call from %1$s</string>
+    <string name="call_decline_cd">Decline call from %1$s</string>
+    <string name="call_unknown_caller">Unknown caller</string>
+    <string name="call_kind_audio">Audio call</string>
+    <string name="call_kind_video">Video call</string>
 
     <!-- AND-160 — mass messages -->
     <string name="mass_messages_title">Mass messages</string>

@@ -75,14 +75,23 @@ class NotificationPresenter @Inject constructor(
 /**
  * AND-105/107 — the real [com.testlogon.android.push.PushMessageSink] binding (replaces AND-105's
  * logging default): parses the inbound data message and posts it via [NotificationPresenter].
+ *
+ * AND-297: a `call.*` data message is intercepted FIRST by [com.testlogon.android.feature.call.incoming
+ * .CallPushHandler] (ring + full-screen via the CallStyle path) and skips the generic display. Everything
+ * else falls through to the channel-bound notification. The call interception is inert without FCM — the
+ * flagged push seam never delivers a `call.invite` without google-services.json.
  */
 @Singleton
 class NotificationDisplaySink @Inject constructor(
     private val parser: PushPayloadParser,
     private val presenter: NotificationPresenter,
+    private val callPushHandler: com.testlogon.android.feature.call.incoming.CallPushHandler,
 ) : com.testlogon.android.push.PushMessageSink {
 
     override fun onMessage(message: com.testlogon.android.push.PushMessage) {
+        // AND-297: route incoming/terminal call data messages to the call orchestrators first.
+        if (callPushHandler.tryHandle(message.data)) return
+
         val payload = parser.parse(message.data)
         if (payload == null) {
             com.testlogon.android.push.PushLog.d("notif dropped reason=invalid_payload")

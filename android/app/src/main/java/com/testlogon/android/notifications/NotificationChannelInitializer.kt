@@ -62,7 +62,18 @@ class DefaultNotificationChannelInitializer @Inject constructor(
                 .setVibrationEnabled(true)
                 .build()
 
-            manager.createNotificationChannelsCompat(listOf(messages, broadcasts, alerts))
+            // AND-297 — incoming-call channel: MAX importance so it bypasses heads-up throttling and
+            // qualifies for the full-screen-intent privilege.
+            val calls = NotificationChannelCompat.Builder(
+                TlChannels.CALLS,
+                NotificationManagerCompat.IMPORTANCE_HIGH,
+            )
+                .setName(context.getString(R.string.notif_channel_calls_name))
+                .setGroup(TlChannels.GROUP_ID)
+                .setVibrationEnabled(true)
+                .build()
+
+            manager.createNotificationChannelsCompat(listOf(messages, broadcasts, alerts, calls))
         }
     }
 }

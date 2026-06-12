@@ -14,6 +14,9 @@ object TlChannels {
     const val BROADCASTS = "tl_broadcasts"
     const val ALERTS = "tl_alerts"
 
+    /** AND-297 — high-importance incoming-call channel (CallStyle + full-screen intent + ringtone). */
+    const val CALLS = "tl_calls"
+
     /** Total mapping; unknown/broadcast route to the lowest-disruption visible channel (FR-4). */
     fun channelIdFor(kind: NotificationKind): String = when (kind) {
         NotificationKind.MESSAGE -> MESSAGES
