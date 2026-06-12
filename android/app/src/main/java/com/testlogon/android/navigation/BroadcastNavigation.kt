@@ -9,6 +9,8 @@ import androidx.navigation.navArgument
 import com.testlogon.android.feature.broadcast.BroadcastBrowseRoute
 import com.testlogon.android.feature.broadcast.host.CreateBroadcastRoute
 import com.testlogon.android.feature.broadcast.host.CreateBroadcastViewModel
+import com.testlogon.android.feature.broadcast.host.HostControlRoute
+import com.testlogon.android.feature.broadcast.host.HostControlViewModel
 import com.testlogon.android.feature.broadcast.host.IngestRoute
 import com.testlogon.android.feature.broadcast.host.IngestViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
@@ -40,6 +42,13 @@ data object BroadcastIngestDest {
     fun build(sessionId: String): String = "broadcast/ingest/${Uri.encode(sessionId)}"
 }
 
+/** AND-309 — the host LIVE control (start/stop/resume/reschedule + health) destination, keyed by sessionId. */
+data object BroadcastHostControlDest {
+    const val ROUTE = "broadcast/host/{${HostControlViewModel.ARG_SESSION_ID}}"
+
+    fun build(sessionId: String): String = "broadcast/host/${Uri.encode(sessionId)}"
+}
+
 /** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
 fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
     composable(
@@ -65,8 +74,23 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         arguments = listOf(
             navArgument(IngestViewModel.ARG_SESSION_ID) { type = NavType.StringType },
         ),
+    ) { entry ->
+        val sessionId = entry.arguments?.getString(IngestViewModel.ARG_SESSION_ID).orEmpty()
+        IngestRoute(
+            onBack = { navController.popBackStack() },
+            // AND-309 — once publishing has started, the host can open the LIVE control surface.
+            onHostControls = {
+                navController.navigate(BroadcastHostControlDest.build(sessionId)) { launchSingleTop = true }
+            },
+        )
+    }
+    composable(
+        route = BroadcastHostControlDest.ROUTE,
+        arguments = listOf(
+            navArgument(HostControlViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
     ) {
-        IngestRoute(onBack = { navController.popBackStack() })
+        HostControlRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(

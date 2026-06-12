@@ -20,6 +20,12 @@ object BroadcastApiModule {
     @Singleton
     fun provideBroadcastApi(retrofit: Retrofit): BroadcastApi =
         retrofit.create(BroadcastApi::class.java)
+
+    /** AND-309 — host LIVE lifecycle control plane on the SAME shared Retrofit (no new OkHttp/Retrofit). */
+    @Provides
+    @Singleton
+    fun provideHostControlApi(retrofit: Retrofit): HostControlApi =
+        retrofit.create(HostControlApi::class.java)
 }
 
 @Module
@@ -29,4 +35,9 @@ abstract class BroadcastDataModule {
     @Binds
     @Singleton
     abstract fun bindBroadcastRepository(impl: BroadcastRepositoryImpl): BroadcastRepository
+
+    /** AND-309 — separate host control repository (keeps the shared BroadcastRepository fakes untouched). */
+    @Binds
+    @Singleton
+    abstract fun bindHostControlRepository(impl: HostControlRepositoryImpl): HostControlRepository
 }

@@ -1807,6 +1807,49 @@
     <string name="ingest_failed">Couldn\'t start your broadcast. Try again.</string>
     <string name="ingest_perm_required">Camera and microphone access is needed to broadcast.</string>
 
+    <!-- AND-309: host LIVE control (start/stop/resume/reschedule + health) -->
+    <string name="host_control_title">Host controls</string>
+    <string name="host_control_open">Manage broadcast</string>
+    <string name="host_control_untitled">Untitled broadcast</string>
+    <string name="host_control_live_for">Live for %1$s</string>
+    <string name="host_control_start">Start</string>
+    <string name="host_control_stop">Stop</string>
+    <string name="host_control_resume">Resume</string>
+    <string name="host_control_reschedule">Reschedule</string>
+    <string name="host_control_start_cd">Start broadcast</string>
+    <string name="host_control_stop_cd">Stop broadcast</string>
+    <string name="host_control_resume_cd">Resume broadcast</string>
+    <string name="host_control_reschedule_cd">Reschedule</string>
+    <string name="host_control_stop_confirm_title">Stop broadcast?</string>
+    <string name="host_control_stop_confirm_body">This ends the live session for everyone watching.</string>
+    <string name="host_control_stop_confirm_yes">Stop</string>
+    <string name="host_control_stop_confirm_no">Cancel</string>
+    <string name="host_control_reschedule_next">Next</string>
+    <string name="host_control_reschedule_confirm">Reschedule</string>
+    <string name="host_control_health_title">Stream health</string>
+    <string name="host_control_health_none">No health data yet.</string>
+    <string name="host_control_health_badge">Status: %1$s</string>
+    <string name="host_control_health_bitrate">Bitrate: %1$s kbps</string>
+    <string name="host_control_health_fps">Frame rate: %1$s fps</string>
+    <string name="host_control_health_dropped">Dropped frames: %1$s</string>
+    <string name="host_control_health_viewers">Viewers: %1$s</string>
+    <string name="host_control_health_stale">Stale — last updated %1$s</string>
+    <string name="host_control_health_retry">Retry</string>
+    <string name="host_control_level_healthy">Healthy</string>
+    <string name="host_control_level_degraded">Degraded</string>
+    <string name="host_control_level_unhealthy">Unhealthy</string>
+    <string name="host_control_level_unknown">Unknown</string>
+    <string name="host_control_status_draft">Draft</string>
+    <string name="host_control_status_scheduled">Scheduled</string>
+    <string name="host_control_status_provisioning">Provisioning</string>
+    <string name="host_control_status_ready">Ready</string>
+    <string name="host_control_status_live">Live</string>
+    <string name="host_control_status_stopping">Stopping</string>
+    <string name="host_control_status_stopped">Stopped</string>
+    <string name="host_control_status_cancelled">Cancelled</string>
+    <string name="host_control_status_error">Error</string>
+    <string name="host_control_status_unknown">Unknown</string>
+
     <!-- AND-280: viewer playback (HLS) -->
     <string name="viewer_back_cd">Back</string>
     <string name="viewer_retry">Retry</string>

@@ -40,6 +40,7 @@ object IngestTestTags {
     const val START = "ingest_start"
     const val STOP = "ingest_stop"
     const val UNAVAILABLE = "ingest_unavailable"
+    const val HOST_CONTROLS = "ingest_host_controls"
 }
 
 /**
@@ -53,6 +54,8 @@ object IngestTestTags {
 @Composable
 fun IngestRoute(
     onBack: () -> Unit,
+    // AND-309 — open the host LIVE control surface (start/stop/resume/reschedule + health) for this session.
+    onHostControls: () -> Unit = {},
     viewModel: IngestViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -74,6 +77,7 @@ fun IngestRoute(
             )
         },
         onStop = viewModel::stop,
+        onHostControls = onHostControls,
         onBack = onBack,
     )
 }
@@ -89,6 +93,8 @@ fun IngestScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
+    // AND-309 — when set, an existing input offers a "Manage broadcast" affordance to the control surface.
+    onHostControls: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(IngestTestTags.SCREEN),
@@ -160,6 +166,19 @@ fun IngestScreen(
                         .testTag(IngestTestTags.STOP),
                 ) {
                     Text(stringResource(R.string.ingest_stop))
+                }
+            }
+
+            // AND-309 — once an input exists, the host can open the LIVE control surface.
+            if (state.inputId != null) {
+                OutlinedButton(
+                    onClick = onHostControls,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(IngestTestTags.HOST_CONTROLS),
+                ) {
+                    Text(stringResource(R.string.host_control_open))
                 }
             }
         }
