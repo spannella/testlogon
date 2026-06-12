@@ -708,6 +708,10 @@
     <string name="participant_muted_cd">%1$s muted</string>
     <string name="participant_speaking_cd">%1$s speaking</string>
 
+    <!-- AND-300 — group-call grid: pin / focus -->
+    <string name="group_call_pin_cd">Pin %1$s</string>
+    <string name="group_call_unpin_cd">Unpin %1$s</string>
+
     <!-- AND-160 — mass messages -->
     <string name="mass_messages_title">Mass messages</string>
     <string name="mass_messages_new">New campaign</string>

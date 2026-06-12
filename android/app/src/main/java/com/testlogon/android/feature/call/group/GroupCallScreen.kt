@@ -77,6 +77,9 @@ fun GroupCallScreen(
         ParticipantGrid(
             participants = state.participants,
             activeSpeakerUserId = state.activeSpeakerUserId,
+            pinnedUserId = state.pinnedUserId,
+            onPin = { onAction(GroupCallAction.Pin(it)) },
+            onUnpin = { onAction(GroupCallAction.Unpin) },
             modifier = Modifier.fillMaxSize(),
         )
 

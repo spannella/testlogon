@@ -23,6 +23,9 @@ data class GroupCallUiState(
     val audioRoute: AudioRoute = AudioRoute.SPEAKER,
     val mediaUnavailable: Boolean = false,
     val activeSpeakerUserId: String? = null,
+    // AND-300 — userId of the pinned/focused participant, or null for grid mode. Held by the view model so
+    // it survives rotation; cleared automatically if the pinned participant leaves.
+    val pinnedUserId: String? = null,
     val error: String? = null,
 )
 
@@ -48,4 +51,9 @@ sealed interface GroupCallAction {
     data object CycleRoute : GroupCallAction
     data object FlipCamera : GroupCallAction
     data object Leave : GroupCallAction
+
+    // AND-300 — pin/focus mode. Pin(userId) promotes a participant to the focus area + filmstrip; Unpin
+    // returns to the equal grid.
+    data class Pin(val userId: String) : GroupCallAction
+    data object Unpin : GroupCallAction
 }

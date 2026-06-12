@@ -13,10 +13,12 @@ import com.testlogon.android.data.webrtc.MeshEvent
 import com.testlogon.android.feature.call.incall.AudioRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -35,6 +37,11 @@ import javax.inject.Inject
  * Local controls (mic/camera) flip optimistic UI state AND fire a best-effort repository.media() PATCH;
  * route/flip are local-only. Leave calls repository.leave() exactly once (guarded by [endRequested]) then
  * emits the one-shot [callEnded] effect (Channel + receiveAsFlow) so the Route pops.
+ *
+ * AND-300 adds advanced-grid state: [pinnedUserId] (pin/focus mode, held here so it survives rotation) and a
+ * client-side [ActiveSpeakerDetector] folded over the mesh audio levels. Native media is FLAGGED — the mesh
+ * exposes no audio levels — so the detector currently sees an empty level flow and yields null; the wiring is
+ * real so the SDK-backed mesh slots in without VM changes. Both are folded into [uiState] for the screen.
  *
  * [uiState] is a combine(...).stateIn(WhileSubscribed) — there is NO unbounded ticker here.
  */
@@ -68,6 +75,26 @@ class GroupCallViewModel @Inject constructor(
 
     private val localControls = MutableStateFlow(LocalControls())
 
+    // AND-300 — pin/focus selection. Owned by the VM so it survives configuration changes (rotation).
+    private val pinnedUserId = MutableStateFlow<String?>(null)
+
+    // AND-300 — client-side active-speaker detection over the mesh audio levels (FLAGGED -> empty -> null).
+    private val activeSpeakerDetector = ActiveSpeakerDetector()
+
+    /**
+     * Per-participant audio levels from the mesh. Native media is FLAGGED — the mesh exposes no levels — so
+     * this is [emptyFlow], and the detector therefore yields null. The real mesh supplies the level stream.
+     */
+    private val audioLevels: Flow<Map<String, Float>> = emptyFlow()
+
+    private val activeSpeakerUserId: StateFlow<String?> = activeSpeakerDetector
+        .detect(audioLevels)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
     private val effects = Channel<Unit>(Channel.BUFFERED)
 
     /** One-shot terminal effect: emits once after Leave so the Route can pop. */
@@ -83,13 +110,22 @@ class GroupCallViewModel @Inject constructor(
     @Volatile
     private var creatorUserId: String? = null
 
-    val uiState: StateFlow<GroupCallUiState> = combine(callState, localControls) { state, controls ->
-        state.copy(
-            micEnabled = controls.micEnabled,
-            cameraEnabled = controls.cameraEnabled,
-            audioRoute = controls.audioRoute,
-        )
-    }.stateIn(
+    val uiState: StateFlow<GroupCallUiState> =
+        combine(callState, localControls, pinnedUserId, activeSpeakerUserId) { state, controls, pinned, speaker ->
+            // AND-300 — pin-on-leave guard: a pinned (or detected-speaking) participant who is no longer in
+            // the roster is dropped so the screen never focuses a phantom tile.
+            val roster = state.participants.mapTo(HashSet()) { it.userId }
+            val effectivePin = pinned?.takeIf { it in roster }
+            // Prefer the client-side detector; fall back to the reducer's roster-derived active speaker.
+            val effectiveSpeaker = (speaker ?: state.activeSpeakerUserId)?.takeIf { it in roster }
+            state.copy(
+                micEnabled = controls.micEnabled,
+                cameraEnabled = controls.cameraEnabled,
+                audioRoute = controls.audioRoute,
+                pinnedUserId = effectivePin,
+                activeSpeakerUserId = effectiveSpeaker,
+            )
+        }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = callState.value,
@@ -167,6 +203,8 @@ class GroupCallViewModel @Inject constructor(
             GroupCallAction.CycleRoute -> localControls.update { it.copy(audioRoute = nextRoute(it.audioRoute)) }
             GroupCallAction.FlipCamera -> Unit // local-only; native flip is FLAGGED.
             GroupCallAction.Leave -> leave()
+            is GroupCallAction.Pin -> pinnedUserId.value = action.userId
+            GroupCallAction.Unpin -> pinnedUserId.value = null
         }
     }
 
@@ -191,6 +229,10 @@ class GroupCallViewModel @Inject constructor(
 
     private fun applyEvent(event: GroupCallEvent) {
         callState.update { GroupCallReducer.reduce(it, event) }
+        // AND-300 — if the pinned participant left, drop the pin so focus mode doesn't strand a phantom tile.
+        if (event is GroupCallEvent.ParticipantLeft && pinnedUserId.value == event.userId) {
+            pinnedUserId.value = null
+        }
     }
 
     private fun nextRoute(current: AudioRoute): AudioRoute {

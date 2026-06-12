@@ -170,6 +170,49 @@ class GroupCallViewModelTest {
     }
 
     @Test
+    fun pin_setsPinnedUserId_andUnpinClearsIt() = runTest {
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val repo = FakeRepo()
+        val viewModel = vm(createSavedState(), repo)
+
+        val job = launch { viewModel.uiState.collect {} }
+        runCurrent()
+
+        assertEquals(null, viewModel.uiState.value.pinnedUserId)
+
+        // u2 is in the resolved roster, so the combine pin-guard keeps it.
+        viewModel.onAction(GroupCallAction.Pin("u2"))
+        runCurrent()
+        assertEquals("u2", viewModel.uiState.value.pinnedUserId)
+
+        viewModel.onAction(GroupCallAction.Unpin)
+        runCurrent()
+        assertEquals(null, viewModel.uiState.value.pinnedUserId)
+
+        job.cancel()
+        scope.coroutineContext[Job]?.cancel()
+    }
+
+    @Test
+    fun pinningAbsentParticipant_isGuardedToNull() = runTest {
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val repo = FakeRepo()
+        val viewModel = vm(createSavedState(), repo)
+
+        val job = launch { viewModel.uiState.collect {} }
+        runCurrent()
+
+        // "ghost" is not in the roster -> the pin-on-leave guard in the combine drops it (same code path a
+        // pinned participant leaving exercises).
+        viewModel.onAction(GroupCallAction.Pin("ghost"))
+        runCurrent()
+        assertEquals(null, viewModel.uiState.value.pinnedUserId)
+
+        job.cancel()
+        scope.coroutineContext[Job]?.cancel()
+    }
+
+    @Test
     fun leave_isIdempotent_callsRepositoryLeaveExactlyOnce() = runTest {
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
         val repo = FakeRepo()
