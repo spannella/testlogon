@@ -90,6 +90,9 @@ object HostControlTestTags {
 
     /** AND-313 — opens the chat-moderation log surface. */
     const val MODERATION = "host_moderation"
+
+    /** AND-314 — opens the goals + products authoring surface. */
+    const val MANAGE_GOALS_PRODUCTS = "host_manage_goals_products"
 }
 
 /**
@@ -107,6 +110,8 @@ fun HostControlRoute(
     onManageGuests: () -> Unit = {},
     // AND-313 — open the chat-moderation log surface; receives the broadcast's creator id (delegate routing).
     onModeration: (String) -> Unit = {},
+    // AND-314 — open the goals + products authoring surface for this session.
+    onManageGoalsProducts: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -127,6 +132,7 @@ fun HostControlRoute(
         onManageLayout = onManageLayout,
         onManageGuests = onManageGuests,
         onModeration = onModeration,
+        onManageGoalsProducts = onManageGoalsProducts,
         onBack = onBack,
     )
 }
@@ -155,6 +161,8 @@ fun HostControlScreen(
     onManageGuests: () -> Unit = {},
     // AND-313 — open the chat-moderation log; receives creator id, defaulted so existing tests are unaffected.
     onModeration: (String) -> Unit = {},
+    // AND-314 — open the goals + products authoring surface; defaulted so existing tests are unaffected.
+    onManageGoalsProducts: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -246,6 +254,17 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.MODERATION),
             ) {
                 Text(stringResource(R.string.host_control_moderation))
+            }
+
+            // AND-314 — manage this broadcast's tip goals + featured products (create / add / price / reorder).
+            OutlinedButton(
+                onClick = onManageGoalsProducts,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_GOALS_PRODUCTS),
+            ) {
+                Text(stringResource(R.string.host_control_manage_goals_products))
             }
         }
     }

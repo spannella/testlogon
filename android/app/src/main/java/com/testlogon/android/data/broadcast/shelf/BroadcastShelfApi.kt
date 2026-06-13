@@ -55,4 +55,9 @@ data class ShelfItemDto(
     @Json(name = "effective_price_cents") val effectivePriceCents: Long? = null,
     @Json(name = "original_price_cents") val originalPriceCents: Long? = null,
     @Json(name = "is_broadcast_price") val isBroadcastPrice: Boolean = false,
+    // AND-314 — host-authoring broadcast-price fields (additive/defaulted; AND-283 viewer ignores them).
+    @Json(name = "broadcast_price_cents") val broadcastPriceCents: Long? = null,
+    @Json(name = "broadcast_price_expires_at") val broadcastPriceExpiresAt: Long? = null,
+    @Json(name = "broadcast_price_set_at") val broadcastPriceSetAt: Long? = null,
+    @Json(name = "discount_pct") val discountPct: Int = 0,
 )

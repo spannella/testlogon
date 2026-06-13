@@ -2086,4 +2086,53 @@
     <string name="moderation_action_pin">Pinned a message</string>
     <string name="moderation_action_unpin">Unpinned a message</string>
     <string name="moderation_action_unknown">Moderation action</string>
+
+    <!-- AND-314 — host goals + products authoring surface (two tabs) -->
+    <string name="host_control_manage_goals_products">Goals &amp; products</string>
+    <string name="manage_title">Goals &amp; products</string>
+    <string name="manage_back_cd">Back</string>
+    <string name="manage_tab_goals">Goals</string>
+    <string name="manage_tab_products">Products</string>
+    <string name="manage_cancel">Cancel</string>
+    <!-- Goals -->
+    <string name="goals_label_label">Goal label</string>
+    <string name="goals_target_label">Target amount</string>
+    <string name="goals_create">Create goal</string>
+    <string name="goals_delete">Delete</string>
+    <string name="goals_reached_badge">Reached</string>
+    <string name="goals_progress">%1$s of %2$s · %3$d%%</string>
+    <string name="goals_empty_title">No goals yet</string>
+    <string name="goals_empty_body">Create a tip goal to motivate viewers.</string>
+    <string name="goals_delete_confirm_title">Delete this goal?</string>
+    <string name="goals_delete_confirm_body">\"%1$s\" will be removed from this broadcast.</string>
+    <string name="goals_delete_confirm">Delete</string>
+    <string name="goals_created_snackbar">Goal \"%1$s\" created</string>
+    <string name="goals_deleted_snackbar">Goal deleted</string>
+    <!-- Products -->
+    <string name="products_item_id_label">Item id</string>
+    <string name="products_category_id_label">Category id</string>
+    <string name="products_display_order_label">Display order</string>
+    <string name="products_add">Add product</string>
+    <string name="products_remove">Remove</string>
+    <string name="products_set_price">Set price</string>
+    <string name="products_clear_price">Clear price</string>
+    <string name="products_move_up_cd">Move up</string>
+    <string name="products_move_down_cd">Move down</string>
+    <string name="products_broadcast_price">%1$s · %2$d%% off</string>
+    <string name="products_price_expiry">Ends in %1$s</string>
+    <string name="products_empty_title">No products yet</string>
+    <string name="products_empty_body">Add a product to feature it during the broadcast.</string>
+    <string name="products_remove_confirm_title">Remove this product?</string>
+    <string name="products_remove_confirm_body">\"%1$s\" will be removed from this broadcast.</string>
+    <string name="products_remove_confirm">Remove</string>
+    <string name="products_set_price_title">Set broadcast price</string>
+    <string name="products_catalog_price">Catalog price: %1$s</string>
+    <string name="products_price_label">Broadcast price</string>
+    <string name="products_expiry_label">Expires in (minutes, optional)</string>
+    <string name="products_set_price_confirm">Set price</string>
+    <string name="products_added_snackbar">Product %1$s added</string>
+    <string name="products_removed_snackbar">Product removed</string>
+    <string name="products_reordered_snackbar">Products reordered</string>
+    <string name="products_price_set_snackbar">Broadcast price set</string>
+    <string name="products_price_cleared_snackbar">Broadcast price cleared</string>
 </resources>

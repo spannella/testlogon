@@ -21,6 +21,8 @@ import com.testlogon.android.feature.broadcast.layout.LayoutRoute
 import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
 import com.testlogon.android.feature.broadcast.moderation.ModerationLogRoute
 import com.testlogon.android.feature.broadcast.moderation.ModerationViewModel
+import com.testlogon.android.feature.broadcasthost.manage.GoalsProductsViewModel
+import com.testlogon.android.feature.broadcasthost.manage.ManageRoute
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 import com.testlogon.android.feature.guest.GuestAcceptRoute
@@ -95,6 +97,13 @@ data object BroadcastModerationLogDest {
     fun build(sessionId: String, creatorId: String): String =
         "broadcast/${Uri.encode(sessionId)}/moderation-log" +
             "?${ModerationViewModel.ARG_CREATOR_ID}=${Uri.encode(creatorId)}"
+}
+
+/** AND-314 — the host goals + products authoring destination (two tabs), keyed by sessionId. */
+data object BroadcastManageDest {
+    const val ROUTE = "broadcast/{${GoalsProductsViewModel.ARG_SESSION_ID}}/manage"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/manage"
 }
 
 /**
@@ -187,6 +196,10 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
                     launchSingleTop = true
                 }
             },
+            // AND-314 — the host can author this broadcast's tip goals + featured products.
+            onManageGoalsProducts = {
+                navController.navigate(BroadcastManageDest.build(sessionId)) { launchSingleTop = true }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -228,6 +241,15 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         ),
     ) {
         ModerationLogRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-314 — the host goals + products authoring destination (two tabs).
+    composable(
+        route = BroadcastManageDest.ROUTE,
+        arguments = listOf(
+            navArgument(GoalsProductsViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        ManageRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(
