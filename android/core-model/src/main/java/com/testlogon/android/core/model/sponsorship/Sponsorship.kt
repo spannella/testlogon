@@ -50,6 +50,14 @@ enum class SponsorshipDealStatus {
             REJECTED, CANCELLED -> SponsorshipDealGroup.CANCELLED
         }
 
+    /**
+     * AND-366 - true for a TERMINAL status (the deal-detail screen is then READ-ONLY: a status banner, NO
+     * actions). The actionable statuses are exactly proposed / negotiating; everything else (including UNKNOWN,
+     * which never offers actions) is treated as terminal for the read-only banner.
+     */
+    val isTerminal: Boolean
+        get() = this != PROPOSED && this != NEGOTIATING
+
     companion object {
         /** Parses a wire token into a [SponsorshipDealStatus]; null / unrecognized -> [UNKNOWN]. */
         fun from(wire: String?): SponsorshipDealStatus = when (wire?.trim()?.lowercase()) {
@@ -92,3 +100,109 @@ data class SponsorshipDeal(
     val deadline: String? = null,
     val createdAt: Long? = null,
 )
+
+/**
+ * AND-366 - the FULL sponsorship deal (the detail screen's subject). A SUPERSET of the inbox row
+ * [SponsorshipDeal] (it adds [creatorSub], [deliverables], [cpmBonusCents], [platformCommissionBps],
+ * [contentId] and a [hasPaymentDetails] presence flag) - kept SEPARATE so the lean inbox row stays untouched.
+ *
+ * Identity is [dealId]. [status] is the RAW wire string (kept for display); [statusEnum] is the typed parse
+ * (UNKNOWN fallback). [compensationCents] + [cpmBonusCents] are flat *_cents [Long] (implicit USD, format with
+ * [com.testlogon.android.core.model.syndicates.formatCents]); [platformCommissionBps] is basis points;
+ * [deadline] is the ISO date STRING from the wire (NOT epoch). The deal does NOT embed offers[] - the
+ * negotiation history is the separate [SponsorshipDealEvent] list.
+ */
+data class SponsorshipDealDetail(
+    val dealId: String,
+    val advertiserSub: String? = null,
+    val creatorSub: String? = null,
+    val brief: String? = null,
+    val status: String,
+    val statusEnum: SponsorshipDealStatus,
+    val compensationCents: Long? = null,
+    val deliverables: List<String> = emptyList(),
+    val deadline: String? = null,
+    val cpmBonusCents: Long? = null,
+    val platformCommissionBps: Int? = null,
+    val contentId: String? = null,
+    val hasPaymentDetails: Boolean = false,
+)
+
+/**
+ * AND-366 - one negotiation / lifecycle event from the deal history. Identity is [eventId]. [eventType] is the
+ * raw wire kind (e.g. "countered" / "accepted"); [actorSub] is who acted; [detailsText] is the OPAQUE payload
+ * flattened to a single display string (the wire ships either an object map OR a plain string - both are
+ * stringified by the mapper, never schema-parsed); [createdAt] is an EPOCH [Long].
+ */
+data class SponsorshipDealEvent(
+    val eventId: String,
+    val eventType: String? = null,
+    val actorSub: String? = null,
+    val detailsText: String? = null,
+    val createdAt: Long? = null,
+)
+
+/**
+ * AND-366 - the viewer's role on a deal, derived CLIENT-SIDE by comparing the current user's sub to the deal's
+ * advertiser_sub vs creator_sub (there is NO viewerRole field on the wire). [OBSERVER] covers a blank current
+ * sub or a sub that matches neither party. This gating is UX-only; the server is authoritative on every
+ * mutation.
+ */
+enum class ViewerRole {
+    ADVERTISER,
+    CREATOR,
+    OBSERVER,
+    ;
+
+    companion object {
+        /** Derives the role from [currentSub] vs the deal's [advertiserSub] / [creatorSub]. */
+        fun derive(
+            currentSub: String?,
+            advertiserSub: String?,
+            creatorSub: String?,
+        ): ViewerRole {
+            val sub = currentSub?.trim().orEmpty()
+            if (sub.isEmpty()) return OBSERVER
+            return when (sub) {
+                advertiserSub?.trim() -> ADVERTISER
+                creatorSub?.trim() -> CREATOR
+                else -> OBSERVER
+            }
+        }
+    }
+}
+
+/**
+ * AND-366 - a management action on a deal. ACCEPT and NEGOTIATE (counter-offer) plus REJECT (the backlog's
+ * "decline" - the wire verb is reject, NOT decline).
+ */
+enum class DealAction {
+    ACCEPT,
+    REJECT,
+    NEGOTIATE,
+}
+
+/**
+ * AND-366 - the set of management actions available CLIENT-SIDE for a deal. Pure (no I/O). Actions are offered
+ * ONLY in the actionable statuses {proposed, negotiating}; every terminal state
+ * (accepted / content_submitted / completed / rejected / cancelled) and UNKNOWN yields the EMPTY set (a
+ * read-only status banner, NO actions). The full {ACCEPT, REJECT, NEGOTIATE} set is offered to BOTH parties
+ * in an actionable status (either party may accept the current terms, walk away, or counter); an OBSERVER gets
+ * nothing. The server remains authoritative - this only drives which affordances render.
+ */
+fun availableActions(status: SponsorshipDealStatus, role: ViewerRole): Set<DealAction> {
+    if (role == ViewerRole.OBSERVER) return emptySet()
+    return when (status) {
+        SponsorshipDealStatus.PROPOSED,
+        SponsorshipDealStatus.NEGOTIATING,
+        -> setOf(DealAction.ACCEPT, DealAction.REJECT, DealAction.NEGOTIATE)
+
+        SponsorshipDealStatus.ACCEPTED,
+        SponsorshipDealStatus.CONTENT_SUBMITTED,
+        SponsorshipDealStatus.COMPLETED,
+        SponsorshipDealStatus.REJECTED,
+        SponsorshipDealStatus.CANCELLED,
+        SponsorshipDealStatus.UNKNOWN,
+        -> emptySet()
+    }
+}
