@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.tickets.data.TicketsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,12 +36,19 @@ class SpacesListViewModel @Inject constructor(
     private val _effects = Channel<TicketsEffect>(Channel.BUFFERED)
     val effects: Flow<TicketsEffect> = _effects.receiveAsFlow()
 
+    /**
+     * AND-375 (FR-7 / AC-3) - the in-flight load guard: concurrent load()/refresh() calls collapse to a SINGLE
+     * repository getSpaces() while one is still running, so a rapid double pull-to-refresh fires one read.
+     */
+    private var loadJob: Job? = null
+
     init {
         load()
     }
 
     /** First load (no cached content): goes through Loading and may resolve to Empty / Error / NavigateToLogin. */
     fun load() {
+        if (loadJob?.isActive == true) return // AND-375 FR-7: collapse onto the in-flight read.
         _uiState.value = SpacesListUiState.Loading
         fetch(isRefresh = false)
     }
@@ -49,6 +57,7 @@ class SpacesListViewModel @Inject constructor(
 
     /** Pull-to-refresh. On a non-401 failure the last-good Content is kept with isStale=true (FR-6). */
     fun refresh() {
+        if (loadJob?.isActive == true) return // AND-375 FR-7: a rapid second refresh collapses onto the first.
         val current = _uiState.value
         if (current is SpacesListUiState.Content) {
             _uiState.value = current.copy(isRefreshing = true)
@@ -57,7 +66,7 @@ class SpacesListViewModel @Inject constructor(
     }
 
     private fun fetch(isRefresh: Boolean) {
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             when (val result = repository.getSpaces()) {
                 is ApiResult.Success -> {
                     val spaces = result.data

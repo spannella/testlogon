@@ -85,6 +85,21 @@ class SpacesListViewModelTest {
     }
 
     @Test
+    fun concurrentRefresh_collapsesToOneRepositoryCall() = runTest {
+        // AND-375 (FR-7 / AC-3): two refresh() before the in-flight read drains => a single getSpaces().
+        repo.spacesResult = ApiResult.Success(listOf(space("s1")))
+        val vm = vm()
+        runCurrent() // drains the init load() (call #1)
+        assertEquals(1, repo.getSpacesCallCount)
+
+        vm.refresh() // call #2 launches
+        vm.refresh() // collapses onto the in-flight #2 (no new call)
+        runCurrent()
+
+        assertEquals(2, repo.getSpacesCallCount)
+    }
+
+    @Test
     fun load_401_emitsNavigateToLogin() = runTest {
         repo.spacesResult = FakeTicketsRepo.ticketsFailure(401)
         val received = mutableListOf<TicketsEffect>()

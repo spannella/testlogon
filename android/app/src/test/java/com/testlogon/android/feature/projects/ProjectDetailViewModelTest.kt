@@ -74,6 +74,22 @@ class ProjectDetailViewModelTest {
     }
 
     @Test
+    fun concurrentLoad_collapsesToOneDetailRead() = runTest {
+        // AND-375 (FR-7 / AC-3): a rapid retry() while the in-flight detail read is still running collapses
+        // onto it, so getProjectDetail fires once per drained read (init #1, then a single #2).
+        val repo = FakeProjectsRepo(detailResult = ApiResult.Success(FakeProjectsRepo.sampleProject("p1")))
+        val vm = vm(repo)
+        runCurrent() // drains the init load() (call #1)
+        assertEquals(1, repo.getProjectDetailCallCount)
+
+        vm.retry() // call #2 launches
+        vm.retry() // collapses onto the in-flight #2 (no new call)
+        runCurrent()
+
+        assertEquals(2, repo.getProjectDetailCallCount)
+    }
+
+    @Test
     fun load_401_emitsNavigateToLogin() = runTest {
         val repo = FakeProjectsRepo(detailResult = FakeProjectsRepo.failure(401))
         val received = mutableListOf<ProjectDetailEffect>()

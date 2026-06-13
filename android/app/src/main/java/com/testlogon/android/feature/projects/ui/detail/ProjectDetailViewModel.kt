@@ -11,6 +11,7 @@ import com.testlogon.android.feature.projects.data.ProjectsRepository
 import com.testlogon.android.feature.projects.provider.ProjectDriveReturn
 import com.testlogon.android.feature.projects.provider.ProjectDriveReturnDispatcher
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +51,12 @@ class ProjectDetailViewModel @Inject constructor(
     private val _effects = Channel<ProjectDetailEffect>(Channel.BUFFERED)
     val effects: Flow<ProjectDetailEffect> = _effects.receiveAsFlow()
 
+    /**
+     * AND-375 (FR-7 / AC-3) - the in-flight detail-load guard: a rapid load()/retry() while a read is still
+     * running collapses onto it (a single getProjectDetail), rather than firing parallel reads.
+     */
+    private var loadJob: Job? = null
+
     init {
         load()
         // The deep-link return path: the Activity emits the parsed return; act on it for THIS project only.
@@ -62,8 +69,9 @@ class ProjectDetailViewModel @Inject constructor(
 
     /** First load (or retry): Loading -> the detail read + the Drive-connection read -> Content / Error. */
     fun load() {
+        if (loadJob?.isActive == true) return // AND-375 FR-7: collapse onto the in-flight detail read.
         _state.value = ProjectDetailUiState.Loading
-        viewModelScope.launch { fetch() }
+        loadJob = viewModelScope.launch { fetch() }
     }
 
     fun retry() = load()
