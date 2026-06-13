@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
@@ -99,6 +100,9 @@ object FilesTestTags {
     const val APPEND_FOOTER = "files_append_footer"
     const val APPEND_RETRY = "files_append_retry"
 
+    /** AND-336 - the import-from-Google-Drive top-bar affordance. */
+    const val DRIVE_IMPORT = "files_drive_import"
+
     /** Per-breadcrumb tag: files_breadcrumb_<index>. */
     fun breadcrumb(index: Int): String = "files_breadcrumb_$index"
 
@@ -122,6 +126,9 @@ fun FilesRoute(
     // AND-335 - share affordance: opens the owner ShareSheet for the tapped file (defaults to no-op so
     // existing call sites/tests are unaffected). The file is keyed by its path (the backend's file id).
     onShareFile: (String) -> Unit = {},
+    // AND-336 - "Import from Google Drive" affordance: opens the backend-mediated Drive picker for the
+    // folder currently on screen (defaults to no-op so existing call sites/tests are unaffected).
+    onImportFromDrive: (String) -> Unit = {},
     viewModel: FilesViewModel = hiltViewModel(),
     uploadViewModel: com.testlogon.android.feature.files.upload.FilesUploadViewModel = hiltViewModel(),
     downloadViewModel: com.testlogon.android.feature.files.download.FileActionsViewModel = hiltViewModel(),
@@ -176,6 +183,8 @@ fun FilesRoute(
         onUploadClick = { pickFiles.launch(arrayOf("*/*")) },
         // AND-335 - the per-row share action carries the file path to the owner ShareSheet route.
         onShareFile = { node -> onShareFile(node.path) },
+        // AND-336 - the Drive-import action carries the folder on screen as the import target.
+        onImportFromDrive = { onImportFromDrive(state.currentPath) },
     )
 
     if (uploadSheetVisible) {
@@ -205,6 +214,9 @@ fun FilesScreen(
     onUploadClick: (() -> Unit)? = null,
     // AND-335 - per-file share action (defaults to no-op so existing call sites/tests are unaffected).
     onShareFile: (FileNode) -> Unit = {},
+    // AND-336 - "Import from Google Drive" action (null -> the affordance is hidden, so existing AND-332
+    // FilesScreen callers / tests are unaffected).
+    onImportFromDrive: (() -> Unit)? = null,
 ) {
     var sortSheetVisible by remember { mutableStateOf(false) }
 
@@ -237,6 +249,19 @@ fun FilesScreen(
                     }
                 },
                 actions = {
+                    // AND-336 - import-from-Drive affordance (only when the host wires it; defaulted-off
+                    // so existing AND-332 callers / tests are unaffected).
+                    if (onImportFromDrive != null && !state.isSearching) {
+                        IconButton(
+                            onClick = onImportFromDrive,
+                            modifier = Modifier.testTag(FilesTestTags.DRIVE_IMPORT),
+                        ) {
+                            Icon(
+                                Icons.Filled.CloudDownload,
+                                contentDescription = stringResource(R.string.drive_title),
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = { sortSheetVisible = true },
                         modifier = Modifier.testTag(FilesTestTags.SORT),

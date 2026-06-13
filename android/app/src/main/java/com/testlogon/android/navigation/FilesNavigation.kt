@@ -26,6 +26,11 @@ fun NavGraphBuilder.filesDestination(navController: NavHostController) {
             onShareFile = { path ->
                 navController.navigate(ShareSheetDest.build(path)) { launchSingleTop = true }
             },
+            // AND-336 - the import-from-Drive affordance opens the backend-mediated picker, carrying the
+            // folder on screen as the import target.
+            onImportFromDrive = { targetFolderPath ->
+                navController.navigate(DriveImportDest.build(targetFolderPath)) { launchSingleTop = true }
+            },
         )
     }
 }

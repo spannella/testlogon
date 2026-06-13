@@ -2626,4 +2626,24 @@
     <string name="public_share_revoked">This share link has been revoked.</string>
     <string name="public_share_exhausted">This share link has reached its download limit.</string>
     <string name="public_share_unavailable">This share link is not available.</string>
+
+    <!-- AND-336 backend-mediated Google Drive import -->
+    <string name="drive_title">Import from Google Drive</string>
+    <string name="drive_close">Close</string>
+    <string name="drive_connect">Connect Google Drive</string>
+    <string name="drive_connect_blurb">Connect your Google Drive to import files into TestLogon.</string>
+    <string name="drive_refresh">I\'ve connected — refresh</string>
+    <string name="drive_disconnect">Disconnect</string>
+    <string name="drive_search_label">Search Drive</string>
+    <string name="drive_search_clear">Clear search</string>
+    <string name="drive_breadcrumb_cd">Go to %1$s</string>
+    <string name="drive_folder_cd">Folder %1$s</string>
+    <string name="drive_file_cd">File %1$s</string>
+    <string name="drive_import">Import</string>
+    <string name="drive_import_cd">Import %1$s</string>
+    <string name="drive_importing">Importing…</string>
+    <string name="drive_imported">Imported to your files</string>
+    <string name="drive_empty">This folder is empty</string>
+    <string name="drive_error">Couldn\'t load Google Drive.</string>
+    <string name="drive_up">Up</string>
 </resources>

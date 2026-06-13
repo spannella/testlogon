@@ -129,6 +129,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         galleryDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
         filesDestination(navController)
+        // AND-336: backend-mediated Google Drive import picker (authenticated-only).
+        driveImportDestination(navController)
         // AND-335: owner share sheet (create/list/revoke share links) + the public share screen
         // (also registered unauthenticated, since a recipient may be signed out).
         shareSheetDestination(navController)
