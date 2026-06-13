@@ -2775,6 +2775,13 @@ class Settings:
     platform_support_email: str = os.environ.get("PLATFORM_SUPPORT_EMAIL", "")
     platform_settings_table_name: str = os.environ.get("PLATFORM_SETTINGS_TABLE_NAME", "platform_settings")
     branding_cache_ttl_seconds: int = int(os.environ.get("BRANDING_CACHE_TTL_SECONDS", "60"))
+    # Party / CRM (PTY-001 — OFBiz Party Manager, Phase 1)
+    # All flags default OFF. Turn on per-environment when Party/CRM is ready.
+    party_crm_enabled: bool = os.environ.get("PARTY_CRM_ENABLED", "0") not in ("0", "false", "False")
+    party_crm_contacts_migration_enabled: bool = os.environ.get("PARTY_CRM_CONTACTS_MIGRATION_ENABLED", "0") not in ("0", "false", "False")
+    party_crm_org_accounts_enabled: bool = os.environ.get("PARTY_CRM_ORG_ACCOUNTS_ENABLED", "0") not in ("0", "false", "False")
+    party_crm_profile_sync_enabled: bool = os.environ.get("PARTY_CRM_PROFILE_SYNC_ENABLED", "0") not in ("0", "false", "False")
+    party_table_name: str = os.environ.get("DDB_PARTY_TABLE", "party")
 
 
 S = Settings()

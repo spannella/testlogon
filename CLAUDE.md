@@ -237,6 +237,10 @@ Feature flags (all default to `true` in `.env.local.example`):
 | `MESSAGING_REPORTING_ENABLED` | Compliance/reporting |
 | `MESSAGING_TRANSLATION_ENABLED` | Per-message AI translation (MVA, default on) |
 | `MESSAGING_TRANSCRIPTION_ENABLED` / `MESSAGING_TTS_ENABLED` | Voice-message STT / TTS (MVA, default off) |
+| `PARTY_CRM_ENABLED` | OFBiz Party/CRM master gate (PTY-001+; default **off**) |
+| `PARTY_CRM_CONTACTS_MIGRATION_ENABLED` | Party contacts→graph migration sub-flag (default **off**) |
+| `PARTY_CRM_ORG_ACCOUNTS_ENABLED` | B2B org-account API sub-flag (default **off**) |
+| `PARTY_CRM_PROFILE_SYNC_ENABLED` | Party profile/address mech re-sync sub-flag (default **off**) |
 
 ---
 

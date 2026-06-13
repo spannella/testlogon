@@ -2495,6 +2495,21 @@ def _table_defs() -> List[TableDef]:
         # by exact key. updated_at is a plain item attribute (N), not a GSI key, so
         # no attr_types entry is needed.
         TableDef(_resolve_table_name(S.platform_settings_table_name, "platform_settings"), "pk", "sk"),
+        # Party/CRM single table (PTY-002). Stores Party meta, role, relationship,
+        # and contact-mech rows in one table. GSI_CREATED uses a numeric created_at
+        # sort key for newest-first pagination; GSI1/2/3 are all-string.
+        TableDef(
+            _resolve_table_name(S.party_table_name, "party"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "GSI_CREATED", "partition_key": "type", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

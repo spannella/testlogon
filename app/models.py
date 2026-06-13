@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.core.normalize import normalize_phone
+from app.core.normalize import normalize_email, normalize_phone
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -14661,3 +14661,261 @@ class BrandingUpdateIn(BaseModel):
     name: Optional[str] = None
     logo_url: Optional[str] = None
     support_email: Optional[str] = None
+# ─── Party / CRM Enums (PTY-003) ─────────────────────────────────────────────
+
+
+class CrmPartyType(str, Enum):
+    PERSON = "PERSON"
+    PARTY_GROUP = "PARTY_GROUP"
+
+
+class CrmPartyStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    MERGED = "MERGED"
+
+
+class CrmPartyRoleType(str, Enum):
+    CUSTOMER = "CUSTOMER"
+    SUPPLIER = "SUPPLIER"
+    EMPLOYEE = "EMPLOYEE"
+    ORG_ADMIN = "ORG_ADMIN"
+    BILL_TO = "BILL_TO"
+    SHIP_TO = "SHIP_TO"
+    CONTACT = "CONTACT"
+
+
+class CrmRelationshipType(str, Enum):
+    EMPLOYMENT = "EMPLOYMENT"
+    GROUP_MEMBER = "GROUP_MEMBER"
+    CONTACT_REL = "CONTACT_REL"
+    OWNER = "OWNER"
+
+
+class CrmContactMechType(str, Enum):
+    EMAIL = "EMAIL"
+    PHONE = "PHONE"
+    POSTAL = "POSTAL"
+
+
+class CrmContactMechPurpose(str, Enum):
+    PRIMARY_EMAIL = "PRIMARY_EMAIL"
+    BILLING = "BILLING"
+    SHIPPING = "SHIPPING"
+    WORK = "WORK"
+    HOME = "HOME"
+
+
+# ─── Party / CRM Domain Models (PTY-003) ──────────────────────────────────────
+
+
+class CrmParty(BaseModel):
+    party_id: str
+    party_type: CrmPartyType
+    status: CrmPartyStatus = CrmPartyStatus.ACTIVE
+    user_sub: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class CrmPartyRole(BaseModel):
+    party_id: str
+    role_type: CrmPartyRoleType
+    created_at: int = 0
+
+
+class CrmPartyRelationship(BaseModel):
+    from_party_id: str
+    to_party_id: str
+    relationship_type: CrmRelationshipType
+    created_at: int = 0
+
+
+class CrmContactMech(BaseModel):
+    mech_id: str
+    party_id: str
+    mech_type: CrmContactMechType
+    value: str
+    purposes: List[CrmContactMechPurpose] = Field(default_factory=list)
+    verified: bool = False
+    created_at: int = 0
+    updated_at: int = 0
+
+
+# ─── Party / CRM Request (In) Models (PTY-003) ────────────────────────────────
+
+
+class CrmPartyIn(BaseModel):
+    party_type: CrmPartyType
+    user_sub: Optional[str] = None  # PERSON only; ignored for PARTY_GROUP
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class CrmPartyStatusIn(BaseModel):
+    status: CrmPartyStatus
+
+
+class CrmAddRoleIn(BaseModel):
+    role_type: CrmPartyRoleType
+
+
+# Alias retained for PTY-011 router import compatibility.
+CrmPartyRoleIn = CrmAddRoleIn
+
+
+class CrmRelationshipIn(BaseModel):
+    from_party_id: str = Field(..., min_length=1, max_length=64)
+    to_party_id: str = Field(..., min_length=1, max_length=64)
+    relationship_type: CrmRelationshipType
+
+    @model_validator(mode="after")
+    def _parties_differ(self) -> "CrmRelationshipIn":
+        if self.from_party_id == self.to_party_id:
+            raise ValueError("from_party_id and to_party_id must differ")
+        return self
+
+
+class CrmContactMechIn(BaseModel):
+    mech_type: CrmContactMechType
+    value: Optional[str] = None  # for EMAIL and PHONE
+    postal_address: Optional[AddressIn] = None  # for POSTAL
+    purposes: List[CrmContactMechPurpose] = Field(default_factory=list)
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
+    verified: bool = False
+
+    @model_validator(mode="after")
+    def _normalize_and_validate(self) -> "CrmContactMechIn":
+        if self.mech_type == CrmContactMechType.EMAIL:
+            if not self.value:
+                raise ValueError("value is required for EMAIL contact mechs")
+            try:
+                self.value = normalize_email(self.value)
+            except Exception as exc:
+                raise ValueError("Invalid email") from exc
+        elif self.mech_type == CrmContactMechType.PHONE:
+            if not self.value:
+                raise ValueError("value is required for PHONE contact mechs")
+            try:
+                self.value = normalize_phone(self.value)
+            except Exception as exc:
+                raise ValueError("Invalid phone") from exc
+        elif self.mech_type == CrmContactMechType.POSTAL:
+            if self.postal_address is None:
+                raise ValueError("postal_address is required for POSTAL contact mechs")
+            import hashlib
+            import json as _json
+
+            _addr = {
+                k: v
+                for k, v in self.postal_address.model_dump().items()
+                if v is not None
+            }
+            _canon = _json.dumps(_addr, sort_keys=True)
+            self.value = hashlib.sha256(_canon.encode()).hexdigest()[:16]
+        return self
+
+
+# Alias retained for PTY-011 router import compatibility.
+CrmContactMechUpdateIn = None  # replaced below after class definition
+
+
+class CrmUpdateContactMechIn(BaseModel):
+    purposes: Optional[List[CrmContactMechPurpose]] = None
+    verified: Optional[bool] = None
+
+
+CrmContactMechUpdateIn = CrmUpdateContactMechIn
+
+
+# ─── Party / CRM Response (Out) Models (PTY-003) ──────────────────────────────
+
+
+class CrmPartyOut(BaseModel):
+    party_id: str
+    party_type: CrmPartyType
+    status: CrmPartyStatus
+    user_sub: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmPartyRoleOut(BaseModel):
+    party_id: str
+    role_type: CrmPartyRoleType
+    created_at: int
+
+
+class CrmRelationshipOut(BaseModel):
+    from_party_id: str
+    to_party_id: str
+    relationship_type: CrmRelationshipType
+    created_at: int
+
+
+class CrmContactMechOut(BaseModel):
+    mech_id: str
+    party_id: str
+    mech_type: CrmContactMechType
+    value: str
+    postal_address: Optional[AddressIn] = None
+    purposes: List[CrmContactMechPurpose]
+    verified: bool
+    created_at: int
+    updated_at: int
+
+
+# ─── Party / CRM List-Wrapper Models (PTY-005/006/007) ────────────────────────
+
+
+class CrmRoleListOut(BaseModel):
+    roles: List[CrmPartyRoleOut]
+    count: int
+
+
+class CrmPartyByRoleOut(BaseModel):
+    roles: List[CrmPartyRoleOut]
+    count: int
+
+
+class CrmRelationshipListOut(BaseModel):
+    relationships: List[CrmRelationshipOut]
+    next_cursor: Optional[str] = None
+    count: int
+
+
+class CrmContactMechListOut(BaseModel):
+    mechs: List[CrmContactMechOut]
+    count: int
+
+
+# ─── Party / CRM B2B Org-Account Models (PTY-003 / PTY-008) ───────────────────
+#
+# Cross-ticket reconciliation: the canonical CRM-org read model is CrmOrgOut
+# (org_party_id + owner_user_sub). CrmOrgAccountOut is retained as the legacy
+# name and aligned to the same field set so PTY-003/PTY-008/PTY-013 agree.
+
+
+class CrmOrgOut(BaseModel):
+    org_party_id: str
+    name: str
+    status: CrmPartyStatus
+    owner_user_sub: Optional[str] = None
+    roles: List[CrmPartyRoleOut] = Field(default_factory=list)
+    member_count: int = 0
+    created_at: int
+    updated_at: int
+
+
+# Legacy alias: same shape, kept so existing references resolve.
+CrmOrgAccountOut = CrmOrgOut
+
+
+class CrmCreateOrgAccountIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    owner_user_sub: Optional[str] = Field(default=None, min_length=1)
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class CrmOrgMemberIn(BaseModel):
+    member_party_id: str = Field(..., min_length=1, max_length=64)
+    role_type: str = Field(default="member", pattern=r"^(member|admin|org_admin)$")

@@ -318,6 +318,7 @@ class Tables:
     reservations: Any
     returns: Any
     platform_settings: Any
+    party: Any  # Party/CRM single table (PTY-002)
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -571,4 +572,5 @@ T = Tables(
     reservations=_safe_table(S.reservations_table_name),
     returns=_safe_table(S.returns_table_name),
     platform_settings=_safe_table(S.platform_settings_table_name),
+    party=_safe_table(S.party_table_name),  # Party/CRM single table (PTY-002)
 )

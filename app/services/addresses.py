@@ -136,7 +136,35 @@ def set_primary_address(user_sub: str, address_id: str) -> Dict[str, Any]:
     apply_profile_update(user_sub, {"mailing_address": mailing}, replace=False)
     target["is_primary_mailing"] = True
     target["updated_at"] = ts
+
+    # PTY-010: re-sync party POSTAL contact mech when the primary address changes
+    # (best-effort, doubly flag-gated, never raises).
+    _sync_party_postal_mech(user_sub, target)
+
     return target
+
+
+def _sync_party_postal_mech(user_sub: str, address: Dict[str, Any]) -> None:
+    """Best-effort party POSTAL mech re-sync after a primary-address change (PTY-010).
+
+    Gated by S.party_crm_enabled AND S.party_crm_profile_sync_enabled. Never raises.
+    Lazy imports avoid circular deps and startup cost when the flags are off.
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    try:
+        from app.core.settings import S as _S
+
+        if not (_S.party_crm_enabled and _S.party_crm_profile_sync_enabled):
+            return
+        from app.services.party import _resync_postal_mech
+
+        _resync_postal_mech(user_sub, address)
+    except Exception:
+        _log.exception(
+            "party.sync_postal_mech_after_address_change_error user_sub=%s", user_sub
+        )
 
 
 def search_addresses(user_sub: str, query: str) -> List[Dict[str, Any]]:

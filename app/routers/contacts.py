@@ -108,6 +108,19 @@ def add_contact(inp: AddContactIn, ctx: Dict = Depends(require_ui_session)):
         "added_at": now,
     }
     T.contacts.put_item(Item=item)
+
+    # PTY-009 forward hook — best-effort, flag-gated (lazy import to avoid
+    # pulling the party graph into the import path when the flag is off).
+    from app.core.settings import S as _S
+
+    if _S.party_crm_contacts_migration_enabled:
+        try:
+            from app.services.party_contacts_migration import maybe_project_new_contact
+
+            maybe_project_new_contact(user_sub, inp.user_id, item)
+        except Exception:
+            pass
+
     return _item_to_contact(item)
 
 
