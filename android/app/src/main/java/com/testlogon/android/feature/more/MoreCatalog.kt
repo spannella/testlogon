@@ -465,6 +465,14 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.DMCA,
             section = MoreSection.SUPPORT,
         ),
+        // AND-385: Privacy & Data Export (request a machine-readable export -> status -> download).
+        MoreEntry(
+            id = "privacy_export",
+            labelRes = R.string.more_entry_privacy_export,
+            icon = Icons.Outlined.Security,
+            route = MoreRoutes.PRIVACY_EXPORT,
+            section = MoreSection.SECURITY,
+        ),
         MoreEntry(
             id = "help",
             labelRes = R.string.more_entry_help,

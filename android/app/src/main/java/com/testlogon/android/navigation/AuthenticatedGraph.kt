@@ -277,6 +277,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // and pre-targeted from a content / profile overflow (prefills + locks the content reference via
         // navigateToDmca). A single non-idempotent POST v1/dmca/claims; no auto-retry.
         dmcaDestination(navController)
+        // AND-385: Privacy & Data Export. Authenticated request -> status -> download lifecycle over the
+        // /ui/privacy/account-deletion/export + /ui/privacy/requests endpoints; Room-cached for offline.
+        privacyExportDestination(navController)
     }
 }
 

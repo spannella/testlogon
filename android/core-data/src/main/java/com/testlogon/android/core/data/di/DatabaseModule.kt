@@ -12,6 +12,7 @@ import com.testlogon.android.core.data.download.DownloadDao
 import com.testlogon.android.core.data.feed.BookmarkStateDao
 import com.testlogon.android.core.data.feed.PostSuppressionDao
 import com.testlogon.android.core.data.paywall.EntitlementDao
+import com.testlogon.android.core.data.privacy.ExportRequestDao
 import com.testlogon.android.core.data.respond.SessionDraftDao
 import dagger.Module
 import dagger.Provides
@@ -75,4 +76,8 @@ object DatabaseModule {
     @Provides
     fun provideSessionDraftDao(db: TestLogonDatabase): SessionDraftDao =
         db.sessionDraftDao()
+
+    @Provides
+    fun provideExportRequestDao(db: TestLogonDatabase): ExportRequestDao =
+        db.exportRequestDao()
 }

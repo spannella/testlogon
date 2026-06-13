@@ -23,6 +23,8 @@ import com.testlogon.android.core.data.download.DownloadDao
 import com.testlogon.android.core.data.download.DownloadEntity
 import com.testlogon.android.core.data.paywall.EntitlementDao
 import com.testlogon.android.core.data.paywall.EntitlementEntity
+import com.testlogon.android.core.data.privacy.ExportRequestDao
+import com.testlogon.android.core.data.privacy.ExportRequestEntity
 import com.testlogon.android.core.data.respond.SessionDraftDao
 import com.testlogon.android.core.data.respond.SessionDraftEntity
 
@@ -55,6 +57,8 @@ import com.testlogon.android.core.data.respond.SessionDraftEntity
  *        the broadcast_layout table (cached session layout, keyed by session_id).
  * - v8 — AND-348: adds the session_draft table (durable in-progress respondent questionnaire session,
  *        keyed by slug — single active session per slug per device, FR-7).
+ * - v9 — AND-385: adds the export_requests table (durable cache of the user's data-export requests, keyed by
+ *        the server request_id — offline/stale history, FR-6).
  */
 @Database(
     entities = [
@@ -67,8 +71,9 @@ import com.testlogon.android.core.data.respond.SessionDraftEntity
         BroadcastInputEntity::class,
         BroadcastLayoutEntity::class,
         SessionDraftEntity::class,
+        ExportRequestEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(LayoutListConverters::class)
@@ -98,6 +103,9 @@ abstract class TestLogonDatabase : RoomDatabase() {
 
     /** AND-348 — durable in-progress respondent questionnaire session draft (per slug). */
     abstract fun sessionDraftDao(): SessionDraftDao
+
+    /** AND-385 — durable cache of the user's data-export requests (per request_id). */
+    abstract fun exportRequestDao(): ExportRequestDao
 
     companion object {
         const val NAME = "testlogon-cache.db"
@@ -262,6 +270,27 @@ abstract class TestLogonDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * AND-385 — additive migration creating the export_requests table (durable cache of the user's
+         * data-export requests). Purely additive (a new table), so no existing rows are touched. Column
+         * types/affinities match [com.testlogon.android.core.data.privacy.ExportRequestEntity] EXACTLY
+         * (nullable expires_at / size_bytes / download_url; status/requested_at/synced_at NOT NULL).
+         */
+        val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS export_requests (" +
+                        "id TEXT NOT NULL PRIMARY KEY, " +
+                        "status TEXT NOT NULL, " +
+                        "requested_at INTEGER NOT NULL, " +
+                        "expires_at INTEGER, " +
+                        "size_bytes INTEGER, " +
+                        "download_url TEXT, " +
+                        "synced_at INTEGER NOT NULL)",
+                )
+            }
+        }
+
         /** Registered migrations; grows as the schema evolves. */
         val ALL_MIGRATIONS: Array<Migration> =
             arrayOf(
@@ -272,6 +301,7 @@ abstract class TestLogonDatabase : RoomDatabase() {
                 MIGRATION_5_6,
                 MIGRATION_6_7,
                 MIGRATION_7_8,
+                MIGRATION_8_9,
             )
     }
 }

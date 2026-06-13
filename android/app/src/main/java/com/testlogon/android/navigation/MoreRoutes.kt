@@ -193,6 +193,9 @@ object MoreRoutes {
     // the plain base route resolves to it (the optional query args default to null).
     val DMCA: String get() = DmcaDest.STANDALONE_ROUTE
 
+    // AND-385: privacy & data export (request -> status -> download lifecycle; Room-cached offline history).
+    const val PRIVACY_EXPORT = PrivacyExportDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -258,6 +261,7 @@ object MoreRoutes {
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,
+            PRIVACY_EXPORT,
             SETTINGS,
             HELP,
             ABOUT,

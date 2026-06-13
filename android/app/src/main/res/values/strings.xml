@@ -3236,4 +3236,29 @@
     <string name="dmca_confirm_title">We received your notice</string>
     <string name="dmca_confirm_claim_id">Reference: %1$s</string>
     <string name="dmca_confirm_content_removed">The reported content has been removed.</string>
+
+    <!-- AND-385: Privacy & Data Export -->
+    <string name="more_entry_privacy_export">Privacy &amp; data export</string>
+    <string name="privacy_export_title">Privacy &amp; data export</string>
+    <string name="privacy_export_back">Back</string>
+    <string name="privacy_export_request">Request data export</string>
+    <string name="privacy_export_refresh">Refresh</string>
+    <string name="privacy_export_refresh_cd">Refresh export requests</string>
+    <string name="privacy_export_retry">Retry</string>
+    <string name="privacy_export_download_cd">Download export</string>
+    <string name="privacy_export_offline">Showing offline data</string>
+    <string name="privacy_export_saved">Export saved to Downloads</string>
+    <string name="privacy_export_empty_title">No data exports yet</string>
+    <string name="privacy_export_empty_body">Request a machine-readable copy of your account data. Exports usually take a few minutes to prepare.</string>
+    <string name="privacy_export_requested_at">Requested %1$s</string>
+    <string name="privacy_export_status_cd">Export status: %1$s</string>
+    <string name="privacy_export_status_pending">Pending</string>
+    <string name="privacy_export_status_processing">Processing</string>
+    <string name="privacy_export_status_completed">Completed</string>
+    <string name="privacy_export_status_failed">Failed</string>
+    <string name="privacy_export_status_cancelled">Cancelled</string>
+    <string name="privacy_export_status_rejected">Rejected</string>
+    <string name="privacy_export_status_held">On hold</string>
+    <string name="privacy_export_status_expired">Expired</string>
+    <string name="privacy_export_status_unknown">Unknown</string>
 </resources>
