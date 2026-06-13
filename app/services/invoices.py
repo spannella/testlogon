@@ -14,6 +14,7 @@ Money is always integer cents.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from botocore.exceptions import ClientError
+from fastapi import HTTPException
 
 from app.core.aws_clients import s3_client
 from app.core.cursor import decode_cursor, encode_cursor
@@ -30,7 +32,23 @@ from app.core.time import now_ts
 
 logger = logging.getLogger(__name__)
 
-VALID_TYPES = {"tip", "unlock", "subscription", "shop", "deposit"}
+VALID_TYPES = {"tip", "unlock", "subscription", "shop", "deposit", "b2b"}
+
+# QUO-005: standalone invoice lifecycle.
+STANDALONE_STATUSES = {"draft", "sent", "paid", "overdue", "void"}
+
+_ALLOWED_TRANSITIONS: Dict[str, set] = {
+    "draft": {"sent", "void"},
+    "sent": {"paid", "overdue", "void"},
+    "overdue": {"paid", "void"},
+    "paid": set(),          # user cannot transition; admin can void (handled inline)
+    "void": set(),          # terminal
+    "generated": {"void"},  # legacy auto-generated invoices may be voided
+    "emailed": {"void"},
+}
+
+# Origin statuses an admin may settle via the D5 record-payment path.
+_MANUAL_PAYMENT_ORIGINS = {"draft", "sent", "overdue", "generated", "emailed"}
 
 _s3 = s3_client()
 
@@ -155,12 +173,24 @@ def _render_invoice_lines(record: Dict[str, Any]) -> List[str]:
     total = _coerce_int(record.get("total_cents"))
     refunded = str(record.get("status")) == "refunded"
 
+    status = str(record.get("status") or "")
     lines: List[str] = ["INVOICE", "=" * 48]
     if refunded:
         lines.append("*** REFUNDED ***")
+    if status == "void":
+        lines.append("*** VOIDED ***")
+    if status == "overdue":
+        lines.append("*** OVERDUE ***")
     lines.append(f"Invoice : {record.get('invoice_number', '')}")
     lines.append(f"Date    : {date_str}")
     lines.append(f"Type    : {record.get('invoice_type', '')}")
+    if record.get("payment_terms_days"):
+        lines.append(f"Terms   : Net {int(record['payment_terms_days'])}")
+    if record.get("due_date"):
+        due_str = datetime.fromtimestamp(
+            _coerce_int(record["due_date"]), tz=timezone.utc
+        ).strftime("%B %d, %Y")
+        lines.append(f"Due     : {due_str}")
     pm = record.get("payment_method_summary") or ""
     if pm:
         lines.append(f"Payment : {pm}")
@@ -223,7 +253,11 @@ def _serialize(record: Dict[str, Any]) -> Dict[str, Any]:
             "description": str(li.get("description") or ""),
             "quantity": _coerce_int(li.get("quantity"), 1),
             "amount_cents": _coerce_int(li.get("amount_cents")),
+            "unit_price_cents": _coerce_int(li.get("unit_price_cents")),
         })
+    due_date = record.get("due_date")
+    voided_at = record.get("voided_at")
+    payment_terms = record.get("payment_terms_days")
     return {
         "invoice_id": str(record.get("invoice_id") or ""),
         "invoice_number": str(record.get("invoice_number") or ""),
@@ -242,6 +276,10 @@ def _serialize(record: Dict[str, Any]) -> Dict[str, Any]:
         "payment_method_summary": str(record.get("payment_method_summary") or ""),
         "ledger_entry_id": str(record.get("ledger_entry_id") or ""),
         "created_at": _coerce_int(record.get("created_at")),
+        "aos_quote_id": str(record.get("aos_quote_id") or ""),
+        "payment_terms_days": _coerce_int(payment_terms) if payment_terms is not None else None,
+        "due_date": _coerce_int(due_date) if due_date is not None else None,
+        "voided_at": _coerce_int(voided_at) if voided_at is not None else None,
     }
 
 
@@ -283,6 +321,7 @@ def create_invoice(
     buyer_email: str = "",
     payment_method_summary: str = "",
     currency: str = "usd",
+    aos_quote_id: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Create an invoice record, render its PDF, and store it in S3.
 
@@ -340,6 +379,7 @@ def create_invoice(
         "buyer_email": buyer_email,
         "line_items": norm_items,
         "payment_method_summary": payment_method_summary,
+        "aos_quote_id": aos_quote_id,
         "created_at": created_at,
         "GSI1PK": f"USER#{user_sub}#TYPE#{invoice_type}",
         "GSI1SK": created_at,
@@ -520,3 +560,395 @@ def admin_list_invoices(
     if invoice_type and invoice_type in VALID_TYPES:
         out = [r for r in out if r["invoice_type"] == invoice_type]
     return {"invoices": out, "next_cursor": encode_cursor(_clean_lek(resp.get("LastEvaluatedKey")))}
+
+
+# --------------------------------------------------------------------------
+# QUO-005: standalone invoice lifecycle (draft/sent/paid/overdue/void),
+# manual B2B creation, admin offline-payment recording (D5), overdue checker.
+# Money reconciliations: D1 (signed_amount_cents), D5 (record-payment).
+# --------------------------------------------------------------------------
+
+def _require_standalone_enabled() -> None:
+    if not S.aos_standalone_invoices_enabled:
+        raise HTTPException(404, "Standalone invoices not enabled")
+
+
+def update_invoice_status(
+    user_sub: str,
+    invoice_number: str,
+    new_status: str,
+    *,
+    admin: bool = False,
+    payment_ref: str = "",
+    request: Any = None,
+) -> Dict[str, Any]:
+    """Transition an invoice through the standalone lifecycle, enforcing the
+    allowed-transition graph and performing the canonical money side effects:
+
+    * ``sent``/``overdue`` -> ``paid`` (owner): positive ``b2b_invoice_payment``
+      ledger credit + ``apply_balance_delta(+total)`` (D1).
+    * ``paid`` -> ``void`` (admin only): canonical refund/void combo — positive
+      ``adjustment`` (``signed_amount_cents=-total``, D1) +
+      ``apply_balance_delta(-total)`` + ``settle_or_reverse_ledger(original)``.
+      Never writes a negative ``amount_cents`` (audit A4).
+    """
+    from app.services import billing_shared
+    from app.services.alerts import audit_event
+
+    item = _get_raw(user_sub, invoice_number)
+    if not item:
+        raise HTTPException(404, "Invoice not found")
+    old_status = str(item.get("status") or "generated")
+
+    if new_status not in _ALLOWED_TRANSITIONS.get(old_status, set()):
+        # paid->void only allowed for admins; surface a clearer 409 in that case.
+        if new_status == "void" and old_status == "paid":
+            pass  # handled below (admin gate)
+        else:
+            raise HTTPException(
+                409,
+                {"code": "invalid_transition", "from": old_status, "to": new_status},
+            )
+    if new_status == "void" and old_status == "paid" and not admin:
+        raise HTTPException(409, "paid invoices may only be voided by an admin")
+
+    total_cents = _coerce_int(item.get("total_cents"))
+    currency = str(item.get("currency") or "usd")
+    pk = item["pk"]
+    ts = now_ts()
+
+    set_parts = ["#s = :s", "updated_at = :t"]
+    expr_names = {"#s": "status"}
+    expr_values: Dict[str, Any] = {":s": new_status, ":t": ts}
+    remove_parts: List[str] = []
+
+    # --- sent/overdue -> paid: positive inbound payment credit (D1) ---
+    if new_status == "paid":
+        led_sk, led_item = billing_shared.new_ledger_entry(
+            key_name="pk",
+            key_value=pk,
+            entry_type="b2b_invoice_payment",
+            amount_cents=total_cents,
+            signed_amount_cents=+total_cents,  # D1: inbound payment = credit
+            state="settled",
+            reason=f"manual payment for {invoice_number}",
+            meta={"invoice_number": invoice_number},
+            extra={"payment_ref": payment_ref, "currency": currency},
+        )
+        billing_shared.ddb_put(T.billing, led_item)
+        billing_shared.apply_balance_delta(
+            T.billing, pk, {"payments_settled_cents": +total_cents}, currency=currency,
+        )
+        set_parts.append("paid_at = :pa")
+        expr_values[":pa"] = ts
+        remove_parts.extend(["GSI3PK", "GSI3SK"])
+
+    # --- paid -> void: canonical refund/void combo (D1, A4) ---
+    elif new_status == "void":
+        if old_status == "paid" and not item.get("void_reversal_ledger_sk"):
+            led_sk, led_item = billing_shared.new_ledger_entry(
+                key_name="pk",
+                key_value=pk,
+                entry_type="adjustment",
+                amount_cents=total_cents,           # positive unsigned (A4)
+                signed_amount_cents=-total_cents,   # D1: void reversal = debit direction
+                state="settled",
+                reason="void",
+                meta={"invoice_number": invoice_number},
+                extra={"provider": str(item.get("provider") or ""), "currency": currency},
+            )
+            billing_shared.ddb_put(T.billing, led_item)
+            billing_shared.apply_balance_delta(
+                T.billing, pk, {"payments_settled_cents": -total_cents}, currency=currency,
+            )
+            original_sk = item.get("ledger_entry_id")
+            if original_sk:
+                try:
+                    billing_shared.settle_or_reverse_ledger(
+                        T.billing, "pk", pk, original_sk, "reversed",
+                    )
+                except Exception:  # pragma: no cover
+                    logger.warning("void: original ledger reverse failed", exc_info=True)
+            set_parts.append("void_reversal_ledger_sk = :vsk")
+            expr_values[":vsk"] = led_sk
+        set_parts.append("voided_at = :va")
+        expr_values[":va"] = ts
+        remove_parts.extend(["GSI3PK", "GSI3SK"])
+
+    # --- draft/generated/emailed -> sent: enroll in overdue scanner ---
+    elif new_status == "sent":
+        due_date = item.get("due_date")
+        if due_date is not None and S.aos_standalone_invoices_enabled:
+            set_parts.append("GSI3PK = :g3pk")
+            set_parts.append("GSI3SK = :g3sk")
+            expr_values[":g3pk"] = "STATUS#sent"
+            expr_values[":g3sk"] = _coerce_int(due_date)
+
+    elif new_status == "overdue":
+        remove_parts.extend(["GSI3PK", "GSI3SK"])
+
+    update_expr = "SET " + ", ".join(set_parts)
+    # only REMOVE attributes that actually exist (DDB ignores missing, but keep clean)
+    actual_removes = [r for r in remove_parts if r in item]
+    if actual_removes:
+        update_expr += " REMOVE " + ", ".join(actual_removes)
+
+    T.invoices.update_item(
+        Key={"pk": pk, "sk": _inv_sk(invoice_number)},
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames=expr_names,
+        ExpressionAttributeValues=expr_values,
+    )
+    audit_event(
+        "invoice.status_changed", user_sub, request,
+        invoice_number=invoice_number, old_status=old_status, new_status=new_status,
+    )
+    updated = _get_raw(user_sub, invoice_number)
+    return _serialize(updated or item)
+
+
+def create_manual_invoice(
+    *,
+    admin_user_sub: str,
+    buyer_user_sub: str = "",
+    buyer_name: str,
+    buyer_email: str,
+    billing_address: Optional[Dict[str, Any]] = None,
+    line_items: List[Dict[str, Any]],
+    currency: str = "usd",
+    payment_terms_days: int = 30,
+    notes: str = "",
+) -> Dict[str, Any]:
+    from app.services.alerts import audit_event
+
+    payment_terms_days = _coerce_int(payment_terms_days, 30)
+    if not (1 <= payment_terms_days <= 365):
+        raise HTTPException(422, "payment_terms_days must be in [1, 365]")
+    if not line_items:
+        raise HTTPException(422, "at least one line item is required")
+
+    norm_items: List[Dict[str, Any]] = []
+    amount_cents = 0
+    for li in line_items:
+        qty = _coerce_int(li.get("quantity"), 1)
+        unit = _coerce_int(li.get("unit_price_cents"))
+        li_total = unit * qty
+        amount_cents += li_total
+        norm_items.append({
+            "description": str(li.get("description") or "Item"),
+            "quantity": qty,
+            "unit_price_cents": unit,
+            "amount_cents": li_total,
+            "tax_rate_bps": _coerce_int(li.get("tax_rate_bps")),
+        })
+    tax_cents = (amount_cents * max(0, S.invoices_tax_bps)) // 10_000
+    total_cents = amount_cents + tax_cents
+
+    invoice_number = _next_invoice_number()
+    invoice_id = "inv_" + uuid.uuid4().hex
+    created_at = now_ts()
+    owner_sub = buyer_user_sub if buyer_user_sub else admin_user_sub
+    due_date = created_at + payment_terms_days * 86400
+
+    record: Dict[str, Any] = {
+        "pk": _user_pk(owner_sub),
+        "sk": _inv_sk(invoice_number),
+        "invoice_id": invoice_id,
+        "invoice_number": invoice_number,
+        "user_sub": owner_sub,
+        "invoice_type": "b2b",
+        "amount_cents": amount_cents,
+        "tax_cents": tax_cents,
+        "total_cents": total_cents,
+        "currency": (currency or "usd").lower(),
+        "status": "draft",
+        "ledger_entry_id": "",
+        "buyer_name": buyer_name,
+        "buyer_email": buyer_email,
+        "billing_address": dict(billing_address or {}),
+        "line_items": norm_items,
+        "payment_method_summary": "",
+        "payment_terms_days": payment_terms_days,
+        "due_date": due_date,
+        "notes": notes or "",
+        "created_by_admin": admin_user_sub,
+        "created_at": created_at,
+        "GSI1PK": f"USER#{owner_sub}#TYPE#b2b",
+        "GSI1SK": created_at,
+        "GSI2PK": "ADMIN_ALL",
+        "GSI2SK": created_at,
+    }
+    pdf = _render_pdf(_render_invoice_lines(record))
+    record["s3_key"] = _store_pdf(owner_sub, invoice_number, pdf)
+    T.invoices.put_item(Item=record)
+    audit_event(
+        "invoice.manual_created", admin_user_sub,
+        invoice_number=invoice_number, buyer_email=buyer_email,
+    )
+    return _serialize(record)
+
+
+def record_external_payment(
+    *,
+    admin_user_sub: str,
+    owner_user_sub: str,
+    invoice_number: str,
+    amount_cents: int,
+    reference: str = "",
+    reason: str = "",
+    request: Any = None,
+) -> Dict[str, Any]:
+    """D5: admin records an OFFLINE/external payment (bank transfer, cheque,
+    cash, wire). No provider/Stripe SDK call — money is recorded as already
+    received out-of-band. Idempotent + money-safe."""
+    from app.services import billing_shared
+    from app.services.alerts import audit_event
+
+    amount_cents = _coerce_int(amount_cents)
+    if amount_cents < 1:
+        raise HTTPException(422, "amount_cents must be >= 1")
+
+    item = _get_raw(owner_user_sub, invoice_number)
+    if not item:
+        raise HTTPException(404, "Invoice not found")
+    old_status = str(item.get("status") or "generated")
+    total_cents = _coerce_int(item.get("total_cents"))
+
+    # idempotency / money safety
+    if old_status == "paid" or item.get("external_payment_ledger_sk"):
+        raise HTTPException(409, {"code": "already_paid", "invoice_number": invoice_number})
+    if old_status == "void":
+        raise HTTPException(409, {"code": "invalid_state", "from": "void"})
+    if old_status not in _MANUAL_PAYMENT_ORIGINS:
+        raise HTTPException(
+            409, {"code": "invalid_transition", "from": old_status, "to": "paid"},
+        )
+
+    mismatch = amount_cents != total_cents
+    pk = item["pk"]
+    currency = str(item.get("currency") or "usd")
+    ts = now_ts()
+
+    meta: Dict[str, Any] = {
+        "invoice_number": invoice_number,
+        "method": "external",
+        "reference": reference,
+        "recorded_by": admin_user_sub,
+    }
+    if mismatch:
+        meta["amount_mismatch"] = True
+        meta["expected_cents"] = total_cents
+
+    led_sk, led_item = billing_shared.new_ledger_entry(
+        key_name="pk",
+        key_value=pk,
+        entry_type="invoice_payment_external",
+        amount_cents=amount_cents,            # positive, unsigned (display)
+        signed_amount_cents=+amount_cents,    # D1: inbound payment = credit
+        state="settled",
+        reason=reason or f"external payment for {invoice_number}",
+        meta=meta,
+        extra={"provider": "external", "currency": currency},
+    )
+    billing_shared.ddb_put(T.billing, led_item)
+    billing_shared.apply_balance_delta(
+        T.billing, pk, {"payments_settled_cents": +amount_cents}, currency=currency,
+    )
+
+    T.invoices.update_item(
+        Key={"pk": pk, "sk": _inv_sk(invoice_number)},
+        UpdateExpression=(
+            "SET #s = :s, paid_at = :pa, updated_at = :t, "
+            "external_payment_ledger_sk = :lsk, external_payment_reference = :ref "
+            "REMOVE GSI3PK, GSI3SK"
+        ),
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":s": "paid", ":pa": ts, ":t": ts, ":lsk": led_sk, ":ref": reference,
+        },
+    )
+    audit_event(
+        "invoice.payment_recorded_external", admin_user_sub, request,
+        invoice_number=invoice_number, owner_user_sub=owner_user_sub,
+        amount_cents=amount_cents, reference=reference, method="external",
+        amount_mismatch=mismatch, ledger_sk=led_sk,
+    )
+    updated = _get_raw(owner_user_sub, invoice_number)
+    return _serialize(updated or item)
+
+
+def check_overdue_invoices() -> int:
+    """Scan GSI3 for sent invoices past their due_date and mark them overdue.
+    Returns the count processed. No-op when the flag is off."""
+    if not S.aos_standalone_invoices_enabled:
+        return 0
+    now = now_ts()
+    count = 0
+    lek = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "GSI3",
+            "KeyConditionExpression": "GSI3PK = :pk AND GSI3SK < :now",
+            "ExpressionAttributeValues": {":pk": "STATUS#sent", ":now": now},
+        }
+        if lek:
+            kwargs["ExclusiveStartKey"] = lek
+        resp = T.invoices.query(**kwargs)
+        for item in resp.get("Items", []):
+            owner = str(item.get("user_sub") or "")
+            number = str(item.get("invoice_number") or "")
+            if not owner or not number:
+                continue
+            try:
+                update_invoice_status(owner, number, "overdue")
+                count += 1
+            except Exception:  # pragma: no cover
+                logger.warning("overdue transition failed for %s", number, exc_info=True)
+                continue
+            to_email = item.get("buyer_email") or ""
+            if to_email:
+                try:
+                    from app.services.alerts import send_alert_email
+                    body = "\n".join(["*** OVERDUE ***"] + _render_invoice_lines(item))
+                    send_alert_email([to_email], f"Invoice {number} is now overdue", body)
+                except Exception:  # pragma: no cover
+                    pass
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+    return count
+
+
+async def _invoice_overdue_loop() -> None:
+    try:
+        from app.services.job_registry import register_task
+        register_task(
+            "invoice_overdue_checker",
+            S.aos_invoice_overdue_check_interval_seconds,
+            enabled=True,
+            description="Marks sent invoices past due_date as overdue",
+        )
+    except Exception:  # pragma: no cover
+        pass
+    while True:
+        try:
+            check_overdue_invoices()
+        except Exception:  # pragma: no cover
+            logger.exception("invoice_overdue_checker error")
+        await asyncio.sleep(S.aos_invoice_overdue_check_interval_seconds)
+
+
+def start_invoice_overdue_checker_task() -> None:
+    if not S.aos_invoice_overdue_checker_enabled:
+        try:
+            from app.services.job_registry import register_task
+            register_task(
+                "invoice_overdue_checker",
+                S.aos_invoice_overdue_check_interval_seconds,
+                enabled=False,
+                description="Marks sent invoices past due_date as overdue",
+            )
+        except Exception:  # pragma: no cover
+            pass
+        return
+    asyncio.ensure_future(_invoice_overdue_loop())

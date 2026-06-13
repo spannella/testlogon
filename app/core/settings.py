@@ -516,6 +516,20 @@ class Settings:
     # Contacts
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
 
+    # Sales pipeline (OPP-001)
+    sales_pipeline_enabled: bool = os.environ.get(
+        "SALES_PIPELINE_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    sales_pipeline_allow_reopen: bool = os.environ.get(
+        "SALES_PIPELINE_ALLOW_REOPEN", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    sales_opportunities_table_name: str = os.environ.get(
+        "DDB_SALES_OPPORTUNITIES_TABLE", "sales_opportunities"
+    )
+    sales_quotas_table_name: str = os.environ.get(
+        "DDB_SALES_QUOTAS_TABLE", "sales_quotas"
+    )
+
     # Messaging
     broadcast_profiles_table_name: str = os.environ.get("DDB_BROADCAST_PROFILES", "BroadcastProfiles")
     broadcast_promo_posts_table_name: str = os.environ.get("DDB_BROADCAST_PROMO_POSTS", "BroadcastPromoPosts")
@@ -2586,6 +2600,28 @@ class Settings:
     invoices_table_name: str = os.environ.get("INVOICES_TABLE_NAME", "invoices")
     invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() not in ("0", "false")
     invoices_tax_bps: int = int(os.environ.get("INVOICES_TAX_BPS", "0"))
+    # QUO-001: Sales Quotes (AOS). Default OFF — no routes / DDB writes when off.
+    aos_quotes_enabled: bool = os.environ.get("AOS_QUOTES_ENABLED", "0") in ("1", "true", "True")
+    aos_quotes_table_name: str = os.environ.get("AOS_QUOTES_TABLE_NAME", "aos_quotes")
+    # QUO-004: CRM Contracts (AOS). Default OFF.
+    aos_contracts_enabled: bool = os.environ.get("AOS_CONTRACTS_ENABLED", "0") in ("1", "true", "True")
+    aos_contracts_table_name: str = os.environ.get("AOS_CONTRACTS_TABLE_NAME", "aos_contracts")
+    aos_contracts_renewal_notifications_enabled: bool = os.environ.get(
+        "AOS_CONTRACTS_RENEWAL_NOTIFICATIONS_ENABLED", "0"
+    ) in ("1", "true", "True")
+    aos_contracts_renewal_check_interval_seconds: int = int(
+        os.environ.get("AOS_CONTRACTS_RENEWAL_CHECK_INTERVAL_SECONDS", "3600")
+    )
+    # QUO-005: Standalone invoice lifecycle (AOS-INV-001 / VOID). Default OFF.
+    aos_standalone_invoices_enabled: bool = os.environ.get(
+        "AOS_STANDALONE_INVOICES_ENABLED", "0"
+    ) in ("1", "true", "True")
+    aos_invoice_overdue_checker_enabled: bool = os.environ.get(
+        "AOS_INVOICE_OVERDUE_CHECKER_ENABLED", "0"
+    ) in ("1", "true", "True")
+    aos_invoice_overdue_check_interval_seconds: int = int(
+        os.environ.get("AOS_INVOICE_OVERDUE_CHECK_INTERVAL_SECONDS", "3600")
+    )
     # FIN-004: Consumer Tax Documents (annual creator earnings / 1099-style summaries)
     tax_documents_table_name: str = os.environ.get("TAX_DOCUMENTS_TABLE_NAME", "tax_documents")
     tax_documents_enabled: bool = os.environ.get("TAX_DOCUMENTS_ENABLED", "true").lower() not in (
@@ -2866,6 +2902,112 @@ class Settings:
     banking_image_max_bytes: int = int(os.environ.get("BANKING_IMAGE_MAX_BYTES", "5242880"))
     banking_metadata_write_rate_limit: int = int(
         os.environ.get("BANKING_METADATA_WRITE_RATE_LIMIT", "60")
+    )
+    # CRM Leads module (LED-001). Master switch defaults OFF: with it off all
+    # new routes return 404 and no background work starts; existing behavior
+    # is byte-for-byte unchanged.
+    leads_enabled: bool = os.environ.get("LEADS_ENABLED", "0") not in ("0", "false", "False")
+    leads_table_name: str = os.environ.get("DDB_LEADS_TABLE", "leads")
+    # Sub-flags — all default OFF; enabled individually as downstream LED
+    # tickets are deployed.
+    leads_scoring_enabled: bool = os.environ.get("LEADS_SCORING_ENABLED", "0") not in ("0", "false", "False")
+    leads_drip_enabled: bool = os.environ.get("LEADS_DRIP_ENABLED", "0") not in ("0", "false", "False")
+    leads_assignment_enabled: bool = os.environ.get("LEADS_ASSIGNMENT_ENABLED", "0") not in ("0", "false", "False")
+    # CRM Reports & Dashboards (RPT-001)
+    crm_reports_enabled: bool = os.environ.get("CRM_REPORTS_ENABLED", "0") not in ("0", "false", "False")
+    crm_reports_table_name: str = os.environ.get("CRM_REPORTS_TABLE_NAME", "crm_reports")
+    crm_dashboards_table_name: str = os.environ.get("CRM_DASHBOARDS_TABLE_NAME", "crm_dashboards")
+    crm_saved_searches_table_name: str = os.environ.get("CRM_SAVED_SEARCHES_TABLE_NAME", "crm_saved_searches")
+    # RPT-002: run rate limiting
+    crm_reports_run_rate_limit: int = int(os.environ.get("CRM_REPORTS_RUN_RATE_LIMIT", "10"))
+    crm_reports_run_rate_window: int = int(os.environ.get("CRM_REPORTS_RUN_RATE_WINDOW", "60"))
+    crm_reports_max_rows: int = int(os.environ.get("CRM_REPORTS_MAX_ROWS", "2000"))
+    # RPT-004: scheduled report email delivery
+    crm_reports_scheduler_enabled: bool = os.environ.get("CRM_REPORTS_SCHEDULER_ENABLED", "0") not in ("0", "false", "False")
+    crm_reports_scheduler_poll_interval: int = int(os.environ.get("CRM_REPORTS_SCHEDULER_POLL_INTERVAL", "300"))
+    # RPT-008: saved search run cap
+    crm_saved_search_run_max_rows: int = int(os.environ.get("CRM_SAVED_SEARCH_RUN_MAX_ROWS", "500"))
+    # CRM Workflow & Process Automation (WFL-001)
+    crm_workflow_enabled: bool = os.environ.get("CRM_WORKFLOW_ENABLED", "0") not in ("0", "false", "False")
+    crm_workflow_rules_table_name: str = os.environ.get("CRM_WORKFLOW_RULES_TABLE_NAME", "crm_workflow_rules")
+    crm_workflow_runs_table_name: str = os.environ.get("CRM_WORKFLOW_RUNS_TABLE_NAME", "crm_workflow_runs")
+    crm_workflow_poll_interval_seconds: int = int(os.environ.get("CRM_WORKFLOW_POLL_INTERVAL_SECONDS", "60"))
+    crm_workflow_max_rules_per_module: int = int(os.environ.get("CRM_WORKFLOW_MAX_RULES_PER_MODULE", "50"))
+    crm_workflow_max_conditions_per_rule: int = int(os.environ.get("CRM_WORKFLOW_MAX_CONDITIONS_PER_RULE", "10"))
+    crm_workflow_max_actions_per_rule: int = int(os.environ.get("CRM_WORKFLOW_MAX_ACTIONS_PER_RULE", "10"))
+    # CRM Cases, Customer Support & Customer Portal (CAS-001..CAS-017)
+    # Master switch — default OFF. Sub-flags also default OFF; they are only
+    # evaluated when crm_cases_enabled is True.
+    crm_cases_enabled: bool = os.environ.get(
+        "CRM_CASES_ENABLED", "false"
+    ).lower() == "true"
+
+    # Sub-flags
+    crm_cases_sla_enabled: bool = os.environ.get(
+        "CRM_CASES_SLA_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_portal_enabled: bool = os.environ.get(
+        "CRM_CASES_PORTAL_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_kb_enabled: bool = os.environ.get(
+        "CRM_CASES_KB_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_csat_enabled: bool = os.environ.get(
+        "CRM_CASES_CSAT_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_email_inbound_enabled: bool = os.environ.get(
+        "CRM_CASES_EMAIL_INBOUND_ENABLED", "false"
+    ).lower() == "true"
+
+    # Table names (CAS-001)
+    crm_cases_counter_table: str = os.environ.get(
+        "CRM_CASES_COUNTER_TABLE", "crm_cases_counters"
+    )
+    crm_cases_links_table: str = os.environ.get(
+        "CRM_CASES_LINKS_TABLE", "crm_cases_links"
+    )
+    crm_cases_templates_table: str = os.environ.get(
+        "CRM_CASES_TEMPLATES_TABLE", "crm_cases_templates"
+    )
+    crm_cases_portal_sessions_table: str = os.environ.get(
+        "CRM_CASES_PORTAL_SESSIONS_TABLE", "crm_cases_portal_sessions"
+    )
+    crm_cases_sla_config_table: str = os.environ.get(
+        "CRM_CASES_SLA_CONFIG_TABLE", "crm_cases_sla_config"
+    )
+    crm_kb_articles_table: str = os.environ.get(
+        "CRM_KB_ARTICLES_TABLE", "crm_kb_articles"
+    )
+
+    # S3 attachment storage (CAS-001 — shared bucket, distinct prefix)
+    crm_cases_attachments_bucket: str = os.environ.get(
+        "CRM_CASES_ATTACHMENTS_BUCKET", "local-uploads"
+    )
+    crm_cases_attachments_s3_prefix: str = os.environ.get(
+        "CRM_CASES_ATTACHMENTS_S3_PREFIX", "ticket-attachments/"
+    )
+
+    # CAS-003: priority GSI index name
+    tickets_priority_index_name: str = os.environ.get(
+        "TICKETS_PRIORITY_INDEX_NAME", "crm_cases_priority_index"
+    )
+
+    # CAS-005: contact/account GSI index names
+    tickets_contact_index_name: str = os.environ.get(
+        "TICKETS_CONTACT_INDEX_NAME", "crm_cases_contact_index"
+    )
+    tickets_account_index_name: str = os.environ.get(
+        "TICKETS_ACCOUNT_INDEX_NAME", "crm_cases_account_index"
+    )
+
+    # CAS-004: maximum transactional ticket emails per user per hour (anti-spam)
+    crm_cases_email_transactional_per_hour: int = int(
+        os.environ.get("CRM_CASES_EMAIL_TRANSACTIONAL_PER_HOUR", "20")
+    )
+
+    # CAS-007: ticket watchers table name
+    crm_cases_watchers_table: str = os.environ.get(
+        "CRM_CASES_WATCHERS_TABLE", "crm_cases_watchers"
     )
 
 

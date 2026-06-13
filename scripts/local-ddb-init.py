@@ -41,6 +41,136 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # CRM Cases (CAS-001) — six new tables
+        TableDef(
+            _resolve_table_name(S.crm_cases_counter_table, "crm_cases_counters"),
+            "counter_id",
+            "scope",
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_links_table, "crm_cases_links"),
+            "ticket_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByRelated", "partition_key": "related_ticket_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_templates_table, "crm_cases_templates"),
+            "template_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_portal_sessions_table, "crm_cases_portal_sessions"),
+            "token",
+            "sk",
+            gsi=[
+                {"index_name": "ByEmail", "partition_key": "submitter_email", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_sla_config_table, "crm_cases_sla_config"),
+            "config_key",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_kb_articles_table, "crm_kb_articles"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCategory", "partition_key": "category", "sort_key": "published_at"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "published_at"},
+            ],
+            attr_types={"published_at": "N"},
+        ),
+        # CAS-007: ticket watchers table
+        TableDef(
+            _resolve_table_name(S.crm_cases_watchers_table, "crm_cases_watchers"),
+            "ticket_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByWatcher", "partition_key": "watcher_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CRM Workflow Rules (WFL-001)
+        TableDef(
+            _resolve_table_name(S.crm_workflow_rules_table_name, "crm_workflow_rules"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByModule", "partition_key": "GSI_MODULE_PK", "sort_key": "GSI_MODULE_SK"},
+            ],
+            attr_types={"GSI_MODULE_SK": "N"},
+        ),
+        # CRM Workflow Runs (WFL-001)
+        TableDef(
+            _resolve_table_name(S.crm_workflow_runs_table_name, "crm_workflow_runs"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByRecord", "partition_key": "GSI_RECORD_PK", "sort_key": "GSI_RECORD_SK"},
+            ],
+            attr_types={"GSI_RECORD_SK": "N"},
+        ),
+        # CRM Reports & Dashboards (RPT-001)
+        # crm_reports: report definitions, RUN rows, and SCHEDULE rows (single-table).
+        # GSI1: owner-reports-index  (GSI1PK=OWNER#{owner_sub}, GSI1SK=created_at N)
+        # GSI2: rpt-schedules-due-index (GSI2PK=RPT_SCHEDULES#ACTIVE, GSI2SK=next_run_at N)
+        TableDef(
+            _resolve_table_name(S.crm_reports_table_name, "crm_reports"),
+            "report_id",
+            "sk",
+            gsi=[
+                {"index_name": "owner-reports-index",     "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "rpt-schedules-due-index", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # crm_dashboards: per-user dashboard layout (single item per user).
+        TableDef(
+            _resolve_table_name(S.crm_dashboards_table_name, "crm_dashboards"),
+            "dashboard_id",
+            "sk",
+            gsi=[
+                {"index_name": "owner-dashboards-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # crm_saved_searches: named saved filter expressions.
+        TableDef(
+            _resolve_table_name(S.crm_saved_searches_table_name, "crm_saved_searches"),
+            "saved_search_id",
+            "sk",
+            gsi=[
+                {"index_name": "owner-searches-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # CRM Leads (LED-001): single table for Lead + Prospect records.
+        # GSI sort keys are integer Unix timestamps → must declare attr_types N.
+        # LED-007 adds ByEmail GSI (GSI4) for O(1) email-based dedup.
+        TableDef(
+            _resolve_table_name(S.leads_table_name, "leads"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner",  "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByStatus", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "BySource", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "ByEmail",  "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
+            ],
+            attr_types={
+                "GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N",
+                "GSI4SK": "N",
+            },
+        ),
         TableDef(_resolve_table_name(S.ddb_sessions_table, "sessions"), "user_sub", "session_id"),
         TableDef(_resolve_table_name(S.ddb_totp_table, "totp_devices"), "user_sub", "device_id"),
         TableDef(_resolve_table_name(S.ddb_sms_table, "sms_devices"), "user_sub", "sms_device_id"),
@@ -689,6 +819,24 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
         TableDef(os.getenv("DDB_CONTACTS_TABLE", "Contacts"), "owner_id", "contact_id"),
+        # Sales pipeline — Opportunities (OPP-001)
+        TableDef(
+            _resolve_table_name(S.sales_opportunities_table_name, "sales_opportunities"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_BY_USER_CLOSE", "partition_key": "owner_sub", "sort_key": "close_date"},
+                {"index_name": "GSI_BY_STAGE",      "partition_key": "stage",     "sort_key": "close_date"},
+                {"index_name": "GSI_DIRECT",        "partition_key": "opp_id"},
+            ],
+            attr_types={"close_date": "N", "created_at": "N"},
+        ),
+        # Sales pipeline — Quotas (OPP-001)
+        TableDef(
+            _resolve_table_name(S.sales_quotas_table_name, "sales_quotas"),
+            "pk",
+            "sk",
+        ),
         # Tickets (composite GSI keys: gsi1pk/gsi1sk=owner, gsi2pk/gsi2sk=status, gsi3pk/gsi3sk=assignee,
         # gsi_space_pk/sk=space, gsi_space_status_pk/sk=space+status, gsi_space_assignee_pk/sk=space+assignee,
         # gsi_member_pk/sk=member spaces)
@@ -710,6 +858,11 @@ def _table_defs() -> List[TableDef]:
                 # TBT-002 — sparse ByBounty GSI: funded+unclaimed bounty board.
                 # gsi_bounty_pk="BOUNTY#OPEN" / gsi_bounty_sk=created_at (numeric).
                 {"index_name": S.tickets_bounty_index_name, "partition_key": "gsi_bounty_pk", "sort_key": "gsi_bounty_sk"},
+                # CAS-003: priority filter index (gsi_priority_sk is a lexicographic string, not numeric)
+                {"index_name": S.tickets_priority_index_name, "partition_key": "gsi_priority_pk", "sort_key": "gsi_priority_sk"},
+                # CAS-005: contact/account link indexes
+                {"index_name": S.tickets_contact_index_name, "partition_key": "gsi_contact_pk", "sort_key": "gsi_contact_sk"},
+                {"index_name": S.tickets_account_index_name, "partition_key": "gsi_account_pk", "sort_key": "gsi_account_sk"},
             ],
             # TBT-002 — numeric sort key for the ByBounty GSI (CLAUDE.md gotcha).
             attr_types={"gsi_bounty_sk": "N"},
@@ -2278,8 +2431,10 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                # GSI3=overdue scanner (STATUS#sent / due_date) — QUO-005.
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
             ],
-            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
         ),
         # Platform Financial Dashboard daily/live rollups (FIN-013).
         # pk=ROLLUP#DAILY sk=YYYY-MM-DD ; pk=ROLLUP#LIVE sk=CURRENT
@@ -2605,6 +2760,32 @@ def _table_defs() -> List[TableDef]:
                 }
             ],
             attr_types={"created_at": "N"},
+        ),
+        # QUO-001: AOS Sales Quotes.
+        # GSI1=admin cross-user list (QUOTES#ALL / created_at).
+        # GSI2=per-user stage filter (USER#{sub}#STAGE#{stage} / created_at).
+        TableDef(
+            _resolve_table_name(S.aos_quotes_table_name, "aos_quotes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # QUO-004: AOS CRM Contracts.
+        # GSI1=admin cross-user list (CONTRACTS#ALL / created_at).
+        # GSI2=per-user stage + expiry filter (USER#{sub}#STAGE#{stage} / end_date).
+        TableDef(
+            _resolve_table_name(S.aos_contracts_table_name, "aos_contracts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "contracts-all-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "contracts-by-stage-index", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
     ]
 

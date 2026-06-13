@@ -122,6 +122,13 @@ def add_contact(inp: AddContactIn, ctx: Dict = Depends(require_ui_session)):
             pass
 
     return _item_to_contact(item)
+    contact_out = _item_to_contact(item)
+    try:
+        from app.services.workflow_hooks import fire_on_save_hook
+        fire_on_save_hook(module="contact", record=item, event="create")
+    except Exception:
+        pass
+    return contact_out
 
 
 @router.delete("/{contact_id}", status_code=204)
@@ -166,4 +173,11 @@ def update_contact(contact_id: str, inp: UpdateContactIn, ctx: Dict = Depends(re
     except T.contacts.meta.client.exceptions.ConditionalCheckFailedException:
         raise HTTPException(404, "Contact not found")
 
-    return _item_to_contact(resp["Attributes"])
+    raw = resp["Attributes"]
+    contact_out = _item_to_contact(raw)
+    try:
+        from app.services.workflow_hooks import fire_on_save_hook
+        fire_on_save_hook(module="contact", record=raw, event="update")
+    except Exception:
+        pass
+    return contact_out

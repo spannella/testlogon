@@ -87,6 +87,9 @@ from app.routers.party import (  # PTY-011 / PTY-012
 )
 from app.routers.candidates import router as candidates_router
 from app.routers.job_orders import router as job_orders_router
+from app.routers.opportunities import router as opportunities_router
+from app.routers.opportunities import router_admin as opportunities_admin_router
+from app.routers.leads import router as leads_router  # CRM Leads (LED-013)
 from app.routers.social import router as social_router
 from app.routers.activity_feed import router as activity_feed_router
 from app.routers.discovery import router as discovery_router
@@ -335,6 +338,9 @@ from app.routers.agent_session_terminal import (
 )
 from app.routers.agent_fleet import router as agent_fleet_router
 from app.routers.agent_memory import router as agent_memory_router
+# CRM Workflow (WFL-001..WFL-009)
+from app.routers.workflow_rules import router as workflow_rules_router
+from app.services.workflow_scheduler import start_workflow_scheduler_task
 
 logger = logging.getLogger(__name__)
 
@@ -694,6 +700,10 @@ def create_app() -> FastAPI:
     app.include_router(party_router)  # PTY-011
     app.include_router(candidates_router)
     app.include_router(job_orders_router)
+    # Sales pipeline (OPP-001..OPP-006) — always registered; _require_flag() gates all endpoints
+    app.include_router(opportunities_router)
+    app.include_router(opportunities_admin_router)
+    app.include_router(leads_router)  # CRM Leads (LED-013)
     app.include_router(social_router)
     app.include_router(activity_feed_router)
     app.include_router(discovery_router)
@@ -792,6 +802,9 @@ def create_app() -> FastAPI:
     app.include_router(admin_notifications_router)
     app.include_router(admin_party_router)  # PTY-012
     app.include_router(ses_notifications_router)
+    # CRM Workflow (WFL-009)
+    if _S.crm_workflow_enabled:
+        app.include_router(workflow_rules_router)
     app.include_router(privacy_router)
     app.include_router(admin_privacy_router)
     app.include_router(account_deletion_router)
@@ -881,6 +894,11 @@ def create_app() -> FastAPI:
     app.include_router(k8s_launcher_router)
     app.add_event_handler("startup", start_k8s_ttl_checker_task)
     app.add_event_handler("startup", start_compute_billing_timer_task)
+    # QUO-004/005: AOS contract renewal checker + invoice overdue checker.
+    from app.services.aos_contracts import start_contracts_renewal_check_task
+    from app.services.invoices import start_invoice_overdue_checker_task
+    app.add_event_handler("startup", start_contracts_renewal_check_task)
+    app.add_event_handler("startup", start_invoice_overdue_checker_task)
     app.add_event_handler("startup", start_idle_worker_checker_task)
     app.include_router(instance_templates_router)
     app.add_event_handler("startup", ensure_system_templates)
@@ -977,6 +995,13 @@ def create_app() -> FastAPI:
     from app.routers.invoices import invoices_router, invoices_admin_router
     app.include_router(invoices_router)
     app.include_router(invoices_admin_router)
+    # QUO-001/003/004/005: AOS quotes, contracts, conversion, invoice lifecycle.
+    from app.routers.aos_quotes import aos_quotes_router, aos_quotes_admin_router
+    app.include_router(aos_quotes_router)
+    app.include_router(aos_quotes_admin_router)
+    from app.routers.aos_contracts import aos_contracts_router, aos_contracts_admin_router
+    app.include_router(aos_contracts_router)
+    app.include_router(aos_contracts_admin_router)
     from app.routers.consumer_tax_documents import (
         consumer_tax_documents_router,
         consumer_tax_documents_admin_router,
@@ -986,7 +1011,18 @@ def create_app() -> FastAPI:
     from app.routers.tax_form_1099 import tax_form_1099_router
     app.include_router(tax_form_1099_router)
 
+    # CRM Reports & Dashboards (RPT-001..RPT-009)
+    from app.routers.crm_reports import router as crm_reports_router
+    from app.routers.crm_dashboard import router as crm_dashboard_router
+    from app.routers.crm_saved_searches import router as crm_saved_searches_router
+    app.include_router(crm_reports_router)
+    app.include_router(crm_dashboard_router)
+    app.include_router(crm_saved_searches_router)
+    from app.services.crm_report_scheduler import start_report_scheduler_task
+    app.add_event_handler("startup", start_report_scheduler_task)
+
     app.add_event_handler("startup", start_unified_scheduler_task)
+    app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)

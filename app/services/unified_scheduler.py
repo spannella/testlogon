@@ -25,10 +25,26 @@ logger = logging.getLogger(__name__)
 
 MAX_BATCH_SIZE = 25
 
+
+# CRM Workflow lazy-import wrappers (WFL-006 / WFL-008)
+# Lazy imports avoid circular deps at module load time.
+async def _lazy_crm_executor(user_sub: str, payload: dict) -> None:
+    from app.services.workflow_action_executor import execute_crm_workflow_action
+    await execute_crm_workflow_action(user_sub, payload)
+
+
+async def _lazy_drip_stage_executor(user_sub: str, payload: dict) -> None:
+    from app.services.workflow_action_executor import execute_drip_stage_action
+    await execute_drip_stage_action(user_sub, payload)
+
+
 _EXECUTORS = {
     "post": schedule_executors.execute_scheduled_post,
     "file_share": schedule_executors.execute_scheduled_file_share,
     "catalog_sale": schedule_executors.execute_scheduled_catalog_sale,
+    # CRM Workflow (WFL-006)
+    "crm_workflow": _lazy_crm_executor,
+    "crm_workflow_drip_stage": _lazy_drip_stage_executor,  # WFL-008
 }
 
 

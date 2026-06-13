@@ -196,6 +196,43 @@ def _complexity_from_labels(labels: list[str]) -> str | None:
     return None
 
 
+# CAS-002: sequential case numbers
+def _next_case_number() -> str:
+    """Atomically allocate the next sequential case number.
+
+    Uses DynamoDB ADD on the counter row so concurrent ticket creation
+    never produces duplicate numbers.  Returns a zero-padded string such
+    as "CASE-0042".  The attribute is auto-initialised to 1 on first call
+    (DynamoDB ADD creates missing numeric attributes at 0 then adds :one).
+    """
+    resp = T.crm_cases_counters.update_item(
+        Key={"counter_id": "TICKETS", "scope": "GLOBAL"},
+        UpdateExpression="ADD #n :one",
+        ExpressionAttributeNames={"#n": "n"},
+        ExpressionAttributeValues={":one": 1},
+        ReturnValues="UPDATED_NEW",
+    )
+    n = int(resp["Attributes"]["n"])
+    return f"CASE-{n:04d}"
+
+
+# CAS-003: priority field helpers
+_PRIORITY_VALUES: tuple[str, ...] = ("urgent", "high", "medium", "low")
+
+
+def _priority_index_pk(priority: str) -> str:
+    return f"PRIORITY#{priority}"
+
+
+# CAS-005: contact / account link helpers
+def _contact_index_pk(contact_id: str) -> str:
+    return f"CONTACT#{contact_id}"
+
+
+def _account_index_pk(account_id: str) -> str:
+    return f"ACCOUNT#{account_id}"
+
+
 class TicketStateError(Exception):
     def __init__(self, detail: dict[str, Any]):
         super().__init__(str(detail.get("code", "invalid_ticket_status_transition")))
@@ -462,6 +499,9 @@ class TicketStore:
         metadata: dict[str, Any] | None = None,
         labels: list[str] | None = None,
         estimated_effort_hours: int | None = None,
+        priority: str | None = None,        # CAS-003
+        contact_id: str | None = None,      # CAS-005
+        account_id: str | None = None,      # CAS-005
     ) -> dict[str, Any]:
         ts = now_ts()
         # TKB-001: board_id is an alias for space_id (same physical attribute).
@@ -477,6 +517,16 @@ class TicketStore:
 
         norm_labels = sorted({str(l).strip() for l in (labels or []) if str(l).strip()})
         complexity = _complexity_from_labels(norm_labels)
+
+        # CAS-002: sequential case number (allocated AFTER idempotency guard)
+        case_number: str | None = None
+        if S.crm_cases_enabled:
+            case_number = _next_case_number()
+
+        # CAS-003: validated priority
+        resolved_priority: str | None = None
+        if S.crm_cases_enabled:
+            resolved_priority = priority if priority in _PRIORITY_VALUES else "medium"
 
         header = {
             "pk": _ticket_pk(resolved_ticket_id),
@@ -513,6 +563,19 @@ class TicketStore:
             "gsi_space_status_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
             "gsi_space_assignee_pk": _space_assignee_index_pk(space_id, "unassigned") if space_id else None,
             "gsi_space_assignee_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
+            # CAS-002
+            "case_number": case_number,
+            # CAS-003
+            "priority": resolved_priority,
+            "gsi_priority_pk": _priority_index_pk(resolved_priority) if resolved_priority else None,
+            "gsi_priority_sk": _updated_index_sk(ts, resolved_ticket_id) if resolved_priority else None,
+            # CAS-005 (only when flag on — gate to avoid writing spurious GSI rows)
+            "contact_id": contact_id if S.crm_cases_enabled else None,
+            "account_id": account_id if S.crm_cases_enabled else None,
+            "gsi_contact_pk": _contact_index_pk(contact_id) if (contact_id and S.crm_cases_enabled) else None,
+            "gsi_contact_sk": _updated_index_sk(ts, resolved_ticket_id) if (contact_id and S.crm_cases_enabled) else None,
+            "gsi_account_pk": _account_index_pk(account_id) if (account_id and S.crm_cases_enabled) else None,
+            "gsi_account_sk": _updated_index_sk(ts, resolved_ticket_id) if (account_id and S.crm_cases_enabled) else None,
         }
         self._table.put_item(Item={k: v for k, v in header.items() if v is not None})
         # AGENT-008: fan-out one label index row per label for agent eligibility queries.
@@ -550,7 +613,13 @@ class TicketStore:
             "actor_sub": owner_sub,
             "created_at": ts,
         })
-        return self.get_ticket(resolved_ticket_id) or {}
+        result = self.get_ticket(resolved_ticket_id) or {}
+        try:
+            from app.services.workflow_hooks import fire_on_save_hook
+            fire_on_save_hook(module="ticket", record=result, event="create")
+        except Exception:
+            pass
+        return result
 
     def _query_partition_prefix(self, *, ticket_id: str, sk_prefix: str) -> list[dict[str, Any]]:
         resp = self._table.query(
@@ -589,6 +658,13 @@ class TicketStore:
             "created_at": int(header.get("created_at", 0) or 0),
             "updated_at": int(header.get("updated_at", 0) or 0),
             "version": int(header.get("version", 0) or 0),
+            # CAS-002
+            "case_number": header.get("case_number"),
+            # CAS-003
+            "priority": header.get("priority"),
+            # CAS-005
+            "contact_id": header.get("contact_id"),
+            "account_id": header.get("account_id"),
             "messages": [{
                 "message_id": item.get("message_id", ""),
                 "sender_sub": item.get("sender_sub", ""),
@@ -684,8 +760,141 @@ class TicketStore:
                 out.append(assembled)
         return out
 
-    def list_tickets(self, *, limit: int = 25, cursor: str | None = None, status: str | None = None, assignee_sub: str | None = None, owner_sub: str | None = None) -> dict[str, Any]:
+    def update_priority(
+        self,
+        *,
+        ticket_id: str,
+        new_priority: str,
+        actor_sub: str,
+    ) -> dict[str, Any] | None:
+        """Update the priority field via optimistic-locking. Returns None if ticket not found."""
+        if new_priority not in _PRIORITY_VALUES:
+            raise ValueError(f"invalid priority: {new_priority!r}")
+
+        def _build_values(cur: dict[str, Any]) -> dict[str, Any]:
+            ts = now_ts()
+            tid = cur["ticket_id"]
+            space_id = cur.get("space_id")
+            assigned = cur.get("assigned_admin_sub")
+            return {
+                ":status": cur["status"],
+                ":assigned_admin_sub": assigned,
+                ":assigned_to_sub": cur.get("assigned_to_sub"),
+                ":assigned_by": cur.get("assigned_by"),
+                ":assigned_at": cur.get("assigned_at"),
+                ":updated_at": ts,
+                ":last_message_at": cur.get("last_message_at", ts),
+                ":last_message_by_role": cur.get("last_message_by_role", "user"),
+                ":gsi1sk": _updated_index_sk(ts, tid),
+                ":gsi2pk": _status_index_pk(cur["status"]),
+                ":gsi2sk": _updated_index_sk(ts, tid),
+                ":gsi3pk": _assignee_index_pk(assigned or "unassigned"),
+                ":gsi3sk": _updated_index_sk(ts, tid),
+                ":gsi_space_pk": _space_index_pk(space_id) if space_id else None,
+                ":gsi_space_sk": _updated_index_sk(ts, tid) if space_id else None,
+                ":gsi_space_status_pk": _space_status_index_pk(space_id, cur["status"]) if space_id else None,
+                ":gsi_space_status_sk": _updated_index_sk(ts, tid) if space_id else None,
+                ":gsi_space_assignee_pk": _space_assignee_index_pk(space_id, cur.get("assigned_to_sub") or "unassigned") if space_id else None,
+                ":gsi_space_assignee_sk": _updated_index_sk(ts, tid) if space_id else None,
+            }
+
+        result = self._apply_header_update_once(ticket_id=ticket_id, build_values=_build_values)
+        if result is None:
+            return None
+
+        # Write priority attributes in a second unconditional update (annotation pattern,
+        # same as kyc_cases.escalate_case — no version bump needed)
+        ts = now_ts()
+        self._table.update_item(
+            Key={"pk": _ticket_pk(ticket_id), "sk": "META"},
+            UpdateExpression=(
+                "SET priority = :priority, gsi_priority_pk = :gpk, gsi_priority_sk = :gsk"
+            ),
+            ExpressionAttributeValues={
+                ":priority": new_priority,
+                ":gpk": _priority_index_pk(new_priority),
+                ":gsk": _updated_index_sk(ts, ticket_id),
+            },
+        )
+        return self.get_ticket(ticket_id)
+
+    def update_contact_account(
+        self,
+        *,
+        ticket_id: str,
+        contact_id: str | None,
+        account_id: str | None,
+        actor_sub: str,
+    ) -> dict[str, Any] | None:
+        """Update the contact_id / account_id soft foreign keys. Returns None if not found."""
+        cur = self.get_ticket(ticket_id)
+        if not cur:
+            return None
+        ts = now_ts()
+        expr_parts = []
+        expr_values: dict[str, Any] = {}
+        expr_names: dict[str, str] = {"#updated_at": "updated_at"}
+        expr_parts.append("#updated_at = :updated_at")
+        expr_values[":updated_at"] = ts
+
+        if contact_id is not None:
+            expr_parts.append("contact_id = :contact_id, gsi_contact_pk = :gsi_contact_pk, gsi_contact_sk = :gsi_contact_sk")
+            expr_values[":contact_id"] = contact_id
+            expr_values[":gsi_contact_pk"] = _contact_index_pk(contact_id)
+            expr_values[":gsi_contact_sk"] = _updated_index_sk(ts, ticket_id)
+        if account_id is not None:
+            expr_parts.append("account_id = :account_id, gsi_account_pk = :gsi_account_pk, gsi_account_sk = :gsi_account_sk")
+            expr_values[":account_id"] = account_id
+            expr_values[":gsi_account_pk"] = _account_index_pk(account_id)
+            expr_values[":gsi_account_sk"] = _updated_index_sk(ts, ticket_id)
+
+        self._table.update_item(
+            Key={"pk": _ticket_pk(ticket_id), "sk": "META"},
+            UpdateExpression=f"SET {', '.join(expr_parts)}",
+            ExpressionAttributeNames=expr_names,
+            ExpressionAttributeValues=expr_values,
+        )
+        return self.get_ticket(ticket_id)
+
+    def list_tickets_by_contact(self, *, contact_id: str, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        """CAS-005: list all tickets linked to a given contact."""
         page_limit = max(1, min(int(limit or 25), 100))
+        headers, next_cursor = self._query_headers_by_index(
+            index_name=S.tickets_contact_index_name,
+            pk=_contact_index_pk(contact_id),
+            key_expr="gsi_contact_pk = :pk",
+            limit=page_limit,
+            cursor=cursor,
+        )
+        return {"tickets": self._assemble_headers(headers), "next_cursor": next_cursor}
+
+    def list_tickets_by_account(self, *, account_id: str, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        """CAS-005: list all tickets linked to a given account."""
+        page_limit = max(1, min(int(limit or 25), 100))
+        headers, next_cursor = self._query_headers_by_index(
+            index_name=S.tickets_account_index_name,
+            pk=_account_index_pk(account_id),
+            key_expr="gsi_account_pk = :pk",
+            limit=page_limit,
+            cursor=cursor,
+        )
+        return {"tickets": self._assemble_headers(headers), "next_cursor": next_cursor}
+
+    def list_tickets(self, *, limit: int = 25, cursor: str | None = None, status: str | None = None, assignee_sub: str | None = None, owner_sub: str | None = None, priority: str | None = None) -> dict[str, Any]:
+        page_limit = max(1, min(int(limit or 25), 100))
+
+        # CAS-003: priority filter (checked before owner_sub to give explicit priority filter precedence)
+        if priority and S.crm_cases_enabled:
+            if priority not in _PRIORITY_VALUES:
+                return {"tickets": [], "next_cursor": None}
+            headers, next_cursor = self._query_headers_by_index(
+                index_name=S.tickets_priority_index_name,
+                pk=_priority_index_pk(priority),
+                key_expr="gsi_priority_pk = :pk",
+                limit=page_limit,
+                cursor=cursor,
+            )
+            return {"tickets": self._assemble_headers(headers), "next_cursor": next_cursor}
 
         if owner_sub:
             headers, next_cursor = self._query_headers_by_index(
@@ -856,6 +1065,13 @@ class TicketStore:
                 ExpressionAttributeNames=names,
                 ExpressionAttributeValues=expr_values,
             )
+            try:
+                from app.services.workflow_hooks import fire_on_save_hook
+                ticket = self.get_ticket(ticket_id)
+                if ticket:
+                    fire_on_save_hook(module="ticket", record=ticket, event="update")
+            except Exception:
+                pass
             return True
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":

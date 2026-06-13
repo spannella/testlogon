@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.roles import Role, normalize_role
+from app.core.settings import S
 from app.core.tables import T
 from app.services.alerts import audit_event
 from app.services.jira_ticket_sync_store import JiraTicketSyncStore
@@ -20,9 +21,15 @@ from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
 from app.services import ticket_bounties as bounties
 from app.services.ticket_bounties import TicketBountyError
+from app.services.ticket_watchers import WATCHER_STORE
+from app.services.ticket_links import LINK_STORE
 from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
 from app.services.payment_incident_ticket_sync import sync_incident_from_ticket
 from app.services.kyc_cases import STORE as KYC_STORE, KycCaseConflictError, KycCaseValidationError
+from app.models import (
+    TicketWatcherOut, TicketWatcherListOut, AddWatcherReq,
+    TicketLinkOut, TicketLinkListOut, CreateTicketLinkReq,
+)
 
 router = APIRouter(prefix="/tickets", tags=["tickets"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 _KYC_TICKET_SYNC_COUNTS: Counter[str] = Counter()
@@ -70,6 +77,13 @@ class TicketOut(BaseModel):
     created_at: int
     updated_at: int
     version: int
+    # CAS-002: sequential human-readable case number
+    case_number: str | None = None
+    # CAS-003: priority field
+    priority: str | None = None
+    # CAS-005: contact/account soft FK
+    contact_id: str | None = None
+    account_id: str | None = None
     messages: list[TicketMessage]
     activity: list[TicketActivity]
     # --- TBT-002: optional bounty fields (None for non-bounty tickets) ---
@@ -151,6 +165,13 @@ class TicketListItemOut(BaseModel):
     created_at: int
     updated_at: int
     version: int | None = None
+    # CAS-002
+    case_number: str | None = None
+    # CAS-003
+    priority: str | None = None
+    # CAS-005
+    contact_id: str | None = None
+    account_id: str | None = None
     messages: list[TicketMessage] = []
     activity: list[TicketActivity] = []
     source: Literal["internal", "jira"]
@@ -221,6 +242,22 @@ class TicketKycSyncDeadletterBatchReplayEnvelope(BaseModel):
 class CreateTicketReq(BaseModel):
     subject: str = Field(..., min_length=3, max_length=160)
     description: str = Field(..., min_length=1, max_length=4000)
+    # CAS-003: optional priority (default "medium")
+    priority: Literal["urgent", "high", "medium", "low"] | None = "medium"
+    # CAS-005: optional contact/account FK
+    contact_id: str | None = None
+    account_id: str | None = None
+
+
+# CAS-003: PATCH /tickets/{id}/priority request body
+class UpdateTicketPriorityReq(BaseModel):
+    priority: Literal["urgent", "high", "medium", "low"]
+
+
+# CAS-005: PATCH /tickets/{id}/contact-account request body
+class UpdateTicketContactAccountReq(BaseModel):
+    contact_id: str | None = None
+    account_id: str | None = None
 
 
 class AssignTicketReq(BaseModel):
@@ -830,8 +867,15 @@ def create_ticket(
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
-    ticket = STORE.create_ticket(owner_sub=user.sub, subject=body.subject.strip(), description=body.description.strip())
-    _emit_ticket_alerts("ticket_created", recipients=[user.sub], actor_sub=user.sub, request=request, ticket_id=ticket["ticket_id"], ticket_subject=ticket.get("subject", ""))
+    ticket = STORE.create_ticket(
+        owner_sub=user.sub,
+        subject=body.subject.strip(),
+        description=body.description.strip(),
+        priority=body.priority if S.crm_cases_enabled else None,  # CAS-003
+        contact_id=body.contact_id if S.crm_cases_enabled else None,  # CAS-005
+        account_id=body.account_id if S.crm_cases_enabled else None,  # CAS-005
+    )
+    _emit_ticket_alerts("ticket_created", recipients=[user.sub], actor_sub=user.sub, request=request, ticket_id=ticket["ticket_id"], ticket_subject=ticket.get("subject", ""), case_number=ticket.get("case_number"))
     return _wrap_ticket(ticket)
 
 
@@ -849,6 +893,7 @@ def list_tickets(
     owner_sub: str | None = None,
     cursor: str | None = None,
     limit: int = Query(default=25, ge=1, le=100),
+    priority: Literal["urgent", "high", "medium", "low"] | None = None,  # CAS-003
     request: Request = None,  # type: ignore[assignment]
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
@@ -931,6 +976,7 @@ def list_tickets(
             status=status,
             assignee_sub=(assignee_admin_sub or "").strip() or None,
             owner_sub=(owner_sub or "").strip() or None,
+            priority=priority,  # CAS-003
         )
         return _wrap_ticket_list(payload)
 
@@ -1207,3 +1253,238 @@ def set_ticket_status(
     _emit_ticket_alerts("ticket_status_changed", recipients=[ticket["owner_sub"]], actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""), status=body.status)
     _sync_kyc_for_ticket_event(ticket_before=ticket, ticket_after=updated, event_type="status_changed", actor_sub=user.sub, request=request)
     return _wrap_ticket(updated)
+
+
+# ---------------------------------------------------------------------------
+# CAS-003: PATCH /tickets/{ticket_id}/priority
+# ---------------------------------------------------------------------------
+@router.patch("/{ticket_id}/priority", response_model=TicketEnvelope, responses=_error_responses())
+def update_ticket_priority(
+    ticket_id: str,
+    body: UpdateTicketPriorityReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    ticket = _ticket_or_404(ticket_id)
+    try:
+        updated = STORE.update_priority(
+            ticket_id=ticket_id,
+            new_priority=body.priority,
+            actor_sub=user.sub,
+        )
+    except TicketStateError as exc:
+        raise HTTPException(status_code=409, detail=_ticket_state_error(exc)) from exc
+    if updated is None:
+        _raise(404, "ticket_not_found", "ticket not found")
+    _emit_ticket_alerts(
+        "ticket_priority_changed",
+        recipients=[ticket["owner_sub"]],
+        actor_sub=user.sub,
+        request=request,
+        ticket_id=ticket_id,
+        ticket_subject=ticket.get("subject", ""),
+        priority=body.priority,
+        case_number=ticket.get("case_number"),
+    )
+    return _wrap_ticket(updated)
+
+
+# ---------------------------------------------------------------------------
+# CAS-005: PATCH /tickets/{ticket_id}/contact-account
+# ---------------------------------------------------------------------------
+@router.patch("/{ticket_id}/contact-account", response_model=TicketEnvelope, responses=_error_responses())
+def update_ticket_contact_account(
+    ticket_id: str,
+    body: UpdateTicketContactAccountReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    updated = STORE.update_contact_account(
+        ticket_id=ticket_id,
+        contact_id=body.contact_id,
+        account_id=body.account_id,
+        actor_sub=user.sub,
+    )
+    if updated is None:
+        _raise(404, "ticket_not_found", "ticket not found")
+    return _wrap_ticket(updated)
+
+
+# ---------------------------------------------------------------------------
+# CAS-005: GET /tickets/by-contact/{contact_id}
+#          GET /tickets/by-account/{account_id}
+# NOTE: declared before /{ticket_id} would conflict but FastAPI matches by
+# declaration order; these literal-prefix routes are fine added at file-end
+# since we just append after the existing /{ticket_id}/status route.
+# ---------------------------------------------------------------------------
+@router.get("/by-contact/{contact_id}", response_model=TicketListEnvelope, responses=_error_responses())
+def list_tickets_by_contact(
+    contact_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    payload = STORE.list_tickets_by_contact(contact_id=contact_id, limit=limit, cursor=cursor)
+    return _wrap_ticket_list(payload)
+
+
+@router.get("/by-account/{account_id}", response_model=TicketListEnvelope, responses=_error_responses())
+def list_tickets_by_account(
+    account_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    payload = STORE.list_tickets_by_account(account_id=account_id, limit=limit, cursor=cursor)
+    return _wrap_ticket_list(payload)
+
+
+# ---------------------------------------------------------------------------
+# CAS-007 — Ticket watchers / CC list
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/watchers", response_model=TicketWatcherListOut, responses=_error_responses())
+def list_ticket_watchers(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_access_ticket(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to access this ticket")
+    watchers = WATCHER_STORE.list_watchers(ticket_id=ticket_id)
+    return TicketWatcherListOut(watchers=[TicketWatcherOut.model_validate(w) for w in watchers])
+
+
+@router.post("/{ticket_id}/watchers", response_model=TicketWatcherListOut, responses=_error_responses())
+def add_ticket_watcher(
+    ticket_id: str,
+    body: AddWatcherReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    _ticket_or_404(ticket_id)
+    watcher_sub = (body.watcher_sub or "").strip()
+    if not watcher_sub:
+        _raise(400, "watcher_sub_required", "watcher_sub is required")
+    WATCHER_STORE.add_watcher(ticket_id=ticket_id, watcher_sub=watcher_sub, actor_sub=user.sub)
+    _emit_ticket_alerts(
+        "ticket_watcher_added",
+        recipients=[watcher_sub],
+        actor_sub=user.sub,
+        request=request,
+        ticket_id=ticket_id,
+    )
+    watchers = WATCHER_STORE.list_watchers(ticket_id=ticket_id)
+    return TicketWatcherListOut(watchers=[TicketWatcherOut.model_validate(w) for w in watchers])
+
+
+@router.delete("/{ticket_id}/watchers/{watcher_sub}", responses=_error_responses())
+def remove_ticket_watcher(
+    ticket_id: str,
+    watcher_sub: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user) and user.sub != watcher_sub:
+        _raise(403, "admin_role_required", "admin role required or must be removing self")
+    _ticket_or_404(ticket_id)
+    WATCHER_STORE.remove_watcher(ticket_id=ticket_id, watcher_sub=watcher_sub)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# CAS-011 — Case-to-case relationship links
+# ---------------------------------------------------------------------------
+@router.get("/{ticket_id}/links", response_model=TicketLinkListOut, responses=_error_responses())
+def list_ticket_links(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_access_ticket(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to access this ticket")
+    links = LINK_STORE.list_all_links(ticket_id=ticket_id)
+    return TicketLinkListOut(links=[TicketLinkOut.model_validate(lnk) for lnk in links])
+
+
+@router.post("/{ticket_id}/links", response_model=TicketLinkListOut, responses=_error_responses())
+def create_ticket_link(
+    ticket_id: str,
+    body: CreateTicketLinkReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    _ticket_or_404(ticket_id)
+    related_id = (body.related_ticket_id or "").strip()
+    if not related_id:
+        _raise(400, "related_ticket_id_required", "related_ticket_id is required")
+    _ticket_or_404(related_id)
+    try:
+        LINK_STORE.create_link(
+            ticket_id=ticket_id,
+            related_ticket_id=related_id,
+            link_type=body.link_type,
+            created_by_sub=user.sub,
+        )
+    except ValueError as exc:
+        _raise(400, "invalid_link_type", str(exc))
+    links = LINK_STORE.list_all_links(ticket_id=ticket_id)
+    return TicketLinkListOut(links=[TicketLinkOut.model_validate(lnk) for lnk in links])
+
+
+@router.delete("/{ticket_id}/links/{related_ticket_id}", responses=_error_responses())
+def delete_ticket_link(
+    ticket_id: str,
+    related_ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not S.crm_cases_enabled:
+        _raise(404, "not_found", "not found")
+    if not _is_admin_actor(request, user):
+        _raise(403, "admin_role_required", "admin role required")
+    LINK_STORE.delete_link(ticket_id=ticket_id, related_ticket_id=related_ticket_id)
+    return {"ok": True}

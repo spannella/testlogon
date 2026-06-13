@@ -78,6 +78,12 @@ class QuestionReorderReq(BaseModel):
 
 class PublishDraftReq(BaseModel):
     published_slug: str | None = Field(default=None, min_length=1, max_length=240)
+    # LED-005: web-to-lead capture flags (default-off)
+    capture_as_lead: bool = False
+    lead_source_override: str | None = Field(
+        default=None,
+        pattern=r"^(web_site|cold_call|email|campaign|trade_show|word_of_mouth|other|internal)$",
+    )
 
 
 class QuestionnaireVersionEnvelope(BaseModel):
@@ -591,6 +597,8 @@ def publish_draft(
             owner_id=user.sub,
             actor_sub=user.sub,
             published_slug=body.published_slug.strip() if body.published_slug else None,
+            capture_as_lead=body.capture_as_lead,           # LED-005
+            lead_source_override=body.lead_source_override, # LED-005
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail={"error": {"code": "questionnaire_forbidden", "message": str(exc)}}) from exc
@@ -816,6 +824,21 @@ async def submit_response_session(
     )
     if not submitted:
         raise HTTPException(status_code=404, detail={"error": {"code": "session_not_found", "message": "response session not found"}})
+
+    # LED-005: best-effort web-to-lead capture (default-off)
+    from app.core.settings import S as _S
+    if getattr(_S, "leads_enabled", False) and version.get("capture_as_lead", False):
+        try:
+            import app.services.leads as _leads_svc
+            _leads_svc.create_lead_from_submission(
+                version,
+                authoritative_answers,
+                response_session_id=response_session_id,
+                user_sub=(user.sub if user else None),
+            )
+        except Exception:
+            pass  # never block a successful submission
+
     return {"session": submitted, "result": result}
 
 

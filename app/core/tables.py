@@ -100,6 +100,9 @@ class Tables:
     subscriptions: Any
     projects: Any
     contacts: Any
+    sales_opportunities: Any
+    sales_quotas: Any
+    leads: Any  # CRM Leads (LED-001)
     broadcast_profiles: Any
     broadcast_promo_posts: Any
     broadcast_sessions: Any
@@ -294,6 +297,8 @@ class Tables:
     agent_cost_budgets: Any
     agent_cost_alerts: Any
     invoices: Any
+    aos_quotes: Any
+    aos_contracts: Any
     tax_documents: Any
     tax_forms_1099: Any
     tax_info: Any
@@ -325,6 +330,21 @@ class Tables:
     hotels: Any
     hotel_amenities: Any
     banking_accounts: Any
+    # CRM Reports & Dashboards (RPT-001)
+    crm_reports: Any
+    crm_dashboards: Any
+    crm_saved_searches: Any
+    # CRM Workflow (WFL-001)
+    crm_workflow_rules: Any
+    crm_workflow_runs: Any
+    # CRM Cases (CAS-001)
+    crm_cases_counters: Any
+    crm_cases_links: Any
+    crm_cases_templates: Any
+    crm_cases_portal_sessions: Any
+    crm_cases_sla_config: Any
+    crm_kb_articles: Any
+    crm_cases_watchers: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -360,6 +380,9 @@ T = Tables(
     subscriptions=_safe_table(S.subscriptions_table_name),
     projects=_safe_table(S.projects_table_name),
     contacts=_safe_table(S.contacts_table_name),
+    sales_opportunities=_safe_table(S.sales_opportunities_table_name),
+    sales_quotas=_safe_table(S.sales_quotas_table_name),
+    leads=_safe_table(S.leads_table_name),  # CRM Leads (LED-001)
     broadcast_profiles=_safe_table(S.broadcast_profiles_table_name),
     broadcast_promo_posts=_safe_table(S.broadcast_promo_posts_table_name),
     broadcast_sessions=_safe_table(S.broadcast_sessions_table_name),
@@ -553,6 +576,8 @@ T = Tables(
     agent_cost_budgets=_safe_table(S.agent_cost_budgets_table_name),
     agent_cost_alerts=_safe_table(S.agent_cost_alerts_table_name),
     invoices=_safe_table(S.invoices_table_name),
+    aos_quotes=_safe_table(S.aos_quotes_table_name),
+    aos_contracts=_safe_table(S.aos_contracts_table_name),
     tax_documents=_safe_table(S.tax_documents_table_name),
     tax_forms_1099=_safe_table(S.tax_forms_1099_table_name),
     tax_info=_safe_table(S.tax_info_table_name),
@@ -585,4 +610,19 @@ T = Tables(
     hotels=_safe_table(S.hotels_table_name),
     hotel_amenities=_safe_table(S.hotel_amenities_table_name),
     banking_accounts=_safe_table(S.banking_accounts_table_name),
+    # CRM Reports & Dashboards (RPT-001)
+    crm_reports=_safe_table(S.crm_reports_table_name),
+    crm_dashboards=_safe_table(S.crm_dashboards_table_name),
+    crm_saved_searches=_safe_table(S.crm_saved_searches_table_name),
+    # CRM Workflow (WFL-001)
+    crm_workflow_rules=_safe_table(S.crm_workflow_rules_table_name),
+    crm_workflow_runs=_safe_table(S.crm_workflow_runs_table_name),
+    # CRM Cases (CAS-001)
+    crm_cases_counters=_safe_table(S.crm_cases_counter_table),
+    crm_cases_links=_safe_table(S.crm_cases_links_table),
+    crm_cases_templates=_safe_table(S.crm_cases_templates_table),
+    crm_cases_portal_sessions=_safe_table(S.crm_cases_portal_sessions_table),
+    crm_cases_sla_config=_safe_table(S.crm_cases_sla_config_table),
+    crm_kb_articles=_safe_table(S.crm_kb_articles_table),
+    crm_cases_watchers=_safe_table(S.crm_cases_watchers_table),
 )

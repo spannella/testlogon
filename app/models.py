@@ -9540,6 +9540,7 @@ class InvoiceLineItemOut(BaseModel):
     description: str
     quantity: int = 1
     amount_cents: int
+    unit_price_cents: int = 0  # QUO-005 (additive; 0 for legacy items)
 
 
 class InvoiceOut(BaseModel):
@@ -9560,6 +9561,12 @@ class InvoiceOut(BaseModel):
     payment_method_summary: str = ""
     ledger_entry_id: str = ""
     created_at: int = 0
+    # QUO-003 (additive): back-reference to the originating quote.
+    aos_quote_id: str = ""
+    # QUO-005 (additive): standalone invoice lifecycle fields.
+    payment_terms_days: Optional[int] = None
+    due_date: Optional[int] = None
+    voided_at: Optional[int] = None
 
 
 class InvoiceListOut(BaseModel):
@@ -15602,3 +15609,1016 @@ class AddAccountHolderIn(BaseModel):
 
 
 TransactionOut.model_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# QUO-001 — AOS Sales Quotes
+# ---------------------------------------------------------------------------
+
+
+class QuoteAddressIn(BaseModel):
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
+
+
+class QuoteLineItemIn(BaseModel):
+    catalog_item_id: str = ""
+    description: str
+    qty: int = Field(ge=1)
+    unit_price_cents: int = Field(ge=0)
+    discount_bps: int = Field(default=0, ge=0, le=10000)
+    tax_rate_bps: int = Field(default=0, ge=0, le=10000)
+
+
+class QuoteCreateIn(BaseModel):
+    title: str
+    valid_until: Optional[int] = None
+    assigned_user_sub: str = ""
+    account_id: str = ""
+    contact_id: str = ""
+    currency: str = "usd"
+    billing_address: QuoteAddressIn = Field(default_factory=QuoteAddressIn)
+    shipping_address: QuoteAddressIn = Field(default_factory=QuoteAddressIn)
+    notes: str = ""
+    line_items: List[QuoteLineItemIn]
+
+    @field_validator("line_items")
+    @classmethod
+    def _non_empty_line_items(cls, v: List[QuoteLineItemIn]) -> List[QuoteLineItemIn]:
+        if not v:
+            raise ValueError("at least one line item is required")
+        return v
+
+
+class QuotePatchIn(BaseModel):
+    title: Optional[str] = None
+    valid_until: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    currency: Optional[str] = None
+    billing_address: Optional[QuoteAddressIn] = None
+    shipping_address: Optional[QuoteAddressIn] = None
+    notes: Optional[str] = None
+    line_items: Optional[List[QuoteLineItemIn]] = None
+
+
+class QuoteStageIn(BaseModel):
+    stage: str
+
+
+class QuoteLineItemOut(BaseModel):
+    catalog_item_id: str = ""
+    description: str = ""
+    qty: int = 1
+    unit_price_cents: int = 0
+    discount_bps: int = 0
+    tax_rate_bps: int = 0
+    line_total_cents: int = 0
+
+
+class QuoteOut(BaseModel):
+    quote_id: str
+    quote_number: str
+    title: str
+    stage: str
+    valid_until: Optional[int] = None
+    assigned_user_sub: str = ""
+    account_id: str = ""
+    contact_id: str = ""
+    currency: str = "usd"
+    billing_address: Dict[str, Any] = Field(default_factory=dict)
+    shipping_address: Dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+    line_items: List[QuoteLineItemOut] = Field(default_factory=list)
+    subtotal_cents: int = 0
+    discount_cents: int = 0
+    tax_cents: int = 0
+    total_cents: int = 0
+    converted_to_invoice_number: str = ""
+    converted_to_contract_id: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class QuoteListOut(BaseModel):
+    quotes: List[QuoteOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# QUO-004 — AOS CRM Contracts
+# ---------------------------------------------------------------------------
+
+
+class ContractAddressIn(BaseModel):
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
+
+
+class ContractCreateIn(BaseModel):
+    title: str
+    start_date: int
+    end_date: Optional[int] = None
+    value_cents: int = Field(default=0, ge=0)
+    currency: str = "usd"
+    description: str = ""
+    account_id: str = ""
+    contact_id: str = ""
+    renewal_notice_days: int = Field(default=30, ge=1, le=365)
+    billing_address: ContractAddressIn = Field(default_factory=ContractAddressIn)
+    shipping_address: ContractAddressIn = Field(default_factory=ContractAddressIn)
+
+
+class ContractPatchIn(BaseModel):
+    title: Optional[str] = None
+    end_date: Optional[int] = None
+    value_cents: Optional[int] = None
+    currency: Optional[str] = None
+    description: Optional[str] = None
+    renewal_notice_days: Optional[int] = None
+    billing_address: Optional[ContractAddressIn] = None
+    shipping_address: Optional[ContractAddressIn] = None
+
+
+class ContractStageTransitionIn(BaseModel):
+    stage: str
+
+
+class ContractOut(BaseModel):
+    contract_id: str
+    contract_number: str
+    title: str
+    stage: str
+    account_id: str = ""
+    contact_id: str = ""
+    aos_quote_id: str = ""
+    start_date: int = 0
+    end_date: Optional[int] = None
+    value_cents: int = 0
+    currency: str = "usd"
+    description: str = ""
+    renewal_notice_days: int = 30
+    renewal_notified_at: Optional[int] = None
+    billing_address: Dict[str, Any] = Field(default_factory=dict)
+    shipping_address: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ContractListOut(BaseModel):
+    contracts: List[ContractOut] = Field(default_factory=list)
+    count: int = 0
+    next_cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# QUO-005 — Standalone invoice lifecycle (manual B2B + payment)
+# ---------------------------------------------------------------------------
+
+
+class ManualInvoiceLineItemIn(BaseModel):
+    description: str = Field(min_length=1, max_length=512)
+    quantity: int = Field(default=1, ge=1, le=10000)
+    unit_price_cents: int = Field(ge=0)
+    tax_rate_bps: int = Field(default=0, ge=0, le=10000)
+
+
+class ManualInvoiceBillingAddressIn(BaseModel):
+    street: str = Field(default="", max_length=256)
+    city: str = Field(default="", max_length=128)
+    state: str = Field(default="", max_length=128)
+    postal_code: str = Field(default="", max_length=32)
+    country: str = Field(default="", max_length=64)
+
+
+class ManualInvoiceCreateIn(BaseModel):
+    buyer_user_sub: str = Field(default="", max_length=256)
+    buyer_name: str = Field(min_length=1, max_length=256)
+    buyer_email: str = Field(min_length=1, max_length=256)
+    billing_address: ManualInvoiceBillingAddressIn = Field(
+        default_factory=ManualInvoiceBillingAddressIn
+    )
+    line_items: List[ManualInvoiceLineItemIn] = Field(min_length=1)
+    currency: str = Field(default="usd", max_length=8)
+    payment_terms_days: int = Field(default=30, ge=1, le=365)
+    notes: str = Field(default="", max_length=4096)
+
+
+class ManualPayInvoiceIn(BaseModel):
+    payment_ref: str = Field(default="", max_length=256)
+
+
+class RecordExternalPaymentIn(BaseModel):
+    # D5: admin record offline/manual payment (no provider charge).
+    amount_cents: int = Field(ge=1)
+    method: Literal["external"] = "external"
+    reference: str = Field(default="", max_length=256)
+    reason: str = Field(default="", max_length=512)
+    user_sub: str = Field(min_length=1, max_length=256)  # invoice owner
+
+
+
+
+# ── Sales Pipeline (OPP-001..OPP-006) ────────────────────────────────────────
+
+OPPORTUNITY_STAGES = (
+    "prospecting",
+    "qualification",
+    "needs_analysis",
+    "value_proposition",
+    "id_decision_makers",
+    "proposal_price_quote",
+    "negotiation_review",
+    "closed_won",
+    "closed_lost",
+)
+
+LEAD_SOURCE_CHOICES = (
+    "cold_call",
+    "existing_customer",
+    "self_generated",
+    "employee",
+    "partner",
+    "public_relations",
+    "direct_mail",
+    "conference",
+    "trade_show",
+    "web_site",
+    "word_of_mouth",
+    "email",
+    "campaign",
+    "other",
+)
+
+
+class OpportunityCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    stage: str = Field(..., description="One of OPPORTUNITY_STAGES")
+    amount_cents: int = Field(..., ge=0)
+    close_date: int = Field(..., description="Unix timestamp integer seconds")
+    probability: int = Field(0, ge=0, le=100)
+    lead_source: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=4096)
+    account_party_id: Optional[str] = Field(None, max_length=128)
+    contact_party_id: Optional[str] = Field(None, max_length=128)
+
+    @field_validator("stage")
+    @classmethod
+    def _validate_stage(cls, v: str) -> str:
+        if v not in OPPORTUNITY_STAGES:
+            raise ValueError(
+                f"Unknown stage {v!r}. Valid choices: {', '.join(OPPORTUNITY_STAGES)}"
+            )
+        return v
+
+    @field_validator("lead_source")
+    @classmethod
+    def _validate_lead_source(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in LEAD_SOURCE_CHOICES:
+            raise ValueError(
+                f"Unknown lead_source {v!r}. Valid choices: {', '.join(LEAD_SOURCE_CHOICES)}"
+            )
+        return v
+
+
+class OpportunityUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    stage: Optional[str] = None
+    amount_cents: Optional[int] = Field(None, ge=0)
+    close_date: Optional[int] = None
+    probability: Optional[int] = Field(None, ge=0, le=100)
+    lead_source: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=4096)
+    account_party_id: Optional[str] = Field(None, max_length=128)
+    contact_party_id: Optional[str] = Field(None, max_length=128)
+
+    @field_validator("stage")
+    @classmethod
+    def _validate_stage(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in OPPORTUNITY_STAGES:
+            raise ValueError(
+                f"Unknown stage {v!r}. Valid choices: {', '.join(OPPORTUNITY_STAGES)}"
+            )
+        return v
+
+    @field_validator("lead_source")
+    @classmethod
+    def _validate_lead_source(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in LEAD_SOURCE_CHOICES:
+            raise ValueError(
+                f"Unknown lead_source {v!r}. Valid choices: {', '.join(LEAD_SOURCE_CHOICES)}"
+            )
+        return v
+
+
+class OppContactRoleOut(BaseModel):
+    opp_id: str
+    contact_ref: str
+    contact_role: str
+    owner_sub: str
+    created_at: int
+
+
+class OpportunityOut(BaseModel):
+    opp_id: str
+    owner_sub: str
+    name: str
+    stage: str
+    amount_cents: int
+    weighted_amount_cents: int
+    close_date: int
+    probability: int
+    lead_source: Optional[str] = None
+    description: Optional[str] = None
+    account_party_id: Optional[str] = None
+    contact_party_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+    contact_roles: List["OppContactRoleOut"] = Field(default_factory=list)
+
+
+class OppContactRoleIn(BaseModel):
+    contact_ref: str = Field(..., min_length=1, max_length=255)
+    contact_role: str = Field(..., description="One of CONTACT_ROLES")
+
+    @field_validator("contact_role")
+    @classmethod
+    def validate_contact_role(cls, v: str) -> str:
+        from app.services.opportunities import CONTACT_ROLES  # lazy import to avoid circular
+        if v not in CONTACT_ROLES:
+            raise ValueError(f"Unknown contact_role '{v}'. Valid values: {CONTACT_ROLES}")
+        return v
+
+
+# OPP-003 Stage config models
+class StageConfigItemIn(BaseModel):
+    stage_key: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=80)
+    probability_default: int = Field(default=0, ge=0, le=100)
+    order: int = Field(default=0, ge=0)
+    is_won: bool = False
+    is_lost: bool = False
+    color: Optional[str] = Field(None, max_length=7)  # "#RRGGBB"
+
+
+class StageConfigIn(BaseModel):
+    stages: List[StageConfigItemIn]
+
+
+class StageConfigItemOut(BaseModel):
+    stage_key: str
+    label: str
+    probability_default: int
+    order: int
+    is_won: bool
+    is_lost: bool
+    color: Optional[str] = None
+
+
+class StageConfigOut(BaseModel):
+    stages: List[StageConfigItemOut]
+    updated_at: Optional[int] = None
+    updated_by_sub: Optional[str] = None
+
+
+# OPP-005 Quota / Forecast models
+PERIOD_TYPE_CHOICES = ("monthly", "quarterly", "annual")
+
+
+class SalesQuotaIn(BaseModel):
+    user_sub: str = Field(..., min_length=1)
+    period_type: str = Field(..., description="monthly | quarterly | annual")
+    period_key: str = Field(..., min_length=4, max_length=16)
+    target_amount_cents: int = Field(..., ge=0)
+
+    @field_validator("period_type")
+    @classmethod
+    def _validate_period_type(cls, v: str) -> str:
+        if v not in PERIOD_TYPE_CHOICES:
+            raise ValueError(f"period_type must be one of {PERIOD_TYPE_CHOICES}")
+        return v
+
+
+class SalesQuotaOut(BaseModel):
+    user_sub: str
+    period_type: str
+    period_key: str
+    target_amount_cents: int
+    created_at: int
+    updated_at: int
+    set_by_sub: str
+
+
+class SalesQuotaListOut(BaseModel):
+    items: List[SalesQuotaOut]
+    next_cursor: Optional[str] = None
+
+
+class ForecastWorksheetIn(BaseModel):
+    committed_cents: int = Field(..., ge=0)
+    best_case_cents: int = Field(..., ge=0)
+    pipeline_cents: int = Field(..., ge=0)
+    notes: Optional[str] = Field(None, max_length=4096)
+
+
+class ForecastWorksheetOut(BaseModel):
+    user_sub: str
+    period_key: str
+    committed_cents: int
+    best_case_cents: int
+    pipeline_cents: int
+    closed_cents: int
+    quota_cents: int
+    attainment_pct: int
+    notes: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+# OPP-006 Pipeline report models
+class PipelineStageMetric(BaseModel):
+    stage: str
+    label: str
+    count: int
+    total_amount_cents: int
+    weighted_amount_cents: int
+    avg_close_date: Optional[int] = None
+
+
+class PipelineReportOut(BaseModel):
+    stages: List[PipelineStageMetric]
+    total_amount_cents: int
+    total_weighted_cents: int
+    generated_at: int
+
+
+
+
+# ── CRM Leads (LED-002) ──────────────────────────────────────────────────────
+
+LEAD_STATUSES: frozenset = frozenset({
+    "new", "assigned", "in_process", "converted", "recycled", "dead"
+})
+
+LEAD_SOURCES: frozenset = frozenset({
+    "web_site", "cold_call", "email", "campaign", "trade_show",
+    "word_of_mouth", "other", "internal",
+})
+
+_LEAD_SOURCE_PATTERN = (
+    r"^(web_site|cold_call|email|campaign|trade_show|word_of_mouth|other|internal)$"
+)
+
+
+class LeadCreateIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=120)
+    last_name: str = Field(..., min_length=1, max_length=120)
+    email: str = Field(..., min_length=3, max_length=254)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+    lead_source: str = Field(default="other", pattern=_LEAD_SOURCE_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    assigned_to: Optional[str] = None
+    website: Optional[str] = Field(default=None, max_length=500)
+    attribution_code: Optional[str] = Field(default=None, max_length=200)
+    campaign_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class LeadUpdateIn(BaseModel):
+    first_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    last_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    email: Optional[str] = Field(default=None, min_length=3, max_length=254)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+    lead_source: Optional[str] = Field(default=None, pattern=_LEAD_SOURCE_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    assigned_to: Optional[str] = None
+    status: Optional[str] = None  # transition enforced by service layer (LED-003)
+    website: Optional[str] = Field(default=None, max_length=500)
+    score: Optional[int] = None   # only written by scoring engine (LED-011)
+
+
+class LeadOut(BaseModel):
+    lead_id: str
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str] = None
+    company: Optional[str] = None
+    title: Optional[str] = None
+    lead_source: str = "other"
+    description: Optional[str] = None
+    status: str = "new"
+    assigned_to: Optional[str] = None
+    score: int = 0
+    website: Optional[str] = None
+    attribution_code: Optional[str] = None
+    campaign_id: Optional[str] = None
+    created_by: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    converted_at: Optional[int] = None
+    converted_party_id: Optional[str] = None
+    converted_org_id: Optional[str] = None
+    origin_questionnaire_id: Optional[str] = None
+    origin_response_session_id: Optional[str] = None
+    linked_entity_id: Optional[str] = None  # opaque PTY linkage (soft, LED-006)
+
+
+class ProspectCreateIn(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    first_name: Optional[str] = Field(default=None, max_length=120)
+    last_name: Optional[str] = Field(default=None, max_length=120)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+
+
+class ProspectOut(BaseModel):
+    prospect_id: str
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
+    suppressed: bool = False
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ProspectUpdateIn(BaseModel):
+    first_name: Optional[str] = Field(default=None, max_length=120)
+    last_name: Optional[str] = Field(default=None, max_length=120)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+
+
+class LeadConversionIn(BaseModel):
+    create_account: bool = False
+    account_name: Optional[str] = Field(default=None, max_length=200)
+    create_opportunity: bool = False
+    opportunity_name: Optional[str] = Field(default=None, max_length=300)
+    opportunity_amount_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class OpportunityStubOut(BaseModel):
+    opportunity_id: str
+    name: str
+    amount_cents: int
+    currency: str
+    stage: str
+    created_at: int
+
+
+class LeadConversionOut(BaseModel):
+    lead_id: str
+    status: str = "converted"
+    converted_party_id: str = ""
+    converted_org_id: Optional[str] = None
+    opportunity: Optional[OpportunityStubOut] = None
+    converted_at: int = 0
+    pty_path_used: bool = False
+
+
+class LeadScoreRuleIn(BaseModel):
+    """A single scoring rule definition (LED-011)."""
+    field: str = Field(..., max_length=100)
+    operator: str = Field(..., max_length=50)
+    value: str = Field(..., max_length=500)
+    points: int
+
+
+class LeadScoreRulesIn(BaseModel):
+    rules: List[LeadScoreRuleIn]
+    max_score: int = Field(default=100, ge=0)
+
+
+class LeadScoreRulesOut(BaseModel):
+    rules: List[LeadScoreRuleIn]
+    max_score: int
+    updated_at: int = 0
+
+
+class LeadScoreHistoryEntry(BaseModel):
+    score: int
+    trigger: str
+    computed_at: int
+    lead_id: str
+
+
+class LeadScoreHistoryOut(BaseModel):
+    lead_id: str
+    entries: List[LeadScoreHistoryEntry]
+    cursor: Optional[str] = None
+
+
+class LeadActivityOut(BaseModel):
+    activity_id: str
+    lead_id: str
+    activity_type: str
+    subject: Optional[str] = None
+    description: Optional[str] = None
+    actor_sub: str = ""
+    created_at: int = 0
+    metadata: Optional[Dict] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# CRM Reports & Dashboards (RPT-001..RPT-009)
+# ---------------------------------------------------------------------------
+
+class ReportCondition(BaseModel):
+    field: str = Field(..., min_length=1, max_length=100)
+    operator: str = Field(
+        ...,
+        pattern=r"^(eq|neq|contains|gt|lt|gte|lte|is_empty|not_empty)$"
+    )
+    value: Optional[str] = Field(None, max_length=500)
+
+
+class AggregateSpec(BaseModel):
+    field: str = Field(..., min_length=1, max_length=100, description="Field name or '*' for COUNT(*)")
+    function: str = Field(..., pattern=r"^(SUM|AVG|COUNT|MIN|MAX)$")
+
+
+class ChartConfig(BaseModel):
+    chart_type: str = Field(..., pattern=r"^(bar|line|pie)$")
+    x_field: str = Field(..., min_length=1, max_length=100)
+    y_field: str = Field(..., min_length=1, max_length=100)
+
+
+class ReportCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    module: str = Field(
+        ...,
+        pattern=r"^(tickets|contacts|billing_ledger|orders|subscriptions|questionnaire_responses)$"
+    )
+    fields: List[str] = Field(..., min_length=1, max_length=20)
+    conditions: List[ReportCondition] = Field(default_factory=list)
+    # RPT-003 additions
+    group_by: Optional[str] = Field(None, min_length=1, max_length=100)
+    aggregates: List[AggregateSpec] = Field(default_factory=list)
+    # RPT-005 addition
+    chart: Optional[ChartConfig] = None
+
+    @model_validator(mode="after")
+    def _check_group_by_aggregates(self) -> "ReportCreateIn":
+        if self.group_by and not self.aggregates:
+            raise ValueError("aggregates must be non-empty when group_by is set")
+        if not self.group_by and self.aggregates:
+            raise ValueError("aggregates requires group_by to be set")
+        if len(self.aggregates) > 10:
+            raise ValueError("maximum 10 aggregates per report")
+        # Check for duplicate (field, function) pairs
+        seen = set()
+        for agg in self.aggregates:
+            pair = (agg.field, agg.function)
+            if pair in seen:
+                raise ValueError(f"Duplicate aggregate: {pair}")
+            seen.add(pair)
+        return self
+
+
+class ReportUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    fields: Optional[List[str]] = Field(None, min_length=1, max_length=20)
+    conditions: Optional[List[ReportCondition]] = None
+    group_by: Optional[str] = Field(None, min_length=1, max_length=100)
+    aggregates: Optional[List[AggregateSpec]] = None
+    chart: Optional[ChartConfig] = None
+
+
+class ReportOut(BaseModel):
+    report_id: str
+    name: str
+    description: Optional[str] = None
+    module: str
+    fields: List[str]
+    conditions: List[ReportCondition]
+    group_by: Optional[str] = None
+    aggregates: List[AggregateSpec] = Field(default_factory=list)
+    chart: Optional[ChartConfig] = None
+    owner_sub: str
+    created_at: int
+    updated_at: int
+
+
+class ReportRunOut(BaseModel):
+    report_id: str
+    run_id: str
+    run_at: int
+    status: str
+    row_count: int
+    columns: List[str]
+    rows: List[List[Any]]
+    error_msg: Optional[str] = None
+    chart: Optional[ChartConfig] = None
+
+
+# RPT-004: schedule models
+
+class ReportScheduleCreateIn(BaseModel):
+    cadence: str = Field(..., pattern=r"^(daily|weekly|monthly)$")
+    recipients: List[str] = Field(..., min_length=1, max_length=50)
+    format: str = Field("csv", pattern=r"^(csv|json)$")
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v: List[str]) -> List[str]:
+        for email in v:
+            if "@" not in email:
+                raise ValueError(f"Invalid email address: {email}")
+        return v
+
+
+class ReportScheduleUpdateIn(BaseModel):
+    cadence: Optional[str] = Field(None, pattern=r"^(daily|weekly|monthly)$")
+    recipients: Optional[List[str]] = Field(None, min_length=1, max_length=50)
+    format: Optional[str] = Field(None, pattern=r"^(csv|json)$")
+    enabled: Optional[bool] = None
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        for email in v:
+            if "@" not in email:
+                raise ValueError(f"Invalid email address: {email}")
+        return v
+
+
+class ReportScheduleOut(BaseModel):
+    schedule_id: str
+    report_id: str
+    owner_sub: str
+    cadence: str
+    recipients: List[str]
+    format: str
+    enabled: bool
+    created_at: int
+    next_run_at: int
+    last_run_at: Optional[int] = None
+    last_run_id: Optional[str] = None
+
+
+class ReportScheduleListOut(BaseModel):
+    schedules: List[ReportScheduleOut]
+    cursor: Optional[str] = None
+
+
+# RPT-006: dashboard models
+
+class DashletConfig(BaseModel):
+    dashlet_type: str = Field(
+        ...,
+        pattern=r"^(recent_tickets|calendar_today|my_contacts|billing_summary|report|saved_search)$"
+    )
+    title: str = Field(..., min_length=1, max_length=120)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DashletConfigOut(BaseModel):
+    dashlet_id: str
+    dashlet_type: str
+    title: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DashboardOut(BaseModel):
+    dashboard_id: str
+    name: str
+    owner_sub: str
+    dashlets: List[DashletConfigOut]
+    created_at: int
+    updated_at: int
+
+
+class DashboardUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    dashlets: Optional[List[DashletConfig]] = None
+
+
+class DashletAddIn(BaseModel):
+    dashlet_type: str = Field(
+        ...,
+        pattern=r"^(recent_tickets|calendar_today|my_contacts|billing_summary|report|saved_search)$"
+    )
+    title: str = Field(..., min_length=1, max_length=120)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DashletReorderIn(BaseModel):
+    dashlet_ids: List[str] = Field(..., min_length=1)
+
+
+# RPT-008: saved search models
+
+class SavedSearchCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    module: str = Field(
+        ...,
+        pattern=r"^(tickets|contacts|billing_ledger|orders|subscriptions|questionnaire_responses)$"
+    )
+    filters: List[ReportCondition] = Field(default_factory=list, max_length=20)
+
+
+class SavedSearchUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    filters: Optional[List[ReportCondition]] = Field(None, max_length=20)
+
+
+class SavedSearchOut(BaseModel):
+    saved_search_id: str
+    name: str
+    module: str
+    filters: List[Dict[str, Any]]
+    owner_sub: str
+    created_at: int
+    updated_at: int
+
+
+class SavedSearchRunOut(BaseModel):
+    saved_search_id: str
+    module: str
+    columns: List[str]
+    rows: List[Dict[str, Any]]
+    row_count: int
+    ran_at: int
+
+
+
+
+# ---------------------------------------------------------------------------
+# CRM Workflow & Process Automation (WFL-001 / WFL-002 / WFL-006 / WFL-008 / WFL-009)
+# ---------------------------------------------------------------------------
+
+class WorkflowConditionIn(BaseModel):
+    field: str
+    operator: str  # eq|neq|contains|gt|lt|is_empty|is_not_empty
+    value: Optional[str] = None
+
+
+class WorkflowActionIn(BaseModel):
+    action_type: str  # modify_field|create_record|send_email|drip_sequence
+    config: dict = {}
+
+
+class WorkflowRuleCreateIn(BaseModel):
+    name: str = Field(..., max_length=200)
+    description: str = Field(default="", max_length=2000)
+    target_module: str
+    trigger_type: str
+    trigger_config: dict = {}
+    conditions: List[WorkflowConditionIn] = []
+    actions: List[WorkflowActionIn] = []
+    enabled: bool = True
+
+
+class WorkflowRuleUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = None
+    trigger_config: Optional[dict] = None
+    conditions: Optional[List[WorkflowConditionIn]] = None
+    actions: Optional[List[WorkflowActionIn]] = None
+
+
+class WorkflowRuleOut(BaseModel):
+    rule_id: str
+    name: str
+    description: str = ""
+    target_module: str
+    trigger_type: str
+    trigger_config: dict
+    conditions: List[dict]
+    actions: List[dict]
+    enabled: bool
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class WorkflowRuleListOut(BaseModel):
+    rules: List[WorkflowRuleOut] = []
+    cursor: Optional[str] = None
+
+
+class WorkflowActionFiredOut(BaseModel):
+    action_type: str
+    result: str  # "ok" | "skipped" | "error:<msg>"
+    error: Optional[str] = None
+
+
+class WorkflowRunOut(BaseModel):
+    run_id: str
+    rule_id: str
+    target_module: str
+    record_id: str
+    trigger_type: str
+    outcome: str  # "matched" | "error" | "skipped"
+    actions_fired: List[dict] = []
+    started_at: int
+    finished_at: Optional[int] = None
+    error_message: Optional[str] = None
+
+
+class WorkflowRunListOut(BaseModel):
+    runs: List[WorkflowRunOut] = []
+    cursor: Optional[str] = None
+
+
+class DripStageIn(BaseModel):
+    stage_number: int = Field(..., ge=1)
+    delay_hours: int = Field(..., ge=0)
+    template_id: str
+    to_field: str
+
+
+class DripSequenceCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    stages: List[DripStageIn] = Field(..., min_length=1)
+
+
+class DripSequenceUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = None
+    stages: Optional[List[DripStageIn]] = None
+
+
+class DripSequenceOut(BaseModel):
+    sequence_id: str
+    name: str
+    description: str
+    stages: List[dict]
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class DripSequenceListOut(BaseModel):
+    sequences: List[DripSequenceOut] = []
+    cursor: Optional[str] = None
+
+
+class DripEnrolmentOut(BaseModel):
+    sequence_id: str
+    module: str
+    record_id: str
+    current_stage: int
+    enrolled_at: int
+    last_stage_sent_at: Optional[int] = None
+    completed: bool
+    stopped: bool
+
+
+
+
+# ---------------------------------------------------------------------------
+# CAS-007 — Ticket watchers / CC list
+# ---------------------------------------------------------------------------
+class TicketWatcherOut(BaseModel):
+    ticket_id: str
+    watcher_sub: str
+    added_by_sub: Optional[str] = None
+    created_at: int
+
+
+class TicketWatcherListOut(BaseModel):
+    watchers: List[TicketWatcherOut]
+
+
+class AddWatcherReq(BaseModel):
+    watcher_sub: str
+
+
+# ---------------------------------------------------------------------------
+# CAS-011 — Case-to-case relationship links
+# ---------------------------------------------------------------------------
+class TicketLinkOut(BaseModel):
+    ticket_id: str
+    related_ticket_id: str
+    link_type: Literal["duplicate", "blocks", "relates_to"]
+    created_by_sub: Optional[str] = None
+    created_at: int
+
+
+class TicketLinkListOut(BaseModel):
+    links: List[TicketLinkOut]
+
+
+class CreateTicketLinkReq(BaseModel):
+    related_ticket_id: str
+    link_type: Literal["duplicate", "blocks", "relates_to"]
