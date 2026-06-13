@@ -274,4 +274,96 @@ class AdsAccountsApiTest {
         assertTrue(error is HttpException)
         assertEquals(400, (error as HttpException).code())
     }
+
+    // ---- AND-368: getAnalyticsSummary GET ui/ads/analytics/summary?account_id=&from=&to= ----
+
+    @Test
+    fun getAnalyticsSummary_sendsAccountAndRangeQuery_decodesSingle() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """{"impressions":120000,"clicks":3400,"spend_cents":250000,"ctr_pct":2.83,
+                    "cpa_cents":7350,"effective_cpm_cents":2083,"completes":900,"skips":120,
+                    "completion_rate_pct":88.2,"impressions_change_pct":4.5,"ctr_change_pct":-1.2}""",
+            ),
+        )
+
+        val summary = adsApi().getAnalyticsSummary("acc_1", from = "2026-05-13", to = "2026-06-09")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/ads/analytics/summary", recorded.requestUrl?.encodedPath)
+        assertEquals("acc_1", recorded.requestUrl?.queryParameter("account_id"))
+        assertEquals("2026-05-13", recorded.requestUrl?.queryParameter("from"))
+        assertEquals("2026-06-09", recorded.requestUrl?.queryParameter("to"))
+        assertEquals(120000L, summary.impressions)
+        assertEquals(3400L, summary.clicks)
+        assertEquals(250000L, summary.spendCents)
+        // ctr_pct is already a percentage (decoded as-is, NOT multiplied).
+        assertEquals(2.83, summary.ctrPct, 0.0001)
+        assertEquals(88.2, summary.completionRatePct!!, 0.0001)
+        assertEquals(4.5, summary.impressionsChangePct!!, 0.0001)
+        assertEquals(-1.2, summary.ctrChangePct!!, 0.0001)
+    }
+
+    // ---- AND-368: getAnalyticsTimeseries GET ui/ads/analytics/timeseries -> BARE ARRAY ----
+
+    @Test
+    fun getAnalyticsTimeseries_sendsRangeQuery_decodesBareArray() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """[
+                    {"date":"2026-06-08","impressions":1000,"clicks":30,"spend_cents":2500},
+                    {"ts":1749513600,"impressions":1200,"clicks":36,"spend_cents":3000}
+                ]""",
+            ),
+        )
+
+        val points = adsApi().getAnalyticsTimeseries("acc_1", from = "2026-06-08", to = "2026-06-09")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/ads/analytics/timeseries", recorded.requestUrl?.encodedPath)
+        assertEquals("acc_1", recorded.requestUrl?.queryParameter("account_id"))
+        assertEquals("2026-06-08", recorded.requestUrl?.queryParameter("from"))
+        assertEquals(2, points.size)
+        assertEquals("2026-06-08", points[0].date)
+        assertEquals(2500L, points[0].spendCents)
+        // second point identifies its bucket via ts, not date.
+        assertEquals(1749513600L, points[1].ts)
+        assertEquals(36L, points[1].clicks)
+    }
+
+    // ---- AND-368: getAnalyticsBreakdown GET ui/ads/analytics/breakdown?dimension= -> BARE ARRAY ----
+
+    @Test
+    fun getAnalyticsBreakdown_sendsDimensionQuery_decodesBareArray() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """[
+                    {"key":"cmp_1","impressions":80000,"clicks":2400,"spend_cents":180000,"ctr_pct":3.0},
+                    {"dimension_value":"cmp_2","impressions":40000,"clicks":1000,"spend_cents":70000}
+                ]""",
+            ),
+        )
+
+        val rows = adsApi().getAnalyticsBreakdown(
+            "acc_1",
+            dimension = "creative",
+            from = "2026-05-13",
+            to = "2026-06-09",
+        )
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/ads/analytics/breakdown", recorded.requestUrl?.encodedPath)
+        assertEquals("acc_1", recorded.requestUrl?.queryParameter("account_id"))
+        assertEquals("creative", recorded.requestUrl?.queryParameter("dimension"))
+        assertEquals(2, rows.size)
+        assertEquals("cmp_1", rows[0].key)
+        assertEquals(180000L, rows[0].spendCents)
+        assertEquals(3.0, rows[0].ctrPct!!, 0.0001)
+        // second row carries dimension_value instead of key; ctr omitted.
+        assertEquals("cmp_2", rows[1].dimensionValue)
+        assertEquals(null, rows[1].ctrPct)
+    }
 }

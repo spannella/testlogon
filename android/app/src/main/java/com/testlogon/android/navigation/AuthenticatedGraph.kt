@@ -118,6 +118,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // + monthly invoice) + the DEPOSIT (add-funds) sheet. First MUTATING ads feature. Route reachable via
         // navigateToAdsBilling(accountId); the More-hub uses a sample account id (no ads-accounts list yet).
         adsBillingDestination(navController)
+        // AND-368: READ-ONLY ad-analytics dashboard (KPI summary + time-series charts + breakdown over a
+        // selectable date range). Route reachable via navigateToAdAnalytics(accountId); the More-hub uses a
+        // sample account id (no ads-accounts list yet).
+        adAnalyticsDestination(navController)
         // AND-183: tag pages (in-app nav + App Link / dev-host deep links).
         tagPageDestination(navController)
         // AND-185: global multi-entity search (distinct from AND-152 message search).

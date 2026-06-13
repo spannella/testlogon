@@ -3059,4 +3059,31 @@
     <string name="deposit_confirm">Confirm deposit</string>
     <string name="deposit_success">Deposit successful.</string>
     <string name="deposit_success_with_balance">Deposit successful. New balance: %1$s</string>
+
+    <!-- AND-368: READ-ONLY ad-analytics dashboard -->
+    <string name="more_entry_ad_analytics">Ad analytics</string>
+    <string name="ad_analytics_title">Ad analytics</string>
+    <string name="ad_analytics_back">Back</string>
+    <string name="ad_analytics_range_7">Last 7 days</string>
+    <string name="ad_analytics_range_28">Last 28 days</string>
+    <string name="ad_analytics_range_90">Last 90 days</string>
+    <string name="ad_analytics_kpi_impressions">Impressions</string>
+    <string name="ad_analytics_kpi_clicks">Clicks</string>
+    <string name="ad_analytics_kpi_spend">Spend</string>
+    <string name="ad_analytics_kpi_ctr">CTR</string>
+    <string name="ad_analytics_kpi_cpa">CPA</string>
+    <string name="ad_analytics_kpi_ecpm">eCPM</string>
+    <string name="ad_analytics_kpi_completion_rate">Completion rate</string>
+    <string name="ad_analytics_chart_spend_title">Spend over time</string>
+    <string name="ad_analytics_chart_traffic_title">Impressions vs clicks</string>
+    <string name="ad_analytics_chart_impressions_label">Impressions</string>
+    <string name="ad_analytics_chart_clicks_label">Clicks</string>
+    <string name="ad_analytics_chart_no_data">No data for this range</string>
+    <string name="ad_analytics_breakdown_header">Breakdown</string>
+    <string name="ad_analytics_breakdown_empty">No breakdown data for this range</string>
+    <string name="ad_analytics_breakdown_unknown">Unknown</string>
+    <string name="ad_analytics_breakdown_impressions">%1$d impressions</string>
+    <string name="ad_analytics_breakdown_clicks">%1$d clicks</string>
+    <string name="ad_analytics_empty_title">No analytics yet</string>
+    <string name="ad_analytics_empty_body">There is no campaign activity for this date range.</string>
 </resources>

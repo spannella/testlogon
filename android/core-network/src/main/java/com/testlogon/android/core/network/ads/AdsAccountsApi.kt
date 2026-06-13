@@ -68,4 +68,40 @@ interface AdsAccountsApi {
         @Path("accountId") accountId: String,
         @Body body: AdDepositIn,
     ): AdDepositOut
+
+    /**
+     * AND-368 - GET the READ-ONLY KPI analytics summary for an account over a date range. account_id is a
+     * QUERY param (mirrors the verified web ads.ts getAnalyticsSummary); [from] / [to] are YYYY-MM-DD
+     * strings. Idempotent GET; returns a single raw DTO.
+     */
+    @GET("ui/ads/analytics/summary")
+    suspend fun getAnalyticsSummary(
+        @Query("account_id") accountId: String,
+        @Query("from") from: String,
+        @Query("to") to: String,
+    ): AdAnalyticsSummaryDto
+
+    /**
+     * AND-368 - GET the READ-ONLY daily-bucketed time series (BARE ARRAY) for an account over a date range.
+     * account_id / from / to are QUERY params. Idempotent GET; no paging.
+     */
+    @GET("ui/ads/analytics/timeseries")
+    suspend fun getAnalyticsTimeseries(
+        @Query("account_id") accountId: String,
+        @Query("from") from: String,
+        @Query("to") to: String,
+    ): List<AdTimeSeriesPointDto>
+
+    /**
+     * AND-368 - GET the READ-ONLY breakdown rows (BARE ARRAY) for a [dimension] (creative / surface /
+     * targeting) over a date range. account_id / dimension / from / to are QUERY params. Idempotent GET; the
+     * caller caps the row count client-side (no paging).
+     */
+    @GET("ui/ads/analytics/breakdown")
+    suspend fun getAnalyticsBreakdown(
+        @Query("account_id") accountId: String,
+        @Query("dimension") dimension: String,
+        @Query("from") from: String,
+        @Query("to") to: String,
+    ): List<AdBreakdownEntryDto>
 }

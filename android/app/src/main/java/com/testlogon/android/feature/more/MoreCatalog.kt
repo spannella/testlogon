@@ -382,6 +382,14 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.ADS_BILLING,
             section = MoreSection.ACCOUNT,
         ),
+        // AND-368: READ-ONLY ad-analytics dashboard (KPI summary + time-series charts + breakdown).
+        MoreEntry(
+            id = "ad_analytics",
+            labelRes = R.string.more_entry_ad_analytics,
+            icon = Icons.Outlined.Insights,
+            route = MoreRoutes.AD_ANALYTICS,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-360: the delegate console (focused manage-as-creator demonstration).
         MoreEntry(
             id = "delegate_console",

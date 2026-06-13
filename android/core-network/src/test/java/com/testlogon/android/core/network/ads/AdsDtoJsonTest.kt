@@ -334,4 +334,126 @@ class AdsDtoJsonTest {
         assertNull(sparse.newBalanceCents)
         assertNull(sparse.status)
     }
+
+    // ---- AND-368: analytics summary DTO ----
+
+    private fun timeseriesListAdapter() = moshi.adapter<List<AdTimeSeriesPointDto>>(
+        Types.newParameterizedType(List::class.java, AdTimeSeriesPointDto::class.java),
+    )
+
+    private fun breakdownListAdapter() = moshi.adapter<List<AdBreakdownEntryDto>>(
+        Types.newParameterizedType(List::class.java, AdBreakdownEntryDto::class.java),
+    )
+
+    @Test
+    fun analyticsSummary_decodesPctAsIs_centsLong_andOptionalFields() {
+        val adapter = moshi.adapter(AdAnalyticsSummaryDto::class.java)
+        val decoded = requireNotNull(
+            adapter.fromJson(
+                """{"impressions":120000,"clicks":3400,"spend_cents":250000,"ctr_pct":2.83,
+                    "cpa_cents":7350,"effective_cpm_cents":2083,"completes":900,"skips":120,
+                    "completion_rate_pct":88.2,"spend_change_pct":-3.4}""",
+            ),
+        )
+        assertEquals(120000L, decoded.impressions)
+        assertEquals(250000L, decoded.spendCents)
+        // pct fields are already percentages - decoded verbatim (NOT multiplied by 100).
+        assertEquals(2.83, decoded.ctrPct, 0.0001)
+        assertEquals(88.2, decoded.completionRatePct!!, 0.0001)
+        assertEquals(-3.4, decoded.spendChangePct!!, 0.0001)
+        assertEquals(7350L, decoded.cpaCents)
+        assertEquals(900L, decoded.completes)
+    }
+
+    @Test
+    fun analyticsSummary_sparse_decodesOptionalNulls() {
+        val adapter = moshi.adapter(AdAnalyticsSummaryDto::class.java)
+        val decoded = requireNotNull(
+            adapter.fromJson("""{"impressions":0,"clicks":0,"spend_cents":0,"ctr_pct":0.0}"""),
+        )
+        assertEquals(0L, decoded.impressions)
+        assertNull(decoded.cpaCents)
+        assertNull(decoded.effectiveCpmCents)
+        assertNull(decoded.completionRatePct)
+        assertNull(decoded.impressionsChangePct)
+    }
+
+    @Test
+    fun analyticsSummary_spendCents_decodeToLong_aboveIntMax() {
+        val big = Int.MAX_VALUE.toLong() + 3_000_000L
+        val adapter = moshi.adapter(AdAnalyticsSummaryDto::class.java)
+        val decoded = requireNotNull(
+            adapter.fromJson(
+                """{"impressions":1,"clicks":1,"spend_cents":$big,"ctr_pct":1.0}""",
+            ),
+        )
+        assertEquals(big, decoded.spendCents)
+        assertTrue(decoded.spendCents > Int.MAX_VALUE.toLong())
+    }
+
+    @Test
+    fun analyticsSummary_missingRequiredCtrPct_throws() {
+        assertThrows(JsonDataException::class.java) {
+            moshi.adapter(AdAnalyticsSummaryDto::class.java)
+                .fromJson("""{"impressions":1,"clicks":1,"spend_cents":1}""")
+        }
+    }
+
+    // ---- AND-368: timeseries bare array (date OR ts) ----
+
+    @Test
+    fun timeseries_decodesBareArray_dateOrTs() {
+        val points = requireNotNull(
+            timeseriesListAdapter().fromJson(
+                """[
+                    {"date":"2026-06-08","impressions":1000,"clicks":30,"spend_cents":2500},
+                    {"ts":1749513600,"impressions":1200,"clicks":36,"spend_cents":3000}
+                ]""",
+            ),
+        )
+        assertEquals(2, points.size)
+        assertEquals("2026-06-08", points[0].date)
+        assertNull(points[0].ts)
+        assertEquals(1749513600L, points[1].ts)
+        assertNull(points[1].date)
+        assertEquals(3000L, points[1].spendCents)
+    }
+
+    @Test
+    fun timeseries_missingRequiredSpendCents_throws() {
+        assertThrows(JsonDataException::class.java) {
+            timeseriesListAdapter().fromJson("""[{"date":"2026-06-08","impressions":1,"clicks":1}]""")
+        }
+    }
+
+    // ---- AND-368: breakdown bare array (key OR dimension_value; optional ctr) ----
+
+    @Test
+    fun breakdown_decodesBareArray_keyOrDimensionValue() {
+        val rows = requireNotNull(
+            breakdownListAdapter().fromJson(
+                """[
+                    {"key":"cmp_1","impressions":80000,"clicks":2400,"spend_cents":180000,"ctr_pct":3.0},
+                    {"dimension_value":"cmp_2","impressions":40000,"clicks":1000,"spend_cents":70000}
+                ]""",
+            ),
+        )
+        assertEquals(2, rows.size)
+        assertEquals("cmp_1", rows[0].key)
+        assertEquals(3.0, rows[0].ctrPct!!, 0.0001)
+        assertEquals("cmp_2", rows[1].dimensionValue)
+        assertNull(rows[1].key)
+        assertNull(rows[1].ctrPct)
+    }
+
+    @Test
+    fun breakdown_spendCents_decodeToLong_aboveIntMax() {
+        val big = 8_000_000_000L
+        val rows = requireNotNull(
+            breakdownListAdapter().fromJson(
+                """[{"key":"k","impressions":1,"clicks":1,"spend_cents":$big}]""",
+            ),
+        )
+        assertEquals(big, rows[0].spendCents)
+    }
 }

@@ -136,3 +136,76 @@ data class AdDepositOut(
     @Json(name = "new_balance_cents") val newBalanceCents: Long? = null,
     @Json(name = "status") val status: String? = null,
 )
+
+/**
+ * AND-368 - READ-ONLY ad-analytics transport DTOs (ui/ads/analytics). Same reflective-Moshi rules as the
+ * AND-363 account DTOs: explicit @Json on every wire key, nullable-with-default optionals, required
+ * structural keys with no default. NO @JsonClass codegen.
+ *
+ * MONEY / RATES (frontend-verified wire contract): every monetary amount is a flat *_cents integer typed as
+ * Long (overflow-proof; NO float, NO currency field - display is fixed to USD). Every *_pct field is ALREADY
+ * a percentage Double (e.g. 1.23 == 1.23 percent) - the mapper keeps it as-is and NEVER multiplies by 100.
+ * Counts (impressions / clicks / completes / skips) are Long. There is NO cpc and NO conversions field on
+ * the analytics surface.
+ *
+ * WIRE CONTRACT (OpenAPI / frontend-corrected; endpoints under ui/ads/analytics):
+ *   GET ui/ads/analytics/summary?account_id=&from=&to=                     -> AdAnalyticsSummaryDto
+ *   GET ui/ads/analytics/timeseries?account_id=&from=&to=                  -> BARE ARRAY of AdTimeSeriesPointDto
+ *   GET ui/ads/analytics/breakdown?account_id=&dimension=&from=&to=        -> BARE ARRAY of AdBreakdownEntryDto
+ *
+ * ASSUMPTION (account selector): the verified web client (ads.ts getAnalyticsSummary) passes account_id as a
+ * QUERY param (NOT a path token) and the date range as `from` / `to` strings in YYYY-MM-DD form. Reconcile
+ * against the server spec if the wire uses a path token or epoch dates.
+ */
+
+/**
+ * AND-368 - the KPI summary for an account over a date range. `impressions` / `clicks` / `spend_cents` /
+ * `ctr_pct` are required structural keys; everything else is optional. Each `*_pct` is ALREADY a percentage
+ * (kept as-is, NO multiply). Each `*_change_pct` is a period-over-period delta percentage (also as-is).
+ */
+data class AdAnalyticsSummaryDto(
+    @Json(name = "impressions") val impressions: Long,
+    @Json(name = "clicks") val clicks: Long,
+    @Json(name = "spend_cents") val spendCents: Long,
+    @Json(name = "ctr_pct") val ctrPct: Double,
+    @Json(name = "cpa_cents") val cpaCents: Long? = null,
+    @Json(name = "effective_cpm_cents") val effectiveCpmCents: Long? = null,
+    @Json(name = "completes") val completes: Long? = null,
+    @Json(name = "skips") val skips: Long? = null,
+    @Json(name = "completion_rate_pct") val completionRatePct: Double? = null,
+    @Json(name = "impressions_change_pct") val impressionsChangePct: Double? = null,
+    @Json(name = "clicks_change_pct") val clicksChangePct: Double? = null,
+    @Json(name = "spend_change_pct") val spendChangePct: Double? = null,
+    @Json(name = "ctr_change_pct") val ctrChangePct: Double? = null,
+    @Json(name = "cpa_change_pct") val cpaChangePct: Double? = null,
+    @Json(name = "effective_cpm_change_pct") val effectiveCpmChangePct: Double? = null,
+    @Json(name = "completion_rate_change_pct") val completionRateChangePct: Double? = null,
+)
+
+/**
+ * AND-368 - one daily-bucketed time-series point. `impressions` / `clicks` / `spend_cents` are required
+ * structural keys. The bucket is identified by either `date` (YYYY-MM-DD string) or `ts` (epoch Long); both
+ * are optional and the mapper keeps whichever the server sends.
+ */
+data class AdTimeSeriesPointDto(
+    @Json(name = "date") val date: String? = null,
+    @Json(name = "ts") val ts: Long? = null,
+    @Json(name = "impressions") val impressions: Long,
+    @Json(name = "clicks") val clicks: Long,
+    @Json(name = "spend_cents") val spendCents: Long,
+)
+
+/**
+ * AND-368 - one breakdown row for a dimension (creative / surface / targeting). `impressions` / `clicks` /
+ * `spend_cents` are required structural keys. The grouping key arrives as either `key` or `dimension_value`
+ * (both optional); the mapper prefers `key` then falls back to `dimension_value`. `ctr_pct` is ALREADY a
+ * percentage (kept as-is). Campaign names / status are NOT on this row (joined from the AND-363 campaign list).
+ */
+data class AdBreakdownEntryDto(
+    @Json(name = "key") val key: String? = null,
+    @Json(name = "dimension_value") val dimensionValue: String? = null,
+    @Json(name = "impressions") val impressions: Long,
+    @Json(name = "clicks") val clicks: Long,
+    @Json(name = "spend_cents") val spendCents: Long,
+    @Json(name = "ctr_pct") val ctrPct: Double? = null,
+)

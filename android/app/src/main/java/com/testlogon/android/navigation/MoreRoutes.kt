@@ -169,6 +169,11 @@ object MoreRoutes {
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
     const val ADS_BILLING = AdsBillingDest.STUB_ROUTE
 
+    // AND-368: READ-ONLY ad-analytics dashboard (KPI summary + time-series charts + breakdown over a
+    // selectable date range). No ads-accounts list yet, so the hub opens a known sample account id (plain
+    // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
+    const val AD_ANALYTICS = AdAnalyticsDest.STUB_ROUTE
+
     // AND-360: the delegate console (focused manage-as-creator demonstration). Self-gates on the managed-
     // creator state (shows an enter prompt when not in delegate mode); renders the persistent banner + the
     // permission-gated delegate feed / messaging affordances.
@@ -233,6 +238,7 @@ object MoreRoutes {
             COLLABORATIONS,
             SPONSORSHIPS,
             ADS_BILLING,
+            AD_ANALYTICS,
             DELEGATE_CONSOLE,
             SETTINGS,
             HELP,

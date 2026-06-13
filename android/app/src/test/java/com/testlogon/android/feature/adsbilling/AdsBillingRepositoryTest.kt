@@ -76,6 +76,33 @@ class AdsBillingRepositoryTest {
             throwOnDeposit?.let { throw it }
             return depositResult
         }
+
+        // AND-368 - analytics endpoints are unused by the billing repo; stubbed so the fake satisfies the
+        // extended interface.
+        override suspend fun getAnalyticsSummary(
+            accountId: String,
+            from: String,
+            to: String,
+        ): com.testlogon.android.core.network.ads.AdAnalyticsSummaryDto =
+            com.testlogon.android.core.network.ads.AdAnalyticsSummaryDto(
+                impressions = 0L,
+                clicks = 0L,
+                spendCents = 0L,
+                ctrPct = 0.0,
+            )
+
+        override suspend fun getAnalyticsTimeseries(
+            accountId: String,
+            from: String,
+            to: String,
+        ): List<com.testlogon.android.core.network.ads.AdTimeSeriesPointDto> = emptyList()
+
+        override suspend fun getAnalyticsBreakdown(
+            accountId: String,
+            dimension: String,
+            from: String,
+            to: String,
+        ): List<com.testlogon.android.core.network.ads.AdBreakdownEntryDto> = emptyList()
     }
 
     private fun repo(api: AdsAccountsApi): AdsBillingRepositoryImpl =
