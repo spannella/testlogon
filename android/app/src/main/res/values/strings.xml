@@ -2767,4 +2767,25 @@
     <string name="respond_form_errors_title">Please fix the following</string>
     <string name="respond_validate_offline">Couldn\'t reach the server to confirm. Submit stays disabled until it\'s reachable.</string>
     <string name="respond_validate_retry">Retry</string>
+
+    <!-- AND-353 - organizations members/roles -->
+    <string name="more_entry_organizations">Organizations</string>
+    <string name="orgs_members_title">Organization members</string>
+    <string name="orgs_back">Back</string>
+    <string name="orgs_section_members">Members</string>
+    <string name="orgs_section_pending_invites">Pending invites</string>
+    <string name="orgs_remove">Remove</string>
+    <string name="orgs_role_label">Role</string>
+    <string name="orgs_invite_cd">Invite a member</string>
+    <string name="orgs_status_unknown">Unknown status</string>
+    <string name="orgs_empty_title">No members yet</string>
+    <string name="orgs_empty_body">Invite teammates to this organization to get started.</string>
+    <string name="orgs_role_owner">Owner</string>
+    <string name="orgs_role_admin">Admin</string>
+    <string name="orgs_role_member">Member</string>
+    <string name="orgs_role_viewer">Viewer</string>
+    <string name="orgs_role_unknown">Unknown</string>
+    <string name="invite_title">Invite a member</string>
+    <string name="invite_email_label">Email</string>
+    <string name="invite_submit">Send invite</string>
 </resources>

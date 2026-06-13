@@ -146,6 +146,9 @@ object MoreRoutes {
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val FAN_CLUB = "fanclub/channels/${FanClubChannelsDest.SELF}"
 
+    // AND-353: organizations members/roles (list members + pending invites + invite/change-role/remove).
+    val ORGS_MEMBERS: String get() = OrgsGraphDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -199,6 +202,7 @@ object MoreRoutes {
             SUBSCRIPTION_TIERS,
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,
+            ORGS_MEMBERS,
             SETTINGS,
             HELP,
             ABOUT,

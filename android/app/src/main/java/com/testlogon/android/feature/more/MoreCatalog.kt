@@ -336,6 +336,13 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "organizations",
+            labelRes = R.string.more_entry_organizations,
+            icon = Icons.Outlined.Groups,
+            route = MoreRoutes.ORGS_MEMBERS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "sessions",
             labelRes = R.string.more_entry_sessions,
             icon = Icons.Outlined.Devices,
