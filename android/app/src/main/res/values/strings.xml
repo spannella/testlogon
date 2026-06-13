@@ -2646,4 +2646,46 @@
     <string name="drive_empty">This folder is empty</string>
     <string name="drive_error">Couldn\'t load Google Drive.</string>
     <string name="drive_up">Up</string>
+
+    <!-- AND-340: e-signature packet entry + detail -->
+    <string name="signing_entry_title">Signing</string>
+    <string name="signing_entry_subtitle">Open a signing packet by its ID, or start a draft from a document.</string>
+    <string name="signing_packet_id_label">Packet ID</string>
+    <string name="signing_load_packet">Load packet</string>
+    <string name="signing_create_draft">Create draft</string>
+    <string name="signing_packet_detail_title">Signing packet</string>
+    <string name="signing_status_heading">Status</string>
+    <string name="signing_stale">Showing saved details</string>
+    <string name="signing_retry">Try again</string>
+    <string name="signing_open_document">Open document</string>
+    <string name="signing_meta_source">Document</string>
+    <string name="signing_meta_created">Created %1$s</string>
+    <string name="signing_meta_sent">Sent %1$s</string>
+    <string name="signing_meta_completed">Completed %1$s</string>
+    <string name="signing_signers_heading">Signers</string>
+    <string name="signing_no_signers">No signers yet</string>
+    <string name="signing_fields_heading">Fields</string>
+    <string name="signing_no_fields">No fields yet</string>
+    <string name="signing_events_heading">Activity</string>
+    <string name="signing_no_events">No activity yet</string>
+    <string name="signing_action_send">Send for signature</string>
+    <string name="signing_action_sign">Sign</string>
+    <string name="signing_field_page">Page %1$d</string>
+    <string name="signing_field_signature">Signature</string>
+    <string name="signing_field_initials">Initials</string>
+    <string name="signing_field_date">Date</string>
+    <string name="signing_field_text">Text</string>
+    <string name="signing_field_notary_stamp">Notary stamp</string>
+    <string name="signing_field_unknown">Field</string>
+    <string name="signing_field_filled">Filled</string>
+    <string name="signing_field_assigned_to_you">Assigned to you</string>
+    <string name="signing_field_assigned">Assigned</string>
+    <string name="signing_field_unassigned">Unassigned</string>
+    <string name="signing_status_draft">Draft</string>
+    <string name="signing_status_sent">Sent</string>
+    <string name="signing_status_partially_signed">Partially signed</string>
+    <string name="signing_status_completed">Completed</string>
+    <string name="signing_status_cancelled">Cancelled</string>
+    <string name="signing_status_expired">Expired</string>
+    <string name="signing_status_unknown">Status unavailable</string>
 </resources>

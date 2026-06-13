@@ -225,6 +225,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         screeningDestination(navController)
         // AND-329: KYC case status + monitoring (READ-ONLY case list + synthesized timeline + monitoring banner).
         kycCasesDestinations(navController)
+        // AND-340: e-signature Signing entry (load-by-id / create-draft) + packet DETAIL (status, signers,
+        // field-manifest placeholder, events, status-driven action). No backend packet-list endpoint, so
+        // the "list" half is deferred.
+        signingDestinations(navController)
     }
 }
 
