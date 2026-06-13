@@ -174,6 +174,9 @@ object MoreRoutes {
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
     const val AD_ANALYTICS = AdAnalyticsDest.STUB_ROUTE
 
+    // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
+    const val TICKETS = TicketSpacesListDest.ROUTE
+
     // AND-360: the delegate console (focused manage-as-creator demonstration). Self-gates on the managed-
     // creator state (shows an enter prompt when not in delegate mode); renders the persistent banner + the
     // permission-gated delegate feed / messaging affordances.
@@ -239,6 +242,7 @@ object MoreRoutes {
             SPONSORSHIPS,
             ADS_BILLING,
             AD_ANALYTICS,
+            TICKETS,
             DELEGATE_CONSOLE,
             SETTINGS,
             HELP,

@@ -3086,4 +3086,34 @@
     <string name="ad_analytics_breakdown_clicks">%1$d clicks</string>
     <string name="ad_analytics_empty_title">No analytics yet</string>
     <string name="ad_analytics_empty_body">There is no campaign activity for this date range.</string>
+
+    <!-- AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). -->
+    <string name="more_entry_tickets">Support tickets</string>
+    <string name="tickets_back">Back</string>
+    <string name="tickets_spaces_title">Ticket spaces</string>
+    <string name="tickets_spaces_empty_title">No ticket spaces yet</string>
+    <string name="tickets_spaces_empty_body">Support spaces you can access will appear here.</string>
+    <string name="tickets_space_untitled">Untitled space</string>
+    <string name="tickets_member_count">%1$d members</string>
+    <string name="tickets_updated">Updated %1$s</string>
+    <string name="tickets_visibility_private">Private</string>
+    <string name="tickets_visibility_shared">Shared</string>
+    <string name="tickets_visibility_unknown">Unknown</string>
+    <string name="tickets_list_title">Tickets</string>
+    <string name="tickets_list_error">Couldn\'t load tickets. Pull down to retry.</string>
+    <string name="tickets_list_empty_title">No tickets yet</string>
+    <string name="tickets_list_empty_body">Tickets opened in this space will appear here.</string>
+    <string name="tickets_subject_untitled">Untitled ticket</string>
+    <string name="tickets_owner">Owner %1$s</string>
+    <string name="tickets_status_open">Open</string>
+    <string name="tickets_status_in_progress">In progress</string>
+    <string name="tickets_status_waiting_on_user">Waiting on you</string>
+    <string name="tickets_status_done">Done</string>
+    <string name="tickets_status_reopened">Reopened</string>
+    <string name="tickets_status_unknown">Unknown</string>
+    <string name="tickets_thread_title">Ticket</string>
+    <string name="tickets_thread_empty_title">No messages yet</string>
+    <string name="tickets_thread_empty_body">This ticket has no messages.</string>
+    <string name="tickets_sender_unknown">Unknown sender</string>
+    <string name="tickets_message_empty">(no message)</string>
 </resources>

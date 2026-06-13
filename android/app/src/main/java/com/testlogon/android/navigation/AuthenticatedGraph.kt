@@ -261,6 +261,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // filter over /ui/ads/sponsorships) + a thin deal-detail placeholder. Accept / reject / negotiate
         // live in the detail (AND-366) and are OUT OF SCOPE.
         sponsorshipDestinations(navController)
+        // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> a space's ticket
+        // list (Paging-3 over the AND-371 next_cursor) -> a ticket thread (embedded messages, mine-vs-other).
+        // Composing / replying / member or status edits are AND-373 and OUT OF SCOPE.
+        ticketsDestinations(navController)
         // AND-360: delegate console (the focused manage-as-creator demonstration) - lists the managed
         // creator's delegate feed posts + conversations and offers create-post / send-message gated by
         // feed_post / chat_respond, with the persistent banner. Overlay-only; the mature feed / broadcast /

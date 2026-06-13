@@ -390,6 +390,14 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.AD_ANALYTICS,
             section = MoreSection.ACCOUNT,
         ),
+        // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces -> tickets -> thread.
+        MoreEntry(
+            id = "tickets",
+            labelRes = R.string.more_entry_tickets,
+            icon = Icons.Outlined.SupportAgent,
+            route = MoreRoutes.TICKETS,
+            section = MoreSection.SUPPORT,
+        ),
         // AND-360: the delegate console (focused manage-as-creator demonstration).
         MoreEntry(
             id = "delegate_console",
