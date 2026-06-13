@@ -2768,5 +2768,13 @@ class Settings:
         "LEGAL_EXPORT_AUTHORIZED_SUBS", ""
     )
 
+    # Platform branding (BRAND-001 / decision D6). Env values are the DEFAULTS;
+    # the PLATFORM#BRANDING settings row overrides them at runtime when set.
+    platform_name: str = os.environ.get("PLATFORM_NAME", "testlogon")
+    platform_logo_url: str = os.environ.get("PLATFORM_LOGO_URL", "")
+    platform_support_email: str = os.environ.get("PLATFORM_SUPPORT_EMAIL", "")
+    platform_settings_table_name: str = os.environ.get("PLATFORM_SETTINGS_TABLE_NAME", "platform_settings")
+    branding_cache_ttl_seconds: int = int(os.environ.get("BRANDING_CACHE_TTL_SECONDS", "60"))
+
 
 S = Settings()

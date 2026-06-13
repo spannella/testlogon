@@ -1308,6 +1308,9 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         key_value=pk,
         entry_type="adjustment",
         amount_cents=amount,
+        # D1 / CROSS_TICKET_AUDIT §A4: a refund is a credit -> positive signed.
+        # amount_cents stays unsigned (positive); signed_amount_cents = +amount.
+        signed_amount_cents=amount,
         state="settled",
         reason="refund",
         meta={"reason": body.reason},

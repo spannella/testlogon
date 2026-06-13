@@ -2490,6 +2490,11 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # BRAND-001 / decision D6: platform-wide branding singleton (name, logo_url,
+        # support_email). PK="PLATFORM", SK="BRANDING". No GSIs — singleton fetched
+        # by exact key. updated_at is a plain item attribute (N), not a GSI key, so
+        # no attr_types entry is needed.
+        TableDef(_resolve_table_name(S.platform_settings_table_name, "platform_settings"), "pk", "sk"),
     ]
 
 

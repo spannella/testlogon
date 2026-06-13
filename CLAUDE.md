@@ -273,6 +273,10 @@ Feature flags (all default to `true` in `.env.local.example`):
 
 **Backend won't start without `.env.local`**: The startup script sources `.env.local` for mock AWS creds. Running `uvicorn` directly causes `NoCredentialsError`.
 
+**Platform branding (`platform_settings` table / BRAND-001 / D6)**: `app/services/branding.py` owns the canonical `get_branding()` helper — never read branding fields directly from `S` or env. Branding is stored in `T.platform_settings` under `PK=PLATFORM#GLOBAL / SK=BRANDING` and cached in-process (call `invalidate_branding_cache()` after writes). Root-only write: `PUT /ui/admin/branding`; admin-readable: `GET /ui/admin/branding`. Template rendering (notification_templates, receipts, etc.) resolves `{{platform_name}}` / `{{support_email}}` via `get_branding()`. `platform_settings` table is declared in `scripts/local-ddb-init.py`; `just restart` creates it. Tests: `tests/test_brand_001.py`.
+
+**Ledger `signed_amount_cents` convention (D1 / CROSS_TICKET_AUDIT §A4)**: `new_ledger_entry` in `app/services/billing_shared.py` always stamps `signed_amount_cents` at write time — positive = credit to user, negative = charge/debit. `LEDGER_ENTRY_SIGN` in `billing_shared.py` is the canonical entry_type → sign map; `sign_for_entry_type` / `derive_signed_amount_cents` are the helpers. Readers should prefer `row["signed_amount_cents"]` and fall back to `LEDGER_ENTRY_SIGN.get(row["type"], 1) * row["amount_cents"]` for legacy rows. `scripts/backfill_signed_amount_cents.py` stamps existing DDB rows that lack the field. Tests: `tests/test_ledger_signed_amount.py`.
+
 **Cognito blocks dev-mode header fallback**: When `COGNITO_USER_POOL_ID` is set (which it is in the local stack), the `X-User-Id` dev fallback is disabled. All dev auth goes through either cookie-based sessions or real Cognito JWT tokens.
 
 **`pip install --user` inside a venv**: Ubuntu 24+ rejects `--user` installs when inside a virtualenv. Always use `.venv/bin/pip` directly.

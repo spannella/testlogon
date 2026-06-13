@@ -31,6 +31,7 @@ from app.routers.webauthn import router as webauthn_router
 from app.routers.root_auth import router as root_auth_router
 from app.routers.admin_roles import router as admin_roles_router
 from app.routers.admin_impersonation import router as admin_impersonation_router
+from app.routers.branding import router as branding_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.ccbill_mock import router as ccbill_mock_router
@@ -563,6 +564,7 @@ def create_app() -> FastAPI:
     app.include_router(root_auth_router)
     app.include_router(admin_roles_router)
     app.include_router(admin_impersonation_router)
+    app.include_router(branding_router)
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
     app.include_router(ccbill_mock_router)

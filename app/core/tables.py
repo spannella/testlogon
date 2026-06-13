@@ -317,6 +317,7 @@ class Tables:
     inventory: Any
     reservations: Any
     returns: Any
+    platform_settings: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -569,4 +570,5 @@ T = Tables(
     inventory=_safe_table(S.inventory_table_name),
     reservations=_safe_table(S.reservations_table_name),
     returns=_safe_table(S.returns_table_name),
+    platform_settings=_safe_table(S.platform_settings_table_name),
 )

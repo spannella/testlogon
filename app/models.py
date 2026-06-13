@@ -14631,3 +14631,33 @@ class AffiliateTopProductItem(BaseModel):
 
 class AffiliateTopProductsOut(BaseModel):
     items: List[AffiliateTopProductItem]
+
+
+# ---------------------------------------------------------------------------
+# BRAND-001 — Platform branding (decision D6)
+# ---------------------------------------------------------------------------
+
+class BrandingOut(BaseModel):
+    """Read/update response for the platform branding entity.
+
+    ``platform_name`` (not ``name``) is the output key so downstream consumers
+    and merge-tag users access it as ``get_branding().platform_name`` or
+    ``BrandingOut.platform_name`` (matching the ``{{platform_name}}`` template
+    variable name).
+    """
+    platform_name: str
+    logo_url: str = ""
+    support_email: str = ""
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+
+
+class BrandingUpdateIn(BaseModel):
+    """PUT payload for updating platform branding; all fields optional (partial update).
+
+    ``name`` is the input key (matches the stored DDB attribute and the D6
+    shape); the output exposes it as ``platform_name``.
+    """
+    name: Optional[str] = None
+    logo_url: Optional[str] = None
+    support_email: Optional[str] = None

@@ -1,10 +1,84 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.time import now_ts
+
+logger = logging.getLogger(__name__)
+
+
+# D1 / CROSS_TICKET_AUDIT §A4: canonical entry_type -> sign map for the billing
+# ledger. ``amount_cents`` is ALWAYS stored unsigned (for display); direction is
+# carried by ``signed_amount_cents`` = sign * amount. Credits move the platform
+# balance positively (+1); charges/debits negatively (-1). Refunds / adjustments
+# / void-reversals are credits (+1) — they return money to the user.
+#
+# This is the single source of truth for sign derivation. Readers prefer the
+# persisted ``signed_amount_cents`` and fall back to this map only for legacy /
+# unstamped rows. Unknown entry_types default to +1 (safe credit) and are logged.
+LEDGER_ENTRY_SIGN: Dict[str, int] = {
+    # --- credits (+1): money returned to / accruing for the user ---
+    "credit": 1,
+    "refund": 1,
+    "refund_credit": 1,
+    "shipping_refund": 1,
+    "adjustment": 1,
+    "invoice_void_reversal": 1,
+    "refund_reversal": 1,
+    "sponsorship_escrow_refund": 1,
+    "ad_revenue_credit": 1,
+    "vod_rental_credit": 1,
+    "vod_purchase_credit": 1,
+    "license_revenue_credit": 1,
+    "license_fixed_fee_credit": 1,
+    "affiliate_withdrawal_credit": 1,
+    "sponsorship_payout": 1,
+    # --- charges / debits (-1): money owed by / charged to the user ---
+    "debit": -1,
+    "charge": -1,
+    "purchase": -1,
+    "refund_debit": -1,
+    "vod_rental_debit": -1,
+    "vod_purchase_debit": -1,
+    "license_revenue_debit": -1,
+    "license_fixed_fee_debit": -1,
+    "impression_charge": -1,
+    "conversion_charge": -1,
+    "click_charge": -1,
+    "sponsorship_escrow_hold": -1,
+    "sponsorship_commission": -1,
+}
+
+# Default sign for entry_types not in the map. Positive (credit) is the safe
+# default per ACC-002: a missing/unknown type should never silently invent a
+# debit against the user.
+LEDGER_ENTRY_SIGN_DEFAULT = 1
+
+
+def sign_for_entry_type(entry_type: str) -> int:
+    """Return +1 (credit) or -1 (charge/debit) for an entry_type using the
+    canonical :data:`LEDGER_ENTRY_SIGN` map. Unknown types fall back to
+    :data:`LEDGER_ENTRY_SIGN_DEFAULT` (+1) and are logged at WARNING."""
+    if entry_type in LEDGER_ENTRY_SIGN:
+        return LEDGER_ENTRY_SIGN[entry_type]
+    logger.warning(
+        "ledger entry_type %r not in LEDGER_ENTRY_SIGN; defaulting sign to %+d",
+        entry_type,
+        LEDGER_ENTRY_SIGN_DEFAULT,
+    )
+    return LEDGER_ENTRY_SIGN_DEFAULT
+
+
+def derive_signed_amount_cents(entry_type: str, amount_cents: int) -> int:
+    """Derive ``signed_amount_cents`` = sign(entry_type) * abs(amount_cents).
+
+    ``amount_cents`` is treated as a magnitude (its absolute value is used) so a
+    caller that already passed a negative amount still yields the correct sign
+    from the type map."""
+    return sign_for_entry_type(entry_type) * abs(int(amount_cents))
 
 
 def ledger_date_for_ts(ts: int) -> str:
@@ -231,6 +305,7 @@ def new_ledger_entry(
     reason: str,
     meta: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
+    signed_amount_cents: Optional[int] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     # GAP-0203 / FIN-013: provider-originating transactions MUST pass
     # ``extra={"provider": "stripe"|"paypal"|"ccbill"}`` so the platform
@@ -239,6 +314,14 @@ def new_ledger_entry(
     ts = now_ts()
     entry_id = ulidish()
     sk = ledger_sk(ts, entry_id)
+    # D1 / CROSS_TICKET_AUDIT §A4: persist a signed_amount_cents at write time.
+    # ``amount_cents`` STAYS UNSIGNED (display). When the caller passes an
+    # explicit signed value we persist it verbatim; otherwise we derive it from
+    # the canonical entry_type -> sign map.
+    if signed_amount_cents is None:
+        signed_value = derive_signed_amount_cents(entry_type, amount_cents)
+    else:
+        signed_value = int(signed_amount_cents)
     item = {
         key_name: key_value,
         "sk": sk,
@@ -246,6 +329,7 @@ def new_ledger_entry(
         "ts": ts,
         "type": entry_type,
         "amount_cents": int(amount_cents),
+        "signed_amount_cents": signed_value,
         "state": state,
         "reason": reason,
         # FIN-013: denormalized UTC date for platform financial dashboard
