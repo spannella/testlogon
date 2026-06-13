@@ -6,6 +6,10 @@ import com.testlogon.android.core.network.BuildConfig
 import com.testlogon.android.core.network.json.BigDecimalAdapter
 import com.testlogon.android.core.network.kyc.KycCaseStatusAdapter
 import com.testlogon.android.core.network.kyc.KycFileTypeAdapter
+import com.testlogon.android.core.network.signing.PacketRoleAdapter
+import com.testlogon.android.core.network.signing.PacketStatusAdapter
+import com.testlogon.android.core.network.signing.SignatureFieldTypeAdapter
+import com.testlogon.android.core.network.signing.SignatureInputModeAdapter
 import com.testlogon.android.core.network.SettingsStore
 import com.testlogon.android.core.network.auth.AuthEventSink
 import com.testlogon.android.core.network.auth.SessionAuthenticator
@@ -48,6 +52,13 @@ object NetworkModule {
         // factory so they resolve for KycCaseStatus / KycFileType fields on the KYC DTOs.
         .add(KycCaseStatusAdapter)
         .add(KycFileTypeAdapter)
+        // AND-339: signing enum token mapping (lenient -> UNKNOWN). The dependency-free stand-in for
+        // EnumJsonAdapter.withUnknownFallback (moshi-adapters is not a project dependency). Registered
+        // before the reflective factory so they resolve for the signing DTO enum fields.
+        .add(PacketStatusAdapter)
+        .add(SignatureFieldTypeAdapter)
+        .add(PacketRoleAdapter)
+        .add(SignatureInputModeAdapter)
         .add(KotlinJsonAdapterFactory())
         .build()
 
