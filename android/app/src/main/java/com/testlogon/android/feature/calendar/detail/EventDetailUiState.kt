@@ -16,6 +16,12 @@ sealed interface EventDetailUiState {
         val zoneMismatch: Boolean,
         val isPublic: Boolean,
         val publicShareUrl: String,
+        /**
+         * AND-391 — the canonical public iCal download URL
+         * (`https://<host>/event/<calendarId>/<eventId>/ical`), opened via ACTION_VIEW from the
+         * "Download .ics" affordance. Built eagerly from the App Link host (never the dev host).
+         */
+        val publicIcalUrl: String,
     ) : EventDetailUiState
 
     /** 404 / 422-for-display — the event is missing or the link expired. */

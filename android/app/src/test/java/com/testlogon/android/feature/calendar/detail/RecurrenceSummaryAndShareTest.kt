@@ -43,4 +43,21 @@ class RecurrenceSummaryAndShareTest {
         assertTrue(url.startsWith("https://"))
         assertTrue(!url.contains("18.222.237.167"))
     }
+
+    // AND-391 — the public iCal download URL appends `/ical` to the canonical public event URL.
+    @Test
+    fun publicIcalUrl_appendsIcalSegment_onHttpsHost() {
+        val url = EventShareUrl.publicIcalUrl("app.testlogon.example.com", "cal_55", "evt_1")
+        assertEquals("https://app.testlogon.example.com/event/cal_55/evt_1/ical", url)
+        assertTrue(url.startsWith("https://"))
+        assertTrue(url.endsWith("/ical"))
+        assertTrue(!url.contains("18.222.237.167"))
+    }
+
+    // AND-391 — opaque ids are URL-encoded once (encodeURIComponent-equivalent) in the iCal URL.
+    @Test
+    fun publicIcalUrl_encodesOpaqueSegments() {
+        val url = EventShareUrl.publicIcalUrl("app.testlogon.example.com", "a/b", "evt 900")
+        assertEquals("https://app.testlogon.example.com/event/a%2Fb/evt%20900/ical", url)
+    }
 }

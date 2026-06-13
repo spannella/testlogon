@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,6 +53,9 @@ object EventDetailTestTags {
     const val RECURRENCE = "event_detail_recurrence"
     const val SHARE = "event_detail_share"
     const val ADD_TO_CALENDAR = "event_detail_add_to_calendar"
+
+    /** AND-391 — public iCal download affordance. */
+    const val DOWNLOAD_ICS = "event_detail_download_ics"
     const val UNAVAILABLE = "event_detail_unavailable"
     const val FORBIDDEN = "event_detail_forbidden"
 }
@@ -77,6 +81,8 @@ fun EventDetailRoute(
     val noShareApp = stringResource(R.string.event_detail_no_share_app)
     val noCalendarApp = stringResource(R.string.event_detail_no_calendar_app)
     val shareSubjectTemplate = stringResource(R.string.event_detail_share_subject)
+    // AND-391 — no-handler fallback for the public iCal download (ACTION_VIEW).
+    val noBrowserApp = stringResource(R.string.event_detail_no_browser_app)
 
     EventDetailScreen(
         state = state,
@@ -105,6 +111,11 @@ fun EventDetailRoute(
             )
             if (!ok) scope.launch { snackbarHostState.showSnackbar(noCalendarApp) }
         },
+        onDownloadIcs = { content ->
+            // AND-391 — open the public iCal URL (unauthenticated GET) via the browser/download manager.
+            val ok = intents.openUrl(context, content.publicIcalUrl)
+            if (!ok) scope.launch { snackbarHostState.showSnackbar(noBrowserApp) }
+        },
         modifier = modifier,
     )
 }
@@ -117,6 +128,7 @@ fun EventDetailScreen(
     onRetry: () -> Unit,
     onShare: (EventDetailUiState.Content) -> Unit,
     onAddToCalendar: (EventDetailUiState.Content) -> Unit,
+    onDownloadIcs: (EventDetailUiState.Content) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -167,6 +179,7 @@ fun EventDetailScreen(
                 is EventDetailUiState.Content -> EventDetailContent(
                     content = state,
                     onAddToCalendar = onAddToCalendar,
+                    onDownloadIcs = onDownloadIcs,
                 )
             }
         }
@@ -177,6 +190,7 @@ fun EventDetailScreen(
 private fun EventDetailContent(
     content: EventDetailUiState.Content,
     onAddToCalendar: (EventDetailUiState.Content) -> Unit,
+    onDownloadIcs: (EventDetailUiState.Content) -> Unit,
 ) {
     val event = content.event
     Column(
@@ -229,6 +243,18 @@ private fun EventDetailContent(
                 Icon(Icons.Filled.Event, contentDescription = null)
                 Text(
                     stringResource(R.string.event_detail_add_to_calendar),
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+
+            // AND-391 — public iCal download (verified affordance, mirrors web getPublicIcalUrl).
+            OutlinedButton(
+                onClick = { onDownloadIcs(content) },
+                modifier = Modifier.testTag(EventDetailTestTags.DOWNLOAD_ICS),
+            ) {
+                Icon(Icons.Filled.Download, contentDescription = null)
+                Text(
+                    stringResource(R.string.event_download_ics),
                     modifier = Modifier.padding(start = 8.dp),
                 )
             }

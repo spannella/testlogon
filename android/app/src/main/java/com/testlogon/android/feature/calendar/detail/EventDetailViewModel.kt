@@ -99,6 +99,8 @@ class EventDetailViewModel @Inject constructor(
             zoneMismatch = displayZoneId != deviceZoneId,
             isPublic = event.isPublic,
             publicShareUrl = EventShareUrl.build(shareHostProvider.host(), calendarId, eventId),
+            // AND-391 — canonical public iCal download URL on the published host (never the dev host).
+            publicIcalUrl = EventShareUrl.publicIcalUrl(shareHostProvider.host(), calendarId, eventId),
         )
 
     private fun mapFailure(error: ApiError): EventDetailUiState = when (error.status) {

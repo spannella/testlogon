@@ -530,6 +530,9 @@
     <string name="event_detail_forbidden_body">This event is private.</string>
     <string name="event_detail_no_share_app">No app available to share</string>
     <string name="event_detail_no_calendar_app">No calendar app available</string>
+    <!-- AND-391: public event iCal download affordance. -->
+    <string name="event_download_ics">Download .ics</string>
+    <string name="event_detail_no_browser_app">No app available to open the download</string>
     <string name="calendar_share_chooser_title">Share event</string>
 
     <!-- AND-274: content calendar (read-only scheduled-content schedule view) -->

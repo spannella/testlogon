@@ -22,6 +22,18 @@ object EventShareUrl {
     fun build(host: String, calendarId: String, eventId: String): String =
         "https://$host/event/${enc(calendarId)}/${enc(eventId)}"
 
+    /**
+     * AND-391 — builds the canonical PUBLIC iCal download URL
+     * `https://<host>/event/<calendarId>/<eventId>/ical`, mirroring the verified web
+     * `calendar.ts:getPublicIcalUrl` and the backend op
+     * `GET /calendar/public/event/{calendar_id}/{event_id}/ical`. The host is the published App Link
+     * host (prod/staging), NEVER the plaintext dev host, so the link is always https on a real host.
+     * Opened via [EventIntents.openUrl] (ACTION_VIEW) — no vendor/native SDK; the download is a public,
+     * unauthenticated GET handled by the browser/system download manager.
+     */
+    fun publicIcalUrl(host: String, calendarId: String, eventId: String): String =
+        "https://$host/event/${enc(calendarId)}/${enc(eventId)}/ical"
+
     // Pure path-segment encoder (encodeURIComponent-equivalent) — no android.net.Uri, JVM-testable.
     private fun enc(segment: String): String =
         URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
@@ -105,6 +117,19 @@ class EventIntents @Inject constructor() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         return launch(context, chooser)
+    }
+
+    /**
+     * AND-391 — opens an https URL via ACTION_VIEW (the public iCal download URL). The system browser /
+     * download manager handles the unauthenticated GET and the `.ics` MIME, so the file is offered for
+     * download or opened in a calendar app — no vendor SDK and no in-app file write needed. Returns
+     * false when no app can handle it so the caller can show a Snackbar instead of crashing.
+     */
+    fun openUrl(context: Context, url: String): Boolean {
+        val view = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return launch(context, view)
     }
 
     private fun launch(context: Context, intent: Intent): Boolean = try {

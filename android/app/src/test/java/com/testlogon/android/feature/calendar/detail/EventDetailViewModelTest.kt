@@ -59,6 +59,11 @@ class EventDetailViewModelTest {
             "https://app.testlogon.example.com/event/cal_55/evt_1",
             content.publicShareUrl,
         )
+        // AND-391 — the public iCal download URL is built eagerly on the published host.
+        assertEquals(
+            "https://app.testlogon.example.com/event/cal_55/evt_1/ical",
+            content.publicIcalUrl,
+        )
         assertEquals(1, repo.eventCalls)
     }
 
