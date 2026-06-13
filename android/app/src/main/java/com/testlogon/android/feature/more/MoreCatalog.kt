@@ -6,6 +6,7 @@ import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.EditCalendar
 import androidx.compose.material.icons.outlined.EventNote
@@ -397,6 +398,14 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.SupportAgent,
             route = MoreRoutes.TICKETS,
             section = MoreSection.SUPPORT,
+        ),
+        // AND-374: projects (paged list -> detail + account-scoped Google Drive provider connect flow).
+        MoreEntry(
+            id = "projects",
+            labelRes = R.string.more_entry_projects,
+            icon = Icons.Outlined.FolderOpen,
+            route = MoreRoutes.PROJECTS,
+            section = MoreSection.ACCOUNT,
         ),
         // AND-360: the delegate console (focused manage-as-creator demonstration).
         MoreEntry(

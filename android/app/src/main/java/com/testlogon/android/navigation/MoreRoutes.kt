@@ -177,6 +177,9 @@ object MoreRoutes {
     // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
     const val TICKETS = TicketSpacesListDest.ROUTE
 
+    // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
+    const val PROJECTS = ProjectsListDest.ROUTE
+
     // AND-360: the delegate console (focused manage-as-creator demonstration). Self-gates on the managed-
     // creator state (shows an enter prompt when not in delegate mode); renders the persistent banner + the
     // permission-gated delegate feed / messaging affordances.
@@ -243,6 +246,7 @@ object MoreRoutes {
             ADS_BILLING,
             AD_ANALYTICS,
             TICKETS,
+            PROJECTS,
             DELEGATE_CONSOLE,
             SETTINGS,
             HELP,

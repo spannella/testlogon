@@ -3123,4 +3123,22 @@
     <string name="ticket_reply_failed">Couldn\'t send</string>
     <string name="ticket_reply_retry">Retry</string>
     <string name="ticket_reply_disabled_caption">You don\'t have permission to reply to this ticket.</string>
+
+    <!-- AND-374: projects (paged list + detail + Google Drive provider connect). -->
+    <string name="more_entry_projects">Projects</string>
+    <string name="projects_back">Back</string>
+    <string name="projects_title">Projects</string>
+    <string name="projects_untitled">Untitled project</string>
+    <string name="projects_empty">No projects yet</string>
+    <string name="projects_empty_body">Projects you own or can access will appear here.</string>
+    <string name="projects_error">Couldn\'t load projects. Pull down to retry.</string>
+    <string name="projects_offline_banner">You\'re offline. Showing saved project.</string>
+    <string name="projects_updated">Updated %1$s</string>
+    <string name="projects_created">Created %1$s</string>
+    <string name="project_detail_title">Project</string>
+    <string name="project_connect_drive">Connect Google Drive</string>
+    <string name="project_drive_connected">Google Drive connected</string>
+    <string name="project_connect_canceled">Connection canceled.</string>
+    <string name="project_connect_unverified">Connection couldn\'t be verified.</string>
+    <string name="project_connect_no_browser">No browser available to open Google sign-in.</string>
 </resources>

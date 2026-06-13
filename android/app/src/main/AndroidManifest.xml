@@ -350,6 +350,19 @@
                     android:host="calendar-integrations" />
             </intent-filter>
 
+            <!-- AND-374: custom-scheme project Google Drive OAuth-return deep link (server-mediated OAuth).
+                 The backend redirects here after the user authorizes; the Activity parses it and resumes the
+                 project detail screen. NOT auto-verified (plaintext dev host cannot serve assetlinks).
+                 testlogon://projects/{projectId}/providers/google_drive/callback?code=&state=&error= -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="projects" />
+            </intent-filter>
+
             <!-- AND-230: US-bank micro-deposit verification deep link (from a "verify your bank account"
                  email/notification). com.testlogon.android://billing/us-bank/verify?sid={setup_intent_id} -->
             <intent-filter>

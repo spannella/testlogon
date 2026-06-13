@@ -23,6 +23,7 @@ import com.testlogon.android.core.ui.theme.TestLogonTheme
 import com.testlogon.android.data.gcal.GoogleCalendarReturnHandler
 import com.testlogon.android.data.payments.PaymentReturnDispatcher
 import com.testlogon.android.data.payments.PaymentReturnHandler
+import com.testlogon.android.feature.projects.provider.ProjectDriveReturnHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +68,12 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var googleCalendarReturnHandler: GoogleCalendarReturnHandler
 
+    // AND-374: custom-scheme project Google Drive OAuth return handler (mirrors the AND-273 pattern). Parses a
+    // testlogon://projects/{id}/providers/google_drive/callback deep link and emits it to the detail ViewModel
+    // via the ProjectDriveReturnDispatcher; the detail screen validates state + completes the connection.
+    @Inject
+    lateinit var projectDriveReturnHandler: ProjectDriveReturnHandler
+
     private val returnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -80,6 +87,8 @@ class MainActivity : ComponentActivity() {
         handlePaymentReturn(intent)
         // AND-273: a cold-start Google Calendar OAuth return (optional custom-scheme deep link).
         handleGoogleCalendarReturn(intent)
+        // AND-374: a cold-start project Drive OAuth return (custom-scheme deep link).
+        handleProjectDriveReturn(intent)
         setContent {
             // AND-081: resolve the persisted appearance preference into TestLogonTheme inputs so the
             // whole app (incl. system bars) re-themes immediately when the user changes it.
@@ -129,6 +138,8 @@ class MainActivity : ComponentActivity() {
         handlePaymentReturn(intent)
         // AND-273: a warm Google Calendar OAuth return (optional custom-scheme deep link).
         handleGoogleCalendarReturn(intent)
+        // AND-374: a warm project Drive OAuth return (custom-scheme deep link).
+        handleProjectDriveReturn(intent)
         if (intent.data != null) {
             navController?.handleDeepLink(intent)
         }
@@ -156,6 +167,16 @@ class MainActivity : ComponentActivity() {
     private fun handleGoogleCalendarReturn(intent: Intent?): Boolean {
         val url = intent?.data?.toString() ?: return false
         return googleCalendarReturnHandler.handle(url)
+    }
+
+    /**
+     * AND-374 — feeds a VIEW intent's data URL to the [ProjectDriveReturnHandler]. Returns true (and stops)
+     * only for a recognized project-Drive return URL; otherwise other deep-link handlers run. android.net.Uri
+     * parsing happens only here — the pure parser uses java.net.URI.
+     */
+    private fun handleProjectDriveReturn(intent: Intent?): Boolean {
+        val url = intent?.data?.toString() ?: return false
+        return projectDriveReturnHandler.handle(url)
     }
 
     override fun onDestroy() {
