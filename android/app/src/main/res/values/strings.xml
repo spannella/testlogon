@@ -3261,4 +3261,36 @@
     <string name="privacy_export_status_held">On hold</string>
     <string name="privacy_export_status_expired">Expired</string>
     <string name="privacy_export_status_unknown">Unknown</string>
+
+    <!-- AND-386: account deletion request -->
+    <string name="privacy_deletion_title">Delete account</string>
+    <string name="privacy_deletion_back">Back</string>
+    <string name="privacy_deletion_retry">Retry</string>
+    <string name="privacy_deletion_stale">Showing last-known status (offline)</string>
+    <string name="privacy_deletion_active_title">Delete your account</string>
+    <string name="privacy_deletion_active_body">Requesting deletion schedules your account for permanent removal. You can cancel during the grace period before it is executed.</string>
+    <string name="privacy_deletion_start">Delete my account…</string>
+    <string name="privacy_deletion_warning_title">This will permanently delete your account</string>
+    <string name="privacy_deletion_warning_body">Your profile, posts, messages, and purchases will be permanently removed after the grace period. This cannot be undone once executed. You can cancel the request before then.</string>
+    <string name="privacy_deletion_continue">Continue</string>
+    <string name="privacy_deletion_cancel">Cancel</string>
+    <string name="privacy_deletion_type_instruction">To confirm, type %1$s and re-enter your password.</string>
+    <string name="privacy_deletion_type_label">Type the confirmation phrase</string>
+    <string name="privacy_deletion_password_label">Password</string>
+    <string name="privacy_deletion_reason_label">Reason (optional)</string>
+    <string name="privacy_deletion_delete_button">Delete my account</string>
+    <string name="privacy_deletion_enabled">Delete button enabled</string>
+    <string name="privacy_deletion_disabled">Delete button disabled until the phrase and password are entered</string>
+    <string name="privacy_deletion_final_title">This cannot be undone</string>
+    <string name="privacy_deletion_final_body">Your account will be scheduled for permanent deletion. Are you sure?</string>
+    <string name="privacy_deletion_final_confirm">Delete my account</string>
+    <string name="privacy_deletion_scheduled_title">Deletion scheduled</string>
+    <string name="privacy_deletion_scheduled_for">Scheduled for %1$s</string>
+    <string name="privacy_deletion_scheduled_soon">Scheduled soon</string>
+    <string name="privacy_deletion_grace_days">%1$d days remaining</string>
+    <string name="privacy_deletion_cancel_cta">Cancel deletion request</string>
+    <string name="privacy_deletion_cancel_dialog_title">Keep my account?</string>
+    <string name="privacy_deletion_cancel_dialog_body">This cancels the scheduled deletion and restores your account.</string>
+    <string name="privacy_deletion_cancel_confirm">Cancel deletion</string>
+    <string name="privacy_deletion_keep">Keep deleting</string>
 </resources>

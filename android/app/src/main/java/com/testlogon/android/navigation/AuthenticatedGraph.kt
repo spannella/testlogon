@@ -280,6 +280,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-385: Privacy & Data Export. Authenticated request -> status -> download lifecycle over the
         // /ui/privacy/account-deletion/export + /ui/privacy/requests endpoints; Room-cached for offline.
         privacyExportDestination(navController)
+        // AND-386: Account deletion request. Multi-step confirm -> request -> pending -> cancel over the
+        // /ui/privacy/account-deletion/request + .../requests + .../requests/{id}/cancel endpoints.
+        accountDeletionDestination(navController)
     }
 }
 
@@ -353,9 +356,9 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     composable(MainDest.SettingsPrivacy.route) {
         PrivacySettingsScreen(
             onBack = { navController.popBackStack() },
-            // Data export / deletion execution is owned by E50; handoff is a no-op for now.
-            onRequestExport = {},
-            onDeleteData = {},
+            // AND-385 owns the export surface; AND-386 wires the account-deletion request flow.
+            onRequestExport = { navController.navigateToPrivacyExport() },
+            onDeleteData = { navController.navigateToAccountDeletion() },
         )
     }
 }

@@ -49,7 +49,92 @@ interface PrivacyApi {
 
     @GET("ui/privacy/requests")
     suspend fun listPrivacyRequests(): Response<DataRequestListDto>
+
+    // AND-386 - account-deletion request/cancel surface (extends the AND-385 PrivacyApi; same module,
+    // same shared authenticated Retrofit). Endpoints RECONCILED against openapi.index.txt +
+    // src/api/endpoints/accountDeletion.ts (spec §4/§5/§16):
+    //   GET  ui/privacy/account-deletion/requests                     -> 200:AccountDeletionListOut
+    //   GET  ui/privacy/account-deletion/requests/{requestId}         -> 200:AccountDeletionStatusOut
+    //   POST ui/privacy/account-deletion/request   body req           -> 201:AccountDeletionStatusOut
+    //   POST ui/privacy/account-deletion/requests/{requestId}/cancel  -> 200:AccountDeletionCancelOut
+    // There is NO singleton status GET; the active state is derived from the list (status == "pending").
+    // The two POSTs are non-idempotent and are NEVER auto-retried; the GETs are idempotent.
+
+    @GET("ui/privacy/account-deletion/requests")
+    suspend fun listDeletions(): Response<AccountDeletionListDto>
+
+    @GET("ui/privacy/account-deletion/requests/{requestId}")
+    suspend fun getDeletion(
+        @Path("requestId") requestId: String,
+    ): Response<AccountDeletionStatusDto>
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/privacy/account-deletion/request")
+    suspend fun requestDeletion(
+        @Body body: AccountDeletionRequestDto,
+    ): Response<AccountDeletionStatusDto>
+
+    @POST("ui/privacy/account-deletion/requests/{requestId}/cancel")
+    suspend fun cancelDeletion(
+        @Path("requestId") requestId: String,
+    ): Response<AccountDeletionCancelDto>
 }
+
+/**
+ * AND-386 - POST body = AccountDeletionRequestIn. [confirmText] MUST equal the server sentinel
+ * "DELETE MY ACCOUNT" (spec §5/§16, claim 5); [password] is the user's re-entered password
+ * (required, 1..200); [reason] is optional (<= 500). The password is sent over the dev-only
+ * plaintext channel and is NEVER persisted or logged (spec §8).
+ */
+@JsonClass(generateAdapter = true)
+data class AccountDeletionRequestDto(
+    @Json(name = "password") val password: String,
+    @Json(name = "confirm_text") val confirmText: String,
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/**
+ * AND-386 - AccountDeletionStatusOut. CORRECTED (spec §5/§16, claim 9): ALL timestamps are INTEGER epoch
+ * SECONDS (not ISO strings); the creation field is `created_at` (there is NO `requested_at`). The pending
+ * state is `status == "pending"` (NOT "pending_deletion"). Defaults are defensive so a partial / extra-key
+ * body never throws; identifiers/timestamps here are NEVER logged (spec §8 / AC-8).
+ */
+@JsonClass(generateAdapter = true)
+data class AccountDeletionStatusDto(
+    @Json(name = "request_id") val requestId: String,
+    @Json(name = "status") val status: String,
+    @Json(name = "created_at") val createdAt: Long,
+    @Json(name = "scheduled_for") val scheduledFor: Long? = null,
+    @Json(name = "grace_days_remaining") val graceDaysRemaining: Int? = null,
+    @Json(name = "can_cancel") val canCancel: Boolean = false,
+    @Json(name = "retention_hold") val retentionHold: Boolean = false,
+    @Json(name = "retention_hold_reason") val retentionHoldReason: String? = null,
+    @Json(name = "reason") val reason: String? = null,
+    @Json(name = "completed_at") val completedAt: Long? = null,
+    @Json(name = "user_sub") val userSub: String? = null,
+)
+
+/**
+ * AND-386 - AccountDeletionListOut. The caller's deletion requests; the active pending request is the
+ * entry whose `status == "pending"` (mirrors the web client's `requests.find(r => r.status === "pending")`).
+ */
+@JsonClass(generateAdapter = true)
+data class AccountDeletionListDto(
+    @Json(name = "requests") val requests: List<AccountDeletionStatusDto> = emptyList(),
+    @Json(name = "total") val total: Int = 0,
+)
+
+/**
+ * AND-386 - AccountDeletionCancelOut (cancel returns 200 + this body, NOT 204/empty - spec §5/§16, claim 8).
+ * `cancelled_at` is epoch SECONDS. Defensive defaults so a partial body never throws.
+ */
+@JsonClass(generateAdapter = true)
+data class AccountDeletionCancelDto(
+    @Json(name = "ok") val ok: Boolean = true,
+    @Json(name = "request_id") val requestId: String,
+    @Json(name = "status") val status: String,
+    @Json(name = "cancelled_at") val cancelledAt: Long = 0L,
+)
 
 /**
  * AND-385 - POST body = PrivacyExportRequestIn: a map of data-category keys to include-flags. The web client
