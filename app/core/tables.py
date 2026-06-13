@@ -320,6 +320,7 @@ class Tables:
     platform_settings: Any
     party: Any  # Party/CRM single table (PTY-002)
     candidates: Any
+    job_orders: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -575,4 +576,5 @@ T = Tables(
     platform_settings=_safe_table(S.platform_settings_table_name),
     party=_safe_table(S.party_table_name),  # Party/CRM single table (PTY-002)
     candidates=_safe_table(S.candidates_table_name),
+    job_orders=_safe_table(S.job_orders_table_name),
 )

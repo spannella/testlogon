@@ -2801,6 +2801,12 @@ class Settings:
     candidate_resume_max_per_candidate: int = int(
         os.environ.get("CANDIDATE_RESUME_MAX_PER_CANDIDATE", "25")
     )
+    # ATS / Recruiting — Job Orders (JOB-001)
+    ats_enabled: bool = os.environ.get("ATS_ENABLED", "0") not in ("0", "false", "False")
+    job_orders_enabled: bool = os.environ.get("JOB_ORDERS_ENABLED", "0") not in ("0", "false", "False")
+    job_orders_table_name: str = os.environ.get("DDB_JOB_ORDERS_TABLE", "job_orders")
+    # JOB-002: allow closed job orders to be reopened (default True)
+    job_order_allow_reopen: bool = os.environ.get("JOB_ORDER_ALLOW_REOPEN", "1") not in ("0", "false", "False")
 
 
 S = Settings()

@@ -2526,6 +2526,19 @@ def _table_defs() -> List[TableDef]:
                 "GSI2SK": "N",
                 "GSI3SK": "N",
             },
+        # ATS — Job Orders (JOB-001)
+        TableDef(
+            _resolve_table_name(S.job_orders_table_name, "job_orders"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_BY_STATUS",    "partition_key": "status",        "sort_key": "created_at"},
+                {"index_name": "GSI_BY_RECRUITER", "partition_key": "recruiter_sub", "sort_key": "created_at"},
+                {"index_name": "GSI_HOT",          "partition_key": "hot_flag",      "sort_key": "created_at"},
+                {"index_name": "GSI_PUBLIC",       "partition_key": "public_flag",   "sort_key": "created_at"},
+                {"index_name": "GSI_DIRECT",       "partition_key": "job_id"},
+            ],
+            attr_types={"created_at": "N", "updated_at": "N"},
         ),
     ]
 

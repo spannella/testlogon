@@ -86,6 +86,7 @@ from app.routers.party import (  # PTY-011 / PTY-012
     admin_party_router,
 )
 from app.routers.candidates import router as candidates_router
+from app.routers.job_orders import router as job_orders_router
 from app.routers.social import router as social_router
 from app.routers.activity_feed import router as activity_feed_router
 from app.routers.discovery import router as discovery_router
@@ -690,6 +691,7 @@ def create_app() -> FastAPI:
     app.include_router(contacts_router)
     app.include_router(party_router)  # PTY-011
     app.include_router(candidates_router)
+    app.include_router(job_orders_router)
     app.include_router(social_router)
     app.include_router(activity_feed_router)
     app.include_router(discovery_router)

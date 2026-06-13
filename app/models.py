@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import ipaddress
 import re
@@ -15088,3 +15088,103 @@ class CandidateListOut(BaseModel):
 class CandidateHistoryPage(BaseModel):
     events: List[CandidateHistoryOut]
     cursor: Optional[str] = None
+# ATS — Job Order constants and models (JOB-001)
+# ---------------------------------------------------------------------------
+
+JOB_ORDER_TYPES: Tuple[str, ...] = (
+    "hire",             # Direct / permanent placement
+    "contract",         # Contract-only
+    "contract_to_hire", # Contract-to-hire (C2H)
+    "referral",         # Referral / non-fee
+)
+JOB_ORDER_STATUSES: Tuple[str, ...] = (
+    "active",           # Open and accepting candidates
+    "on_hold",          # Temporarily paused
+    "full",             # Openings filled / placed_count == openings
+    "closed",           # Manually closed — terminal
+    "canceled",         # Canceled by client — terminal
+    "lead",             # Pre-sale / not yet confirmed
+    "upcoming",         # Future start, not yet active
+)
+JOB_ORDER_TERMINAL: Tuple[str, ...] = ("closed", "canceled")
+
+
+class JobOrderCreateIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., description="One of JOB_ORDER_TYPES")
+    status: str = Field(default="active", description="One of JOB_ORDER_STATUSES")
+    openings: int = Field(default=1, ge=0, le=10_000)
+    client_company_id: str = Field(..., min_length=1, max_length=128)
+    client_contact_id: Optional[str] = Field(None, max_length=128)
+    recruiter_subs: List[str] = Field(default_factory=list, max_length=25)
+    hot: bool = False
+    public: bool = False
+    pay_rate_cents: Optional[int] = Field(None, ge=0)
+    bill_rate_cents: Optional[int] = Field(None, ge=0)
+    duration: Optional[str] = Field(None, max_length=120)
+    city: Optional[str] = Field(None, max_length=120)
+    state: Optional[str] = Field(None, max_length=120)
+    description: Optional[str] = Field(None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def _validate_enums(self) -> "JobOrderCreateIn":
+        if self.type not in JOB_ORDER_TYPES:
+            raise ValueError(f"type must be one of {JOB_ORDER_TYPES}")
+        if self.status not in JOB_ORDER_STATUSES:
+            raise ValueError(f"status must be one of {JOB_ORDER_STATUSES}")
+        return self
+
+
+class JobOrderUpdateIn(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    type: Optional[str] = None
+    status: Optional[str] = None
+    openings: Optional[int] = Field(None, ge=0, le=10_000)
+    client_company_id: Optional[str] = Field(None, max_length=128)
+    client_contact_id: Optional[str] = Field(None, max_length=128)
+    recruiter_subs: Optional[List[str]] = Field(None, max_length=25)
+    hot: Optional[bool] = None
+    public: Optional[bool] = None
+    pay_rate_cents: Optional[int] = Field(None, ge=0)
+    bill_rate_cents: Optional[int] = Field(None, ge=0)
+    duration: Optional[str] = Field(None, max_length=120)
+    city: Optional[str] = Field(None, max_length=120)
+    state: Optional[str] = Field(None, max_length=120)
+    description: Optional[str] = Field(None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def _validate_enums(self) -> "JobOrderUpdateIn":
+        if self.type is not None and self.type not in JOB_ORDER_TYPES:
+            raise ValueError(f"type must be one of {JOB_ORDER_TYPES}")
+        if self.status is not None and self.status not in JOB_ORDER_STATUSES:
+            raise ValueError(f"status must be one of {JOB_ORDER_STATUSES}")
+        return self
+
+
+class JobOrderOut(BaseModel):
+    job_id: str
+    title: str
+    type: str
+    status: str
+    openings: int
+    placed_count: int           # 0 until PIPE-* ships; JOB-005 adds adjust_placed_count
+    openings_remaining: int     # max(openings - placed_count, 0), derived not stored
+    client_company_id: str
+    client_contact_id: Optional[str]
+    recruiter_subs: List[str]
+    hot: bool
+    public: bool
+    pay_rate_cents: Optional[int]
+    bill_rate_cents: Optional[int]
+    duration: Optional[str]
+    city: Optional[str]
+    state: Optional[str]
+    description: Optional[str]
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class JobOrderListOut(BaseModel):
+    items: List[JobOrderOut]
+    next_cursor: Optional[str] = None

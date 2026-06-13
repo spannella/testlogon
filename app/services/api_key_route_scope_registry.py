@@ -253,6 +253,17 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "POST:/v1/fs/upload-archive": {"reason": "session-auth file manager route, not in initial API-key rollout scope"},
     "POST:/v1/fs/upload-zip": {"reason": "session-auth file manager route, not in initial API-key rollout scope"},
     "PUT:/ui/purchase-history/transactions/{txn_id}/shipping": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
+    # ATS — Job Orders (JOB-003, JOB-004, JOB-005)
+    "GET:/ui/ats/job-orders/feature-status": {"reason": "session-auth-optional ATS feature flag probe, not in API-key rollout scope"},
+    "POST:/ui/ats/job-orders": {"reason": "session-auth ATS job-orders route, not in initial API-key rollout scope"},
+    "GET:/ui/ats/job-orders/{job_id}": {"reason": "session-auth ATS job-orders route, not in initial API-key rollout scope"},
+    "PATCH:/ui/ats/job-orders/{job_id}": {"reason": "session-auth ATS job-orders route, not in initial API-key rollout scope"},
+    "POST:/ui/ats/job-orders/{job_id}/status": {"reason": "session-auth ATS job-orders route, not in initial API-key rollout scope"},
+    "GET:/ui/ats/job-orders/{job_id}/openings": {"reason": "session-auth ATS job-orders route, not in initial API-key rollout scope"},
+    "DELETE:/ui/ats/job-orders/{job_id}": {"reason": "session-auth ATS job-orders route, not in initial API-key rollout scope"},
+    "GET:/ui/ats/job-orders/open": {"reason": "session-auth ATS route, not in initial API-key rollout scope"},
+    "GET:/ui/ats/job-orders/hot": {"reason": "session-auth ATS route, not in initial API-key rollout scope"},
+    "GET:/ui/ats/job-orders/mine": {"reason": "session-auth ATS route, not in initial API-key rollout scope"},
 }
 
 API_KEY_INITIAL_ROLLOUT_PATH_PREFIXES = (
