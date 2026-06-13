@@ -47,6 +47,10 @@ data class FilesUiState(
     val searchLoading: Boolean = false,
     val searchError: String? = null,
     val searchResults: List<FileNode> = emptyList(),
+    // AND-337 - multi-select chrome. [selected] holds file PATHS (there are no node ids); it survives
+    // sort / search but is cleared on folder navigation. [selectionMode] toggles the selection affordance.
+    val selectionMode: Boolean = false,
+    val selected: Set<String> = emptySet(),
 ) {
     val breadcrumbs: List<Breadcrumb> = FilePath.breadcrumbs(currentPath, rootLabel)
 }
@@ -58,7 +62,17 @@ sealed interface FilesEvent {
 
     /** A file row was opened; [path] is its addressable path (preview is a later ticket). */
     data class OpenFile(val path: String) : FilesEvent
+
+    /**
+     * AND-337 - the outcome of a CRUD op, surfaced as a one-shot message WITHOUT dropping the listing.
+     * [kind] identifies the op and [success] whether it landed; the UI maps these to localized strings
+     * (the VM intentionally emits enums, not @StringRes, so message resolution lives in a later UI ticket).
+     */
+    data class CrudMessage(val kind: CrudKind, val success: Boolean) : FilesEvent
 }
+
+/** AND-337 - which folder CRUD op a [FilesEvent.CrudMessage] reports. */
+enum class CrudKind { CREATE_FOLDER, RENAME, DELETE, DELETE_BATCH, MOVE, MOVE_BATCH }
 
 /**
  * AND-332 - presentation logic for the read-only file-manager browse surface.
@@ -102,6 +116,9 @@ class FilesViewModel @Inject constructor(
 
     /** The single in-flight debounced search job; a new keystroke cancels it. */
     private var searchJob: Job? = null
+
+    /** AND-337 - true while a CRUD op is in flight, guarding against double-submit of non-idempotent ops. */
+    private var crudInFlight: Boolean = false
 
     init {
         viewModelScope.launch {
@@ -214,6 +231,9 @@ class FilesViewModel @Inject constructor(
                 searchLoading = false,
                 searchError = null,
                 searchResults = emptyList(),
+                // AND-337 - selection is folder-scoped; leaving the folder clears it (and exits the mode).
+                selectionMode = false,
+                selected = emptySet(),
             )
         }
         pagerKey.update { it.copy(path = path) }
@@ -231,6 +251,151 @@ class FilesViewModel @Inject constructor(
                 it.copy(searchLoading = false, searchError = OFFLINE_MESSAGE, searchResults = emptyList())
             }
         }
+    }
+
+    // ---- AND-337 - multi-select ----
+
+    /** Toggles selection mode; turning it OFF clears the current selection. */
+    fun toggleSelectionMode() {
+        _uiState.update {
+            val on = !it.selectionMode
+            it.copy(selectionMode = on, selected = if (on) it.selected else emptySet())
+        }
+    }
+
+    /** Adds / removes [path] from the selection (entering selection mode on the first pick). */
+    fun toggleSelected(path: String) {
+        _uiState.update {
+            val next = if (path in it.selected) it.selected - path else it.selected + path
+            it.copy(selected = next, selectionMode = it.selectionMode || next.isNotEmpty())
+        }
+    }
+
+    /** Clears the selection (leaving selection mode untouched). */
+    fun clearSelection() {
+        _uiState.update { it.copy(selected = emptySet()) }
+    }
+
+    // ---- AND-337 - folder CRUD intents ----
+
+    /** Creates a folder named [name] under the current path, then refreshes + reports the outcome. */
+    fun createFolder(name: String) {
+        if (name.isBlank()) return
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                val result = repository.createFolder(_uiState.value.currentPath, name.trim())
+                emitCrud(CrudKind.CREATE_FOLDER, result is ApiResult.Success)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /** Renames the node at [path] to [newName] (folder vs. file by [isFolder]), then reports the outcome. */
+    fun rename(path: String, newName: String, isFolder: Boolean) {
+        if (newName.isBlank()) return
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                val result = repository.rename(path, newName.trim(), isFolder)
+                emitCrud(CrudKind.RENAME, result is ApiResult.Success)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /** Deletes the single node at [path] (folder vs. file by [isFolder]), then reports the outcome. */
+    fun delete(path: String, isFolder: Boolean) {
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                val result = repository.delete(path, isFolder)
+                emitCrud(CrudKind.DELETE, result is ApiResult.Success)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /**
+     * Deletes every node in the current selection per-path (NO batch endpoint), clearing the selection
+     * afterwards. [folderPaths] supplies which selected paths are folders (the rest delete as files);
+     * the batch reports success only when ALL per-path deletes succeed.
+     */
+    fun deleteSelected(folderPaths: Set<String> = emptySet()) {
+        val targets = _uiState.value.selected
+        if (targets.isEmpty()) return
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                var allOk = true
+                for (path in targets) {
+                    val result = repository.delete(path, path in folderPaths)
+                    if (result !is ApiResult.Success) allOk = false
+                }
+                _uiState.update { it.copy(selected = emptySet(), selectionMode = false) }
+                emitCrud(CrudKind.DELETE_BATCH, allOk)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /** Moves the node at [src] under [dst], then reports the outcome. */
+    fun move(src: String, dst: String) {
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                val result = repository.move(src, dst)
+                emitCrud(CrudKind.MOVE, result is ApiResult.Success)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /**
+     * Moves every selected node under [dst] per-path (NO batch endpoint), clearing the selection
+     * afterwards. Reports success only when ALL per-path moves succeed.
+     */
+    fun moveSelected(dst: String) {
+        val targets = _uiState.value.selected
+        if (targets.isEmpty()) return
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                var allOk = true
+                for (src in targets) {
+                    val result = repository.move(src, dst)
+                    if (result !is ApiResult.Success) allOk = false
+                }
+                _uiState.update { it.copy(selected = emptySet(), selectionMode = false) }
+                emitCrud(CrudKind.MOVE_BATCH, allOk)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /**
+     * AND-337 - double-action guard: CRUD POSTs / DELETEs are non-idempotent, so only one runs at a time.
+     * Returns false (skip) when an op is already in flight. The repository re-pages the affected folder
+     * via [FolderRefreshBus]; this VM only emits the one-shot [FilesEvent.CrudMessage].
+     */
+    private fun beginCrud(): Boolean {
+        if (crudInFlight) return false
+        crudInFlight = true
+        return true
+    }
+
+    private fun endCrud() {
+        crudInFlight = false
+    }
+
+    private fun emitCrud(kind: CrudKind, success: Boolean) {
+        _events.trySend(FilesEvent.CrudMessage(kind, success))
     }
 
     companion object {

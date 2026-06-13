@@ -67,6 +67,33 @@ class FilesViewModelTest {
             searchModes += mode
             return searchResult
         }
+
+        // AND-337 - record CRUD calls and serve a configurable result (success by default).
+        val createFolderCalls = mutableListOf<Pair<String, String>>()
+        val renameCalls = mutableListOf<Triple<String, String, Boolean>>()
+        val deleteCalls = mutableListOf<Pair<String, Boolean>>()
+        val moveCalls = mutableListOf<Pair<String, String>>()
+        var crudResult: ApiResult<Unit> = ApiResult.Success(Unit)
+
+        override suspend fun createFolder(parentPath: String, name: String): ApiResult<Unit> {
+            createFolderCalls += parentPath to name
+            return crudResult
+        }
+
+        override suspend fun rename(path: String, newName: String, isFolder: Boolean): ApiResult<Unit> {
+            renameCalls += Triple(path, newName, isFolder)
+            return crudResult
+        }
+
+        override suspend fun delete(path: String, isFolder: Boolean): ApiResult<Unit> {
+            deleteCalls += path to isFolder
+            return crudResult
+        }
+
+        override suspend fun move(src: String, dst: String): ApiResult<Unit> {
+            moveCalls += src to dst
+            return crudResult
+        }
     }
 
     private class FakeSortPrefs(var stored: FileSort = FileSort()) : SortPrefs {

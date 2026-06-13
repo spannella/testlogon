@@ -164,6 +164,8 @@ fun FilesRoute(
             when (event) {
                 com.testlogon.android.feature.files.presentation.FilesEvent.NavigateUp -> onBack()
                 is com.testlogon.android.feature.files.presentation.FilesEvent.OpenFile -> onOpenFile(event.path)
+                // AND-337 - CRUD outcome events are surfaced by a later UI ticket; ignored here for now.
+                is com.testlogon.android.feature.files.presentation.FilesEvent.CrudMessage -> Unit
             }
         }
     }

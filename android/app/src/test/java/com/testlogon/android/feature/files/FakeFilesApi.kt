@@ -41,6 +41,16 @@ class FakeFilesApi(
     val searchPrefixes = mutableListOf<String>()
     val searchTextQueries = mutableListOf<String>()
 
+    // AND-337 - CRUD recording for the data-layer CRUD tests. Each verb records its body / path and
+    // serves a configurable result; a configured throwable lets a test exercise the failure mapping.
+    val createFolderBodies = mutableListOf<CreateFolderRequest>()
+    val renameFileBodies = mutableListOf<RenameRequest>()
+    val renameFolderBodies = mutableListOf<RenameRequest>()
+    val moveBodies = mutableListOf<MoveRequest>()
+    val deleteFilePaths = mutableListOf<String>()
+    val deleteFolderPaths = mutableListOf<String>()
+    var crudError: (() -> Throwable)? = null
+
     override suspend fun list(
         path: String,
         limit: Int?,
@@ -68,12 +78,41 @@ class FakeFilesApi(
         return searchTextResult()
     }
 
-    override suspend fun createFolder(body: CreateFolderRequest): OkRespDto = error("read-only ticket")
-    override suspend fun renameFile(body: RenameRequest): MoveResultDto = error("read-only ticket")
-    override suspend fun renameFolder(body: RenameRequest): MoveResultDto = error("read-only ticket")
-    override suspend fun move(body: MoveRequest): MoveResultDto = error("read-only ticket")
-    override suspend fun deleteFile(path: String): OkRespDto = error("read-only ticket")
-    override suspend fun deleteFolder(path: String): DeleteFolderDto = error("read-only ticket")
+    override suspend fun createFolder(body: CreateFolderRequest): OkRespDto {
+        createFolderBodies += body
+        crudError?.let { throw it() }
+        return OkRespDto(ok = true, path = body.path)
+    }
+
+    override suspend fun renameFile(body: RenameRequest): MoveResultDto {
+        renameFileBodies += body
+        crudError?.let { throw it() }
+        return MoveResultDto(ok = true, path = body.path, new_name = body.new_name)
+    }
+
+    override suspend fun renameFolder(body: RenameRequest): MoveResultDto {
+        renameFolderBodies += body
+        crudError?.let { throw it() }
+        return MoveResultDto(ok = true, path = body.path, new_name = body.new_name)
+    }
+
+    override suspend fun move(body: MoveRequest): MoveResultDto {
+        moveBodies += body
+        crudError?.let { throw it() }
+        return MoveResultDto(ok = true, src = body.src, dst = body.dst)
+    }
+
+    override suspend fun deleteFile(path: String): OkRespDto {
+        deleteFilePaths += path
+        crudError?.let { throw it() }
+        return OkRespDto(ok = true, path = path)
+    }
+
+    override suspend fun deleteFolder(path: String): DeleteFolderDto {
+        deleteFolderPaths += path
+        crudError?.let { throw it() }
+        return DeleteFolderDto(ok = true, deleted_count = 1)
+    }
     override suspend fun presignUpload(body: PresignRequest): PresignResponse = error("read-only ticket")
     override suspend fun completeUpload(body: CompleteUploadRequest): FileEntryDto = error("read-only ticket")
 }

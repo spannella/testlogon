@@ -9,6 +9,7 @@ import com.testlogon.android.feature.files.data.FileSort
 import com.testlogon.android.feature.files.data.FileSortBy
 import com.testlogon.android.feature.files.data.FileSortDir
 import com.testlogon.android.feature.files.data.FilesRepositoryImpl
+import com.testlogon.android.feature.files.data.FolderRefreshBus
 import com.testlogon.android.feature.files.data.SearchMode
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
@@ -27,7 +28,8 @@ class FilesRepositorySearchTest {
 
     private val parser = ApiErrorParser(Moshi.Builder().build())
 
-    private fun repo(api: FakeFilesApi) = FilesRepositoryImpl(api = api, errorParser = parser)
+    private fun repo(api: FakeFilesApi) =
+        FilesRepositoryImpl(api = api, errorParser = parser, refreshBus = FolderRefreshBus())
 
     private val nameAsc = FileSort(FileSortBy.NAME, FileSortDir.ASC, foldersFirst = false)
 
