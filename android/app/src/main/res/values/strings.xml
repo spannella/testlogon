@@ -2572,6 +2572,13 @@
     <string name="files_append_error">Couldn\'t load more.</string>
     <!-- AND-333 - upload via presign -->
     <string name="files_upload_action">Upload files</string>
+    <!-- AND-334 download / open-with -->
+    <string name="files_download_in_progress">Downloading…</string>
+    <string name="files_download_done">Download complete</string>
+    <string name="files_download_cancelled">Download cancelled</string>
+    <string name="files_download_cancel">Cancel download</string>
+    <string name="files_download_open">Open</string>
+    <string name="files_download_save">Save to Downloads</string>
     <string name="files_upload_title">Uploads</string>
     <string name="files_upload_empty">No uploads yet.</string>
     <string name="files_upload_cancel">Cancel upload</string>

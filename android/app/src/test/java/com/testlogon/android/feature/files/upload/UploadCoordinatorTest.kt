@@ -78,6 +78,9 @@ class UploadCoordinatorTest {
         override suspend fun list(path: String, limit: Int?, cursor: String?, sortBy: String?, sortDir: String?) =
             FileListDto(path = path)
         override suspend fun info(path: String) = FileEntryDto(name = "", path = path, type = "file")
+        // AND-334 - download is unused by the upload coordinator; trivial empty-body stub.
+        override suspend fun download(path: String) =
+            retrofit2.Response.success(ByteArray(0).toResponseBody())
         override suspend fun search(prefix: String, limit: Int) = FileSearchDto(prefix = prefix)
         override suspend fun searchText(query: String, limit: Int) = FileTextSearchDto(query = query)
         override suspend fun createFolder(body: CreateFolderRequest) = OkRespDto(ok = true)

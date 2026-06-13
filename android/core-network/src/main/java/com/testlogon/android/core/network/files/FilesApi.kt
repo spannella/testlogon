@@ -13,12 +13,15 @@ import com.testlogon.android.core.model.files.OkRespDto
 import com.testlogon.android.core.model.files.PresignRequest
 import com.testlogon.android.core.model.files.PresignResponse
 import com.testlogon.android.core.model.files.RenameRequest
+import okhttp3.ResponseBody
+import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /**
  * AND-331 - Retrofit interface for the path-addressed file-manager surface (transport only).
@@ -53,6 +56,19 @@ interface FilesApi {
 
     @GET("v1/fs/info")
     suspend fun info(@Query("path") path: String): FileEntryDto
+
+    /**
+     * AND-334 - streamed authenticated download of the file at [path]. The endpoint advertises an
+     * application/json content-type but returns the raw file bytes, so the caller treats the
+     * [ResponseBody] as opaque bytes (NOT JSON). @Streaming means Retrofit does NOT buffer the whole
+     * body into memory; the caller copies [ResponseBody.byteStream] to disk in chunks on an IO
+     * dispatcher. Content-Length may be absent (the download progress total is therefore nullable).
+     * Documented errors are 400/401/403/422/429 (no 404/5xx); 401 is handled globally by the
+     * SessionAuthenticator. Range/resume is NOT used (restart-from-0 only).
+     */
+    @Streaming
+    @GET("v1/fs/download")
+    suspend fun download(@Query("path") path: String): Response<ResponseBody>
 
     @GET("v1/fs/search")
     suspend fun search(

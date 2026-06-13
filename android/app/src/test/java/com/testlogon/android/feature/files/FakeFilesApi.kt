@@ -14,6 +14,8 @@ import com.testlogon.android.core.model.files.PresignRequest
 import com.testlogon.android.core.model.files.PresignResponse
 import com.testlogon.android.core.model.files.RenameRequest
 import com.testlogon.android.core.network.files.FilesApi
+import okhttp3.ResponseBody.Companion.toResponseBody
+import retrofit2.Response
 
 /** AND-332 - one captured argument set from a [FakeFilesApi.list] call. */
 data class ListCall(
@@ -51,6 +53,10 @@ class FakeFilesApi(
     }
 
     override suspend fun info(path: String): FileEntryDto = error("unused in AND-332 tests")
+
+    // AND-334 - download is unused by the AND-332 browse / search tests; trivial empty-body stub.
+    override suspend fun download(path: String): Response<okhttp3.ResponseBody> =
+        Response.success(ByteArray(0).toResponseBody())
 
     override suspend fun search(prefix: String, limit: Int): FileSearchDto {
         searchPrefixes += prefix

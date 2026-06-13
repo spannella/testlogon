@@ -25,6 +25,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import okhttp3.RequestBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -52,6 +53,9 @@ class FilesUploadViewModelTest {
         override suspend fun list(path: String, limit: Int?, cursor: String?, sortBy: String?, sortDir: String?) =
             FileListDto(path = path)
         override suspend fun info(path: String) = FileEntryDto(name = "", path = path, type = "file")
+        // AND-334 - download is unused here; trivial empty-body stub.
+        override suspend fun download(path: String) =
+            retrofit2.Response.success(ByteArray(0).toResponseBody())
         override suspend fun search(prefix: String, limit: Int) = FileSearchDto(prefix = prefix)
         override suspend fun searchText(query: String, limit: Int) = FileTextSearchDto(query = query)
         override suspend fun createFolder(body: CreateFolderRequest) = OkRespDto(ok = true)
@@ -80,6 +84,9 @@ class FilesUploadViewModelTest {
     }
 
     private fun uri() = Mockito.mock(Uri::class.java)
+
+    // AND-334 - distinct helper name; the download stub returns an empty body that is never read here.
+    private fun emptyResponseBody() = ByteArray(0).toResponseBody()
 
     @Test
     fun onFilesPicked_enqueuesOnePerUri_targetingPath() = runTest {

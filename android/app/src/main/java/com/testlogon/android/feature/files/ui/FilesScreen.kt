@@ -117,11 +117,23 @@ fun FilesRoute(
     modifier: Modifier = Modifier,
     viewModel: FilesViewModel = hiltViewModel(),
     uploadViewModel: com.testlogon.android.feature.files.upload.FilesUploadViewModel = hiltViewModel(),
+    downloadViewModel: com.testlogon.android.feature.files.download.FileActionsViewModel = hiltViewModel(),
 ) {
+    val context = LocalContext.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val items = viewModel.pagedItems.collectAsLazyPagingItems()
     val uploadJobs by uploadViewModel.uploadJobs.collectAsStateWithLifecycle()
     var uploadSheetVisible by remember { mutableStateOf(false) }
+
+    // AND-334 - download / open-with state for the tapped file row.
+    val downloadState by downloadViewModel.uiState.collectAsStateWithLifecycle()
+    var downloadSheetVisible by remember { mutableStateOf(false) }
+    var pendingDownloadNode by remember { mutableStateOf<FileNode?>(null) }
+    val openLauncher = remember { com.testlogon.android.data.files.download.OpenWithLauncher() }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        downloadViewModel.events.collect { event -> openLauncher.open(context, event.cached) }
+    }
 
     // AND-333 - system document picker; placement is path-based, so we capture the folder on screen.
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(
