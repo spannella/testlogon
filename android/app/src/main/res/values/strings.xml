@@ -2722,4 +2722,25 @@
     <string name="submit_status_partially_signed">Your part is signed</string>
     <string name="submit_status_sent">Submitted</string>
     <string name="submit_status_other">Submitted</string>
+    <!-- AND-347 - dynamic questionnaire form renderer -->
+    <string name="questionnaire_required_marker">*</string>
+    <string name="questionnaire_unsupported_field">Unsupported question type: %1$s</string>
+    <string name="questionnaire_select_label">Select an option</string>
+    <string name="questionnaire_timezone_label">Time zone</string>
+    <string name="questionnaire_slider_value">Value: %1$s</string>
+    <string name="questionnaire_select_min_max">Select between %1$d and %2$d</string>
+    <string name="questionnaire_select_min">Select at least %1$d</string>
+    <string name="questionnaire_select_max">Select up to %1$d</string>
+    <string name="questionnaire_date_placeholder">YYYY-MM-DD</string>
+    <string name="questionnaire_time_placeholder">HH:MM</string>
+    <string name="questionnaire_picker_open">Pick</string>
+    <string name="questionnaire_picker_clear">Clear</string>
+    <string name="questionnaire_picker_confirm">OK</string>
+    <string name="questionnaire_picker_cancel">Cancel</string>
+    <string name="questionnaire_address_line1">Address line 1</string>
+    <string name="questionnaire_address_line2">Address line 2</string>
+    <string name="questionnaire_address_city">City</string>
+    <string name="questionnaire_address_state">State / Province</string>
+    <string name="questionnaire_address_postal">Postal code</string>
+    <string name="questionnaire_address_country">Country</string>
 </resources>
