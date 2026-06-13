@@ -457,6 +457,14 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.SETTINGS,
             section = MoreSection.APP,
         ),
+        // AND-384: standalone DMCA copyright-takedown form entry (Privacy & Safety / Support).
+        MoreEntry(
+            id = "dmca",
+            labelRes = R.string.more_entry_dmca,
+            icon = Icons.Outlined.Gavel,
+            route = MoreRoutes.DMCA,
+            section = MoreSection.SUPPORT,
+        ),
         MoreEntry(
             id = "help",
             labelRes = R.string.more_entry_help,

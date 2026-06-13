@@ -3206,4 +3206,34 @@
     <string name="blocked_profile_placeholder_body">Unblock to see their profile and contact them again.</string>
     <string name="cannot_contact_banner">You can\'t message this user.</string>
     <string name="block_update_failed">Couldn\'t update — tap to retry.</string>
+
+    <!-- AND-384: DMCA copyright-takedown submit form -->
+    <string name="more_entry_dmca">File a DMCA notice</string>
+    <string name="dmca_title">File a DMCA notice</string>
+    <string name="dmca_section_work">The copyrighted work</string>
+    <string name="dmca_section_infringing">The infringing material</string>
+    <string name="dmca_section_contact">Your contact information</string>
+    <string name="dmca_section_legal">Legal statements</string>
+    <string name="dmca_field_description">Describe the copyrighted work</string>
+    <string name="dmca_field_content_url">URL of the infringing material</string>
+    <string name="dmca_field_content_type">Type of content</string>
+    <string name="dmca_field_name">Full legal name</string>
+    <string name="dmca_field_email">Email address</string>
+    <string name="dmca_field_address">Mailing address</string>
+    <string name="dmca_field_phone">Phone number (optional)</string>
+    <string name="dmca_field_signature">Electronic signature</string>
+    <string name="dmca_signature_mismatch">Your signature does not match your legal name.</string>
+    <string name="dmca_content_type_feed_post">Feed post</string>
+    <string name="dmca_content_type_feed_media">Feed media</string>
+    <string name="dmca_content_type_message_media">Message media</string>
+    <string name="dmca_content_type_video">Video</string>
+    <string name="dmca_content_type_other">Other</string>
+    <string name="dmca_sworn_statement">I swear, under penalty of perjury, that the information in this notice is accurate and that I am the copyright owner or am authorized to act on the owner\'s behalf.</string>
+    <string name="dmca_good_faith_statement">I have a good-faith belief that the use of the material described above is not authorized by the copyright owner, its agent, or the law.</string>
+    <string name="dmca_submit">Submit DMCA notice</string>
+    <string name="dmca_try_again">Try again</string>
+    <string name="dmca_done">Done</string>
+    <string name="dmca_confirm_title">We received your notice</string>
+    <string name="dmca_confirm_claim_id">Reference: %1$s</string>
+    <string name="dmca_confirm_content_removed">The reported content has been removed.</string>
 </resources>

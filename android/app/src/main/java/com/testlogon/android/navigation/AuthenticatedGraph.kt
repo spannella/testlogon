@@ -273,6 +273,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // feed_post / chat_respond, with the persistent banner. Overlay-only; the mature feed / broadcast /
         // messaging screens are untouched.
         delegateConsoleDestination(navController)
+        // AND-384: DMCA copyright-takedown submit form. Reachable standalone (Settings -> Privacy & Safety)
+        // and pre-targeted from a content / profile overflow (prefills + locks the content reference via
+        // navigateToDmca). A single non-idempotent POST v1/dmca/claims; no auto-retry.
+        dmcaDestination(navController)
     }
 }
 

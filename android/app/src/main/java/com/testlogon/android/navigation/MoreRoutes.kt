@@ -188,6 +188,11 @@ object MoreRoutes {
     // permission-gated delegate feed / messaging affordances.
     const val DELEGATE_CONSOLE = DelegateConsoleDest.ROUTE
 
+    // AND-384: file a DMCA copyright-takedown notice (standalone entry; the content-overflow entry uses
+    // navigateToDmca with a pre-target). The composable is registered under DmcaDest.ROUTE; navigating to
+    // the plain base route resolves to it (the optional query args default to null).
+    val DMCA: String get() = DmcaDest.STANDALONE_ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -252,6 +257,7 @@ object MoreRoutes {
             TICKETS,
             PROJECTS,
             DELEGATE_CONSOLE,
+            DMCA,
             SETTINGS,
             HELP,
             ABOUT,
