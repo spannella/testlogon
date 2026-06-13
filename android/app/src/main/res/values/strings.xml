@@ -856,6 +856,11 @@
     <string name="helpdesk_claim_go_online_caption">Go Online to claim</string>
     <string name="helpdesk_claim_disabled_away_cd">disabled — go Online to claim</string>
 
+    <!-- AND-380 — unified helpdesk agent ViewModel banners -->
+    <string name="helpdesk_offline">You\'re offline. Showing the last loaded queue.</string>
+    <string name="helpdesk_reply_empty">Reply can\'t be empty.</string>
+    <string name="helpdesk_permission_denied">You don\'t have access to the helpdesk.</string>
+
     <!-- AND-163 — report message -->
     <string name="msg_action_report">Report</string>
     <string name="report_title">Report message</string>
