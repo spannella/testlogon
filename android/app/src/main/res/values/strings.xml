@@ -875,6 +875,16 @@
     <string name="report_reason_spam">Spam</string>
     <string name="report_reason_racist">Hate / racism</string>
 
+    <!-- AND-383 — cross-cutting report flow (user / content / message) -->
+    <string name="report_flow_title">Report this</string>
+    <string name="report_flow_reason_label">Reason (required, 5–2000 characters)</string>
+    <string name="report_flow_retry">Retry</string>
+    <string name="report_flow_done">Done</string>
+    <string name="report_confirm_title">Report submitted</string>
+    <string name="report_already_reported">You\'ve already reported this</string>
+    <string name="report_flow_topic_checked">%1$s, selected</string>
+    <string name="report_flow_topic_unchecked">%1$s, not selected</string>
+
     <!-- AND-164 — legal holds / compliance (read-only) -->
     <string name="action_close">Close</string>
     <string name="legal_hold_badge">On legal hold</string>

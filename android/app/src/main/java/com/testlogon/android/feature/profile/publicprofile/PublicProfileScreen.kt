@@ -21,6 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -37,8 +40,10 @@ import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.StaleBanner
+import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.profile.ProfileTestTags
 import com.testlogon.android.feature.profile.components.ProfileHeader
+import com.testlogon.android.feature.report.ReportSheet
 
 /** AND-073 — route-level public-profile entry for /u/{identifier}. */
 @Composable
@@ -178,6 +183,25 @@ private fun PublicContent(
                 .testTag("public_open_fanclub"),
         ) {
             Text(stringResource(R.string.profile_public_open_fanclub))
+        }
+
+        // AND-383: reuse the cross-cutting report flow as a real USER call site.
+        var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
+        OutlinedButton(
+            onClick = { reportTarget = ReportTarget.User(profile.userId, profile.displayName) },
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .testTag("public_report_user"),
+        ) {
+            Text(stringResource(R.string.msg_action_report))
+        }
+        reportTarget?.let { tgt ->
+            ReportSheet(
+                target = tgt,
+                onDismiss = { reportTarget = null },
+                onCompleted = { reportTarget = null },
+            )
         }
     }
 }
