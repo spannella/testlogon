@@ -2509,6 +2509,23 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_CREATED", "partition_key": "type", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        # CND-001: ATS Candidates table — single-table design with three GSIs.
+        # GSI sort keys are numeric (created_at aliases) — attr_types required
+        # to avoid ValidationException on integer range queries (CLAUDE.md gotcha).
+        TableDef(
+            _resolve_table_name(S.candidates_table_name, "candidates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner",  "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByStatus", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "BySource", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={
+                "GSI1SK": "N",
+                "GSI2SK": "N",
+                "GSI3SK": "N",
+            },
         ),
     ]
 

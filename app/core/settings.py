@@ -2783,5 +2783,24 @@ class Settings:
     party_crm_profile_sync_enabled: bool = os.environ.get("PARTY_CRM_PROFILE_SYNC_ENABLED", "0") not in ("0", "false", "False")
     party_table_name: str = os.environ.get("DDB_PARTY_TABLE", "party")
 
+    # ATS Candidates (CND-001)
+    # Master switch defaults OFF. With it off every CND route returns 404/503
+    # and no DynamoDB or S3 write is attempted. No existing table, endpoint, or
+    # service is modified when this flag is False.
+    candidates_enabled: bool = (
+        os.environ.get("CANDIDATES_ENABLED", "0") not in ("0", "false", "False")
+    )
+    candidates_table_name: str = os.environ.get("DDB_CANDIDATES_TABLE", "candidates")
+    candidate_resume_bucket: str = os.environ.get("CANDIDATE_RESUME_BUCKET", "local-uploads")
+    candidate_resume_s3_prefix: str = os.environ.get(
+        "CANDIDATE_RESUME_S3_PREFIX", "candidate-resumes/"
+    )
+    candidate_resume_max_bytes: int = int(
+        os.environ.get("CANDIDATE_RESUME_MAX_BYTES", "20971520")   # 20 MB
+    )
+    candidate_resume_max_per_candidate: int = int(
+        os.environ.get("CANDIDATE_RESUME_MAX_PER_CANDIDATE", "25")
+    )
+
 
 S = Settings()

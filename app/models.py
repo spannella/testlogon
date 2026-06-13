@@ -14919,3 +14919,172 @@ class CrmCreateOrgAccountIn(BaseModel):
 class CrmOrgMemberIn(BaseModel):
     member_party_id: str = Field(..., min_length=1, max_length=64)
     role_type: str = Field(default="member", pattern=r"^(member|admin|org_admin)$")
+# ── ATS Candidates (CND-001) ─────────────────────────────────────────────────
+
+CANDIDATE_STATUSES = frozenset({
+    "active",
+    "qualified",
+    "submitted",
+    "interviewing",
+    "placed",
+    "on_hold",
+    "not_in_search",
+    "archived",
+})
+
+CANDIDATE_SOURCES = frozenset({
+    "direct",
+    "referral",
+    "job_board",
+    "linkedin",
+    "agency",
+    "career_portal",
+    "import",
+    "other",
+})
+
+CANDIDATE_RESUME_CONTENT_TYPES = frozenset({
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/rtf",
+    "text/plain",
+    "application/vnd.oasis.opendocument.text",
+})
+
+
+class CandidateCreateIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=200)
+    last_name: str = Field(..., min_length=1, max_length=200)
+    email: str = Field(..., max_length=254)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default=None, max_length=500)
+    title: Optional[str] = Field(default=None, max_length=500)
+    source: Optional[str] = Field(
+        default=None,
+        pattern=r"^(direct|referral|job_board|linkedin|agency|career_portal|import|other)$",
+    )
+    owner_sub: Optional[str] = Field(default=None, max_length=200)
+    status: Optional[str] = Field(
+        default=None,
+        pattern=r"^(active|qualified|submitted|interviewing|placed|on_hold|not_in_search|archived)$",
+    )
+    # ATS delta fields
+    current_pay: Optional[str] = Field(default=None, max_length=500)
+    desired_pay: Optional[str] = Field(default=None, max_length=500)
+    key_skills: Optional[str] = Field(default=None, max_length=4000)
+    date_available: Optional[str] = Field(default=None, max_length=10)  # "YYYY-MM-DD"
+    can_relocate: bool = False
+    linkedin_url: Optional[str] = Field(default=None, max_length=500)
+    web_url: Optional[str] = Field(default=None, max_length=500)
+    address: Optional[str] = Field(default=None, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=200)
+    state: Optional[str] = Field(default=None, max_length=200)
+    postal_code: Optional[str] = Field(default=None, max_length=20)
+    country: Optional[str] = Field(default=None, max_length=200)
+
+
+class CandidateUpdateIn(BaseModel):
+    first_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    last_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=254)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default=None, max_length=500)
+    title: Optional[str] = Field(default=None, max_length=500)
+    source: Optional[str] = Field(
+        default=None,
+        pattern=r"^(direct|referral|job_board|linkedin|agency|career_portal|import|other)$",
+    )
+    status: Optional[str] = Field(
+        default=None,
+        pattern=r"^(active|qualified|submitted|interviewing|placed|on_hold|not_in_search|archived)$",
+    )
+    current_pay: Optional[str] = Field(default=None, max_length=500)
+    desired_pay: Optional[str] = Field(default=None, max_length=500)
+    key_skills: Optional[str] = Field(default=None, max_length=4000)
+    date_available: Optional[str] = Field(default=None, max_length=10)
+    can_relocate: Optional[bool] = None
+    linkedin_url: Optional[str] = Field(default=None, max_length=500)
+    web_url: Optional[str] = Field(default=None, max_length=500)
+    address: Optional[str] = Field(default=None, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=200)
+    state: Optional[str] = Field(default=None, max_length=200)
+    postal_code: Optional[str] = Field(default=None, max_length=20)
+    country: Optional[str] = Field(default=None, max_length=200)
+
+
+class CandidateResumeOut(BaseModel):
+    attachment_id: str
+    candidate_id: str
+    filename: str
+    filename_original: str
+    content_type: str
+    size_bytes: int
+    url: str              # presigned (prod) or /mock/s3/... (dev)
+    source: str           # "upload" | "file_manager"
+    is_primary: bool
+    node_path: Optional[str] = None   # only for source="file_manager"
+    created_at: int
+    uploaded_by: str
+
+
+class CandidateOut(BaseModel):
+    candidate_id: str
+    first_name: str
+    last_name: str
+    email: str
+    email_raw: str
+    phone: Optional[str] = None
+    company: Optional[str] = None
+    title: Optional[str] = None
+    source: str
+    owner_sub: str
+    status: str
+    # ATS delta
+    current_pay: Optional[str] = None
+    desired_pay: Optional[str] = None
+    key_skills: Optional[str] = None
+    date_available: Optional[str] = None
+    can_relocate: bool
+    linkedin_url: Optional[str] = None
+    web_url: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    primary_resume_id: Optional[str] = None
+    created_by: str
+    created_at: int
+    updated_at: int
+    deleted_at: Optional[int] = None
+    resumes: List[CandidateResumeOut] = Field(default_factory=list)
+
+
+# ── ATS Candidates change history (CND-004) ──────────────────────────────────
+
+class CandidateHistoryOut(BaseModel):
+    event_id: str            # activity_id
+    candidate_id: str
+    change_type: str
+    summary: str
+    actor_sub: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int
+
+
+# ── ATS Candidates router models (CND-005) ───────────────────────────────────
+
+class SetOwnerIn(BaseModel):
+    owner_sub: str = Field(..., min_length=1, max_length=128)
+
+
+class CandidateListOut(BaseModel):
+    candidates: List[CandidateOut]
+    cursor: Optional[str] = None
+    total_hint: Optional[int] = None
+
+
+class CandidateHistoryPage(BaseModel):
+    events: List[CandidateHistoryOut]
+    cursor: Optional[str] = None
