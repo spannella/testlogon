@@ -374,6 +374,18 @@
                     android:host="guest"
                     android:pathPrefix="/accept" />
             </intent-filter>
+
+            <!-- AND-335: custom-scheme PUBLIC share deep link. The link id is the path segment, routed to
+                 the session-free public share screen (registered in both nav graphs - the recipient may be
+                 signed out). testlogon://share/<linkId> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="share" />
+            </intent-filter>
         </activity>
 
         <!-- AND-297: lock-screen-capable full-screen incoming-call Activity. Launched by the call

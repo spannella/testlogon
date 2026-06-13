@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.CircularProgressIndicator
@@ -103,6 +104,9 @@ object FilesTestTags {
 
     /** Per-row tag: file_row_<path-or-name>. */
     fun row(node: FileNode): String = "file_row_${node.path.ifBlank { node.name }}"
+
+    /** AND-335 - per-row share affordance tag: file_share_<path-or-name>. */
+    fun share(node: FileNode): String = "file_share_${node.path.ifBlank { node.name }}"
 }
 
 /**
@@ -115,6 +119,9 @@ fun FilesRoute(
     onBack: () -> Unit,
     onOpenFile: (String) -> Unit,
     modifier: Modifier = Modifier,
+    // AND-335 - share affordance: opens the owner ShareSheet for the tapped file (defaults to no-op so
+    // existing call sites/tests are unaffected). The file is keyed by its path (the backend's file id).
+    onShareFile: (String) -> Unit = {},
     viewModel: FilesViewModel = hiltViewModel(),
     uploadViewModel: com.testlogon.android.feature.files.upload.FilesUploadViewModel = hiltViewModel(),
     downloadViewModel: com.testlogon.android.feature.files.download.FileActionsViewModel = hiltViewModel(),
@@ -167,6 +174,8 @@ fun FilesRoute(
         onRefresh = viewModel::onRefresh,
         modifier = modifier,
         onUploadClick = { pickFiles.launch(arrayOf("*/*")) },
+        // AND-335 - the per-row share action carries the file path to the owner ShareSheet route.
+        onShareFile = { node -> onShareFile(node.path) },
     )
 
     if (uploadSheetVisible) {
@@ -194,6 +203,8 @@ fun FilesScreen(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     onUploadClick: (() -> Unit)? = null,
+    // AND-335 - per-file share action (defaults to no-op so existing call sites/tests are unaffected).
+    onShareFile: (FileNode) -> Unit = {},
 ) {
     var sortSheetVisible by remember { mutableStateOf(false) }
 
@@ -248,13 +259,19 @@ fun FilesScreen(
             HorizontalDivider()
             Box(Modifier.fillMaxSize()) {
                 if (state.isSearching) {
-                    SearchContent(state = state, onOpenFolder = onOpenFolder, onOpenFile = onOpenFile)
+                    SearchContent(
+                        state = state,
+                        onOpenFolder = onOpenFolder,
+                        onOpenFile = onOpenFile,
+                        onShareFile = onShareFile,
+                    )
                 } else {
                     BrowseContent(
                         items = items,
                         onRefresh = onRefresh,
                         onOpenFolder = onOpenFolder,
                         onOpenFile = onOpenFile,
+                        onShareFile = onShareFile,
                     )
                 }
             }
@@ -360,6 +377,7 @@ private fun BrowseContent(
     onRefresh: () -> Unit,
     onOpenFolder: (FileNode) -> Unit,
     onOpenFile: (FileNode) -> Unit,
+    onShareFile: (FileNode) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val refresh = items.loadState.refresh
@@ -399,6 +417,7 @@ private fun BrowseContent(
                             FileRow(
                                 node = node,
                                 onClick = { if (node.type == FileNodeType.FOLDER) onOpenFolder(node) else onOpenFile(node) },
+                                onShare = if (node.type == FileNodeType.FOLDER) null else ({ onShareFile(node) }),
                             )
                         }
                     }
@@ -439,6 +458,7 @@ private fun SearchContent(
     state: FilesUiState,
     onOpenFolder: (FileNode) -> Unit,
     onOpenFile: (FileNode) -> Unit,
+    onShareFile: (FileNode) -> Unit = {},
 ) {
     when {
         state.searchLoading -> LoadingState()
@@ -461,6 +481,7 @@ private fun SearchContent(
                 FileRow(
                     node = node,
                     onClick = { if (node.type == FileNodeType.FOLDER) onOpenFolder(node) else onOpenFile(node) },
+                    onShare = if (node.type == FileNodeType.FOLDER) null else ({ onShareFile(node) }),
                 )
             }
         }
@@ -472,6 +493,7 @@ private fun SearchContent(
 private fun FileRow(
     node: FileNode,
     onClick: () -> Unit,
+    onShare: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val isFolder = node.type == FileNodeType.FOLDER
@@ -491,14 +513,20 @@ private fun FileRow(
         sizeText?.let { append(", ").append(it) }
         if (relative.isNotEmpty()) append(", ").append(relative)
     }
+    val shareCd = stringResource(R.string.share_action_share)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
+            .testTag(FilesTestTags.row(node)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        modifier = Modifier
+            .weight(1f)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
-            .testTag(FilesTestTags.row(node))
             .clearAndSetSemantics { contentDescription = cd },
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -541,6 +569,19 @@ private fun FileRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+      }
+        // AND-335 - per-file share affordance (files only; null for folders).
+        if (onShare != null) {
+            IconButton(
+                onClick = onShare,
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .clearAndSetSemantics { contentDescription = shareCd }
+                    .testTag(FilesTestTags.share(node)),
+            ) {
+                Icon(imageVector = Icons.Filled.Share, contentDescription = null)
             }
         }
     }

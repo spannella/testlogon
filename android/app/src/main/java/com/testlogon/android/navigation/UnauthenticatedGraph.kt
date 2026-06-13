@@ -329,6 +329,8 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         eventDetailDestination(navController)
         // AND-312: guest accept (testlogon://guest/accept) works while signed out (an invitee may be).
         guestAcceptDestination(navController)
+        // AND-335: public share (testlogon://share/<linkId>) works while signed out (a recipient may be).
+        publicShareDestination(navController)
     }
 }
 

@@ -22,6 +22,10 @@ fun NavGraphBuilder.filesDestination(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             // Preview / open is AND-333+; keep the path-carrying callback wired but a safe no-op.
             onOpenFile = { },
+            // AND-335 - the share affordance opens the owner ShareSheet keyed by the file path.
+            onShareFile = { path ->
+                navController.navigate(ShareSheetDest.build(path)) { launchSingleTop = true }
+            },
         )
     }
 }

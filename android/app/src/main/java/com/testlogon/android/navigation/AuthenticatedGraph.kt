@@ -129,6 +129,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         galleryDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
         filesDestination(navController)
+        // AND-335: owner share sheet (create/list/revoke share links) + the public share screen
+        // (also registered unauthenticated, since a recipient may be signed out).
+        shareSheetDestination(navController)
+        publicShareDestination(navController)
         // AND-205: storefront catalog / category browse grid (cells open the product detail route).
         catalogDestination(navController)
         // AND-206: real product detail (item derived from the category-items list; add-to-cart).
