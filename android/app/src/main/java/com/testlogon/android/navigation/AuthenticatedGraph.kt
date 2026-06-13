@@ -201,6 +201,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         kycTierDestination(navController)
         // AND-321: KYC identity-document capture+upload (system camera / photo picker + inline base64 POST).
         kycDocumentCaptureDestination(navController)
+        // AND-322: KYC guided ID capture+scan (validate-document + per-side upload + scan-document).
+        idScannerDestination(navController)
     }
 }
 

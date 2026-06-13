@@ -2283,4 +2283,33 @@
     <string name="kyc_doc_permission_message">Camera access is needed to photograph your ID.</string>
     <string name="kyc_doc_grant_permission">Allow camera</string>
     <string name="kyc_doc_open_settings">Open settings</string>
+
+    <!-- AND-322: KYC guided ID capture+scan (ID scanner) -->
+    <string name="idscan_type_prompt">Which document are you scanning?</string>
+    <string name="idscan_type_passport">Passport</string>
+    <string name="idscan_type_national_id_card">National ID card</string>
+    <string name="idscan_type_driving_license">Driving license</string>
+    <string name="idscan_type_residence_permit">Residence permit</string>
+    <string name="idscan_side_front">Front</string>
+    <string name="idscan_side_back">Back</string>
+    <string name="idscan_capture_prompt">Capture the %1$s of your document</string>
+    <string name="idscan_overlay_hint">Position the document inside the frame</string>
+    <string name="idscan_auto_capture_unavailable">Live auto-capture and MRZ reading are not configured. Capture manually instead.</string>
+    <string name="idscan_take_photo">Take photo</string>
+    <string name="idscan_pick">Choose from library</string>
+    <string name="idscan_review_prompt">Review your captured sides</string>
+    <string name="idscan_review_image_cd">Preview of the captured %1$s</string>
+    <string name="idscan_retake">Retake</string>
+    <string name="idscan_confirm">Upload and scan</string>
+    <string name="idscan_uploading">Uploading documents…</string>
+    <string name="idscan_scanning">Scanning documents…</string>
+    <string name="idscan_result_prompt">Scan results</string>
+    <string name="idscan_status_matched">Matched</string>
+    <string name="idscan_status_approved">Approved</string>
+    <string name="idscan_status_flagged">Needs review</string>
+    <string name="idscan_status_rejected">Rejected</string>
+    <string name="idscan_status_declined">Declined</string>
+    <string name="idscan_status_unknown">Pending review</string>
+    <string name="idscan_restart">Start over</string>
+    <string name="idscan_done">Done</string>
 </resources>

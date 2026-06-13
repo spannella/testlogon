@@ -18,6 +18,9 @@ import javax.inject.Singleton
  *
  * AND-321 - also provides [KycDocumentsApi] (the `ui/kyc/documents` upload endpoint) from the SAME
  * shared Retrofit, alongside KycApi for consistency.
+ *
+ * AND-322 - also provides [KycIdScannerApi] (the `ui/kyc/id-scanner/cases/{caseId}/...` validate +
+ * per-side scan control plane) from the same shared Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -31,4 +34,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycDocumentsApi(retrofit: Retrofit): KycDocumentsApi =
         retrofit.create(KycDocumentsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycIdScannerApi(retrofit: Retrofit): KycIdScannerApi =
+        retrofit.create(KycIdScannerApi::class.java)
 }
