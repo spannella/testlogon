@@ -283,6 +283,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-386: Account deletion request. Multi-step confirm -> request -> pending -> cancel over the
         // /ui/privacy/account-deletion/request + .../requests + .../requests/{id}/cancel endpoints.
         accountDeletionDestination(navController)
+        // AND-387 (E50): account lifecycle - closure (start/finalize), suspend, reactivate over the
+        // /ui/account/closure/* + /ui/account/suspend + /ui/account/reactivate endpoints.
+        accountLifecycleDestinations(navController)
     }
 }
 
@@ -310,14 +313,12 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
             onOpenPrivacy = {
                 navController.navigate(MainDest.SettingsPrivacy.route) { launchSingleTop = true }
             },
-            // E50 reactivation/closure flows are out of scope; route to the privacy/lifecycle
-            // surface as a safe handoff until those tickets register their own destinations.
-            onReactivate = {
-                navController.navigate(MainDest.SettingsPrivacy.route) { launchSingleTop = true }
-            },
-            onCloseAccount = {
-                navController.navigate(MainDest.SettingsPrivacy.route) { launchSingleTop = true }
-            },
+            // AND-387 (E50): the lifecycle flows now own their destinations. onCloseAccount fires only
+            // after the AND-082 confirm gate, then deep-links into the closure flow (which adds its own
+            // re-auth + typed-CLOSE guard before the irreversible finalize).
+            onReactivate = { navController.navigateToAccountReactivate() },
+            onSuspend = { navController.navigateToAccountSuspend() },
+            onCloseAccount = { navController.navigateToAccountClosure() },
         )
     }
     composable(MainDest.SettingsSecurity.route) {

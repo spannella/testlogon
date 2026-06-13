@@ -202,6 +202,51 @@
     <string name="account_close_confirm_body">The next screen will guide you through closing your account. This action can be permanent.</string>
     <string name="account_close_confirm_continue">Continue</string>
     <string name="account_close_confirm_cancel">Cancel</string>
+    <string name="account_row_suspend">Suspend account</string>
+
+    <!-- AND-387 (E50): account closure / suspend / reactivate lifecycle flows -->
+    <string name="account_lifecycle_back">Back</string>
+    <string name="account_lifecycle_cancel">Cancel</string>
+    <string name="account_lifecycle_retry">Try again</string>
+    <string name="account_lifecycle_offline">Can\'t reach the server. Check your connection and try again.</string>
+    <string name="account_lifecycle_enabled">Enabled</string>
+    <string name="account_lifecycle_disabled">Disabled</string>
+
+    <string name="account_closure_title">Close account</string>
+    <string name="account_closure_summary_title">Before you close your account</string>
+    <string name="account_closure_summary_body">Closing your account is permanent. Your profile, content, and history may be removed and cannot be recovered. We may retain some data where required by law.</string>
+    <string name="account_closure_start">Start closing my account</string>
+    <string name="account_closure_reauth_title">Confirm it\'s you</string>
+    <string name="account_closure_reauth_body">For your security, re-enter your password to continue closing your account.</string>
+    <string name="account_closure_reauth_password">Password</string>
+    <string name="account_closure_reauth_continue">Continue</string>
+    <string name="account_closure_final_title">Permanently close your account?</string>
+    <string name="account_closure_final_body">This cannot be undone. Once confirmed, your account will be closed.</string>
+    <string name="account_closure_type_instruction">Type %1$s to confirm.</string>
+    <string name="account_closure_type_label">Confirmation</string>
+    <string name="account_closure_final_confirm">Close my account</string>
+
+    <string name="account_suspend_title">Suspend account</string>
+    <string name="account_suspend_summary_title">Temporarily suspend your account</string>
+    <string name="account_suspend_summary_body">Your account will be put on hold until you reactivate it. You can lift the suspension at any time.</string>
+    <string name="account_suspend_reason_label">Reason (optional)</string>
+    <string name="account_suspend_action">Suspend my account</string>
+    <string name="account_suspend_confirm_title">Suspend your account?</string>
+    <string name="account_suspend_confirm_body">You\'ll be signed out and your account placed on hold until you reactivate it.</string>
+    <string name="account_suspend_confirm_button">Suspend</string>
+
+    <string name="account_reactivate_title">Reactivate account</string>
+    <string name="account_reactivate_summary_title">Reactivate your account</string>
+    <string name="account_reactivate_body_suspended">Lift the suspension and return your account to active.</string>
+    <string name="account_reactivate_body_closure">Cancel the pending closure and return your account to active.</string>
+    <string name="account_reactivate_action">Reactivate my account</string>
+    <string name="account_reactivate_confirm_title">Reactivate your account?</string>
+    <string name="account_reactivate_confirm_body">Your account will be returned to active.</string>
+    <string name="account_reactivate_confirm_button">Reactivate</string>
+
+    <string name="account_closed_title">Account closed</string>
+    <string name="account_closed_heading">This account is closed</string>
+    <string name="account_closed_body">There are no further actions available for a closed account.</string>
 
     <!-- Security &amp; Privacy subsections (AND-077 / AND-082) -->
     <string name="security_settings_title">Security</string>

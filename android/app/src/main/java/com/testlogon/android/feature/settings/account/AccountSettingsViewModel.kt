@@ -28,6 +28,10 @@ sealed interface AccountUiState {
         /** Lifecycle row visibility derived purely from state (FR-4/FR-5). */
         val showClose: Boolean
             get() = status.state == AccountState.ACTIVE || status.state == AccountState.SUSPENDED
+
+        /** AND-387 FR-4: suspend is a self-service hold offered only from an ACTIVE account. */
+        val showSuspend: Boolean
+            get() = status.state == AccountState.ACTIVE
         val showReactivate: Boolean
             get() = status.state == AccountState.SUSPENDED ||
                 status.state == AccountState.CLOSURE_PENDING ||

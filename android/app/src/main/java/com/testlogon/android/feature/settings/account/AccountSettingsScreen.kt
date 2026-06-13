@@ -13,6 +13,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NoAccounts
+import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.AlertDialog
@@ -55,6 +56,7 @@ fun AccountSettingsRoute(
     onReactivate: () -> Unit,
     onCloseAccount: () -> Unit,
     modifier: Modifier = Modifier,
+    onSuspend: () -> Unit = {},
     viewModel: AccountSettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -66,6 +68,7 @@ fun AccountSettingsRoute(
         onOpenMfaDevices = onOpenMfaDevices,
         onOpenPrivacy = onOpenPrivacy,
         onReactivate = onReactivate,
+        onSuspend = onSuspend,
         onRequestClose = { viewModel.requestDestructive(DestructiveAction.CLOSE_ACCOUNT) },
         onDismissConfirm = viewModel::dismissConfirm,
         onConfirmClose = {
@@ -90,6 +93,7 @@ fun AccountSettingsScreen(
     onDismissConfirm: () -> Unit,
     onConfirmClose: () -> Unit,
     modifier: Modifier = Modifier,
+    onSuspend: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag("account_settings_screen"),
@@ -129,6 +133,7 @@ fun AccountSettingsScreen(
                 onOpenMfaDevices = onOpenMfaDevices,
                 onOpenPrivacy = onOpenPrivacy,
                 onReactivate = onReactivate,
+                onSuspend = onSuspend,
                 onRequestClose = onRequestClose,
             )
         }
@@ -147,6 +152,7 @@ private fun ReadyContent(
     onOpenMfaDevices: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onReactivate: () -> Unit,
+    onSuspend: () -> Unit,
     onRequestClose: () -> Unit,
 ) {
     Column(
@@ -176,6 +182,14 @@ private fun ReadyContent(
             title = stringResource(R.string.account_row_privacy),
             onClick = onOpenPrivacy,
         )
+        if (state.showSuspend) {
+            LinkRow(
+                tag = "account_row_suspend",
+                icon = Icons.Outlined.PauseCircleOutline,
+                title = stringResource(R.string.account_row_suspend),
+                onClick = onSuspend,
+            )
+        }
         if (state.showReactivate) {
             LinkRow(
                 tag = "account_row_reactivate",
