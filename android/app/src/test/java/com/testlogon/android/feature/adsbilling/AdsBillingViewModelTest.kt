@@ -52,6 +52,16 @@ class AdsBillingViewModelTest {
 
         override suspend fun getAccount(accountId: String) = accountOutcome
 
+        // AND-369 - accounts-list / campaigns reads are unused by the billing VM; stubbed so the fake
+        // satisfies the extended repository interface.
+        override suspend fun listAccounts(): ApiResult<List<AdAccountSummary>> =
+            ApiResult.Success(emptyList())
+
+        override suspend fun getCampaigns(
+            accountId: String,
+        ): ApiResult<List<com.testlogon.android.core.model.ads.AdCampaign>> =
+            ApiResult.Success(emptyList())
+
         override suspend fun getBillingHistory(accountId: String, limit: Int): ApiResult<List<AdBillingEntry>> {
             ledgerCalls++
             return if (ledgerOutcomes.isNotEmpty()) ledgerOutcomes.removeFirst() else defaultLedger

@@ -6,6 +6,8 @@ import com.testlogon.android.core.network.ads.AdAccountDto
 import com.testlogon.android.core.network.ads.AdAccountStatus
 import com.testlogon.android.core.network.ads.AdBillingEntryDto
 import com.testlogon.android.core.network.ads.AdCampaignDto
+import com.testlogon.android.core.network.ads.AdCampaignStatus
+import com.testlogon.android.core.model.ads.AdCampaignStatusDomain
 import com.testlogon.android.core.network.ads.AdDepositIn
 import com.testlogon.android.core.network.ads.AdDepositOut
 import com.testlogon.android.core.network.ads.AdInvoiceCampaignLineDto
@@ -52,12 +54,28 @@ class AdsBillingRepositoryTest {
         )
         var depositResult: AdDepositOut = AdDepositOut(newBalanceCents = 200000L, status = "ok")
 
+        // AND-369 - canned campaigns list + throw seams for the accounts-list / campaigns reads.
+        var campaignsResult: List<AdCampaignDto> = listOf(
+            AdCampaignDto(
+                campaignId = "cmp_1",
+                accountId = "acc_1",
+                status = AdCampaignStatus.ACTIVE,
+                budgetCents = 500000L,
+                dailyBudgetCents = 50000L,
+            ),
+        )
+        var throwOnListAccounts: Throwable? = null
+        var throwOnCampaigns: Throwable? = null
+
         var throwOnDeposit: Throwable? = null
 
         var lastDepositAccountId: String? = null
         var lastDepositBody: AdDepositIn? = null
 
-        override suspend fun listAdsAccounts(): List<AdAccountDto> = listOf(accountResult)
+        override suspend fun listAdsAccounts(): List<AdAccountDto> {
+            throwOnListAccounts?.let { throw it }
+            return listOf(accountResult)
+        }
 
         override suspend fun getAdsAccount(accountId: String): AdAccountDto = accountResult
 
@@ -66,7 +84,10 @@ class AdsBillingRepositoryTest {
             limit: Int,
         ): List<AdBillingEntryDto> = billingResult
 
-        override suspend fun listAdsAccountCampaigns(accountId: String): List<AdCampaignDto> = emptyList()
+        override suspend fun listAdsAccountCampaigns(accountId: String): List<AdCampaignDto> {
+            throwOnCampaigns?.let { throw it }
+            return campaignsResult
+        }
 
         override suspend fun getInvoice(accountId: String, month: String): AdInvoiceDto = invoiceResult
 
@@ -164,6 +185,59 @@ class AdsBillingRepositoryTest {
 
         // Body was recorded before the throw.
         assertEquals(100L, api.lastDepositBody?.amountCents)
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(400, (result as ApiResult.Failure).error.status)
+    }
+
+    // ---- AND-369 - accounts-list + campaigns reads ----
+
+    @Test
+    fun listAccounts_mapsRows() = runTest {
+        val result = repo(FakeAdsApi()).listAccounts()
+        assertTrue(result is ApiResult.Success)
+        val rows = (result as ApiResult.Success).data
+        assertEquals(1, rows.size)
+        assertEquals("acc_1", rows[0].accountId)
+        assertEquals("Acme Ads", rows[0].companyName)
+        assertEquals("active", rows[0].status)
+        assertEquals(150000L, rows[0].balanceCents)
+    }
+
+    @Test
+    fun listAccounts_httpError_surfacesFailure_withStatus() = runTest {
+        val api = FakeAdsApi().apply { throwOnListAccounts = http400() }
+        val result = repo(api).listAccounts()
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(400, (result as ApiResult.Failure).error.status)
+    }
+
+    @Test
+    fun getCampaigns_mapsRows_statusEnumAndCents() = runTest {
+        val result = repo(FakeAdsApi()).getCampaigns("acc_1")
+        assertTrue(result is ApiResult.Success)
+        val rows = (result as ApiResult.Success).data
+        assertEquals(1, rows.size)
+        assertEquals("cmp_1", rows[0].campaignId)
+        assertEquals("active", rows[0].status)
+        assertEquals(AdCampaignStatusDomain.ACTIVE, rows[0].statusEnum)
+        assertEquals(500000L, rows[0].budgetCents)
+        assertEquals(50000L, rows[0].dailyBudgetCents)
+    }
+
+    @Test
+    fun getCampaigns_unknownStatus_mapsUnknownSafely() = runTest {
+        val api = FakeAdsApi().apply {
+            campaignsResult = listOf(AdCampaignDto(campaignId = "cmp_x", status = AdCampaignStatus.UNKNOWN))
+        }
+        val rows = (repo(api).getCampaigns("acc_1") as ApiResult.Success).data
+        assertEquals(AdCampaignStatusDomain.UNKNOWN, rows[0].statusEnum)
+        assertEquals("unknown", rows[0].status)
+    }
+
+    @Test
+    fun getCampaigns_httpError_surfacesFailure_withStatus() = runTest {
+        val api = FakeAdsApi().apply { throwOnCampaigns = http400() }
+        val result = repo(api).getCampaigns("acc_1")
         assertTrue(result is ApiResult.Failure)
         assertEquals(400, (result as ApiResult.Failure).error.status)
     }

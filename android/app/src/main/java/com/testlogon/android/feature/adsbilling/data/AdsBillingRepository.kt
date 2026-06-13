@@ -5,6 +5,7 @@ import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.model.ads.AdBillingEntry
+import com.testlogon.android.core.model.ads.AdCampaign
 import com.testlogon.android.core.model.ads.AdInvoice
 import com.testlogon.android.core.model.ads.DepositResult
 import com.testlogon.android.core.network.ads.AdDepositIn
@@ -37,6 +38,18 @@ import javax.inject.Singleton
  */
 interface AdsBillingRepository {
 
+    /**
+     * AND-369 - GET the advertiser-accounts list (bare array), mapped to [AdAccountSummary] rows (the list
+     * row reuses the AND-367 summary type). Idempotent GET. Backs the AdsAccountsViewModel.
+     */
+    suspend fun listAccounts(): ApiResult<List<AdAccountSummary>>
+
+    /**
+     * AND-369 - GET the read-only campaigns under [accountId] (bare array), mapped to [AdCampaign]. Idempotent
+     * GET. Backs the AdsCampaignsViewModel.
+     */
+    suspend fun getCampaigns(accountId: String): ApiResult<List<AdCampaign>>
+
     /** GET the account summary (balance + lifetime spend + company name + status), mapped. Idempotent GET. */
     suspend fun getAccount(accountId: String): ApiResult<AdAccountSummary>
 
@@ -62,6 +75,16 @@ class AdsBillingRepositoryImpl @Inject constructor(
     private val api: AdsAccountsApi,
     private val errorParser: ApiErrorParser,
 ) : AdsBillingRepository {
+
+    override suspend fun listAccounts(): ApiResult<List<AdAccountSummary>> =
+        withContext(Dispatchers.IO) {
+            call { api.listAdsAccounts().map { it.toAccountSummary() } }
+        }
+
+    override suspend fun getCampaigns(accountId: String): ApiResult<List<AdCampaign>> =
+        withContext(Dispatchers.IO) {
+            call { api.listAdsAccountCampaigns(accountId).map { it.toDomain() } }
+        }
 
     override suspend fun getAccount(accountId: String): ApiResult<AdAccountSummary> =
         withContext(Dispatchers.IO) {
