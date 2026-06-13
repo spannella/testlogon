@@ -29,6 +29,9 @@ kotlin {
 dependencies {
     implementation(project(":core-model"))
 
+    // AND-388 - IrreversibleActionGuard exposes a StateFlow phase (framework-free state machine).
+    implementation(libs.coroutines.core)
+
     // Compose exposed via api(...) so feature modules inherit the design system transitively.
     val composeBom = platform(libs.compose.bom)
     api(composeBom)

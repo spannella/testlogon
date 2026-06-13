@@ -52,3 +52,18 @@ data class BlockedUser(
     val profilePhotoUrl: String?,
     val blockedAt: String,
 )
+
+/**
+ * AND-388 - the staged block / unblock action routed through the shared IrreversibleActionGuard by
+ * BlockActionDelegate. A framework-free domain payload (core-model has no Moshi / Android deps) so
+ * the guard's typed Confirming/Submitting phases can carry the pending intent.
+ */
+sealed interface BlockAction {
+    val targetUserId: String
+
+    /** Block [targetUserId]; optional [reason] forwarded to the server (server maxLength 500). */
+    data class Block(override val targetUserId: String, val reason: String? = null) : BlockAction
+
+    /** Unblock [targetUserId]. */
+    data class Unblock(override val targetUserId: String) : BlockAction
+}
