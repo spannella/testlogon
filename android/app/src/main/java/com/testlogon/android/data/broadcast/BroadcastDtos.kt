@@ -40,6 +40,11 @@ data class BroadcastSessionDto(
     @Json(name = "cancelled_at") val cancelledAt: String? = null,
     @Json(name = "tip_total_cents") val tipTotalCents: Long? = null,
     @Json(name = "tip_count") val tipCount: Int? = null,
+    // AND-315 — host tip-config fields carried on the SAME BroadcastSessionOut. Additive + defaulted so
+    // AND-278/307 decode paths keep working when absent. The PATCH tips/config response is this full session.
+    @Json(name = "tip_enabled") val tipEnabled: Boolean? = null,
+    @Json(name = "tip_min_cents") val tipMinCents: Long? = null,
+    @Json(name = "tip_max_cents") val tipMaxCents: Long? = null,
 )
 
 /**

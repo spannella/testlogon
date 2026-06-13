@@ -48,6 +48,12 @@ object BroadcastApiModule {
         retrofit: Retrofit,
     ): com.testlogon.android.feature.broadcast.moderation.ModerationApi =
         retrofit.create(com.testlogon.android.feature.broadcast.moderation.ModerationApi::class.java)
+
+    /** AND-315 — host monetization (tip-config PATCH + private-show lifecycle) on the SAME shared Retrofit. */
+    @Provides
+    @Singleton
+    fun provideBroadcastMonetizationApi(retrofit: Retrofit): BroadcastMonetizationApi =
+        retrofit.create(BroadcastMonetizationApi::class.java)
 }
 
 @Module
@@ -99,4 +105,14 @@ abstract class BroadcastDataModule {
     abstract fun bindModerationRepository(
         impl: com.testlogon.android.feature.broadcast.moderation.ModerationRepositoryImpl,
     ): com.testlogon.android.feature.broadcast.moderation.ModerationRepository
+
+    /**
+     * AND-315 — separate monetization repository (tip-config + private-show). Kept distinct from the shared
+     * BroadcastRepository / HostControl / Inputs so their fakes are NOT touched. No new API/DAO/migration.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindBroadcastMonetizationRepository(
+        impl: BroadcastMonetizationRepositoryImpl,
+    ): BroadcastMonetizationRepository
 }

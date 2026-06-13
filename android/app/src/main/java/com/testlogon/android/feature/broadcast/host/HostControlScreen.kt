@@ -93,6 +93,12 @@ object HostControlTestTags {
 
     /** AND-314 — opens the goals + products authoring surface. */
     const val MANAGE_GOALS_PRODUCTS = "host_manage_goals_products"
+
+    /** AND-315 — opens the tip-config editor. */
+    const val MANAGE_TIPS = "host_manage_tips"
+
+    /** AND-315 — opens the private-show lifecycle surface. */
+    const val PRIVATE_SHOWS = "host_private_shows"
 }
 
 /**
@@ -112,6 +118,10 @@ fun HostControlRoute(
     onModeration: (String) -> Unit = {},
     // AND-314 — open the goals + products authoring surface for this session.
     onManageGoalsProducts: () -> Unit = {},
+    // AND-315 — open the tip-config editor for this session.
+    onManageTips: () -> Unit = {},
+    // AND-315 — open the private-show lifecycle surface for this session.
+    onPrivateShows: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -133,6 +143,8 @@ fun HostControlRoute(
         onManageGuests = onManageGuests,
         onModeration = onModeration,
         onManageGoalsProducts = onManageGoalsProducts,
+        onManageTips = onManageTips,
+        onPrivateShows = onPrivateShows,
         onBack = onBack,
     )
 }
@@ -163,6 +175,10 @@ fun HostControlScreen(
     onModeration: (String) -> Unit = {},
     // AND-314 — open the goals + products authoring surface; defaulted so existing tests are unaffected.
     onManageGoalsProducts: () -> Unit = {},
+    // AND-315 — open the tip-config editor; defaulted so existing call sites/tests are unaffected.
+    onManageTips: () -> Unit = {},
+    // AND-315 — open the private-show lifecycle surface; defaulted so existing call sites/tests are unaffected.
+    onPrivateShows: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -265,6 +281,28 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.MANAGE_GOALS_PRODUCTS),
             ) {
                 Text(stringResource(R.string.host_control_manage_goals_products))
+            }
+
+            // AND-315 — edit this broadcast's tip-config (allow tips + min/max bounds).
+            OutlinedButton(
+                onClick = onManageTips,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_TIPS),
+            ) {
+                Text(stringResource(R.string.host_control_manage_tips))
+            }
+
+            // AND-315 — manage incoming private-show requests + the active private show.
+            OutlinedButton(
+                onClick = onPrivateShows,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.PRIVATE_SHOWS),
+            ) {
+                Text(stringResource(R.string.host_control_private_shows))
             }
         }
     }

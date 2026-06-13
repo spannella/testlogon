@@ -53,6 +53,10 @@ fun BroadcastSessionDto.toDomain(): BroadcastSession = BroadcastSession(
     thumbnailUrl = thumbnailUrl,
     tipTotalCents = tipTotalCents,
     tipCount = tipCount,
+    // AND-315 — host tip-config fields (null when absent on this payload).
+    tipEnabled = tipEnabled,
+    tipMinCents = tipMinCents,
+    tipMaxCents = tipMaxCents,
     createdAt = parseInstantOrNull(createdAt) ?: Instant.EPOCH,
     updatedAt = parseInstantOrNull(updatedAt) ?: Instant.EPOCH,
 )

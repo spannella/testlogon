@@ -2135,4 +2135,51 @@
     <string name="products_reordered_snackbar">Products reordered</string>
     <string name="products_price_set_snackbar">Broadcast price set</string>
     <string name="products_price_cleared_snackbar">Broadcast price cleared</string>
+
+    <!-- AND-315 — host tip-config editor -->
+    <string name="tips_config_title">Tips</string>
+    <string name="tips_config_back_cd">Back</string>
+    <string name="tips_config_enabled_label">Allow tips</string>
+    <string name="tips_config_enabled_cd">Allow tips during this broadcast</string>
+    <string name="tips_config_min_label">Minimum tip</string>
+    <string name="tips_config_max_label">Maximum tip</string>
+    <string name="tips_config_amount_prefix">$</string>
+    <string name="tips_config_bounds_hint">Each tip must be between $1.00 and $1,000.00.</string>
+    <string name="tips_config_error_required">Enter an amount.</string>
+    <string name="tips_config_error_out_of_range">Enter an amount between $1.00 and $1,000.00.</string>
+    <string name="tips_config_error_min_gt_max">The minimum can\'t be more than the maximum.</string>
+    <string name="tips_config_save">Save</string>
+    <string name="tips_config_save_cd">Save tip settings</string>
+    <string name="tips_config_error_title">Couldn\'t load tip settings</string>
+    <string name="tips_config_saving">Saving…</string>
+
+    <!-- AND-315 — host private-show lifecycle -->
+    <string name="private_show_title">Private show</string>
+    <string name="private_show_request_title">Private show request</string>
+    <string name="private_show_request_from">From %1$s</string>
+    <string name="private_show_anonymous_viewer">A viewer</string>
+    <string name="private_show_rate">%1$s / minute</string>
+    <string name="private_show_max_duration">Up to %1$d minutes</string>
+    <string name="private_show_behavior_label">Public stream while private</string>
+    <string name="private_show_behavior_pause">Pause</string>
+    <string name="private_show_behavior_end">End</string>
+    <string name="private_show_behavior_continue">Continue</string>
+    <string name="private_show_accept">Accept</string>
+    <string name="private_show_accept_cd">Accept private show request</string>
+    <string name="private_show_decline">Decline</string>
+    <string name="private_show_decline_cd">Decline private show request</string>
+    <string name="private_show_active_title">Private show in progress</string>
+    <string name="private_show_elapsed">%1$s elapsed</string>
+    <string name="private_show_running_cost">%1$s so far</string>
+    <string name="private_show_end">End show</string>
+    <string name="private_show_end_cd">End the private show</string>
+    <string name="private_show_ending">Ending…</string>
+    <string name="private_show_summary_title">Private show ended</string>
+    <string name="private_show_summary_duration">Duration: %1$s</string>
+    <string name="private_show_summary_total">Total billed: %1$s</string>
+    <string name="private_show_summary_dismiss">Done</string>
+
+    <!-- AND-315 — host control affordances -->
+    <string name="host_control_manage_tips">Tip settings</string>
+    <string name="host_control_private_shows">Private shows</string>
 </resources>

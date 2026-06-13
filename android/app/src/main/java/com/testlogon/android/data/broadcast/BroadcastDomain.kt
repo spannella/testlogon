@@ -39,6 +39,11 @@ data class BroadcastSession(
     val thumbnailUrl: String?,
     val tipTotalCents: Long?,
     val tipCount: Int?,
+    // AND-315 — host tip-config (read from GET session / PATCH tips/config response). Additive + defaulted
+    // (null = "not reported on this payload") so AND-278/307 construction sites keep compiling.
+    val tipEnabled: Boolean? = null,
+    val tipMinCents: Long? = null,
+    val tipMaxCents: Long? = null,
     val createdAt: Instant,
     val updatedAt: Instant,
 )

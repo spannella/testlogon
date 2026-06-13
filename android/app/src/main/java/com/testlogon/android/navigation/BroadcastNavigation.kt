@@ -21,6 +21,10 @@ import com.testlogon.android.feature.broadcast.layout.LayoutRoute
 import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
 import com.testlogon.android.feature.broadcast.moderation.ModerationLogRoute
 import com.testlogon.android.feature.broadcast.moderation.ModerationViewModel
+import com.testlogon.android.feature.broadcast.privateshow.PrivateShowRoute
+import com.testlogon.android.feature.broadcast.privateshow.PrivateShowViewModel
+import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigRoute
+import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigViewModel
 import com.testlogon.android.feature.broadcasthost.manage.GoalsProductsViewModel
 import com.testlogon.android.feature.broadcasthost.manage.ManageRoute
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
@@ -104,6 +108,20 @@ data object BroadcastManageDest {
     const val ROUTE = "broadcast/{${GoalsProductsViewModel.ARG_SESSION_ID}}/manage"
 
     fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/manage"
+}
+
+/** AND-315 — the host tip-config editor destination (allow tips + min/max bounds), keyed by sessionId. */
+data object BroadcastTipsConfigDest {
+    const val ROUTE = "broadcast/{${TipsConfigViewModel.ARG_SESSION_ID}}/tips-config"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/tips-config"
+}
+
+/** AND-315 — the host private-show lifecycle destination (request/accept/active/end), keyed by sessionId. */
+data object BroadcastPrivateShowDest {
+    const val ROUTE = "broadcast/{${PrivateShowViewModel.ARG_SESSION_ID}}/private-show"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/private-show"
 }
 
 /**
@@ -200,6 +218,14 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onManageGoalsProducts = {
                 navController.navigate(BroadcastManageDest.build(sessionId)) { launchSingleTop = true }
             },
+            // AND-315 — the host can edit this broadcast's tip-config (allow tips + min/max bounds).
+            onManageTips = {
+                navController.navigate(BroadcastTipsConfigDest.build(sessionId)) { launchSingleTop = true }
+            },
+            // AND-315 — the host can manage incoming private-show requests + the active private show.
+            onPrivateShows = {
+                navController.navigate(BroadcastPrivateShowDest.build(sessionId)) { launchSingleTop = true }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -250,6 +276,24 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         ),
     ) {
         ManageRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-315 — the host tip-config editor destination (allow tips + min/max bounds).
+    composable(
+        route = BroadcastTipsConfigDest.ROUTE,
+        arguments = listOf(
+            navArgument(TipsConfigViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        TipsConfigRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-315 — the host private-show lifecycle destination (request / accept / active / end).
+    composable(
+        route = BroadcastPrivateShowDest.ROUTE,
+        arguments = listOf(
+            navArgument(PrivateShowViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        PrivateShowRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(
