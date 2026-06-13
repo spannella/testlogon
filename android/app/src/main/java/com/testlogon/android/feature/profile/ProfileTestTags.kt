@@ -31,4 +31,11 @@ object ProfileTestTags {
     const val PUBLIC_RATE_LIMITED = "public_ratelimited"
     const val PUBLIC_ERROR = "public_error"
     const val PUBLIC_STALE_BANNER = "public_stale_banner"
+
+    // AND-390: public-profile polish (share/copy affordances + unauth Sign-in CTA + auth-only gates).
+    const val PUBLIC_SHARE = "public_share"
+    const val PUBLIC_COPY_LINK = "public_copy_link"
+    const val PUBLIC_SIGN_IN_CTA = "public_sign_in_cta"
+    const val PUBLIC_OPEN_FANCLUB = "public_open_fanclub"
+    const val PUBLIC_REPORT_USER = "public_report_user"
 }

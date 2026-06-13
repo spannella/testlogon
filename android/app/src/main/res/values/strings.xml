@@ -116,6 +116,16 @@
     <string name="profile_stat_following">Following</string>
     <string name="profile_stat_posts">Posts</string>
 
+    <!-- Public profile polish (AND-390): share/copy affordances + unauth Sign-in CTA. -->
+    <string name="share_profile_title">%1$s on TestLogon</string>
+    <string name="share_profile_chooser">Share profile</string>
+    <string name="share_profile_failed">Couldn\'t open the share sheet.</string>
+    <string name="link_copied">Link copied</string>
+    <string name="link_copy_failed">Couldn\'t copy the link.</string>
+    <string name="cd_share_profile">Share this profile</string>
+    <string name="cd_copy_link">Copy link to this profile</string>
+    <string name="sign_in_cta">Sign in</string>
+
     <!-- Profile media upload (AND-074) -->
     <string name="profile_media_prepare_failed">Couldn\'t prepare the image.</string>
     <string name="profile_media_upload_failed">Couldn\'t upload the photo. Try again.</string>

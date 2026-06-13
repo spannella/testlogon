@@ -12,20 +12,27 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Login
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -44,22 +51,62 @@ import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.profile.ProfileTestTags
 import com.testlogon.android.feature.profile.components.ProfileHeader
 import com.testlogon.android.feature.report.ReportSheet
+import kotlinx.coroutines.launch
 
-/** AND-073 — route-level public-profile entry for /u/{identifier}. */
+/**
+ * AND-073 / AND-390 — route-level public-profile entry for /u/{identifier}.
+ *
+ * AND-390 polish: wires the share-sheet / copy-link affordances (FR-5) through the injectable
+ * [ProfileShareIntents] seam (resolved in composable scope so a test can fake it), gates auth-only
+ * affordances and the Sign-in CTA on [PublicProfileViewModel.isAuthenticated] (FR-7/FR-8), and routes
+ * the Sign-in CTA via [onSignIn] into the auth flow (FR-8). The public read itself never requires a
+ * session (FR-1) — auth state only changes presentation.
+ */
 @Composable
 fun PublicProfileRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    // Defaulted no-op so the authenticated graph (where the CTA is hidden) need not supply it.
+    onSignIn: () -> Unit = {},
+    shareIntents: ProfileShareIntents = remember { ProfileShareIntents() },
     viewModel: PublicProfileViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val isAuthenticated by viewModel.isAuthenticated.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val linkCopied = stringResource(R.string.link_copied)
+    val copyFailed = stringResource(R.string.link_copy_failed)
+    val shareFailed = stringResource(R.string.share_profile_failed)
+
     PublicProfileScreen(
         state = state,
         identifier = viewModel.identifier,
+        isAuthenticated = isAuthenticated,
+        shareUrl = viewModel.shareUrl,
+        snackbarHostState = snackbarHostState,
         onRetry = viewModel::onRetry,
         onBack = onBack,
         onOpenFanClub = onOpenFanClub,
+        onSignIn = onSignIn,
+        onShare = { displayName ->
+            val url = viewModel.shareUrl ?: return@PublicProfileScreen
+            if (!shareIntents.share(context, url, displayName)) {
+                scope.launch { snackbarHostState.showSnackbar(shareFailed) }
+            }
+        },
+        onCopyLink = {
+            val url = viewModel.shareUrl ?: return@PublicProfileScreen
+            val ok = shareIntents.copyLink(context, url)
+            // On API 33+ the OS shows its own clipboard toast; suppress the duplicate in-app snackbar.
+            if (ok && shareIntents.shouldShowCopyConfirmation()) {
+                scope.launch { snackbarHostState.showSnackbar(linkCopied) }
+            } else if (!ok) {
+                scope.launch { snackbarHostState.showSnackbar(copyFailed) }
+            }
+        },
         modifier = modifier,
     )
 }
@@ -71,13 +118,26 @@ fun PublicProfileScreen(
     identifier: String,
     onRetry: () -> Unit,
     onBack: () -> Unit,
-    onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
+    isAuthenticated: Boolean = false,
+    shareUrl: String? = null,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    onSignIn: () -> Unit = {},
+    onShare: (displayName: String) -> Unit = {},
+    onCopyLink: () -> Unit = {},
 ) {
     val title = (state as? PublicProfileUiState.Content)?.profile?.displayName
         ?.takeIf { it.isNotBlank() } ?: identifier
+    // The share URL needs only the identifier, so copy-link can be enabled before Content; the share
+    // sheet (which carries a display name) is enabled once a name is available (§7).
+    val canShareOrCopy = shareUrl != null
+    val displayName = (state as? PublicProfileUiState.Content)?.profile
+        ?.let { it.displayName.ifBlank { it.identifier } }
+        ?: identifier
     TlScaffold(
         modifier = modifier.testTag(ProfileTestTags.PUBLIC_ROOT),
+        snackbarHostState = snackbarHostState,
         topBar = {
             TopAppBar(
                 title = { Text(title.ifBlank { stringResource(R.string.profile_public_title) }) },
@@ -86,6 +146,30 @@ fun PublicProfileScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
+                        )
+                    }
+                },
+                actions = {
+                    // AND-390: copy-link + share affordances. The canonical https URL is always the
+                    // production App Link host so a shared link round-trips back into the app (FR-5/FR-6).
+                    IconButton(
+                        onClick = onCopyLink,
+                        enabled = canShareOrCopy,
+                        modifier = Modifier.testTag(ProfileTestTags.PUBLIC_COPY_LINK),
+                    ) {
+                        Icon(
+                            Icons.Outlined.ContentCopy,
+                            contentDescription = stringResource(R.string.cd_copy_link),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onShare(displayName) },
+                        enabled = canShareOrCopy,
+                        modifier = Modifier.testTag(ProfileTestTags.PUBLIC_SHARE),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Share,
+                            contentDescription = stringResource(R.string.cd_share_profile),
                         )
                     }
                 },
@@ -100,14 +184,20 @@ fun PublicProfileScreen(
                 PublicContent(
                     profile = state.profile,
                     isStale = state.isStale,
+                    isAuthenticated = isAuthenticated,
                     onRetry = onRetry,
                     onOpenFanClub = onOpenFanClub,
+                    onSignIn = onSignIn,
                 )
 
             is PublicProfileUiState.NotFound ->
+                // AND-390: the not-found surface folds private/suppressed (both 404). Signing in may
+                // reveal a profile suppressed from anonymous viewers, so offer the Sign-in CTA here.
                 EmptyState(
                     title = stringResource(R.string.profile_public_not_found_title),
                     body = stringResource(R.string.profile_public_not_found_body),
+                    actionLabel = if (!isAuthenticated) stringResource(R.string.sign_in_cta) else null,
+                    onAction = if (!isAuthenticated) onSignIn else null,
                     modifier = Modifier.testTag(ProfileTestTags.PUBLIC_NOT_FOUND),
                 )
 
@@ -134,8 +224,10 @@ fun PublicProfileScreen(
 private fun PublicContent(
     profile: PublicProfile,
     isStale: Boolean,
+    isAuthenticated: Boolean,
     onRetry: () -> Unit,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    onSignIn: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -174,34 +266,53 @@ private fun PublicContent(
             modifier = Modifier.padding(horizontal = 16.dp),
         )
         StatsRow(profile = profile, modifier = Modifier.padding(horizontal = 16.dp))
-        // AND-238: entry point into this creator's fan-club channels.
-        OutlinedButton(
-            onClick = { onOpenFanClub(profile.userId, profile.displayName) },
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .fillMaxWidth()
-                .testTag("public_open_fanclub"),
-        ) {
-            Text(stringResource(R.string.profile_public_open_fanclub))
-        }
 
-        // AND-383: reuse the cross-cutting report flow as a real USER call site.
-        var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
-        OutlinedButton(
-            onClick = { reportTarget = ReportTarget.User(profile.userId, profile.displayName) },
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .fillMaxWidth()
-                .testTag("public_report_user"),
-        ) {
-            Text(stringResource(R.string.msg_action_report))
-        }
-        reportTarget?.let { tgt ->
-            ReportSheet(
-                target = tgt,
-                onDismiss = { reportTarget = null },
-                onCompleted = { reportTarget = null },
-            )
+        // AND-390: auth-only affordances (fan-club, report) are HIDDEN (not disabled) when signed out;
+        // the unauthenticated viewer instead gets a non-blocking Sign-in CTA (FR-7/FR-8).
+        if (isAuthenticated) {
+            // AND-238: entry point into this creator's fan-club channels.
+            OutlinedButton(
+                onClick = { onOpenFanClub(profile.userId, profile.displayName) },
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag(ProfileTestTags.PUBLIC_OPEN_FANCLUB),
+            ) {
+                Text(stringResource(R.string.profile_public_open_fanclub))
+            }
+
+            // AND-383: reuse the cross-cutting report flow as a real USER call site.
+            var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
+            OutlinedButton(
+                onClick = { reportTarget = ReportTarget.User(profile.userId, profile.displayName) },
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag(ProfileTestTags.PUBLIC_REPORT_USER),
+            ) {
+                Text(stringResource(R.string.msg_action_report))
+            }
+            reportTarget?.let { tgt ->
+                ReportSheet(
+                    target = tgt,
+                    onDismiss = { reportTarget = null },
+                    onCompleted = { reportTarget = null },
+                )
+            }
+        } else {
+            Button(
+                onClick = onSignIn,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag(ProfileTestTags.PUBLIC_SIGN_IN_CTA),
+            ) {
+                Icon(Icons.Filled.Login, contentDescription = null)
+                Text(
+                    text = stringResource(R.string.sign_in_cta),
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
         }
     }
 }

@@ -322,7 +322,14 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
             ServerUrlSettingsRoute(onNavigateBack = { navController.popBackStack() })
         }
         // AND-073: public profile via the /u/{identifier} App Link works while signed out too.
-        publicProfileDestination(navController)
+        // AND-390: the Sign-in CTA routes into the Login destination of this graph; on a successful
+        // login the auth gate (AppNavHost) swaps to the authenticated graph automatically.
+        publicProfileDestination(
+            navController,
+            onSignIn = {
+                navController.navigate(AuthDest.Login.route) { launchSingleTop = true }
+            },
+        )
         // AND-196: public clip via the /c/{clipId} App Link works while signed out too.
         publicClipDestination(navController)
         // AND-272: public event via the /event/{calendarId}/{eventId} App Link works while signed out.
