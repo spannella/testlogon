@@ -164,6 +164,11 @@ object MoreRoutes {
     // filter -> deal-detail placeholder; the real detail is AND-366).
     const val SPONSORSHIPS = SponsorshipInboxDest.ROUTE
 
+    // AND-367: ads-account billing read view (balance/lifetime-spend + ledger + monthly invoice) + the
+    // DEPOSIT add-funds sheet. No ads-accounts list yet, so the hub opens a known sample account id (plain
+    // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
+    const val ADS_BILLING = AdsBillingDest.STUB_ROUTE
+
     // AND-360: the delegate console (focused manage-as-creator demonstration). Self-gates on the managed-
     // creator state (shows an enter prompt when not in delegate mode); renders the persistent banner + the
     // permission-gated delegate feed / messaging affordances.
@@ -227,6 +232,7 @@ object MoreRoutes {
             SYNDICATES,
             COLLABORATIONS,
             SPONSORSHIPS,
+            ADS_BILLING,
             DELEGATE_CONSOLE,
             SETTINGS,
             HELP,

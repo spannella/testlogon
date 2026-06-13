@@ -192,4 +192,86 @@ class AdsAccountsApiTest {
         assertTrue(error is HttpException)
         assertEquals(500, (error as HttpException).code())
     }
+
+    // ---- AND-367: getInvoice GET ui/ads/accounts/{accountId}/invoices/{month} -> AdInvoiceDto ----
+
+    @Test
+    fun getInvoice_substitutesAccountIdAndMonth_decodesCampaignLines() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """{"month":"2026-06","total_charges_cents":750000,"total_deposits_cents":100000,
+                    "entry_count":3,
+                    "campaigns":[
+                        {"campaign_id":"cmp_1","impressions":12000,"clicks":340,"conversions":12,
+                         "total_cents":500000},
+                        {"campaign_id":"cmp_2","total_cents":250000}
+                    ]}""",
+            ),
+        )
+
+        val invoice = adsApi().getInvoice("acc_1", "2026-06")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/ads/accounts/acc_1/invoices/2026-06", recorded.requestUrl?.encodedPath)
+        assertEquals("2026-06", invoice.month)
+        assertEquals(750000L, invoice.totalChargesCents)
+        assertEquals(100000L, invoice.totalDepositsCents)
+        assertEquals(3, invoice.entryCount)
+        assertEquals(2, invoice.campaigns.size)
+        assertEquals("cmp_1", invoice.campaigns[0].campaignId)
+        assertEquals(12000L, invoice.campaigns[0].impressions)
+        assertEquals(500000L, invoice.campaigns[0].totalCents)
+        // sparse line: counts null
+        assertEquals("cmp_2", invoice.campaigns[1].campaignId)
+        assertEquals(null, invoice.campaigns[1].impressions)
+    }
+
+    // ---- AND-367: deposit POST ui/ads/accounts/{accountId}/deposit ----
+
+    @Test
+    fun deposit_postsAmountAndPaymentMethod_decodesNewBalance() = runTest {
+        server.enqueue(jsonResponse("""{"new_balance_cents":155000,"status":"ok"}"""))
+
+        val out = adsApi().deposit("acc_1", AdDepositIn(amountCents = 50000L, paymentMethodId = "pm_9"))
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ui/ads/accounts/acc_1/deposit", recorded.requestUrl?.encodedPath)
+        val body = recorded.body.readUtf8()
+        assertTrue(body.contains("\"amount_cents\":50000"))
+        assertTrue(body.contains("\"payment_method_id\":\"pm_9\""))
+        assertEquals(155000L, out.newBalanceCents)
+        assertEquals("ok", out.status)
+    }
+
+    @Test
+    fun deposit_omitsNullPaymentMethod() = runTest {
+        server.enqueue(jsonResponse("""{"new_balance_cents":50000}"""))
+
+        adsApi().deposit("acc_1", AdDepositIn(amountCents = 50000L))
+
+        val recorded = server.takeRequest()
+        val body = recorded.body.readUtf8()
+        assertTrue(body.contains("\"amount_cents\":50000"))
+        // null payment_method_id is omitted by Moshi's non-serialize-nulls default.
+        assertTrue(!body.contains("payment_method_id"))
+    }
+
+    @Test
+    fun deposit_400_surfacesAsHttpException() = runTest {
+        server.enqueue(
+            jsonResponse("""{"detail":"Minimum deposit is 5000 cents"}""", code = 400),
+        )
+
+        val error = runCatching {
+            adsApi().deposit("acc_1", AdDepositIn(amountCents = 100L))
+        }.exceptionOrNull()
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ui/ads/accounts/acc_1/deposit", recorded.requestUrl?.encodedPath)
+        assertTrue(error is HttpException)
+        assertEquals(400, (error as HttpException).code())
+    }
 }

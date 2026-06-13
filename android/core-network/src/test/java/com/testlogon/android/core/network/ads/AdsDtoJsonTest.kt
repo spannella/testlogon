@@ -229,4 +229,109 @@ class AdsDtoJsonTest {
             billingListAdapter().fromJson("""[{"entry_id":"e"}]""")
         }
     }
+
+    // ---- AND-367: billing row entry_type / state / reason ----
+
+    @Test
+    fun billingEntry_decodesEntryTypeStateReason() {
+        val entries = requireNotNull(
+            billingListAdapter().fromJson(
+                """[{"entry_type":"charge","amount_cents":2500,"state":"settled",
+                    "reason":"daily spend","created_at":1700000000}]""",
+            ),
+        )
+        assertEquals("charge", entries[0].entryType)
+        assertEquals(2500L, entries[0].amountCents)
+        assertEquals("settled", entries[0].state)
+        assertEquals("daily spend", entries[0].reason)
+        assertEquals(1700000000L, entries[0].createdAt)
+    }
+
+    // ---- AND-367: invoice DTO + campaign lines ----
+
+    @Test
+    fun invoice_roundTrips_withLinesAndCents() {
+        val decoded = roundTrip(
+            AdInvoiceDto(
+                month = "2026-06",
+                totalChargesCents = 750000L,
+                totalDepositsCents = 100000L,
+                entryCount = 3,
+                campaigns = listOf(
+                    AdInvoiceCampaignLineDto(
+                        campaignId = "cmp_1",
+                        impressions = 12000L,
+                        clicks = 340L,
+                        conversions = 12L,
+                        totalCents = 500000L,
+                    ),
+                ),
+            ),
+        )
+        assertEquals("2026-06", decoded.month)
+        assertEquals(750000L, decoded.totalChargesCents)
+        assertEquals(3, decoded.entryCount)
+        assertEquals(1, decoded.campaigns.size)
+        assertEquals("cmp_1", decoded.campaigns[0].campaignId)
+        assertEquals(12000L, decoded.campaigns[0].impressions)
+        assertEquals(500000L, decoded.campaigns[0].totalCents)
+    }
+
+    @Test
+    fun invoice_sparse_decodesEmptyCampaigns_andNullTotals() {
+        val adapter = moshi.adapter(AdInvoiceDto::class.java)
+        val decoded = requireNotNull(adapter.fromJson("""{"month":"2026-06"}"""))
+        assertEquals("2026-06", decoded.month)
+        assertNull(decoded.totalChargesCents)
+        assertNull(decoded.totalDepositsCents)
+        assertNull(decoded.entryCount)
+        assertTrue(decoded.campaigns.isEmpty())
+    }
+
+    @Test
+    fun invoiceCents_decodeToLong_aboveIntMax() {
+        val big = Int.MAX_VALUE.toLong() + 5_000_000L
+        val adapter = moshi.adapter(AdInvoiceDto::class.java)
+        val decoded = requireNotNull(
+            adapter.fromJson("""{"month":"2026-06","total_charges_cents":$big}"""),
+        )
+        assertEquals(big, decoded.totalChargesCents)
+        assertTrue(decoded.totalChargesCents!! > Int.MAX_VALUE.toLong())
+    }
+
+    // ---- AND-367: deposit in / out ----
+
+    @Test
+    fun depositIn_roundTrips() {
+        val decoded = roundTrip(AdDepositIn(amountCents = 50000L, paymentMethodId = "pm_9"))
+        assertEquals(50000L, decoded.amountCents)
+        assertEquals("pm_9", decoded.paymentMethodId)
+    }
+
+    @Test
+    fun depositIn_amountCents_decodesToLong_aboveIntMax() {
+        val big = 9_500_000_000L
+        val adapter = moshi.adapter(AdDepositIn::class.java)
+        val decoded = requireNotNull(adapter.fromJson("""{"amount_cents":$big}"""))
+        assertEquals(big, decoded.amountCents)
+        assertNull(decoded.paymentMethodId)
+    }
+
+    @Test
+    fun depositIn_missingRequiredAmountCents_throws() {
+        assertThrows(JsonDataException::class.java) {
+            moshi.adapter(AdDepositIn::class.java).fromJson("""{"payment_method_id":"pm_1"}""")
+        }
+    }
+
+    @Test
+    fun depositOut_decodesNewBalance_andToleratesSparse() {
+        val adapter = moshi.adapter(AdDepositOut::class.java)
+        val full = requireNotNull(adapter.fromJson("""{"new_balance_cents":155000,"status":"ok"}"""))
+        assertEquals(155000L, full.newBalanceCents)
+        assertEquals("ok", full.status)
+        val sparse = requireNotNull(adapter.fromJson("""{}"""))
+        assertNull(sparse.newBalanceCents)
+        assertNull(sparse.status)
+    }
 }

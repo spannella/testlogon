@@ -3033,4 +3033,30 @@
     <string name="sponsorship_deal_counter_error_invalid">Enter a valid dollar amount.</string>
     <string name="sponsorship_deal_counter_error_note_long">Note is too long (max 2000 characters).</string>
     <string name="sponsorship_deal_counter_error_server">The server rejected this value. Adjust and try again.</string>
+
+    <!-- AND-367: ads-account billing (summary + ledger + invoice) + DEPOSIT add-funds. -->
+    <string name="more_entry_ads_billing">Ad billing</string>
+    <string name="ads_billing_title">Ad billing</string>
+    <string name="ads_billing_back">Back</string>
+    <string name="ads_billing_status_label">Status: %1$s</string>
+    <string name="ads_billing_balance_label">Balance</string>
+    <string name="ads_billing_lifetime_spend_label">Lifetime spend</string>
+    <string name="ads_billing_add_funds">Add funds</string>
+    <string name="ads_billing_ledger_header">Billing history</string>
+    <string name="ads_billing_ledger_empty">No billing activity yet</string>
+    <string name="ads_billing_entry_unknown">Activity</string>
+    <string name="ads_billing_entry_date">When: %1$d</string>
+    <string name="ads_billing_invoice_header">Invoice — %1$s</string>
+    <string name="ads_billing_invoice_month_unknown">this month</string>
+    <string name="ads_billing_invoice_charges">Total charges</string>
+    <string name="ads_billing_invoice_deposits">Total deposits</string>
+    <string name="ads_billing_invoice_campaign_unknown">Campaign</string>
+    <string name="deposit_sheet_title">Add funds</string>
+    <string name="deposit_sheet_subtitle">Deposit funds into this ad account. Your wallet or saved payment method is charged.</string>
+    <string name="deposit_amount_label">Amount (USD)</string>
+    <string name="deposit_amount_helper">Minimum $50.00, maximum $100,000.00.</string>
+    <string name="deposit_amount_range_error">Enter an amount between $50.00 and $100,000.00.</string>
+    <string name="deposit_confirm">Confirm deposit</string>
+    <string name="deposit_success">Deposit successful.</string>
+    <string name="deposit_success_with_balance">Deposit successful. New balance: %1$s</string>
 </resources>

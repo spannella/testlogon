@@ -114,6 +114,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // with cancel/refund while active. Route reachable via navigateToBoost(postId); deeper post-detail /
         // composer-success CTA wiring is FLAGGED (see BoostNavigation) to avoid regressing those screens.
         boostDestination(navController)
+        // AND-367: ads-account billing read view (balance / lifetime-spend summary + billing-history ledger
+        // + monthly invoice) + the DEPOSIT (add-funds) sheet. First MUTATING ads feature. Route reachable via
+        // navigateToAdsBilling(accountId); the More-hub uses a sample account id (no ads-accounts list yet).
+        adsBillingDestination(navController)
         // AND-183: tag pages (in-app nav + App Link / dev-host deep links).
         tagPageDestination(navController)
         // AND-185: global multi-entity search (distinct from AND-152 message search).

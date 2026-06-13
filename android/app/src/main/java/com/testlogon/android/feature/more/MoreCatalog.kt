@@ -374,6 +374,14 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.SPONSORSHIPS,
             section = MoreSection.ACCOUNT,
         ),
+        // AND-367: ads-account billing (balance/lifetime-spend + ledger + invoice) + DEPOSIT add-funds.
+        MoreEntry(
+            id = "ads_billing",
+            labelRes = R.string.more_entry_ads_billing,
+            icon = Icons.Outlined.AccountBalanceWallet,
+            route = MoreRoutes.ADS_BILLING,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-360: the delegate console (focused manage-as-creator demonstration).
         MoreEntry(
             id = "delegate_console",
