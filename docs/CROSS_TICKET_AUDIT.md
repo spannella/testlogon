@@ -276,7 +276,8 @@ Canonical: a **`PLATFORM#BRANDING`** settings row `{name, logo_url, support_emai
 `GET/PUT /ui/admin/branding` (**root** only); env values (`PLATFORM_NAME`, …) are the defaults; a
 cached `get_branding()` helper resolves it. Templates read `{{platform_name}}` from `get_branding()`.
 **CMP-006** (`web_to_lead_platform_name`) and **CMP-008** migrate to `get_branding().platform_name`.
-A small dedicated branding ticket should formalize the entity when this is built.
+Formalized as a first-class spec: **`docs/platform/specs/BRAND-001.md`** (new `platform_settings`
+table, `branding.py` service, admin-read/root-write `/ui/admin/branding`).
 
 ### D7. HTL-036 → ship dark
 HTL-036 ships with `getattr(S, …, default)` + lazy-`try/except` import fallbacks (flat
