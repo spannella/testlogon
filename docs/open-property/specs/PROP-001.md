@@ -7,7 +7,7 @@
 
 ## 1. Summary & Goal
 
-PROP-001 is the P1 foundational ticket for the open-property vertical. It lands exactly three deliverables: (1) the `properties` DynamoDB table with its two GSIs and correct `attr_types`, (2) the `PROPERTY_MGMT_ENABLED` master feature flag with a `_flag_on()` / `_require_enabled()` contract, and (3) the four service functions — `create_property`, `get_property`, `update_property`, `archive_property` — plus the Pydantic I/O models (`PropertyIn`, `PropertyOut`, `PropertyUpdateIn`) and a shared `Address` model.
+PROP-001 is the P1 foundational ticket for the open-property vertical. It lands exactly three deliverables: (1) the `properties` DynamoDB table with its two GSIs and correct `attr_types`, (2) the `PROPERTY_MGMT_ENABLED` master feature flag with a `_flag_on()` / `_require_enabled()` contract, and (3) the four service functions — `create_property`, `get_property`, `update_property`, `archive_property` — plus the Pydantic I/O models (`PropertyIn`, `PropertyOut`, `PropertyUpdateIn`) and a `PropertyAddress` model.
 
 Without PROP-001 in place, no other PROP ticket (units, list/filter, router, frontend) can be implemented. With PROP-001 merged but `PROPERTY_MGMT_ENABLED=false` (the default), the platform is byte-for-byte unchanged: no new HTTP surface is exposed and existing behavior is entirely unaffected.
 
@@ -143,10 +143,10 @@ Note: PROP-002 adds a third GSI `GSI_UNIT_OCCUPANCY` to this same `TableDef` ent
 
 ### 3.2 Pydantic models (`app/models.py`)
 
-**`Address`** — reuse if an existing `Address` model is already present in `app/models.py`; inspect before adding. If absent, add:
+**`PropertyAddress`** — committed new model. `app/models.py` has no bare `class Address` (only the `AddressBase`/`AddressIn`/`AddressOut` family at `:1411+`, which uses `state` not `region`), so this is namespaced as `PropertyAddress` to avoid colliding with HTL-001's `HotelAddress` (HTL-001 independently adds a same-shape address model; see `docs/CROSS_TICKET_AUDIT.md §A6`). Add:
 
 ```python
-class Address(BaseModel):
+class PropertyAddress(BaseModel):
     line1: str
     line2: Optional[str] = None
     city: str
@@ -161,7 +161,7 @@ class Address(BaseModel):
 class PropertyIn(BaseModel):
     name: str
     property_type: Literal["single_family", "multi_family", "apartment", "commercial"]
-    address: Address
+    address: PropertyAddress
     color_tags: List[str] = []
 ```
 
@@ -173,7 +173,7 @@ class PropertyOut(BaseModel):
     owner_sub: str
     name: str
     property_type: str
-    address: Address
+    address: PropertyAddress
     color_tags: List[str]
     occupancy_status: Literal["vacant", "partial", "occupied"]
     unit_count: int
@@ -188,7 +188,7 @@ class PropertyOut(BaseModel):
 class PropertyUpdateIn(BaseModel):
     name: Optional[str] = None
     property_type: Optional[Literal["single_family","multi_family","apartment","commercial"]] = None
-    address: Optional[Address] = None
+    address: Optional[PropertyAddress] = None
     color_tags: Optional[List[str]] = None
 ```
 
@@ -309,7 +309,7 @@ def archive_property(property_id: str, *, user_sub: str) -> dict:
 
 ### 5.2 `address` stored as DynamoDB Map (`M`)
 
-The `address` dict is stored as a nested DynamoDB Map. When reading back, DynamoDB returns it as a Python dict with the same keys. `PropertyOut.address` serializes it as an `Address` object. Callers should not pass the `address` dict with None values for optional fields — either omit the key or pass an empty string — because DynamoDB cannot store `None` as a Map value.
+The `address` dict is stored as a nested DynamoDB Map. When reading back, DynamoDB returns it as a Python dict with the same keys. `PropertyOut.address` serializes it as a `PropertyAddress` object. Callers should not pass the `address` dict with None values for optional fields — either omit the key or pass an empty string — because DynamoDB cannot store `None` as a Map value.
 
 ### 5.3 `color_tags` as List (`L`)
 
@@ -409,7 +409,7 @@ PROP-001 adds:
 - One new attribute to the `Tables` dataclass (`app/core/tables.py`) and one new wire in `T = Tables(...)` (additive; existing handles are unchanged)
 - One new `TableDef` in `scripts/local-ddb-init.py` (additive; existing table defs are unchanged)
 - One new file `app/services/property_mgmt.py` (additive)
-- Potentially one new model `Address` and three new models to `app/models.py` (additive; check for existing `Address` first)
+- One new model `PropertyAddress` plus three new models (`PropertyIn`/`PropertyOut`/`PropertyUpdateIn`) to `app/models.py` (additive; no bare `Address` exists today — see `docs/CROSS_TICKET_AUDIT.md §A6`)
 
 No existing file is modified in a breaking way. No existing endpoint, service function, DynamoDB table, or Pydantic model is altered.
 
@@ -506,7 +506,7 @@ def setup_table(monkeypatch):
 
 9. **`property_id` derivation determinism**: verify that `_property_id("alice", "Maple House") == _property_id("alice", "Maple House")` and differs from `_property_id("bob", "Maple House")`.
 
-10. **`address` round-trip**: create with a full `Address` dict, `get_property` and assert all address sub-fields are present.
+10. **`address` round-trip**: create with a full `PropertyAddress` dict, `get_property` and assert all address sub-fields are present.
 
 11. **`color_tags` round-trip**: create with `color_tags=["urgent", "blue"]`, get and assert both tags present; create with `color_tags=[]`, get and assert empty list.
 
@@ -520,7 +520,7 @@ E2E tests are PROP-005's deliverable and are **not** part of PROP-001. However, 
 
 ## 10. Open Questions / Assumptions
 
-1. **Existing `Address` model?** Before adding `Address` to `app/models.py`, inspect the file for any existing address model. If one exists (e.g., from the `settings/` profile or `contacts.py` domain), reuse it if structurally compatible (at minimum: `line1`, `city`, `region`, `postal_code`, `country`). If incompatible, add a `PropertyAddress` alias or a new `Address` model under a non-colliding name.
+1. **`PropertyAddress` namespacing (RESOLVED).** `app/models.py` has no bare `class Address` — only the `AddressBase`/`AddressIn`/`AddressOut` family at `:1411+`, which uses `state` (not `region`) and is structurally incompatible. Per `docs/CROSS_TICKET_AUDIT.md §A6`, PROP-001 commits to a new `PropertyAddress` model (rather than a bare `Address`) so it does not collide with HTL-001's `HotelAddress` — both verticals independently add a same-shape address model, so each is namespaced to its domain. No "reuse if present" hedge remains.
 
 2. **Multi-tenant landlord isolation.** The current design allows any admin/root to read any property via `get_property(property_id)`. The router (PROP-004) does not enforce that the caller's `user.sub` matches `item["owner_sub"]`. For a single-platform deployment (one operator = one landlord), this is fine. For a multi-landlord SaaS scenario, an ownership check in the router is required. **Assumption**: single-platform deployment; no cross-landlord isolation needed for the initial vertical.
 
@@ -611,10 +611,20 @@ Each assumption in PROP-001 was cross-checked against the live codebase. Evidenc
 | 26 | PTY-006 spec exists | **VERIFIED** | `docs/ofbiz/specs/PTY-006.md` |
 | 27 | PUR-003 spec exists | **VERIFIED** | `docs/ofbiz/specs/PUR-003.md` |
 | 28 | FXA-012 / FXA-013 specs exist; `scheduled_for`, `cost` (`cost_cents`) fields present | **CORRECTED** | `docs/ofbiz/specs/FXA-012.md` — `cost_cents` at `:14,:115`, `scheduled_for` at `:116`; FXA-013 mirrors (`:108,:109`). The `priority` field is **absent** from both FXA-012/013 AND from `app/services/tickets.py` (no `priority` constant or column). The §11.4 "Work orders" row claimed "add `priority`, `scheduled_for`, `cost` per FXA-012/013 spec" — corrected: `priority` is NOT defined by the FXA analogue and is not inherited; only `scheduled_for` + `cost_cents` come from FXA-012/013. §11.4 body edited to drop the unsupported `priority` inheritance and mark it as an optional WOV-owned additive extension. |
-| 29 | No existing `Address` class (plain name) in `app/models.py` | **VERIFIED** | Only `AddressBase`, `MailingAddress`, `KycPartnerApplicantAddress`, etc. exist; none named `Address`. `AddressBase` uses `state` not `region` — not structurally compatible with the spec's `Address` model. New `Address` model required. |
+| 29 | No existing `Address` class (plain name) in `app/models.py` | **VERIFIED** | Only `AddressBase`, `MailingAddress`, `KycPartnerApplicantAddress`, etc. exist; none named `Address`. `AddressBase` uses `state` not `region` — not structurally compatible. New model required; committed as `PropertyAddress` (see cross-ticket reconciliation below). |
 | 30 | `moto.mock_dynamodb()` in §9.1 test fixture | **CORRECTED** | Installed moto has no `mock_dynamodb` attribute (`hasattr(moto, "mock_dynamodb") == False`). All existing tests use `from moto import mock_aws`. Fixed to `from moto import mock_aws` / `with mock_aws():` (see §9.1 edit). |
 | 31 | `S` (`Settings`) is `@dataclass(frozen=True)` — `object.__setattr__` required | **VERIFIED** | `app/core/settings.py:6–7` |
 | 32 | Rent ledger: "no online payment provider, manually recorded only; never fork billing" | **VERIFIED** (design intent) | `billing_shared.new_ledger_entry` is provider-agnostic (takes `extra=` dict); no `stripe`/`paypal` SDK call inside it. Spec correctly states rent is manually recorded — no live payment provider. Not yet implemented; claim is forward-looking design guidance, consistent with billing architecture. |
 | 33 | FAC-001 `facilities` table not implemented in running codebase | **VERIFIED** | Neither `S.facilities_table_name` nor `T.facilities` exists in `settings.py` or `tables.py` |
 
 **Summary**: 2 corrections applied (item 30 — deprecated `moto.mock_dynamodb()` API; item 28 — §11.4 over-claimed a `priority` field inherited from FXA-012/013, which neither those specs nor `tickets.py` define; `cost_cents` and `scheduled_for` confirmed and retained). All other 31 claims verified exact against codebase. No UNCONFIRMED/RISK rows remain.
+
+### Cross-ticket reconciliation (audit 2026-06-13)
+
+Per `docs/CROSS_TICKET_AUDIT.md §A6` (and Part C item 5): the shared `Address` model was a latent
+collision — both PROP-001 and HTL-001 independently added a byte-identical, same-shape bare `class Address`
+to `app/models.py` (each verified no live `Address`, but neither cross-checked the other). Resolution:
+PROP-001's address model is committed as **`PropertyAddress`** (and HTL-001's as `HotelAddress`), dropping
+the "reuse if a live `Address` exists else add" hedge. Confirmed `app/models.py` has NO bare `class Address`
+— only the `AddressBase`/`AddressIn`/`AddressOut` family at `:1411+`. All definition/field-ref/example/test
+occurrences in this spec updated to `PropertyAddress`.

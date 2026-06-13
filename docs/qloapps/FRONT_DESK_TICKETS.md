@@ -52,10 +52,12 @@ of scope here (separate clusters in the gap analysis Tier-2/Tier-3).
   (`app/services/sessions.py:330`); mutations → `require_admin_or_root_csrf`
   (`app/auth/policy.py:100`) — identical split to `app/routers/inventory.py` (reads on
   `require_ui_session`, mutations on `require_admin_or_root_csrf`).
-- **GSI-backed, no scans.** Every arrivals/departures/in-house query MUST use an HTL-018
-  GSI (the hotel+checkin-date index for arrivals, hotel+checkout-date for departures,
-  hotel+status for in-house) — never a table scan. Pagination via cursor where a result set
-  can exceed one page.
+- **GSI-backed, no scans.** Every arrivals/in-house query MUST use an HTL-018
+  GSI (`GSI_HOTEL_ARRIVALS` — the hotel+checkin-date index — for arrivals;
+  `GSI_HOTEL_STATUS` — hotel+status — for in-house) — never a table scan. **Departures have
+  no dedicated index**: HTL-018 exposes NO checkout GSI, so departures are derived from
+  `GSI_HOTEL_STATUS` (`status == "checked_in"`) with an in-memory `checkout == date` filter.
+  Pagination via cursor where a result set can exceed one page.
 - **Dev/prod parity (SECOPS-007).** Zero `if S.dev_mode` branches in business logic; the
   same `T.*` handles in both environments (moto intercepts boto3 in dev, real DynamoDB in
   prod). Mirrors `app/services/inventory.py:27-29`.
@@ -84,12 +86,15 @@ analogue we re-skin (status-bucketed lists), but these are reservations, not ord
 
 **DDB**: NO new table. Queries the HTL-018 `hotel_reservations` table via its GSIs (forward
 dep — assumed to exist exactly as specified in the Tier-2 reservations cluster):
-- `GSI_HOTEL_CHECKIN` — PK=`hotel_id`, SK=`checkin` (`YYYY-MM-DD`, `S`; lexical ==
-  chronological) — arrivals-by-date. (HTL-018.)
-- `GSI_HOTEL_CHECKOUT` — PK=`hotel_id`, SK=`checkout` (`YYYY-MM-DD`, `S`) — departures-by-date.
-  (HTL-018.)
+- `GSI_HOTEL_ARRIVALS` — PK=`hotel_id`, SK=`checkin` (`YYYY-MM-DD`, `S`; lexical ==
+  chronological) — arrivals-by-date. (HTL-018; authoritative name per the audit below — the
+  earlier `GSI_HOTEL_CHECKIN` label is non-canonical.)
+- **No checkout index.** HTL-018 exposes NO `GSI_HOTEL_CHECKOUT`. Departures-by-date are
+  derived from `GSI_HOTEL_STATUS` (`status == "checked_in"`) filtered in-memory to
+  `checkout == date` — there is no checkout-keyed GSI. (HTL-018.)
 - `GSI_HOTEL_STATUS` — PK=`hotel_id`, SK=`status` (`S`; `confirmed`/`checked_in`/
-  `checked_out`/`no_show`/`cancelled`) — in-house = `status == "checked_in"`. (HTL-018.)
+  `checked_out`/`no_show`/`cancelled`) — in-house = `status == "checked_in"`; also the source
+  for departures (status=="checked_in" + in-memory `checkout == date`). (HTL-018.)
 - `hotel_rooms` `GSI_HK_STATUS` (PK=`hotel_id`, SK=`housekeeping_status`,
   `docs/qloapps/ROOMTYPES_ROOMS_HOUSEKEEPING_TICKETS.md` HTL-006) for the room side of the
   occupancy snapshot.
@@ -112,15 +117,16 @@ Service `app/services/hotel_front_desk.py` (new), modeled on the read paths in
 - `_row_from_reservation(item) -> dict` — projects a `hotel_reservations` META item into a
   `FrontDeskRow` shape (computes `nights = days_between(checkin, checkout)`).
 - `arrivals_today(hotel_id, *, date=None, cursor=None, limit=50) -> dict` — `date` defaults
-  to today (derived from `now_ts()`, `app/core/time.py:2`); queries `GSI_HOTEL_CHECKIN`
+  to today (derived from `now_ts()`, `app/core/time.py:2`); queries `GSI_HOTEL_ARRIVALS`
   (PK=`hotel_id`, SK `checkin == date`) filtered to `status == "confirmed"` (a reservation
   arriving today that is not yet checked in). Returns `{rows, count, cursor}` (the
   `{items, count, cursor}` contract used by `host_inventory.list_hosts`, per CLAUDE.md —
   here keyed `rows`). GSI-backed, no scan.
-- `departures_today(hotel_id, *, date=None, cursor=None, limit=50) -> dict` — queries
-  `GSI_HOTEL_CHECKOUT` (PK=`hotel_id`, SK `checkout == date`) filtered to
-  `status == "checked_in"` (still in-house, due to depart today). Returns `{rows, count,
-  cursor}`. GSI-backed, no scan.
+- `departures_today(hotel_id, *, date=None, cursor=None, limit=50) -> dict` — there is **no
+  checkout GSI** (HTL-018 exposes none), so departures derive from `GSI_HOTEL_STATUS`
+  (PK=`hotel_id`, SK `status == "checked_in"`) with an **in-memory `checkout == date`
+  filter** (still in-house, due to depart today). Returns `{rows, count, cursor}`. GSI-backed
+  (no scan; the `checkout == date` predicate is applied in-memory over the checked-in page).
 - `in_house(hotel_id, *, cursor=None, limit=50) -> dict` — queries `GSI_HOTEL_STATUS`
   (PK=`hotel_id`, SK `status == "checked_in"`) — every guest currently checked in
   regardless of date. Returns `{rows, count, cursor}`. GSI-backed, no scan.
@@ -143,9 +149,11 @@ All entrypoints call `_require_enabled()` first.
 
 **Acceptance Criteria**
 - `arrivals_today` returns only `confirmed` reservations whose `checkin == date`, sourced
-  from `GSI_HOTEL_CHECKIN` (no scan); `departures_today` returns only `checked_in`
-  reservations whose `checkout == date` via `GSI_HOTEL_CHECKOUT`; `in_house` returns every
-  `checked_in` reservation via `GSI_HOTEL_STATUS`.
+  from `GSI_HOTEL_ARRIVALS` (no scan); `departures_today` returns only `checked_in`
+  reservations whose `checkout == date`, sourced from `GSI_HOTEL_STATUS`
+  (`status == "checked_in"`) + an in-memory `checkout == date` filter (there is **no**
+  `GSI_HOTEL_CHECKOUT`); `in_house` returns every `checked_in` reservation via
+  `GSI_HOTEL_STATUS`.
 - All three list queries return the `{rows, count, cursor}` shape and paginate via cursor.
 - `date` defaults to today (derived from `now_ts()`); an explicit `date` overrides it.
 - `occupancy_snapshot` computes `rooms_occupied` from distinct in-house `assigned_room_ids`,
@@ -156,9 +164,10 @@ All entrypoints call `_require_enabled()` first.
   `_require_enabled()`.
 - No `if S.dev_mode` branch in `hotel_front_desk.py` (SECOPS-007).
 
-**Dependencies**: HTL-018 (`hotel_reservations` table + `GSI_HOTEL_CHECKIN` /
-`GSI_HOTEL_CHECKOUT` / `GSI_HOTEL_STATUS` + reservation entity — forward dep, separate
-Tier-2 cluster), HTL-006 (`hotel_rooms` table + `GSI_HK_STATUS`,
+**Dependencies**: HTL-018 (`hotel_reservations` table + `GSI_HOTEL_ARRIVALS` /
+`GSI_HOTEL_STATUS` / `GSI_GUEST` + reservation entity — forward dep, separate
+Tier-2 cluster; note there is NO `GSI_HOTEL_CHECKOUT` — departures derive from
+`GSI_HOTEL_STATUS` + in-memory `checkout == date`), HTL-006 (`hotel_rooms` table + `GSI_HK_STATUS`,
 `docs/qloapps/ROOMTYPES_ROOMS_HOUSEKEEPING_TICKETS.md`), HTL-010 (`HOTEL_PMS_ENABLED`
 flag + settings block, `docs/qloapps/AVAILABILITY_INVENTORY_TICKETS.md`). Reuses:
 `app/services/inventory.py:51-58,92-98` (flag/audit idioms), `app/core/time.py:2`
@@ -355,9 +364,10 @@ Reads use `require_ui_session` (`app/services/sessions.py:330`); mutations use
   `hotel_front_desk` module namespace (the reservation/room services are forward deps —
   patch, don't re-test). Cover:
   - **arrivals query** — only `confirmed` reservations with `checkin == date` via
-    `GSI_HOTEL_CHECKIN`; `date` defaults to today; `{rows, count, cursor}` shape.
-  - **departures query** — only `checked_in` reservations with `checkout == date` via
-    `GSI_HOTEL_CHECKOUT`.
+    `GSI_HOTEL_ARRIVALS`; `date` defaults to today; `{rows, count, cursor}` shape.
+  - **departures query** — only `checked_in` reservations with `checkout == date`, sourced
+    from `GSI_HOTEL_STATUS` (`status == "checked_in"`) + an in-memory `checkout == date`
+    filter (there is **no** `GSI_HOTEL_CHECKOUT`).
   - **in-house query** — every `checked_in` reservation via `GSI_HOTEL_STATUS`.
   - **occupancy snapshot** — `rooms_occupied` from distinct in-house `assigned_room_ids`,
     `rooms_out_of_service` from `GSI_HK_STATUS`, `occupancy_rate` 0..1, no divide-by-zero on
@@ -420,6 +430,27 @@ wrapping HTL-018/019/007) → HTL-024 (router + `main.py` registration + FrontDe
 hermetic + E2E tests).
 
 Forward dependency (separate Tier-2 reservations cluster, referenced by id, NOT built here):
-HTL-018 (`hotel_reservations` entity + `GSI_HOTEL_CHECKIN` / `GSI_HOTEL_CHECKOUT` /
-`GSI_HOTEL_STATUS` + `create_reservation`) and HTL-019 (reservation lifecycle / `check_in`
-transition + optimistic-concurrency `version`).
+HTL-018 (`hotel_reservations` entity + `GSI_HOTEL_ARRIVALS` / `GSI_HOTEL_STATUS` / `GSI_GUEST`
++ `create_reservation`; there is NO `GSI_HOTEL_CHECKOUT` — departures derive from
+`GSI_HOTEL_STATUS` + in-memory `checkout == date`) and HTL-019 (reservation lifecycle /
+`check_in` transition + optimistic-concurrency `version`).
+
+---
+
+### Cross-ticket reconciliation (audit 2026-06-13)
+
+Per `docs/CROSS_TICKET_AUDIT.md §B4` (row 2): this ticket's earlier prose named the
+reservation GSIs `GSI_HOTEL_CHECKIN` / `GSI_HOTEL_CHECKOUT`. The **authoritative** HTL-018
+index names are `GSI_HOTEL_ARRIVALS` / `GSI_HOTEL_STATUS` / `GSI_GUEST`, and **there is no
+checkout index**. Reconciled throughout this file:
+
+- **Arrivals** → `GSI_HOTEL_ARRIVALS` (PK=`hotel_id`, SK=`checkin`); the old `GSI_HOTEL_CHECKIN`
+  label was the non-canonical name for the same index.
+- **Departures** → derived from `GSI_HOTEL_STATUS` (`status == "checked_in"`) + an in-memory
+  `checkout == date` filter. The `GSI_HOTEL_CHECKOUT` index does **not** exist (HTL-018
+  exposes none); `departures_today` must NOT query a checkout-keyed GSI.
+- **In-house** → `GSI_HOTEL_STATUS` (`status == "checked_in"`), unchanged.
+
+This aligns the FRONT_DESK prose with the HTL-018-owned GSI contract; no schema or behavior
+change beyond the departures derivation (which was already GSI-backed, just over the status
+index rather than a non-existent checkout index).
