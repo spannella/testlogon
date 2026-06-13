@@ -3009,6 +3009,26 @@ class Settings:
     crm_cases_watchers_table: str = os.environ.get(
         "CRM_CASES_WATCHERS_TABLE", "crm_cases_watchers"
     )
+    # CRM Security Suite, Studio & Admin (STU-001)
+    # Both flags default OFF — platform is byte-for-byte unchanged when absent.
+    crm_acl_enabled: bool = os.environ.get("CRM_ACL_ENABLED", "false").lower() == "true"
+    crm_studio_enabled: bool = os.environ.get("CRM_STUDIO_ENABLED", "false").lower() == "true"
+
+    # CRM table names (STU-001 scaffold)
+    crm_acl_roles_table_name: str = os.environ.get("CRM_ACL_ROLES_TABLE", "crm_acl_roles")
+    crm_security_groups_table_name: str = os.environ.get("CRM_SECURITY_GROUPS_TABLE", "crm_security_groups")
+    crm_studio_fields_table_name: str = os.environ.get("CRM_STUDIO_FIELDS_TABLE", "crm_studio_fields")
+    crm_studio_modules_table_name: str = os.environ.get("CRM_STUDIO_MODULES_TABLE", "crm_studio_modules")
+    crm_studio_layouts_table_name: str = os.environ.get("CRM_STUDIO_LAYOUTS_TABLE", "crm_studio_layouts")
+    crm_studio_dropdowns_table_name: str = os.environ.get("CRM_STUDIO_DROPDOWNS_TABLE", "crm_studio_dropdowns")
+    crm_audit_trail_table_name: str = os.environ.get("CRM_AUDIT_TRAIL_TABLE", "crm_audit_trail")
+    currencies_table_name: str = os.environ.get("CURRENCIES_TABLE", "currencies")
+    search_config_table_name: str = os.environ.get("SEARCH_CONFIG_TABLE", "search_config")
+    email_queue_table_name: str = os.environ.get("EMAIL_QUEUE_TABLE", "email_queue")
+
+    # STU-011 Studio tunable constants
+    crm_studio_max_fields_per_entity: int = int(os.environ.get("CRM_STUDIO_MAX_FIELDS_PER_ENTITY", "200"))
+    crm_studio_field_cache_ttl_seconds: int = int(os.environ.get("CRM_STUDIO_FIELD_CACHE_TTL_SECONDS", "60"))
 
 
 S = Settings()

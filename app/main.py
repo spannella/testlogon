@@ -1045,6 +1045,17 @@ def create_app() -> FastAPI:
         from app.routers.banking_accounts import router as banking_accounts_router
 
         app.include_router(banking_accounts_router)
+    # STU-001/002/003/004: CRM ACL (gated by CRM_ACL_ENABLED)
+    if _S.crm_acl_enabled:
+        from app.routers.crm_acl import router as crm_acl_router
+        app.include_router(crm_acl_router)
+        from app.routers.crm_security_groups import router as crm_sg_router
+        app.include_router(crm_sg_router)
+
+    # STU-011: CRM Studio (gated by CRM_STUDIO_ENABLED)
+    if _S.crm_studio_enabled:
+        from app.routers.crm_studio import router as crm_studio_router
+        app.include_router(crm_studio_router)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

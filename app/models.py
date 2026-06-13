@@ -16622,3 +16622,185 @@ class TicketLinkListOut(BaseModel):
 class CreateTicketLinkReq(BaseModel):
     related_ticket_id: str
     link_type: Literal["duplicate", "blocks", "relates_to"]
+
+
+
+
+# ---------------------------------------------------------------------------
+# STU-002: CRM ACL Role matrix models
+# ---------------------------------------------------------------------------
+
+class CrmAclPermissionMatrix(BaseModel):
+    """Seven per-module boolean permission flags."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    create: bool = False
+    read: bool = False
+    update: bool = False
+    delete: bool = False
+    export: bool = False
+    import_: bool = Field(False, alias="import")
+    mass_update: bool = False
+
+
+class CrmAclRoleCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = ""
+    permissions: Dict[str, CrmAclPermissionMatrix] = {}
+
+
+class CrmAclRoleUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    description: Optional[str] = None
+    permissions: Optional[Dict[str, CrmAclPermissionMatrix]] = None
+
+
+class CrmAclRoleOut(BaseModel):
+    role_id: str
+    name: str
+    description: str
+    permissions: Dict[str, Any]
+    created_at: int
+    created_by_sub: str
+    updated_at: Optional[int] = None
+    updated_by_sub: Optional[str] = None
+
+
+class CrmAclAssignmentIn(BaseModel):
+    user_sub: str
+
+
+class CrmAclAssignmentOut(BaseModel):
+    role_id: str
+    user_sub: str
+    assigned_by_sub: str
+    assigned_at: int
+
+
+class CrmEffectivePermissionsOut(BaseModel):
+    user_sub: str
+    permissions: Dict[str, Any]
+
+
+# STU-003: Group assignment models
+
+class CrmAclGroupAssignmentIn(BaseModel):
+    group_key: str = Field(..., min_length=1, max_length=100)
+
+
+class CrmAclGroupAssignmentOut(BaseModel):
+    role_id: str
+    group_key: str
+    assigned_by_sub: str
+    assigned_at: int
+
+
+class CrmAclRoleAssignmentsOut(BaseModel):
+    role_id: str
+    user_assignments: List[Dict[str, Any]]
+    group_assignments: List[CrmAclGroupAssignmentOut]
+
+
+# ---------------------------------------------------------------------------
+# STU-004: CRM Security Groups models
+# ---------------------------------------------------------------------------
+
+class CrmSecurityGroupCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = Field("", max_length=512)
+    is_global: bool = False
+
+
+class CrmSecurityGroupMemberAddIn(BaseModel):
+    user_sub: str
+    can_edit: bool = False
+
+
+class CrmSecurityGroupRecordAssignIn(BaseModel):
+    entity_type: str = Field(..., min_length=1)
+    record_id: str = Field(..., min_length=1)
+
+
+class CrmSecurityGroupOut(BaseModel):
+    group_id: str
+    name: str
+    description: str
+    owner_sub: str
+    created_at: int
+    is_global: bool
+    member_count: int = 0
+    record_count: int = 0
+
+
+class CrmSecurityGroupMemberOut(BaseModel):
+    user_sub: str
+    added_by_sub: str
+    added_at: int
+    can_edit: bool
+
+
+class CrmSecurityGroupRecordOut(BaseModel):
+    entity_type: str
+    record_id: str
+    record_ref: str
+    assigned_by_sub: str
+    created_at: int
+
+
+class CrmSecurityGroupDetailOut(BaseModel):
+    group: CrmSecurityGroupOut
+    members: List[CrmSecurityGroupMemberOut]
+    records: List[CrmSecurityGroupRecordOut]
+
+
+# ---------------------------------------------------------------------------
+# STU-011: Studio custom fields models
+# ---------------------------------------------------------------------------
+
+class StudioFieldCreateIn(BaseModel):
+    field_key: str = Field(..., pattern=r"^[a-z][a-z0-9_]{2,49}$")
+    label: str = Field(..., min_length=1, max_length=255)
+    field_type: Literal["text", "integer", "decimal", "boolean", "date", "picklist", "multi_picklist"]
+    required: bool = False
+    default_value: Any = None
+    picklist_name: Optional[str] = None
+    max_length: int = Field(1000, ge=1, le=65535)
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    sort_order: int = 0
+
+
+class StudioFieldUpdateIn(BaseModel):
+    label: Optional[str] = Field(None, min_length=1, max_length=255)
+    required: Optional[bool] = None
+    default_value: Any = None
+    max_length: Optional[int] = Field(None, ge=1, le=65535)
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    sort_order: Optional[int] = None
+    reactivate: Optional[bool] = None
+
+
+class StudioFieldOut(BaseModel):
+    entity_type: str
+    field_key: str
+    label: str
+    field_type: str
+    required: bool
+    default_value: Any
+    picklist_name: Optional[str]
+    max_length: int
+    min_value: Optional[float]
+    max_value: Optional[float]
+    sort_order: int
+    is_active: bool
+    created_by_sub: str
+    created_at: int
+    updated_by_sub: str
+    updated_at: int
+
+
+class StudioFieldListOut(BaseModel):
+    fields: List[StudioFieldOut]
+    next_cursor: Optional[str]
+    total_count: Optional[int] = None

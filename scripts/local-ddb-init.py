@@ -41,6 +41,37 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # STU-001: CRM Security Suite, Studio & Admin scaffolding
+        TableDef(
+            S.crm_acl_roles_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-assignee", "partition_key": "assignee_id", "sort_key": "assigned_at"}],
+            attr_types={"assigned_at": "N"},
+        ),
+        TableDef(
+            S.crm_security_groups_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-record", "partition_key": "record_ref", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(S.crm_studio_fields_table_name, "entity_type", "field_key"),
+        TableDef(S.crm_studio_modules_table_name, "pk", "sk"),
+        TableDef(S.crm_studio_layouts_table_name, "pk", "sk"),
+        TableDef(S.crm_studio_dropdowns_table_name, "pk", "sk"),
+        TableDef(
+            S.crm_audit_trail_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-actor", "partition_key": "actor_sub", "sort_key": "changed_at"}],
+            attr_types={"changed_at": "N"},
+        ),
+        TableDef(S.currencies_table_name, "pk", "sk"),
+        TableDef(S.search_config_table_name, "pk", "sk"),
+        TableDef(
+            S.email_queue_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-status", "partition_key": "status", "sort_key": "queued_at"}],
+            attr_types={"queued_at": "N"},
+        ),
         # CRM Cases (CAS-001) — six new tables
         TableDef(
             _resolve_table_name(S.crm_cases_counter_table, "crm_cases_counters"),

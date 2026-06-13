@@ -345,6 +345,17 @@ class Tables:
     crm_cases_sla_config: Any
     crm_kb_articles: Any
     crm_cases_watchers: Any
+    # STU-001: CRM Security Suite, Studio & Admin
+    crm_acl_roles: Any
+    crm_security_groups: Any
+    crm_studio_fields: Any
+    crm_studio_modules: Any
+    crm_studio_layouts: Any
+    crm_studio_dropdowns: Any
+    crm_audit_trail: Any
+    currencies: Any
+    search_config: Any
+    email_queue: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -625,4 +636,15 @@ T = Tables(
     crm_cases_sla_config=_safe_table(S.crm_cases_sla_config_table),
     crm_kb_articles=_safe_table(S.crm_kb_articles_table),
     crm_cases_watchers=_safe_table(S.crm_cases_watchers_table),
+    # STU-001: CRM Security Suite, Studio & Admin
+    crm_acl_roles=_safe_table(S.crm_acl_roles_table_name),
+    crm_security_groups=_safe_table(S.crm_security_groups_table_name),
+    crm_studio_fields=_safe_table(S.crm_studio_fields_table_name),
+    crm_studio_modules=_safe_table(S.crm_studio_modules_table_name),
+    crm_studio_layouts=_safe_table(S.crm_studio_layouts_table_name),
+    crm_studio_dropdowns=_safe_table(S.crm_studio_dropdowns_table_name),
+    crm_audit_trail=_safe_table(S.crm_audit_trail_table_name),
+    currencies=_safe_table(S.currencies_table_name),
+    search_config=_safe_table(S.search_config_table_name),
+    email_queue=_safe_table(S.email_queue_table_name),
 )
