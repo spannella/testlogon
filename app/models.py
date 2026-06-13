@@ -14919,6 +14919,10 @@ class CrmCreateOrgAccountIn(BaseModel):
 class CrmOrgMemberIn(BaseModel):
     member_party_id: str = Field(..., min_length=1, max_length=64)
     role_type: str = Field(default="member", pattern=r"^(member|admin|org_admin)$")
+
+
+
+
 # ── ATS Candidates (CND-001) ─────────────────────────────────────────────────
 
 CANDIDATE_STATUSES = frozenset({
@@ -15088,6 +15092,11 @@ class CandidateListOut(BaseModel):
 class CandidateHistoryPage(BaseModel):
     events: List[CandidateHistoryOut]
     cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
 # ATS — Job Order constants and models (JOB-001)
 # ---------------------------------------------------------------------------
 
@@ -15181,14 +15190,22 @@ class JobOrderOut(BaseModel):
     state: Optional[str]
     description: Optional[str]
     created_by: str
+    created_at: int
+    updated_at: int
+
+
+class JobOrderListOut(BaseModel):
+    items: List[JobOrderOut]
+    next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
 # Property management (open-property vertical, PROP-001..PROP-005)
 # ---------------------------------------------------------------------------
 
 class PropertyAddress(BaseModel):
-# QloApps hotel-PMS vertical (HTL-001..HTL-004)
-# ---------------------------------------------------------------------------
-
-class HotelAddress(BaseModel):
     line1: str
     line2: Optional[str] = None
     city: str
@@ -15213,6 +15230,91 @@ class PropertyOut(BaseModel):
     color_tags: List[str]
     occupancy_status: Literal["vacant", "partial", "occupied"]
     unit_count: int
+    status: Literal["active", "archived"]
+    created_at: int
+    updated_at: int
+
+
+class PropertyUpdateIn(BaseModel):
+    name: Optional[str] = None
+    property_type: Optional[Literal["single_family", "multi_family", "apartment", "commercial"]] = None
+    address: Optional[PropertyAddress] = None
+    color_tags: Optional[List[str]] = None
+
+
+class UnitIn(BaseModel):
+    label: str
+    bedrooms: int = Field(ge=0)
+    bathrooms: float = Field(ge=0)
+    square_footage: int = Field(ge=0)
+    market_rent_cents: int = Field(ge=0)
+    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"] = "vacant"
+
+
+class UnitOut(BaseModel):
+    property_id: str
+    unit_id: str
+    label: str
+    bedrooms: int
+    bathrooms: float
+    square_footage: int
+    market_rent_cents: int
+    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"]
+    created_at: int
+    updated_at: int
+
+
+class UnitUpdateIn(BaseModel):
+    label: Optional[str] = None
+    bedrooms: Optional[int] = Field(default=None, ge=0)
+    bathrooms: Optional[float] = Field(default=None, ge=0)
+    square_footage: Optional[int] = Field(default=None, ge=0)
+    market_rent_cents: Optional[int] = Field(default=None, ge=0)
+    occupancy_status: Optional[Literal["vacant", "occupied", "turnover", "unavailable"]] = None
+
+
+class PropertyOccupancyOut(BaseModel):
+    property_id: str
+    total: int
+    occupied: int
+    vacant: int
+    turnover: int
+    unavailable: int
+    occupancy_status: Literal["vacant", "partial", "occupied"]
+    occupancy_rate: float
+
+
+class PortfolioOccupancyOut(BaseModel):
+    property_count: int
+    unit_count: int
+    occupied: int
+    vacant: int
+    turnover: int
+    unavailable: int
+    occupancy_rate: float
+
+
+class PropertyListOut(BaseModel):
+    properties: List[PropertyOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps hotel-PMS vertical (HTL-001..HTL-004)
+# ---------------------------------------------------------------------------
+
+class HotelAddress(BaseModel):
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
 class HotelPolicies(BaseModel):
     cancellation_text: str = ""
     pet_policy: str = ""
@@ -15263,109 +15365,6 @@ class HotelOut(BaseModel):
     updated_at: int
 
 
-class JobOrderListOut(BaseModel):
-    items: List[JobOrderOut]
-    next_cursor: Optional[str] = None
-class PropertyUpdateIn(BaseModel):
-    name: Optional[str] = None
-    property_type: Optional[Literal["single_family", "multi_family", "apartment", "commercial"]] = None
-    address: Optional[PropertyAddress] = None
-    color_tags: Optional[List[str]] = None
-
-
-class UnitIn(BaseModel):
-    label: str
-    bedrooms: int = Field(ge=0)
-    bathrooms: float = Field(ge=0)
-    square_footage: int = Field(ge=0)
-    market_rent_cents: int = Field(ge=0)
-    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"] = "vacant"
-
-
-class UnitOut(BaseModel):
-    property_id: str
-    unit_id: str
-    label: str
-    bedrooms: int
-    bathrooms: float
-    square_footage: int
-    market_rent_cents: int
-    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"]
-# ───────────────────────────────────────────────────────────────────────────
-# OpenBankProject — Banking accounts (ACC-001..ACC-004)
-# ───────────────────────────────────────────────────────────────────────────
-
-
-class AccountAttributeIn(BaseModel):
-    name: str
-    type: str  # "STRING" | "INTEGER" | "DOUBLE" | "BOOLEAN" | "DATE"
-    value: str  # always string-encoded
-
-
-class BankOut(BaseModel):
-    bank_id: str
-    name: str
-    short_name: str
-    logo_url: Optional[str] = None
-    website: Optional[str] = None
-
-
-class BankListOut(BaseModel):
-    banks: List[BankOut]
-
-
-class AccountOut(BaseModel):
-    account_id: str
-    bank_id: str
-    label: str
-    account_type: str
-    product_code: str
-    currency: str
-    owners: List[str]
-    is_default: bool
-    wallet_backed: bool
-    iban: Optional[str] = None
-    routing_number: Optional[str] = None
-    account_number_masked: Optional[str] = None
-    attributes: List[AccountAttributeIn] = []
-    created_at: int
-    updated_at: int
-
-
-class UnitUpdateIn(BaseModel):
-    label: Optional[str] = None
-    bedrooms: Optional[int] = Field(default=None, ge=0)
-    bathrooms: Optional[float] = Field(default=None, ge=0)
-    square_footage: Optional[int] = Field(default=None, ge=0)
-    market_rent_cents: Optional[int] = Field(default=None, ge=0)
-    occupancy_status: Optional[Literal["vacant", "occupied", "turnover", "unavailable"]] = None
-
-
-class PropertyOccupancyOut(BaseModel):
-    property_id: str
-    total: int
-    occupied: int
-    vacant: int
-    turnover: int
-    unavailable: int
-    occupancy_status: Literal["vacant", "partial", "occupied"]
-    occupancy_rate: float
-
-
-class PortfolioOccupancyOut(BaseModel):
-    property_count: int
-    unit_count: int
-    occupied: int
-    vacant: int
-    turnover: int
-    unavailable: int
-    occupancy_rate: float
-
-
-class PropertyListOut(BaseModel):
-    properties: List[PropertyOut]
-    count: int
-    cursor: Optional[str] = None
 class HotelUpdateIn(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -15418,6 +15417,51 @@ class AmenityAssociationOut(BaseModel):
     icon: Optional[str] = None
     target_type: Literal["hotel", "room_type"]
     created_at: int
+
+
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# OpenBankProject — Banking accounts (ACC-001..ACC-004)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class AccountAttributeIn(BaseModel):
+    name: str
+    type: str  # "STRING" | "INTEGER" | "DOUBLE" | "BOOLEAN" | "DATE"
+    value: str  # always string-encoded
+
+
+class BankOut(BaseModel):
+    bank_id: str
+    name: str
+    short_name: str
+    logo_url: Optional[str] = None
+    website: Optional[str] = None
+
+
+class BankListOut(BaseModel):
+    banks: List[BankOut]
+
+
+class AccountOut(BaseModel):
+    account_id: str
+    bank_id: str
+    label: str
+    account_type: str
+    product_code: str
+    currency: str
+    owners: List[str]
+    is_default: bool
+    wallet_backed: bool
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+    attributes: List[AccountAttributeIn] = []
+    created_at: int
+    updated_at: int
+
+
 class AccountListOut(BaseModel):
     accounts: List[AccountOut]
 

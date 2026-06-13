@@ -2509,6 +2509,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_CREATED", "partition_key": "type", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
+        ),
         # CND-001: ATS Candidates table — single-table design with three GSIs.
         # GSI sort keys are numeric (created_at aliases) — attr_types required
         # to avoid ValidationException on integer range queries (CLAUDE.md gotcha).
@@ -2526,6 +2527,7 @@ def _table_defs() -> List[TableDef]:
                 "GSI2SK": "N",
                 "GSI3SK": "N",
             },
+        ),
         # ATS — Job Orders (JOB-001)
         TableDef(
             _resolve_table_name(S.job_orders_table_name, "job_orders"),
@@ -2553,6 +2555,9 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",         "sort_key": "created_at"},
                 {"index_name": "GSI_STATUS",         "partition_key": "status",            "sort_key": "created_at"},
                 {"index_name": "GSI_UNIT_OCCUPANCY", "partition_key": "property_id",       "sort_key": "occupancy_status"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # QloApps hotel-PMS vertical (HTL-001): hotel entity table.
         # GSI_OWNER: list a hotelier's hotels newest-first (PK=owner_sub, SK=created_at).
         # GSI_STATUS: admin listing by status (PK=status, SK=created_at).
@@ -2576,6 +2581,9 @@ def _table_defs() -> List[TableDef]:
             "sk",
             gsi=[
                 {"index_name": "GSI_CATEGORY", "partition_key": "category", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # OpenBankProject ACC-001: single-table store for Banks + Accounts +
         # transaction metadata + co-owner reverse-index rows. GSI_ACCOUNT_BY_ID
         # resolves an account by id regardless of owner partition (cross-owner
