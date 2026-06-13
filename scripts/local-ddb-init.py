@@ -41,6 +41,22 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # HTL-010..HTL-011 (QloApps hotel PMS): per-room-type per-date availability.
+        # PK=availability_pk ("{hotel_id}#{room_type_id}"), SK="DATE#{YYYY-MM-DD}".
+        # Hold meta rows use PK="HOLD#{hold_id}", SK="META".
+        # GSI_HOTEL_DATE: hotel-wide calendar aggregation across all room types.
+        # GSI_HOLD_EXPIRY: TTL sweep for expiring holds (expires_at is numeric).
+        # attr_types: updated_at=N (mutation timestamp), expires_at=N (hold TTL).
+        TableDef(
+            _resolve_table_name(S.hotel_availability_table_name, "hotel_availability"),
+            "availability_pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_HOTEL_DATE",  "partition_key": "hotel_id",      "sort_key": "date"},
+                {"index_name": "GSI_HOLD_EXPIRY", "partition_key": "gsi_expiry_pk", "sort_key": "expires_at"},
+            ],
+            attr_types={"updated_at": "N", "expires_at": "N"},
+        ),
         # STU-001: CRM Security Suite, Studio & Admin scaffolding
         TableDef(
             S.crm_acl_roles_table_name,

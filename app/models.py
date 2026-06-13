@@ -17071,3 +17071,87 @@ class CrmProjectAddContactLinkIn(BaseModel):
     linked_entity_id: str
     linked_entity_type: str = "contact_party"
     note: Optional[str] = Field(default=None, max_length=500)
+
+
+
+
+# ─── Hotel PMS / Availability (QloApps vertical, HTL-010..HTL-013) ───────────
+
+class AvailabilityDayOut(BaseModel):
+    """One (room_type, date) row — mirrors the hotel_availability DATE# row.
+
+    ``available`` is derived: total_rooms + overbooking_allowance - booked - held.
+    It is never stored; the service recomputes it on every read/mutation.
+    """
+    hotel_id: str
+    room_type_id: str
+    date: str                           # YYYY-MM-DD
+    total_rooms: int
+    booked: int
+    held: int
+    overbooking_allowance: int
+    min_availability: int
+    max_availability: Optional[int] = None
+    available: int                      # derived
+    updated_at: int
+
+
+class AvailabilitySetIn(BaseModel):
+    """Date-range seed/set payload for set_total_rooms."""
+    hotel_id: str
+    room_type_id: str
+    start_date: str                     # YYYY-MM-DD inclusive
+    end_date: str                       # YYYY-MM-DD inclusive
+    total_rooms: int = Field(ge=0)
+
+
+class AvailabilityDayIn(BaseModel):
+    """Single-date set payload."""
+    hotel_id: str
+    room_type_id: str
+    date: str                           # YYYY-MM-DD
+    total_rooms: int = Field(ge=0)
+
+
+class HoldRoomsIn(BaseModel):
+    """Request body for hold_rooms (HTL-011)."""
+    hotel_id: str
+    room_type_id: str
+    checkin: str                        # YYYY-MM-DD inclusive
+    checkout: str                       # YYYY-MM-DD exclusive
+    quantity: int = Field(ge=1)
+    ttl_seconds: Optional[int] = Field(default=None, ge=1)
+
+
+class HoldOut(BaseModel):
+    """Response for a hold (HTL-011)."""
+    hold_id: str
+    hotel_id: str
+    room_type_id: str
+    checkin: str
+    checkout: str
+    dates: List[str]
+    quantity: int
+    status: str                         # "active" | "released" | "expired"
+    user_sub: str
+    created_at: int
+    expires_at: int
+
+
+class OverbookingSetIn(BaseModel):
+    """Request body for set_overbooking_allowance (HTL-011)."""
+    hotel_id: str
+    room_type_id: str
+    start_date: str
+    end_date: str
+    allowance: int = Field(ge=0)
+
+
+class MinMaxSetIn(BaseModel):
+    """Request body for set_min_max_availability (HTL-011)."""
+    hotel_id: str
+    room_type_id: str
+    start_date: str
+    end_date: str
+    min_availability: Optional[int] = Field(default=None, ge=0)
+    max_availability: Optional[int] = Field(default=None, ge=0)

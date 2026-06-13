@@ -3046,6 +3046,10 @@ class Settings:
     crm_pm_templates_table_name: str = os.environ.get(
         "DDB_CRM_PM_TEMPLATES_TABLE", "crm_pm_templates"
     )
+    # Hotel PMS / availability (QloApps vertical, HTL-010..HTL-013). Default OFF.
+    hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() == "true"
+    hotel_availability_table_name: str = os.environ.get("HOTEL_AVAILABILITY_TABLE_NAME", "hotel_availability")
+    hotel_hold_ttl_seconds: int = int(os.environ.get("HOTEL_HOLD_TTL_SECONDS", "900"))
 
 
 S = Settings()

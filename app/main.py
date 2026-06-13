@@ -343,6 +343,7 @@ from app.routers.workflow_rules import router as workflow_rules_router
 from app.services.workflow_scheduler import start_workflow_scheduler_task
 # CRM Project Management (PRJ-001)
 from app.routers.crm_projects import router as crm_projects_router
+from app.routers.hotel_availability import hotel_availability_router
 
 logger = logging.getLogger(__name__)
 
@@ -1024,6 +1025,10 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_report_scheduler_task)
     # CRM Project Management (PRJ-001)
     app.include_router(crm_projects_router)
+    # HTL-010..HTL-013: Hotel PMS / availability (QloApps vertical, default OFF)
+    app.include_router(hotel_availability_router)
+    from app.services.hotel_availability import start_hotel_hold_expiry_task
+    app.add_event_handler("startup", start_hotel_hold_expiry_task)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
