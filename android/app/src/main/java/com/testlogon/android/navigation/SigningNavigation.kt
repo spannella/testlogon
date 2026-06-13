@@ -9,6 +9,8 @@ import androidx.navigation.navArgument
 import com.testlogon.android.feature.signing.PacketDetailRoute
 import com.testlogon.android.feature.signing.PacketDetailViewModel
 import com.testlogon.android.feature.signing.SigningEntryRoute
+import com.testlogon.android.feature.signing.document.DocumentViewerRoute
+import com.testlogon.android.feature.signing.document.DocumentViewerViewModel
 
 /**
  * AND-340 - the e-signature Signing ENTRY + packet DETAIL destinations.
@@ -30,6 +32,16 @@ data object SigningPacketDetailDest {
     fun build(packetId: String): String = "signing/packet/${Uri.encode(packetId)}"
 }
 
+/**
+ * AND-341 - the PDF document viewer destination, opened from the detail's "Open document" affordance.
+ * `packetId` is a required path arg; the viewer streams that packet's PDF via SigningApi.downloadFinalPdf.
+ */
+data object SigningDocumentDest {
+    const val ROUTE = "signing/packet/{packetId}/document"
+
+    fun build(packetId: String): String = "signing/packet/${Uri.encode(packetId)}/document"
+}
+
 /** AND-340 - registers the Signing entry + packet-detail screens in the authenticated graph. */
 fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
     composable(SigningEntryDest.ROUTE) {
@@ -47,12 +59,33 @@ fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
                 type = NavType.StringType
             },
         ),
-    ) {
+    ) { entry ->
+        val packetId = entry.arguments?.getString(PacketDetailViewModel.ARG_PACKET_ID).orEmpty()
         PacketDetailRoute(
             onBack = { navController.popBackStack() },
-            // The PDF viewer + the assigned-signer deep capture flow are later tickets; no-op for now.
-            onOpenPdf = {},
+            // AND-341 - the "Open document" affordance opens the PDF viewer for this packet. The viewer
+            // streams the packet's PDF, so it navigates by packetId (NOT the source path argument).
+            onOpenPdf = {
+                if (packetId.isNotBlank()) {
+                    navController.navigate(SigningDocumentDest.build(packetId))
+                }
+            },
+            // The assigned-signer deep capture flow is a later ticket; no-op for now.
             onSign = {},
+        )
+    }
+    composable(
+        route = SigningDocumentDest.ROUTE,
+        arguments = listOf(
+            navArgument(DocumentViewerViewModel.ARG_PACKET_ID) {
+                type = NavType.StringType
+            },
+        ),
+    ) {
+        DocumentViewerRoute(
+            onBack = { navController.popBackStack() },
+            // AND-342 will collect the per-page geometry to overlay signature fields; no-op for now.
+            onPageLayout = {},
         )
     }
 }

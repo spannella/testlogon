@@ -2688,4 +2688,8 @@
     <string name="signing_status_cancelled">Cancelled</string>
     <string name="signing_status_expired">Expired</string>
     <string name="signing_status_unknown">Status unavailable</string>
+    <!-- AND-341 - PDF document viewer -->
+    <string name="document_title">Document</string>
+    <string name="document_page_label">Page %1$d of %2$d</string>
+    <string name="document_retry">Try again</string>
 </resources>
