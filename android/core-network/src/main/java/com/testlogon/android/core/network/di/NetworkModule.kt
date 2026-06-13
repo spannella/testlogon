@@ -4,6 +4,8 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.testlogon.android.core.network.BuildConfig
 import com.testlogon.android.core.network.json.BigDecimalAdapter
+import com.testlogon.android.core.network.kyc.KycCaseStatusAdapter
+import com.testlogon.android.core.network.kyc.KycFileTypeAdapter
 import com.testlogon.android.core.network.SettingsStore
 import com.testlogon.android.core.network.auth.AuthEventSink
 import com.testlogon.android.core.network.auth.SessionAuthenticator
@@ -42,6 +44,10 @@ object NetworkModule {
         // AND-218: BigDecimal mapping for the purchases transaction `amount` (no built-in adapter).
         // Registered before the reflective factory so it wins for BigDecimal-typed fields.
         .add(BigDecimalAdapter)
+        // AND-319: KYC enum token mapping (lenient -> UNKNOWN). Registered before the reflective
+        // factory so they resolve for KycCaseStatus / KycFileType fields on the KYC DTOs.
+        .add(KycCaseStatusAdapter)
+        .add(KycFileTypeAdapter)
         .add(KotlinJsonAdapterFactory())
         .build()
 
