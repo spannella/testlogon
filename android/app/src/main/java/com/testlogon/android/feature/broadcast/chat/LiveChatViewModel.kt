@@ -170,6 +170,9 @@ class LiveChatViewModel @AssistedInject constructor(
     private fun applyEvent(event: ChatStreamEvent) {
         when (event) {
             is ChatStreamEvent.MessageReceived -> appendOrReconcile(event.message)
+            // AND-313 — the chat:delete frame reconciles a moderator's optimistic delete (the moderation VM
+            // issues the DELETE; this reducer removes the row when the server echoes chat:delete). There are
+            // NO SSE frames for mute / ban / pin, so those are NOT reconciled here.
             is ChatStreamEvent.MessageDeleted -> removeMessage(event.messageId)
             is ChatStreamEvent.ReactionUpdated -> applyReactionCounts(event.messageId, event.counts)
             is ChatStreamEvent.MessageUnlocked -> unlockMessage(event.messageId, event.text)

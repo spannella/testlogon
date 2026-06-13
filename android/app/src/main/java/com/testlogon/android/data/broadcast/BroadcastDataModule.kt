@@ -40,6 +40,14 @@ object BroadcastApiModule {
         retrofit: Retrofit,
     ): com.testlogon.android.feature.guest.GuestApi =
         retrofit.create(com.testlogon.android.feature.guest.GuestApi::class.java)
+
+    /** AND-313 — chat moderation (mute / ban / delete / pin / log) on the SAME shared Retrofit. */
+    @Provides
+    @Singleton
+    fun provideModerationApi(
+        retrofit: Retrofit,
+    ): com.testlogon.android.feature.broadcast.moderation.ModerationApi =
+        retrofit.create(com.testlogon.android.feature.broadcast.moderation.ModerationApi::class.java)
 }
 
 @Module
@@ -81,4 +89,14 @@ abstract class BroadcastDataModule {
     abstract fun bindGuestRepository(
         impl: com.testlogon.android.feature.guest.GuestRepositoryImpl,
     ): com.testlogon.android.feature.guest.GuestRepository
+
+    /**
+     * AND-313 — separate chat-moderation repository. Kept distinct from BroadcastRepository / HostControl /
+     * Guest so the shared broadcast fakes are NOT touched. No new API/DAO/migration/dependency.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindModerationRepository(
+        impl: com.testlogon.android.feature.broadcast.moderation.ModerationRepositoryImpl,
+    ): com.testlogon.android.feature.broadcast.moderation.ModerationRepository
 }

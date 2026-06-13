@@ -19,6 +19,8 @@ import com.testlogon.android.feature.broadcast.inputs.InputsRoute
 import com.testlogon.android.feature.broadcast.inputs.InputsViewModel
 import com.testlogon.android.feature.broadcast.layout.LayoutRoute
 import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
+import com.testlogon.android.feature.broadcast.moderation.ModerationLogRoute
+import com.testlogon.android.feature.broadcast.moderation.ModerationViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 import com.testlogon.android.feature.guest.GuestAcceptRoute
@@ -78,6 +80,21 @@ data object BroadcastGuestsDest {
     const val ROUTE = "broadcast/{${GuestManageViewModel.ARG_SESSION_ID}}/guests"
 
     fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/guests"
+}
+
+/**
+ * AND-313 — the chat-moderation log destination, keyed by sessionId + the broadcast's creatorId (delegate
+ * routing). ban / unban / pin / unpin / log all live under the delegate prefix, so a creatorId is required;
+ * a blank creatorId still resolves the route but the log surface reports it as unavailable.
+ */
+data object BroadcastModerationLogDest {
+    const val ROUTE =
+        "broadcast/{${ModerationViewModel.ARG_SESSION_ID}}/moderation-log" +
+            "?${ModerationViewModel.ARG_CREATOR_ID}={${ModerationViewModel.ARG_CREATOR_ID}}"
+
+    fun build(sessionId: String, creatorId: String): String =
+        "broadcast/${Uri.encode(sessionId)}/moderation-log" +
+            "?${ModerationViewModel.ARG_CREATOR_ID}=${Uri.encode(creatorId)}"
 }
 
 /**
@@ -163,6 +180,13 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onManageGuests = {
                 navController.navigate(BroadcastGuestsDest.build(sessionId)) { launchSingleTop = true }
             },
+            // AND-313 — the host can moderate this broadcast's chat + view the moderation log. The creator id
+            // (delegate routing) comes from the loaded session's createdBy; blank falls back to host-only.
+            onModeration = { creatorId ->
+                navController.navigate(BroadcastModerationLogDest.build(sessionId, creatorId)) {
+                    launchSingleTop = true
+                }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -191,6 +215,19 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         ),
     ) {
         GuestManageRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-313 — the chat-moderation log destination (mute / ban / delete / pin actions + the log + unban).
+    composable(
+        route = BroadcastModerationLogDest.ROUTE,
+        arguments = listOf(
+            navArgument(ModerationViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+            navArgument(ModerationViewModel.ARG_CREATOR_ID) {
+                type = NavType.StringType
+                defaultValue = ""
+            },
+        ),
+    ) {
+        ModerationLogRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(

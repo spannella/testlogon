@@ -2045,4 +2045,45 @@
     <string name="guest_accept_decline">Decline</string>
     <string name="guest_accept_joined_title">You\'re in</string>
     <string name="guest_accept_joined_body">You\'ve joined the broadcast as a guest.</string>
+
+    <!-- AND-313 — chat moderation (mute / ban / unban / delete / pin / log) -->
+    <string name="host_control_moderation">Moderate chat</string>
+    <string name="moderation_log_title">Moderation log</string>
+    <string name="moderation_back_cd">Back</string>
+    <string name="moderation_delete">Delete message</string>
+    <string name="moderation_delete_cd">Delete this message</string>
+    <string name="moderation_pin">Pin message</string>
+    <string name="moderation_pin_cd">Pin this message</string>
+    <string name="moderation_unpin">Unpin</string>
+    <string name="moderation_unpin_cd">Unpin the pinned message</string>
+    <string name="moderation_moderate_author">Moderate author</string>
+    <string name="moderation_moderate_author_cd">Moderate %1$s</string>
+    <string name="moderation_mute">Mute</string>
+    <string name="moderation_mute_label">Mute for</string>
+    <string name="moderation_mute_5m">5 min</string>
+    <string name="moderation_mute_1h">1 hour</string>
+    <string name="moderation_mute_24h">24 hours</string>
+    <string name="moderation_ban">Ban</string>
+    <string name="moderation_ban_reason_label">Reason (optional)</string>
+    <string name="moderation_ban_confirm_title">Ban this viewer?</string>
+    <string name="moderation_ban_confirm_body">%1$s will be removed and blocked from this broadcast\'s chat.</string>
+    <string name="moderation_ban_confirm">Ban</string>
+    <string name="moderation_ban_cancel">Cancel</string>
+    <string name="moderation_unban">Unban</string>
+    <string name="moderation_unnamed_user">This viewer</string>
+    <string name="moderation_pinned_label">Pinned message</string>
+    <string name="moderation_log_empty_title">No moderation activity</string>
+    <string name="moderation_log_empty_body">Mutes, bans, and removed messages will appear here.</string>
+    <string name="moderation_log_error_title">Couldn\'t load the log</string>
+    <string name="moderation_log_row_summary">By %1$s · %2$s</string>
+    <string name="moderation_log_row_reason">Reason: %1$s</string>
+    <string name="moderation_log_ban_row">Banned: %1$s</string>
+    <string name="moderation_action_mute">Muted a viewer</string>
+    <string name="moderation_action_unmute">Unmuted a viewer</string>
+    <string name="moderation_action_ban">Banned a viewer</string>
+    <string name="moderation_action_unban">Unbanned a viewer</string>
+    <string name="moderation_action_delete">Deleted a message</string>
+    <string name="moderation_action_pin">Pinned a message</string>
+    <string name="moderation_action_unpin">Unpinned a message</string>
+    <string name="moderation_action_unknown">Moderation action</string>
 </resources>

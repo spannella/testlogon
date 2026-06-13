@@ -87,6 +87,9 @@ object HostControlTestTags {
 
     /** AND-312 — opens the guest-management surface. */
     const val MANAGE_GUESTS = "host_manage_guests"
+
+    /** AND-313 — opens the chat-moderation log surface. */
+    const val MODERATION = "host_moderation"
 }
 
 /**
@@ -102,6 +105,8 @@ fun HostControlRoute(
     onManageLayout: () -> Unit = {},
     // AND-312 — open the guest-management surface (invite / promote / mute / remove) for this session.
     onManageGuests: () -> Unit = {},
+    // AND-313 — open the chat-moderation log surface; receives the broadcast's creator id (delegate routing).
+    onModeration: (String) -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -121,6 +126,7 @@ fun HostControlRoute(
         onManageInputs = onManageInputs,
         onManageLayout = onManageLayout,
         onManageGuests = onManageGuests,
+        onModeration = onModeration,
         onBack = onBack,
     )
 }
@@ -147,6 +153,8 @@ fun HostControlScreen(
     onManageLayout: () -> Unit = {},
     // AND-312 — open the guest-management surface; defaulted so existing call sites/tests are unaffected.
     onManageGuests: () -> Unit = {},
+    // AND-313 — open the chat-moderation log; receives creator id, defaulted so existing tests are unaffected.
+    onModeration: (String) -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -227,6 +235,17 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.MANAGE_GUESTS),
             ) {
                 Text(stringResource(R.string.host_control_manage_guests))
+            }
+
+            // AND-313 — moderate this broadcast's chat (mute / ban / delete / pin) + view the moderation log.
+            OutlinedButton(
+                onClick = { onModeration(state.session?.createdBy.orEmpty()) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MODERATION),
+            ) {
+                Text(stringResource(R.string.host_control_moderation))
             }
         }
     }
