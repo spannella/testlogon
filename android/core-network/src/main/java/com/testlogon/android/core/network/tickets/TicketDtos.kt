@@ -98,6 +98,16 @@ data class SpaceTicketActivity(
 )
 
 /**
+ * AND-373 - request body for POST ticket-spaces/{spaceId}/tickets/{ticketId}/messages (a ticket REPLY).
+ * The only field is `body` (the message text; server-validated minLength 1, maxLength 4000 - the client also
+ * pre-validates 1..4000 in the composer). TEXT only this wave (no media). The response is the WHOLE updated
+ * ticket ([SpaceTicketEnvelope]), NOT a single message - the new message is ticket.messages.last().
+ */
+data class SpaceTicketMessageReq(
+    @Json(name = "body") val body: String,
+)
+
+/**
  * NAMED envelope for GET ticket-spaces/{spaceId} (the body is {"space": {...}}, NOT a bare object).
  */
 data class TicketSpaceEnvelope(

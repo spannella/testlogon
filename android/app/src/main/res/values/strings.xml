@@ -3116,4 +3116,11 @@
     <string name="tickets_thread_empty_body">This ticket has no messages.</string>
     <string name="tickets_sender_unknown">Unknown sender</string>
     <string name="tickets_message_empty">(no message)</string>
+    <string name="ticket_reply_placeholder">Write a reply…</string>
+    <string name="ticket_reply_send_cd">Send reply</string>
+    <string name="ticket_reply_char_counter">%1$d / %2$d</string>
+    <string name="ticket_reply_sending">Sending…</string>
+    <string name="ticket_reply_failed">Couldn\'t send</string>
+    <string name="ticket_reply_retry">Retry</string>
+    <string name="ticket_reply_disabled_caption">You don\'t have permission to reply to this ticket.</string>
 </resources>

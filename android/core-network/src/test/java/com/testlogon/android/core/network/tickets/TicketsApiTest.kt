@@ -207,4 +207,63 @@ class TicketsApiTest {
         assertTrue(error is HttpException)
         assertEquals(500, (error as HttpException).code())
     }
+
+    // ---- AND-373: replyToTicket POSTs {body}, both @Path tokens, returns the whole-ticket envelope ----
+
+    @Test
+    fun replyToTicket_postsBody_substitutesBothPaths_returnsWholeTicketEnvelope() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """{"ticket":{"ticket_id":"tk_1","space_id":"sp_1","title":"Cannot log in",
+                     "status":"open","messages":[
+                       {"message_id":"m_1","sender_sub":"usr_a","body":"Help","created_at":1700000010},
+                       {"message_id":"m_2","sender_sub":"usr_b","body":"On it","created_at":1700000020}
+                     ]}}""",
+            ),
+        )
+
+        val envelope = ticketsApi().replyToTicket("sp_1", "tk_1", SpaceTicketMessageReq(body = "On it"))
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ticket-spaces/sp_1/tickets/tk_1/messages", recorded.requestUrl?.encodedPath)
+        // request body carries {"body":"On it"}
+        val sentBody = recorded.body.readUtf8()
+        assertTrue(sentBody.contains(""""body":"On it""""))
+        // response is the WHOLE ticket; the new message is messages.last()
+        assertEquals("m_2", envelope.ticket.messages.last().messageId)
+        assertEquals("On it", envelope.ticket.messages.last().body)
+    }
+
+    @Test
+    fun replyToTicket_422_surfacesAsHttpException() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(422).setHeader("Content-Type", "application/json")
+                .setBody("""{"detail":[{"loc":["body","body"],"msg":"too long","type":"value_error"}]}"""),
+        )
+
+        val error = runCatching {
+            ticketsApi().replyToTicket("sp_1", "tk_1", SpaceTicketMessageReq(body = "x"))
+        }.exceptionOrNull()
+
+        val recorded = server.takeRequest()
+        assertEquals("/ticket-spaces/sp_1/tickets/tk_1/messages", recorded.requestUrl?.encodedPath)
+        assertTrue(error is HttpException)
+        assertEquals(422, (error as HttpException).code())
+    }
+
+    @Test
+    fun replyToTicket_403_errorEnvelope_surfacesAsHttpException() = runTest {
+        server.enqueue(
+            MockResponse().setResponseCode(403).setHeader("Content-Type", "application/json")
+                .setBody("""{"error":{"code":"role_required","message":"nope"}}"""),
+        )
+
+        val error = runCatching {
+            ticketsApi().replyToTicket("sp_1", "tk_1", SpaceTicketMessageReq(body = "x"))
+        }.exceptionOrNull()
+
+        assertTrue(error is HttpException)
+        assertEquals(403, (error as HttpException).code())
+    }
 }

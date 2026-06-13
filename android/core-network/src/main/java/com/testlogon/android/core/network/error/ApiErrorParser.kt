@@ -59,4 +59,30 @@ class ApiErrorParser @Inject constructor(
             null
         }
     }
+
+    /**
+     * AND-373 - extracts the FastAPI 422 validation message whose `loc` tail equals [field], so a composer can
+     * surface a field-level error (e.g. loc ["body","body"] -> the message text field). Returns null when the
+     * error is not a 422, the body is not a HTTPValidationError {detail:[{loc,msg,type}]}, or no item targets
+     * [field]. Additive + total (never throws): existing callers are unaffected. The raw body is read from
+     * [ApiError.raw] (populated by [from]).
+     */
+    fun fieldErrorForLocTail(error: ApiError, field: String): String? {
+        if (error.status != HTTP_UNPROCESSABLE_ENTITY) return null
+        val detail = parseDetail(error.raw as? String) as? List<*> ?: return null
+        for (item in detail) {
+            val obj = item as? Map<*, *> ?: continue
+            val loc = obj["loc"] as? List<*> ?: continue
+            val tail = loc.lastOrNull() as? String ?: continue
+            if (tail == field) {
+                val msg = obj["msg"] as? String
+                if (!msg.isNullOrBlank()) return msg
+            }
+        }
+        return null
+    }
+
+    private companion object {
+        const val HTTP_UNPROCESSABLE_ENTITY = 422
+    }
 }

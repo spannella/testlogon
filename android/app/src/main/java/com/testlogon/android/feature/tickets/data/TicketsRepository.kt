@@ -9,6 +9,8 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.tickets.Ticket
 import com.testlogon.android.core.model.tickets.TicketSpace
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.core.network.tickets.SpaceTicketMessageReq
+import com.testlogon.android.core.network.tickets.TicketConstants
 import com.testlogon.android.core.network.tickets.TicketsApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -49,9 +51,32 @@ interface TicketsRepository {
     /** GET one ticket (named {ticket} envelope unwrap; embeds messages[] oldest-first), mapped. Idempotent. */
     suspend fun getTicket(spaceId: String, ticketId: String): ApiResult<Ticket>
 
+    /**
+     * AND-373 - POST a TEXT reply to a ticket and map the returned WHOLE updated ticket to domain (the
+     * server-confirmed new message is messages.last()). NON-idempotent (no idempotency key) -> there is NO
+     * auto-retry inside the repo; the caller decides whether to re-send. A 4xx surfaces as Failure (the VM maps
+     * 422 to the composer field via [ApiErrorParser.fieldErrorForLocTail]).
+     */
+    suspend fun reply(spaceId: String, ticketId: String, body: String): ApiResult<Ticket>
+
     companion object {
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 6
+
+        /** AND-373 - server-validated reply length bounds (the composer pre-validates the same range). */
+        const val REPLY_MIN_LENGTH = 1
+        const val REPLY_MAX_LENGTH = 4000
+
+        /**
+         * AND-373 - ADVISORY canPost: the current user is an editor / owner member of [space] (a viewer or
+         * non-member is read-only). This is a UX enhancement ONLY - the server 403 is the authority (the web
+         * does NOT gate client-side). Terminal-status gating (done) is applied separately at the ViewModel.
+         */
+        fun canPostInSpace(space: TicketSpace, currentSub: String?): Boolean {
+            if (currentSub.isNullOrBlank()) return false
+            val role = space.members.firstOrNull { it.userSub == currentSub }?.role ?: return false
+            return role == TicketConstants.SpaceRole.EDITOR || role == TicketConstants.SpaceRole.OWNER
+        }
     }
 }
 
@@ -80,6 +105,13 @@ class TicketsRepositoryImpl @Inject constructor(
     override suspend fun getTicket(spaceId: String, ticketId: String): ApiResult<Ticket> =
         withContext(Dispatchers.IO) {
             call { api.getTicket(spaceId, ticketId).ticket.toDomain() }
+        }
+
+    override suspend fun reply(spaceId: String, ticketId: String, body: String): ApiResult<Ticket> =
+        withContext(Dispatchers.IO) {
+            call {
+                api.replyToTicket(spaceId, ticketId, SpaceTicketMessageReq(body = body)).ticket.toDomain()
+            }
         }
 
     private fun pagingConfig() = PagingConfig(

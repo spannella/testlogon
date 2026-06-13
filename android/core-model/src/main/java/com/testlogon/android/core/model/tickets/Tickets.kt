@@ -52,9 +52,26 @@ data class Ticket(
 )
 
 /**
+ * AND-373 - the client-side lifecycle of an OPTIMISTIC ticket reply. Server-confirmed messages are always
+ * [SENT]; an in-flight optimistic reply starts [SENDING] and either reconciles to the server-confirmed message
+ * (still [SENT]) or, on a non-cancellation failure, flips to [FAILED] (the user may tap retry - there is NO
+ * auto-retry because the reply POST is non-idempotent). This enum lives in core-model so both the ViewModel and
+ * the UI bubble can switch on it exhaustively.
+ */
+enum class TicketSendState { SENDING, FAILED, SENT }
+
+/**
  * One message on a ticket (embedded in [Ticket.messages]). The author is the opaque [senderSub] (no display
  * name on the wire - the UI renders the sub). [senderRole] is a RAW String. [createdAt] is an EPOCH-seconds
  * [Long].
+ *
+ * AND-373 - augmented with an OPTIMISTIC SEND lifecycle so the SAME type renders both server messages and the
+ * member's in-flight reply (the AND-372 thread already renders [TicketMessage], so we reuse it rather than fork
+ * onto a separate messaging Message model - see the AND-373 reconciliation note). Both fields are DEFAULTED so
+ * every existing AND-371/372 mapper, fake and test is unaffected: [sendState] defaults to [TicketSendState.SENT]
+ * (the wire mapper leaves it at SENT) and [clientId] (the optimistic-dedupe key) defaults to null on a wire
+ * message. An optimistic reply is created with a generated [clientId] + [TicketSendState.SENDING]; on reconcile
+ * it is replaced by the canonical server message (matched by [messageId]).
  */
 data class TicketMessage(
     val messageId: String? = null,
@@ -62,4 +79,6 @@ data class TicketMessage(
     val senderRole: String? = null,
     val body: String? = null,
     val createdAt: Long? = null,
+    val sendState: TicketSendState = TicketSendState.SENT,
+    val clientId: String? = null,
 )

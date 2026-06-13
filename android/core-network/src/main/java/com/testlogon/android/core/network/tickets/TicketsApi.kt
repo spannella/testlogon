@@ -1,6 +1,8 @@
 package com.testlogon.android.core.network.tickets
 
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -47,5 +49,18 @@ interface TicketsApi {
     suspend fun getTicket(
         @Path("spaceId") spaceId: String,
         @Path("ticketId") ticketId: String,
+    ): SpaceTicketEnvelope
+
+    /**
+     * AND-373 - POST a TEXT reply to a ticket. The response is the WHOLE updated ticket (NAMED {ticket}
+     * envelope), NOT a single message - the newly-posted message is ticket.messages.last(). @Path tokens are
+     * EXACTLY {spaceId} and {ticketId}. This POST is NON-idempotent (there is NO idempotency key), so the
+     * global GET-only retry backoff intentionally excludes it - retry is user-driven only.
+     */
+    @POST("ticket-spaces/{spaceId}/tickets/{ticketId}/messages")
+    suspend fun replyToTicket(
+        @Path("spaceId") spaceId: String,
+        @Path("ticketId") ticketId: String,
+        @Body body: SpaceTicketMessageReq,
     ): SpaceTicketEnvelope
 }

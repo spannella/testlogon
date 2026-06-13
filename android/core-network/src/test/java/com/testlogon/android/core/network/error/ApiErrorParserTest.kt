@@ -45,4 +45,29 @@ class ApiErrorParserTest {
         val error = parser.fromThrowable(IOException("reset"))
         assertEquals(ApiError.STATUS_NETWORK, error.status)
     }
+
+    // ---- AND-373: 422 body-field extraction ----
+
+    @Test
+    fun `fieldErrorForLocTail returns body validation message on 422`() {
+        val error = ApiError(
+            status = 422,
+            message = "validation",
+            raw = """{"detail":[{"loc":["body","body"],"msg":"too long","type":"value_error"}]}""",
+        )
+        assertEquals("too long", parser.fieldErrorForLocTail(error, "body"))
+    }
+
+    @Test
+    fun `fieldErrorForLocTail is null for non-422 or unmatched loc`() {
+        val notValidation = ApiError(status = 400, message = "bad", raw = """{"detail":"bad"}""")
+        assertNull(parser.fieldErrorForLocTail(notValidation, "body"))
+
+        val otherField = ApiError(
+            status = 422,
+            message = "validation",
+            raw = """{"detail":[{"loc":["query","cursor"],"msg":"bad cursor","type":"value_error"}]}""",
+        )
+        assertNull(parser.fieldErrorForLocTail(otherField, "body"))
+    }
 }

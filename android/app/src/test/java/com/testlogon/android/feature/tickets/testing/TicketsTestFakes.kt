@@ -4,11 +4,13 @@ import androidx.paging.PagingData
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.LogoutReason
+import com.testlogon.android.core.model.tickets.SpaceMember
 import com.testlogon.android.core.model.tickets.Ticket
 import com.testlogon.android.core.model.tickets.TicketMessage
 import com.testlogon.android.core.model.tickets.TicketSpace
 import com.testlogon.android.core.network.tickets.SpaceTicketEnvelope
 import com.testlogon.android.core.network.tickets.SpaceTicketListEnvelope
+import com.testlogon.android.core.network.tickets.SpaceTicketMessageReq
 import com.testlogon.android.core.network.tickets.SpaceTicketOut
 import com.testlogon.android.core.network.tickets.TicketSpaceEnvelope
 import com.testlogon.android.core.network.tickets.TicketSpaceListEnvelope
@@ -39,12 +41,16 @@ class FakeTicketsApi(
     var space: () -> TicketSpaceEnvelope = { TicketSpaceEnvelope(space = TicketSpaceOut(spaceId = "s1")) },
     var tickets: () -> SpaceTicketListEnvelope = { SpaceTicketListEnvelope(items = emptyList(), nextCursor = null) },
     var ticket: () -> SpaceTicketEnvelope = { SpaceTicketEnvelope(ticket = SpaceTicketOut(ticketId = "t1")) },
+    var reply: () -> SpaceTicketEnvelope = { SpaceTicketEnvelope(ticket = SpaceTicketOut(ticketId = "t1")) },
 ) : TicketsApi {
 
     val listSpacesCursors = mutableListOf<String?>()
     val getSpaceIds = mutableListOf<String>()
     val listTicketsArgs = mutableListOf<Pair<String, String?>>()
     val getTicketArgs = mutableListOf<Pair<String, String>>()
+
+    /** AND-373 - records each replyToTicket as (spaceId, ticketId, requestBody) BEFORE honouring a throw. */
+    val replyArgs = mutableListOf<Triple<String, String, SpaceTicketMessageReq>>()
 
     override suspend fun listSpaces(cursor: String?): TicketSpaceListEnvelope {
         listSpacesCursors += cursor
@@ -64,6 +70,15 @@ class FakeTicketsApi(
     override suspend fun getTicket(spaceId: String, ticketId: String): SpaceTicketEnvelope {
         getTicketArgs += spaceId to ticketId
         return ticket()
+    }
+
+    override suspend fun replyToTicket(
+        spaceId: String,
+        ticketId: String,
+        body: SpaceTicketMessageReq,
+    ): SpaceTicketEnvelope {
+        replyArgs += Triple(spaceId, ticketId, body)
+        return reply()
     }
 
     companion object {
@@ -101,11 +116,15 @@ class FakeTicketsRepo(
     var spacesResult: ApiResult<List<TicketSpace>> = ApiResult.Success(emptyList()),
     var spaceResult: ApiResult<TicketSpace> = ApiResult.Success(TicketSpace(spaceId = "s1", name = "Support")),
     var ticketResult: ApiResult<Ticket> = ApiResult.Success(Ticket(ticketId = "t1")),
+    var replyResult: ApiResult<Ticket> = ApiResult.Success(Ticket(ticketId = "t1")),
 ) : TicketsRepository {
 
     var getSpacesCallCount = 0
     var getSpaceCallCount = 0
     var getTicketCallCount = 0
+
+    /** AND-373 - records each reply as (spaceId, ticketId, body) so a test can assert the POSTed text. */
+    val replyArgs = mutableListOf<Triple<String, String, String>>()
 
     override suspend fun getSpaces(): ApiResult<List<TicketSpace>> {
         getSpacesCallCount++
@@ -122,6 +141,11 @@ class FakeTicketsRepo(
     override suspend fun getTicket(spaceId: String, ticketId: String): ApiResult<Ticket> {
         getTicketCallCount++
         return ticketResult
+    }
+
+    override suspend fun reply(spaceId: String, ticketId: String, body: String): ApiResult<Ticket> {
+        replyArgs += Triple(spaceId, ticketId, body)
+        return replyResult
     }
 
     companion object {
@@ -142,6 +166,20 @@ class FakeTicketsRepo(
             members = emptyList(),
             memberCount = memberCount,
             updatedAt = updatedAt,
+        )
+
+        /** AND-373 - a domain space whose single member [memberSub] holds [role] (for canPost gating tests). */
+        fun spaceWithMember(
+            memberSub: String,
+            role: String?,
+            id: String = "s1",
+        ): TicketSpace = TicketSpace(
+            spaceId = id,
+            name = "Support",
+            visibility = "private",
+            members = listOf(SpaceMember(userSub = memberSub, role = role)),
+            memberCount = 1,
+            updatedAt = 100L,
         )
 
         /** A small domain message builder for the thread ViewModel tests. */
