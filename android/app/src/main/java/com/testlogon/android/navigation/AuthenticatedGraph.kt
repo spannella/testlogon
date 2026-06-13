@@ -215,6 +215,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         proofOfFundsDestination(navController)
         // AND-328: KYC screening status (READ-ONLY sanctions / PEP / adverse-media aggregated into one status).
         screeningDestination(navController)
+        // AND-329: KYC case status + monitoring (READ-ONLY case list + synthesized timeline + monitoring banner).
+        kycCasesDestinations(navController)
     }
 }
 

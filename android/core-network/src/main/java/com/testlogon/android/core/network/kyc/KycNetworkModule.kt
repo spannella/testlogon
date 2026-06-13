@@ -40,6 +40,10 @@ import javax.inject.Singleton
  *
  * AND-328 - also provides [KycScreeningApi] (the READ-ONLY `ui/kyc/screening/cases/{case_id}` sanctions / PEP
  * / adverse-media results GET) from the same shared Retrofit.
+ *
+ * AND-329 - also provides [KycMonitoringApi] (the READ-ONLY `v1/kyc/monitoring/schedule` + `.../triggers`
+ * ongoing-monitoring GETs that drive the case-list monitoring banner) from the same shared Retrofit. The case
+ * list + per-case detail REUSE the existing [KycApi] (listCases / getCase); no new case endpoints are added.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -88,4 +92,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycScreeningApi(retrofit: Retrofit): KycScreeningApi =
         retrofit.create(KycScreeningApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycMonitoringApi(retrofit: Retrofit): KycMonitoringApi =
+        retrofit.create(KycMonitoringApi::class.java)
 }
