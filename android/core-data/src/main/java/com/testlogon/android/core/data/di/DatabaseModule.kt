@@ -12,6 +12,7 @@ import com.testlogon.android.core.data.download.DownloadDao
 import com.testlogon.android.core.data.feed.BookmarkStateDao
 import com.testlogon.android.core.data.feed.PostSuppressionDao
 import com.testlogon.android.core.data.paywall.EntitlementDao
+import com.testlogon.android.core.data.respond.SessionDraftDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -70,4 +71,8 @@ object DatabaseModule {
     @Provides
     fun provideInputsDao(db: TestLogonDatabase): InputsDao =
         db.inputsDao()
+
+    @Provides
+    fun provideSessionDraftDao(db: TestLogonDatabase): SessionDraftDao =
+        db.sessionDraftDao()
 }

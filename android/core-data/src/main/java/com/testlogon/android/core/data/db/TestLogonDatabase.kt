@@ -23,6 +23,8 @@ import com.testlogon.android.core.data.download.DownloadDao
 import com.testlogon.android.core.data.download.DownloadEntity
 import com.testlogon.android.core.data.paywall.EntitlementDao
 import com.testlogon.android.core.data.paywall.EntitlementEntity
+import com.testlogon.android.core.data.respond.SessionDraftDao
+import com.testlogon.android.core.data.respond.SessionDraftEntity
 
 /**
  * AND-115 — the app-wide on-device cache store.
@@ -51,6 +53,8 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
  *        recording_id).
  * - v7 — AND-310: adds the broadcast_input table (cached ingest inputs, keyed by session_id+input_id) and
  *        the broadcast_layout table (cached session layout, keyed by session_id).
+ * - v8 — AND-348: adds the session_draft table (durable in-progress respondent questionnaire session,
+ *        keyed by slug — single active session per slug per device, FR-7).
  */
 @Database(
     entities = [
@@ -62,8 +66,9 @@ import com.testlogon.android.core.data.paywall.EntitlementEntity
         PendingRecordingEntity::class,
         BroadcastInputEntity::class,
         BroadcastLayoutEntity::class,
+        SessionDraftEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(LayoutListConverters::class)
@@ -90,6 +95,9 @@ abstract class TestLogonDatabase : RoomDatabase() {
 
     /** AND-310 — cached broadcast inputs + layout for the inputs-management surface. */
     abstract fun inputsDao(): InputsDao
+
+    /** AND-348 — durable in-progress respondent questionnaire session draft (per slug). */
+    abstract fun sessionDraftDao(): SessionDraftDao
 
     companion object {
         const val NAME = "testlogon-cache.db"
@@ -230,8 +238,40 @@ abstract class TestLogonDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * AND-348 — additive migration creating the session_draft table (durable in-progress respondent
+         * questionnaire session, keyed by slug). Purely additive (a new table), so no existing rows are
+         * touched. Column types/affinities match [com.testlogon.android.core.data.respond.SessionDraftEntity]
+         * EXACTLY (nullable current_section_index / current_question_id; dirty + updated_at NOT NULL with
+         * defaults).
+         */
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS session_draft (" +
+                        "slug TEXT NOT NULL PRIMARY KEY, " +
+                        "session_id TEXT NOT NULL, " +
+                        "questionnaire_id TEXT NOT NULL, " +
+                        "version_id TEXT NOT NULL, " +
+                        "answers_json TEXT NOT NULL, " +
+                        "current_section_index INTEGER, " +
+                        "current_question_id TEXT, " +
+                        "dirty INTEGER NOT NULL DEFAULT 0, " +
+                        "updated_at INTEGER NOT NULL DEFAULT 0)",
+                )
+            }
+        }
+
         /** Registered migrations; grows as the schema evolves. */
         val ALL_MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            arrayOf(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8,
+            )
     }
 }
