@@ -17155,3 +17155,96 @@ class MinMaxSetIn(BaseModel):
     end_date: str
     min_availability: Optional[int] = Field(default=None, ge=0)
     max_availability: Optional[int] = Field(default=None, ge=0)
+
+
+
+
+# ─────────────────── Hotel Rate Plans (HTL-014..HTL-016) ────────────────────
+
+
+class RatePlanIn(BaseModel):
+    room_type_id: str
+    name: str = Field(min_length=1, max_length=200)
+    base_nightly_rate_cents: Optional[int] = Field(default=None, ge=0)  # None → default from room type
+    base_occupancy: int = Field(default=2, ge=1)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class RatePlanOut(BaseModel):
+    rate_plan_id: str
+    hotel_id: str
+    room_type_id: str
+    name: str
+    base_nightly_rate_cents: int
+    base_occupancy: int
+    currency: str
+    active: bool
+    created_at: int
+    updated_at: int
+    created_by: str
+
+
+class RatePlanUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    base_nightly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    base_occupancy: Optional[int] = Field(default=None, ge=1)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    active: Optional[bool] = None
+
+
+class RatePlanRuleIn(BaseModel):
+    kind: Literal["season", "occupancy", "los", "advance", "weekend"]
+    rule_config: dict  # validated per-kind in the service
+    priority: int = Field(default=500, ge=0)
+
+
+class RatePlanRuleOut(BaseModel):
+    rule_id: str
+    kind: str
+    rule_config: dict
+    priority: int
+    created_at: int
+    updated_at: int
+    created_by: str
+
+
+class NightLineOut(BaseModel):
+    date: str                     # "YYYY-MM-DD" — the night's calendar date (inclusive)
+    base_cents: int               # base_nightly_rate_cents at the start of this night
+    season_delta_cents: int       # signed; net effect of season rules
+    weekend_delta_cents: int      # signed; net effect of weekend rules
+    occupancy_cents: int          # >= 0; extra-adult + extra-child surcharge
+    night_total_cents: int        # >= 0; floored final per-night charge (one room)
+
+
+class StayPriceResult(BaseModel):
+    nights: int
+    per_night: List[NightLineOut]
+    stay_subtotal_cents: int      # sum(night_total_cents); ONE room, pre whole-stay mods
+    los_discount_cents: int       # >= 0; LOS discount applied to the subtotal
+    advance_modifier_cents: int   # signed; advance modifier (negative = discount)
+    rooms: int
+    total_cents: int              # final: (subtotal - los + advance) * rooms, floored >= 0
+    currency: str
+    applied_rule_ids: List[str]
+
+
+class StayQuoteIn(BaseModel):
+    checkin: str                  # "YYYY-MM-DD" inclusive (first night)
+    checkout: str                 # "YYYY-MM-DD" exclusive (departure day, not a night)
+    adults: int = Field(ge=1)
+    children: int = Field(default=0, ge=0)
+    rooms: int = Field(default=1, ge=1)
+    advance_days: Optional[int] = Field(default=None, ge=0)
+
+
+class StayQuoteOut(BaseModel):   # serialization of HTL-015's StayPriceResult
+    nights: int
+    per_night: List[NightLineOut]
+    stay_subtotal_cents: int
+    los_discount_cents: int
+    advance_modifier_cents: int   # signed: negative = discount
+    rooms: int
+    total_cents: int              # final, all rules applied, × rooms, floored >= 0
+    currency: str
+    applied_rule_ids: List[str]

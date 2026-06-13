@@ -41,6 +41,22 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # HTL-014: Hotel nightly rate plans — plan header (SK=META) + rule child
+        # rows (SK=RULE#{kind}#{rule_id}) co-located on a hotel_id#room_type_id
+        # partition.  GSI_HOTEL lists plans for a hotel; GSI_ROOM_TYPE fetches
+        # the plan(s) for a room type.  created_at is the numeric GSI sort key on
+        # both indexes — attr_types required (CLAUDE.md "DynamoDB numeric GSI sort
+        # keys" gotcha; omitting it stores created_at as String → ValidationException).
+        TableDef(
+            _resolve_table_name(S.hotel_rate_plans_table_name, "hotel_rate_plans"),
+            "hotel_id#room_type_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_HOTEL",     "partition_key": "hotel_id",     "sort_key": "created_at"},
+                {"index_name": "GSI_ROOM_TYPE", "partition_key": "room_type_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # HTL-010..HTL-011 (QloApps hotel PMS): per-room-type per-date availability.
         # PK=availability_pk ("{hotel_id}#{room_type_id}"), SK="DATE#{YYYY-MM-DD}".
         # Hold meta rows use PK="HOLD#{hold_id}", SK="META".

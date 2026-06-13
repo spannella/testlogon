@@ -3050,6 +3050,12 @@ class Settings:
     hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() == "true"
     hotel_availability_table_name: str = os.environ.get("HOTEL_AVAILABILITY_TABLE_NAME", "hotel_availability")
     hotel_hold_ttl_seconds: int = int(os.environ.get("HOTEL_HOLD_TTL_SECONDS", "900"))
+    # Hotel PMS (HTL-001 flag reused by HTL-014..HTL-016).
+    # The master flag already exists here; HTL-014 adds only the table-name setting.
+    hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() == "true"
+    hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
+    # Hotel rate plans (HTL-014). Gated by the existing HOTEL_PMS_ENABLED master flag.
+    hotel_rate_plans_table_name: str = os.environ.get("HOTEL_RATE_PLANS_TABLE_NAME", "hotel_rate_plans")
 
 
 S = Settings()
