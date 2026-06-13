@@ -2553,6 +2553,29 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",         "sort_key": "created_at"},
                 {"index_name": "GSI_STATUS",         "partition_key": "status",            "sort_key": "created_at"},
                 {"index_name": "GSI_UNIT_OCCUPANCY", "partition_key": "property_id",       "sort_key": "occupancy_status"},
+        # QloApps hotel-PMS vertical (HTL-001): hotel entity table.
+        # GSI_OWNER: list a hotelier's hotels newest-first (PK=owner_sub, SK=created_at).
+        # GSI_STATUS: admin listing by status (PK=status, SK=created_at).
+        # attr_types: created_at is N (integer Unix seconds from now_ts()).
+        TableDef(
+            _resolve_table_name(S.hotels_table_name, "hotels"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",  "partition_key": "owner_sub",  "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status",     "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QloApps hotel-PMS vertical (HTL-002): reusable amenity dictionary table.
+        # GSI_CATEGORY: list amenities by category for the FE picker.
+        # attr_types: created_at is N.
+        TableDef(
+            _resolve_table_name(S.hotel_amenities_table_name, "hotel_amenities"),
+            "amenity_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_CATEGORY", "partition_key": "category", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),

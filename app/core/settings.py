@@ -2810,6 +2810,12 @@ class Settings:
     # Property management (open-property vertical, PROP-001..PROP-005). Default OFF.
     property_mgmt_enabled: bool = os.environ.get("PROPERTY_MGMT_ENABLED", "false").lower() == "true"
     properties_table_name: str = os.environ.get("PROPERTIES_TABLE_NAME", "properties")
+    # QloApps hotel-PMS vertical (HTL) — master flag, default OFF; with it off
+    # the hotel routers (HTL-003) are mounted but every handler 404s and the
+    # platform is byte-for-byte unchanged.
+    hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() == "true"
+    hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
+    hotel_amenities_table_name: str = os.environ.get("HOTEL_AMENITIES_TABLE_NAME", "hotel_amenities")
 
 
 S = Settings()

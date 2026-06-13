@@ -15185,6 +15185,10 @@ class JobOrderOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class PropertyAddress(BaseModel):
+# QloApps hotel-PMS vertical (HTL-001..HTL-004)
+# ---------------------------------------------------------------------------
+
+class HotelAddress(BaseModel):
     line1: str
     line2: Optional[str] = None
     city: str
@@ -15209,6 +15213,51 @@ class PropertyOut(BaseModel):
     color_tags: List[str]
     occupancy_status: Literal["vacant", "partial", "occupied"]
     unit_count: int
+class HotelPolicies(BaseModel):
+    cancellation_text: str = ""
+    pet_policy: str = ""
+    smoking: bool = False
+    children: bool = True
+
+
+class HotelContact(BaseModel):
+    phone: str = ""
+    email: str = ""
+    website: str = ""
+
+
+class HotelIn(BaseModel):
+    name: str
+    description: str = ""
+    star_rating: int = Field(ge=1, le=5)
+    address: HotelAddress
+    check_in_time: str = "15:00"
+    check_out_time: str = "11:00"
+    policies: HotelPolicies = HotelPolicies()
+    contact: HotelContact = HotelContact()
+    photo_urls: List[str] = []
+
+    @field_validator("check_in_time", "check_out_time")
+    @classmethod
+    def _valid_time(cls, v: str) -> str:
+        import re
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("must be HH:MM 24h")
+        return v
+
+
+class HotelOut(BaseModel):
+    hotel_id: str
+    owner_sub: str
+    name: str
+    description: str
+    star_rating: int
+    address: HotelAddress
+    check_in_time: str
+    check_out_time: str
+    policies: HotelPolicies
+    contact: HotelContact
+    photo_urls: List[str]
     status: Literal["active", "archived"]
     created_at: int
     updated_at: int
@@ -15280,3 +15329,55 @@ class PropertyListOut(BaseModel):
     properties: List[PropertyOut]
     count: int
     cursor: Optional[str] = None
+class HotelUpdateIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    star_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    address: Optional[HotelAddress] = None
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+    policies: Optional[HotelPolicies] = None
+    contact: Optional[HotelContact] = None
+    photo_urls: Optional[List[str]] = None
+
+    @field_validator("check_in_time", "check_out_time")
+    @classmethod
+    def _valid_time(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        import re
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("must be HH:MM 24h")
+        return v
+
+
+class AmenityIn(BaseModel):
+    name: str
+    category: Literal[
+        "connectivity", "wellness", "parking",
+        "dining", "family", "accessibility", "general",
+    ]
+    icon: Optional[str] = None
+
+
+class AmenityOut(BaseModel):
+    amenity_id: str
+    name: str
+    category: str
+    icon: Optional[str] = None
+    created_at: int
+
+
+class AmenityAttachIn(BaseModel):
+    target_type: Literal["hotel", "room_type"]
+    target_id: str
+    amenity_id: str
+
+
+class AmenityAssociationOut(BaseModel):
+    amenity_id: str
+    name: str
+    category: str
+    icon: Optional[str] = None
+    target_type: Literal["hotel", "room_type"]
+    created_at: int

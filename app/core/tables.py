@@ -322,6 +322,8 @@ class Tables:
     candidates: Any
     job_orders: Any
     properties: Any
+    hotels: Any
+    hotel_amenities: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -579,4 +581,6 @@ T = Tables(
     candidates=_safe_table(S.candidates_table_name),
     job_orders=_safe_table(S.job_orders_table_name),
     properties=_safe_table(S.properties_table_name),
+    hotels=_safe_table(S.hotels_table_name),
+    hotel_amenities=_safe_table(S.hotel_amenities_table_name),
 )
