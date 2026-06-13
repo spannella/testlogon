@@ -3030,5 +3030,22 @@ class Settings:
     crm_studio_max_fields_per_entity: int = int(os.environ.get("CRM_STUDIO_MAX_FIELDS_PER_ENTITY", "200"))
     crm_studio_field_cache_ttl_seconds: int = int(os.environ.get("CRM_STUDIO_FIELD_CACHE_TTL_SECONDS", "60"))
 
+    # CRM Project Management (PRJ-001) — default OFF
+    crm_projects_enabled: bool = (
+        os.environ.get("CRM_PROJECTS_ENABLED", "0") not in ("0", "false", "False")
+    )
+    crm_pm_projects_table_name: str = os.environ.get(
+        "DDB_CRM_PM_PROJECTS_TABLE", "crm_pm_projects"
+    )
+    crm_pm_tasks_table_name: str = os.environ.get(
+        "DDB_CRM_PM_TASKS_TABLE", "crm_pm_tasks"
+    )
+    crm_pm_members_table_name: str = os.environ.get(
+        "DDB_CRM_PM_MEMBERS_TABLE", "crm_pm_members"
+    )
+    crm_pm_templates_table_name: str = os.environ.get(
+        "DDB_CRM_PM_TEMPLATES_TABLE", "crm_pm_templates"
+    )
+
 
 S = Settings()

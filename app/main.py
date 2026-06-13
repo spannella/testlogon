@@ -341,6 +341,8 @@ from app.routers.agent_memory import router as agent_memory_router
 # CRM Workflow (WFL-001..WFL-009)
 from app.routers.workflow_rules import router as workflow_rules_router
 from app.services.workflow_scheduler import start_workflow_scheduler_task
+# CRM Project Management (PRJ-001)
+from app.routers.crm_projects import router as crm_projects_router
 
 logger = logging.getLogger(__name__)
 
@@ -1020,6 +1022,8 @@ def create_app() -> FastAPI:
     app.include_router(crm_saved_searches_router)
     from app.services.crm_report_scheduler import start_report_scheduler_task
     app.add_event_handler("startup", start_report_scheduler_task)
+    # CRM Project Management (PRJ-001)
+    app.include_router(crm_projects_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

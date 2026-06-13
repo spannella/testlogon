@@ -356,6 +356,11 @@ class Tables:
     currencies: Any
     search_config: Any
     email_queue: Any
+    # CRM Project Management (PRJ-001)
+    crm_pm_projects: Any
+    crm_pm_tasks: Any
+    crm_pm_members: Any
+    crm_pm_templates: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -647,4 +652,9 @@ T = Tables(
     currencies=_safe_table(S.currencies_table_name),
     search_config=_safe_table(S.search_config_table_name),
     email_queue=_safe_table(S.email_queue_table_name),
+    # CRM Project Management (PRJ-001)
+    crm_pm_projects=_safe_table(S.crm_pm_projects_table_name),
+    crm_pm_tasks=_safe_table(S.crm_pm_tasks_table_name),
+    crm_pm_members=_safe_table(S.crm_pm_members_table_name),
+    crm_pm_templates=_safe_table(S.crm_pm_templates_table_name),
 )

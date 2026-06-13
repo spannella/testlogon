@@ -16804,3 +16804,270 @@ class StudioFieldListOut(BaseModel):
     fields: List[StudioFieldOut]
     next_cursor: Optional[str]
     total_count: Optional[int] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# CRM Project Management (PRJ-001 through PRJ-009)
+# ---------------------------------------------------------------------------
+
+
+class CrmProjectStatus(str, Enum):
+    draft = "draft"
+    in_review = "in_review"
+    underway = "underway"
+    completed = "completed"
+    deferred = "deferred"
+
+
+class CrmProjectCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    status: CrmProjectStatus = CrmProjectStatus.draft
+    priority: int = Field(default=0, ge=0, le=4)
+    start_date: Optional[int] = None  # Unix ts (seconds)
+    end_date: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+
+
+class CrmProjectUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    status: Optional[CrmProjectStatus] = None
+    priority: Optional[int] = Field(default=None, ge=0, le=4)
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+
+
+class CrmProjectOut(BaseModel):
+    id: str
+    owner_sub: str
+    name: str
+    description: Optional[str] = None
+    status: CrmProjectStatus
+    priority: int
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmProjectListResp(BaseModel):
+    items: List[CrmProjectOut]
+    cursor: Optional[str] = None
+
+
+# PRJ-003: Task models
+class CrmProjectResourceType(str, Enum):
+    user = "user"
+    contact = "contact"
+
+
+class CrmProjectTaskCreateReq(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_order: int = Field(default=0, ge=0)  # 0 = auto-assign
+    duration_days: int = Field(default=1, ge=1)
+    start_date: Optional[int] = None  # Unix ts
+    end_date: Optional[int] = None
+    percent_complete: int = Field(default=0, ge=0, le=100)
+    is_milestone: bool = False
+    assigned_user_sub: Optional[str] = None
+    predecessor_task_ids: List[str] = Field(default_factory=list, max_length=50)
+    project_resource_type: Optional[CrmProjectResourceType] = None
+    linked_contact_id: Optional[str] = None
+
+
+class CrmProjectTaskUpdateReq(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_order: Optional[int] = Field(default=None, ge=0)
+    duration_days: Optional[int] = Field(default=None, ge=1)
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    percent_complete: Optional[int] = Field(default=None, ge=0, le=100)
+    is_milestone: Optional[bool] = None
+    assigned_user_sub: Optional[str] = None
+    predecessor_task_ids: Optional[List[str]] = Field(default=None, max_length=50)
+    project_resource_type: Optional[CrmProjectResourceType] = None
+    linked_contact_id: Optional[str] = None
+
+
+class CrmProjectTaskReorderReq(BaseModel):
+    task_ids: List[str] = Field(..., min_length=1)
+
+
+class CrmProjectTaskModel(BaseModel):
+    id: str
+    project_id: str
+    owner_sub: str
+    name: str
+    description: Optional[str] = None
+    task_order: int
+    duration_days: int
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    percent_complete: int
+    is_milestone: bool
+    assigned_user_sub: Optional[str] = None
+    predecessor_task_ids: List[str]
+    project_resource_type: CrmProjectResourceType = CrmProjectResourceType.user
+    linked_contact_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmProjectTaskListResp(BaseModel):
+    items: List[CrmProjectTaskModel]
+    cursor: Optional[str] = None
+
+
+# PRJ-004: Workload models
+class CrmTaskWorkloadEntry(BaseModel):
+    assignee_key: str
+    resource_type: CrmProjectResourceType
+    assigned_id: str
+    task_count: int
+    overdue_count: int
+
+
+class CrmProjectWorkloadResp(BaseModel):
+    project_id: str
+    entries: List[CrmTaskWorkloadEntry]
+
+
+# PRJ-005: Milestone models
+class CrmMilestoneSummaryItem(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    task_order: int
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    percent_complete: int
+    on_track: bool
+    overdue: bool
+    created_at: int
+    updated_at: int
+
+
+class CrmMilestoneSummaryResp(BaseModel):
+    items: List[CrmMilestoneSummaryItem]
+    cursor: Optional[str] = None
+    total_milestones: int
+    overdue_count: int
+    on_track_count: int
+    no_date_count: int
+
+
+# PRJ-006: Template models
+class CrmTemplateTaskDef(BaseModel):
+    template_task_id: str
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_order: int = Field(..., ge=0)
+    duration_days: int = Field(default=1, ge=1)
+    is_milestone: bool = False
+    predecessor_template_task_ids: List[str] = Field(default_factory=list)
+
+
+class CrmProjectTemplateModel(BaseModel):
+    id: str
+    owner_sub: str
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_defs: List[CrmTemplateTaskDef] = Field(default_factory=list)
+    created_at: int
+    updated_at: int
+
+
+class CrmTemplateCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_defs: List[CrmTemplateTaskDef] = Field(default_factory=list)
+
+
+class CrmTemplateFromProjectIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CrmTemplateInstantiateIn(BaseModel):
+    project_name: str = Field(..., min_length=1, max_length=120)
+    start_date: Optional[int] = None  # Unix timestamp; None → no start_date
+
+
+class CrmTemplateListOut(BaseModel):
+    items: List[CrmProjectTemplateModel] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+
+# PRJ-007: Member models
+class CrmProjectMemberRole(str, Enum):
+    owner = "owner"
+    member = "member"
+    viewer = "viewer"
+
+
+class CrmProjectMemberOut(BaseModel):
+    project_id: str
+    user_sub: str
+    role: CrmProjectMemberRole
+    added_by: str
+    added_at: int
+
+
+class CrmProjectMemberListResp(BaseModel):
+    items: List[CrmProjectMemberOut]
+    cursor: Optional[str] = None
+
+
+class CrmProjectAddMemberIn(BaseModel):
+    user_sub: str
+    role: CrmProjectMemberRole = CrmProjectMemberRole.member
+
+
+class CrmProjectUpdateMemberIn(BaseModel):
+    role: CrmProjectMemberRole
+
+
+# PRJ-009: Status history model
+class CrmProjectStatusHistoryEntry(BaseModel):
+    project_id: str
+    from_status: Optional[str] = None
+    to_status: str
+    changed_by: str
+    changed_at: int
+    event_id: str
+
+
+class CrmProjectStatusHistoryResp(BaseModel):
+    items: List[CrmProjectStatusHistoryEntry]
+    cursor: Optional[str] = None
+
+
+# PRJ-010: Contact links model
+class CrmProjectContactLinkOut(BaseModel):
+    project_id: str
+    linked_entity_id: str
+    linked_entity_type: str
+    added_by: str
+    added_at: int
+    note: Optional[str] = None
+
+
+class CrmProjectContactLinkListResp(BaseModel):
+    items: List[CrmProjectContactLinkOut]
+    cursor: Optional[str] = None
+
+
+class CrmProjectAddContactLinkIn(BaseModel):
+    linked_entity_id: str
+    linked_entity_type: str = "contact_party"
+    note: Optional[str] = Field(default=None, max_length=500)

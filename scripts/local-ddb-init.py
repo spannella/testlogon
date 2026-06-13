@@ -436,6 +436,55 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
         ),
+        # CRM Project Management (PRJ-001)
+        # crm_pm_projects: PK=OWNER#{owner_sub}, SK=PROJECT#{project_id}
+        #   GSI1: single-project lookup by project_id
+        #   GSI2: status-filtered list sorted by created_at (N)
+        #   GSI3: per-account project lookup sorted by created_at (N) (PRJ-011)
+        TableDef(
+            _resolve_table_name(S.crm_pm_projects_table_name, "crm_pm_projects"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI2SK": "N", "GSI3SK": "N"},
+        ),
+        # crm_pm_tasks: PK=PROJECT#{project_id}, SK=TASK#{task_order:06d}#{task_id}
+        #   GSI1: single-task lookup by task_id
+        #   GSI2: per-assignee workload sorted by end_date (N)
+        TableDef(
+            _resolve_table_name(S.crm_pm_tasks_table_name, "crm_pm_tasks"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI2SK": "N"},
+        ),
+        # crm_pm_members: PK=PROJECT#{project_id}, SK=MEMBER#{user_sub}
+        #   GSI1: per-user project membership list
+        TableDef(
+            _resolve_table_name(S.crm_pm_members_table_name, "crm_pm_members"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
+        # crm_pm_templates: PK=OWNER#{owner_sub}, SK=TEMPLATE#{template_id}
+        #   GSI1: template lookup by template_id
+        TableDef(
+            _resolve_table_name(S.crm_pm_templates_table_name, "crm_pm_templates"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
         TableDef(
             _resolve_table_name(S.catalog_products_table_name, "catalog_products"),
             "PK",
