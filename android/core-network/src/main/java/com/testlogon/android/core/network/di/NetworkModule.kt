@@ -10,6 +10,9 @@ import com.testlogon.android.core.network.signing.PacketRoleAdapter
 import com.testlogon.android.core.network.signing.PacketStatusAdapter
 import com.testlogon.android.core.network.signing.SignatureFieldTypeAdapter
 import com.testlogon.android.core.network.signing.SignatureInputModeAdapter
+import com.testlogon.android.core.network.questionnaire.AnswerValueAdapter
+import com.testlogon.android.core.network.questionnaire.QuestionTypeAdapter
+import com.testlogon.android.core.network.questionnaire.QuestionnaireFieldFactory
 import com.testlogon.android.core.network.SettingsStore
 import com.testlogon.android.core.network.auth.AuthEventSink
 import com.testlogon.android.core.network.auth.SessionAuthenticator
@@ -59,6 +62,14 @@ object NetworkModule {
         .add(SignatureFieldTypeAdapter)
         .add(PacketRoleAdapter)
         .add(SignatureInputModeAdapter)
+        // AND-346: questionnaire custom adapters - the dependency-free polymorphic field schema
+        // (QuestionnaireFieldFactory), the answer union (AnswerValueAdapter) and the question-type
+        // enum (QuestionTypeAdapter, lenient -> UNKNOWN). Registered BEFORE the reflective factory so
+        // they win for QuestionnaireField / AnswerValue / QuestionType. No new dependency is added
+        // (NO PolymorphicJsonAdapterFactory, NO moshi-adapters).
+        .add(QuestionnaireFieldFactory)
+        .add(QuestionTypeAdapter)
+        .add(AnswerValueAdapter)
         .add(KotlinJsonAdapterFactory())
         .build()
 
