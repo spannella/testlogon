@@ -2817,5 +2817,37 @@ class Settings:
     hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
     hotel_amenities_table_name: str = os.environ.get("HOTEL_AMENITIES_TABLE_NAME", "hotel_amenities")
 
+    # OpenBankProject umbrella master flag (cross-series, decision D4).
+    # One kill-switch for the entire banking vertical; every OBP series gate
+    # ANDs this with its own per-series flag. Default OFF.
+    open_bank_project_enabled: bool = os.environ.get(
+        "OPEN_BANK_PROJECT_ENABLED", "false"
+    ).lower() == "true"
+
+    # Banking accounts feature flags (ACC-001..ACC-004), all default OFF.
+    banking_accounts_enabled: bool = os.environ.get(
+        "BANKING_ACCOUNTS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    banking_account_metadata_enabled: bool = os.environ.get(
+        "BANKING_ACCOUNT_METADATA_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    banking_account_views_enabled: bool = os.environ.get(
+        "BANKING_ACCOUNT_VIEWS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+
+    # Banking accounts table + house-bank seed values.
+    banking_accounts_table_name: str = os.environ.get(
+        "BANKING_ACCOUNTS_TABLE_NAME", "banking_accounts"
+    )
+    banking_default_bank_id: str = os.environ.get("BANKING_DEFAULT_BANK_ID", "testlogon")
+    banking_default_bank_name: str = os.environ.get("BANKING_DEFAULT_BANK_NAME", "Testlogon")
+
+    # ACC-003 transaction-metadata config.
+    banking_s3_bucket: str = os.environ.get("BANKING_S3_BUCKET", "")
+    banking_image_max_bytes: int = int(os.environ.get("BANKING_IMAGE_MAX_BYTES", "5242880"))
+    banking_metadata_write_rate_limit: int = int(
+        os.environ.get("BANKING_METADATA_WRITE_RATE_LIMIT", "60")
+    )
+
 
 S = Settings()

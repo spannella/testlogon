@@ -1002,6 +1002,14 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_marketing_publish_task)
     app.add_event_handler("startup", start_cost_collection_task)
 
+    # OpenBankProject — banking accounts (ACC-001..ACC-004). Umbrella gate
+    # (decision D4): the master flag ANDed with the per-series flag. Both default
+    # OFF, so no /ui/banking/* route is registered in normal deployments.
+    if _S.open_bank_project_enabled and _S.banking_accounts_enabled:
+        from app.routers.banking_accounts import router as banking_accounts_router
+
+        app.include_router(banking_accounts_router)
+
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:
         path = str(getattr(route, "path", "") or "").strip()

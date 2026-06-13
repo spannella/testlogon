@@ -2576,6 +2576,20 @@ def _table_defs() -> List[TableDef]:
             "sk",
             gsi=[
                 {"index_name": "GSI_CATEGORY", "partition_key": "category", "sort_key": "created_at"},
+        # OpenBankProject ACC-001: single-table store for Banks + Accounts +
+        # transaction metadata + co-owner reverse-index rows. GSI_ACCOUNT_BY_ID
+        # resolves an account by id regardless of owner partition (cross-owner
+        # co-access). created_at is the numeric GSI sort key → attr_types "N".
+        TableDef(
+            _resolve_table_name(S.banking_accounts_table_name, "banking_accounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "GSI_ACCOUNT_BY_ID",
+                    "partition_key": "account_id",
+                    "sort_key": "created_at",
+                }
             ],
             attr_types={"created_at": "N"},
         ),

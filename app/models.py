@@ -15291,6 +15291,43 @@ class UnitOut(BaseModel):
     square_footage: int
     market_rent_cents: int
     occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"]
+# ───────────────────────────────────────────────────────────────────────────
+# OpenBankProject — Banking accounts (ACC-001..ACC-004)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class AccountAttributeIn(BaseModel):
+    name: str
+    type: str  # "STRING" | "INTEGER" | "DOUBLE" | "BOOLEAN" | "DATE"
+    value: str  # always string-encoded
+
+
+class BankOut(BaseModel):
+    bank_id: str
+    name: str
+    short_name: str
+    logo_url: Optional[str] = None
+    website: Optional[str] = None
+
+
+class BankListOut(BaseModel):
+    banks: List[BankOut]
+
+
+class AccountOut(BaseModel):
+    account_id: str
+    bank_id: str
+    label: str
+    account_type: str
+    product_code: str
+    currency: str
+    owners: List[str]
+    is_default: bool
+    wallet_backed: bool
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+    attributes: List[AccountAttributeIn] = []
     created_at: int
     updated_at: int
 
@@ -15381,3 +15418,143 @@ class AmenityAssociationOut(BaseModel):
     icon: Optional[str] = None
     target_type: Literal["hotel", "room_type"]
     created_at: int
+class AccountListOut(BaseModel):
+    accounts: List[AccountOut]
+
+
+class AccountCreateIn(BaseModel):
+    bank_id: str
+    label: str
+    account_type: str  # "SAVINGS" | "EXTERNAL"
+    product_code: str = "default"
+    currency: str = "usd"
+    attributes: List[AccountAttributeIn] = []
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+
+
+class AccountUpdateIn(BaseModel):
+    label: Optional[str] = None
+    attributes: Optional[List[AccountAttributeIn]] = None
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+
+
+class AccountBalanceOut(BaseModel):
+    currency: str
+    current: float  # dollars (not cents)
+    available: float  # dollars; == current (no holds in this tier)
+
+
+# ACC-002 — transaction projection over the billing ledger
+
+
+class TransactionAmountOut(BaseModel):
+    currency: str
+    value: str  # decimal string, e.g. "12.50" (cents / 100)
+
+
+class TransactionOut(BaseModel):
+    transaction_id: str
+    account_id: str
+    type: str
+    amount: TransactionAmountOut
+    status: str
+    posted_at: int
+    description: str
+    provider: Optional[str] = None
+    new_balance: TransactionAmountOut
+    # ACC-003 additive fields
+    has_metadata: bool = False
+    metadata: Optional["TransactionMetadataOut"] = None
+
+
+class TransactionListOut(BaseModel):
+    transactions: List[TransactionOut]
+    cursor: Optional[str] = None
+
+
+# ACC-003 — transaction metadata
+
+
+class NarrativeOut(BaseModel):
+    text: str
+    author_sub: str
+    updated_at: int
+
+
+class GeotagOut(BaseModel):
+    lat: float
+    lon: float
+    label: Optional[str] = None
+    author_sub: str
+    updated_at: int
+
+
+class TransactionImageOut(BaseModel):
+    image_id: str
+    url: str
+    author_sub: str
+    created_at: int
+
+
+class TransactionTagOut(BaseModel):
+    tag_id: str
+    value: str
+    author_sub: str
+    created_at: int
+
+
+class TransactionCommentOut(BaseModel):
+    comment_id: str
+    text: str
+    author_sub: str
+    created_at: int
+
+
+class TransactionMetadataOut(BaseModel):
+    narrative: Optional[NarrativeOut] = None
+    geotag: Optional[GeotagOut] = None
+    image: Optional[TransactionImageOut] = None
+    tags: List[TransactionTagOut] = []
+    comments: List[TransactionCommentOut] = []
+
+
+class PutNarrativeIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class PutGeotagIn(BaseModel):
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
+    label: Optional[str] = Field(default=None, max_length=200)
+
+
+class AddTagIn(BaseModel):
+    value: str = Field(min_length=1, max_length=100)
+
+
+class AddCommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+# ACC-004 — account-holder co-access
+
+
+class AccountHolderOut(BaseModel):
+    user_sub: str
+    added_at: int
+    is_primary_owner: bool
+
+
+class AccountHoldersOut(BaseModel):
+    holders: List[AccountHolderOut]
+
+
+class AddAccountHolderIn(BaseModel):
+    user_sub: str
+
+
+TransactionOut.model_rebuild()
