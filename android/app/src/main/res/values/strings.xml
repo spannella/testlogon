@@ -2805,4 +2805,29 @@
     <string name="invite_title">Invite a member</string>
     <string name="invite_email_label">Email</string>
     <string name="invite_submit">Send invite</string>
+    <!-- AND-355: social groups (discover -> detail -> members; role-gated management) -->
+    <string name="more_entry_groups">Groups</string>
+    <string name="groups_list_title">Groups</string>
+    <string name="groups_back">Back</string>
+    <string name="groups_member_count">%1$d members</string>
+    <string name="groups_empty_title">No groups yet</string>
+    <string name="groups_empty_body">Join a group to see it here.</string>
+    <string name="groups_detail_title">Group</string>
+    <string name="groups_your_role">Your role: %1$s</string>
+    <string name="groups_view_members">View members</string>
+    <string name="groups_leave">Leave group</string>
+    <string name="groups_members_title">Members</string>
+    <string name="groups_section_members">Members</string>
+    <string name="groups_section_pending">Pending invites</string>
+    <string name="groups_members_empty_title">No members yet</string>
+    <string name="groups_members_empty_body">This group has no members yet.</string>
+    <string name="groups_invite">Invite</string>
+    <string name="groups_invite_user_id_label">User ID</string>
+    <string name="groups_remove">Remove</string>
+    <string name="groups_role_label">Role</string>
+    <string name="groups_status_invited">Invited</string>
+    <string name="groups_role_admin">Admin</string>
+    <string name="groups_role_moderator">Moderator</string>
+    <string name="groups_role_member">Member</string>
+    <string name="groups_role_unknown">Unknown</string>
 </resources>

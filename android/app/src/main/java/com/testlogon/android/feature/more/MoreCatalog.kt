@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Diversity3
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -340,6 +341,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_organizations,
             icon = Icons.Outlined.Groups,
             route = MoreRoutes.ORGS_MEMBERS,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "groups",
+            labelRes = R.string.more_entry_groups,
+            icon = Icons.Outlined.Diversity3,
+            route = MoreRoutes.GROUPS,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

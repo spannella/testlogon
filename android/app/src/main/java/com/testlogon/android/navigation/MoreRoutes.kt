@@ -149,6 +149,9 @@ object MoreRoutes {
     // AND-353: organizations members/roles (list members + pending invites + invite/change-role/remove).
     val ORGS_MEMBERS: String get() = OrgsGraphDest.ROUTE
 
+    // AND-355: social groups (discover -> detail -> members; role-gated invite/change-role/remove + leave).
+    val GROUPS: String get() = GroupsGraphDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -203,6 +206,7 @@ object MoreRoutes {
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,
             ORGS_MEMBERS,
+            GROUPS,
             SETTINGS,
             HELP,
             ABOUT,

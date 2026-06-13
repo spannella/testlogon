@@ -236,6 +236,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // remove with permission gating + self-protection). Nested graph so the members + invite screens
         // share one ViewModel.
         orgsDestinations(navController)
+        // AND-355: social groups (discover -> detail -> members with role-gated invite/change-role/remove
+        // + leave). Nested graph: GroupsList -> GroupDetail{groupId} -> GroupMembers{groupId}.
+        groupsDestinations(navController)
     }
 }
 
