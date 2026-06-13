@@ -18,6 +18,8 @@ from app.services.jira_ticket_sync_store import JiraTicketSyncStore
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
+from app.services import ticket_bounties as bounties
+from app.services.ticket_bounties import TicketBountyError
 from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
 from app.services.payment_incident_ticket_sync import sync_incident_from_ticket
 from app.services.kyc_cases import STORE as KYC_STORE, KycCaseConflictError, KycCaseValidationError
@@ -70,10 +72,56 @@ class TicketOut(BaseModel):
     version: int
     messages: list[TicketMessage]
     activity: list[TicketActivity]
+    # --- TBT-002: optional bounty fields (None for non-bounty tickets) ---
+    bounty_amount_cents: int | None = None
+    bounty_currency: str | None = None
+    bounty_status: str | None = None
+    bounty_id: str | None = None
+    claimed_by_sub: str | None = None
+    claimed_at: int | None = None
+    bounty_funded_at: int | None = None
+    bounty_submitted_at: int | None = None
+    bounty_paid_at: int | None = None
+    bounty_cancelled_at: int | None = None
+    bounty_repost_count: int | None = None
 
 
 class TicketEnvelope(BaseModel):
     ticket: TicketOut
+
+
+# --- TBT-006/007/009: bounty request + board response models ---
+class PostBountyReq(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    currency: str = Field(default="usd", pattern=r"^[a-z]{3}$")
+
+
+class RejectBountyReq(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class CancelBountyReq(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+class BountyBoardItem(BaseModel):
+    ticket_id: str
+    subject: str
+    owner_sub: str
+    status: str
+    labels: list[str] = []
+    created_at: int
+    updated_at: int
+    bounty_amount_cents: int
+    bounty_currency: str
+    bounty_status: str | None = None
+    bounty_id: str | None = None
+    bounty_funded_at: int | None = None
+
+
+class BountyBoardEnvelope(BaseModel):
+    items: list[BountyBoardItem]
+    next_cursor: str | None = None
 
 
 class TicketListEnvelope(BaseModel):
@@ -336,8 +384,20 @@ def _ticket_or_404(ticket_id: str) -> dict:
     return ticket
 
 
+_PUBLIC_BOUNTY_STATUSES = {"funded", "claimed", "submitted"}
+
+
 def _can_access_ticket(request: Request, user: AuthenticatedUser, ticket: dict) -> bool:
-    return user.sub == ticket["owner_sub"] or _is_admin_actor(request, user)
+    if user.sub == ticket["owner_sub"] or _is_admin_actor(request, user):
+        return True
+    # TBT-008: any authenticated user may view a ticket in a public bounty state
+    # so they can read the amount/subject before claiming. paid_out / cancelled
+    # stay owner/admin-only.
+    from app.core.settings import S as _S
+
+    if getattr(_S, "ticket_bounties_enabled", False) and ticket.get("bounty_status") in _PUBLIC_BOUNTY_STATUSES:
+        return True
+    return False
 
 
 def _is_assignable_admin(user_sub: str) -> bool:
@@ -897,6 +957,27 @@ def admin_ticket_summary(
     return TicketAdminSummaryEnvelope(summary=TicketAdminSummary.model_validate(summary))
 
 
+def _raise_bounty_error(exc: TicketBountyError) -> None:
+    _raise(exc.http_status, exc.code, exc.message)
+
+
+# --- TBT-008/009: bounty board. MUST be declared before GET /{ticket_id} so the
+# literal "bounties" segment is not captured as a ticket_id path param. ---
+@router.get("/bounties/open", response_model=BountyBoardEnvelope, responses=_error_responses())
+def list_open_bounties_endpoint(
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    _user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> BountyBoardEnvelope:
+    bounties._require_bounties_enabled()
+    result = bounties.list_open_bounties(limit=limit, cursor=cursor)
+    return BountyBoardEnvelope(
+        items=[BountyBoardItem.model_validate(b) for b in result["items"]],
+        next_cursor=result.get("next_cursor"),
+    )
+
+
 @router.get("/{ticket_id}", response_model=TicketEnvelope, responses=_error_responses())
 def get_ticket(
     ticket_id: str,
@@ -907,6 +988,124 @@ def get_ticket(
     ticket = _ticket_or_404(ticket_id)
     if not _can_access_ticket(request, user, ticket):
         _raise(403, "ticket_access_forbidden", "not authorized to access this ticket", details={"ticket_id": ticket_id})
+    return _wrap_ticket(ticket)
+
+
+# --- TBT-009: bounty mutation endpoints. All gate on _require_bounties_enabled
+# (404 when off) and enforce auth/ownership inline. ---
+@router.post("/{ticket_id}/bounty", response_model=TicketEnvelope, responses=_error_responses())
+def post_bounty_endpoint(
+    ticket_id: str,
+    body: PostBountyReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    ticket = bounties.post_bounty(
+        ticket_id=ticket_id, poster_sub=user.sub,
+        amount_cents=body.amount_cents, currency=body.currency, request=request,
+    )
+    return _wrap_ticket(ticket)
+
+
+@router.post("/{ticket_id}/bounty/claim", response_model=TicketEnvelope, responses=_error_responses())
+def claim_bounty_endpoint(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    try:
+        ticket = bounties.claim_bounty(ticket_id=ticket_id, claimer_sub=user.sub)
+    except TicketBountyError as exc:
+        _raise_bounty_error(exc)
+    return _wrap_ticket(ticket)
+
+
+@router.post("/{ticket_id}/bounty/unclaim", response_model=TicketEnvelope, responses=_error_responses())
+def unclaim_bounty_endpoint(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    try:
+        ticket = bounties.unclaim_bounty(ticket_id=ticket_id, claimer_sub=user.sub)
+    except TicketBountyError as exc:
+        _raise_bounty_error(exc)
+    return _wrap_ticket(ticket)
+
+
+@router.post("/{ticket_id}/bounty/submit", response_model=TicketEnvelope, responses=_error_responses())
+def submit_bounty_endpoint(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    try:
+        ticket = bounties.submit_bounty(ticket_id=ticket_id, claimer_sub=user.sub)
+    except TicketBountyError as exc:
+        _raise_bounty_error(exc)
+    return _wrap_ticket(ticket)
+
+
+@router.post("/{ticket_id}/bounty/approve", response_model=TicketEnvelope, responses=_error_responses())
+def approve_bounty_endpoint(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    if not _is_admin(user):
+        _raise(403, "admin_role_required", "admin role required")
+    try:
+        ticket = bounties.approve_bounty(ticket_id=ticket_id, admin_sub=user.sub, request=request)
+    except TicketBountyError as exc:
+        _raise_bounty_error(exc)
+    return _wrap_ticket(ticket)
+
+
+@router.post("/{ticket_id}/bounty/reject", response_model=TicketEnvelope, responses=_error_responses())
+def reject_bounty_endpoint(
+    ticket_id: str,
+    body: RejectBountyReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    if not _is_admin(user):
+        _raise(403, "admin_role_required", "admin role required")
+    try:
+        ticket = bounties.reject_bounty(ticket_id=ticket_id, admin_sub=user.sub, reason=body.reason)
+    except TicketBountyError as exc:
+        _raise_bounty_error(exc)
+    return _wrap_ticket(ticket)
+
+
+@router.post("/{ticket_id}/bounty/cancel", response_model=TicketEnvelope, responses=_error_responses())
+def cancel_bounty_endpoint(
+    ticket_id: str,
+    body: CancelBountyReq,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    bounties._require_bounties_enabled()
+    is_admin = _is_admin_actor(request, user)
+    try:
+        ticket = bounties.cancel_bounty(
+            ticket_id=ticket_id, actor_sub=user.sub, reason=body.reason,
+            is_admin=is_admin, request=request,
+        )
+    except TicketBountyError as exc:
+        _raise_bounty_error(exc)
     return _wrap_ticket(ticket)
 
 
@@ -1000,7 +1199,7 @@ def set_ticket_status(
         _raise(403, "admin_role_required", "admin role required")
     ticket = _ticket_or_404(ticket_id)
     try:
-        updated = STORE.update_status(ticket_id=ticket["ticket_id"], actor_sub=user.sub, status=body.status)
+        updated = STORE.update_status(ticket_id=ticket["ticket_id"], actor_sub=user.sub, status=body.status, is_admin=_is_admin_actor(request, user))
         assert updated is not None
     except TicketStateError as exc:
         raise HTTPException(status_code=_ticket_state_http_status(exc), detail=_ticket_state_error(exc)) from exc

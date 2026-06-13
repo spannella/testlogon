@@ -434,6 +434,25 @@ class Settings:
     tickets_jira_issue_index_name: str = os.environ.get("TICKETS_JIRA_ISSUE_INDEX_NAME", "jira_issue-index")
     tickets_jira_sync_state_index_name: str = os.environ.get("TICKETS_JIRA_SYNC_STATE_INDEX_NAME", "jira_sync_state-updated_at-index")
 
+    # Ticket bounties (TBT-001) — escrow-backed ticket bounties. Additive, default OFF.
+    # When off, all bounty endpoints 404 and the ticket + billing systems are unchanged.
+    ticket_bounties_enabled: bool = (
+        os.environ.get("TICKET_BOUNTIES_ENABLED", "false").lower() == "true"
+    )
+    ticket_bounty_min_cents: int = int(os.environ.get("TICKET_BOUNTY_MIN_CENTS", "100"))
+    ticket_bounty_max_cents: int = int(os.environ.get("TICKET_BOUNTY_MAX_CENTS", "10000000"))
+    ticket_bounty_fee_bps: int = int(os.environ.get("TICKET_BOUNTY_FEE_BPS", "0"))
+    ticket_bounty_payout_hold_seconds: int = int(
+        os.environ.get("TICKET_BOUNTY_PAYOUT_HOLD_SECONDS", "0")
+    )
+    # Reserved / NOT enforced in v1 (audit D3 — no repost cap; bounty_repost_count
+    # is tracked but unenforced). Kept so a future opt-in cap is a one-line flip.
+    ticket_bounty_max_reposts: int = int(os.environ.get("TICKET_BOUNTY_MAX_REPOSTS", "3"))
+    # TBT-002 — sparse ByBounty GSI on the tickets table (funded+unclaimed board).
+    tickets_bounty_index_name: str = os.environ.get(
+        "TICKETS_BOUNTY_INDEX_NAME", "bounty-open-created_at-index"
+    )
+
     # Jira integration feature flags and guardrails
     jira_sync_enabled: bool = os.environ.get("JIRA_SYNC_ENABLED", "false").lower() == "true"
     jira_sync_read_enabled: bool = os.environ.get("JIRA_SYNC_READ_ENABLED", "false").lower() == "true"

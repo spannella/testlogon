@@ -38,6 +38,16 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "POST:/tickets/{ticket_id}/messages": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
     "POST:/tickets/{ticket_id}/assign": {"product": "tickets", "required_scopes": ["tickets:admin"], "entitlement_required": True},
     "POST:/tickets/{ticket_id}/status": {"product": "tickets", "required_scopes": ["tickets:admin"], "entitlement_required": True},
+    # Ticket bounties (TBT-009). Board read uses tickets:read; mutations are
+    # owner/claimant/admin-gated bounty flows.
+    "GET:/tickets/bounties/open": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty/claim": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty/unclaim": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty/submit": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty/approve": {"product": "tickets", "required_scopes": ["tickets:admin"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty/reject": {"product": "tickets", "required_scopes": ["tickets:admin"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/bounty/cancel": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
     # Shopping
     "GET:/ui/catalog/categories": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
     "GET:/ui/catalog/categories/{category_id}/items": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},

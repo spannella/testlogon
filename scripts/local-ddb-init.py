@@ -707,7 +707,12 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": S.tickets_jira_workspace_index_name, "partition_key": "gsi_jira_workspace_pk", "sort_key": "gsi_jira_workspace_sk"},
                 {"index_name": S.tickets_jira_issue_index_name, "partition_key": "gsi_jira_issue_pk", "sort_key": "gsi_jira_issue_sk"},
                 {"index_name": S.tickets_jira_sync_state_index_name, "partition_key": "gsi_jira_sync_state_pk", "sort_key": "gsi_jira_sync_state_sk"},
+                # TBT-002 — sparse ByBounty GSI: funded+unclaimed bounty board.
+                # gsi_bounty_pk="BOUNTY#OPEN" / gsi_bounty_sk=created_at (numeric).
+                {"index_name": S.tickets_bounty_index_name, "partition_key": "gsi_bounty_pk", "sort_key": "gsi_bounty_sk"},
             ],
+            # TBT-002 — numeric sort key for the ByBounty GSI (CLAUDE.md gotcha).
+            attr_types={"gsi_bounty_sk": "N"},
         ),
         # Broadcast tables
         TableDef(

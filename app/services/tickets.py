@@ -26,6 +26,14 @@ _TICKET_STATUSES = (
     "investigating",
     "analyzing",
     "tickets_created",
+    # TBT-004: bounty lifecycle ticket statuses. Added to the validation
+    # allowlist unconditionally so update_status does not reject them, but they
+    # are deliberately ABSENT from _STATUS_TRANSITIONS so the generic status
+    # endpoint can never reach them — only the dedicated bounty service paths do.
+    "claimed",
+    "pending_approval",
+    "paid_out",
+    "cancelled",
 )
 _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "open": ("in_progress", "done", "blocked"),
@@ -38,6 +46,39 @@ _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "qa_approved": ("done", "in_progress", "open"),
     "blocked": ("open", "in_progress"),
 }
+
+# TBT-004: separate transition map applied ONLY when a ticket carries an active
+# bounty (keyed on bounty_status). paid_out and cancelled are terminal and have
+# no outgoing edges here — they are only reachable via the dedicated bounty
+# approve/cancel endpoints (TBT-006/007).
+_BOUNTY_STATUSES = ("funded", "claimed", "submitted", "paid_out", "cancelled")
+_BOUNTY_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "funded": ("in_progress",),       # claim → in_progress (TBT-005)
+    "claimed": ("pending_approval",),  # submit → pending_approval (TBT-004 gate)
+    "pending_approval": ("in_progress",),  # reject → back to in_progress (TBT-006)
+}
+
+
+def bounty_id_for_ticket(ticket_id: str) -> str:
+    """Deterministic 24-hex bounty id (TBT-002). Used by TBT-003/007."""
+    import hashlib
+
+    return hashlib.sha256(f"bounty:{ticket_id}".encode()).hexdigest()[:24]
+
+
+def _set_bounty_gsi_keys(item: dict[str, Any], *, funded: bool, created_at: int) -> dict[str, Any]:
+    """Set or clear the sparse ByBounty GSI keys on a ticket item (TBT-002).
+
+    funded=True sets gsi_bounty_pk/sk; funded=False sets them to None (omitted
+    by the None-filter on put_item, so the ticket drops off the board).
+    """
+    if funded:
+        item["gsi_bounty_pk"] = "BOUNTY#OPEN"
+        item["gsi_bounty_sk"] = int(created_at)
+    else:
+        item["gsi_bounty_pk"] = None
+        item["gsi_bounty_sk"] = None
+    return item
 
 # AGENT-008: label index partition prefix. Label fan-out rows live in the base
 # tickets table under pk="LABELIDX#{label}" so the coder agent can query eligible
@@ -563,6 +604,38 @@ class TicketStore:
                 "status": item.get("status"),
                 "created_at": int(item.get("created_at", 0) or 0),
             } for item in activities],
+            # --- TBT-002: bounty fields (None for non-bounty tickets) ---
+            "bounty_amount_cents": (
+                int(header["bounty_amount_cents"])
+                if header.get("bounty_amount_cents") is not None else None
+            ),
+            "bounty_currency": header.get("bounty_currency"),
+            "bounty_status": header.get("bounty_status"),
+            "bounty_id": header.get("bounty_id"),
+            "claimed_by_sub": header.get("claimed_by_sub"),
+            "claimed_at": (
+                int(header["claimed_at"]) if header.get("claimed_at") is not None else None
+            ),
+            "bounty_funded_at": (
+                int(header["bounty_funded_at"])
+                if header.get("bounty_funded_at") is not None else None
+            ),
+            "bounty_submitted_at": (
+                int(header["bounty_submitted_at"])
+                if header.get("bounty_submitted_at") is not None else None
+            ),
+            "bounty_paid_at": (
+                int(header["bounty_paid_at"])
+                if header.get("bounty_paid_at") is not None else None
+            ),
+            "bounty_cancelled_at": (
+                int(header["bounty_cancelled_at"])
+                if header.get("bounty_cancelled_at") is not None else None
+            ),
+            "bounty_repost_count": (
+                int(header["bounty_repost_count"])
+                if header.get("bounty_repost_count") is not None else None
+            ),
         }
 
     def _encode_cursor(self, token: dict[str, Any]) -> str:
@@ -910,7 +983,118 @@ class TicketStore:
             return None
         return self.get_ticket(ticket_id)
 
-    def update_status(self, *, ticket_id: str, actor_sub: str, status: str) -> dict[str, Any] | None:
+    def _write_bounty_activity(self, *, ticket_id: str, actor_sub: str, ts: int, from_status: str, to_status: str) -> None:
+        act_id = f"act_{uuid.uuid4().hex[:12]}"
+        self._table.put_item(Item={
+            "pk": _ticket_pk(ticket_id),
+            "sk": _act_sk(ts, act_id),
+            "entity_type": "ticket_activity",
+            "ticket_id": ticket_id,
+            "activity_id": act_id,
+            "activity_type": "bounty_status_changed",
+            "actor_sub": actor_sub,
+            "status": to_status,
+            "bounty_status_from": from_status,
+            "bounty_status_to": to_status,
+            "created_at": ts,
+        })
+
+    def _update_status_bounty(
+        self,
+        *,
+        ticket_id: str,
+        cur: dict[str, Any],
+        actor_sub: str,
+        requested_status: str,
+        bounty_status: str,
+        current_status: str,
+        ts: int,
+        is_admin: bool,
+    ) -> dict[str, Any] | None:
+        # paid_out / cancelled are reachable only via dedicated endpoints.
+        if requested_status in ("paid_out", "cancelled"):
+            raise TicketStateError({
+                "code": "bounty_terminal_via_dedicated_endpoint",
+                "ticket_id": ticket_id,
+                "requested_status": requested_status,
+            })
+
+        expected_version = int(cur.get("version", 1))
+        new_bounty_status = bounty_status
+        new_ticket_status = requested_status
+        set_extra: dict[str, Any] = {}
+
+        # Submit path: claimant (or admin) marks work done on a claimed bounty →
+        # reroute to pending_approval / bounty_status=submitted.
+        if requested_status == "done" and bounty_status == "claimed":
+            new_ticket_status = "pending_approval"
+            new_bounty_status = "submitted"
+            set_extra["bounty_submitted_at"] = ts
+        elif is_admin and current_status == "pending_approval" and requested_status == "in_progress":
+            # Reject carve-out: caller already reverted bounty_status to claimed.
+            new_ticket_status = "in_progress"
+        else:
+            allowed = _BOUNTY_TRANSITIONS.get(bounty_status, ())
+            if requested_status not in allowed:
+                raise TicketStateError({
+                    "code": "invalid_bounty_transition",
+                    "ticket_id": ticket_id,
+                    "bounty_status": bounty_status,
+                    "requested_status": requested_status,
+                    "allowed_next_statuses": list(allowed),
+                })
+
+        names = {
+            "#status": "status",
+            "#updated_at": "updated_at",
+            "#version": "version",
+            "#gsi2pk": "gsi2pk",
+            "#gsi2sk": "gsi2sk",
+            "#bounty_status": "bounty_status",
+        }
+        values: dict[str, Any] = {
+            ":status": new_ticket_status,
+            ":updated_at": ts,
+            ":expected_version": expected_version,
+            ":next_version": expected_version + 1,
+            ":gsi2pk": _status_index_pk(new_ticket_status),
+            ":gsi2sk": _updated_index_sk(ts, ticket_id),
+            ":bounty_status": new_bounty_status,
+        }
+        set_parts = [
+            "#status = :status", "#updated_at = :updated_at", "#version = :next_version",
+            "#gsi2pk = :gsi2pk", "#gsi2sk = :gsi2sk", "#bounty_status = :bounty_status",
+        ]
+        for k, v in set_extra.items():
+            alias = f"#{k}"
+            ph = f":{k}"
+            names[alias] = k
+            values[ph] = v
+            set_parts.append(f"{alias} = {ph}")
+        update_expr = f"SET {', '.join(set_parts)} REMOVE gsi_bounty_pk, gsi_bounty_sk"
+        try:
+            self._table.update_item(
+                Key=_meta_item_key(ticket_id),
+                UpdateExpression=update_expr,
+                ConditionExpression="#version = :expected_version",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise TicketStateError({
+                    "code": "ticket_update_conflict",
+                    "ticket_id": ticket_id,
+                    "expected_version": expected_version,
+                })
+            raise
+        self._write_bounty_activity(
+            ticket_id=ticket_id, actor_sub=actor_sub, ts=ts,
+            from_status=bounty_status, to_status=new_bounty_status,
+        )
+        return self.get_ticket(ticket_id)
+
+    def update_status(self, *, ticket_id: str, actor_sub: str, status: str, is_admin: bool = False) -> dict[str, Any] | None:
         requested_status = _coerce_status(status)
         if requested_status not in _TICKET_STATUSES:
             raise TicketStateError({
@@ -924,6 +1108,24 @@ class TicketStore:
         if not cur:
             return None
         current_status = cur.get("status", "open")
+
+        # --- TBT-004: bounty gate. Tickets carrying an active bounty route
+        # through the dedicated bounty state machine instead of the generic
+        # _STATUS_TRANSITIONS map. Non-bounty tickets (bounty_status is None)
+        # and a flag-off process bypass this entirely.
+        bounty_status = cur.get("bounty_status")
+        if bounty_status and getattr(S, "ticket_bounties_enabled", False):
+            return self._update_status_bounty(
+                ticket_id=ticket_id,
+                cur=cur,
+                actor_sub=actor_sub,
+                requested_status=requested_status,
+                bounty_status=bounty_status,
+                current_status=current_status,
+                ts=ts,
+                is_admin=is_admin,
+            )
+
         allowed_next = _STATUS_TRANSITIONS.get(current_status, ())
         if requested_status not in allowed_next and requested_status != current_status:
             raise TicketStateError({
