@@ -1,9 +1,11 @@
 package com.testlogon.android.feature.questionnaire.respond.data
 
+import android.content.Context
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.data.respond.SessionDraftDao
+import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.questionnaire.AnswerValue
 import com.testlogon.android.core.model.questionnaire.QuestionnaireValidationRequest
@@ -12,13 +14,20 @@ import com.testlogon.android.core.model.questionnaire.RespondentSession
 import com.testlogon.android.core.model.questionnaire.ResponseSessionStartReq
 import com.testlogon.android.core.model.questionnaire.SessionSaveReq
 import com.testlogon.android.core.model.questionnaire.SessionState
+import com.testlogon.android.core.model.questionnaire.SessionStatus
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.questionnaire.QuestionnaireApi
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okhttp3.ResponseBody
 import retrofit2.HttpException
+import retrofit2.Response
+import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import javax.inject.Inject
@@ -86,15 +95,51 @@ interface RespondentSessionRepository {
 
     /** FR-7 - clears the draft + prior sessionId for [slug], then starts fresh. */
     suspend fun startOver(slug: String): SessionStartOutcome
+
+    /**
+     * AND-349 FR-2/3/4 - FINAL submit of the session for [slug]. Flushes any dirty draft first
+     * ([syncSave]), then POSTs submit with final_submit=true (built from the current draft answers).
+     * NON-idempotent, so there is NO auto-retry. A 200 with result.can_submit==false is a VALIDATION
+     * FAILURE (mapped to [SubmitOutcome.ValidationFailed]), NOT a success. [fieldOrder] is the schema
+     * question order used to compute the first-errored field for scroll-to-first.
+     */
+    suspend fun submit(slug: String, fieldOrder: List<String> = emptyList()): SubmitOutcome
+
+    /**
+     * AND-349 FR-5 - ensures + downloads the response PDF for [slug]. Calls generatePdf (POST) to ensure
+     * generation, then downloadPdf (the @Streaming GET) and streams the bytes to
+     * cacheDir/questionnaire-pdf/{sessionId}.pdf (mirrors AND-341 PdfSource). Returns the on-disk file.
+     */
+    suspend fun downloadSubmissionPdf(slug: String): ApiResult<java.io.File>
+
+    /**
+     * AND-349 FR-7 - re-submit guard: true when the persisted draft/session for [slug] is in a TERMINAL
+     * (submitted) status, so the screen opens directly in the Submitted state rather than re-editing.
+     */
+    suspend fun isAlreadySubmitted(slug: String): Boolean
 }
 
 @Singleton
-class RespondentSessionRepositoryImpl @Inject constructor(
+class RespondentSessionRepositoryImpl(
     private val api: QuestionnaireApi,
     private val draftDao: SessionDraftDao,
     moshi: Moshi,
     private val errorParser: ApiErrorParser,
+    private val cacheDir: File,
 ) : RespondentSessionRepository {
+
+    /**
+     * Production constructor: derives the streamed-PDF cache root from the application context (mirrors
+     * AND-341 PdfSourceImpl). The five-arg constructor above is used by tests (they pass a temp dir).
+     */
+    @Inject
+    constructor(
+        api: QuestionnaireApi,
+        draftDao: SessionDraftDao,
+        moshi: Moshi,
+        errorParser: ApiErrorParser,
+        @ApplicationContext context: Context,
+    ) : this(api, draftDao, moshi, errorParser, context.cacheDir)
 
     private val answerJson = AnswerMapJson(moshi)
 
@@ -193,7 +238,147 @@ class RespondentSessionRepositoryImpl @Inject constructor(
         freshStart(slug)
     }
 
+    override suspend fun submit(slug: String, fieldOrder: List<String>): SubmitOutcome =
+        withContext(dispatcher) {
+            val draft = draftDao.getBySlug(slug)
+                ?: return@withContext SubmitOutcome.Failed(
+                    errorParser.fromThrowable(IllegalStateException("no draft")),
+                )
+            // AND-349 FR-2/3: flush the latest edits FIRST so submit sees the saved answers. A flush
+            // failure does not abort the submit (the submit body carries the current draft answers); the
+            // submit itself is the source of truth for the final verdict.
+            if (draft.dirty) {
+                runCatching { syncSaveLocked(slug, draft) }
+            }
+            // AND-349 FR-4: NON-idempotent submit; NO auto-retry. Build the request from the current draft.
+            val refreshed = draftDao.getBySlug(slug) ?: draft
+            val result = call {
+                val req = QuestionnaireValidationRequest(
+                    answers_by_question_id = answerJson.decode(refreshed.answersJson),
+                    final_submit = true,
+                )
+                val envelope = api.submit(slug, refreshed.sessionId, req)
+                val state = envelope.session.toSessionState()
+                SessionSubmitMapping(
+                    sessionId = state.response_session_id,
+                    status = SessionStatus.fromWire(state.status),
+                    result = envelope.result,
+                    fieldOrder = fieldOrder,
+                )
+            }
+            when (result) {
+                is ApiResult.Success -> result.data.toSubmitOutcome()
+                is ApiResult.Failure -> SubmitOutcome.Failed(result.error)
+                is ApiResult.NetworkError ->
+                    SubmitOutcome.Failed(ApiError(ApiError.STATUS_NETWORK, OFFLINE_MESSAGE))
+            }
+        }
+
+    override suspend fun downloadSubmissionPdf(slug: String): ApiResult<File> = withContext(dispatcher) {
+        val draft = draftDao.getBySlug(slug)
+            ?: return@withContext ApiResult.Failure(
+                errorParser.fromThrowable(IllegalStateException("no draft")),
+            )
+        val sessionId = draft.sessionId
+
+        // AND-349 FR-5 step 1: ensure the artifact exists (POST). The descriptor is opaque/tolerated; the
+        // bytes come from the streamed GET below, so a generate failure (HTTP / transport) short-circuits.
+        when (val generated = call { api.generatePdf(slug, sessionId) }) {
+            is ApiResult.Success -> Unit
+            is ApiResult.Failure -> return@withContext ApiResult.Failure(generated.error)
+            is ApiResult.NetworkError -> return@withContext generated
+        }
+
+        // AND-349 FR-5 step 2: stream the bytes to cacheDir/questionnaire-pdf/{sessionId}.pdf (mirrors
+        // AND-341 PdfSource: chunked copy, between-chunk cancellation, non-empty verification).
+        val target = targetPdfFile(sessionId)
+        val response: Response<ResponseBody> = try {
+            api.downloadPdf(slug, sessionId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            return@withContext ApiResult.Failure(errorParser.from(e))
+        } catch (e: IOException) {
+            return@withContext ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+        if (!response.isSuccessful) {
+            return@withContext ApiResult.Failure(errorParser.from(HttpException(response)))
+        }
+        val body = response.body()
+            ?: return@withContext ApiResult.NetworkError(IOException("Empty PDF body"))
+
+        val part = File(target.parentFile, target.name + PART_SUFFIX)
+        try {
+            body.byteStream().use { input ->
+                part.outputStream().use { output ->
+                    val buffer = ByteArray(PDF_BUFFER_SIZE)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
+            }
+        } catch (e: CancellationException) {
+            part.delete()
+            throw e
+        } catch (e: IOException) {
+            part.delete()
+            return@withContext ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+
+        if (part.length() <= 0L) {
+            part.delete()
+            return@withContext ApiResult.Failure(
+                ApiError(status = ApiError.STATUS_PARSE, message = EMPTY_PDF_MESSAGE),
+            )
+        }
+        // Commit: atomic-ish rename over any prior file.
+        target.delete()
+        if (!part.renameTo(target)) {
+            part.copyTo(target, overwrite = true)
+            part.delete()
+        }
+        ApiResult.Success(target)
+    }
+
+    override suspend fun isAlreadySubmitted(slug: String): Boolean = withContext(dispatcher) {
+        val draft = draftDao.getBySlug(slug)?.takeIf { it.sessionId.isNotBlank() }
+            ?: return@withContext false
+        // FR-7 re-submit guard: the local draft carries no terminal status column (no Room migration), so
+        // the server session is the authority. A SUBMITTED status -> terminal. Any error (offline /
+        // missing) is treated as not-yet-submitted so the user can still work / retry.
+        when (val result = call { api.getSession(slug, draft.sessionId).toDomain(slug) }) {
+            is ApiResult.Success -> result.data.status == SessionStatus.SUBMITTED
+            is ApiResult.Failure, is ApiResult.NetworkError -> false
+        }
+    }
+
     // ---- internals ----
+
+    /** PUTs the dirty [draft]'s answers for [slug]; clears dirty on success. Used by the submit flush. */
+    private suspend fun syncSaveLocked(slug: String, draft: com.testlogon.android.core.data.respond.SessionDraftEntity) {
+        val answers = answerJson.decode(draft.answersJson)
+        val result = call {
+            val req = SessionSaveReq(
+                answers_by_question_id = answers,
+                current_section_index = draft.currentSectionIndex,
+                current_question_id = draft.currentQuestionId,
+            )
+            api.saveAnswers(slug, draft.sessionId, req).toDomain(slug)
+        }
+        if (result is ApiResult.Success) {
+            draftDao.setDirty(slug, dirty = false, updatedAt = clock())
+        }
+    }
+
+    /** The on-disk cache target for [sessionId]'s response PDF (cacheDir/questionnaire-pdf/{id}.pdf). */
+    private fun targetPdfFile(sessionId: String): File {
+        val dir = File(cacheDir, PDF_DIR).apply { mkdirs() }
+        return File(dir, sanitize(sessionId) + ".pdf")
+    }
 
     /** POSTs a new session, persists a fresh (clean) draft, and returns it. */
     private suspend fun freshStart(slug: String): SessionStartOutcome {
@@ -280,6 +465,20 @@ class RespondentSessionRepositoryImpl @Inject constructor(
         ApiResult.Failure(errorParser.fromThrowable(e))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+    }
+
+    private companion object {
+        const val PDF_DIR = "questionnaire-pdf"
+        const val PART_SUFFIX = ".part"
+        const val PDF_BUFFER_SIZE = 16 * 1024
+        const val OFFLINE_MESSAGE = "Couldn't reach the server. Try again."
+        const val EMPTY_PDF_MESSAGE = "This response could not be downloaded."
+
+        /** Keeps the cache filename to a safe basename (session ids are opaque, but be defensive). */
+        fun sanitize(sessionId: String): String =
+            sessionId.map { if (it.isLetterOrDigit() || it == '_' || it == '-') it else '_' }
+                .joinToString("")
+                .ifEmpty { "session" }
     }
 }
 

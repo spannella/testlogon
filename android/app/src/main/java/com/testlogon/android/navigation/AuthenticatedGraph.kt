@@ -135,6 +135,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // (also registered unauthenticated, since a recipient may be signed out).
         shareSheetDestination(navController)
         publicShareDestination(navController)
+        // AND-349: public questionnaire respond (App Link .../published/{slug}/respond), anonymous; also
+        // registered unauthenticated since a respondent may be signed out.
+        questionnaireRespondDestination(navController)
         // AND-205: storefront catalog / category browse grid (cells open the product detail route).
         catalogDestination(navController)
         // AND-206: real product detail (item derived from the category-items list; add-to-cart).

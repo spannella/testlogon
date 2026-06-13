@@ -37,11 +37,13 @@ sealed interface SessionStartOutcome {
  * [fieldErrors] is the per-question FIRST blocking-or-any message (questionId -> message), already
  * flattened from the wire's questionId -> List<ValidationIssue>. [canSubmit] is the server's
  * can_submit verdict (the AND-349 hand-off). [isValid] / [hasBlockingFormError] are surfaced for
- * completeness.
+ * completeness. [firstErrorQuestionId] (AND-349) is the first errored field IN SCHEMA QUESTION ORDER,
+ * for the screen's scroll-to-first-error on a validation failure; null when there are no field errors.
  */
 data class SessionValidation(
     val isValid: Boolean,
     val canSubmit: Boolean,
     val hasBlockingFormError: Boolean,
     val fieldErrors: Map<String, String>,
+    val firstErrorQuestionId: String? = null,
 )

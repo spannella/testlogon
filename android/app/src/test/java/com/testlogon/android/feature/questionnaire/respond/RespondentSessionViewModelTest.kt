@@ -10,10 +10,13 @@ import com.testlogon.android.core.testing.MainDispatcherRule
 import com.testlogon.android.feature.questionnaire.respond.data.RespondentSessionRepository
 import com.testlogon.android.feature.questionnaire.respond.data.SessionStartOutcome
 import com.testlogon.android.feature.questionnaire.respond.data.SessionValidation
+import com.testlogon.android.feature.questionnaire.respond.data.SubmitOutcome
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -70,6 +73,27 @@ class RespondentSessionViewModelTest {
             startOverCalls++
             return startOverOutcome
         }
+
+        // AND-349 additions.
+        var submitOutcome: SubmitOutcome = SubmitOutcome.Submitted("rs_1", SessionStatus.SUBMITTED)
+        var pdfResult: ApiResult<java.io.File> = ApiResult.Success(java.io.File("response.pdf"))
+        var alreadySubmitted = false
+        var submitCalls = 0
+        var pdfCalls = 0
+        var lastFieldOrder: List<String>? = null
+
+        override suspend fun submit(slug: String, fieldOrder: List<String>): SubmitOutcome {
+            submitCalls++
+            lastFieldOrder = fieldOrder
+            return submitOutcome
+        }
+
+        override suspend fun downloadSubmissionPdf(slug: String): ApiResult<java.io.File> {
+            pdfCalls++
+            return pdfResult
+        }
+
+        override suspend fun isAlreadySubmitted(slug: String): Boolean = alreadySubmitted
     }
 
     private fun vm(repo: RespondentSessionRepository, slug: String? = SLUG): RespondentSessionViewModel {
@@ -229,6 +253,132 @@ class RespondentSessionViewModelTest {
         val vm = vm(FakeRepo(), slug = null)
         runCurrent()
         assertTrue(vm.uiState.value is RespondentSessionUiState.Error)
+    }
+
+    // ---- AND-349 ----
+
+    @Test
+    fun onSubmit_success_becomesSubmitted_terminal() = runTest {
+        val repo = FakeRepo()
+        repo.validateResult = ApiResult.Success(SessionValidation(true, true, false, emptyMap()))
+        repo.submitOutcome = SubmitOutcome.Submitted("rs_1", SessionStatus.SUBMITTED)
+        val vm = vm(repo)
+        runCurrent()
+        // Reach a canSubmit=true Active via validate.
+        vm.onSaveAndContinue()
+        runCurrent()
+        assertTrue((vm.uiState.value as RespondentSessionUiState.Active).canSubmit)
+
+        vm.onSubmit()
+        runCurrent()
+
+        assertEquals(1, repo.submitCalls)
+        val state = vm.uiState.value
+        assertTrue(state is RespondentSessionUiState.Submitted)
+        assertEquals("rs_1", (state as RespondentSessionUiState.Submitted).sessionId)
+        assertEquals(SessionStatus.SUBMITTED, state.sessionStatus)
+    }
+
+    @Test
+    fun onSubmit_validationFail_mapsFieldErrors_andFirstError() = runTest {
+        val repo = FakeRepo()
+        repo.submitOutcome = SubmitOutcome.ValidationFailed(
+            SessionValidation(
+                isValid = false,
+                canSubmit = false,
+                hasBlockingFormError = true,
+                fieldErrors = mapOf("q1" to "Required"),
+                firstErrorQuestionId = "q1",
+            ),
+        )
+        val vm = vm(repo)
+        runCurrent()
+        makeSubmittable(vm)
+
+        vm.onSubmit()
+        runCurrent()
+
+        val state = vm.uiState.value as RespondentSessionUiState.Active
+        assertEquals("Required", state.fieldErrors["q1"])
+        assertEquals("q1", state.firstErrorQuestionId)
+        assertEquals(false, state.submitting)
+    }
+
+    @Test
+    fun onSubmit_doubleTap_blockedWhileSubmitting() = runTest {
+        val repo = FakeRepo()
+        repo.submitOutcome = SubmitOutcome.Submitted("rs_1", SessionStatus.SUBMITTED)
+        val vm = vm(repo)
+        runCurrent()
+        makeSubmittable(vm)
+
+        vm.onSubmit()
+        vm.onSubmit()
+        runCurrent()
+
+        // The in-flight guard collapses the second tap.
+        assertEquals(1, repo.submitCalls)
+    }
+
+    @Test
+    fun onDownloadPdf_emitsOpenPdfEffect() = runTest {
+        val repo = FakeRepo()
+        repo.alreadySubmitted = true
+        val vm = vm(repo)
+        runCurrent()
+        assertTrue(vm.uiState.value is RespondentSessionUiState.Submitted)
+
+        val effects = mutableListOf<RespondEffect>()
+        backgroundScope.launch { vm.effects.collect { effects.add(it) } }
+        runCurrent()
+
+        vm.onDownloadPdf()
+        runCurrent()
+
+        assertEquals(1, repo.pdfCalls)
+        assertTrue(effects.any { it is RespondEffect.OpenPdf })
+    }
+
+    @Test
+    fun alreadySubmitted_opensSubmittedOnLoad() = runTest {
+        val repo = FakeRepo()
+        repo.alreadySubmitted = true
+        repo.startOutcome = SessionStartOutcome.Ready(
+            RespondentSession(
+                sessionId = "rs_done", slug = SLUG, questionnaireId = "q1", versionId = "v1",
+                answers = emptyMap(), status = SessionStatus.SUBMITTED,
+            ),
+        )
+        val vm = vm(repo)
+        runCurrent()
+
+        val state = vm.uiState.value
+        assertTrue(state is RespondentSessionUiState.Submitted)
+        assertEquals("rs_done", (state as RespondentSessionUiState.Submitted).sessionId)
+    }
+
+    @Test
+    fun onFirstErrorConsumed_clearsMarker() = runTest {
+        val repo = FakeRepo()
+        repo.submitOutcome = SubmitOutcome.ValidationFailed(
+            SessionValidation(false, false, true, mapOf("q1" to "Required"), "q1"),
+        )
+        val vm = vm(repo)
+        runCurrent()
+        makeSubmittable(vm)
+        vm.onSubmit()
+        runCurrent()
+        assertEquals("q1", (vm.uiState.value as RespondentSessionUiState.Active).firstErrorQuestionId)
+
+        vm.onFirstErrorConsumed()
+        runCurrent()
+        assertNull((vm.uiState.value as RespondentSessionUiState.Active).firstErrorQuestionId)
+    }
+
+    /** Drives the VM to a canSubmit=true Active so onSubmit's FR-1 gate passes. */
+    private fun kotlinx.coroutines.test.TestScope.makeSubmittable(vm: RespondentSessionViewModel) {
+        vm.onSaveAndContinue()
+        runCurrent()
     }
 
     private companion object {

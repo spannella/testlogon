@@ -14,4 +14,9 @@
     <cache-path
         name="kyc-capture"
         path="kyc-capture/" />
+    <!-- AND-349: downloaded questionnaire-response PDFs handed to an external viewer (system chooser)
+         via a transient content:// read grant. Scoped to cacheDir/questionnaire-pdf/. -->
+    <cache-path
+        name="questionnaire-pdf"
+        path="questionnaire-pdf/" />
 </paths>

@@ -386,6 +386,33 @@
                     android:scheme="testlogon"
                     android:host="share" />
             </intent-filter>
+
+            <!-- AND-349: PUBLIC questionnaire-respond App Link on the production host (HTTPS,
+                 auto-verified), mirroring the web .../questionnaires/published/{slug}/respond page. Works
+                 for anonymous users (registered in both nav graphs). Requires
+                 /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/questionnaires/published/"
+                    android:pathPattern="/questionnaires/published/.*/respond" />
+            </intent-filter>
+
+            <!-- AND-349: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/questionnaires/published/"
+                    android:pathPattern="/questionnaires/published/.*/respond" />
+            </intent-filter>
         </activity>
 
         <!-- AND-297: lock-screen-capable full-screen incoming-call Activity. Launched by the call

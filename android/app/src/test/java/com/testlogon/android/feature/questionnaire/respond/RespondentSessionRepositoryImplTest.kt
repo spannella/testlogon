@@ -9,26 +9,33 @@ import com.testlogon.android.core.model.questionnaire.QuestionnaireValidationReq
 import com.testlogon.android.core.model.questionnaire.QuestionnaireValidationResponse
 import com.testlogon.android.core.model.questionnaire.ResponseSessionEnvelope
 import com.testlogon.android.core.model.questionnaire.ResponseSessionStartReq
+import com.testlogon.android.core.model.questionnaire.SessionPdfEnvelope
 import com.testlogon.android.core.model.questionnaire.SessionSaveReq
 import com.testlogon.android.core.model.questionnaire.SessionState
 import com.testlogon.android.core.model.questionnaire.SessionStateEnvelope
+import com.testlogon.android.core.model.questionnaire.SessionSubmitEnvelope
 import com.testlogon.android.core.model.questionnaire.ValidationIssue
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.questionnaire.AnswerValueAdapter
 import com.testlogon.android.core.network.questionnaire.QuestionnaireApi
 import com.testlogon.android.feature.questionnaire.respond.data.RespondentSessionRepositoryImpl
 import com.testlogon.android.feature.questionnaire.respond.data.SessionStartOutcome
+import com.testlogon.android.feature.questionnaire.respond.data.SubmitOutcome
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import retrofit2.Response
 
 /**
@@ -66,15 +73,23 @@ class RespondentSessionRepositoryImplTest {
         var getCalls = 0
         var saveCalls = 0
         var validateCalls = 0
+        var submitCalls = 0
+        var generatePdfCalls = 0
+        var downloadPdfCalls = 0
         var lastSave: SessionSaveReq? = null
+        var lastSubmit: QuestionnaireValidationRequest? = null
 
         var startEnvelope: ResponseSessionEnvelope = envelope("rs_1", "q1", "v1")
         var stateEnvelope: SessionStateEnvelope = stateEnv("rs_1", "q1", "v1", emptyMap())
         var validateResponse: QuestionnaireValidationResponse =
             QuestionnaireValidationResponse(true, true, false, emptyMap())
+        var submitEnvelope: SessionSubmitEnvelope = submitEnv("rs_1", "submitted", true, true, emptyMap())
+        var pdfEnvelope: SessionPdfEnvelope = SessionPdfEnvelope(artifact = emptyMap())
+        var pdfBytes: ByteArray = byteArrayOf(0x25, 0x50, 0x44, 0x46, 0x2D, 0x31)
 
         // When set, the matching call records itself THEN throws (offline simulation).
         var saveThrows: Throwable? = null
+        var submitThrows: Throwable? = null
 
         override suspend fun getPublished(publishedSlug: String) =
             throw UnsupportedOperationException("not used")
@@ -115,13 +130,30 @@ class RespondentSessionRepositoryImplTest {
             return validateResponse
         }
 
-        override suspend fun submit(publishedSlug: String, responseSessionId: String, body: QuestionnaireValidationRequest) =
-            throw UnsupportedOperationException("out of scope (AND-349)")
-        override suspend fun generatePdf(publishedSlug: String, responseSessionId: String) =
-            throw UnsupportedOperationException("out of scope (AND-349)")
-        override suspend fun downloadPdf(publishedSlug: String, responseSessionId: String): Response<ResponseBody> =
-            throw UnsupportedOperationException("out of scope (AND-349)")
+        override suspend fun submit(
+            publishedSlug: String,
+            responseSessionId: String,
+            body: QuestionnaireValidationRequest,
+        ): SessionSubmitEnvelope {
+            submitCalls++
+            lastSubmit = body
+            submitThrows?.let { throw it }
+            return submitEnvelope
+        }
+
+        override suspend fun generatePdf(publishedSlug: String, responseSessionId: String): SessionPdfEnvelope {
+            generatePdfCalls++
+            return pdfEnvelope
+        }
+
+        override suspend fun downloadPdf(publishedSlug: String, responseSessionId: String): Response<ResponseBody> {
+            downloadPdfCalls++
+            return Response.success(pdfBytes.toResponseBody("application/pdf".toMediaTypeOrNull()))
+        }
     }
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     private val dao = FakeSessionDraftDao()
     private val api = FakeQuestionnaireApi()
@@ -131,6 +163,7 @@ class RespondentSessionRepositoryImplTest {
         draftDao = dao,
         moshi = moshi,
         errorParser = ApiErrorParser(moshi),
+        cacheDir = tempFolder.root,
     ).also {
         it.clock = { 1_000L }
         it.dispatcher = UnconfinedTestDispatcher()
@@ -277,6 +310,7 @@ class RespondentSessionRepositoryImplTest {
             draftDao = dao,
             moshi = moshi,
             errorParser = ApiErrorParser(moshi),
+            cacheDir = tempFolder.root,
         ).also {
             it.clock = { 1_000L }
             it.dispatcher = UnconfinedTestDispatcher()
@@ -289,6 +323,93 @@ class RespondentSessionRepositoryImplTest {
             AnswerValue.Text("cached"),
             (outcome as SessionStartOutcome.Ready).session.answers["q1"],
         )
+    }
+
+    // ---- AND-349: submit + PDF + already-submitted ----
+
+    @Test
+    fun submit_flushesDirty_thenPostsFinalSubmitTrue() = runTest {
+        seedDraft(dirty = true, answersJson = """{"q1":"typed"}""")
+        api.submitEnvelope = submitEnv("rs_1", "submitted", canSubmit = true, isValid = true, emptyMap())
+
+        val outcome = repo().submit(SLUG)
+
+        // Flush (PUT) happens before the submit (POST).
+        assertEquals(1, api.saveCalls)
+        assertEquals(1, api.submitCalls)
+        assertTrue(api.lastSubmit?.final_submit == true)
+        assertEquals(AnswerValue.Text("typed"), api.lastSubmit?.answers_by_question_id?.get("q1"))
+        assertTrue(outcome is SubmitOutcome.Submitted)
+        assertEquals("rs_1", (outcome as SubmitOutcome.Submitted).sessionId)
+    }
+
+    @Test
+    fun submit_canSubmitFalse_mapsFieldErrors_andFirstErrorInOrder() = runTest {
+        seedDraft(answersJson = """{"q1":"x"}""")
+        api.submitEnvelope = submitEnv(
+            sessionId = "rs_1",
+            status = "in_progress",
+            canSubmit = false,
+            isValid = false,
+            errors = mapOf(
+                "q2" to listOf(ValidationIssue(code = "req", message = "q2 required", blocking = true)),
+                "q1" to listOf(ValidationIssue(code = "req", message = "q1 required", blocking = true)),
+            ),
+        )
+
+        val outcome = repo().submit(SLUG, fieldOrder = listOf("q1", "q2"))
+
+        assertTrue(outcome is SubmitOutcome.ValidationFailed)
+        val v = (outcome as SubmitOutcome.ValidationFailed).validation
+        assertFalse(v.canSubmit)
+        assertEquals("q1 required", v.fieldErrors["q1"])
+        // First errored field IN FIELD ORDER (q1 before q2), NOT a success.
+        assertEquals("q1", v.firstErrorQuestionId)
+    }
+
+    @Test
+    fun submit_transportFailure_isRetryable_andDraftIntact() = runTest {
+        seedDraft(answersJson = """{"q1":"keep"}""")
+        api.submitThrows = java.io.IOException("offline")
+
+        val outcome = repo().submit(SLUG)
+
+        // The fake recorded the call BEFORE throwing.
+        assertEquals(1, api.submitCalls)
+        assertTrue(outcome is SubmitOutcome.Failed)
+        // The draft (and its answers) is NOT lost.
+        assertEquals("""{"q1":"keep"}""", dao.getBySlug(SLUG)?.answersJson)
+    }
+
+    @Test
+    fun downloadSubmissionPdf_generatesThenStreamsToFile() = runTest {
+        seedDraft()
+
+        val result = repo().downloadSubmissionPdf(SLUG)
+
+        assertEquals(1, api.generatePdfCalls)
+        assertEquals(1, api.downloadPdfCalls)
+        assertTrue(result is ApiResult.Success)
+        val file = (result as ApiResult.Success).data
+        assertTrue(file.exists())
+        assertTrue(file.length() > 0L)
+        assertTrue(file.name.endsWith(".pdf"))
+    }
+
+    @Test
+    fun isAlreadySubmitted_trueWhenServerStatusTerminal() = runTest {
+        seedDraft()
+        api.stateEnvelope = stateEnv("rs_1", "q1", "v1", emptyMap(), status = "submitted")
+
+        assertTrue(repo().isAlreadySubmitted(SLUG))
+    }
+
+    @Test
+    fun isAlreadySubmitted_falseWhenInProgress() = runTest {
+        seedDraft()
+        api.stateEnvelope = stateEnv("rs_1", "q1", "v1", emptyMap(), status = "in_progress")
+
+        assertFalse(repo().isAlreadySubmitted(SLUG))
     }
 
     // ---- helpers ----
@@ -332,14 +453,36 @@ private fun stateEnv(
     qId: String,
     versionId: String,
     answers: Map<String, AnswerValue>,
+    status: String = "in_progress",
 ) = SessionStateEnvelope(
     session = SessionState(
         response_session_id = sessionId,
         questionnaire_id = qId,
         version_id = versionId,
-        status = "in_progress",
+        status = status,
         current_section_index = 0,
         current_question_id = qId,
     ),
     answers_by_question_id = answers,
+)
+
+private fun submitEnv(
+    sessionId: String,
+    status: String,
+    canSubmit: Boolean,
+    isValid: Boolean,
+    errors: Map<String, List<ValidationIssue>>,
+) = SessionSubmitEnvelope(
+    session = mapOf(
+        "response_session_id" to sessionId,
+        "questionnaire_id" to "q1",
+        "version_id" to "v1",
+        "status" to status,
+    ),
+    result = QuestionnaireValidationResponse(
+        is_valid = isValid,
+        can_submit = canSubmit,
+        has_blocking_form_error = !isValid,
+        errors = errors,
+    ),
 )

@@ -10,14 +10,19 @@ import com.testlogon.android.core.model.questionnaire.RespondentSession
 import com.testlogon.android.feature.questionnaire.respond.data.RespondentSessionRepository
 import com.testlogon.android.feature.questionnaire.respond.data.SessionStartOutcome
 import com.testlogon.android.feature.questionnaire.respond.data.SessionValidation
+import com.testlogon.android.feature.questionnaire.respond.data.SubmitOutcome
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -49,20 +54,46 @@ class RespondentSessionViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<RespondentSessionUiState>(RespondentSessionUiState.Loading)
     val uiState: StateFlow<RespondentSessionUiState> = _uiState.asStateFlow()
 
+    /**
+     * AND-349 - one-shot effects (the PDF [OpenPdf] hand-off the screen relays to OpenWithLauncher). A
+     * BUFFERED Channel consumed exactly once; never replayed on recomposition.
+     */
+    private val _effects = Channel<RespondEffect>(Channel.BUFFERED)
+    val effects: Flow<RespondEffect> = _effects.receiveAsFlow()
+
+    /**
+     * AND-349 - schema question order (set by the screen once the schema is known) used to compute the
+     * first-errored field for scroll-to-first on a rejected submit. Empty -> the first error key wins.
+     */
+    var fieldOrder: List<String> = emptyList()
+
     private var syncJob: Job? = null
+
+    /** AND-349 - guards against a double-tap on Submit while one is in flight. */
+    private var submitting = false
 
     init {
         if (slug.isBlank()) {
             _uiState.value = RespondentSessionUiState.Error(ApiError(ApiError.STATUS_PARSE, MISSING_SLUG))
         } else {
-            load { repository.startOrResume(slug) }
+            // AND-349 FR-7: a session already submitted on this device opens directly in the terminal
+            // confirmation (re-submit guard) rather than re-editing; otherwise start/resume as normal.
+            viewModelScope.launch {
+                if (repository.isAlreadySubmitted(slug)) {
+                    loadAlreadySubmitted()
+                } else {
+                    loadStartOrResume()
+                }
+            }
         }
     }
+
+    private fun loadStartOrResume() = load { repository.startOrResume(slug) }
 
     /** Re-runs start/resume (e.g. retry after a load error). */
     fun onReload() {
         if (slug.isBlank()) return
-        load { repository.startOrResume(slug) }
+        loadStartOrResume()
     }
 
     /**
@@ -140,6 +171,109 @@ class RespondentSessionViewModel @Inject constructor(
         syncJob?.cancel()
         load { repository.startOver(slug) }
     }
+
+    // ---- AND-349 submit + PDF ----
+
+    /**
+     * AND-349 FR-2/3/4 - the terminal action. Disables the form + blocks a double-tap while in flight,
+     * flushes-then-submits via the repository (NO auto-retry). On Submitted -> the terminal confirmation
+     * (form non-editable). On a 200 with can_submit==false -> the field errors are merged back into Active
+     * and [Active.firstErrorQuestionId] drives scroll-to-first (NOT a success). On a transport/HTTP
+     * failure -> a retryable inline error WITHOUT losing the draft (the Active answers are untouched).
+     */
+    fun onSubmit() {
+        if (submitting) return
+        val current = _uiState.value as? RespondentSessionUiState.Active ?: return
+        // FR-1 gate: submit is only meaningful with a verdict + a real session.
+        if (!current.canSubmit || current.session.sessionId.isBlank()) return
+        submitting = true
+        syncJob?.cancel()
+        _uiState.value = current.copy(submitting = true)
+        viewModelScope.launch {
+            try {
+                when (val outcome = repository.submit(slug, fieldOrder)) {
+                    is SubmitOutcome.Submitted -> _uiState.value = RespondentSessionUiState.Submitted(
+                        sessionId = outcome.sessionId,
+                        sessionStatus = outcome.sessionStatus,
+                    )
+                    is SubmitOutcome.ValidationFailed -> {
+                        val active = _uiState.value as? RespondentSessionUiState.Active ?: return@launch
+                        _uiState.value = active.copy(
+                            submitting = false,
+                            canSubmit = outcome.validation.canSubmit,
+                            fieldErrors = outcome.validation.fieldErrors,
+                            firstErrorQuestionId = outcome.validation.firstErrorQuestionId,
+                        )
+                    }
+                    is SubmitOutcome.Failed -> {
+                        // FR-8: keep the draft; surface a retryable error inline (stay editable).
+                        val active = _uiState.value as? RespondentSessionUiState.Active ?: return@launch
+                        _uiState.value = active.copy(submitting = false, syncState = SyncState.SYNC_ERROR)
+                        _effects.send(RespondEffect.ShowError(errorMessageOf(outcome)))
+                    }
+                }
+            } finally {
+                submitting = false
+            }
+        }
+    }
+
+    /**
+     * AND-349 - clears the scroll-to-first marker after the screen has consumed it (so a recomposition or
+     * a manual edit does not re-trigger the scroll).
+     */
+    fun onFirstErrorConsumed() {
+        val current = _uiState.value as? RespondentSessionUiState.Active ?: return
+        if (current.firstErrorQuestionId != null) {
+            _uiState.value = current.copy(firstErrorQuestionId = null)
+        }
+    }
+
+    /**
+     * AND-349 FR-5 - generates + downloads the response PDF to cache, then emits a one-shot [OpenPdf]
+     * effect the screen hands to OpenWithLauncher (system chooser). Only valid in the terminal Submitted
+     * state. A failure surfaces a retryable [PdfState.Error]; no auto-retry.
+     */
+    fun onDownloadPdf() {
+        val current = _uiState.value as? RespondentSessionUiState.Submitted ?: return
+        if (current.pdfState is PdfState.Downloading) return
+        _uiState.value = current.copy(pdfState = PdfState.Downloading)
+        viewModelScope.launch {
+            when (val result = repository.downloadSubmissionPdf(slug)) {
+                is ApiResult.Success -> {
+                    setPdfState(PdfState.Idle)
+                    _effects.send(RespondEffect.OpenPdf(result.data))
+                }
+                is ApiResult.Failure -> setPdfState(PdfState.Error(result.error.message))
+                is ApiResult.NetworkError -> setPdfState(PdfState.Error(OFFLINE))
+            }
+        }
+    }
+
+    /** AND-349 - loads the terminal Submitted state for an already-submitted session (FR-7, cold start). */
+    private fun loadAlreadySubmitted() {
+        viewModelScope.launch {
+            when (val outcome = repository.startOrResume(slug)) {
+                is SessionStartOutcome.Ready -> _uiState.value = RespondentSessionUiState.Submitted(
+                    sessionId = outcome.session.sessionId,
+                    sessionStatus = outcome.session.status,
+                )
+                is SessionStartOutcome.SchemaChanged ->
+                    _uiState.value = RespondentSessionUiState.SchemaChanged(outcome.slug)
+                is SessionStartOutcome.Failed ->
+                    _uiState.value = RespondentSessionUiState.Error(errorOf(outcome.error))
+            }
+        }
+    }
+
+    private fun setPdfState(state: PdfState) {
+        _uiState.update { s ->
+            if (s is RespondentSessionUiState.Submitted) s.copy(pdfState = state) else s
+        }
+    }
+
+    private fun errorMessageOf(failed: SubmitOutcome.Failed): String =
+        failed.error.message.ifBlank { OFFLINE }
 
     // ---- sync internals ----
 
@@ -220,4 +354,17 @@ class RespondentSessionViewModel @Inject constructor(
         private const val MISSING_SLUG = "No questionnaire was specified."
         private const val OFFLINE = "Couldn't reach the server. Try again."
     }
+}
+
+/**
+ * AND-349 - one-shot effects emitted by [RespondentSessionViewModel] for the screen to act on exactly
+ * once (NOT replayed on recomposition). [OpenPdf] hands a downloaded PDF [File] to OpenWithLauncher (the
+ * system chooser); [ShowError] surfaces a transient submit error.
+ */
+sealed interface RespondEffect {
+    /** Open the downloaded response PDF [file] via the system chooser (OpenWithLauncher). */
+    data class OpenPdf(val file: File) : RespondEffect
+
+    /** Show a transient error [message] (e.g. a retryable submit failure). */
+    data class ShowError(val message: String) : RespondEffect
 }

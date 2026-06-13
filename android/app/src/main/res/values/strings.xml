@@ -2743,4 +2743,23 @@
     <string name="questionnaire_address_state">State / Province</string>
     <string name="questionnaire_address_postal">Postal code</string>
     <string name="questionnaire_address_country">Country</string>
+
+    <!-- AND-349 - public questionnaire respond (submit + PDF) -->
+    <string name="respond_title">Questionnaire</string>
+    <string name="respond_back">Back</string>
+    <string name="respond_submit">Submit</string>
+    <string name="respond_submitting">Submitting…</string>
+    <string name="respond_loading">Loading…</string>
+    <string name="respond_confirmation_title">Response submitted</string>
+    <string name="respond_confirmation_body">Thanks. Your response has been recorded.</string>
+    <string name="respond_session_id_label">Reference: %1$s</string>
+    <string name="respond_status_label">Status: %1$s</string>
+    <string name="respond_download_pdf">Download PDF</string>
+    <string name="respond_downloading">Downloading…</string>
+    <string name="respond_pdf_error">Couldn\'t download the PDF. Try again.</string>
+    <string name="respond_error_title">Something went wrong</string>
+    <string name="respond_error_retry">Retry</string>
+    <string name="respond_schema_changed">This questionnaire was updated. Reload to continue.</string>
+    <string name="respond_schema_reload">Reload</string>
+    <string name="respond_empty_form">No questions to show.</string>
 </resources>
