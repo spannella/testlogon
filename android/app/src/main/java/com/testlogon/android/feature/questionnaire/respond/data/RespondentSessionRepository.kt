@@ -90,8 +90,17 @@ interface RespondentSessionRepository {
      * FR-4/8 - POSTs validate for [slug] and maps the wire errors (questionId -> List<ValidationIssue>)
      * to a per-field message map for AND-347's renderer, plus the can_submit verdict (the AND-349
      * hand-off). [finalSubmit] is false for an in-flow validate.
+     *
+     * AND-350: [answersOverride] (when non-null) is the EXACT answer body to send - the caller (the
+     * ViewModel) passes the VISIBLE-only subset so HIDDEN questions are excluded from
+     * answers_by_question_id (FR-2). When null the persisted draft answers are used (AND-348 behaviour).
+     * The validate/submit body still sends EMPTY form_rules / group_rules (the server derives them).
      */
-    suspend fun validate(slug: String, finalSubmit: Boolean = false): ApiResult<SessionValidation>
+    suspend fun validate(
+        slug: String,
+        finalSubmit: Boolean = false,
+        answersOverride: Map<String, AnswerValue>? = null,
+    ): ApiResult<SessionValidation>
 
     /** FR-7 - clears the draft + prior sessionId for [slug], then starts fresh. */
     suspend fun startOver(slug: String): SessionStartOutcome
@@ -102,8 +111,15 @@ interface RespondentSessionRepository {
      * NON-idempotent, so there is NO auto-retry. A 200 with result.can_submit==false is a VALIDATION
      * FAILURE (mapped to [SubmitOutcome.ValidationFailed]), NOT a success. [fieldOrder] is the schema
      * question order used to compute the first-errored field for scroll-to-first.
+     *
+     * AND-350: [answersOverride] (when non-null) is the VISIBLE-only answer body (HIDDEN questions
+     * excluded, FR-2); null keeps the AND-349 draft-answer behaviour.
      */
-    suspend fun submit(slug: String, fieldOrder: List<String> = emptyList()): SubmitOutcome
+    suspend fun submit(
+        slug: String,
+        fieldOrder: List<String> = emptyList(),
+        answersOverride: Map<String, AnswerValue>? = null,
+    ): SubmitOutcome
 
     /**
      * AND-349 FR-5 - ensures + downloads the response PDF for [slug]. Calls generatePdf (POST) to ensure
@@ -217,7 +233,11 @@ class RespondentSessionRepositoryImpl(
         result
     }
 
-    override suspend fun validate(slug: String, finalSubmit: Boolean): ApiResult<SessionValidation> =
+    override suspend fun validate(
+        slug: String,
+        finalSubmit: Boolean,
+        answersOverride: Map<String, AnswerValue>?,
+    ): ApiResult<SessionValidation> =
         withContext(dispatcher) {
             val draft = draftDao.getBySlug(slug)
                 ?: return@withContext ApiResult.Failure(
@@ -225,7 +245,8 @@ class RespondentSessionRepositoryImpl(
                 )
             call {
                 val req = QuestionnaireValidationRequest(
-                    answers_by_question_id = answerJson.decode(draft.answersJson),
+                    // AND-350: prefer the caller's VISIBLE-only subset (hidden excluded); else the draft.
+                    answers_by_question_id = answersOverride ?: answerJson.decode(draft.answersJson),
                     final_submit = finalSubmit,
                 )
                 api.validate(slug, draft.sessionId, req).toValidation()
@@ -238,7 +259,11 @@ class RespondentSessionRepositoryImpl(
         freshStart(slug)
     }
 
-    override suspend fun submit(slug: String, fieldOrder: List<String>): SubmitOutcome =
+    override suspend fun submit(
+        slug: String,
+        fieldOrder: List<String>,
+        answersOverride: Map<String, AnswerValue>?,
+    ): SubmitOutcome =
         withContext(dispatcher) {
             val draft = draftDao.getBySlug(slug)
                 ?: return@withContext SubmitOutcome.Failed(
@@ -254,7 +279,8 @@ class RespondentSessionRepositoryImpl(
             val refreshed = draftDao.getBySlug(slug) ?: draft
             val result = call {
                 val req = QuestionnaireValidationRequest(
-                    answers_by_question_id = answerJson.decode(refreshed.answersJson),
+                    // AND-350: prefer the caller's VISIBLE-only subset (hidden excluded); else the draft.
+                    answers_by_question_id = answersOverride ?: answerJson.decode(refreshed.answersJson),
                     final_submit = true,
                 )
                 val envelope = api.submit(slug, refreshed.sessionId, req)
@@ -515,5 +541,7 @@ internal fun QuestionnaireValidationResponse.toValidation(): SessionValidation {
         canSubmit = can_submit,
         hasBlockingFormError = has_blocking_form_error,
         fieldErrors = fieldErrors,
+        // AND-350: carry the raw wire errors (incl. group:/form: keys) for the VM's IssueReconciler.
+        serverErrors = errors,
     )
 }

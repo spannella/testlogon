@@ -2,6 +2,7 @@ package com.testlogon.android.feature.questionnaire.respond.data
 
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.questionnaire.RespondentSession
+import com.testlogon.android.core.model.questionnaire.ValidationIssue
 
 /**
  * AND-348 - the start/resume outcome. Most paths return a plain [ApiResult]<[RespondentSession]>, but
@@ -39,6 +40,11 @@ sealed interface SessionStartOutcome {
  * can_submit verdict (the AND-349 hand-off). [isValid] / [hasBlockingFormError] are surfaced for
  * completeness. [firstErrorQuestionId] (AND-349) is the first errored field IN SCHEMA QUESTION ORDER,
  * for the screen's scroll-to-first-error on a validation failure; null when there are no field errors.
+ *
+ * AND-350: [serverErrors] is the RAW wire error map (questionId AND `group:` / `form:` prefixed keys ->
+ * issues), carried through UN-flattened so the ViewModel's IssueReconciler can (a) split inline-vs-banner
+ * keys and (b) union + de-dup by code against the local ClientValidator issues. [fieldErrors] above stays
+ * the pre-flattened per-field map for callers that do not reconcile (AND-348 / AND-349 paths).
  */
 data class SessionValidation(
     val isValid: Boolean,
@@ -46,4 +52,5 @@ data class SessionValidation(
     val hasBlockingFormError: Boolean,
     val fieldErrors: Map<String, String>,
     val firstErrorQuestionId: String? = null,
+    val serverErrors: Map<String, List<ValidationIssue>> = emptyMap(),
 )

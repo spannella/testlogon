@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.questionnaire.AnswerValue
+import com.testlogon.android.core.model.questionnaire.QuestionnaireField
 import com.testlogon.android.core.model.questionnaire.RespondentSession
 import com.testlogon.android.core.model.questionnaire.SessionStatus
 import com.testlogon.android.core.testing.MainDispatcherRule
@@ -64,8 +65,15 @@ class RespondentSessionViewModelTest {
             return syncResult
         }
 
-        override suspend fun validate(slug: String, finalSubmit: Boolean): ApiResult<SessionValidation> {
+        var lastValidateAnswers: Map<String, AnswerValue>? = null
+
+        override suspend fun validate(
+            slug: String,
+            finalSubmit: Boolean,
+            answersOverride: Map<String, AnswerValue>?,
+        ): ApiResult<SessionValidation> {
             validateCalls++
+            lastValidateAnswers = answersOverride
             return validateResult
         }
 
@@ -82,9 +90,16 @@ class RespondentSessionViewModelTest {
         var pdfCalls = 0
         var lastFieldOrder: List<String>? = null
 
-        override suspend fun submit(slug: String, fieldOrder: List<String>): SubmitOutcome {
+        var lastSubmitAnswers: Map<String, AnswerValue>? = null
+
+        override suspend fun submit(
+            slug: String,
+            fieldOrder: List<String>,
+            answersOverride: Map<String, AnswerValue>?,
+        ): SubmitOutcome {
             submitCalls++
             lastFieldOrder = fieldOrder
+            lastSubmitAnswers = answersOverride
             return submitOutcome
         }
 
@@ -380,6 +395,159 @@ class RespondentSessionViewModelTest {
         vm.onSaveAndContinue()
         runCurrent()
     }
+
+    // ---- AND-350: conditional logic + validation ----
+
+    @Test
+    fun answerChange_recomputesVisibility_synchronously() = runTest {
+        val repo = FakeRepo()
+        val vm = vm(repo)
+        runCurrent()
+        vm.setSchemaFields(branchingFields())
+        runCurrent()
+
+        // Controller not "yes": the dependent is hidden.
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("no"))
+        runCurrent()
+        var active = vm.uiState.value as RespondentSessionUiState.Active
+        assertEquals(listOf("ctrl"), active.visibleQuestionIds)
+
+        // Controller "yes": the dependent becomes visible (cascade re-show).
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("yes"))
+        runCurrent()
+        active = vm.uiState.value as RespondentSessionUiState.Active
+        assertEquals(listOf("ctrl", "dep"), active.visibleQuestionIds)
+    }
+
+    @Test
+    fun validateBody_excludesHiddenAnswers() = runTest {
+        val repo = FakeRepo()
+        val vm = vm(repo)
+        vm.debounceMillis = 100
+        runCurrent()
+        vm.setSchemaFields(branchingFields())
+        runCurrent()
+
+        // Answer the hidden dependent first, then leave the controller hiding it.
+        vm.onAnswerChanged("dep", AnswerValue.Text("secret"))
+        runCurrent()
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("no"))
+        advanceTimeBy(200)
+        runCurrent()
+
+        // The debounced server validate ran with the VISIBLE-only body: 'dep' is excluded.
+        val body = repo.lastValidateAnswers
+        assertTrue(body != null && !body.containsKey("dep"))
+        assertTrue(body!!.containsKey("ctrl"))
+    }
+
+    @Test
+    fun debouncedServerValidate_firesAfterEdit() = runTest {
+        val repo = FakeRepo()
+        val vm = vm(repo)
+        vm.debounceMillis = 100
+        runCurrent()
+        vm.setSchemaFields(branchingFields())
+        runCurrent()
+
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("yes"))
+        runCurrent()
+        assertEquals(0, repo.validateCalls)
+        advanceTimeBy(200)
+        runCurrent()
+        assertTrue(repo.validateCalls >= 1)
+    }
+
+    @Test
+    fun submitGate_followsServerCanSubmit_notLocal() = runTest {
+        val repo = FakeRepo()
+        // The server says can_submit=false even though local validation would pass.
+        repo.validateResult =
+            ApiResult.Success(SessionValidation(isValid = false, canSubmit = false, hasBlockingFormError = false, fieldErrors = emptyMap()))
+        val vm = vm(repo)
+        vm.debounceMillis = 100
+        runCurrent()
+        vm.setSchemaFields(branchingFields())
+        runCurrent()
+
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("yes"))
+        runCurrent()
+        // Immediately after a local edit, canSubmit is conservatively false (no local-only enable).
+        assertEquals(false, (vm.uiState.value as RespondentSessionUiState.Active).canSubmit)
+
+        advanceTimeBy(200)
+        runCurrent()
+        // Even after the server validate, canSubmit stays false (server verdict governs).
+        assertEquals(false, (vm.uiState.value as RespondentSessionUiState.Active).canSubmit)
+    }
+
+    @Test
+    fun validateFailure_keepsSubmitDisabled_andShowsRetryNotice() = runTest {
+        val repo = FakeRepo()
+        repo.validateResult = ApiResult.NetworkError(java.io.IOException("offline"))
+        val vm = vm(repo)
+        vm.debounceMillis = 100
+        runCurrent()
+        vm.setSchemaFields(branchingFields())
+        runCurrent()
+
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("yes"))
+        advanceTimeBy(200)
+        runCurrent()
+
+        val active = vm.uiState.value as RespondentSessionUiState.Active
+        assertEquals(false, active.canSubmit)
+        assertTrue(active.serverConfirmFailed)
+
+        // Retry: a now-successful validate clears the notice.
+        repo.validateResult =
+            ApiResult.Success(SessionValidation(true, true, false, emptyMap()))
+        vm.onRetryValidate()
+        runCurrent()
+        val retried = vm.uiState.value as RespondentSessionUiState.Active
+        assertEquals(false, retried.serverConfirmFailed)
+        assertEquals(true, retried.canSubmit)
+    }
+
+    @Test
+    fun formBanner_surfacesGroupAndFormKeys() = runTest {
+        val repo = FakeRepo()
+        repo.validateResult = ApiResult.Success(
+            SessionValidation(
+                isValid = false,
+                canSubmit = false,
+                hasBlockingFormError = true,
+                fieldErrors = emptyMap(),
+                serverErrors = mapOf(
+                    "group:g1" to listOf(
+                        com.testlogon.android.core.model.questionnaire.ValidationIssue("x", "Group issue"),
+                    ),
+                ),
+            ),
+        )
+        val vm = vm(repo)
+        vm.debounceMillis = 100
+        runCurrent()
+        vm.setSchemaFields(branchingFields())
+        runCurrent()
+
+        vm.onAnswerChanged("ctrl", AnswerValue.Text("yes"))
+        advanceTimeBy(200)
+        runCurrent()
+
+        val active = vm.uiState.value as RespondentSessionUiState.Active
+        assertTrue(active.formBannerIssues.contains("Group issue"))
+    }
+
+    private fun branchingFields(): List<QuestionnaireField> = listOf(
+        QuestionnaireField.Text("ctrl", "s", "ctrl", required = false),
+        QuestionnaireField.Text(
+            "dep", "s", "dep", required = false,
+            configJson = mapOf(
+                "visible_when" to mapOf("question_id" to "ctrl", "op" to "eq", "value" to "yes"),
+            ),
+        ),
+    )
 
     private companion object {
         const val SLUG = "my-survey"

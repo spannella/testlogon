@@ -6,7 +6,12 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.questionnaire.AnswerValue
+import com.testlogon.android.core.model.questionnaire.QuestionnaireField
 import com.testlogon.android.core.model.questionnaire.RespondentSession
+import com.testlogon.android.feature.questionnaire.validation.ClientValidator
+import com.testlogon.android.feature.questionnaire.validation.IssueReconciler
+import com.testlogon.android.feature.questionnaire.validation.ShadowAnswers
+import com.testlogon.android.feature.questionnaire.validation.VisibilityEvaluator
 import com.testlogon.android.feature.questionnaire.respond.data.RespondentSessionRepository
 import com.testlogon.android.feature.questionnaire.respond.data.SessionStartOutcome
 import com.testlogon.android.feature.questionnaire.respond.data.SessionValidation
@@ -67,7 +72,25 @@ class RespondentSessionViewModel @Inject constructor(
      */
     var fieldOrder: List<String> = emptyList()
 
+    /**
+     * AND-350 - the ordered schema fields (set by the screen via [setSchemaFields]) backing the
+     * visibility cascade + local inline validation. Empty until the schema is known (the VM then treats
+     * all answers as visible - fail open). PURE evaluation only; no Android types are touched here.
+     */
+    private var schemaFields: List<QuestionnaireField> = emptyList()
+
     private var syncJob: Job? = null
+
+    /** AND-350 - cancellable debounced SERVER validate job (final_submit=false) after material edits. */
+    private var validateJob: Job? = null
+
+    /**
+     * AND-350 - the raw server error map (incl. `group:` / `form:` keys) from the LAST server validate /
+     * submit, retained so a subsequent local recompute can re-reconcile inline-vs-banner + de-dup by code
+     * against fresh local issues. Cleared when a new verdict supersedes it.
+     */
+    private var lastServerErrors: Map<String, List<com.testlogon.android.core.model.questionnaire.ValidationIssue>> =
+        emptyMap()
 
     /** AND-349 - guards against a double-tap on Submit while one is in flight. */
     private var submitting = false
@@ -115,23 +138,93 @@ class RespondentSessionViewModel @Inject constructor(
     }
 
     /**
-     * FR-5 - the user changed an answer: update in-memory immediately, persist the dirty draft
-     * immediately (never blocking on network), mark SYNC_PENDING, and (re)arm the debounced sync.
+     * AND-350 - the screen hands the VM the ordered schema fields once known so it can compute the
+     * visibility cascade + run local inline validation. Idempotent; recomputes the visible set against
+     * the current answers. PURE; no Android types.
+     */
+    fun setSchemaFields(fields: List<QuestionnaireField>) {
+        if (schemaFields === fields || schemaFields == fields) return
+        schemaFields = fields
+        fieldOrder = fields.map { it.questionId }
+        val current = _uiState.value as? RespondentSessionUiState.Active ?: return
+        _uiState.value = recompute(current, current.answers)
+    }
+
+    /**
+     * FR-5 + AND-350 FR-2/3/4 - the user changed an answer: update the FULL working map (the shadow,
+     * retaining hidden values), recompute the VISIBLE set SYNCHRONOUSLY (so the next recomposition sees
+     * the cascade), run LOCAL inline validation for fast feedback, persist the dirty draft immediately
+     * (never blocking on network), and (re)arm BOTH the debounced save AND the debounced SERVER validate.
+     * The server remains authoritative: Submit is NEVER enabled here on local validation alone.
      */
     fun onAnswerChanged(questionId: String, value: AnswerValue) {
         val current = _uiState.value as? RespondentSessionUiState.Active ?: return
         val newAnswers = current.answers + (questionId to value)
-        // Clear any stale field error for this question now that it has been edited.
-        val newErrors = current.fieldErrors - questionId
-        _uiState.value = current.copy(
-            answers = newAnswers,
-            fieldErrors = newErrors,
+        // AND-350: recompute visibility + local inline issues against the new answers. A material edit
+        // invalidates the prior server verdict, so canSubmit is conservatively cleared until the next
+        // server validate confirms it (FR-6 - never submit on local alone).
+        val recomputed = recompute(current, newAnswers).copy(
             syncState = SyncState.SYNC_PENDING,
+            canSubmit = false,
         )
+        _uiState.value = recomputed
         viewModelScope.launch {
+            // Persist the FULL map for durability (shadow retained across reload); the wire body still
+            // excludes hidden questions (see the visible-only subset in the validate / submit calls).
             repository.saveLocal(current.session, newAnswers)
         }
         scheduleSync()
+        scheduleValidate()
+    }
+
+    /**
+     * AND-350 - recomputes the VISIBLE field set (transitive cascade, fail-open) for [answers], runs the
+     * LOCAL ClientValidator on the visible fields, reconciles those local issues with any retained server
+     * errors (split inline vs form banner, de-duped by code, server wins), and returns the updated state.
+     * PURE apart from reading [schemaFields]. When the schema is not yet known every answer is visible.
+     */
+    private fun recompute(
+        current: RespondentSessionUiState.Active,
+        answers: Map<String, AnswerValue>,
+    ): RespondentSessionUiState.Active {
+        if (schemaFields.isEmpty()) {
+            return current.copy(answers = answers)
+        }
+        val visibility = VisibilityEvaluator.evaluate(schemaFields, answers)
+        val withAnswers = current.copy(answers = answers)
+        val reconciled = reconcileFor(withAnswers, lastServerErrors)
+        return withAnswers.copy(
+            visibleQuestionIds = visibility.visibleQuestionIds,
+            fieldErrors = reconciled.fieldErrors,
+            formBannerIssues = reconciled.formBannerIssues,
+        )
+    }
+
+    /** The visible-only answer body for validate / submit (hidden questions excluded, FR-2). */
+    private fun visibleBody(state: RespondentSessionUiState.Active): Map<String, AnswerValue> {
+        if (schemaFields.isEmpty()) return state.answers
+        val visibleIds = VisibilityEvaluator.evaluate(schemaFields, state.answers).visibleIdSet
+        return ShadowAnswers.visibleAnswers(state.answers, visibleIds)
+    }
+
+    /**
+     * AND-350 - reconciles the latest LOCAL inline issues (visible fields only) with [serverErrors]
+     * (split inline vs `group:` / `form:` banner, de-duped by code, server wins) for [active]. Returns
+     * the inline per-field map (restricted to visible questions) + the form-level banner messages. When
+     * the schema is unknown there are no local issues and visibility is the answered keys (fail open).
+     */
+    private fun reconcileFor(
+        active: RespondentSessionUiState.Active,
+        serverErrors: Map<String, List<com.testlogon.android.core.model.questionnaire.ValidationIssue>>,
+    ): IssueReconciler.Reconciled {
+        val (visibleIds, localIssues) = if (schemaFields.isEmpty()) {
+            active.answers.keys.toSet() to emptyMap<String, List<ClientValidator.LocalIssue>>()
+        } else {
+            val v = VisibilityEvaluator.evaluate(schemaFields, active.answers)
+            v.visibleIdSet to ClientValidator.validate(v.visibleFields, active.answers)
+        }
+        val reconciled = IssueReconciler.reconcile(localIssues, serverErrors)
+        return reconciled.copy(fieldErrors = reconciled.fieldErrors.filterKeys { it in visibleIds })
     }
 
     /** FR-3 - explicit save: cancel the debounce and flush immediately. */
@@ -148,10 +241,13 @@ class RespondentSessionViewModel @Inject constructor(
     fun onSaveAndContinue() {
         if (_uiState.value !is RespondentSessionUiState.Active) return
         syncJob?.cancel()
+        val current = _uiState.value as? RespondentSessionUiState.Active
         viewModelScope.launch {
             // Flush the latest edits first so validate sees the saved answers (best-effort).
             flushOnce()
-            applyValidation(repository.validate(slug, finalSubmit = false))
+            // AND-350: validate the VISIBLE-only body (hidden excluded, FR-2).
+            val body = current?.let { visibleBody(it) }
+            applyValidation(repository.validate(slug, finalSubmit = false, answersOverride = body))
         }
     }
 
@@ -188,21 +284,32 @@ class RespondentSessionViewModel @Inject constructor(
         if (!current.canSubmit || current.session.sessionId.isBlank()) return
         submitting = true
         syncJob?.cancel()
+        validateJob?.cancel()
         _uiState.value = current.copy(submitting = true)
         viewModelScope.launch {
             try {
-                when (val outcome = repository.submit(slug, fieldOrder)) {
+                // AND-350: submit the VISIBLE-only body (hidden questions excluded, FR-2).
+                when (val outcome = repository.submit(slug, fieldOrder, answersOverride = visibleBody(current))) {
                     is SubmitOutcome.Submitted -> _uiState.value = RespondentSessionUiState.Submitted(
                         sessionId = outcome.sessionId,
                         sessionStatus = outcome.sessionStatus,
                     )
                     is SubmitOutcome.ValidationFailed -> {
                         val active = _uiState.value as? RespondentSessionUiState.Active ?: return@launch
+                        // AND-350: retain the raw server errors and split inline vs form-level banner
+                        // (de-duped by code against local issues). canSubmit comes from the SERVER only.
+                        lastServerErrors = outcome.validation.serverErrors
+                        val reconciled = reconcileFor(active, lastServerErrors)
+                        // Fall back to the pre-flattened map if reconciliation produced nothing inline
+                        // (e.g. schema unknown) so AND-349 behaviour is preserved.
+                        val inline = reconciled.fieldErrors.ifEmpty { outcome.validation.fieldErrors }
                         _uiState.value = active.copy(
                             submitting = false,
                             canSubmit = outcome.validation.canSubmit,
-                            fieldErrors = outcome.validation.fieldErrors,
+                            fieldErrors = inline,
+                            formBannerIssues = reconciled.formBannerIssues,
                             firstErrorQuestionId = outcome.validation.firstErrorQuestionId,
+                            serverConfirmFailed = false,
                         )
                     }
                     is SubmitOutcome.Failed -> {
@@ -286,6 +393,68 @@ class RespondentSessionViewModel @Inject constructor(
         }
     }
 
+    /**
+     * AND-350 FR-6 - arms a single debounced SERVER validate (final_submit=false), cancelling any prior
+     * pending one. The server is authoritative for the submit gate; this confirms can_submit after a
+     * material edit. Reuses the AND-348 debounce window.
+     */
+    private fun scheduleValidate() {
+        validateJob?.cancel()
+        validateJob = viewModelScope.launch {
+            delay(debounceMillis)
+            runValidate()
+        }
+    }
+
+    /**
+     * AND-350 - performs one server validate with the VISIBLE-only answer body (hidden excluded, FR-2),
+     * then folds the verdict into the state. On success: retain the raw server errors, reconcile with the
+     * latest local issues, and set canSubmit from the SERVER only. On failure (FR-8): keep Submit
+     * DISABLED, surface a non-blocking "couldn't reach server" flag, and fall back to local inline
+     * feedback (no clobber of answers).
+     */
+    private fun runValidate() {
+        viewModelScope.launch {
+            val current = _uiState.value as? RespondentSessionUiState.Active ?: return@launch
+            applyServerValidation(repository.validate(slug, finalSubmit = false, answersOverride = visibleBody(current)))
+        }
+    }
+
+    /**
+     * AND-350 - merges a server validate result into the Active state. The submit gate is set SOLELY from
+     * the server's can_submit (never local). Field + banner messages come from reconciling the retained
+     * server errors with the latest local issues. A failure -> serverConfirmFailed + canSubmit=false.
+     */
+    private fun applyServerValidation(result: ApiResult<SessionValidation>) {
+        val current = _uiState.value as? RespondentSessionUiState.Active ?: return
+        when (result) {
+            is ApiResult.Success -> {
+                lastServerErrors = result.data.serverErrors
+                val reconciled = reconcileFor(current, lastServerErrors)
+                // Backward-compat: when the raw serverErrors map is absent (older / simpler validate
+                // responses) fall back to the pre-flattened per-field map so inline errors still show.
+                val inline = reconciled.fieldErrors.ifEmpty { result.data.fieldErrors }
+                _uiState.value = current.copy(
+                    fieldErrors = inline,
+                    formBannerIssues = reconciled.formBannerIssues,
+                    canSubmit = result.data.canSubmit,
+                    serverConfirmFailed = false,
+                )
+            }
+            // FR-8: cannot confirm with the server -> keep Submit disabled + a non-blocking notice; the
+            // local inline feedback already shown stays. Answers are untouched.
+            is ApiResult.Failure, is ApiResult.NetworkError ->
+                _uiState.value = current.copy(canSubmit = false, serverConfirmFailed = true)
+        }
+    }
+
+    /** AND-350 FR-8 - manual retry of the server validate (e.g. after the offline notice). */
+    fun onRetryValidate() {
+        if (_uiState.value !is RespondentSessionUiState.Active) return
+        validateJob?.cancel()
+        runValidate()
+    }
+
     /** Performs one sync, updating [SyncState] (SAVING -> SYNCED / SYNC_ERROR). */
     private fun runSync() {
         viewModelScope.launch {
@@ -308,17 +477,10 @@ class RespondentSessionViewModel @Inject constructor(
     }
 
     private fun applyValidation(result: ApiResult<SessionValidation>) {
-        val current = _uiState.value as? RespondentSessionUiState.Active ?: return
-        when (result) {
-            is ApiResult.Success -> _uiState.value = current.copy(
-                fieldErrors = result.data.fieldErrors,
-                canSubmit = result.data.canSubmit,
-            )
-            // A failed validate does not clobber the working answers; the sync indicator already
-            // reflects any save failure. canSubmit is conservatively cleared.
-            is ApiResult.Failure, is ApiResult.NetworkError ->
-                _uiState.value = current.copy(canSubmit = false)
-        }
+        // AND-350: route the verdict through the shared server-validation handler so the inline / banner
+        // split + de-dup by code + server-only submit gate are applied consistently with the debounced
+        // validate path (and serverConfirmFailed is set on failure - FR-8).
+        applyServerValidation(result)
     }
 
     private fun setSync(state: SyncState) {
@@ -342,6 +504,7 @@ class RespondentSessionViewModel @Inject constructor(
 
     override fun onCleared() {
         syncJob?.cancel()
+        validateJob?.cancel()
     }
 
     companion object {

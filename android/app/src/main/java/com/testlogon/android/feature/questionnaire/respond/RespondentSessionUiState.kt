@@ -20,6 +20,18 @@ sealed interface RespondentSessionUiState {
      * from the last validate / a rejected submit. [canSubmit] is the server's verdict. [submitting]
      * (AND-349) disables the form + blocks double-tap while a submit is in flight. [firstErrorQuestionId]
      * (AND-349) is the first errored field IN SCHEMA ORDER for scroll-to-first after a rejected submit.
+     *
+     * AND-350 additions (all additive, defaulted so existing constructions still compile):
+     * - [answers] is the FULL working map (the shadow): it RETAINS hidden questions' values so toggling
+     *   a controlling field back ON restores the prior answer (FR-2). Hidden values are EXCLUDED from the
+     *   answers sent to validate / submit (the VM passes the visible-only subset).
+     * - [visibleQuestionIds] is the ordered set of currently-VISIBLE questions; the renderer (AND-347)
+     *   shows ONLY these. Empty means "no visibility computed yet" - callers fall back to all fields.
+     * - [formBannerIssues] are cross-field / form-level messages (server `group:` / `form:` keys) for the
+     *   FORM-LEVEL banner; [fieldErrors] holds the inline per-field messages (bare questionId).
+     * - [serverConfirmFailed] is true when the last server validate could not be reached (timeout /
+     *   offline / 5xx): the VM falls back to LOCAL inline feedback, keeps Submit DISABLED, and the screen
+     *   shows a non-blocking "couldn't reach the server to confirm" message + retry (FR-8).
      */
     data class Active(
         val session: RespondentSession,
@@ -29,6 +41,9 @@ sealed interface RespondentSessionUiState {
         val canSubmit: Boolean = false,
         val submitting: Boolean = false,
         val firstErrorQuestionId: String? = null,
+        val visibleQuestionIds: List<String> = emptyList(),
+        val formBannerIssues: List<String> = emptyList(),
+        val serverConfirmFailed: Boolean = false,
     ) : RespondentSessionUiState
 
     /**

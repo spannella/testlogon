@@ -96,6 +96,8 @@ fun SessionSubmitMapping.toSubmitOutcome(): SubmitOutcome {
                 hasBlockingFormError = result.has_blocking_form_error,
                 fieldErrors = fieldErrors,
                 firstErrorQuestionId = firstErrorQuestionId,
+                // AND-350: carry the raw wire errors (incl. group:/form: keys) for the VM's reconciler.
+                serverErrors = result.errors,
             ),
         )
     }

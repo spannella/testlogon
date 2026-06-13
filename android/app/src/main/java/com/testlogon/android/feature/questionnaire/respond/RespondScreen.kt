@@ -61,6 +61,12 @@ object RespondTestTags {
     const val SESSION_ID = "respond_session_id"
     const val DOWNLOAD_PDF = "respond_download_pdf"
     const val ERROR_RETRY = "respond_error_retry"
+
+    /** AND-350 - the form-level banner hosting cross-field / form-level (group:/form:) issues. */
+    const val FORM_BANNER = "respond_form_banner"
+
+    /** AND-350 - the non-blocking "couldn't reach server to confirm" notice + retry (FR-8). */
+    const val SERVER_CONFIRM_NOTICE = "respond_server_confirm_notice"
 }
 
 /**
@@ -92,6 +98,9 @@ fun RespondRoute(
     }
     LaunchedEffect(viewModel, fields) {
         viewModel.fieldOrder = fields.map { it.questionId }
+        // AND-350: hand the VM the ordered schema fields so it can compute the visibility cascade +
+        // run local inline validation (this also sets fieldOrder).
+        viewModel.setSchemaFields(fields)
     }
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
@@ -110,6 +119,7 @@ fun RespondRoute(
         onRetry = viewModel::onReload,
         onReloadSchema = viewModel::onReloadSchema,
         onFirstErrorConsumed = viewModel::onFirstErrorConsumed,
+        onRetryValidate = viewModel::onRetryValidate,
         onBack = onBack,
         modifier = modifier,
     )
@@ -133,6 +143,7 @@ fun RespondScreen(
     onFirstErrorConsumed: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onRetryValidate: () -> Unit = {},
 ) {
     val backDescription = stringResource(R.string.respond_back)
     Scaffold(
@@ -166,6 +177,7 @@ fun RespondScreen(
                     onAnswerChanged = onAnswerChanged,
                     onSubmit = onSubmit,
                     onFirstErrorConsumed = onFirstErrorConsumed,
+                    onRetryValidate = onRetryValidate,
                 )
                 is RespondentSessionUiState.Submitted -> SubmittedBody(state, onDownloadPdf)
             }
@@ -180,12 +192,24 @@ private fun ActiveBody(
     onAnswerChanged: (String, AnswerValue) -> Unit,
     onSubmit: () -> Unit,
     onFirstErrorConsumed: () -> Unit,
+    onRetryValidate: () -> Unit,
 ) {
+    // AND-350: render ONLY the currently-visible fields (the VM computed the cascade). Empty
+    // visibleQuestionIds means the VM has not computed visibility yet (schema unknown) - fall back to
+    // showing all fields (fail open: never hide content the client cannot place).
+    val visibleFields = remember(fields, state.visibleQuestionIds) {
+        if (state.visibleQuestionIds.isEmpty()) {
+            fields
+        } else {
+            val visible = state.visibleQuestionIds.toSet()
+            fields.filter { it.questionId in visible }
+        }
+    }
     val listState = rememberLazyListState()
     // AND-349: scroll the first errored field into view after a rejected submit, then clear the marker.
     LaunchedEffect(state.firstErrorQuestionId) {
         val target = state.firstErrorQuestionId ?: return@LaunchedEffect
-        val index = fields.indexOfFirst { it.questionId == target }
+        val index = visibleFields.indexOfFirst { it.questionId == target }
         if (index >= 0) {
             listState.animateScrollToItem(index)
         }
@@ -201,12 +225,20 @@ private fun ActiveBody(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (fields.isEmpty()) {
+            // AND-350: form-level banner for cross-field / form-level (group:/form:) issues.
+            if (state.formBannerIssues.isNotEmpty()) {
+                item { FormBanner(state.formBannerIssues) }
+            }
+            // AND-350 FR-8: non-blocking notice when the server could not confirm the verdict.
+            if (state.serverConfirmFailed) {
+                item { ServerConfirmNotice(onRetryValidate) }
+            }
+            if (visibleFields.isEmpty()) {
                 item { Text(stringResource(R.string.respond_empty_form)) }
             } else {
                 item {
                     SectionFieldList(
-                        fields = fields,
+                        fields = visibleFields,
                         answers = state.answers,
                         enabled = !state.submitting,
                         errors = state.fieldErrors,
@@ -330,6 +362,49 @@ private fun ErrorBody(
             modifier = Modifier.testTag(RespondTestTags.ERROR_RETRY),
         ) {
             Text(stringResource(R.string.respond_error_retry))
+        }
+    }
+}
+
+/**
+ * AND-350 - the form-level banner: cross-field / form-level validation issues (server `group:` / `form:`
+ * keys) that do not belong to any single field. Always SERVER-sourced (the client sends no group/form
+ * rules); shown above the fields so the respondent sees what is blocking submit.
+ */
+@Composable
+private fun FormBanner(issues: List<String>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(RespondTestTags.FORM_BANNER),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.respond_form_errors_title),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        issues.forEach { message ->
+            Text(text = message, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/**
+ * AND-350 FR-8 - a non-blocking notice shown when the server could not be reached to CONFIRM the
+ * submit verdict. Submit stays disabled (the server is authoritative); the respondent can retry.
+ */
+@Composable
+private fun ServerConfirmNotice(onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(RespondTestTags.SERVER_CONFIRM_NOTICE),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(text = stringResource(R.string.respond_validate_offline))
+        OutlinedButton(onClick = onRetry) {
+            Text(stringResource(R.string.respond_validate_retry))
         }
     }
 }
