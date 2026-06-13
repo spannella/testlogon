@@ -213,6 +213,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         residencyDestination(navController)
         // AND-327: KYC proof-of-funds (summary + submissions + submit with an optional document key; real REST).
         proofOfFundsDestination(navController)
+        // AND-328: KYC screening status (READ-ONLY sanctions / PEP / adverse-media aggregated into one status).
+        screeningDestination(navController)
     }
 }
 

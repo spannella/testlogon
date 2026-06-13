@@ -2478,4 +2478,35 @@
     <string name="pof_status_needs_more_info">More information needed</string>
     <string name="pof_status_expired">Expired</string>
     <string name="pof_retry">Try again</string>
+    <!-- AND-328 KYC screening (READ-ONLY sanctions / PEP / adverse-media status) -->
+    <string name="screening_title">Screening</string>
+    <string name="screening_breakdown_heading">Per-check results</string>
+    <string name="screening_retry">Try again</string>
+    <string name="screening_stale">Showing saved status</string>
+    <string name="screening_stale_with_time">Showing saved status — last updated %1$s</string>
+    <string name="screening_status_clear">Clear</string>
+    <string name="screening_status_review">Under review</string>
+    <string name="screening_status_hit">Match found</string>
+    <string name="screening_status_not_started">Not started</string>
+    <string name="screening_status_unknown">Status unavailable</string>
+    <string name="screening_desc_clear">No sanctions, PEP, or adverse-media matches were found.</string>
+    <string name="screening_desc_review">One or more checks need a closer look.</string>
+    <string name="screening_desc_hit">A confirmed match was found on at least one check.</string>
+    <string name="screening_desc_not_started">Screening has not run yet for your case.</string>
+    <string name="screening_desc_unknown">We could not determine your screening status.</string>
+    <string name="screening_guidance_clear">No further action is needed.</string>
+    <string name="screening_guidance_review">Our team is reviewing the results; no action is needed from you yet.</string>
+    <string name="screening_guidance_hit">Our compliance team will contact you with next steps.</string>
+    <string name="screening_guidance_not_started">Complete your verification to begin screening.</string>
+    <string name="screening_guidance_unknown">Pull to refresh, or try again later.</string>
+    <string name="screening_type_sanctions_ofac">OFAC sanctions</string>
+    <string name="screening_type_sanctions_eu">EU sanctions</string>
+    <string name="screening_type_sanctions_un">UN sanctions</string>
+    <string name="screening_type_pep_check">Politically exposed person</string>
+    <string name="screening_type_adverse_media">Adverse media</string>
+    <string name="screening_type_unknown">Other check</string>
+    <string name="screening_result_clear">Clear</string>
+    <string name="screening_result_potential">Potential match</string>
+    <string name="screening_result_confirmed">Confirmed match</string>
+    <string name="screening_result_unknown">Unknown</string>
 </resources>

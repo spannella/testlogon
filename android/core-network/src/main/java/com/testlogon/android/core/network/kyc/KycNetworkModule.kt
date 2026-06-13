@@ -37,6 +37,9 @@ import javax.inject.Singleton
  *
  * AND-327 - also provides [KycProofOfFundsApi] (the `ui/kyc/proof-of-funds` summary + submissions + submit
  * control plane) from the same shared Retrofit.
+ *
+ * AND-328 - also provides [KycScreeningApi] (the READ-ONLY `ui/kyc/screening/cases/{case_id}` sanctions / PEP
+ * / adverse-media results GET) from the same shared Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -80,4 +83,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycProofOfFundsApi(retrofit: Retrofit): KycProofOfFundsApi =
         retrofit.create(KycProofOfFundsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycScreeningApi(retrofit: Retrofit): KycScreeningApi =
+        retrofit.create(KycScreeningApi::class.java)
 }
