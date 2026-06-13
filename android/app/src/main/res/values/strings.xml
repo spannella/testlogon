@@ -2692,4 +2692,18 @@
     <string name="document_title">Document</string>
     <string name="document_page_label">Page %1$d of %2$d</string>
     <string name="document_retry">Try again</string>
+    <!-- AND-342 - signature capture + placement -->
+    <string name="sigpad_title">Your signature</string>
+    <string name="sigpad_mode_draw">Draw</string>
+    <string name="sigpad_mode_type">Type</string>
+    <string name="sigpad_clear">Clear</string>
+    <string name="sigpad_undo">Undo</string>
+    <string name="sigpad_confirm">Use this signature</string>
+    <string name="sigpad_use_saved">Use saved signature</string>
+    <string name="sigpad_typed_label">Full name</string>
+    <string name="sigpad_typed_preview">Your name</string>
+    <string name="signing_progress">%1$d of %2$d required complete</string>
+    <string name="signing_continue">Continue</string>
+    <string name="signing_field_tap_cd">%1$s field, tap to fill</string>
+    <string name="signing_field_satisfied_cd">%1$s field filled, tap to clear</string>
 </resources>

@@ -9,6 +9,8 @@ import androidx.navigation.navArgument
 import com.testlogon.android.feature.signing.PacketDetailRoute
 import com.testlogon.android.feature.signing.PacketDetailViewModel
 import com.testlogon.android.feature.signing.SigningEntryRoute
+import com.testlogon.android.feature.signing.capture.SigningRoute
+import com.testlogon.android.feature.signing.capture.SigningViewModel
 import com.testlogon.android.feature.signing.document.DocumentViewerRoute
 import com.testlogon.android.feature.signing.document.DocumentViewerViewModel
 
@@ -42,6 +44,19 @@ data object SigningDocumentDest {
     fun build(packetId: String): String = "signing/packet/${Uri.encode(packetId)}/document"
 }
 
+/**
+ * AND-342 - the signature CAPTURE + PLACEMENT destination. `packetId` + `documentId` are required path
+ * args; the surface overlays signature fields on the AND-341 PDF viewer and builds a validated draft. NO
+ * network submit (AND-343).
+ */
+data object SigningCaptureDest {
+    // A distinct `capture/` prefix avoids any segment-count ambiguity with `signing/packet/{packetId}`.
+    const val ROUTE = "signing/capture/{packetId}/{documentId}"
+
+    fun build(packetId: String, documentId: String): String =
+        "signing/capture/${Uri.encode(packetId)}/${Uri.encode(documentId)}"
+}
+
 /** AND-340 - registers the Signing entry + packet-detail screens in the authenticated graph. */
 fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
     composable(SigningEntryDest.ROUTE) {
@@ -70,8 +85,13 @@ fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
                     navController.navigate(SigningDocumentDest.build(packetId))
                 }
             },
-            // The assigned-signer deep capture flow is a later ticket; no-op for now.
-            onSign = {},
+            // AND-342 - the assigned-signer deep flow opens the capture + placement surface. The PDF is
+            // streamed by packetId (AND-341), so documentId == packetId here.
+            onSign = {
+                if (packetId.isNotBlank()) {
+                    navController.navigate(SigningCaptureDest.build(packetId, packetId))
+                }
+            },
         )
     }
     composable(
@@ -84,8 +104,22 @@ fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
     ) {
         DocumentViewerRoute(
             onBack = { navController.popBackStack() },
-            // AND-342 will collect the per-page geometry to overlay signature fields; no-op for now.
+            // The AND-342 capture surface (SigningCaptureDest) overlays fields on its own viewer instance;
+            // this standalone viewer is read-only, so no overlay is collected here.
             onPageLayout = {},
+        )
+    }
+    composable(
+        route = SigningCaptureDest.ROUTE,
+        arguments = listOf(
+            navArgument(SigningViewModel.ARG_PACKET_ID) { type = NavType.StringType },
+            navArgument(SigningViewModel.ARG_DOCUMENT_ID) { type = NavType.StringType },
+        ),
+    ) {
+        SigningRoute(
+            onBack = { navController.popBackStack() },
+            // AND-343 will submit the validated draft; pop back to the detail for now.
+            onContinueToSubmit = { navController.popBackStack() },
         )
     }
 }
