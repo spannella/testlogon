@@ -2442,4 +2442,40 @@
     <string name="address_confidence">Confidence: %1$d</string>
     <string name="address_discrepancies_heading">Discrepancies</string>
     <string name="address_standardized_heading">Standardized address</string>
+
+    <!-- AND-327: KYC proof of funds. -->
+    <string name="pof_title">Proof of funds</string>
+    <string name="pof_summary_heading">Summary</string>
+    <string name="pof_summary_counts">%1$d submissions, %2$d verified</string>
+    <string name="pof_summary_verified_amount">Verified amount: %1$s</string>
+    <string name="pof_form_heading">New submission</string>
+    <string name="pof_source_label">Source of funds</string>
+    <string name="pof_source_unselected">Select a source</string>
+    <string name="pof_source_bank_statement">Bank statement</string>
+    <string name="pof_source_pay_stub">Pay stub</string>
+    <string name="pof_source_sale_of_asset">Sale of an asset</string>
+    <string name="pof_source_investment">Investment</string>
+    <string name="pof_source_business_income">Business income</string>
+    <string name="pof_source_inheritance">Inheritance</string>
+    <string name="pof_source_gift">Gift</string>
+    <string name="pof_source_savings">Savings</string>
+    <string name="pof_amount_label">Declared amount</string>
+    <string name="pof_currency_label">Currency</string>
+    <string name="pof_note_label">Note (optional)</string>
+    <string name="pof_document_heading">Supporting document</string>
+    <string name="pof_document_capture">Capture</string>
+    <string name="pof_document_choose">Choose file</string>
+    <string name="pof_document_attached">Document attached</string>
+    <string name="pof_document_thumbnail_cd">Attached document preview</string>
+    <string name="pof_submit">Submit</string>
+    <string name="pof_latest_heading">Latest submission</string>
+    <string name="pof_history_heading">Earlier submissions</string>
+    <string name="pof_reviewer_note">Reviewer note: %1$s</string>
+    <string name="pof_resubmit">Resubmit</string>
+    <string name="pof_status_pending">Pending review</string>
+    <string name="pof_status_verified">Verified</string>
+    <string name="pof_status_rejected">Rejected</string>
+    <string name="pof_status_needs_more_info">More information needed</string>
+    <string name="pof_status_expired">Expired</string>
+    <string name="pof_retry">Try again</string>
 </resources>

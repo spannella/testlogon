@@ -211,6 +211,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         eidvDestination(navController)
         // AND-326: KYC residency (proof-of-residency document upload + structured address verification; real REST).
         residencyDestination(navController)
+        // AND-327: KYC proof-of-funds (summary + submissions + submit with an optional document key; real REST).
+        proofOfFundsDestination(navController)
     }
 }
 

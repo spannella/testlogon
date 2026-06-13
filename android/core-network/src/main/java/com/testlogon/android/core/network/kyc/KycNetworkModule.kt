@@ -34,6 +34,9 @@ import javax.inject.Singleton
  * AND-326 - also provides [KycResidencyApi] (the `ui/kyc/residency` proof-of-residency document upload +
  * the `v1/kyc/address-verification` structured address-verification control plane) from the same shared
  * Retrofit.
+ *
+ * AND-327 - also provides [KycProofOfFundsApi] (the `ui/kyc/proof-of-funds` summary + submissions + submit
+ * control plane) from the same shared Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -72,4 +75,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycResidencyApi(retrofit: Retrofit): KycResidencyApi =
         retrofit.create(KycResidencyApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycProofOfFundsApi(retrofit: Retrofit): KycProofOfFundsApi =
+        retrofit.create(KycProofOfFundsApi::class.java)
 }
