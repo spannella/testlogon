@@ -37,6 +37,9 @@ object MoreRoutes {
     // AND-161/AND-162: agent-facing helpdesk queue. Screen self-gates via the 403 role signal.
     val HELPDESK_QUEUE: String get() = MessagingRoutes.HELPDESK_QUEUE
 
+    // AND-377: agent helpdesk dashboard (metrics + queue preview). Self-gates via the 403 role signal.
+    val HELPDESK_DASHBOARD: String get() = MessagingRoutes.HELPDESK_DASHBOARD
+
     // AND-088: alert preferences (email/SMS target management).
     val ALERT_PREFS: String get() = MainDest.SettingsAlerts.route
 
@@ -199,6 +202,7 @@ object MoreRoutes {
             CALL_HISTORY,
             BROADCASTS,
             HELPDESK_QUEUE,
+            HELPDESK_DASHBOARD,
             SESSIONS,
             MFA_DEVICES,
             NOTIFICATION_CENTER,

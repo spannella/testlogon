@@ -657,6 +657,7 @@
     <!-- More hub entries (AND-160 / AND-161) -->
     <string name="more_entry_mass_messages">Mass messages</string>
     <string name="more_entry_helpdesk_queue">Helpdesk queue</string>
+    <string name="more_entry_helpdesk_dashboard">Helpdesk dashboard</string>
 
     <!-- AND-295/296/297 — 1:1 calling -->
     <string name="more_entry_call_history">Call history</string>
@@ -797,6 +798,27 @@
     <string name="helpdesk_badge_paused">Paused</string>
     <string name="helpdesk_badge_closed">Closed</string>
     <string name="helpdesk_badge_unknown">—</string>
+
+    <!-- AND-377 — helpdesk agent dashboard -->
+    <string name="helpdesk_dashboard_title">Helpdesk</string>
+    <string name="helpdesk_dashboard_access_denied">You don\'t have access to the helpdesk dashboard.</string>
+    <string name="helpdesk_dashboard_empty">No helpdesk activity yet.</string>
+    <string name="helpdesk_dashboard_queue_section">Queue</string>
+    <string name="helpdesk_dashboard_view_full_queue">View full queue</string>
+    <string name="helpdesk_dashboard_metric_none">—</string>
+    <string name="helpdesk_dashboard_metric_open">Open</string>
+    <string name="helpdesk_dashboard_metric_unassigned">Unassigned</string>
+    <string name="helpdesk_dashboard_metric_assigned_me">Assigned to me</string>
+    <string name="helpdesk_dashboard_metric_sla">SLA at risk</string>
+    <string name="helpdesk_dashboard_metric_avg_first_response">Avg first response</string>
+    <string name="helpdesk_dashboard_metric_avg_resolution">Avg resolution</string>
+    <string name="helpdesk_dashboard_metric_resolved_me_today">Resolved by me today</string>
+    <string name="helpdesk_dashboard_delta_up">+%1$d</string>
+    <string name="helpdesk_dashboard_delta_down">-%1$d</string>
+    <string name="helpdesk_dashboard_card_cd">%1$s: %2$s</string>
+    <string name="helpdesk_dashboard_card_cd_with_delta">%1$s: %2$s, %3$s</string>
+    <string name="helpdesk_dashboard_stale">Showing cached data</string>
+    <string name="helpdesk_dashboard_stale_updated">Showing cached data · updated %1$s</string>
 
     <!-- AND-162 — helpdesk claim + reply -->
     <string name="helpdesk_detail_title">Helpdesk conversation</string>

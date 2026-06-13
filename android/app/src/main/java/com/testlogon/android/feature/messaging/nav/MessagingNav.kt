@@ -6,9 +6,11 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import androidx.navigation.navDeepLink
 import com.testlogon.android.feature.messaging.contacts.ContactsRoute
 import com.testlogon.android.feature.messaging.dm.StartDmRoute
 import com.testlogon.android.data.messaging.helpdesk.ClaimState
+import com.testlogon.android.feature.messaging.helpdesk.HelpdeskDashboardScreen
 import com.testlogon.android.feature.messaging.helpdesk.HelpdeskDetailRoute
 import com.testlogon.android.feature.messaging.helpdesk.HelpdeskDetailViewModel
 import com.testlogon.android.feature.messaging.helpdesk.HelpdeskQueueRoute
@@ -62,6 +64,9 @@ object MessagingRoutes {
 
     /** AND-161 — agent-facing helpdesk queue. */
     const val HELPDESK_QUEUE = "messaging/helpdesk/queue"
+
+    /** AND-377 — agent helpdesk dashboard (metrics grid + queue preview). Self-gates via queue 403. */
+    const val HELPDESK_DASHBOARD = "messaging/helpdesk/dashboard"
 
     /** AND-162 — helpdesk conversation detail (claim + reply). Carries the row's claim state. */
     const val ARG_CLAIM_STATE = HelpdeskDetailViewModel.ARG_CLAIM_STATE
@@ -220,6 +225,23 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
     // AND-160 — mass messages (broadcast campaigns). Self-gates on the mass-send capability.
     composable(MessagingRoutes.MASS_MESSAGES) {
         MassMessagesScreenRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-377 — helpdesk agent dashboard. Self-gates via the queue-403 probe. Deep-linkable.
+    composable(
+        route = MessagingRoutes.HELPDESK_DASHBOARD,
+        deepLinks = listOf(navDeepLink { uriPattern = "testlogon://helpdesk/dashboard" }),
+    ) {
+        HelpdeskDashboardScreen(
+            onOpenFullQueue = {
+                navController.navigate(MessagingRoutes.HELPDESK_QUEUE) { launchSingleTop = true }
+            },
+            onOpenConversation = { conversationId ->
+                // Preview rows carry only the id; the detail re-derives assignment from its own load.
+                navController.navigate(
+                    MessagingRoutes.helpdeskDetail(conversationId = conversationId, claimStateArg = ""),
+                ) { launchSingleTop = true }
+            },
+        )
     }
     // AND-161 — helpdesk queue. Row tap opens the AND-162 detail (claim + reply).
     composable(MessagingRoutes.HELPDESK_QUEUE) {

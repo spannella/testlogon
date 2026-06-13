@@ -102,6 +102,13 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.SUPPORT,
         ),
         MoreEntry(
+            id = "helpdesk_dashboard",
+            labelRes = R.string.more_entry_helpdesk_dashboard,
+            icon = Icons.Outlined.Insights,
+            route = MoreRoutes.HELPDESK_DASHBOARD,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
             id = "activity",
             labelRes = R.string.more_entry_activity,
             icon = Icons.Outlined.History,
