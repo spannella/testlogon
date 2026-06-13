@@ -4,6 +4,7 @@ import com.testlogon.android.MainDispatcherRule
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.helpdesk.HelpdeskMetrics
+import com.testlogon.android.core.testing.helpdesk.HelpdeskFixtures
 import com.testlogon.android.data.messaging.helpdesk.CachedMetrics
 import com.testlogon.android.data.messaging.helpdesk.ClaimState
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskDashboardData
@@ -26,16 +27,21 @@ class HelpdeskDashboardViewModelTest {
 
     private val repo = FakeHelpdeskMetricsRepository()
 
+    /**
+     * AND-381 — delegate to the shared [HelpdeskFixtures.metrics] (AC-11: helpdesk suites consume the
+     * core-testing fixtures, no duplicated metric builders). Defaults match the prior inline builder;
+     * callers still override per case.
+     */
     private fun metrics(
         open: Int = 5,
         unassigned: Int = 2,
         assignedToMe: Int = 1,
         sla: Int = 1,
-    ) = HelpdeskMetrics(
-        openCount = open,
-        unassignedCount = unassigned,
-        assignedToMeCount = assignedToMe,
-        slaAtRiskCount = sla,
+    ): HelpdeskMetrics = HelpdeskFixtures.metrics(
+        open = open,
+        unassigned = unassigned,
+        assignedToMe = assignedToMe,
+        sla = sla,
         generatedAtEpochSeconds = 1000L,
     )
 
