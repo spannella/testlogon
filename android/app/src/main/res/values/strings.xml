@@ -2921,4 +2921,28 @@
     <string name="collaboration_status_cancelled">Cancelled</string>
     <string name="collaboration_status_declined">Declined</string>
     <string name="collaboration_status_unknown">Unknown</string>
+
+    <!-- AND-360: delegate / manage-as-creator overlay (banner + delegate console demonstration). -->
+    <string name="delegation_banner_managing">Managing @%1$s</string>
+    <string name="delegation_banner_managing_unnamed">Managing a creator</string>
+    <string name="delegation_exit">Exit</string>
+    <string name="more_entry_delegate_console">Delegate console</string>
+    <string name="delegate_console_title">Delegate console</string>
+    <string name="delegate_console_back">Back</string>
+    <string name="delegate_console_not_delegate_title">Not managing a creator</string>
+    <string name="delegate_console_not_delegate_body">Enter manage-as-creator mode to act in delegated surfaces.</string>
+    <string name="delegate_console_feed_heading">Feed</string>
+    <string name="delegate_console_messages_heading">Conversations</string>
+    <string name="delegate_console_no_feed_permission">You don\'t have permission to view this creator\'s feed.</string>
+    <string name="delegate_console_no_chat_permission">You don\'t have permission to view this creator\'s messages.</string>
+    <string name="delegate_console_feed_empty">No posts yet.</string>
+    <string name="delegate_console_messages_empty">No conversations yet.</string>
+    <string name="delegate_console_compose_post_hint">Write a post…</string>
+    <string name="delegate_console_post_action">Post</string>
+    <string name="delegate_console_compose_message_hint">Send a message…</string>
+    <string name="delegate_console_send_action">Send</string>
+    <string name="delegate_console_post_pending">Pending approval</string>
+    <string name="delegate_console_load_failed">Couldn\'t load delegate data.</string>
+    <string name="delegate_console_action_failed">Couldn\'t complete that action.</string>
+    <string name="delegate_console_revoked">Your delegate access ended. You\'re acting as yourself again.</string>
 </resources>

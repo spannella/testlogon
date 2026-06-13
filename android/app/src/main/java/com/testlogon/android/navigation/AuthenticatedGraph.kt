@@ -245,6 +245,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-358: READ-ONLY collaborations (Paging-3 list -> detail with the two parties + status + the
         // revenue split over /ui/collaborations/*). Write actions are OUT OF SCOPE.
         collaborationsDestinations(navController)
+        // AND-360: delegate console (the focused manage-as-creator demonstration) - lists the managed
+        // creator's delegate feed posts + conversations and offers create-post / send-message gated by
+        // feed_post / chat_respond, with the persistent banner. Overlay-only; the mature feed / broadcast /
+        // messaging screens are untouched.
+        delegateConsoleDestination(navController)
     }
 }
 

@@ -160,6 +160,11 @@ object MoreRoutes {
     // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
     const val COLLABORATIONS = CollaborationsListDest.ROUTE
 
+    // AND-360: the delegate console (focused manage-as-creator demonstration). Self-gates on the managed-
+    // creator state (shows an enter prompt when not in delegate mode); renders the persistent banner + the
+    // permission-gated delegate feed / messaging affordances.
+    const val DELEGATE_CONSOLE = DelegateConsoleDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -217,6 +222,7 @@ object MoreRoutes {
             GROUPS,
             SYNDICATES,
             COLLABORATIONS,
+            DELEGATE_CONSOLE,
             SETTINGS,
             HELP,
             ABOUT,

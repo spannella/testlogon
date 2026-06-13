@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.Storefront
+import androidx.compose.material.icons.outlined.SupervisorAccount
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShoppingCart
@@ -362,6 +363,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_collaborations,
             icon = Icons.Outlined.Diversity3,
             route = MoreRoutes.COLLABORATIONS,
+            section = MoreSection.ACCOUNT,
+        ),
+        // AND-360: the delegate console (focused manage-as-creator demonstration).
+        MoreEntry(
+            id = "delegate_console",
+            labelRes = R.string.more_entry_delegate_console,
+            icon = Icons.Outlined.SupervisorAccount,
+            route = MoreRoutes.DELEGATE_CONSOLE,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
