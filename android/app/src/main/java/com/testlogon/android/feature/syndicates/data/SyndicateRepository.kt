@@ -4,6 +4,9 @@ import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.syndicates.LicensingContentType
+import com.testlogon.android.core.model.syndicates.OpenLicensingContent
+import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
@@ -11,6 +14,7 @@ import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.syndicates.SyndicateApi
+import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegisterIn
 import com.testlogon.android.data.auth.AuthStateStore
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
@@ -58,6 +62,23 @@ interface SyndicateRepository {
     /** A cold [PagingData] stream of the treasury ledger; re-collect to refresh. */
     fun treasuryLedgerPager(syndicateId: String): Flow<PagingData<TreasuryEntry>>
 
+    /**
+     * AND-357 - GET the syndicate's open-licensing content, mapped. NOT paginated (a single bounded {items}
+     * page), so this returns the full list in one [ApiResult].
+     */
+    suspend fun getOpenLicensingContent(syndicateId: String): ApiResult<List<OpenLicensingContent>>
+
+    /**
+     * AND-357 - register [contentId] of [contentType] for open licensing (a CSRF-protected mutation). On
+     * success returns the [RegistrationResult] receipt; the caller REFETCHES the list (does NOT optimistically
+     * prepend). A 422 surfaces as Failure (status=422) carrying the raw detail for per-field mapping.
+     */
+    suspend fun registerOpenLicensing(
+        syndicateId: String,
+        contentId: String,
+        contentType: LicensingContentType,
+    ): ApiResult<RegistrationResult>
+
     companion object {
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 6
@@ -98,6 +119,28 @@ class SyndicateRepositoryImpl @Inject constructor(
             config = pagingConfig(),
             pagingSourceFactory = { TreasuryLedgerPagingSource(api, syndicateId) },
         ).flow
+
+    override suspend fun getOpenLicensingContent(
+        syndicateId: String,
+    ): ApiResult<List<OpenLicensingContent>> = withContext(Dispatchers.IO) {
+        call { api.getOpenLicensingContent(syndicateId).items.map { it.toDomain() } }
+    }
+
+    override suspend fun registerOpenLicensing(
+        syndicateId: String,
+        contentId: String,
+        contentType: LicensingContentType,
+    ): ApiResult<RegistrationResult> = withContext(Dispatchers.IO) {
+        call {
+            api.registerOpenLicensing(
+                syndicateId = syndicateId,
+                body = SyndicateOpenLicensingRegisterIn(
+                    contentId = contentId,
+                    contentType = contentType.wire,
+                ),
+            ).toDomain()
+        }
+    }
 
     private fun pagingConfig() = PagingConfig(
         pageSize = SyndicateRepository.PAGE_SIZE,

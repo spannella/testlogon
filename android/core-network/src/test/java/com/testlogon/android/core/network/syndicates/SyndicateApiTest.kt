@@ -9,8 +9,10 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
@@ -142,5 +144,79 @@ class SyndicateApiTest {
         assertEquals(500, split.platformFeeBps)
         assertEquals(6000, split.weightsBps?.get("usr_a"))
         assertEquals(4000, split.weightsBps?.get("usr_b"))
+    }
+
+    // ---- AND-357: open-licensing ----
+
+    @Test
+    fun getOpenLicensingContent_decodesItemsEnvelope_andSubstitutesPath() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """{"items":[
+                     {"content_id":"vid_1","content_type":"video","creator_id":"usr_a",
+                      "exempt":true,"registered_at":1780000000},
+                     {"content_id":"clip_2","content_type":"clip"}
+                   ]}""",
+            ),
+        )
+
+        val response = api().getOpenLicensingContent("syn_1")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/syndicates/open-licensing/syn_1/content", recorded.requestUrl?.encodedPath)
+        assertEquals(2, response.items.size)
+        assertEquals("vid_1", response.items[0].contentId)
+        assertEquals("video", response.items[0].contentType)
+        assertEquals("usr_a", response.items[0].creatorId)
+        assertEquals(true, response.items[0].exempt)
+        assertEquals(1780000000L, response.items[0].registeredAt)
+        assertEquals("clip_2", response.items[1].contentId)
+    }
+
+    @Test
+    fun registerOpenLicensing_postsBody_toRegisterPath_andDecodesReceipt() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """{"content_id":"vid_1","syndicate_id":"syn_1","licenses_created":3}""",
+            ),
+        )
+
+        val receipt = api().registerOpenLicensing(
+            "syn_1",
+            SyndicateOpenLicensingRegisterIn(contentId = "vid_1", contentType = "video"),
+        )
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ui/syndicates/open-licensing/syn_1/register", recorded.requestUrl?.encodedPath)
+        val sentBody = recorded.body.readUtf8()
+        assertTrue(sentBody.contains("\"content_id\":\"vid_1\""))
+        assertTrue(sentBody.contains("\"content_type\":\"video\""))
+        assertEquals("vid_1", receipt.contentId)
+        assertEquals("syn_1", receipt.syndicateId)
+        assertEquals(3, receipt.licensesCreated)
+    }
+
+    @Test
+    fun registerOpenLicensing_422_surfacesAsHttpException() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """{"detail":[{"loc":["body","content_id"],"msg":"required","type":"value_error"}]}""",
+                code = 422,
+            ),
+        )
+
+        val error = runCatching {
+            api().registerOpenLicensing(
+                "syn_1",
+                SyndicateOpenLicensingRegisterIn(contentId = "", contentType = "video"),
+            )
+        }.exceptionOrNull()
+
+        val recorded = server.takeRequest()
+        assertEquals("/ui/syndicates/open-licensing/syn_1/register", recorded.requestUrl?.encodedPath)
+        assertTrue(error is HttpException)
+        assertEquals(422, (error as HttpException).code())
     }
 }

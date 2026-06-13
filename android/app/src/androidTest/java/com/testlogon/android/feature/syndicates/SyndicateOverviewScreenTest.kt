@@ -80,6 +80,7 @@ class SyndicateOverviewScreenTest {
                     feed = feedItems,
                     ledger = ledgerItems,
                     onBack = {},
+                    onOpenLicensing = {},
                     onRetry = {},
                     onRefresh = {},
                 )

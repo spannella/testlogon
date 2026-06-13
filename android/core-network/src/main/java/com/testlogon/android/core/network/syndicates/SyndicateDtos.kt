@@ -128,3 +128,51 @@ data class MemberEarningsOut(
     @Json(name = "currency") val currency: String? = null,
     @Json(name = "window_days") val windowDays: Int? = null,
 )
+
+// ---- AND-357: open-licensing sub-surface (extends AND-356, same DTO file) ----
+
+/**
+ * AND-357 - one open-licensing content row.
+ *
+ * WIRE: content_id + content_type are required; content_type is one of the fixed 6 values
+ * video|music|image|post|broadcast|clip (the typed enum + UNKNOWN fallback lives in core-model). exempt
+ * gates the "Exempt" vs "Auto-licensed" label (defaults false when the wire omits it); registered_at is an
+ * INTEGER epoch-SECONDS value (relative-time at the UI). There is NO SPDX type, NO open/claimed/expired
+ * status and NO registrant_sub / title / notes on this row.
+ */
+data class SyndicateOpenLicensingContentOut(
+    @Json(name = "content_id") val contentId: String,
+    @Json(name = "content_type") val contentType: String,
+    @Json(name = "creator_id") val creatorId: String? = null,
+    @Json(name = "exempt") val exempt: Boolean? = false,
+    @Json(name = "registered_at") val registeredAt: Long? = null,
+)
+
+/**
+ * AND-357 - the open-licensing content list envelope. NOT paginated: a single bounded page carried as
+ * {items}. There is NO cursor / page field (no Paging 3 on this surface).
+ */
+data class OpenLicensingContentListResponse(
+    @Json(name = "items") val items: List<SyndicateOpenLicensingContentOut> = emptyList(),
+)
+
+/**
+ * AND-357 - the register-content request body. content_id is 1..200 chars; content_type is one of the fixed
+ * 6 values (validated server-side; a 422 maps back per-field by loc tail). The X-CSRF-Token is attached by
+ * the shared authenticated client interceptor (NOT a field here).
+ */
+data class SyndicateOpenLicensingRegisterIn(
+    @Json(name = "content_id") val contentId: String,
+    @Json(name = "content_type") val contentType: String,
+)
+
+/**
+ * AND-357 - the register-content response. This is a registration RECEIPT, NOT a list row: it echoes
+ * content_id + syndicate_id and reports licenses_created (the count of licenses minted). On success the UI
+ * surfaces licenses_created and REFETCHES the list (it does NOT optimistically prepend this).
+ */
+data class SyndicateOpenLicensingRegistrationOut(
+    @Json(name = "content_id") val contentId: String? = null,
+    @Json(name = "syndicate_id") val syndicateId: String? = null,
+    @Json(name = "licenses_created") val licensesCreated: Int? = 0,
+)

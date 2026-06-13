@@ -1,5 +1,8 @@
 package com.testlogon.android.feature.syndicates.data
 
+import com.testlogon.android.core.model.syndicates.LicensingContentType
+import com.testlogon.android.core.model.syndicates.OpenLicensingContent
+import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SplitMode
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
@@ -7,6 +10,8 @@ import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.core.network.syndicates.SplitConfigOut
+import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingContentOut
+import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegistrationOut
 import com.testlogon.android.core.network.syndicates.SyndicatePostOut
 import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryLedgerEntryOut
@@ -84,4 +89,27 @@ fun SplitConfigOut.toDomain(): RevenueSplitPolicy = RevenueSplitPolicy(
     updatedAt = updatedAt,
     updatedBy = updatedBy,
     weightsBps = weightsBps.orEmpty(),
+)
+
+// ---- AND-357: open-licensing mappers ----
+
+/**
+ * AND-357 - maps an open-licensing content-row DTO to the domain [OpenLicensingContent]. content_type via
+ * [LicensingContentType.from] (UNKNOWN fallback); exempt defaults false; registered_at stays a Long epoch.
+ */
+fun SyndicateOpenLicensingContentOut.toDomain(): OpenLicensingContent = OpenLicensingContent(
+    contentId = contentId,
+    contentType = LicensingContentType.from(contentType),
+    creatorId = creatorId,
+    exempt = exempt ?: false,
+    registeredAt = registeredAt,
+)
+
+/**
+ * AND-357 - maps the register-content receipt DTO to the domain [RegistrationResult]; a null
+ * licenses_created folds to 0.
+ */
+fun SyndicateOpenLicensingRegistrationOut.toDomain(): RegistrationResult = RegistrationResult(
+    contentId = contentId,
+    licensesCreated = licensesCreated ?: 0,
 )

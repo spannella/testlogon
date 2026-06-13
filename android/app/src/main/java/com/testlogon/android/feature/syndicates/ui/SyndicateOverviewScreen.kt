@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Policy
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,6 +74,7 @@ object SyndicateOverviewTestTags {
     const val SPLIT_MISMATCH = "syndicate_split_mismatch"
     const val NOT_MEMBER = "syndicate_not_member"
     const val STALE = "syndicate_stale"
+    const val OPEN_LICENSING_ACTION = "syndicate_open_licensing_action"
 
     fun feedItem(postId: String) = "syndicate_feed_item_$postId"
     fun ledgerItem(index: Int) = "syndicate_ledger_item_$index"
@@ -86,6 +88,7 @@ private enum class OverviewTab { FEED, TREASURY, SPLIT }
 @Composable
 fun SyndicateOverviewRoute(
     onBack: () -> Unit,
+    onOpenLicensing: () -> Unit,
     viewModel: SyndicateOverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -96,6 +99,7 @@ fun SyndicateOverviewRoute(
         feed = feed,
         ledger = ledger,
         onBack = onBack,
+        onOpenLicensing = onOpenLicensing,
         onRetry = viewModel::onRetry,
         onRefresh = {
             viewModel.refresh()
@@ -112,6 +116,7 @@ fun SyndicateOverviewScreen(
     feed: LazyPagingItems<SyndicateFeedItem>,
     ledger: LazyPagingItems<TreasuryEntry>,
     onBack: () -> Unit,
+    onOpenLicensing: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
@@ -126,6 +131,18 @@ fun SyndicateOverviewScreen(
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.syndicate_back),
+                        )
+                    }
+                },
+                actions = {
+                    // AND-357 - entry point to the open-licensing sub-screen.
+                    IconButton(
+                        onClick = onOpenLicensing,
+                        modifier = Modifier.testTag(SyndicateOverviewTestTags.OPEN_LICENSING_ACTION),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Policy,
+                            contentDescription = stringResource(R.string.syndicate_open_licensing_action),
                         )
                     }
                 },

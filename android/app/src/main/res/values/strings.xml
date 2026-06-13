@@ -2864,4 +2864,29 @@
     <string name="syndicate_bps_format">%1$d bps</string>
     <string name="syndicate_not_member_title">Not a member</string>
     <string name="syndicate_not_member_body">You need to be a member of this syndicate to view it.</string>
+
+    <!-- AND-357: syndicate open-licensing sub-screen (list + register) -->
+    <string name="syndicate_open_licensing_action">Open licensing</string>
+    <string name="open_licensing_title">Open licensing</string>
+    <string name="open_licensing_back">Back</string>
+    <string name="open_licensing_register_cta">Register content</string>
+    <string name="open_licensing_empty_title">No registered content</string>
+    <string name="open_licensing_empty_body">Register a piece of content to start open licensing for this syndicate.</string>
+    <string name="open_licensing_creator">Creator: %1$s</string>
+    <string name="open_licensing_exempt">Exempt</string>
+    <string name="open_licensing_auto_licensed">Auto-licensed</string>
+    <string name="open_licensing_result">%1$d license(s) created.</string>
+    <string name="open_licensing_form_title">Register content</string>
+    <string name="open_licensing_content_id_label">Content ID</string>
+    <string name="open_licensing_content_type_label">Content type</string>
+    <string name="open_licensing_content_type_placeholder">Select a type</string>
+    <string name="open_licensing_submit">Register</string>
+    <string name="open_licensing_cancel">Cancel</string>
+    <string name="open_licensing_type_video">Video</string>
+    <string name="open_licensing_type_music">Music</string>
+    <string name="open_licensing_type_image">Image</string>
+    <string name="open_licensing_type_post">Post</string>
+    <string name="open_licensing_type_broadcast">Broadcast</string>
+    <string name="open_licensing_type_clip">Clip</string>
+    <string name="open_licensing_type_unknown">Unknown</string>
 </resources>

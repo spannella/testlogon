@@ -90,4 +90,30 @@ class SyndicateMappersTest {
         // an unrecognized ISO code must not crash; it falls back to "<major>.<minor> CODE"
         assertEquals("12.34 ZZZ", formatCents(1234, "zzz", Locale.US))
     }
+
+    // ---- AND-357: LicensingContentType.from ----
+
+    @Test
+    fun licensingContentType_parsesKnownTokens_caseAndWhitespaceInsensitive() {
+        assertEquals(LicensingContentType.VIDEO, LicensingContentType.from("video"))
+        assertEquals(LicensingContentType.MUSIC, LicensingContentType.from("MUSIC"))
+        assertEquals(LicensingContentType.BROADCAST, LicensingContentType.from(" broadcast "))
+        assertEquals(LicensingContentType.CLIP, LicensingContentType.from("clip"))
+    }
+
+    @Test
+    fun licensingContentType_unknownOrNull_isUnknown_neverThrows() {
+        assertEquals(LicensingContentType.UNKNOWN, LicensingContentType.from(null))
+        assertEquals(LicensingContentType.UNKNOWN, LicensingContentType.from(""))
+        // "audio" is NOT one of the 6 valid values -> UNKNOWN
+        assertEquals(LicensingContentType.UNKNOWN, LicensingContentType.from("audio"))
+    }
+
+    @Test
+    fun licensingContentType_wireValues_areTheSixSelectableTokens() {
+        assertEquals(
+            listOf("video", "music", "image", "post", "broadcast", "clip"),
+            LicensingContentType.WIRE_VALUES.map { it.wire },
+        )
+    }
 }

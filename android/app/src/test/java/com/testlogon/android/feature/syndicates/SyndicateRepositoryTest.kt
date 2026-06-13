@@ -3,9 +3,13 @@ package com.testlogon.android.feature.syndicates
 import androidx.paging.PagingSource
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.syndicates.LicensingContentType
 import com.testlogon.android.core.model.syndicates.SplitMode
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.core.network.syndicates.OpenLicensingContentListResponse
 import com.testlogon.android.core.network.syndicates.SyndicateFeedOut
+import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingContentOut
+import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegistrationOut
 import com.testlogon.android.core.network.syndicates.SyndicatePostOut
 import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SplitConfigOut
@@ -133,5 +137,73 @@ class SyndicateRepositoryTest {
         val result = SyndicateFeedPagingSource(api, "syn_1")
             .load(PagingSource.LoadParams.Refresh(null, 20, false))
         assertTrue(result is PagingSource.LoadResult.Error)
+    }
+
+    // ---- AND-357: open-licensing ----
+
+    @Test
+    fun getOpenLicensingContent_mapsItems_andPassesPath() = runTest {
+        val api = FakeSyndicateApi(
+            licensingContent = {
+                OpenLicensingContentListResponse(
+                    items = listOf(
+                        SyndicateOpenLicensingContentOut(
+                            contentId = "vid_1", contentType = "video", creatorId = "usr_a",
+                            exempt = true, registeredAt = 1780000000L,
+                        ),
+                        SyndicateOpenLicensingContentOut(
+                            contentId = "x_2", contentType = "bogus",
+                        ),
+                    ),
+                )
+            },
+        )
+        val result = repo(api).getOpenLicensingContent("syn_1")
+
+        assertTrue(result is ApiResult.Success)
+        val items = (result as ApiResult.Success).data
+        assertEquals(2, items.size)
+        assertEquals("vid_1", items[0].contentId)
+        assertEquals(LicensingContentType.VIDEO, items[0].contentType)
+        assertTrue(items[0].exempt)
+        assertEquals(1780000000L, items[0].registeredAt)
+        // unknown wire token -> UNKNOWN; exempt defaults false
+        assertEquals(LicensingContentType.UNKNOWN, items[1].contentType)
+        assertFalse(items[1].exempt)
+        assertEquals("syn_1", api.licensingContentSyndicateIds.single())
+    }
+
+    @Test
+    fun registerOpenLicensing_mapsLicensesCreated_andSendsWireTypeAndPath() = runTest {
+        val api = FakeSyndicateApi(
+            register = {
+                SyndicateOpenLicensingRegistrationOut(
+                    contentId = "vid_1", syndicateId = "syn_1", licensesCreated = 4,
+                )
+            },
+        )
+        val result = repo(api).registerOpenLicensing("syn_1", "vid_1", LicensingContentType.VIDEO)
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(4, (result as ApiResult.Success).data.licensesCreated)
+        assertEquals("syn_1", api.registerSyndicateIds.single())
+        assertEquals("vid_1", api.registerBodies.single().contentId)
+        assertEquals("video", api.registerBodies.single().contentType)
+    }
+
+    @Test
+    fun registerOpenLicensing_422_isFailureWithStatus422_andRawDetail() = runTest {
+        val api = FakeSyndicateApi(
+            register = { throw FakeSyndicateApi.http422("content_id" to "must not be blank") },
+        )
+        val result = repo(api).registerOpenLicensing("syn_1", "", LicensingContentType.VIDEO)
+
+        assertTrue(result is ApiResult.Failure)
+        val error = (result as ApiResult.Failure).error
+        assertEquals(422, error.status)
+        // the raw body is preserved for the ViewModel's per-field loc-tail mapping
+        assertTrue((error.raw as? String)?.contains("content_id") == true)
+        // recorded BEFORE throwing
+        assertEquals("syn_1", api.registerSyndicateIds.single())
     }
 }

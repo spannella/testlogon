@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.syndicates.ui.OpenLicensingRoute
 import com.testlogon.android.feature.syndicates.ui.SyndicateOverviewRoute
 
 /**
@@ -13,8 +14,10 @@ import com.testlogon.android.feature.syndicates.ui.SyndicateOverviewRoute
  * Revenue-split tabs). The ViewModel reads {syndicateId} from SavedStateHandle (the nav arg).
  *
  * STUB ENTRY: there is no syndicate-discovery list in scope this wave, so the More-hub links to a known
- * sample syndicate id ([SAMPLE_SYNDICATE_ID]) purely for manual testing. Discovery / join / propose /
- * payout + open-licensing are downstream / OUT OF SCOPE.
+ * sample syndicate id ([SAMPLE_SYNDICATE_ID]) purely for manual testing.
+ *
+ * AND-357 - the open-licensing sub-surface ([SyndicateOpenLicensingDest]) is reachable from this overview
+ * (a TopAppBar action). join / propose / payout remain downstream / OUT OF SCOPE.
  */
 data object SyndicateOverviewDest {
     const val ARG_SYNDICATE_ID = "syndicateId"
@@ -29,14 +32,44 @@ data object SyndicateOverviewDest {
     const val STUB_ROUTE = "syndicate/$SAMPLE_SYNDICATE_ID"
 }
 
-/** AND-356 - registers the syndicate-overview destination in the authenticated graph. */
+/**
+ * AND-357 - the open-licensing sub-destination of a syndicate (list + register). The
+ * [OpenLicensingViewModel] reads {syndicateId} from SavedStateHandle (the nav arg). Same arg name as the
+ * overview so the same id flows through.
+ */
+data object SyndicateOpenLicensingDest {
+    const val ARG_SYNDICATE_ID = "syndicateId"
+    const val ROUTE = "syndicate/{$ARG_SYNDICATE_ID}/open-licensing"
+
+    fun build(syndicateId: String): String = "syndicate/${Uri.encode(syndicateId)}/open-licensing"
+}
+
+/**
+ * AND-356 / AND-357 - registers the syndicate-overview destination and its open-licensing sub-destination in
+ * the authenticated graph (one shared nav graph; NOT forked).
+ */
 fun NavGraphBuilder.syndicateDestinations(navController: NavHostController) {
     composable(
         route = SyndicateOverviewDest.ROUTE,
         arguments = listOf(
             navArgument(SyndicateOverviewDest.ARG_SYNDICATE_ID) { type = NavType.StringType },
         ),
+    ) { backStackEntry ->
+        val syndicateId =
+            backStackEntry.arguments?.getString(SyndicateOverviewDest.ARG_SYNDICATE_ID).orEmpty()
+        SyndicateOverviewRoute(
+            onBack = { navController.popBackStack() },
+            onOpenLicensing = {
+                navController.navigate(SyndicateOpenLicensingDest.build(syndicateId))
+            },
+        )
+    }
+    composable(
+        route = SyndicateOpenLicensingDest.ROUTE,
+        arguments = listOf(
+            navArgument(SyndicateOpenLicensingDest.ARG_SYNDICATE_ID) { type = NavType.StringType },
+        ),
     ) {
-        SyndicateOverviewRoute(onBack = { navController.popBackStack() })
+        OpenLicensingRoute(onBack = { navController.popBackStack() })
     }
 }

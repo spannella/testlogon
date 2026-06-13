@@ -134,3 +134,61 @@ data class MemberEarnings(
     val currency: String? = null,
     val windowDays: Int? = null,
 )
+
+// ---- AND-357: open-licensing sub-surface (extends AND-356, same core-model file) ----
+
+/**
+ * AND-357 - the fixed open-licensing content type. The wire ships one of 6 values
+ * video|music|image|post|broadcast|clip; [from] parses that token into the typed enum with an [UNKNOWN]
+ * fallback so an unrecognized value NEVER crashes the UI (mirrors [SplitMode] / GroupRole). [WIRE_VALUES] is
+ * the ordered list of the 6 valid wire tokens for the register-form picker (UNKNOWN is NOT offerable).
+ */
+enum class LicensingContentType(val wire: String) {
+    VIDEO("video"),
+    MUSIC("music"),
+    IMAGE("image"),
+    POST("post"),
+    BROADCAST("broadcast"),
+    CLIP("clip"),
+    UNKNOWN("unknown"),
+    ;
+
+    companion object {
+        /** The 6 selectable wire tokens for the register picker (UNKNOWN excluded). */
+        val WIRE_VALUES: List<LicensingContentType> =
+            listOf(VIDEO, MUSIC, IMAGE, POST, BROADCAST, CLIP)
+
+        /** Parses a wire token into a [LicensingContentType]; null / unknown -> [UNKNOWN] (never throws). */
+        fun from(wire: String?): LicensingContentType = when (wire?.trim()?.lowercase()) {
+            "video" -> VIDEO
+            "music" -> MUSIC
+            "image" -> IMAGE
+            "post" -> POST
+            "broadcast" -> BROADCAST
+            "clip" -> CLIP
+            else -> UNKNOWN
+        }
+    }
+}
+
+/**
+ * AND-357 - one open-licensing content row. [contentType] is the typed enum (UNKNOWN fallback); [exempt]
+ * gates the "Exempt" vs "Auto-licensed" label; [registeredAt] is kept a Long epoch-SECONDS value
+ * (relative-time at the UI), null when absent.
+ */
+data class OpenLicensingContent(
+    val contentId: String,
+    val contentType: LicensingContentType,
+    val creatorId: String? = null,
+    val exempt: Boolean = false,
+    val registeredAt: Long? = null,
+)
+
+/**
+ * AND-357 - the result of a register-content mutation (a RECEIPT, NOT a list row). [licensesCreated] is the
+ * count of licenses minted (surfaced as success feedback); [contentId] echoes the registered content id.
+ */
+data class RegistrationResult(
+    val contentId: String? = null,
+    val licensesCreated: Int = 0,
+)
