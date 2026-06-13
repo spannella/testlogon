@@ -24,4 +24,14 @@ object AdsNetworkModule {
     @Singleton
     fun provideAdsAccountsApi(retrofit: Retrofit): AdsAccountsApi =
         retrofit.create(AdsAccountsApi::class.java)
+
+    /**
+     * AND-364 - the CONTENT BOOST transport ([ContentBoostApi]) from the shared singleton [Retrofit]. The
+     * boost DTOs decode reflectively (no new Moshi adapter needed - status is a raw String, not an enum),
+     * so no provideMoshi change is required. Folded here rather than a separate module (same ads surface).
+     */
+    @Provides
+    @Singleton
+    fun provideContentBoostApi(retrofit: Retrofit): ContentBoostApi =
+        retrofit.create(ContentBoostApi::class.java)
 }

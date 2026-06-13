@@ -16,7 +16,16 @@ import java.util.Locale
  * The currency code is upper-cased defensively (the wire ships lowercase ISO; the mapper already
  * upper-cases, but this keeps the helper self-contained).
  */
-fun formatCents(cents: Int, currency: String, locale: Locale = Locale.getDefault()): String {
+fun formatCents(cents: Int, currency: String, locale: Locale = Locale.getDefault()): String =
+    formatCents(cents.toLong(), currency, locale)
+
+/**
+ * AND-364 - overflow-proof [Long] overload (the content-boost / ads surface ships *_cents as Long to avoid
+ * Int overflow). [currency] defaults to USD because the boost contract bills implicitly in integer USD
+ * cents (no currency field on the wire). Same locale-aware formatting + plain-string fallback as the Int
+ * form; the Int overload now delegates here so both share one implementation.
+ */
+fun formatCents(cents: Long, currency: String = "USD", locale: Locale = Locale.getDefault()): String {
     val amount = cents / 100.0
     val code = currency.trim().uppercase(Locale.ROOT)
     return try {

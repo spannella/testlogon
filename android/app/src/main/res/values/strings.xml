@@ -2945,4 +2945,27 @@
     <string name="delegate_console_load_failed">Couldn\'t load delegate data.</string>
     <string name="delegate_console_action_failed">Couldn\'t complete that action.</string>
     <string name="delegate_console_revoked">Your delegate access ended. You\'re acting as yourself again.</string>
+
+    <!-- AND-364: content boost (paid post promotion). -->
+    <string name="boost_title">Boost post</string>
+    <string name="boost_back">Back</string>
+    <string name="boost_form_intro">Promote this post. Pick a total budget and how long it should run. Your wallet is charged up front.</string>
+    <string name="boost_budget_label">Total budget (USD)</string>
+    <string name="boost_budget_helper">Charged up front: %1$s</string>
+    <string name="boost_duration_label">Duration (minutes)</string>
+    <string name="boost_duration_helper">How long the boost runs, in minutes.</string>
+    <string name="boost_submit">Boost post</string>
+    <string name="boost_refresh">Refresh</string>
+    <string name="boost_cancel">Cancel &amp; refund</string>
+    <string name="boost_status_label">Status</string>
+    <string name="boost_status_cd">Boost status: %1$s</string>
+    <string name="boost_id_label">Boost ID</string>
+    <string name="boost_budget_field">Budget</string>
+    <string name="boost_spent_field">Spent</string>
+    <string name="boost_remaining_field">Remaining</string>
+    <string name="boost_duration_field">Duration</string>
+    <string name="boost_minutes_value">%1$d min</string>
+    <string name="boost_ends_field">Ends</string>
+    <string name="boost_ends_in">in %1$d min</string>
+    <string name="boost_ends_passed">Ended</string>
 </resources>

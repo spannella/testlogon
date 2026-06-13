@@ -110,6 +110,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         )
         // AND-100: read-only post detail (in-app nav + deep link).
         postDetailDestination(navController)
+        // AND-364: content boost (paid post promotion) - budget/duration form -> create -> status watch
+        // with cancel/refund while active. Route reachable via navigateToBoost(postId); deeper post-detail /
+        // composer-success CTA wiring is FLAGGED (see BoostNavigation) to avoid regressing those screens.
+        boostDestination(navController)
         // AND-183: tag pages (in-app nav + App Link / dev-host deep links).
         tagPageDestination(navController)
         // AND-185: global multi-entity search (distinct from AND-152 message search).
