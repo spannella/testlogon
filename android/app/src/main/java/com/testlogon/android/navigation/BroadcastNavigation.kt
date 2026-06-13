@@ -15,6 +15,8 @@ import com.testlogon.android.feature.broadcast.host.HostControlRoute
 import com.testlogon.android.feature.broadcast.host.HostControlViewModel
 import com.testlogon.android.feature.broadcast.host.IngestRoute
 import com.testlogon.android.feature.broadcast.host.IngestViewModel
+import com.testlogon.android.feature.broadcast.host.ads.AdControlRoute
+import com.testlogon.android.feature.broadcast.host.ads.AdControlViewModel
 import com.testlogon.android.feature.broadcast.inputs.InputsRoute
 import com.testlogon.android.feature.broadcast.inputs.InputsViewModel
 import com.testlogon.android.feature.broadcast.layout.LayoutRoute
@@ -124,6 +126,13 @@ data object BroadcastPrivateShowDest {
     fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/private-show"
 }
 
+/** AND-316 — the host ad-break / ad-config destination (trigger/end + pre-roll/mid-roll edit), by sessionId. */
+data object BroadcastAdsDest {
+    const val ROUTE = "broadcast/{${AdControlViewModel.ARG_SESSION_ID}}/ads"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/ads"
+}
+
 /**
  * AND-312 — the guest ACCEPT destination, reached from the testlogon://guest/accept deep link. Identity is
  * (sessionId, inviteId) carried as query args (NOT a token). Registered in both top-level graphs so an invite
@@ -226,6 +235,10 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onPrivateShows = {
                 navController.navigate(BroadcastPrivateShowDest.build(sessionId)) { launchSingleTop = true }
             },
+            // AND-316 — the host can trigger / end ad breaks + edit the ad-config (pre-roll + mid-roll bounds).
+            onManageAds = {
+                navController.navigate(BroadcastAdsDest.build(sessionId)) { launchSingleTop = true }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -294,6 +307,15 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         ),
     ) {
         PrivateShowRoute(onBack = { navController.popBackStack() })
+    }
+    // AND-316 — the host ad-break / ad-config destination (trigger / end + pre-roll/mid-roll edit).
+    composable(
+        route = BroadcastAdsDest.ROUTE,
+        arguments = listOf(
+            navArgument(AdControlViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        AdControlRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(

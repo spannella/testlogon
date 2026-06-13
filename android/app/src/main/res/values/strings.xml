@@ -2182,4 +2182,33 @@
     <!-- AND-315 — host control affordances -->
     <string name="host_control_manage_tips">Tip settings</string>
     <string name="host_control_private_shows">Private shows</string>
+
+    <!-- AND-316 — host ad-break / ad-config surface -->
+    <string name="host_control_manage_ads">Ads</string>
+    <string name="ads_title">Ads</string>
+    <string name="ads_back_cd">Back</string>
+    <string name="ads_error_title">Couldn\'t load ad settings</string>
+    <string name="ads_saving">Saving…</string>
+    <string name="ads_config_title">Ad configuration</string>
+    <string name="ads_pre_roll_label">Show pre-roll ad</string>
+    <string name="ads_pre_roll_cd">Toggle pre-roll ad</string>
+    <string name="ads_duration_label">Mid-roll break length (seconds)</string>
+    <string name="ads_duration_cd">Mid-roll break length in seconds</string>
+    <string name="ads_duration_hint">Between 15 and 60 seconds</string>
+    <string name="ads_duration_error">Enter 15 to 60 seconds</string>
+    <string name="ads_skip_after_label">Skip allowed after (seconds)</string>
+    <string name="ads_skip_after_cd">Skip allowed after in seconds</string>
+    <string name="ads_skip_after_hint">Between 5 and 30 seconds</string>
+    <string name="ads_skip_after_error">Enter 5 to 30 seconds</string>
+    <string name="ads_save">Save ad settings</string>
+    <string name="ads_save_cd">Save ad settings</string>
+    <string name="ad_break_title">Ad break</string>
+    <string name="ad_break_inactive_hint">No ad break is running.</string>
+    <string name="ad_break_trigger">Trigger ad break</string>
+    <string name="ad_break_trigger_cd">Trigger an ad break now</string>
+    <string name="ad_break_countdown">%1$d s remaining</string>
+    <string name="ad_break_countdown_cd">Ad break: %1$d seconds remaining</string>
+    <string name="ad_break_end">End early</string>
+    <string name="ad_break_end_cd">End the ad break early</string>
+    <string name="ad_break_total">Ad breaks this broadcast: %1$d</string>
 </resources>

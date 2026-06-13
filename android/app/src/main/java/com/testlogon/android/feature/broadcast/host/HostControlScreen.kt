@@ -99,6 +99,9 @@ object HostControlTestTags {
 
     /** AND-315 — opens the private-show lifecycle surface. */
     const val PRIVATE_SHOWS = "host_private_shows"
+
+    /** AND-316 — opens the ad-break / ad-config surface. */
+    const val MANAGE_ADS = "host_manage_ads"
 }
 
 /**
@@ -122,6 +125,8 @@ fun HostControlRoute(
     onManageTips: () -> Unit = {},
     // AND-315 — open the private-show lifecycle surface for this session.
     onPrivateShows: () -> Unit = {},
+    // AND-316 — open the ad-break / ad-config surface for this session.
+    onManageAds: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -145,6 +150,7 @@ fun HostControlRoute(
         onManageGoalsProducts = onManageGoalsProducts,
         onManageTips = onManageTips,
         onPrivateShows = onPrivateShows,
+        onManageAds = onManageAds,
         onBack = onBack,
     )
 }
@@ -179,6 +185,8 @@ fun HostControlScreen(
     onManageTips: () -> Unit = {},
     // AND-315 — open the private-show lifecycle surface; defaulted so existing call sites/tests are unaffected.
     onPrivateShows: () -> Unit = {},
+    // AND-316 — open the ad-break / ad-config surface; defaulted so existing call sites/tests are unaffected.
+    onManageAds: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -303,6 +311,17 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.PRIVATE_SHOWS),
             ) {
                 Text(stringResource(R.string.host_control_private_shows))
+            }
+
+            // AND-316 — trigger / end ad breaks + edit the ad-config (pre-roll + mid-roll bounds).
+            OutlinedButton(
+                onClick = onManageAds,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_ADS),
+            ) {
+                Text(stringResource(R.string.host_control_manage_ads))
             }
         }
     }

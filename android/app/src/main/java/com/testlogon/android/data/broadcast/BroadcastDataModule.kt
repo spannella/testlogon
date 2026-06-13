@@ -54,6 +54,12 @@ object BroadcastApiModule {
     @Singleton
     fun provideBroadcastMonetizationApi(retrofit: Retrofit): BroadcastMonetizationApi =
         retrofit.create(BroadcastMonetizationApi::class.java)
+
+    /** AND-316 — host ad-break / ad-config control plane on the SAME shared Retrofit (no new OkHttp/Retrofit). */
+    @Provides
+    @Singleton
+    fun provideHostAdApi(retrofit: Retrofit): HostAdApi =
+        retrofit.create(HostAdApi::class.java)
 }
 
 @Module
@@ -115,4 +121,15 @@ abstract class BroadcastDataModule {
     abstract fun bindBroadcastMonetizationRepository(
         impl: BroadcastMonetizationRepositoryImpl,
     ): BroadcastMonetizationRepository
+
+    /**
+     * AND-316 — separate host ad-break / ad-config repository. Kept distinct from the shared
+     * BroadcastRepository / HostControl / Inputs / Monetization so their fakes are NOT touched. No new
+     * API/DAO/migration/dependency.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindHostAdRepository(
+        impl: HostAdRepositoryImpl,
+    ): HostAdRepository
 }
