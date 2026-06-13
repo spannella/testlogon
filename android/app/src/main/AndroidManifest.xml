@@ -361,6 +361,19 @@
                     android:host="billing"
                     android:pathPrefix="/us-bank/verify" />
             </intent-filter>
+
+            <!-- AND-312: custom-scheme guest-accept deep link from a co-broadcast invite. Identity is the
+                 (sessionId, inviteId) query pair (NOT a token), routed to the guest accept screen.
+                 testlogon://guest/accept?sessionId={sessionId}&inviteId={inviteId} -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="guest"
+                    android:pathPrefix="/accept" />
+            </intent-filter>
         </activity>
 
         <!-- AND-297: lock-screen-capable full-screen incoming-call Activity. Launched by the call

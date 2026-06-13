@@ -1,11 +1,13 @@
 package com.testlogon.android.navigation
 
 import android.net.Uri
+import androidx.navigation.NavDeepLink
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import androidx.navigation.navDeepLink
 import com.testlogon.android.feature.broadcast.BroadcastBrowseRoute
 import com.testlogon.android.feature.broadcast.host.CreateBroadcastRoute
 import com.testlogon.android.feature.broadcast.host.CreateBroadcastViewModel
@@ -19,6 +21,10 @@ import com.testlogon.android.feature.broadcast.layout.LayoutRoute
 import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
+import com.testlogon.android.feature.guest.GuestAcceptRoute
+import com.testlogon.android.feature.guest.GuestAcceptViewModel
+import com.testlogon.android.feature.guest.GuestManageRoute
+import com.testlogon.android.feature.guest.GuestManageViewModel
 
 /** AND-279 — the broadcast browse (live + scheduled + past) destination. */
 data object BroadcastBrowseDest {
@@ -65,6 +71,40 @@ data object BroadcastLayoutDest {
     const val ROUTE = "broadcast/{${LayoutViewModel.ARG_SESSION_ID}}/layout"
 
     fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/layout"
+}
+
+/** AND-312 — the host guest-management (invite / promote / mute / remove) destination, keyed by sessionId. */
+data object BroadcastGuestsDest {
+    const val ROUTE = "broadcast/{${GuestManageViewModel.ARG_SESSION_ID}}/guests"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/guests"
+}
+
+/**
+ * AND-312 — the guest ACCEPT destination, reached from the testlogon://guest/accept deep link. Identity is
+ * (sessionId, inviteId) carried as query args (NOT a token). Registered in both top-level graphs so an invite
+ * link resolves whether or not the recipient is already signed in.
+ */
+data object GuestAcceptDest {
+    const val ROUTE =
+        "guest/accept?${GuestAcceptViewModel.ARG_SESSION_ID}={${GuestAcceptViewModel.ARG_SESSION_ID}}" +
+            "&${GuestAcceptViewModel.ARG_INVITE_ID}={${GuestAcceptViewModel.ARG_INVITE_ID}}"
+
+    fun build(sessionId: String, inviteId: String): String =
+        "guest/accept?${GuestAcceptViewModel.ARG_SESSION_ID}=${Uri.encode(sessionId)}" +
+            "&${GuestAcceptViewModel.ARG_INVITE_ID}=${Uri.encode(inviteId)}"
+
+    /**
+     * Deep links for testlogon://guest/accept. The sessionId + inviteId arrive as query params
+     * (?sessionId=...&inviteId=...) so they bind to the route's nav args; there is NO token.
+     */
+    fun deepLinks(): List<NavDeepLink> = listOf(
+        navDeepLink {
+            uriPattern = "testlogon://guest/accept?" +
+                "${GuestAcceptViewModel.ARG_SESSION_ID}={${GuestAcceptViewModel.ARG_SESSION_ID}}" +
+                "&${GuestAcceptViewModel.ARG_INVITE_ID}={${GuestAcceptViewModel.ARG_INVITE_ID}}"
+        },
+    )
 }
 
 /** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
@@ -119,6 +159,10 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onManageLayout = {
                 navController.navigate(BroadcastLayoutDest.build(sessionId)) { launchSingleTop = true }
             },
+            // AND-312 — the host can manage this broadcast's co-broadcast guests (invite / promote / remove).
+            onManageGuests = {
+                navController.navigate(BroadcastGuestsDest.build(sessionId)) { launchSingleTop = true }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -139,6 +183,15 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
     ) {
         LayoutRoute(onBack = { navController.popBackStack() })
     }
+    // AND-312 — the host guest-management destination (invite / promote / mute / remove).
+    composable(
+        route = BroadcastGuestsDest.ROUTE,
+        arguments = listOf(
+            navArgument(GuestManageViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        GuestManageRoute(onBack = { navController.popBackStack() })
+    }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(
             onBack = { navController.popBackStack() },
@@ -158,6 +211,40 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             // AND-283 — Buy from the products shelf routes to the AND-206 product detail.
             onBuyProduct = { categoryId, itemId ->
                 navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
+            },
+        )
+    }
+}
+
+/**
+ * AND-312 — registers the guest ACCEPT destination + its testlogon://guest/accept deep link. Registered in
+ * BOTH top-level graphs (an invitee may not be signed in), mirroring [publicClipDestination]. On a cold
+ * deep-link start the back stack may be empty; Done falls back to the graph start.
+ */
+fun NavGraphBuilder.guestAcceptDestination(navController: NavHostController) {
+    composable(
+        route = GuestAcceptDest.ROUTE,
+        arguments = listOf(
+            navArgument(GuestAcceptViewModel.ARG_SESSION_ID) {
+                type = NavType.StringType
+                defaultValue = ""
+            },
+            navArgument(GuestAcceptViewModel.ARG_INVITE_ID) {
+                type = NavType.StringType
+                defaultValue = ""
+            },
+        ),
+        deepLinks = GuestAcceptDest.deepLinks(),
+    ) {
+        GuestAcceptRoute(
+            onDone = {
+                if (!navController.popBackStack()) {
+                    navController.navigate(
+                        navController.graph.startDestinationRoute ?: TlGraphs.UNAUTHENTICATED,
+                    ) {
+                        launchSingleTop = true
+                    }
+                }
             },
         )
     }

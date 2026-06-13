@@ -195,6 +195,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         schedulerDestinations(navController)
         // AND-279/AND-280/AND-281: broadcast browse + viewer playback (HLS) + live chat panel.
         broadcastDestinations(navController)
+        // AND-312: guest accept (testlogon://guest/accept) — also registered in the unauthenticated graph.
+        guestAcceptDestination(navController)
     }
 }
 

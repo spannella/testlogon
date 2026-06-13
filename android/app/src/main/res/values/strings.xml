@@ -1992,4 +1992,57 @@
     <string name="layout_mode_pip">Picture-in-picture</string>
     <string name="layout_mode_grid">Grid</string>
     <string name="layout_mode_unknown">Unknown</string>
+
+    <!-- AND-312 — guest invites & management (host side) -->
+    <string name="guest_title">Guests</string>
+    <string name="guest_back_cd">Back</string>
+    <string name="host_control_manage_guests">Manage guests</string>
+    <string name="guest_invite_card_title">Invite a guest</string>
+    <string name="guest_invite_card_body">Create a link to invite someone to co-broadcast with you.</string>
+    <string name="guest_create_invite">Create invite</string>
+    <string name="guest_create_invite_cd">Create a guest invite link</string>
+    <string name="guest_invite_url_label">Invite link</string>
+    <string name="guest_invite_url_cd">Guest invite link</string>
+    <string name="guest_copy">Copy</string>
+    <string name="guest_copy_cd">Copy invite link</string>
+    <string name="guest_copied">Invite link copied</string>
+    <string name="guest_share">Share</string>
+    <string name="guest_share_cd">Share invite link</string>
+    <string name="guest_share_chooser">Share guest invite</string>
+    <string name="guest_revoke">Revoke</string>
+    <string name="guest_revoke_cd">Revoke this invite</string>
+    <string name="guest_promote">Make live</string>
+    <string name="guest_promote_cd">Promote %1$s to the live program</string>
+    <string name="guest_mute">Mute</string>
+    <string name="guest_unmute">Unmute</string>
+    <string name="guest_mute_cd">Mute %1$s</string>
+    <string name="guest_unmute_cd">Unmute %1$s</string>
+    <string name="guest_remove">Remove</string>
+    <string name="guest_remove_cd">Remove %1$s from the broadcast</string>
+    <string name="guest_remove_confirm_title">Remove guest?</string>
+    <string name="guest_remove_confirm_body">%1$s will be removed from this broadcast.</string>
+    <string name="guest_remove_confirm">Remove</string>
+    <string name="guest_remove_cancel">Cancel</string>
+    <string name="guest_overflow_cd">More actions for %1$s</string>
+    <string name="guest_row_pending_cd">Updating %1$s…</string>
+    <string name="guest_status_invited">Invited</string>
+    <string name="guest_status_joined">Joined</string>
+    <string name="guest_status_onair">On air</string>
+    <string name="guest_status_muted">Muted</string>
+    <string name="guest_status_left">Left</string>
+    <string name="guest_status_removed">Removed</string>
+    <string name="guest_empty_title">No guests yet</string>
+    <string name="guest_empty_body">Invite a guest to co-broadcast and they\'ll appear here.</string>
+    <string name="guest_unnamed">Guest</string>
+
+    <!-- AND-312 — guest accept (invited guest side) -->
+    <string name="guest_accept_title">Join the broadcast</string>
+    <string name="guest_accept_back_cd">Back</string>
+    <string name="guest_accept_summary">You\'ve been invited to co-broadcast.</string>
+    <string name="guest_accept_name_label">Your display name</string>
+    <string name="guest_accept_name_cd">Enter your display name</string>
+    <string name="guest_accept_submit">Accept</string>
+    <string name="guest_accept_decline">Decline</string>
+    <string name="guest_accept_joined_title">You\'re in</string>
+    <string name="guest_accept_joined_body">You\'ve joined the broadcast as a guest.</string>
 </resources>

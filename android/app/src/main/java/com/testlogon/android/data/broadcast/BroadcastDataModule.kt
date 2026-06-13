@@ -32,6 +32,14 @@ object BroadcastApiModule {
     @Singleton
     fun provideInputsApi(retrofit: Retrofit): InputsApi =
         retrofit.create(InputsApi::class.java)
+
+    /** AND-312 — guest invite / management surface on the SAME shared Retrofit (no new OkHttp/Retrofit). */
+    @Provides
+    @Singleton
+    fun provideGuestApi(
+        retrofit: Retrofit,
+    ): com.testlogon.android.feature.guest.GuestApi =
+        retrofit.create(com.testlogon.android.feature.guest.GuestApi::class.java)
 }
 
 @Module
@@ -62,4 +70,15 @@ abstract class BroadcastDataModule {
     abstract fun bindLayoutRepository(
         impl: com.testlogon.android.feature.broadcast.layout.LayoutRepositoryImpl,
     ): com.testlogon.android.feature.broadcast.layout.LayoutRepository
+
+    /**
+     * AND-312 — separate guest invite/management repository. Consumes the AND-310 [InputsApi] for the
+     * "guests = inputs filtered to input_type==guest" half; keeps its own in-memory cache (NO Room /
+     * migration). Kept distinct so the shared broadcast/inputs fakes are untouched.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindGuestRepository(
+        impl: com.testlogon.android.feature.guest.GuestRepositoryImpl,
+    ): com.testlogon.android.feature.guest.GuestRepository
 }

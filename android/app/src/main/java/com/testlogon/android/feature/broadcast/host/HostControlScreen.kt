@@ -84,6 +84,9 @@ object HostControlTestTags {
 
     /** AND-311 — opens the layout-management surface. */
     const val MANAGE_LAYOUT = "host_manage_layout"
+
+    /** AND-312 — opens the guest-management surface. */
+    const val MANAGE_GUESTS = "host_manage_guests"
 }
 
 /**
@@ -97,6 +100,8 @@ fun HostControlRoute(
     onManageInputs: () -> Unit = {},
     // AND-311 — open the layout-management surface (mode chooser) for this session.
     onManageLayout: () -> Unit = {},
+    // AND-312 — open the guest-management surface (invite / promote / mute / remove) for this session.
+    onManageGuests: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -115,6 +120,7 @@ fun HostControlRoute(
         onRetryHealth = viewModel::retryHealth,
         onManageInputs = onManageInputs,
         onManageLayout = onManageLayout,
+        onManageGuests = onManageGuests,
         onBack = onBack,
     )
 }
@@ -139,6 +145,8 @@ fun HostControlScreen(
     onManageInputs: () -> Unit = {},
     // AND-311 — open the layout-management surface; defaulted so existing call sites/tests are unaffected.
     onManageLayout: () -> Unit = {},
+    // AND-312 — open the guest-management surface; defaulted so existing call sites/tests are unaffected.
+    onManageGuests: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -208,6 +216,17 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.MANAGE_LAYOUT),
             ) {
                 Text(stringResource(R.string.host_control_manage_layout))
+            }
+
+            // AND-312 — manage this broadcast's co-broadcast guests (invite / promote / mute / remove).
+            OutlinedButton(
+                onClick = onManageGuests,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_GUESTS),
+            ) {
+                Text(stringResource(R.string.host_control_manage_guests))
             }
         }
     }

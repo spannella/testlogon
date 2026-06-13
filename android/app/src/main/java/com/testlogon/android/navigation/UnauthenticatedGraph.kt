@@ -327,6 +327,8 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         publicClipDestination(navController)
         // AND-272: public event via the /event/{calendarId}/{eventId} App Link works while signed out.
         eventDetailDestination(navController)
+        // AND-312: guest accept (testlogon://guest/accept) works while signed out (an invitee may be).
+        guestAcceptDestination(navController)
     }
 }
 
