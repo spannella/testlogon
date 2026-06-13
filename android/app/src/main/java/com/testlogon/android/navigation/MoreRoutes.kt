@@ -157,6 +157,9 @@ object MoreRoutes {
     // JVM MoreCatalog integrity test stays Android-free).
     const val SYNDICATES = SyndicateOverviewDest.STUB_ROUTE
 
+    // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
+    const val COLLABORATIONS = CollaborationsListDest.ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -213,6 +216,7 @@ object MoreRoutes {
             ORGS_MEMBERS,
             GROUPS,
             SYNDICATES,
+            COLLABORATIONS,
             SETTINGS,
             HELP,
             ABOUT,

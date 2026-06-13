@@ -242,6 +242,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split tabs over /ui/syndicates/*).
         // Single screen keyed by {syndicateId}; write actions + open-licensing are downstream / OUT OF SCOPE.
         syndicateDestinations(navController)
+        // AND-358: READ-ONLY collaborations (Paging-3 list -> detail with the two parties + status + the
+        // revenue split over /ui/collaborations/*). Write actions are OUT OF SCOPE.
+        collaborationsDestinations(navController)
     }
 }
 

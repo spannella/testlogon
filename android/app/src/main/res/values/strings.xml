@@ -2889,4 +2889,36 @@
     <string name="open_licensing_type_broadcast">Broadcast</string>
     <string name="open_licensing_type_clip">Clip</string>
     <string name="open_licensing_type_unknown">Unknown</string>
+
+    <!-- AND-358: READ-ONLY collaborations (list + detail with two parties + status + revenue split) -->
+    <string name="more_entry_collaborations">Collaborations</string>
+    <string name="collaborations_list_title">Collaborations</string>
+    <string name="collaboration_detail_title">Collaboration</string>
+    <string name="collaborations_back">Back</string>
+    <string name="collaborations_untitled">Untitled collaboration</string>
+    <string name="collaborations_unknown_party">Unknown</string>
+    <string name="collaborations_list_error">Couldn\'t load your collaborations.</string>
+    <string name="collaborations_empty_title">No collaborations yet</string>
+    <string name="collaborations_empty_body">Collaborations you start or join will appear here.</string>
+    <string name="collaborations_your_share">Your share %1$d%%</string>
+    <string name="collaborations_stale_banner">Showing the last loaded data. Pull down to retry.</string>
+    <string name="collaborations_session_expired_title">Session expired</string>
+    <string name="collaborations_session_expired_body">Please sign in again to view this collaboration.</string>
+    <string name="collaboration_created">Created %1$s</string>
+    <string name="collaboration_updated">Updated %1$s</string>
+    <string name="collaboration_parties_heading">Parties</string>
+    <string name="collaboration_party_initiator">Initiator</string>
+    <string name="collaboration_party_recipient">Recipient</string>
+    <string name="collaboration_split_heading">Revenue split</string>
+    <string name="collaboration_split_you">%1$s (you)</string>
+    <string name="collaboration_percent">%1$d%%</string>
+    <string name="collaboration_split_total">Total</string>
+    <string name="collaboration_split_warning">Split does not total 100%% (currently %1$d%%).</string>
+    <string name="collaboration_distributions_heading">Distributions</string>
+    <string name="collaboration_status_proposed">Proposed</string>
+    <string name="collaboration_status_active">Active</string>
+    <string name="collaboration_status_completed">Completed</string>
+    <string name="collaboration_status_cancelled">Cancelled</string>
+    <string name="collaboration_status_declined">Declined</string>
+    <string name="collaboration_status_unknown">Unknown</string>
 </resources>
