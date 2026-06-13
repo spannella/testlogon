@@ -27,6 +27,9 @@ import javax.inject.Singleton
  *
  * AND-324 - also provides [KycLivenessCallApi] (the `ui/kyc/liveness-call` scheduled video-verification
  * control plane) from the same shared Retrofit.
+ *
+ * AND-325 - also provides [KycEidvApi] (the `v1/kyc/eid` electronic ID verification redirect control plane)
+ * from the same shared Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -55,4 +58,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycLivenessCallApi(retrofit: Retrofit): KycLivenessCallApi =
         retrofit.create(KycLivenessCallApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycEidvApi(retrofit: Retrofit): KycEidvApi =
+        retrofit.create(KycEidvApi::class.java)
 }

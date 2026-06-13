@@ -207,6 +207,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         faceComparisonDestination(navController)
         // AND-324: KYC scheduled liveness (video-verification) call (real REST scheduling; join_url opens externally).
         livenessCallDestination(navController)
+        // AND-325: KYC electronic ID verification (real REST redirect eIDV; redirect_url opens externally + poll).
+        eidvDestination(navController)
     }
 }
 

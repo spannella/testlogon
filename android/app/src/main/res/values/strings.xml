@@ -2362,4 +2362,38 @@
     <string name="liveness_result_passed">Passed</string>
     <string name="liveness_result_failed">Failed</string>
     <string name="liveness_result_unknown">Pending</string>
+
+    <!-- AND-325: KYC electronic ID verification (eIDV) -->
+    <string name="eidv_title">Electronic ID verification</string>
+    <string name="eidv_scheme_heading">Choose an eID scheme</string>
+    <string name="eidv_start_button">Verify with eID</string>
+    <string name="eidv_countries_value">Countries: %1$s</string>
+    <string name="eidv_awaiting_heading">Complete verification with your provider</string>
+    <string name="eidv_awaiting_body">Open your eID app or complete the steps in your browser, then come back here.</string>
+    <string name="eidv_check_status_button">I\'ve finished, check status</string>
+    <string name="eidv_reopen_button">Reopen provider</string>
+    <string name="eidv_result_heading">Identity verified</string>
+    <string name="eidv_result_assurance">Assurance level: %1$s</string>
+    <string name="eidv_tier_upgraded">Your verification tier was upgraded.</string>
+    <string name="eidv_critical_warning">A critical discrepancy was found. Your details may need review.</string>
+    <string name="eidv_discrepancies_heading">Discrepancies</string>
+    <string name="eidv_discrepancy_profile">Profile: %1$s</string>
+    <string name="eidv_discrepancy_eid">eID: %1$s</string>
+    <string name="eidv_value_absent">Not provided</string>
+    <string name="eidv_continue_button">Continue</string>
+    <string name="eidv_expired_message">This verification session expired before it completed.</string>
+    <string name="eidv_restart_button">Start over</string>
+    <string name="eidv_retry_button">Try again</string>
+    <string name="eidv_assurance_low">Low</string>
+    <string name="eidv_assurance_substantial">Substantial</string>
+    <string name="eidv_assurance_high">High</string>
+    <string name="eidv_assurance_unknown">Unknown</string>
+    <string name="eidv_flow_browser_redirect">Browser redirect</string>
+    <string name="eidv_flow_mobile_app_qr">Mobile app (QR)</string>
+    <string name="eidv_flow_otp_biometric">OTP / biometric</string>
+    <string name="eidv_flow_unknown">Other</string>
+    <string name="eidv_severity_match">Match</string>
+    <string name="eidv_severity_warning">Warning</string>
+    <string name="eidv_severity_critical">Critical</string>
+    <string name="eidv_severity_unknown">Unknown</string>
 </resources>
