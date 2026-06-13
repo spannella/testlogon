@@ -2545,4 +2545,29 @@
     <string name="kyc_monitoring_msg_downgraded">Your verification tier was lowered and needs to be renewed.</string>
     <string name="kyc_monitoring_msg_trigger">A recent event requires you to review your verification.</string>
     <string name="kyc_monitoring_msg_generic">Your verification requires attention.</string>
+
+    <!-- AND-332: file manager browse -->
+    <string name="files_title">Files</string>
+    <string name="files_root_label">Home</string>
+    <string name="files_search_label">Search files</string>
+    <string name="files_search_clear">Clear search</string>
+    <string name="files_search_mode_prefix">Name</string>
+    <string name="files_search_mode_text">Contents</string>
+    <string name="files_search_mode_toggle">Switch search mode</string>
+    <string name="files_sort">Sort</string>
+    <string name="files_sort_title">Sort by</string>
+    <string name="files_sort_by_name">Name</string>
+    <string name="files_sort_by_updated">Last modified</string>
+    <string name="files_sort_by_size">Size</string>
+    <string name="files_sort_dir_asc">Ascending</string>
+    <string name="files_sort_dir_desc">Descending</string>
+    <string name="files_sort_folders_first">Folders first</string>
+    <string name="files_breadcrumb_cd">Go to %1$s</string>
+    <string name="files_folder_cd">Folder %1$s</string>
+    <string name="files_file_cd">File %1$s</string>
+    <string name="files_empty_folder">This folder is empty</string>
+    <string name="files_empty_search">No matches</string>
+    <string name="files_error">Couldn\'t load this folder.</string>
+    <string name="files_search_error">Couldn\'t run the search.</string>
+    <string name="files_append_error">Couldn\'t load more.</string>
 </resources>

@@ -127,6 +127,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         storyViewerDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
+        // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
+        filesDestination(navController)
         // AND-205: storefront catalog / category browse grid (cells open the product detail route).
         catalogDestination(navController)
         // AND-206: real product detail (item derived from the category-items list; add-to-cart).
