@@ -2785,6 +2785,23 @@
     <string name="orgs_role_member">Member</string>
     <string name="orgs_role_viewer">Viewer</string>
     <string name="orgs_role_unknown">Unknown</string>
+    <!-- AND-354: org overview hub -->
+    <string name="org_overview_title">Organization</string>
+    <string name="org_overview_name">Organization name</string>
+    <string name="org_overview_your_role">Your role: %1$s</string>
+    <string name="org_overview_member_count">%1$d members</string>
+    <string name="org_overview_member_count_unknown">Member count unavailable</string>
+    <string name="org_overview_members">Members</string>
+    <string name="org_overview_my_invites">My invites</string>
+    <string name="org_overview_empty_title">No organization</string>
+    <string name="org_overview_empty_body">You don\'t belong to any organization yet.</string>
+    <!-- AND-354: my invites (accept/decline) -->
+    <string name="my_invites_title">My invites</string>
+    <string name="my_invites_accept">Accept</string>
+    <string name="my_invites_decline">Decline</string>
+    <string name="my_invites_unknown_org">Organization</string>
+    <string name="my_invites_empty_title">No pending invites</string>
+    <string name="my_invites_empty_body">You have no organization invitations right now.</string>
     <string name="invite_title">Invite a member</string>
     <string name="invite_email_label">Email</string>
     <string name="invite_submit">Send invite</string>

@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.orgs.testing
 
+import com.testlogon.android.core.network.orgs.OrgInviteAcceptReq
 import com.testlogon.android.core.network.orgs.OrgInviteOut
 import com.testlogon.android.core.network.orgs.OrgMemberInviteReq
 import com.testlogon.android.core.network.orgs.OrgMemberOut
@@ -31,6 +32,8 @@ class FakeOrgsApi(
     val changeRoleCalls = mutableListOf<Triple<String, String, OrgMemberRoleUpdateReq>>()
     val removeCalls = mutableListOf<Pair<String, String>>()
     val transferCalls = mutableListOf<Pair<String, TransferOwnershipReq>>()
+    val acceptCalls = mutableListOf<Pair<String, OrgInviteAcceptReq>>()
+    val declineCalls = mutableListOf<String>()
 
     private fun maybeThrow() {
         throwHttp?.let { status ->
@@ -87,6 +90,18 @@ class FakeOrgsApi(
         body: TransferOwnershipReq,
     ): Response<Unit> {
         transferCalls += orgId to body
+        maybeThrow()
+        return emptyOk()
+    }
+
+    override suspend fun acceptInvite(inviteId: String, body: OrgInviteAcceptReq): Response<Unit> {
+        acceptCalls += inviteId to body
+        maybeThrow()
+        return emptyOk()
+    }
+
+    override suspend fun declineInvite(inviteId: String): Response<Unit> {
+        declineCalls += inviteId
         maybeThrow()
         return emptyOk()
     }

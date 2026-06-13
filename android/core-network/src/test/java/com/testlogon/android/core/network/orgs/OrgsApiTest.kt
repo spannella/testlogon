@@ -203,4 +203,35 @@ class OrgsApiTest {
         assertEquals("/ui/orgs/org_1/transfer-ownership", recorded.requestUrl?.encodedPath)
         assertEquals("usr_b", recorded.bodyMap()["new_owner_user_sub"])
     }
+
+    // ---- AND-354: acceptInvite POSTs the accept path with a {token} body ----
+
+    @Test
+    fun acceptInvite_postsAcceptPath_withTokenBody() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200))
+
+        val response = api().acceptInvite("inv_1", OrgInviteAcceptReq(token = "tok_abc"))
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ui/orgs/invites/inv_1/accept", recorded.requestUrl?.encodedPath)
+        assertEquals("application/json", recorded.getHeader("Content-Type"))
+        assertEquals("tok_abc", recorded.bodyMap()["token"])
+        assertTrue(response.isSuccessful)
+    }
+
+    // ---- AND-354: declineInvite POSTs the decline path -> 204 empty ----
+
+    @Test
+    fun declineInvite_postsDeclinePath_204Empty_isSuccessful() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        val response = api().declineInvite("inv_1")
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ui/orgs/invites/inv_1/decline", recorded.requestUrl?.encodedPath)
+        assertTrue(response.isSuccessful)
+        assertEquals(204, response.code())
+    }
 }

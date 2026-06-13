@@ -63,7 +63,10 @@ data class OrgMember(
     val lastActiveAt: String? = null,
 )
 
-/** One pending invite (a separate resource from members). */
+/**
+ * One pending invite (a separate resource from members). AND-354 carries the per-invite [token] so the
+ * recipient's accept flow can echo it back; it is null when the wire row omits it.
+ */
 data class OrgInvite(
     val inviteId: String,
     val email: String,
@@ -74,4 +77,5 @@ data class OrgInvite(
     val invitedBy: String? = null,
     val createdAt: String? = null,
     val expiresAt: String? = null,
+    val token: String? = null,
 )

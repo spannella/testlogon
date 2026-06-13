@@ -30,11 +30,15 @@ class FakeOrgsRepo(
     var changeRoleResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var removeResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var transferResult: ApiResult<Unit> = ApiResult.Success(Unit),
+    var acceptResult: ApiResult<Unit> = ApiResult.Success(Unit),
+    var declineResult: ApiResult<Unit> = ApiResult.Success(Unit),
 ) : OrgsRepository {
 
     val changeRoleArgs = mutableListOf<Triple<String, String, OrgRole>>()
     val removeArgs = mutableListOf<Pair<String, String>>()
     val inviteArgs = mutableListOf<Triple<String, String, OrgRole?>>()
+    val acceptArgs = mutableListOf<Pair<String, String>>()
+    val declineArgs = mutableListOf<String>()
 
     override suspend fun listOrgs(): ApiResult<List<Org>> = orgsResult
     override suspend fun listMembers(orgId: String): ApiResult<List<OrgMember>> = membersResult
@@ -65,6 +69,16 @@ class FakeOrgsRepo(
 
     override suspend fun transferOwnership(orgId: String, newOwnerUserSub: String): ApiResult<Unit> =
         transferResult
+
+    override suspend fun acceptInvite(inviteId: String, token: String): ApiResult<Unit> {
+        acceptArgs += inviteId to token
+        return acceptResult
+    }
+
+    override suspend fun declineInvite(inviteId: String): ApiResult<Unit> {
+        declineArgs += inviteId
+        return declineResult
+    }
 
     companion object {
         fun failure(status: Int = 422): ApiResult.Failure =

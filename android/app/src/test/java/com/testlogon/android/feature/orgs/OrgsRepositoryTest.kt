@@ -102,6 +102,41 @@ class OrgsRepositoryTest {
     }
 
     @Test
+    fun acceptInvite_sendsToken_empty200_isSuccessUnit() = runTest {
+        val api = FakeOrgsApi()
+        val result = repo(api).acceptInvite("inv_1", "tok_abc")
+        assertTrue(result is ApiResult.Success)
+        assertEquals("inv_1" to "tok_abc", api.acceptCalls.single().let { it.first to it.second.token })
+    }
+
+    @Test
+    fun declineInvite_empty204_isSuccessUnit() = runTest {
+        val api = FakeOrgsApi()
+        val result = repo(api).declineInvite("inv_1")
+        assertTrue(result is ApiResult.Success)
+        assertEquals("inv_1", api.declineCalls.single())
+    }
+
+    @Test
+    fun acceptInvite_httpError_mapsToFailure() = runTest {
+        val api = FakeOrgsApi(throwHttp = 409)
+        val result = repo(api).acceptInvite("inv_1", "tok_abc")
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(409, (result as ApiResult.Failure).error.status)
+        // the call was recorded BEFORE the throw
+        assertEquals("inv_1", api.acceptCalls.single().first)
+    }
+
+    @Test
+    fun declineInvite_httpError_mapsToFailure() = runTest {
+        val api = FakeOrgsApi(throwHttp = 422)
+        val result = repo(api).declineInvite("inv_1")
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(422, (result as ApiResult.Failure).error.status)
+        assertEquals("inv_1", api.declineCalls.single())
+    }
+
+    @Test
     fun httpError_mapsToFailure_preservingStatus() = runTest {
         val api = FakeOrgsApi(throwHttp = 403)
         val result = repo(api).listMembers("org_1")

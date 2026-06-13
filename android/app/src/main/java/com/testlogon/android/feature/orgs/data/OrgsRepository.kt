@@ -8,6 +8,7 @@ import com.testlogon.android.core.model.orgs.OrgInvite
 import com.testlogon.android.core.model.orgs.OrgMember
 import com.testlogon.android.core.model.orgs.OrgRole
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.core.network.orgs.OrgInviteAcceptReq
 import com.testlogon.android.core.network.orgs.OrgMemberInviteReq
 import com.testlogon.android.core.network.orgs.OrgMemberRoleUpdateReq
 import com.testlogon.android.core.network.orgs.OrgsApi
@@ -57,6 +58,15 @@ interface OrgsRepository {
 
     /** POST ownership transfer (the separate owner-assignment endpoint). 200/204 -> Success(Unit). */
     suspend fun transferOwnership(orgId: String, newOwnerUserSub: String): ApiResult<Unit>
+
+    /**
+     * AND-354 - the caller ACCEPTS one of their own pending invites. [token] is the per-invite token (or
+     * empty when the wire row omits one). Success-by-isSuccessful -> Success(Unit).
+     */
+    suspend fun acceptInvite(inviteId: String, token: String): ApiResult<Unit>
+
+    /** AND-354 - the caller DECLINES one of their own pending invites. 204 empty -> Success(Unit). */
+    suspend fun declineInvite(inviteId: String): ApiResult<Unit>
 }
 
 @Singleton
@@ -116,6 +126,16 @@ class OrgsRepositoryImpl @Inject constructor(
             orgsApi.transferOwnership(orgId, TransferOwnershipReq(newOwnerUserSub)).requireSuccess()
         }
     }
+
+    override suspend fun acceptInvite(inviteId: String, token: String): ApiResult<Unit> =
+        withContext(Dispatchers.IO) {
+            call { orgsApi.acceptInvite(inviteId, OrgInviteAcceptReq(token = token)).requireSuccess() }
+        }
+
+    override suspend fun declineInvite(inviteId: String): ApiResult<Unit> =
+        withContext(Dispatchers.IO) {
+            call { orgsApi.declineInvite(inviteId).requireSuccess() }
+        }
 
     /**
      * Folds an empty-body [Response] into Unit by HTTP success. A non-2xx response is rethrown as an

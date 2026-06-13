@@ -45,4 +45,6 @@ fun OrgInviteOut.toDomain(): OrgInvite = OrgInvite(
     invitedBy = invitedBy,
     createdAt = createdAt,
     expiresAt = expiresAt,
+    // AND-354 - carry the per-invite token for the recipient accept flow.
+    token = token,
 )

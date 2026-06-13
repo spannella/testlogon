@@ -91,3 +91,12 @@ data class OrgMemberRoleUpdateReq(
 data class TransferOwnershipReq(
     @Json(name = "new_owner_user_sub") val newOwnerUserSub: String,
 )
+
+/**
+ * AND-354 - body for POST ui/orgs/invites/{inviteId}/accept (the caller accepting their OWN invite). The
+ * `token` is the per-invite token carried on the OrgInviteOut row. When the wire row omits a token the
+ * field is sent empty (the server stays authoritative) - see the MyInvitesViewModel open assumption.
+ */
+data class OrgInviteAcceptReq(
+    @Json(name = "token") val token: String,
+)

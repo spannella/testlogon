@@ -76,4 +76,26 @@ interface OrgsApi {
         @Path("orgId") orgId: String,
         @Body body: TransferOwnershipReq,
     ): Response<Unit>
+
+    /**
+     * AND-354 - the CURRENT USER accepts one of their OWN pending invites (from
+     * GET ui/orgs/invites/pending). Body carries the invite [OrgInviteAcceptReq.token]; the response body
+     * (if any) is ignored, so this is typed as Response<Unit> and folded by isSuccessful. @Path token is
+     * EXACTLY {inviteId}. There is NO inviter-side revoke endpoint - do NOT add one (flagged unverified).
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/orgs/invites/{inviteId}/accept")
+    suspend fun acceptInvite(
+        @Path("inviteId") inviteId: String,
+        @Body body: OrgInviteAcceptReq,
+    ): Response<Unit>
+
+    /**
+     * AND-354 - the CURRENT USER declines one of their OWN pending invites (204 EMPTY body, NO request
+     * body). Success-by-isSuccessful via Response<Unit>. @Path token is EXACTLY {inviteId}.
+     */
+    @POST("ui/orgs/invites/{inviteId}/decline")
+    suspend fun declineInvite(
+        @Path("inviteId") inviteId: String,
+    ): Response<Unit>
 }
