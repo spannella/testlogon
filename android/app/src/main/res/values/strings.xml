@@ -2706,4 +2706,20 @@
     <string name="signing_continue">Continue</string>
     <string name="signing_field_tap_cd">%1$s field, tap to fill</string>
     <string name="signing_field_satisfied_cd">%1$s field filled, tap to clear</string>
+    <!-- AND-343 - terminal e-sign (submit / sign + legal notice) -->
+    <string name="submit_title">Finish signing</string>
+    <string name="legal_notice_heading">Legal notice</string>
+    <string name="legal_notice_version">Version %1$s</string>
+    <string name="legal_notice_version_unknown">unspecified</string>
+    <string name="legal_notice_accepted">You have acknowledged this notice.</string>
+    <string name="submit_acknowledge">I acknowledge and agree</string>
+    <string name="submit_mark_done">Submit and finish</string>
+    <string name="submit_dismiss">Done</string>
+    <string name="submit_retry">Try again</string>
+    <string name="submit_download_pdf">Download completed PDF</string>
+    <string name="submit_completed_at">Completed %1$s</string>
+    <string name="submit_status_completed">Signing complete</string>
+    <string name="submit_status_partially_signed">Your part is signed</string>
+    <string name="submit_status_sent">Submitted</string>
+    <string name="submit_status_other">Submitted</string>
 </resources>

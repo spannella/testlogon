@@ -58,6 +58,24 @@ class SigningViewModelTest {
         ): ApiResult<String> = throw UnsupportedOperationException("not used in capture tests")
         override suspend fun send(packetId: String): ApiResult<Unit> =
             throw UnsupportedOperationException("not used in capture tests")
+
+        // AND-343 additions (unused by the capture tests; defaulted to keep AND-342 tests passing).
+        override suspend fun fillField(
+            packetId: String,
+            placement: com.testlogon.android.feature.signing.capture.model.FieldPlacement,
+        ): ApiResult<Unit> = throw UnsupportedOperationException("not used in capture tests")
+
+        override suspend fun flushDraft(
+            draft: com.testlogon.android.feature.signing.capture.model.SignedPacketDraft,
+        ): ApiResult<Unit> = throw UnsupportedOperationException("not used in capture tests")
+
+        override suspend fun acknowledgeLegalNotice(packetId: String): ApiResult<Unit> =
+            throw UnsupportedOperationException("not used in capture tests")
+
+        override suspend fun markDone(
+            packetId: String,
+        ): ApiResult<com.testlogon.android.feature.signing.submit.model.MarkDoneResult> =
+            throw UnsupportedOperationException("not used in capture tests")
     }
 
     private class FakeRasterizer : SignatureRasterizer {

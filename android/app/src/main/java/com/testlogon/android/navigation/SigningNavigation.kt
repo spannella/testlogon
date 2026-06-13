@@ -1,6 +1,7 @@
 package com.testlogon.android.navigation
 
 import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -13,6 +14,10 @@ import com.testlogon.android.feature.signing.capture.SigningRoute
 import com.testlogon.android.feature.signing.capture.SigningViewModel
 import com.testlogon.android.feature.signing.document.DocumentViewerRoute
 import com.testlogon.android.feature.signing.document.DocumentViewerViewModel
+import com.testlogon.android.feature.signing.submit.SignedDraftHandoff
+import com.testlogon.android.feature.signing.submit.SubmitSignRoute
+import com.testlogon.android.feature.signing.submit.SubmitSignViewModel
+import dagger.hilt.android.EntryPointAccessors
 
 /**
  * AND-340 - the e-signature Signing ENTRY + packet DETAIL destinations.
@@ -55,6 +60,24 @@ data object SigningCaptureDest {
 
     fun build(packetId: String, documentId: String): String =
         "signing/capture/${Uri.encode(packetId)}/${Uri.encode(documentId)}"
+}
+
+/**
+ * AND-343 - the TERMINAL e-sign (submit / sign + legal notice) destination, reached from the AND-342
+ * capture surface's ContinueToSubmit. `packetId` is a required path arg; the validated draft is handed
+ * over out-of-band via [SignedDraftHandoff] (a draft is not a primitive nav arg).
+ */
+data object SigningSubmitDest {
+    const val ROUTE = "signing/submit/{packetId}"
+
+    fun build(packetId: String): String = "signing/submit/${Uri.encode(packetId)}"
+}
+
+/** Hilt entry point so the capture route can resolve the singleton draft handoff in a composable. */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface SignedDraftHandoffEntryPoint {
+    fun signedDraftHandoff(): SignedDraftHandoff
 }
 
 /** AND-340 - registers the Signing entry + packet-detail screens in the authenticated graph. */
@@ -116,10 +139,32 @@ fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
             navArgument(SigningViewModel.ARG_DOCUMENT_ID) { type = NavType.StringType },
         ),
     ) {
+        val context = LocalContext.current
         SigningRoute(
             onBack = { navController.popBackStack() },
-            // AND-343 will submit the validated draft; pop back to the detail for now.
-            onContinueToSubmit = { navController.popBackStack() },
+            // AND-343 - deposit the validated draft into the process-scoped handoff (a draft is not a
+            // primitive nav arg), then navigate to the terminal submit surface by packet id.
+            onContinueToSubmit = { draft ->
+                val handoff = EntryPointAccessors.fromApplication(
+                    context.applicationContext,
+                    SignedDraftHandoffEntryPoint::class.java,
+                ).signedDraftHandoff()
+                handoff.put(draft)
+                if (draft.packetId.isNotBlank()) {
+                    navController.navigate(SigningSubmitDest.build(draft.packetId))
+                }
+            },
+        )
+    }
+    composable(
+        route = SigningSubmitDest.ROUTE,
+        arguments = listOf(
+            navArgument(SubmitSignViewModel.ARG_PACKET_ID) { type = NavType.StringType },
+        ),
+    ) {
+        SubmitSignRoute(
+            // Terminal: dismiss back to the packet list / detail.
+            onDismiss = { navController.popBackStack() },
         )
     }
 }

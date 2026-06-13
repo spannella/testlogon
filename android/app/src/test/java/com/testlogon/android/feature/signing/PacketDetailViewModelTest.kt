@@ -55,6 +55,24 @@ class PacketDetailViewModelTest {
             sendCount++
             return sendResult
         }
+
+        // AND-343 additions (unused by the detail tests; defaulted to keep AND-340 tests passing).
+        override suspend fun fillField(
+            packetId: String,
+            placement: com.testlogon.android.feature.signing.capture.model.FieldPlacement,
+        ): ApiResult<Unit> = throw UnsupportedOperationException("not used in detail tests")
+
+        override suspend fun flushDraft(
+            draft: com.testlogon.android.feature.signing.capture.model.SignedPacketDraft,
+        ): ApiResult<Unit> = throw UnsupportedOperationException("not used in detail tests")
+
+        override suspend fun acknowledgeLegalNotice(packetId: String): ApiResult<Unit> =
+            throw UnsupportedOperationException("not used in detail tests")
+
+        override suspend fun markDone(
+            packetId: String,
+        ): ApiResult<com.testlogon.android.feature.signing.submit.model.MarkDoneResult> =
+            throw UnsupportedOperationException("not used in detail tests")
     }
 
     private fun vm(repo: StubRepo, packetId: String? = "pkt_1"): PacketDetailViewModel {

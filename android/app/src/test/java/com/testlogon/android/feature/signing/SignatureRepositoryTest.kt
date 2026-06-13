@@ -54,7 +54,11 @@ class SignatureRepositoryTest {
 
     private val parser = ApiErrorParser(Moshi.Builder().build())
 
-    private fun repo(api: SigningApi) = SignatureRepositoryImpl(signingApi = api, errorParser = parser)
+    private fun repo(api: SigningApi) = SignatureRepositoryImpl(
+        signingApi = api,
+        errorParser = parser,
+        assetBytesReader = { null },
+    )
 
     @Test
     fun getPacket_mapsDtoToDomain_includingEnumsSignersFieldsAndInstant() = runTest {
@@ -128,6 +132,82 @@ class SignatureRepositoryTest {
     }
 
     @Test
+    fun fillField_buildsTypedRequest_andMapsToUnit() = runTest {
+        val api = StubSigningApi(packet = samplePacketDto())
+        val placement = com.testlogon.android.feature.signing.capture.model.FieldPlacement(
+            fieldId = "fld_date",
+            page = 0,
+            rect = com.testlogon.android.feature.signing.capture.model.NormalizedRect(0f, 0f, 1f, 1f),
+            textValue = "2026-06-13",
+            satisfied = true,
+        )
+        val result = repo(api).fillField("pkt_1", placement)
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(1, api.fillCalls.size)
+        assertEquals("fld_date", api.fillCalls.single().first)
+        assertEquals("2026-06-13", api.fillCalls.single().second.value)
+    }
+
+    @Test
+    fun flushDraft_fillsEachPlacement_inOrder() = runTest {
+        val api = StubSigningApi(packet = samplePacketDto())
+        val draft = com.testlogon.android.feature.signing.capture.model.SignedPacketDraft(
+            packetId = "pkt_1",
+            documentId = "pkt_1",
+            placements = listOf(
+                fillPlacement("fld_a"),
+                fillPlacement("fld_b"),
+            ),
+        )
+        val result = repo(api).flushDraft(draft)
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(listOf("fld_a", "fld_b"), api.fillCalls.map { it.first })
+    }
+
+    @Test
+    fun flushDraft_shortCircuits_onFirstFailure() = runTest {
+        val api = StubSigningApi(packet = samplePacketDto(), fillError = { httpException(422) })
+        val draft = com.testlogon.android.feature.signing.capture.model.SignedPacketDraft(
+            packetId = "pkt_1",
+            documentId = "pkt_1",
+            placements = listOf(fillPlacement("fld_a"), fillPlacement("fld_b")),
+        )
+        val result = repo(api).flushDraft(draft)
+
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(1, api.fillCalls.size) // stopped after the first failure.
+    }
+
+    @Test
+    fun markDone_reloadsPacket_forCompletedAt() = runTest {
+        val api = StubSigningApi(
+            packet = samplePacketDto().copy(
+                status = PacketStatus.COMPLETED,
+                completedAt = "2026-06-13T12:00:00Z",
+            ),
+            markDoneResponse = SignaturePacketMarkDoneResponse(ok = true, status = PacketStatus.COMPLETED),
+        )
+        val result = repo(api).markDone("pkt_1")
+
+        assertTrue(result is ApiResult.Success)
+        val done = (result as ApiResult.Success).data
+        assertEquals(PacketStatus.COMPLETED, done.packetStatus)
+        assertEquals(Instant.parse("2026-06-13T12:00:00Z"), done.completedAt)
+        assertEquals(listOf("pkt_1"), api.markDonePacketIds)
+    }
+
+    @Test
+    fun acknowledgeLegalNotice_mapsToUnit() = runTest {
+        val api = StubSigningApi(packet = samplePacketDto())
+        val result = repo(api).acknowledgeLegalNotice("pkt_1")
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(listOf("pkt_1"), api.ackPacketIds)
+    }
+
+    @Test
     fun httpError_foldsToFailure_preservingStatus() = runTest {
         val api = StubSigningApi(packetError = { httpException(422) })
         val result = repo(api).getPacket("pkt_1")
@@ -148,6 +228,15 @@ class SignatureRepositoryTest {
 
     private fun httpException(code: Int): HttpException =
         HttpException(Response.error<Any>(code, "bad".toResponseBody("text/plain".toMediaType())))
+
+    private fun fillPlacement(fieldId: String) =
+        com.testlogon.android.feature.signing.capture.model.FieldPlacement(
+            fieldId = fieldId,
+            page = 0,
+            rect = com.testlogon.android.feature.signing.capture.model.NormalizedRect(0f, 0f, 1f, 1f),
+            textValue = "v",
+            satisfied = true,
+        )
 
     private fun samplePacketDto() = SignaturePacketDetailDto(
         packetId = "pkt_1",
@@ -186,10 +275,15 @@ class SignatureRepositoryTest {
         private val createResponse: CreateSignaturePacketResponse = CreateSignaturePacketResponse(),
         private val sendResponse: SendSignaturePacketResponse = SendSignaturePacketResponse(),
         private val packetError: (() -> Throwable)? = null,
+        private val fillError: (() -> Throwable)? = null,
+        private val markDoneResponse: SignaturePacketMarkDoneResponse = SignaturePacketMarkDoneResponse(),
     ) : SigningApi {
 
         val createBodies = mutableListOf<CreateSignaturePacketRequest>()
         val sentPacketIds = mutableListOf<String>()
+        val fillCalls = mutableListOf<Pair<String, SignaturePacketFieldFillRequest>>()
+        val markDonePacketIds = mutableListOf<String>()
+        val ackPacketIds = mutableListOf<String>()
 
         override suspend fun createPacket(body: CreateSignaturePacketRequest): CreateSignaturePacketResponse {
             createBodies += body
@@ -217,13 +311,23 @@ class SignatureRepositoryTest {
             packetId: String,
             fieldId: String,
             body: SignaturePacketFieldFillRequest,
-        ): SignaturePacketFieldFillResponse = unused()
+        ): SignaturePacketFieldFillResponse {
+            fillCalls += fieldId to body
+            fillError?.let { throw it() }
+            return SignaturePacketFieldFillResponse(ok = true)
+        }
 
-        override suspend fun markDone(packetId: String): SignaturePacketMarkDoneResponse = unused()
+        override suspend fun markDone(packetId: String): SignaturePacketMarkDoneResponse {
+            markDonePacketIds += packetId
+            return markDoneResponse
+        }
 
         override suspend fun acknowledgeLegalNotice(
             packetId: String,
-        ): SignaturePacketLegalNoticeAckResponse = unused()
+        ): SignaturePacketLegalNoticeAckResponse {
+            ackPacketIds += packetId
+            return SignaturePacketLegalNoticeAckResponse(ok = true, accepted = true)
+        }
 
         override suspend fun downloadFinalPdf(packetId: String): Response<ResponseBody> = unused()
 

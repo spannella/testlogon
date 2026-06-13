@@ -6,9 +6,15 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.signing.CreateSignaturePacketRequest
 import com.testlogon.android.core.network.signing.SigningApi
+import com.testlogon.android.feature.signing.capture.model.FieldPlacement
+import com.testlogon.android.feature.signing.capture.model.SignedPacketDraft
 import com.testlogon.android.feature.signing.model.PacketEvent
 import com.testlogon.android.feature.signing.model.SignaturePacket
 import com.testlogon.android.feature.signing.model.toDomain
+import com.testlogon.android.feature.signing.submit.model.AssetBytesReader
+import com.testlogon.android.feature.signing.submit.model.MarkDoneResult
+import com.testlogon.android.feature.signing.submit.model.buildFillRequest
+import com.testlogon.android.feature.signing.submit.model.toMarkDoneResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -53,12 +59,42 @@ interface SignatureRepository {
      * SigningApi.sendPacket. NOT idempotent (a mutating POST).
      */
     suspend fun send(packetId: String): ApiResult<Unit>
+
+    /**
+     * AND-343 - fills ONE field individually (there is NO bulk submit). REUSES AND-339
+     * SigningApi.fillField with a request built from [placement] (typed/date -> value+TYPED; drawn ->
+     * capture_mode DRAWN + base64 render_payload). NOT idempotent (a mutating POST).
+     */
+    suspend fun fillField(packetId: String, placement: FieldPlacement): ApiResult<Unit>
+
+    /**
+     * AND-343 - flushes every placement in [draft] by calling [fillField] in order; short-circuits and
+     * returns the FIRST failure (no auto-retry). This performs AND-342's deferred network fills. Returns
+     * Success(Unit) when (and only when) every placement filled.
+     */
+    suspend fun flushDraft(draft: SignedPacketDraft): ApiResult<Unit>
+
+    /**
+     * AND-343 - acknowledges the packet's inline legal notice (POST acknowledge-legal-notice, EMPTY
+     * body). REUSES AND-339 SigningApi.acknowledgeLegalNotice. The CALLER reloads getPacket afterwards
+     * to observe the updated accepted flag. NOT idempotent.
+     */
+    suspend fun acknowledgeLegalNotice(packetId: String): ApiResult<Unit>
+
+    /**
+     * AND-343 - the TERMINAL e-sign action: POST mark-done (EMPTY body). REUSES AND-339
+     * SigningApi.markDone. Because that response is lenient ({ok,status}), the impl follows up with a
+     * getPacket to populate completed_at / signer_status in the returned [MarkDoneResult]. NOT
+     * idempotent; the ViewModel blocks duplicate taps.
+     */
+    suspend fun markDone(packetId: String): ApiResult<MarkDoneResult>
 }
 
 @Singleton
 class SignatureRepositoryImpl @Inject constructor(
     private val signingApi: SigningApi,
     private val errorParser: ApiErrorParser,
+    private val assetBytesReader: AssetBytesReader,
 ) : SignatureRepository {
 
     override suspend fun getPacket(packetId: String): ApiResult<SignaturePacket> =
@@ -98,6 +134,51 @@ class SignatureRepositoryImpl @Inject constructor(
                 }
             }
     }
+
+    override suspend fun fillField(
+        packetId: String,
+        placement: FieldPlacement,
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        call {
+            val body = buildFillRequest(placement, assetBytesReader)
+            signingApi.fillField(packetId, placement.fieldId, body)
+            Unit
+        }
+    }
+
+    override suspend fun flushDraft(draft: SignedPacketDraft): ApiResult<Unit> =
+        withContext(Dispatchers.IO) {
+            // Fill each placement individually (NO bulk submit); short-circuit on the first failure.
+            for (placement in draft.placements) {
+                when (val result = fillField(draft.packetId, placement)) {
+                    is ApiResult.Success -> Unit
+                    is ApiResult.Failure -> return@withContext result
+                    is ApiResult.NetworkError -> return@withContext result
+                }
+            }
+            ApiResult.Success(Unit)
+        }
+
+    override suspend fun acknowledgeLegalNotice(packetId: String): ApiResult<Unit> =
+        withContext(Dispatchers.IO) {
+            call {
+                // EMPTY body; the lenient ack DTO already tolerates a sparse / empty 200 response.
+                signingApi.acknowledgeLegalNotice(packetId)
+                Unit
+            }
+        }
+
+    override suspend fun markDone(packetId: String): ApiResult<MarkDoneResult> =
+        withContext(Dispatchers.IO) {
+            // Terminal action: POST mark-done (EMPTY body). The response is lenient, so reload the
+            // packet to source completed_at / signer_status. A failed reload degrades to a null packet
+            // (the mark-done itself still succeeded), never overriding the mark-done outcome.
+            call {
+                val response = signingApi.markDone(packetId)
+                val reloaded = runCatching { signingApi.getPacket(packetId).toDomain() }.getOrNull()
+                response.toMarkDoneResult(reloaded)
+            }
+        }
 
     /**
      * Folds a block into [ApiResult]. HTTP errors -> Failure (via [ApiErrorParser], preserving the
