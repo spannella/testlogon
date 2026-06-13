@@ -24,6 +24,9 @@ import javax.inject.Singleton
  *
  * AND-323 - also provides [FaceComparisonApi] (the `v1/kyc/cases/{caseId}/compare-face` +
  * `face-comparisons` server-side facial-comparison control plane) from the same shared Retrofit.
+ *
+ * AND-324 - also provides [KycLivenessCallApi] (the `ui/kyc/liveness-call` scheduled video-verification
+ * control plane) from the same shared Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -47,4 +50,9 @@ object KycNetworkModule {
     @Singleton
     fun provideFaceComparisonApi(retrofit: Retrofit): FaceComparisonApi =
         retrofit.create(FaceComparisonApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycLivenessCallApi(retrofit: Retrofit): KycLivenessCallApi =
+        retrofit.create(KycLivenessCallApi::class.java)
 }

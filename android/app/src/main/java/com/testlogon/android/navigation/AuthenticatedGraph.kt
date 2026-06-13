@@ -205,6 +205,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         idScannerDestination(navController)
         // AND-323: KYC facial comparison (selfie capture + server-side face comparison + history).
         faceComparisonDestination(navController)
+        // AND-324: KYC scheduled liveness (video-verification) call (real REST scheduling; join_url opens externally).
+        livenessCallDestination(navController)
     }
 }
 

@@ -2337,4 +2337,29 @@
     <string name="face_contact_support">No attempts remaining. Please contact support.</string>
     <string name="face_history_title">Previous attempts</string>
     <string name="face_history_row">Attempt %1$d: %2$s (%3$d%%)</string>
+
+    <!-- AND-324: KYC scheduled liveness (video-verification) call (real REST scheduling; join_url opens externally) -->
+    <string name="liveness_title">Video verification</string>
+    <string name="liveness_schedule_heading">Schedule a verification call</string>
+    <string name="liveness_pick_datetime">Pick a date and time</string>
+    <string name="liveness_duration_value">%1$d minutes</string>
+    <string name="liveness_note_label">Note (optional)</string>
+    <string name="liveness_schedule_button">Schedule call</string>
+    <string name="liveness_join_button">Join call</string>
+    <string name="liveness_cancel_button">Cancel</string>
+    <string name="liveness_retry">Try again</string>
+    <string name="liveness_result_value">Result: %1$s</string>
+    <string name="liveness_picker_next">Next</string>
+    <string name="liveness_picker_confirm">Confirm</string>
+    <string name="liveness_picker_cancel">Cancel</string>
+    <string name="liveness_status_scheduled">Scheduled</string>
+    <string name="liveness_status_in_progress">In progress</string>
+    <string name="liveness_status_passed">Passed</string>
+    <string name="liveness_status_failed">Failed</string>
+    <string name="liveness_status_cancelled">Cancelled</string>
+    <string name="liveness_status_expired">Expired</string>
+    <string name="liveness_status_unknown">Pending</string>
+    <string name="liveness_result_passed">Passed</string>
+    <string name="liveness_result_failed">Failed</string>
+    <string name="liveness_result_unknown">Pending</string>
 </resources>
