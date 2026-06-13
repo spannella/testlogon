@@ -223,14 +223,66 @@ Determinate fixes to bake into the specs (high → low leverage):
     `/ui/admin/leads`, PRJ-006 `create_task` kwargs, HTL-025 publish gate, HTL-027 `booking_meta`
     nesting + `guest_party_id`, HTL-034/018 `check_in_ts` seam, HTL-006/007/019 room-status.
 
-**[FOR YOU] product decisions (no determinate default):**
-- Durable `signed_amount_cents` ledger column (A4-3).
-- WOV-003 vendor-payout identity — link `user_sub`, clearing account, or restrict (B3-3).
-- TBT-003 bounty repost cap before ship (B3-4).
-- OBP umbrella `OPEN_BANK_PROJECT_ENABLED` flag, or keep per-series (A5-B).
-- Admin invoice pay-on-behalf endpoint (B1-4).
-- Shared `S.platform_name` branding setting owner (B1-2).
-- HTL-036 sequencing — build INV-002..006 first, or ship the wire-in dark (B4-8).
+**Product decisions — ✅ RESOLVED 2026-06-13 (see Part D for the canonical design baked into the specs):**
+- Durable `signed_amount_cents` ledger column (A4-3) → **ADD it** (canonical; type-table fallback for legacy rows).
+- WOV-003 vendor-payout identity (B3-3) → **HYBRID**: pay the linked wallet if `user_sub` exists, else a clearing account.
+- TBT-003 bounty repost cap (B3-4) → **NO CAP** (explicit v1 decision; counter stays tracked-but-unenforced).
+- OBP umbrella flag (A5-B) → **ADD `OPEN_BANK_PROJECT_ENABLED`** (AND-ed with each per-series flag).
+- Admin invoice settlement (B1-4) → **ADD admin record-external-payment** (mark-paid + ledger entry, no Stripe charge).
+- Shared branding (B1-2) → **ROOT-ADMIN CONFIGURABLE** (`PLATFORM#BRANDING` row + `/ui/admin/branding`, env default).
+- HTL-036 sequencing (B4-8) → **SHIP DARK** (getattr/lazy-import fallbacks; INV-002..006 built later).
+
+---
+
+## Part D — Resolved product decisions (2026-06-13)
+
+The seven `[FOR YOU]` items from Part C, decided and baked into the affected specs.
+
+### D1. Ledger sign → add `signed_amount_cents` (canonical; type-table fallback)
+`billing_shared.new_ledger_entry` stamps a **`signed_amount_cents`** at write time (credit `+`,
+charge/debit `−`; `adjustment`/refund direction set explicitly by the caller). Readers sum
+`signed_amount_cents` and fall back to the ACC-002 §5 type→sign table **only** for legacy/unstamped
+rows; a one-time backfill stamps existing rows at build. `amount_cents` stays unsigned (display).
+**Specs amended:** ACC-002 (reader prefers `signed_amount_cents`), SHP-019 / INV-009 / QUO-005 /
+`refund_payment` (writers stamp it; all already positive `amount_cents` per A4).
+
+### D2. WOV-003 vendor payout → hybrid (linked wallet, else clearing account)
+**WOV-004** `VendorOut` gains an optional **`user_sub`** linking a vendor to a platform account.
+**WOV-003** `_release_escrow`: if `vendor.user_sub` → `apply_wallet_delta(user_sub, +amount)`;
+else → credit a platform **maintenance clearing account** (reserved system sub, e.g.
+`CLEARING#maintenance`) + write a pending-disbursement marker for admin off-platform payout +
+reconciliation. Both paths use the single ledger and are idempotent; no 409 dead-end.
+
+### D3. TBT-003 repost cap → no cap (explicit v1 decision)
+`bounty_repost_count` stays **tracked but unenforced** by deliberate decision; revisit only if abuse
+appears. No code change — TBT-003 records this as a resolved decision, not an oversight.
+
+### D4. OBP umbrella flag → add `OPEN_BANK_PROJECT_ENABLED`
+Add `OPEN_BANK_PROJECT_ENABLED` / `S.open_bank_project_enabled` (default **OFF**). Every OBP series
+`_require_enabled()` becomes `S.open_bank_project_enabled AND S.<series>_enabled` — one umbrella
+kill-switch for the whole banking vertical, per-series flags still gate granular rollout. Defined
+once in **ACC-001**; the AND-ing convention is noted on each series foundation
+(OAU/TXR/VEW/PLT/PAY/CUS/CSN-001).
+
+### D5. Admin invoice → record-external-payment (no Stripe charge)
+Add `POST /ui/admin/invoices/{invoice_number}/record-payment` (`require_admin_or_root`), body
+`{amount_cents, method:"external", reference, reason}`: writes a **positive** `new_ledger_entry`
+(with `signed_amount_cents` per D1) + settles the invoice (`sent→paid`) + audits. It records an
+offline/manual payment — it does **NOT** charge the user's payment method. **Owned by QUO-005**
+(invoice payment/lifecycle); e2e coverage added to INV-012.
+
+### D6. Branding → root-admin configurable
+Canonical: a **`PLATFORM#BRANDING`** settings row `{name, logo_url, support_email}` with
+`GET/PUT /ui/admin/branding` (**root** only); env values (`PLATFORM_NAME`, …) are the defaults; a
+cached `get_branding()` helper resolves it. Templates read `{{platform_name}}` from `get_branding()`.
+**CMP-006** (`web_to_lead_platform_name`) and **CMP-008** migrate to `get_branding().platform_name`.
+A small dedicated branding ticket should formalize the entity when this is built.
+
+### D7. HTL-036 → ship dark
+HTL-036 ships with `getattr(S, …, default)` + lazy-`try/except` import fallbacks (flat
+`invoices_tax_bps`, opaque currency). Tax/currency activates automatically once **INV-002..006** are
+built and their default-off flags flip. No build-order dependency; nothing is gated on the unbuilt
+registries.
 
 ---
 
