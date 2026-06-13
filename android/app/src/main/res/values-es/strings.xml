@@ -12,4 +12,17 @@
     <string name="language_picker_title">Idioma</string>
     <string name="language_picker_back">Atrás</string>
     <string name="language_picker_system_default">Predeterminado del sistema</string>
+
+    <!-- AND-317 host broadcast FSM phase labels -->
+    <string name="host_phase_idle">Sin transmitir</string>
+    <string name="host_phase_scheduling">Programando…</string>
+    <string name="host_phase_scheduled">Programado</string>
+    <string name="host_phase_preflight">Comprobación previa</string>
+    <string name="host_phase_connecting">Conectando…</string>
+    <string name="host_phase_live">En vivo</string>
+    <string name="host_phase_paused">En pausa</string>
+    <string name="host_phase_reconnecting">Reconectando…</string>
+    <string name="host_phase_ending">Finalizando…</string>
+    <string name="host_phase_ended">Finalizado</string>
+    <string name="host_phase_error">Algo salió mal</string>
 </resources>

@@ -2211,4 +2211,17 @@
     <string name="ad_break_end">End early</string>
     <string name="ad_break_end_cd">End the ad break early</string>
     <string name="ad_break_total">Ad breaks this broadcast: %1$d</string>
+
+    <!-- AND-317 host broadcast FSM phase labels -->
+    <string name="host_phase_idle">Not broadcasting</string>
+    <string name="host_phase_scheduling">Scheduling…</string>
+    <string name="host_phase_scheduled">Scheduled</string>
+    <string name="host_phase_preflight">Pre-flight check</string>
+    <string name="host_phase_connecting">Connecting…</string>
+    <string name="host_phase_live">Live</string>
+    <string name="host_phase_paused">Paused</string>
+    <string name="host_phase_reconnecting">Reconnecting…</string>
+    <string name="host_phase_ending">Ending…</string>
+    <string name="host_phase_ended">Ended</string>
+    <string name="host_phase_error">Something went wrong</string>
 </resources>
