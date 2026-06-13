@@ -209,6 +209,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         livenessCallDestination(navController)
         // AND-325: KYC electronic ID verification (real REST redirect eIDV; redirect_url opens externally + poll).
         eidvDestination(navController)
+        // AND-326: KYC residency (proof-of-residency document upload + structured address verification; real REST).
+        residencyDestination(navController)
     }
 }
 

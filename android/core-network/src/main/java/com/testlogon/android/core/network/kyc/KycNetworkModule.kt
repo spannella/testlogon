@@ -30,6 +30,10 @@ import javax.inject.Singleton
  *
  * AND-325 - also provides [KycEidvApi] (the `v1/kyc/eid` electronic ID verification redirect control plane)
  * from the same shared Retrofit.
+ *
+ * AND-326 - also provides [KycResidencyApi] (the `ui/kyc/residency` proof-of-residency document upload +
+ * the `v1/kyc/address-verification` structured address-verification control plane) from the same shared
+ * Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -63,4 +67,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycEidvApi(retrofit: Retrofit): KycEidvApi =
         retrofit.create(KycEidvApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycResidencyApi(retrofit: Retrofit): KycResidencyApi =
+        retrofit.create(KycResidencyApi::class.java)
 }
