@@ -1,6 +1,7 @@
 package com.testlogon.android.data.auth
 
 import com.testlogon.android.core.data.cache.UserScopedCacheCleaner
+import com.testlogon.android.core.data.delegates.DelegationStateStore
 import com.testlogon.android.core.data.telemetry.AuthEvent
 import com.testlogon.android.core.data.telemetry.AuthOutcome
 import com.testlogon.android.core.data.telemetry.AuthTelemetry
@@ -97,6 +98,10 @@ class AuthRepositoryImpl @Inject constructor(
     // AND-118: per-user Room cache purge on logout; defaulted no-op so direct-construction tests
     // are unaffected. Hilt injects the real CacheManager-backed cleaner.
     private val cacheCleaner: UserScopedCacheCleaner = UserScopedCacheCleaner.NOOP,
+    // AND-359 (FR-7): clear the manage-as-creator selection on auth reset / logout so it never leaks
+    // across sessions. Defaulted to a fresh in-memory store so direct-construction tests are unaffected;
+    // Hilt injects the process-global singleton.
+    private val delegationStateStore: DelegationStateStore = DelegationStateStore(),
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -148,6 +153,7 @@ class AuthRepositoryImpl @Inject constructor(
             if (r.error.status == 401) {
                 _cachedUser.value = null
                 authStateStore.clear(com.testlogon.android.core.model.LogoutReason.SESSION_EXPIRED)
+                delegationStateStore.clear() // AND-359 FR-7: drop manage-as selection on auth reset.
             }
             r // network / 5xx: persisted auth flag untouched (flaky host must not log out).
         }
@@ -203,6 +209,7 @@ class AuthRepositoryImpl @Inject constructor(
         // (b-c) guaranteed local teardown regardless of (a)
         cookieCleaner.clear()
         authStateStore.clear()
+        delegationStateStore.clear() // AND-359 FR-7: drop manage-as selection on logout.
         authAreaCache.clear() // AND-045 per-identity cache cleared on logout
         // AND-118: wipe all user-scoped Room cache rows so account B never sees account A's content.
         // Best-effort and self-bounded — never blocks or fails logout.
