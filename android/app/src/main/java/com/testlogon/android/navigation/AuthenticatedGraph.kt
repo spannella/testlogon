@@ -197,6 +197,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         broadcastDestinations(navController)
         // AND-312: guest accept (testlogon://guest/accept) — also registered in the unauthenticated graph.
         guestAcceptDestination(navController)
+        // AND-320: KYC tier status (current tier + target requirements checklist + Evaluate action).
+        kycTierDestination(navController)
     }
 }
 

@@ -2224,4 +2224,39 @@
     <string name="host_phase_ending">Ending…</string>
     <string name="host_phase_ended">Ended</string>
     <string name="host_phase_error">Something went wrong</string>
+
+    <!-- AND-320 — KYC tier status -->
+    <string name="kyc_tier_title">Verification level</string>
+    <string name="kyc_tier_current_label">Current level</string>
+    <string name="kyc_tier_updated_at">Updated %1$s</string>
+    <string name="kyc_tier_requirements_header">Requirements for %1$s</string>
+    <string name="kyc_tier_check_eligibility">Check eligibility</string>
+    <string name="kyc_tier_eligible">You meet the requirements for %1$s. Check eligibility to advance.</string>
+    <string name="kyc_tier_max_reached">You\'ve reached the highest verification level.</string>
+    <string name="kyc_tier_promoted">You\'ve advanced to %1$s.</string>
+    <string name="kyc_tier_stale">Showing saved status — %1$s</string>
+    <string name="kyc_tier_history_header">History</string>
+    <string name="kyc_tier_history_change">%1$s → %2$s</string>
+    <string name="kyc_tier_req_met_cd">requirement met</string>
+    <string name="kyc_tier_req_unmet_cd">requirement not met</string>
+
+    <!-- AND-320 — tier names (client-side level -> name) -->
+    <string name="kyc_tier_name_0">Unverified</string>
+    <string name="kyc_tier_name_1">Basic</string>
+    <string name="kyc_tier_name_2">ID Verified</string>
+    <string name="kyc_tier_name_3">Enhanced</string>
+    <string name="kyc_tier_name_4">Institutional</string>
+
+    <!-- AND-320 — requirement key -> label -->
+    <string name="kyc_req_email_verified">Email verified</string>
+    <string name="kyc_req_phone_verified">Phone verified</string>
+    <string name="kyc_req_kyc_case_approved">Identity verification approved</string>
+    <string name="kyc_req_proof_of_address">Proof of address</string>
+    <string name="kyc_req_verification_call">Verification call</string>
+    <string name="kyc_req_questionnaire_completed">Questionnaire completed</string>
+    <string name="kyc_req_business_kyc_approved">Business verification approved</string>
+    <string name="kyc_req_api_access_approved">API access approved</string>
+    <string name="kyc_req_tier_1">Basic tier</string>
+    <string name="kyc_req_tier_2">ID Verified tier</string>
+    <string name="kyc_req_tier_3">Enhanced tier</string>
 </resources>
