@@ -38,11 +38,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.model.helpdesk.Availability
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskQueueItem
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskRoutingState
 import com.testlogon.android.data.messaging.helpdesk.isClaimable
@@ -61,6 +64,9 @@ object HelpdeskQueueTestTags {
 
     /** AND-378 — per-row inline claim button. */
     const val ROW_CLAIM = "helpdesk_queue_row_claim"
+
+    /** AND-379 — the "Go Online to claim" caption shown under a disabled (AWAY) Claim button. */
+    const val ROW_CLAIM_CAPTION = "helpdesk_queue_row_claim_caption"
 }
 
 /**
@@ -79,16 +85,19 @@ fun HelpdeskQueueRoute(
     viewModel: HelpdeskQueueViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val availability by viewModel.availability.collectAsStateWithLifecycle()
     val refreshing = (state as? HelpdeskQueueUiState.Ready)?.isRefreshing == true
     val snackbarHostState = remember { SnackbarHostState() }
 
     val claimedMsg = stringResource(R.string.helpdesk_queue_claim_success)
     val alreadyMsg = stringResource(R.string.helpdesk_queue_claim_already)
+    val blockedAwayMsg = stringResource(R.string.helpdesk_claim_blocked_away)
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             val message = when (event) {
                 HelpdeskQueueEvent.Claimed -> claimedMsg
                 HelpdeskQueueEvent.AlreadyClaimed -> alreadyMsg
+                HelpdeskQueueEvent.BlockedAway -> blockedAwayMsg
                 is HelpdeskQueueEvent.ClaimFailed -> event.message
             }
             snackbarHostState.currentSnackbarData?.dismiss()
@@ -111,6 +120,11 @@ fun HelpdeskQueueRoute(
                     }
                 },
                 actions = {
+                    // AND-379 — availability toggle in the queue header (single source of truth).
+                    AvailabilityToggle(
+                        value = availability,
+                        onChange = viewModel::setAvailability,
+                    )
                     IconButton(
                         onClick = viewModel::refresh,
                         modifier = Modifier.testTag(HelpdeskQueueTestTags.REFRESH),
@@ -166,6 +180,7 @@ fun HelpdeskQueueRoute(
                                     HelpdeskQueueRow(
                                         item = item,
                                         claiming = item.conversationId in s.inFlight,
+                                        claimEnabled = availability == Availability.ONLINE,
                                         onClick = { onOpenConversation(item.conversationId, item.claimState) },
                                         onClaim = { viewModel.onClaim(item.conversationId) },
                                     )
@@ -182,6 +197,7 @@ fun HelpdeskQueueRoute(
 internal fun HelpdeskQueueRow(
     item: HelpdeskQueueItem,
     claiming: Boolean,
+    claimEnabled: Boolean,
     onClick: () -> Unit,
     onClaim: () -> Unit,
 ) {
@@ -242,10 +258,20 @@ internal fun HelpdeskQueueRow(
         if (item.isClaimable()) {
             Spacer(Modifier.size(8.dp))
             val claimCd = stringResource(R.string.helpdesk_queue_row_claim_cd)
+            // AND-379 — when AWAY the Claim button is disabled (visually + input) with a caption.
+            val awayDisabledDesc = stringResource(R.string.helpdesk_claim_disabled_away_cd)
             OutlinedButton(
                 onClick = onClaim,
-                enabled = !claiming,
-                modifier = Modifier.testTag(HelpdeskQueueTestTags.ROW_CLAIM),
+                enabled = claimEnabled && !claiming,
+                modifier = Modifier
+                    .testTag(HelpdeskQueueTestTags.ROW_CLAIM)
+                    .then(
+                        if (!claimEnabled) {
+                            Modifier.semantics { stateDescription = awayDisabledDesc }
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 if (claiming) {
                     CircularProgressIndicator(Modifier.size(18.dp))
@@ -254,6 +280,15 @@ internal fun HelpdeskQueueRow(
                 } else {
                     Text(claimCd)
                 }
+            }
+            if (!claimEnabled) {
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    text = stringResource(R.string.helpdesk_claim_go_online_caption),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag(HelpdeskQueueTestTags.ROW_CLAIM_CAPTION),
+                )
             }
         }
     }

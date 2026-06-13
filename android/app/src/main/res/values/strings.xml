@@ -846,6 +846,16 @@
     <string name="helpdesk_queue_claim_success">Claimed</string>
     <string name="helpdesk_queue_claim_already">Already handled by another agent</string>
 
+    <!-- AND-379 — agent availability / online state -->
+    <string name="helpdesk_availability_online">Online</string>
+    <string name="helpdesk_availability_away">Away</string>
+    <string name="helpdesk_availability_label">Agent availability</string>
+    <string name="helpdesk_claim_blocked_away">You\'re Away — go Online to claim</string>
+    <string name="helpdesk_claim_disabled_offline">You\'re offline — reconnect to claim</string>
+    <string name="helpdesk_claim_conflict">Already claimed by another agent</string>
+    <string name="helpdesk_claim_go_online_caption">Go Online to claim</string>
+    <string name="helpdesk_claim_disabled_away_cd">disabled — go Online to claim</string>
+
     <!-- AND-163 — report message -->
     <string name="msg_action_report">Report</string>
     <string name="report_title">Report message</string>

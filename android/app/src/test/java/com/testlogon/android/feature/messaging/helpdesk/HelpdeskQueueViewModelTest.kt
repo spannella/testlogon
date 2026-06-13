@@ -3,6 +3,7 @@ package com.testlogon.android.feature.messaging.helpdesk
 import com.testlogon.android.MainDispatcherRule
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.helpdesk.Availability
 import com.testlogon.android.data.auth.FakeAuthStateStore
 import com.testlogon.android.data.messaging.helpdesk.ClaimState
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskAssignment
@@ -33,6 +34,7 @@ class HelpdeskQueueViewModelTest {
 
     private val repo = FakeHelpdeskRepository()
     private val auth = FakeAuthStateStore()
+    private val availability = FakeAvailabilityRepository(Availability.ONLINE)
 
     @Before
     fun seedAgent() {
@@ -40,7 +42,7 @@ class HelpdeskQueueViewModelTest {
         runBlocking { auth.setAuthenticated("usr_me") }
     }
 
-    private fun vm() = HelpdeskQueueViewModel(repo, auth)
+    private fun vm() = HelpdeskQueueViewModel(repo, auth, availability, HelpdeskClaimGate(availability))
 
     private fun item(id: String) = HelpdeskQueueItem(
         conversationId = id, title = "T", preview = "p",
@@ -219,5 +221,61 @@ class HelpdeskQueueViewModelTest {
         advanceUntilIdle()
         assertTrue(repo.claimedIds.isEmpty())
         assertFalse((vm.uiState.value as HelpdeskQueueUiState.Ready).inFlight.contains("c1"))
+    }
+
+    // ---- AND-379: availability gate ----
+
+    @Test
+    fun claim_whileAway_blocksWithoutNetworkCall_andEmitsBlockedAway() = runTest {
+        // TC-AND-379-06 — AWAY agent: no helpdeskRepository.claim call; BlockedAway emitted.
+        availability.set(Availability.AWAY)
+        repo.queueResult = ApiResult.Success(listOf(item("c1")))
+        val vm = vm()
+        advanceUntilIdle()
+        val events = mutableListOf<HelpdeskQueueEvent>()
+        val ejob = CoroutineScope(UnconfinedTestDispatcher(testScheduler)).launch { vm.events.toList(events) }
+        advanceUntilIdle()
+
+        vm.onClaim("c1")
+        advanceUntilIdle()
+        ejob.cancel()
+
+        // No network claim, row unchanged, in-flight cleared, distinct BlockedAway message.
+        assertTrue(repo.claimedIds.isEmpty())
+        val row = readyRow(vm, "c1")
+        assertEquals(ClaimState.UNASSIGNED, row.claimState)
+        assertTrue((vm.uiState.value as HelpdeskQueueUiState.Ready).inFlight.isEmpty())
+        assertEquals(listOf(HelpdeskQueueEvent.BlockedAway), events)
+    }
+
+    @Test
+    fun claim_whileOnline_performsClaim() = runTest {
+        // TC-AND-379-07 — ONLINE agent: the claim request is performed exactly once.
+        availability.set(Availability.ONLINE)
+        repo.queueResult = ApiResult.Success(listOf(item("c1")))
+        repo.claimResult = ApiResult.Success(
+            HelpdeskClaimResult("c1", HelpdeskAssignment.ASSIGNED_TO_ME, "usr_me", 4, false),
+        )
+        val vm = vm()
+        advanceUntilIdle()
+        vm.onClaim("c1")
+        advanceUntilIdle()
+        assertEquals(listOf("c1"), repo.claimedIds)
+        assertEquals(ClaimState.CLAIMED_BY_ME, readyRow(vm, "c1").claimState)
+    }
+
+    @Test
+    fun setAvailability_flipsExposedStateFlow_andPushesStatus() = runTest {
+        // TC-AND-379-03/09 (VM-level) — setAvailability updates the single source + pushes the status.
+        repo.queueResult = ApiResult.Success(emptyList())
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(Availability.ONLINE, vm.availability.value)
+
+        vm.setAvailability(Availability.AWAY)
+        advanceUntilIdle()
+        assertEquals(Availability.AWAY, vm.availability.value)
+        assertEquals(listOf(Availability.AWAY), availability.setCalls)
+        assertEquals(listOf("away"), availability.pushedStatuses)
     }
 }

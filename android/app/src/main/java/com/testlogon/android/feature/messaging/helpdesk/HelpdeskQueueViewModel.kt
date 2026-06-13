@@ -3,7 +3,9 @@ package com.testlogon.android.feature.messaging.helpdesk
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.helpdesk.Availability
 import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.messaging.helpdesk.availability.AvailabilityRepository
 import com.testlogon.android.data.messaging.helpdesk.ClaimState
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskAssignment
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskClaimResult
@@ -54,6 +56,9 @@ sealed interface HelpdeskQueueEvent {
 
     /** Claim failed (network/offline/unknown); the optimistic change was rolled back. */
     data class ClaimFailed(val message: String) : HelpdeskQueueEvent
+
+    /** AND-379 — claim attempted while AWAY; gated client-side (no network call). */
+    data object BlockedAway : HelpdeskQueueEvent
 }
 
 /**
@@ -67,10 +72,18 @@ sealed interface HelpdeskQueueEvent {
 class HelpdeskQueueViewModel @Inject constructor(
     private val repository: HelpdeskRepository,
     private val authStateStore: AuthStateStore,
+    private val availabilityRepository: AvailabilityRepository,
+    private val claimGate: HelpdeskClaimGate,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<HelpdeskQueueUiState>(HelpdeskQueueUiState.Loading)
     val uiState: StateFlow<HelpdeskQueueUiState> = _uiState.asStateFlow()
+
+    /**
+     * AND-379 — the single source of truth for availability, shared by the header toggle, the row
+     * Claim buttons, and the heartbeat (AC-4). Hot StateFlow seeded from DataStore (default AWAY).
+     */
+    val availability: StateFlow<Availability> = availabilityRepository.availability
 
     private val _events = Channel<HelpdeskQueueEvent>(Channel.BUFFERED)
     val events: Flow<HelpdeskQueueEvent> = _events.receiveAsFlow()
@@ -91,9 +104,11 @@ class HelpdeskQueueViewModel @Inject constructor(
     fun retry() = load(isRefresh = false)
 
     /**
-     * AND-378 — claim a queued conversation inline. Guards against double-submit (id already in flight),
-     * applies an optimistic claimed-by-me update, then reconciles from the server payload. On error the
-     * snapshot row is restored. Claim is server-idempotent, so re-claiming one's own row is a no-op.
+     * AND-378 / AND-379 — claim a queued conversation inline. Guards against double-submit (id already
+     * in flight), then gates on availability (AND-379): an AWAY agent is short-circuited with a
+     * [HelpdeskQueueEvent.BlockedAway] message and NO network call (AC-1). When ONLINE it applies an
+     * optimistic claimed-by-me update, reconciles from the server payload, and rolls back on error.
+     * Claim is server-idempotent, so re-claiming one's own row is a no-op.
      */
     fun onClaim(conversationId: String) {
         val ready = _uiState.value as? HelpdeskQueueUiState.Ready ?: return
@@ -102,26 +117,45 @@ class HelpdeskQueueViewModel @Inject constructor(
         // UX guard: only act on rows the matrix considers claimable.
         if (!snapshot.isClaimable()) return
 
-        val me = authStateStore.userSub.value
-        val optimistic = snapshot.copy(
-            routingState = HelpdeskRoutingState.ASSIGNED,
-            claimState = ClaimState.CLAIMED_BY_ME,
-            activeAgentUserId = me ?: snapshot.activeAgentUserId,
-        )
+        // Reserve the in-flight slot synchronously so a second tap is ignored while the gate resolves.
         _uiState.update {
-            (it as? HelpdeskQueueUiState.Ready)?.copy(
-                items = it.items.replaceRow(optimistic),
-                inFlight = it.inFlight + conversationId,
-            ) ?: it
+            (it as? HelpdeskQueueUiState.Ready)?.copy(inFlight = it.inFlight + conversationId) ?: it
         }
 
+        val me = authStateStore.userSub.value
         viewModelScope.launch {
+            // AND-379 — availability gate: AWAY blocks the claim before any network call.
+            if (claimGate.check() == ClaimGateResult.BlockedAway) {
+                _uiState.update {
+                    (it as? HelpdeskQueueUiState.Ready)?.copy(inFlight = it.inFlight - conversationId) ?: it
+                }
+                _events.send(HelpdeskQueueEvent.BlockedAway)
+                return@launch
+            }
+
+            // Online: apply the optimistic claimed-by-me update, then call the network.
+            val optimistic = snapshot.copy(
+                routingState = HelpdeskRoutingState.ASSIGNED,
+                claimState = ClaimState.CLAIMED_BY_ME,
+                activeAgentUserId = me ?: snapshot.activeAgentUserId,
+            )
+            _uiState.update {
+                (it as? HelpdeskQueueUiState.Ready)?.copy(items = it.items.replaceRow(optimistic)) ?: it
+            }
             when (val r = repository.claim(conversationId)) {
                 is ApiResult.Success -> reconcileClaim(conversationId, snapshot, r.data, me)
                 is ApiResult.Failure -> failClaim(conversationId, snapshot, r.error.message)
                 is ApiResult.NetworkError -> failClaim(conversationId, snapshot, OFFLINE_MESSAGE)
             }
         }
+    }
+
+    /**
+     * AND-379 — flip availability (queue header or settings). Persists + fires an immediate heartbeat
+     * via the repository; the exposed [availability] StateFlow updates for every collector (AC-2/AC-4).
+     */
+    fun setAvailability(value: Availability) {
+        viewModelScope.launch { availabilityRepository.set(value) }
     }
 
     private suspend fun reconcileClaim(

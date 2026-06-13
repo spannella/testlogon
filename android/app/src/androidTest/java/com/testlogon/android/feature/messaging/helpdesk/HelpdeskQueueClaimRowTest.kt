@@ -41,11 +41,18 @@ class HelpdeskQueueClaimRowTest {
     private fun setRow(
         item: HelpdeskQueueItem,
         claiming: Boolean = false,
+        claimEnabled: Boolean = true,
         onClaim: () -> Unit = {},
     ) {
         rule.setContent {
             TestLogonTheme(dynamicColor = false) {
-                HelpdeskQueueRow(item = item, claiming = claiming, onClick = {}, onClaim = onClaim)
+                HelpdeskQueueRow(
+                    item = item,
+                    claiming = claiming,
+                    claimEnabled = claimEnabled,
+                    onClick = {},
+                    onClaim = onClaim,
+                )
             }
         }
     }
@@ -66,6 +73,17 @@ class HelpdeskQueueClaimRowTest {
         rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM).assertIsNotEnabled()
         rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM).performClick()
         // Disabled button does not fire the callback (double-submit guard at the UI layer too).
+        assertEquals(0, claims)
+    }
+
+    @Test
+    fun awayAgent_claimButtonDisabled_withCaption_andDoesNotFire() {
+        // AND-379 TC-12 — AWAY disables the Claim button (input + visual) and shows the caption.
+        var claims = 0
+        setRow(item(), claimEnabled = false, onClaim = { claims++ })
+        rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM).assertIsNotEnabled()
+        rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM_CAPTION).assertIsDisplayed()
+        rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM).performClick()
         assertEquals(0, claims)
     }
 
