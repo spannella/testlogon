@@ -21,6 +21,9 @@ import javax.inject.Singleton
  *
  * AND-322 - also provides [KycIdScannerApi] (the `ui/kyc/id-scanner/cases/{caseId}/...` validate +
  * per-side scan control plane) from the same shared Retrofit.
+ *
+ * AND-323 - also provides [FaceComparisonApi] (the `v1/kyc/cases/{caseId}/compare-face` +
+ * `face-comparisons` server-side facial-comparison control plane) from the same shared Retrofit.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -39,4 +42,9 @@ object KycNetworkModule {
     @Singleton
     fun provideKycIdScannerApi(retrofit: Retrofit): KycIdScannerApi =
         retrofit.create(KycIdScannerApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideFaceComparisonApi(retrofit: Retrofit): FaceComparisonApi =
+        retrofit.create(FaceComparisonApi::class.java)
 }

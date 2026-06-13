@@ -203,6 +203,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         kycDocumentCaptureDestination(navController)
         // AND-322: KYC guided ID capture+scan (validate-document + per-side upload + scan-document).
         idScannerDestination(navController)
+        // AND-323: KYC facial comparison (selfie capture + server-side face comparison + history).
+        faceComparisonDestination(navController)
     }
 }
 

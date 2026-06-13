@@ -2312,4 +2312,29 @@
     <string name="idscan_status_unknown">Pending review</string>
     <string name="idscan_restart">Start over</string>
     <string name="idscan_done">Done</string>
+
+    <!-- AND-323: KYC facial comparison (selfie vs. ID, compared server-side) -->
+    <string name="face_capture_prompt">Take a selfie to verify your identity</string>
+    <string name="face_oval_hint">Center your face within the oval</string>
+    <string name="face_auto_capture_unavailable">Live front-camera auto-capture is not configured. Take a selfie manually instead.</string>
+    <string name="face_take">Take selfie</string>
+    <string name="face_pick">Choose photo</string>
+    <string name="face_review_prompt">Review your selfie</string>
+    <string name="face_review_image_cd">Preview of your captured selfie</string>
+    <string name="face_retake">Retake</string>
+    <string name="face_submit">Submit for verification</string>
+    <string name="face_submitting">Comparing your selfie…</string>
+    <string name="face_result_prompt">Verification result</string>
+    <string name="face_result_pass">Verified</string>
+    <string name="face_result_review">Pending review</string>
+    <string name="face_result_fail">Could not verify</string>
+    <string name="face_result_unknown">Pending review</string>
+    <string name="face_confidence">Confidence: %1$d%%</string>
+    <string name="face_anti_spoof">Liveness checks: %1$d of %2$d passed</string>
+    <string name="face_attempts">Attempt %1$d of %2$d (%3$d remaining)</string>
+    <string name="face_retry">Try again</string>
+    <string name="face_done">Done</string>
+    <string name="face_contact_support">No attempts remaining. Please contact support.</string>
+    <string name="face_history_title">Previous attempts</string>
+    <string name="face_history_row">Attempt %1$d: %2$s (%3$d%%)</string>
 </resources>
