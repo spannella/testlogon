@@ -22,13 +22,18 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -40,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskQueueItem
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskRoutingState
+import com.testlogon.android.data.messaging.helpdesk.isClaimable
 import com.testlogon.android.feature.messaging.relativeTimeFromSeconds
 
 /** AND-161 — stable testTags for the helpdesk queue screen. */
@@ -52,12 +58,19 @@ object HelpdeskQueueTestTags {
     const val ERROR = "helpdesk_queue_error"
     const val NOT_AUTHORIZED = "helpdesk_queue_not_authorized"
     const val REFRESH = "helpdesk_queue_refresh"
+
+    /** AND-378 — per-row inline claim button. */
+    const val ROW_CLAIM = "helpdesk_queue_row_claim"
 }
 
 /**
  * AND-161 — route-level helpdesk queue screen. Single bounded fetch rendered in a LazyColumn under a
  * PullToRefreshBox + toolbar refresh. 403 -> Not authorized (no toast); 200 [] -> empty. Row tap calls
  * [onOpenConversation] with the conversation id (consumed by the AND-162 detail).
+ *
+ * AND-378 — claimable rows (`awaiting_agent`, unassigned) expose an inline Claim button. Claiming applies
+ * an optimistic update, disables the button while in flight (double-submit guard), and reports the
+ * outcome via a snackbar. Assign/Transfer are NOT offered here (no backend route — spec section 16).
  */
 @Composable
 fun HelpdeskQueueRoute(
@@ -67,9 +80,25 @@ fun HelpdeskQueueRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val refreshing = (state as? HelpdeskQueueUiState.Ready)?.isRefreshing == true
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val claimedMsg = stringResource(R.string.helpdesk_queue_claim_success)
+    val alreadyMsg = stringResource(R.string.helpdesk_queue_claim_already)
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            val message = when (event) {
+                HelpdeskQueueEvent.Claimed -> claimedMsg
+                HelpdeskQueueEvent.AlreadyClaimed -> alreadyMsg
+                is HelpdeskQueueEvent.ClaimFailed -> event.message
+            }
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     Scaffold(
         modifier = Modifier.testTag(HelpdeskQueueTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.helpdesk_queue_title)) },
@@ -136,7 +165,9 @@ fun HelpdeskQueueRoute(
                                 items(s.items, key = { it.conversationId }) { item ->
                                     HelpdeskQueueRow(
                                         item = item,
+                                        claiming = item.conversationId in s.inFlight,
                                         onClick = { onOpenConversation(item.conversationId, item.claimState) },
+                                        onClaim = { viewModel.onClaim(item.conversationId) },
                                     )
                                 }
                             }
@@ -148,7 +179,12 @@ fun HelpdeskQueueRoute(
 }
 
 @Composable
-private fun HelpdeskQueueRow(item: HelpdeskQueueItem, onClick: () -> Unit) {
+internal fun HelpdeskQueueRow(
+    item: HelpdeskQueueItem,
+    claiming: Boolean,
+    onClick: () -> Unit,
+    onClaim: () -> Unit,
+) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -201,6 +237,23 @@ private fun HelpdeskQueueRow(item: HelpdeskQueueItem, onClick: () -> Unit) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+        if (item.isClaimable()) {
+            Spacer(Modifier.size(8.dp))
+            val claimCd = stringResource(R.string.helpdesk_queue_row_claim_cd)
+            OutlinedButton(
+                onClick = onClaim,
+                enabled = !claiming,
+                modifier = Modifier.testTag(HelpdeskQueueTestTags.ROW_CLAIM),
+            ) {
+                if (claiming) {
+                    CircularProgressIndicator(Modifier.size(18.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text(stringResource(R.string.helpdesk_queue_claiming))
+                } else {
+                    Text(claimCd)
+                }
             }
         }
     }

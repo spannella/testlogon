@@ -840,6 +840,12 @@
     <string name="helpdesk_claim_err_network">Couldn\'t claim. Check your connection and try again.</string>
     <string name="helpdesk_claim_err_unknown">Couldn\'t claim this conversation</string>
 
+    <!-- AND-378 — inline claim from the queue row (assign/transfer have no backend route; not offered) -->
+    <string name="helpdesk_queue_row_claim_cd">Claim this helpdesk conversation</string>
+    <string name="helpdesk_queue_claiming">Claiming…</string>
+    <string name="helpdesk_queue_claim_success">Claimed</string>
+    <string name="helpdesk_queue_claim_already">Already handled by another agent</string>
+
     <!-- AND-163 — report message -->
     <string name="msg_action_report">Report</string>
     <string name="report_title">Report message</string>
