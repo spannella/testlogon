@@ -32,8 +32,10 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -114,9 +116,22 @@ fun FilesRoute(
     onOpenFile: (String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: FilesViewModel = hiltViewModel(),
+    uploadViewModel: com.testlogon.android.feature.files.upload.FilesUploadViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val items = viewModel.pagedItems.collectAsLazyPagingItems()
+    val uploadJobs by uploadViewModel.uploadJobs.collectAsStateWithLifecycle()
+    var uploadSheetVisible by remember { mutableStateOf(false) }
+
+    // AND-333 - system document picker; placement is path-based, so we capture the folder on screen.
+    val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uploadViewModel.onFilesPicked(uris, state.currentPath)
+            uploadSheetVisible = true
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -139,7 +154,18 @@ fun FilesRoute(
         onSortChanged = viewModel::onSortChanged,
         onRefresh = viewModel::onRefresh,
         modifier = modifier,
+        onUploadClick = { pickFiles.launch(arrayOf("*/*")) },
     )
+
+    if (uploadSheetVisible) {
+        com.testlogon.android.feature.files.upload.UploadSheet(
+            jobs = uploadJobs,
+            onCancel = uploadViewModel::onCancel,
+            onRetry = uploadViewModel::onRetry,
+            onDismissJob = uploadViewModel::onDismiss,
+            onDismiss = { uploadSheetVisible = false },
+        )
+    }
 }
 
 @Composable
@@ -155,11 +181,27 @@ fun FilesScreen(
     onSortChanged: (FileSortBy, FileSortDir, Boolean) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    onUploadClick: (() -> Unit)? = null,
 ) {
     var sortSheetVisible by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = modifier.testTag(FilesTestTags.SCREEN),
+        floatingActionButton = {
+            // AND-333 - upload affordance; only shown when the host wires the picker (defaulted-off so
+            // existing AND-332 FilesScreen callers / tests are unaffected).
+            if (onUploadClick != null && !state.isSearching) {
+                FloatingActionButton(
+                    onClick = onUploadClick,
+                    modifier = Modifier.testTag(com.testlogon.android.feature.files.upload.UploadTestTags.FAB),
+                ) {
+                    Icon(
+                        Icons.Filled.Upload,
+                        contentDescription = stringResource(R.string.files_upload_action),
+                    )
+                }
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.files_title)) },

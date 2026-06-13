@@ -11,6 +11,7 @@ import com.testlogon.android.feature.files.data.FileSort
 import com.testlogon.android.feature.files.data.FileSortBy
 import com.testlogon.android.feature.files.data.FileSortDir
 import com.testlogon.android.feature.files.data.FilesRepository
+import com.testlogon.android.feature.files.data.FolderRefreshBus
 import com.testlogon.android.feature.files.data.SearchMode
 import com.testlogon.android.feature.files.data.SortPrefs
 import com.testlogon.android.feature.files.presentation.FilePath
@@ -87,8 +88,9 @@ class FilesViewModelTest {
         repo: FakeRepo = FakeRepo(),
         prefs: FakeSortPrefs = FakeSortPrefs(),
         saved: SavedStateHandle = SavedStateHandle(),
+        refreshBus: FolderRefreshBus = FolderRefreshBus(),
     ): FilesViewModel {
-        val model = FilesViewModel(repo, prefs, saved)
+        val model = FilesViewModel(repo, prefs, refreshBus, saved)
         runCurrent() // let the init prefs read settle.
         return model
     }

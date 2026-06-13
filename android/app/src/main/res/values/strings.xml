@@ -2570,4 +2570,18 @@
     <string name="files_error">Couldn\'t load this folder.</string>
     <string name="files_search_error">Couldn\'t run the search.</string>
     <string name="files_append_error">Couldn\'t load more.</string>
+    <!-- AND-333 - upload via presign -->
+    <string name="files_upload_action">Upload files</string>
+    <string name="files_upload_title">Uploads</string>
+    <string name="files_upload_empty">No uploads yet.</string>
+    <string name="files_upload_cancel">Cancel upload</string>
+    <string name="files_upload_retry">Retry upload</string>
+    <string name="files_upload_dismiss">Dismiss</string>
+    <string name="files_upload_state_queued">Queued</string>
+    <string name="files_upload_state_preparing">Preparing…</string>
+    <string name="files_upload_state_uploading">Uploading %1$d%%</string>
+    <string name="files_upload_state_confirming">Finishing…</string>
+    <string name="files_upload_state_done">Uploaded</string>
+    <string name="files_upload_state_failed">Upload failed</string>
+    <string name="files_upload_state_cancelled">Cancelled</string>
 </resources>

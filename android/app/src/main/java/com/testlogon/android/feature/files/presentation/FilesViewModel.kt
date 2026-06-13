@@ -12,6 +12,7 @@ import com.testlogon.android.feature.files.data.FileSort
 import com.testlogon.android.feature.files.data.FileSortBy
 import com.testlogon.android.feature.files.data.FileSortDir
 import com.testlogon.android.feature.files.data.FilesRepository
+import com.testlogon.android.feature.files.data.FolderRefreshBus
 import com.testlogon.android.feature.files.data.SearchMode
 import com.testlogon.android.feature.files.data.SortPrefs
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -75,6 +76,7 @@ sealed interface FilesEvent {
 class FilesViewModel @Inject constructor(
     private val repository: FilesRepository,
     private val sortPrefs: SortPrefs,
+    private val refreshBus: FolderRefreshBus,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -106,6 +108,15 @@ class FilesViewModel @Inject constructor(
             val sort = sortPrefs.read()
             _uiState.update { it.copy(sort = sort) }
             pagerKey.update { it.copy(sort = sort) }
+        }
+        // AND-333 - when an upload confirms into the folder on screen, re-anchor the Pager (same
+        // first-page re-anchor as pull-to-refresh) so the new node appears without a manual reload.
+        viewModelScope.launch {
+            refreshBus.refreshes.collect { folderPath ->
+                if (!_uiState.value.isSearching && folderPath == _uiState.value.currentPath) {
+                    pagerKey.update { it.copy(refresh = it.refresh + 1) }
+                }
+            }
         }
     }
 
