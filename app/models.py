@@ -15181,6 +15181,35 @@ class JobOrderOut(BaseModel):
     state: Optional[str]
     description: Optional[str]
     created_by: str
+# Property management (open-property vertical, PROP-001..PROP-005)
+# ---------------------------------------------------------------------------
+
+class PropertyAddress(BaseModel):
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
+class PropertyIn(BaseModel):
+    name: str
+    property_type: Literal["single_family", "multi_family", "apartment", "commercial"]
+    address: PropertyAddress
+    color_tags: List[str] = []
+
+
+class PropertyOut(BaseModel):
+    property_id: str
+    owner_sub: str
+    name: str
+    property_type: str
+    address: PropertyAddress
+    color_tags: List[str]
+    occupancy_status: Literal["vacant", "partial", "occupied"]
+    unit_count: int
+    status: Literal["active", "archived"]
     created_at: int
     updated_at: int
 
@@ -15188,3 +15217,66 @@ class JobOrderOut(BaseModel):
 class JobOrderListOut(BaseModel):
     items: List[JobOrderOut]
     next_cursor: Optional[str] = None
+class PropertyUpdateIn(BaseModel):
+    name: Optional[str] = None
+    property_type: Optional[Literal["single_family", "multi_family", "apartment", "commercial"]] = None
+    address: Optional[PropertyAddress] = None
+    color_tags: Optional[List[str]] = None
+
+
+class UnitIn(BaseModel):
+    label: str
+    bedrooms: int = Field(ge=0)
+    bathrooms: float = Field(ge=0)
+    square_footage: int = Field(ge=0)
+    market_rent_cents: int = Field(ge=0)
+    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"] = "vacant"
+
+
+class UnitOut(BaseModel):
+    property_id: str
+    unit_id: str
+    label: str
+    bedrooms: int
+    bathrooms: float
+    square_footage: int
+    market_rent_cents: int
+    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"]
+    created_at: int
+    updated_at: int
+
+
+class UnitUpdateIn(BaseModel):
+    label: Optional[str] = None
+    bedrooms: Optional[int] = Field(default=None, ge=0)
+    bathrooms: Optional[float] = Field(default=None, ge=0)
+    square_footage: Optional[int] = Field(default=None, ge=0)
+    market_rent_cents: Optional[int] = Field(default=None, ge=0)
+    occupancy_status: Optional[Literal["vacant", "occupied", "turnover", "unavailable"]] = None
+
+
+class PropertyOccupancyOut(BaseModel):
+    property_id: str
+    total: int
+    occupied: int
+    vacant: int
+    turnover: int
+    unavailable: int
+    occupancy_status: Literal["vacant", "partial", "occupied"]
+    occupancy_rate: float
+
+
+class PortfolioOccupancyOut(BaseModel):
+    property_count: int
+    unit_count: int
+    occupied: int
+    vacant: int
+    turnover: int
+    unavailable: int
+    occupancy_rate: float
+
+
+class PropertyListOut(BaseModel):
+    properties: List[PropertyOut]
+    count: int
+    cursor: Optional[str] = None

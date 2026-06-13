@@ -2807,6 +2807,9 @@ class Settings:
     job_orders_table_name: str = os.environ.get("DDB_JOB_ORDERS_TABLE", "job_orders")
     # JOB-002: allow closed job orders to be reopened (default True)
     job_order_allow_reopen: bool = os.environ.get("JOB_ORDER_ALLOW_REOPEN", "1") not in ("0", "false", "False")
+    # Property management (open-property vertical, PROP-001..PROP-005). Default OFF.
+    property_mgmt_enabled: bool = os.environ.get("PROPERTY_MGMT_ENABLED", "false").lower() == "true"
+    properties_table_name: str = os.environ.get("PROPERTIES_TABLE_NAME", "properties")
 
 
 S = Settings()

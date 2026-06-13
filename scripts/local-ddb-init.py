@@ -2540,6 +2540,22 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N", "updated_at": "N"},
         ),
+        # Property management (open-property vertical, PROP-001..PROP-005).
+        # Single table: META header rows + UNIT#{unit_id} child rows.
+        # GSI_OWNER: list a landlord's properties newest-first (PROP-001).
+        # GSI_STATUS: admin listing by active/archived state (PROP-001).
+        # GSI_UNIT_OCCUPANCY: count units by occupancy bucket per property (PROP-002).
+        TableDef(
+            _resolve_table_name(S.properties_table_name, "properties"),
+            "property_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",         "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS",         "partition_key": "status",            "sort_key": "created_at"},
+                {"index_name": "GSI_UNIT_OCCUPANCY", "partition_key": "property_id",       "sort_key": "occupancy_status"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
