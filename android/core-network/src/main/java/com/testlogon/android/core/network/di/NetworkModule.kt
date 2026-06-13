@@ -3,6 +3,8 @@ package com.testlogon.android.core.network.di
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.testlogon.android.core.network.BuildConfig
+import com.testlogon.android.core.network.ads.AdAccountStatusAdapter
+import com.testlogon.android.core.network.ads.AdCampaignStatusAdapter
 import com.testlogon.android.core.network.json.BigDecimalAdapter
 import com.testlogon.android.core.network.kyc.KycCaseStatusAdapter
 import com.testlogon.android.core.network.kyc.KycFileTypeAdapter
@@ -70,6 +72,11 @@ object NetworkModule {
         .add(QuestionnaireFieldFactory)
         .add(QuestionTypeAdapter)
         .add(AnswerValueAdapter)
+        // AND-363: ads accounts enum token mapping (lenient -> UNKNOWN). The dependency-free stand-in for
+        // EnumJsonAdapter.withUnknownFallback. Registered before the reflective factory so they resolve
+        // for AdAccountStatus / AdCampaignStatus on the ads DTOs.
+        .add(AdAccountStatusAdapter)
+        .add(AdCampaignStatusAdapter)
         .add(KotlinJsonAdapterFactory())
         .build()
 
