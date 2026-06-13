@@ -2968,4 +2968,31 @@
     <string name="boost_ends_field">Ends</string>
     <string name="boost_ends_in">in %1$d min</string>
     <string name="boost_ends_passed">Ended</string>
+
+    <!-- AND-365: READ-ONLY sponsorship inbox (inbound brand deals + client-side status filter). -->
+    <string name="more_entry_sponsorships">Sponsorships</string>
+    <string name="sponsorship_inbox_title">Sponsorships</string>
+    <string name="sponsorship_back">Back</string>
+    <string name="sponsorship_from_advertiser">From %1$s</string>
+    <string name="sponsorship_advertiser_unknown">an advertiser</string>
+    <string name="sponsorship_received">Received %1$s</string>
+    <string name="sponsorship_deadline">Due %1$s</string>
+    <string name="sponsorship_empty_title">No sponsorship offers yet</string>
+    <string name="sponsorship_empty_body">Sponsorship offers from brands will appear here.</string>
+    <string name="sponsorship_filter_all">All</string>
+    <string name="sponsorship_filter_pending">Pending</string>
+    <string name="sponsorship_filter_active">Active</string>
+    <string name="sponsorship_filter_completed">Completed</string>
+    <string name="sponsorship_filter_cancelled">Cancelled</string>
+    <string name="sponsorship_status_proposed">Proposed</string>
+    <string name="sponsorship_status_negotiating">Negotiating</string>
+    <string name="sponsorship_status_accepted">Accepted</string>
+    <string name="sponsorship_status_content_submitted">Content submitted</string>
+    <string name="sponsorship_status_completed">Completed</string>
+    <string name="sponsorship_status_rejected">Rejected</string>
+    <string name="sponsorship_status_cancelled">Cancelled</string>
+    <string name="sponsorship_status_unknown">Unknown</string>
+    <string name="sponsorship_deal_title">Sponsorship deal</string>
+    <string name="sponsorship_deal_coming_soon">Deal details are coming soon.</string>
+    <string name="sponsorship_deal_id_label">Deal ID: %1$s</string>
 </resources>

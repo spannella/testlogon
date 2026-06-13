@@ -160,6 +160,10 @@ object MoreRoutes {
     // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
     const val COLLABORATIONS = CollaborationsListDest.ROUTE
 
+    // AND-365: READ-ONLY sponsorship inbox (single GET list of inbound brand deals + client-side status
+    // filter -> deal-detail placeholder; the real detail is AND-366).
+    const val SPONSORSHIPS = SponsorshipInboxDest.ROUTE
+
     // AND-360: the delegate console (focused manage-as-creator demonstration). Self-gates on the managed-
     // creator state (shows an enter prompt when not in delegate mode); renders the persistent banner + the
     // permission-gated delegate feed / messaging affordances.
@@ -222,6 +226,7 @@ object MoreRoutes {
             GROUPS,
             SYNDICATES,
             COLLABORATIONS,
+            SPONSORSHIPS,
             DELEGATE_CONSOLE,
             SETTINGS,
             HELP,

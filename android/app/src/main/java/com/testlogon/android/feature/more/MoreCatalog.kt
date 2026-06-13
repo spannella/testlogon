@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Diversity3
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.History
@@ -363,6 +364,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_collaborations,
             icon = Icons.Outlined.Diversity3,
             route = MoreRoutes.COLLABORATIONS,
+            section = MoreSection.ACCOUNT,
+        ),
+        // AND-365: READ-ONLY sponsorship inbox (inbound brand deals + client-side status filter).
+        MoreEntry(
+            id = "sponsorships",
+            labelRes = R.string.more_entry_sponsorships,
+            icon = Icons.Outlined.Handshake,
+            route = MoreRoutes.SPONSORSHIPS,
             section = MoreSection.ACCOUNT,
         ),
         // AND-360: the delegate console (focused manage-as-creator demonstration).
