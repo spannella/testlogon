@@ -388,9 +388,35 @@
                     android:pathPrefix="/accept" />
             </intent-filter>
 
+            <!-- AND-392: PUBLIC share download App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /share/<linkId> public-download page. Works for UNAUTHENTICATED
+                 recipients (registered in both nav graphs). Requires /.well-known/assetlinks.json with
+                 the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/share/" />
+            </intent-filter>
+
+            <!-- AND-392: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. The
+                 plaintext dev host cannot serve assetlinks, so this filter is not auto-verified. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/share/" />
+            </intent-filter>
+
             <!-- AND-335: custom-scheme PUBLIC share deep link. The link id is the path segment, routed to
                  the session-free public share screen (registered in both nav graphs - the recipient may be
-                 signed out). testlogon://share/<linkId> -->
+                 signed out). Accepted on all builds. testlogon://share/<linkId> -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

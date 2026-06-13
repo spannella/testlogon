@@ -64,16 +64,35 @@ data class RevokeShareLinkDto(
 )
 
 /**
- * GET public/files/share/{link_id}/info response (session-free). State is carried via the boolean flags
- * (revoked / expired / exhausted) plus password_required; there is NO download URL in this payload (the
- * bytes come from the separate POST download endpoint). Required wire field: link_id. `size` is bytes,
- * `expires_at` is epoch millis.
+ * GET public/files/share/{link_id}/info response (session-free) - the verified `ShareLinkPublicInfoOut`
+ * schema (OpenAPI tag `public-file-share`; web `src/api/types.ts: ShareLinkPublicInfo`).
+ *
+ * AND-392 CORRECTED CONTRACT: the authoritative public-info wire keys are `file_name`, `file_size_bytes`,
+ * `content_type` (the three REQUIRED fields on the wire), `requires_password`, `is_expired`, `is_revoked`,
+ * `is_used` and `remaining_downloads`. The public payload has NO `link_id`, `owner_display_name`,
+ * `expires_at`, `preview_url` or `downloads_remaining` - the earlier AND-335 draft modelled
+ * `size`/`revoked`/`expired`/`exhausted`/`password_required`/`download_count`/`max_downloads`, which the
+ * OpenAPI does not expose. To stay ADDITIVE and not break AND-335's already-green tests/behaviour, BOTH
+ * name sets are kept: the reflective Moshi only binds keys actually present on the wire, and the AND-392
+ * mapper (ShareDomain.toDomain) prefers the corrected names with the legacy names as a fallback. State is
+ * carried via the boolean flags (`is_revoked` / `is_expired` / `is_used`, falling back to the legacy
+ * `revoked` / `expired` / `exhausted`) plus `requires_password`; there is NO download URL in this payload
+ * (the bytes come from the separate download endpoint). Every field is nullable / boolean-default so a
+ * partial payload decodes leniently; `link_id` is kept (nullable) only for the AND-335 fakes that set it.
  */
 data class PublicShareDto(
-    val link_id: String,
+    // AND-392 corrected (verified ShareLinkPublicInfoOut) wire keys.
     val file_name: String? = null,
-    val size: Long? = null,
+    val file_size_bytes: Long? = null,
     val content_type: String? = null,
+    val requires_password: Boolean = false,
+    val is_expired: Boolean = false,
+    val is_revoked: Boolean = false,
+    val is_used: Boolean = false,
+    val remaining_downloads: Int = 0,
+    // AND-335 legacy keys, tolerated as a fallback (older drafts / older backends / existing fakes).
+    val link_id: String? = null,
+    val size: Long? = null,
     val expires_at: Long? = null,
     val password_required: Boolean = false,
     val revoked: Boolean? = null,

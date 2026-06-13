@@ -72,20 +72,27 @@ fun ShareLinkOutDto.toDomain(): ShareLink = ShareLink(
 
 /**
  * Maps a [PublicShareDto] to its [PublicShare] domain model. The terminal [PublicShareState] is DERIVED
- * from the flags with a fixed precedence: revoked, then expired, then exhausted, else available. The
+ * from the flags with a fixed precedence: revoked, then expired, then used/exhausted, else available. The
  * UNAVAILABLE state is reserved for callers that cannot resolve a link at all (e.g. a 404).
+ *
+ * AND-392 CORRECTED CONTRACT: the verified `ShareLinkPublicInfoOut` carries `file_size_bytes`,
+ * `requires_password`, `is_revoked` / `is_expired` / `is_used` (the consumed / download-limit case) and
+ * `remaining_downloads`. This mapper PREFERS those corrected fields and falls back to the AND-335 legacy
+ * keys (`size`, `password_required`, `revoked` / `expired` / `exhausted`) so an older backend / the
+ * existing fakes still resolve. `is_used` maps to EXHAUSTED (the same "no longer available" terminal the
+ * web `unavailableMessage()` renders for the consumed / limit-reached case).
  */
 fun PublicShareDto.toDomain(): PublicShare = PublicShare(
-    linkId = link_id,
+    linkId = link_id.orEmpty(),
     fileName = file_name,
-    sizeBytes = size,
+    sizeBytes = file_size_bytes ?: size,
     contentType = content_type,
     expiresAt = epochMillisToInstant(expires_at),
-    passwordRequired = password_required,
+    passwordRequired = requires_password || password_required,
     state = when {
-        revoked == true -> PublicShareState.REVOKED
-        expired == true -> PublicShareState.EXPIRED
-        exhausted == true -> PublicShareState.EXHAUSTED
+        is_revoked || revoked == true -> PublicShareState.REVOKED
+        is_expired || expired == true -> PublicShareState.EXPIRED
+        is_used || exhausted == true -> PublicShareState.EXHAUSTED
         else -> PublicShareState.AVAILABLE
     },
 )

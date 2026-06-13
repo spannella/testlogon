@@ -94,6 +94,32 @@ class PublicShareApiContractTest {
         assertEquals(true, out.expired)
     }
 
+    /**
+     * AND-392 - the verified `ShareLinkPublicInfoOut` payload (corrected wire keys: file_size_bytes,
+     * requires_password, is_revoked / is_expired / is_used, remaining_downloads) decodes onto the
+     * corrected DTO fields. No link_id is present on this payload (it is route-supplied). Still
+     * session-free (no Authorization / Cookie / X-CSRF-Token).
+     */
+    @Test
+    fun info_corrected_shareLinkPublicInfoOut_decode() = runTest {
+        server.enqueue(jsonResponse(CORRECTED_INFO_BODY))
+
+        val out = api().resolvePublic("lnk_2")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/public/files/share/lnk_2/info", recorded.requestUrl?.encodedPath)
+        recorded.assertSessionFree()
+        assertEquals("quarterly-report.pdf", out.file_name)
+        assertEquals(4823311L, out.file_size_bytes)
+        assertEquals("application/pdf", out.content_type)
+        assertEquals(true, out.requires_password)
+        assertEquals(false, out.is_expired)
+        assertEquals(true, out.is_revoked)
+        assertEquals(false, out.is_used)
+        assertEquals(17, out.remaining_downloads)
+    }
+
     @Test
     fun download_verb_path_body_sessionFree_and_bytes() = runTest {
         server.enqueue(MockResponse().setResponseCode(200).setBody("file-bytes"))
@@ -134,6 +160,20 @@ class PublicShareApiContractTest {
               "exhausted": false,
               "download_count": 0,
               "max_downloads": 3
+            }
+        """.trimIndent()
+
+        /** AND-392 - the verified ShareLinkPublicInfoOut payload (corrected wire keys, no link_id). */
+        val CORRECTED_INFO_BODY = """
+            {
+              "file_name": "quarterly-report.pdf",
+              "file_size_bytes": 4823311,
+              "content_type": "application/pdf",
+              "requires_password": true,
+              "is_expired": false,
+              "is_revoked": true,
+              "is_used": false,
+              "remaining_downloads": 17
             }
         """.trimIndent()
     }

@@ -34,14 +34,22 @@ data object PublicShareDest {
     fun build(linkId: String): String = "public_share/${Uri.encode(linkId)}"
 
     /**
-     * Deep links for testlogon://share/<linkId>. The link id is the path segment. testlogon:// is enough
-     * (and lower-risk than an https App Link that needs assetlinks); an https variant can be added later.
+     * AND-392 - deep links for the public download landing `/share/<linkId>`, mirroring the established
+     * public-link pattern (AND-196 clip, AND-272 event): a verified HTTPS App Link on the production host,
+     * a plaintext HTTP tap-through on the dev host, and the custom-scheme fallback for share flows on all
+     * builds. The `{host}` segment of the https / http patterns is a wildcard the route does not declare
+     * (only `linkId` binds the route arg); App Link host VERIFICATION is enforced by the manifest
+     * intent-filter (autoVerify on the release `@string/applink_host`), not by the nav uriPattern. The
+     * link id is URL-decoded once by Navigation-Compose and passed verbatim (FR-12).
      */
-    fun deepLinks(): List<NavDeepLink> = listOf(
-        navDeepLink {
-            uriPattern = "testlogon://share/{${PublicShareViewModel.ARG_LINK_ID}}"
-        },
-    )
+    fun deepLinks(): List<NavDeepLink> {
+        val arg = PublicShareViewModel.ARG_LINK_ID
+        return listOf(
+            navDeepLink { uriPattern = "https://{host}/share/{$arg}" },
+            navDeepLink { uriPattern = "http://18.222.237.167/share/{$arg}" },
+            navDeepLink { uriPattern = "testlogon://share/{$arg}" },
+        )
+    }
 }
 
 /** AND-335 - registers the OWNER share sheet (authenticated graph only). */
