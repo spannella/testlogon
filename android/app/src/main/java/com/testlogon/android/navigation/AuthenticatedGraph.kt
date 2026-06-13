@@ -239,6 +239,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-355: social groups (discover -> detail -> members with role-gated invite/change-role/remove
         // + leave). Nested graph: GroupsList -> GroupDetail{groupId} -> GroupMembers{groupId}.
         groupsDestinations(navController)
+        // AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split tabs over /ui/syndicates/*).
+        // Single screen keyed by {syndicateId}; write actions + open-licensing are downstream / OUT OF SCOPE.
+        syndicateDestinations(navController)
     }
 }
 

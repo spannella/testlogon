@@ -351,6 +351,13 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "syndicates",
+            labelRes = R.string.more_entry_syndicates,
+            icon = Icons.Outlined.AccountBalance,
+            route = MoreRoutes.SYNDICATES,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "sessions",
             labelRes = R.string.more_entry_sessions,
             icon = Icons.Outlined.Devices,

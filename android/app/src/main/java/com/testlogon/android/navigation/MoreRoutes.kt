@@ -152,6 +152,11 @@ object MoreRoutes {
     // AND-355: social groups (discover -> detail -> members; role-gated invite/change-role/remove + leave).
     val GROUPS: String get() = GroupsGraphDest.ROUTE
 
+    // AND-356: READ-ONLY syndicate overview (Feed/Treasury/Revenue-split). No discovery list this wave, so
+    // the hub opens a known sample syndicate id for manual testing (plain constant, no Uri.encode, so the
+    // JVM MoreCatalog integrity test stays Android-free).
+    const val SYNDICATES = SyndicateOverviewDest.STUB_ROUTE
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -207,6 +212,7 @@ object MoreRoutes {
             FAN_CLUB,
             ORGS_MEMBERS,
             GROUPS,
+            SYNDICATES,
             SETTINGS,
             HELP,
             ABOUT,
