@@ -9,4 +9,9 @@
     <cache-path
         name="ics"
         path="ics/" />
+    <!-- AND-321: KYC document-capture output handed to the system camera (TakePicture) via a transient
+         content:// write grant. Scoped to cacheDir/kyc-capture/. -->
+    <cache-path
+        name="kyc-capture"
+        path="kyc-capture/" />
 </paths>

@@ -2259,4 +2259,28 @@
     <string name="kyc_req_tier_1">Basic tier</string>
     <string name="kyc_req_tier_2">ID Verified tier</string>
     <string name="kyc_req_tier_3">Enhanced tier</string>
+
+    <!-- AND-321 — KYC identity-document capture + upload -->
+    <string name="kyc_doc_title">Verify your identity</string>
+    <string name="kyc_doc_type_id_front">ID front</string>
+    <string name="kyc_doc_type_id_back">ID back</string>
+    <string name="kyc_doc_select_prompt">Capture both sides of your government ID.</string>
+    <string name="kyc_doc_take_photo">Take photo</string>
+    <string name="kyc_doc_pick">Choose from library</string>
+    <string name="kyc_doc_review_prompt">Review your %1$s photo</string>
+    <string name="kyc_doc_review_image_cd">Preview of the captured document</string>
+    <string name="kyc_doc_retake">Retake</string>
+    <string name="kyc_doc_confirm">Use photo</string>
+    <string name="kyc_doc_upload">Upload</string>
+    <string name="kyc_doc_uploading">Uploading documents…</string>
+    <string name="kyc_doc_cancel">Cancel</string>
+    <string name="kyc_doc_retry">Try again</string>
+    <string name="kyc_doc_success_message">Documents uploaded.</string>
+    <string name="kyc_doc_item_pending">Waiting</string>
+    <string name="kyc_doc_item_uploading">Uploading</string>
+    <string name="kyc_doc_item_succeeded">Uploaded</string>
+    <string name="kyc_doc_item_failed">Failed</string>
+    <string name="kyc_doc_permission_message">Camera access is needed to photograph your ID.</string>
+    <string name="kyc_doc_grant_permission">Allow camera</string>
+    <string name="kyc_doc_open_settings">Open settings</string>
 </resources>

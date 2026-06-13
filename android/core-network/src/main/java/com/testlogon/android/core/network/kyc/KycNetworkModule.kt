@@ -15,6 +15,9 @@ import javax.inject.Singleton
  * registered here: this codebase has no @IntoSet/@AppMoshiAdapter multibinding for Moshi adapters,
  * so they are added directly to the shared Moshi builder in NetworkModule.provideMoshi, alongside
  * the existing BigDecimalAdapter. No new dependency is introduced.
+ *
+ * AND-321 - also provides [KycDocumentsApi] (the `ui/kyc/documents` upload endpoint) from the SAME
+ * shared Retrofit, alongside KycApi for consistency.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -23,4 +26,9 @@ object KycNetworkModule {
     @Provides
     @Singleton
     fun provideKycApi(retrofit: Retrofit): KycApi = retrofit.create(KycApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideKycDocumentsApi(retrofit: Retrofit): KycDocumentsApi =
+        retrofit.create(KycDocumentsApi::class.java)
 }

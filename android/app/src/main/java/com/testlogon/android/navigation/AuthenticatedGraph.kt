@@ -199,6 +199,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         guestAcceptDestination(navController)
         // AND-320: KYC tier status (current tier + target requirements checklist + Evaluate action).
         kycTierDestination(navController)
+        // AND-321: KYC identity-document capture+upload (system camera / photo picker + inline base64 POST).
+        kycDocumentCaptureDestination(navController)
     }
 }
 
