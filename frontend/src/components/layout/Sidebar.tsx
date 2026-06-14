@@ -100,6 +100,8 @@ import {
   ConciergeBell,
   BedDouble,
   LineChart,
+  Building,
+  Award,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -385,6 +387,20 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Rate Plans", path: "/hotels/rate-plans", icon: <ConciergeBell className="h-5 w-5" /> },
       { label: "Cancellation Policies", path: "/hotels/policies", icon: <ShieldCheck className="h-5 w-5" /> },
       { label: "Hotel KPI Reports", path: "/hotels/reports", icon: <LineChart className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Property & Bounties",
+    items: [
+      { label: "Properties", path: "/properties", icon: <Building className="h-5 w-5" /> },
+      { label: "Tenants", path: "/property/tenants", icon: <Users className="h-5 w-5" /> },
+      { label: "Leases", path: "/property/leases", icon: <FileText className="h-5 w-5" /> },
+      { label: "Rent Ledger", path: "/property/rent", icon: <Wallet className="h-5 w-5" /> },
+      { label: "Work Orders", path: "/property/work-orders", icon: <Wrench className="h-5 w-5" /> },
+      { label: "Vendors", path: "/property/vendors", icon: <Building className="h-5 w-5" /> },
+      { label: "Portfolio Dashboard", path: "/property/dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
+      { label: "Rent Policy", path: "/property/policies", icon: <FileText className="h-5 w-5" /> },
+      { label: "Bounty Board", path: "/bounties", icon: <Award className="h-5 w-5" /> },
     ],
   },
 ];

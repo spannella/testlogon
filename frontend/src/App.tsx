@@ -412,6 +412,24 @@ const FolioDetailPage = lazy(() => import("@/pages/hotels/folios/FolioDetailPage
 const CancellationPolicyPage = lazy(() => import("@/pages/hotels/reports/CancellationPolicyPage"));
 const HotelKpiDashboard = lazy(() => import("@/pages/hotels/reports/HotelKpiDashboard"));
 
+// open-property + ticket-bounty frontend
+const PropertiesPage = lazy(() => import("@/pages/properties/PropertiesPage"));
+const PropertyDetailPage = lazy(() => import("@/pages/properties/PropertyDetailPage"));
+const PropTenantsPage = lazy(() => import("@/pages/property/tenants/TenantsPage"));
+const TenantProfilePage = lazy(() => import("@/pages/property/tenants/TenantProfilePage"));
+const LeasesPage = lazy(() => import("@/pages/property/leases/LeasesPage"));
+const LeaseDetailPage = lazy(() => import("@/pages/property/leases/LeaseDetailPage"));
+const RentLedgerPage = lazy(() => import("@/pages/property/rent/RentLedgerPage"));
+const LeaseRentPage = lazy(() => import("@/pages/property/rent/LeaseRentPage"));
+const RentAgingPage = lazy(() => import("@/pages/property/rent/RentAgingPage"));
+const WorkOrdersPage = lazy(() => import("@/pages/property/workOrders/WorkOrdersPage"));
+const WorkOrderDetailPage = lazy(() => import("@/pages/property/workOrders/WorkOrderDetailPage"));
+const VendorsPage = lazy(() => import("@/pages/property/workOrders/VendorsPage"));
+const PortfolioDashboardPage = lazy(() => import("@/pages/property/dashboard/PortfolioDashboardPage"));
+const RentPolicyPage = lazy(() => import("@/pages/property/policies/RentPolicyPage"));
+const PropertyDocumentsPage = lazy(() => import("@/pages/property/dashboard/PropertyDocumentsPage"));
+const BountyBoardPage = lazy(() => import("@/pages/bounties/BountyBoardPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -633,6 +651,23 @@ export default function App() {
           <Route path="hotels/policies/:hotelId" element={<CancellationPolicyPage />} />
           <Route path="hotels/reports" element={<HotelKpiDashboard />} />
           <Route path="hotels/reports/:hotelId" element={<HotelKpiDashboard />} />
+          {/* open-property + ticket-bounty */}
+          <Route path="properties" element={<PropertiesPage />} />
+          <Route path="properties/:propertyId" element={<PropertyDetailPage />} />
+          <Route path="property/tenants" element={<PropTenantsPage />} />
+          <Route path="property/tenants/:tenantId" element={<TenantProfilePage />} />
+          <Route path="property/leases" element={<LeasesPage />} />
+          <Route path="property/leases/:leaseId" element={<LeaseDetailPage />} />
+          <Route path="property/rent" element={<RentLedgerPage />} />
+          <Route path="property/rent/aging" element={<RentAgingPage />} />
+          <Route path="property/rent/leases/:leaseId" element={<LeaseRentPage />} />
+          <Route path="property/work-orders" element={<WorkOrdersPage />} />
+          <Route path="property/work-orders/:propertyId/:workOrderId" element={<WorkOrderDetailPage />} />
+          <Route path="property/vendors" element={<VendorsPage />} />
+          <Route path="property/dashboard" element={<PortfolioDashboardPage />} />
+          <Route path="property/dashboard/documents" element={<PropertyDocumentsPage />} />
+          <Route path="property/policies" element={<RentPolicyPage />} />
+          <Route path="bounties" element={<BountyBoardPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
