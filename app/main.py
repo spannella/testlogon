@@ -621,6 +621,15 @@ def create_app() -> FastAPI:
     app.include_router(newsfeed_router)
     app.include_router(newsfeed_recsys_internal_router)
     app.add_event_handler("startup", start_newsfeed_recsys_refresh_task)
+    def _seed_gl_chart_of_accounts_on_startup():
+        # OFBiz GL (OFB-013): seed default chart of accounts. No-op unless
+        # GL_DOUBLE_ENTRY_ENABLED=true.
+        try:
+            from app.services.gl_accounts import seed_chart_of_accounts
+            seed_chart_of_accounts()
+        except Exception:
+            logger.warning("Failed to seed GL chart of accounts", exc_info=True)
+    app.add_event_handler("startup", _seed_gl_chart_of_accounts_on_startup)
     app.include_router(image_optimization_router)
     app.include_router(moderation_router)
     app.include_router(moderation_compat_router)

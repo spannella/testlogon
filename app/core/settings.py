@@ -873,6 +873,14 @@ class Settings:
     inventory_reservation_ttl_seconds: int = int(os.environ.get("INVENTORY_RESERVATION_TTL_SECONDS", "1800"))
     inventory_table_name: str = os.environ.get("INVENTORY_TABLE_NAME", "inventory")
     reservations_table_name: str = os.environ.get("RESERVATIONS_TABLE_NAME", "reservations")
+    gl_double_entry_enabled: bool = os.environ.get("GL_DOUBLE_ENTRY_ENABLED", "false").lower() == "true"
+    gl_accounts_table_name: str = os.environ.get("GL_ACCOUNTS_TABLE_NAME", "gl_accounts")
+    gl_journal_table_name: str = os.environ.get("GL_JOURNAL_TABLE_NAME", "gl_journal")
+    gl_ar_ap_enabled: bool = os.environ.get("GL_AR_AP_ENABLED", "false").lower() == "true"
+    ar_ap_subledgers_enabled: bool = os.environ.get("AR_AP_SUBLEDGERS_ENABLED", "false").lower() == "true"
+    ar_ap_snapshots_table_name: str = os.environ.get("AR_AP_SNAPSHOTS_TABLE_NAME", "ar_ap_snapshots")
+    pricing_rules_enabled: bool = os.environ.get("PRICING_RULES_ENABLED", "false").lower() == "true"
+    pricing_rules_table_name: str = os.environ.get("PRICING_RULES_TABLE_NAME", "PricingRules")
     # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
     # Master switch defaults OFF: with it off the returns/RMA endpoints 404 and
     # the module is dormant; existing order/billing behavior is unchanged.

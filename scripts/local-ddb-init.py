@@ -41,6 +41,54 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # OFBiz GL Milestone 4 — chart of accounts (OFB-013).
+        # gl_accounts: one row per account (PK=account_code, SK=META).
+        # GSI_CLASS groups accounts by class for OFB-014 mapping.
+        TableDef(
+            _resolve_table_name(S.gl_accounts_table_name, "gl_accounts"),
+            "account_code",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_CLASS", "partition_key": "account_class", "sort_key": "account_code"},
+            ],
+        ),
+        # gl_journal: balanced double-entry journal entries (OFB-014).
+        # PK=JE#GLOBAL, SK=JE#{id} (header) | JL#{id}#{seq} (lines).
+        # ENTRIES_BY_DATE drives date-range queries; SOURCE_ENTRY_IDX idempotency.
+        TableDef(
+            _resolve_table_name(S.gl_journal_table_name, "gl_journal"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "ENTRIES_BY_DATE", "partition_key": "ledger_date", "sort_key": "posted_at"},
+                {"index_name": "SOURCE_ENTRY_IDX", "partition_key": "source_entry_id", "sort_key": "posted_at"},
+            ],
+            attr_types={"posted_at": "N"},
+        ),
+        # ar_ap_snapshots: point-in-time AR/AP aging snapshots (OFB-015).
+        # PK="AR"|"AP", SK="SNAP#{ts}#{snap_id}"; GSI_DATE for time-range queries.
+        TableDef(
+            _resolve_table_name(S.ar_ap_snapshots_table_name, "ar_ap_snapshots"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_DATE", "partition_key": "pk", "sort_key": "ts"},
+            ],
+            attr_types={"ts": "N"},
+        ),
+        # OFBiz GL Milestone 5 — pricing rules engine (OFB-019/020).
+        # PricingRules: tiered/bulk/conditional rules + audit + redemption rows.
+        # PK=pk, SK=sk; ByCreatorCreatedAt + ByActive GSIs.
+        TableDef(
+            _resolve_table_name(S.pricing_rules_table_name, "PricingRules"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatorCreatedAt", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByActive", "partition_key": "active_pk", "sort_key": "created_at"},
+            ],
+            attr_types={"GSI1SK": "N", "created_at": "N"},
+        ),
         # HTL-014: Hotel nightly rate plans — plan header (SK=META) + rule child
         # rows (SK=RULE#{kind}#{rule_id}) co-located on a hotel_id#room_type_id
         # partition.  GSI_HOTEL lists plans for a hotel; GSI_ROOM_TYPE fetches

@@ -322,6 +322,10 @@ class Tables:
     inventory: Any
     reservations: Any
     returns: Any
+    gl_accounts: Any
+    gl_journal: Any
+    ar_ap_snapshots: Any
+    pricing_rules: Any
     platform_settings: Any
     party: Any  # Party/CRM single table (PTY-002)
     candidates: Any
@@ -620,6 +624,10 @@ T = Tables(
     inventory=_safe_table(S.inventory_table_name),
     reservations=_safe_table(S.reservations_table_name),
     returns=_safe_table(S.returns_table_name),
+    gl_accounts=_safe_table(S.gl_accounts_table_name),
+    gl_journal=_safe_table(S.gl_journal_table_name),
+    ar_ap_snapshots=_safe_table(S.ar_ap_snapshots_table_name),
+    pricing_rules=_safe_table(S.pricing_rules_table_name),
     platform_settings=_safe_table(S.platform_settings_table_name),
     party=_safe_table(S.party_table_name),  # Party/CRM single table (PTY-002)
     candidates=_safe_table(S.candidates_table_name),
