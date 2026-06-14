@@ -406,6 +406,8 @@ class Tables:
     shipping_carriers: Any
     shipment_items: Any
     shipment_packages: Any
+    customers: Any
+    financial_products: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -747,4 +749,6 @@ T = Tables(
     shipping_carriers=_safe_table(S.shipping_carriers_table_name),
     shipment_items=_safe_table(S.shipment_items_table_name),
     shipment_packages=_safe_table(S.shipment_packages_table_name),
+    customers=_safe_table(S.customers_table_name),
+    financial_products=_safe_table(S.financial_products_table_name),
 )

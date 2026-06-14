@@ -41,6 +41,25 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        TableDef(
+            _resolve_table_name(S.customers_table_name, "customers"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_NUMBER", "partition_key": "gsi_number_pk", "sort_key": "customer_number"},
+                {"index_name": "GSI_BRANCH", "partition_key": "gsi_branch_pk", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.financial_products_table_name, "financial_products"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_CATEGORY", "partition_key": "gsi_cat_pk", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # OFBiz Phase 8 — Shipping/Logistics (SHP-002). Four new tables. All
         # default OFF (SHIPPING_ENABLED=false); existing paths byte-for-byte
         # unchanged when the flag is off.

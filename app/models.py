@@ -20155,3 +20155,216 @@ class ShipmentAdvanceIn(BaseModel):
 class ShipmentCancelIn(BaseModel):
     reason: str = Field(default="cancelled", min_length=1, max_length=500)
     refund_shipping: bool = False
+
+
+
+
+# ---------------------------------------------------------------------------
+# CUS-001: Customer entity models
+# ---------------------------------------------------------------------------
+
+class CustomerCreateIn(BaseModel):
+    legal_name: str
+    date_of_birth: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    branch_id: Optional[str] = None
+
+
+class CustomerPatchIn(BaseModel):
+    legal_name: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    branch_id: Optional[str] = None
+    kyc_status: Optional[str] = None
+    expected_version: int
+
+
+class CustomerOut(BaseModel):
+    customer_id: str
+    customer_number: str
+    legal_name: str
+    date_of_birth: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    kyc_status: str
+    branch_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+    version: int
+
+
+class CustomerAttributeSetIn(BaseModel):
+    name: str
+    type: Literal["STRING", "INTEGER", "DOUBLE", "DATE_WITH_DAY"]
+    value: str
+
+
+class CustomerAttributeOut(BaseModel):
+    attribute_id: str
+    name: str
+    type: str
+    value: str
+    created_at: int
+
+
+class CustomerListOut(BaseModel):
+    customers: List[CustomerOut]
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CUS-002: User-link + customer message models
+# ---------------------------------------------------------------------------
+
+class CustomerLinkIn(BaseModel):
+    user_sub: str
+
+
+class CustomerLinkOut(BaseModel):
+    customer_id: str
+    user_sub: str
+    linked_at: int
+    linked_by: str
+
+
+class CustomerMessageCreateIn(BaseModel):
+    body: str = Field(max_length=10_000)
+
+
+class CustomerMessageOut(BaseModel):
+    message_id: str
+    author_sub: str
+    author_role: Literal["STAFF", "CUSTOMER"]
+    body: str
+    created_at: int
+
+
+class CustomerMessageListOut(BaseModel):
+    messages: List[CustomerMessageOut]
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CUS-003: Card resource models
+# ---------------------------------------------------------------------------
+
+class CardOut(BaseModel):
+    card_id: str
+    brand: Optional[str] = None
+    last4: Optional[str] = None
+    exp_month: Optional[int] = None
+    exp_year: Optional[int] = None
+    label: Optional[str] = None
+    is_default: bool
+    card_status: str
+    card_version: int
+    created_at: Optional[int] = None
+
+
+class CardStatusUpdateIn(BaseModel):
+    status: str
+    expected_version: int
+
+
+class CardAttributeSetIn(BaseModel):
+    name: str
+    type: Literal["STRING", "INTEGER", "DOUBLE", "DATE_WITH_DAY"]
+    value: str
+
+
+class CardAttributeOut(BaseModel):
+    attribute_id: str
+    name: str
+    type: str
+    value: str
+    created_at: Optional[int] = None
+
+
+class CardListOut(BaseModel):
+    cards: List[CardOut]
+
+
+# ---------------------------------------------------------------------------
+# CUS-004: Financial Products + Collections models
+# ---------------------------------------------------------------------------
+
+class FinancialProductCreateIn(BaseModel):
+    product_code: str = Field(pattern=r"^[a-zA-Z0-9_\-]{1,64}$")
+    name: str
+    parent_product_code: Optional[str] = None
+    category: Optional[str] = None
+    family: Optional[str] = None
+    super_family: Optional[str] = None
+    more_info_url: Optional[str] = None
+    description: Optional[str] = None
+
+
+class FinancialProductPatchIn(BaseModel):
+    name: Optional[str] = None
+    parent_product_code: Optional[str] = None
+    category: Optional[str] = None
+    family: Optional[str] = None
+    super_family: Optional[str] = None
+    more_info_url: Optional[str] = None
+    description: Optional[str] = None
+    expected_version: int
+
+
+class FinancialProductOut(BaseModel):
+    product_code: str
+    name: str
+    parent_product_code: Optional[str] = None
+    category: Optional[str] = None
+    family: Optional[str] = None
+    super_family: Optional[str] = None
+    more_info_url: Optional[str] = None
+    description: Optional[str] = None
+    created_at: int
+    updated_at: int
+    version: int
+
+
+class FinancialProductListOut(BaseModel):
+    items: List[FinancialProductOut]
+    cursor: Optional[str] = None
+
+
+class ProductAttributeSetIn(BaseModel):
+    name: str
+    type: Literal["STRING", "INTEGER", "DOUBLE", "DATE_WITH_DAY"]
+    value: str = Field(max_length=2048)
+
+
+class ProductAttributeOut(BaseModel):
+    attribute_id: str
+    name: str
+    type: str
+    value: str
+    created_at: int
+
+
+class ProductAttributeListOut(BaseModel):
+    attributes: List[ProductAttributeOut]
+
+
+class ProductCollectionUpsertIn(BaseModel):
+    name: str
+    product_codes: List[str]
+
+
+class ProductCollectionOut(BaseModel):
+    collection_code: str
+    name: str
+    product_codes: List[str]
+    updated_at: int
+
+
+class ProductCollectionListOut(BaseModel):
+    items: List[ProductCollectionOut]
+    cursor: Optional[str] = None
+
+
+class ProductCollectionMemberIn(BaseModel):
+    product_code: str

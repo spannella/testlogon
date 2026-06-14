@@ -3388,5 +3388,10 @@ class Settings:
     shipment_items_table_name: str = os.environ.get("SHIPMENT_ITEMS_TABLE_NAME", "shipment_items")
     shipment_packages_table_name: str = os.environ.get("SHIPMENT_PACKAGES_TABLE_NAME", "shipment_packages")
 
+    customer_entity_enabled: bool = os.environ.get("CUSTOMER_ENTITY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    customers_table_name: str = os.environ.get("CUSTOMERS_TABLE_NAME", "customers")
+    financial_products_enabled: bool = os.environ.get("FINANCIAL_PRODUCTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    financial_products_table_name: str = os.environ.get("FINANCIAL_PRODUCTS_TABLE_NAME", "financial_products")
+
 
 S = Settings()
