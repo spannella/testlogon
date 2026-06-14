@@ -18505,3 +18505,113 @@ class TxnRequestOut(BaseModel):
 class TxnRequestListOut(BaseModel):
     items: List[TxnRequestOut]
     next_cursor: Optional[str] = None
+
+
+class InvoiceAddressOut(BaseModel):
+    """INV-001: invoice billing/shipping address (additive)."""
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
+
+
+class TaxBreakdownEntry(BaseModel):
+    """INV-006: one entry per distinct per-line tax rate on an invoice."""
+    name: str = ""
+    rate_bps: int = 0
+    tax_cents: int = 0
+
+
+    unit_price_cents: int = 0  # INV-001
+    tax_rate_bps: int = 0      # INV-006
+    tax_cents: int = 0         # INV-006
+    invoice_type: str  # tip, unlock, subscription, shop, deposit, b2b
+    # QUO-005 standalone-lifecycle fields (additive; default to safe values).
+    aos_quote_id: str = ""
+    payment_terms_days: Optional[int] = None
+    due_date: Optional[int] = None
+    voided_at: Optional[int] = None
+    # INV-001: extended AOS invoice fields.
+    billing_address: Optional[InvoiceAddressOut] = None
+    shipping_address: Optional[InvoiceAddressOut] = None
+    discount_cents: int = 0
+    shipping_cents: int = 0
+    # INV-003: currency conversion snapshot.
+    original_currency: str = ""
+    original_amount_cents: int = 0
+    usd_amount_cents: int = 0
+    exchange_rate_snapshot: Optional[float] = None
+    # INV-006: per-line tax breakdown.
+    tax_breakdown: List[TaxBreakdownEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# INV-002 / INV-005: CRM currency + tax-rate registries
+# ---------------------------------------------------------------------------
+from decimal import Decimal as _InvDecimal  # noqa: E402
+
+
+class CurrencyCreateIn(BaseModel):
+    iso_code: str = Field(..., min_length=3, max_length=3)
+    name: str = Field(..., min_length=1, max_length=64)
+    symbol: str = Field(..., min_length=1, max_length=8)
+    rate_to_usd: _InvDecimal = Field(..., gt=_InvDecimal("0"))
+    decimal_places: int = Field(default=2, ge=0, le=4)
+    is_active: bool = True
+
+
+class CurrencyPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=64)
+    symbol: Optional[str] = Field(default=None, max_length=8)
+    rate_to_usd: Optional[_InvDecimal] = Field(default=None, gt=_InvDecimal("0"))
+    decimal_places: Optional[int] = Field(default=None, ge=0, le=4)
+    is_active: Optional[bool] = None
+
+
+class CurrencyOut(BaseModel):
+    iso_code: str
+    name: str
+    symbol: str
+    rate_to_usd: float
+    decimal_places: int = 2
+    is_active: bool = True
+    is_default: bool = False
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class CurrencyListOut(BaseModel):
+    currencies: List[CurrencyOut] = Field(default_factory=list)
+
+
+class TaxRateCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    rate_bps: int = Field(..., ge=0, le=10000)
+    jurisdiction: str = Field(..., min_length=1, max_length=20)
+    description: str = Field(default="", max_length=500)
+
+
+class TaxRatePatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    rate_bps: Optional[int] = Field(default=None, ge=0, le=10000)
+    jurisdiction: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    description: Optional[str] = Field(default=None, max_length=500)
+    is_active: Optional[bool] = None
+
+
+class TaxRateOut(BaseModel):
+    tax_rate_id: str
+    name: str
+    rate_bps: int
+    jurisdiction: str
+    description: str = ""
+    is_active: bool = True
+    created_by: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class TaxRateListOut(BaseModel):
+    tax_rates: List[TaxRateOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None

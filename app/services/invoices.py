@@ -80,6 +80,18 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _norm_address(addr: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """INV-001: coerce an address dict to the five-field shape."""
+    a = addr or {}
+    return {
+        "street": str(a.get("street", "")),
+        "city": str(a.get("city", "")),
+        "state": str(a.get("state", "")),
+        "postal_code": str(a.get("postal_code", "")),
+        "country": str(a.get("country", "")),
+    }
+
+
 def _clean_lek(lek: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Coerce a DynamoDB LastEvaluatedKey into JSON-serializable types.
 
@@ -161,8 +173,33 @@ def _render_pdf(lines: List[str]) -> bytes:
     return bytes(pdf)
 
 
-def _money(cents: int) -> str:
-    return f"${cents / 100:.2f}"
+def _money(cents: int, symbol: str = "$") -> str:
+    return f"{symbol}{cents / 100:.2f}"
+
+
+def _currency_symbol(record: Dict[str, Any]) -> str:
+    """INV-004: resolve the display symbol for the invoice's original currency.
+
+    Fail-open: when the multicurrency-display flag is off, the currency is USD,
+    or the registry lookup fails, returns ``"$"`` (today's behaviour). Uses an
+    ASCII-safe fallback (the upper-cased ISO code + space) for non-ASCII
+    symbols so the text-PDF renderer never emits bytes it can't escape.
+    """
+    if not S.aos_invoice_multicurrency_display_enabled:
+        return "$"
+    iso = str(record.get("original_currency") or record.get("currency") or "usd").lower().strip()
+    if not iso or iso == "usd":
+        return "$"
+    try:
+        from app.services.crm_currencies import get_currency
+        cur = get_currency(iso)
+        if cur and cur.get("symbol"):
+            sym = str(cur["symbol"])
+            if sym.isascii():
+                return sym
+    except Exception:
+        pass
+    return f"{iso.upper()} "
 
 
 def _render_invoice_lines(record: Dict[str, Any]) -> List[str]:
@@ -172,6 +209,10 @@ def _render_invoice_lines(record: Dict[str, Any]) -> List[str]:
     tax = _coerce_int(record.get("tax_cents"))
     total = _coerce_int(record.get("total_cents"))
     refunded = str(record.get("status")) == "refunded"
+    sym = _currency_symbol(record)
+    fields_active = bool(S.aos_invoice_fields_enabled)
+    line_list = record.get("line_items") or []
+    has_per_line_tax = any(_coerce_int(li.get("tax_rate_bps")) for li in line_list)
 
     status = str(record.get("status") or "")
     lines: List[str] = ["INVOICE", "=" * 48]
@@ -199,20 +240,63 @@ def _render_invoice_lines(record: Dict[str, Any]) -> List[str]:
     if record.get("buyer_email"):
         lines.append(f"          {record.get('buyer_email')}")
     lines.append(f"SELLER  : {record.get('seller_name') or 'Platform'}")
+    if fields_active:
+        ba = record.get("billing_address") or {}
+        if ba:
+            lines.append("BILLING ADDRESS:")
+            lines.append(f"  {ba.get('street','')}")
+            lines.append(f"  {ba.get('city','')}, {ba.get('state','')} {ba.get('postal_code','')}")
+            lines.append(f"  {ba.get('country','')}")
+        sa = record.get("shipping_address") or {}
+        if sa and sa != ba:
+            lines.append("SHIPPING ADDRESS:")
+            lines.append(f"  {sa.get('street','')}")
+            lines.append(f"  {sa.get('city','')}, {sa.get('state','')} {sa.get('postal_code','')}")
+            lines.append(f"  {sa.get('country','')}")
     lines.append("")
     lines.append("-" * 48)
-    lines.append(f"{'Description':<32}{'Qty':>4}{'Amount':>12}")
+    if has_per_line_tax:
+        lines.append(f"{'Description':<23}{'Qty':>4}{'Tax Rate':>9}{'Amount':>12}")
+    else:
+        lines.append(f"{'Description':<32}{'Qty':>4}{'Amount':>12}")
     lines.append("-" * 48)
-    for li in record.get("line_items") or []:
-        desc = str(li.get("description") or "Item")[:30]
+    for li in line_list:
         qty = _coerce_int(li.get("quantity"), 1)
         li_amount = _coerce_int(li.get("amount_cents"))
-        lines.append(f"{desc:<32}{qty:>4}{_money(li_amount):>12}")
+        if has_per_line_tax:
+            desc = str(li.get("description") or "Item")[:21]
+            rate_str = f"{_coerce_int(li.get('tax_rate_bps')) / 100:.1f}%"
+            lines.append(f"{desc:<23}{qty:>4}{rate_str:>9}{_money(li_amount, sym):>12}")
+        else:
+            desc = str(li.get("description") or "Item")[:30]
+            lines.append(f"{desc:<32}{qty:>4}{_money(li_amount, sym):>12}")
     lines.append("-" * 48)
-    lines.append(f"{'Subtotal':<36}{_money(amount):>12}")
-    lines.append(f"{'Tax':<36}{_money(tax):>12}")
+    lines.append(f"{'Subtotal':<36}{_money(amount, sym):>12}")
+    if fields_active:
+        discount = _coerce_int(record.get("discount_cents"))
+        shipping = _coerce_int(record.get("shipping_cents"))
+        if discount > 0:
+            lines.append(f"{'Discount':<36}{'-' + _money(discount, sym):>12}")
+        if shipping > 0:
+            lines.append(f"{'Shipping':<36}{_money(shipping, sym):>12}")
+    lines.append(f"{'Tax':<36}{_money(tax, sym):>12}")
+    for b in record.get("tax_breakdown") or []:
+        b_name = str(b.get("name") or "Tax")
+        b_rate = _coerce_int(b.get("rate_bps")) / 100
+        b_tax = _coerce_int(b.get("tax_cents"))
+        label = f"  {b_name} ({b_rate:.1f}%)"[:36]
+        lines.append(f"{label:<36}{_money(b_tax, sym):>12}")
     total_display = -total if refunded else total
-    lines.append(f"{'TOTAL':<36}{_money(total_display):>12}")
+    lines.append(f"{'TOTAL':<36}{_money(total_display, sym):>12}")
+    # INV-004: USD-equivalent footer for non-USD invoices.
+    if S.aos_invoice_multicurrency_display_enabled:
+        orig = str(record.get("original_currency") or "").lower().strip()
+        snapshot = record.get("exchange_rate_snapshot")
+        usd_amt = _coerce_int(record.get("usd_amount_cents"))
+        if orig and orig != "usd" and snapshot is not None:
+            lines.append("")
+            lines.append(f"USD equivalent : {_money(usd_amt)}")
+            lines.append(f"Exchange rate  : 1 {orig.upper()} = {float(snapshot):.6f} USD")
     lines.append("")
     lines.append("Thank you for your purchase.")
     return lines
@@ -254,10 +338,21 @@ def _serialize(record: Dict[str, Any]) -> Dict[str, Any]:
             "quantity": _coerce_int(li.get("quantity"), 1),
             "amount_cents": _coerce_int(li.get("amount_cents")),
             "unit_price_cents": _coerce_int(li.get("unit_price_cents")),
+            "tax_rate_bps": _coerce_int(li.get("tax_rate_bps")),
+            "tax_cents": _coerce_int(li.get("tax_cents")),
         })
     due_date = record.get("due_date")
     voided_at = record.get("voided_at")
     payment_terms = record.get("payment_terms_days")
+    snapshot = record.get("exchange_rate_snapshot")
+    tax_breakdown = [
+        {
+            "name": str(b.get("name") or ""),
+            "rate_bps": _coerce_int(b.get("rate_bps")),
+            "tax_cents": _coerce_int(b.get("tax_cents")),
+        }
+        for b in (record.get("tax_breakdown") or [])
+    ]
     return {
         "invoice_id": str(record.get("invoice_id") or ""),
         "invoice_number": str(record.get("invoice_number") or ""),
@@ -280,6 +375,18 @@ def _serialize(record: Dict[str, Any]) -> Dict[str, Any]:
         "payment_terms_days": _coerce_int(payment_terms) if payment_terms is not None else None,
         "due_date": _coerce_int(due_date) if due_date is not None else None,
         "voided_at": _coerce_int(voided_at) if voided_at is not None else None,
+        # INV-001
+        "discount_cents": _coerce_int(record.get("discount_cents")),
+        "shipping_cents": _coerce_int(record.get("shipping_cents")),
+        "billing_address": record.get("billing_address") or None,
+        "shipping_address": record.get("shipping_address") or None,
+        # INV-003
+        "original_currency": str(record.get("original_currency") or ""),
+        "original_amount_cents": _coerce_int(record.get("original_amount_cents")),
+        "usd_amount_cents": _coerce_int(record.get("usd_amount_cents")),
+        "exchange_rate_snapshot": (float(snapshot) if snapshot is not None else None),
+        # INV-006
+        "tax_breakdown": tax_breakdown,
     }
 
 
@@ -322,6 +429,14 @@ def create_invoice(
     payment_method_summary: str = "",
     currency: str = "usd",
     aos_quote_id: str = "",
+    # INV-001: extended AOS invoice fields (no-op when flag off).
+    unit_price_cents_per_item: Optional[List[int]] = None,
+    discount_cents: int = 0,
+    shipping_cents: int = 0,
+    billing_address: Optional[Dict[str, Any]] = None,
+    shipping_address: Optional[Dict[str, Any]] = None,
+    # INV-006: per-line tax (no-op when flag off).
+    per_line_tax: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Create an invoice record, render its PDF, and store it in S3.
 
@@ -341,24 +456,107 @@ def create_invoice(
     if existing is not None:
         return _serialize(existing)
 
-    if tax_cents is None:
-        tax_cents = (amount_cents * max(0, S.invoices_tax_bps)) // 10_000
-    tax_cents = _coerce_int(tax_cents)
-    total_cents = amount_cents + tax_cents
-
     invoice_number = _next_invoice_number()
     invoice_id = "inv_" + uuid.uuid4().hex
     created_at = now_ts()
 
+    # --- INV-006: line-item normalisation + per-line tax computation ---------
+    per_line_tax_active = bool(S.aos_per_line_tax_enabled and per_line_tax)
+    fields_active = bool(S.aos_invoice_fields_enabled)
+    total_line_tax = 0
+    tax_accumulator: Dict[int, Dict[str, Any]] = {}
+
     norm_items: List[Dict[str, Any]] = []
-    for li in line_items or []:
-        norm_items.append({
+    for idx, li in enumerate(line_items or []):
+        norm_item: Dict[str, Any] = {
             "description": str(li.get("description") or "Item"),
             "quantity": _coerce_int(li.get("quantity"), 1),
             "amount_cents": _coerce_int(li.get("amount_cents")),
-        })
+        }
+        line_amount = norm_item["amount_cents"]
+
+        if fields_active and unit_price_cents_per_item:
+            upc = unit_price_cents_per_item[idx] if idx < len(unit_price_cents_per_item) else 0
+            norm_item["unit_price_cents"] = max(0, _coerce_int(upc))
+
+        raw_bps = 0
+        tax_name = ""
+        if per_line_tax_active:
+            raw_bps = _coerce_int(li.get("tax_rate_bps"))
+            tax_rate_id = str(li.get("tax_rate_id") or "")
+            if not raw_bps and tax_rate_id and S.crm_tax_rates_enabled:
+                try:
+                    from app.services.crm_tax_rates import get_tax_rate
+                    tr = get_tax_rate(tax_rate_id)
+                    if tr and tr.get("is_active"):
+                        raw_bps = _coerce_int(tr.get("rate_bps"))
+                        tax_name = str(tr.get("name") or "")
+                except Exception:
+                    pass  # fail-open: treat as 0% if lookup errors
+            raw_bps = min(max(0, raw_bps), 10_000)
+            if not tax_name and raw_bps:
+                tax_name = f"{raw_bps / 100:.2f}% Tax"
+            line_tax = (line_amount * raw_bps) // 10_000
+            norm_item["tax_rate_bps"] = raw_bps
+            norm_item["tax_cents"] = line_tax
+            if raw_bps:
+                total_line_tax += line_tax
+                bucket = tax_accumulator.setdefault(
+                    raw_bps, {"name": tax_name, "rate_bps": raw_bps, "tax_cents": 0}
+                )
+                bucket["tax_cents"] += line_tax
+
+        norm_items.append(norm_item)
     if not norm_items:
         norm_items = [{"description": invoice_type.title(), "quantity": 1, "amount_cents": amount_cents}]
+
+    # --- tax total resolution -----------------------------------------------
+    if per_line_tax_active and total_line_tax > 0:
+        if tax_cents is None:
+            tax_cents = total_line_tax
+    else:
+        if tax_cents is None:
+            tax_cents = (amount_cents * max(0, S.invoices_tax_bps)) // 10_000
+    tax_cents = _coerce_int(tax_cents)
+
+    # --- INV-001: discount / shipping / total -------------------------------
+    if fields_active:
+        discount_cents = max(0, _coerce_int(discount_cents))
+        shipping_cents = max(0, _coerce_int(shipping_cents))
+        if discount_cents > amount_cents:
+            logger.warning(
+                "discount_cents %s capped at subtotal %s for user=%s",
+                discount_cents, amount_cents, user_sub,
+            )
+            discount_cents = amount_cents
+        total_cents = amount_cents + tax_cents + shipping_cents - discount_cents
+    else:
+        discount_cents = 0
+        shipping_cents = 0
+        total_cents = amount_cents + tax_cents
+
+    # --- INV-003: snapshot USD equivalent at transaction time ----------------
+    _original_currency = (currency or "usd").lower().strip()
+    _original_amount = amount_cents
+    _usd_amount = amount_cents
+    _rate_snapshot = None
+    if (
+        S.crm_currencies_enabled
+        and S.aos_invoice_currency_conversion_enabled
+        and _original_currency != "usd"
+    ):
+        try:
+            from app.services.crm_currencies import convert_amount as _cvt
+            from app.services.crm_currencies import get_exchange_rate as _rate
+            _rate_snapshot = _rate(_original_currency, "usd")
+            _usd_amount = _cvt(amount_cents, _original_currency, "usd")
+        except Exception:
+            logger.warning(
+                "currency conversion failed for %s invoice type=%s currency=%s",
+                user_sub, invoice_type, _original_currency, exc_info=True,
+            )
+            _rate_snapshot = None
+            _usd_amount = amount_cents
 
     record: Dict[str, Any] = {
         "pk": _user_pk(user_sub),
@@ -386,6 +584,22 @@ def create_invoice(
         "GSI2PK": "ADMIN_ALL",
         "GSI2SK": created_at,
     }
+    if fields_active:
+        record["discount_cents"] = discount_cents
+        record["shipping_cents"] = shipping_cents
+        if billing_address:
+            record["billing_address"] = _norm_address(billing_address)
+        if shipping_address:
+            record["shipping_address"] = _norm_address(shipping_address)
+    if tax_accumulator:
+        record["tax_breakdown"] = list(tax_accumulator.values())
+    # INV-003 snapshot fields (always written so _serialize/InvoiceOut stay
+    # consistent across flag states).
+    record["original_currency"] = _original_currency
+    record["original_amount_cents"] = _original_amount
+    record["usd_amount_cents"] = _usd_amount
+    if _rate_snapshot is not None:
+        record["exchange_rate_snapshot"] = _rate_snapshot
     pdf = _render_pdf(_render_invoice_lines(record))
     record["s3_key"] = _store_pdf(user_sub, invoice_number, pdf)
 

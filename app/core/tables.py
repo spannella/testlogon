@@ -304,6 +304,8 @@ class Tables:
     invoices: Any
     aos_quotes: Any
     aos_contracts: Any
+    crm_currencies: Any  # INV-002
+    crm_tax_rates: Any   # INV-005
     tax_documents: Any
     tax_forms_1099: Any
     tax_info: Any
@@ -619,6 +621,8 @@ T = Tables(
     invoices=_safe_table(S.invoices_table_name),
     aos_quotes=_safe_table(S.aos_quotes_table_name),
     aos_contracts=_safe_table(S.aos_contracts_table_name),
+    crm_currencies=_safe_table(S.crm_currencies_table_name),  # INV-002
+    crm_tax_rates=_safe_table(S.crm_tax_rates_table_name),    # INV-005
     tax_documents=_safe_table(S.tax_documents_table_name),
     tax_forms_1099=_safe_table(S.tax_forms_1099_table_name),
     tax_info=_safe_table(S.tax_info_table_name),

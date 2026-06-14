@@ -1028,6 +1028,11 @@ def create_app() -> FastAPI:
     from app.routers.aos_contracts import aos_contracts_router, aos_contracts_admin_router
     app.include_router(aos_contracts_router)
     app.include_router(aos_contracts_admin_router)
+    # INV-002 / INV-005: CRM currency + tax-rate registries (flag-gated).
+    from app.routers.crm_currencies import crm_currencies_router
+    from app.routers.crm_tax_rates import crm_tax_rates_router
+    app.include_router(crm_currencies_router)
+    app.include_router(crm_tax_rates_router)
     from app.routers.consumer_tax_documents import (
         consumer_tax_documents_router,
         consumer_tax_documents_admin_router,

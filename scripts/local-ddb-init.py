@@ -41,6 +41,27 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # INV-002: currency registry. pk=CURRENCY#{iso}, sk=META.
+        # GSI1=active currencies alphabetically (CURRENCIES#ACTIVE / iso_code, string).
+        TableDef(
+            _resolve_table_name(S.crm_currencies_table_name, "crm_currencies"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
+        # INV-005: named tax rate registry. pk=TAXRATE#{id}, sk=META.
+        # GSI1=active rates alphabetically; GSI2=by jurisdiction. Both SKs string.
+        TableDef(
+            _resolve_table_name(S.crm_tax_rates_table_name, "crm_tax_rates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "taxrates-active-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "taxrates-jurisdiction-index", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+        ),
         # OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005)
         TableDef(
             _resolve_table_name(S.txn_requests_table_name, "txn_requests"),

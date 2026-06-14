@@ -2674,6 +2674,37 @@ class Settings:
     aos_invoice_overdue_check_interval_seconds: int = int(
         os.environ.get("AOS_INVOICE_OVERDUE_CHECK_INTERVAL_SECONDS", "3600")
     )
+    # INV-001: AOS invoice extended fields (unit_price_cents, discount, shipping,
+    # billing/shipping addresses). Default OFF — existing invoice callers unchanged.
+    aos_invoice_fields_enabled: bool = os.environ.get(
+        "AOS_INVOICE_FIELDS_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
+    # INV-002: Admin currency registry (default OFF).
+    crm_currencies_enabled: bool = os.environ.get(
+        "CRM_CURRENCIES_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    crm_currencies_table_name: str = os.environ.get(
+        "CRM_CURRENCIES_TABLE_NAME", "crm_currencies"
+    )
+    # INV-003: snapshot USD equivalent at invoice creation time (default OFF).
+    aos_invoice_currency_conversion_enabled: bool = os.environ.get(
+        "AOS_INVOICE_CURRENCY_CONVERSION_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    # INV-004: multi-currency display on invoice PDF (default OFF).
+    aos_invoice_multicurrency_display_enabled: bool = os.environ.get(
+        "AOS_INVOICE_MULTICURRENCY_DISPLAY_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    # INV-005: Named tax rate registry (default OFF).
+    crm_tax_rates_enabled: bool = os.environ.get(
+        "CRM_TAX_RATES_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
+    crm_tax_rates_table_name: str = os.environ.get(
+        "CRM_TAX_RATES_TABLE_NAME", "crm_tax_rates"
+    )
+    # INV-006: Per-line-item tax rate assignment on invoices (default OFF).
+    aos_per_line_tax_enabled: bool = os.environ.get(
+        "AOS_PER_LINE_TAX_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
     # FIN-004: Consumer Tax Documents (annual creator earnings / 1099-style summaries)
     tax_documents_table_name: str = os.environ.get("TAX_DOCUMENTS_TABLE_NAME", "tax_documents")
     tax_documents_enabled: bool = os.environ.get("TAX_DOCUMENTS_ENABLED", "true").lower() not in (
@@ -2928,7 +2959,6 @@ class Settings:
     # QloApps hotel-PMS vertical (HTL) — master flag, default OFF; with it off
     # the hotel routers (HTL-003) are mounted but every handler 404s and the
     # platform is byte-for-byte unchanged.
-    hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() == "true"
     hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
     hotel_amenities_table_name: str = os.environ.get("HOTEL_AMENITIES_TABLE_NAME", "hotel_amenities")
 
