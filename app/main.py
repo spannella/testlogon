@@ -1240,6 +1240,8 @@ def create_app() -> FastAPI:
     from app.services.fixed_assets import start_depreciation_poster_task
     app.include_router(fixed_assets_router)
     app.add_event_handler("startup", start_depreciation_poster_task)
+    from app.routers.pos import pos_router
+    app.include_router(pos_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

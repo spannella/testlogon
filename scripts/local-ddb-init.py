@@ -41,6 +41,35 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # POS-003 — Point of Sale single-table store.
+        # Register config, session headers, tender sub-rows, and transaction headers
+        # all live in one table keyed by pos_pk/pos_sk.
+        # GSI_REGISTER_OPEN: find the open session per register (register_id → opened_at N).
+        # GSI_SESSION_TXN:   list a session's transactions (session_id → created_at N).
+        # GSI_CASHIER:       list a cashier's sessions     (cashier_sub → opened_at N).
+        TableDef(
+            _resolve_table_name(S.pos_table_name, "pos"),
+            "pos_pk",
+            "pos_sk",
+            gsi=[
+                {
+                    "index_name": "GSI_REGISTER_OPEN",
+                    "partition_key": "register_id",
+                    "sort_key": "opened_at",
+                },
+                {
+                    "index_name": "GSI_SESSION_TXN",
+                    "partition_key": "session_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "GSI_CASHIER",
+                    "partition_key": "cashier_sub",
+                    "sort_key": "opened_at",
+                },
+            ],
+            attr_types={"opened_at": "N", "created_at": "N"},
+        ),
         # OFBiz Fixed Assets — FXA-003.
         # fixed_assets: one row per registered asset (PK=ASSET#{id}, SK=META).
         # GSI_OWNER lets users list their assets by acquisition date.

@@ -21675,3 +21675,194 @@ class MaintenanceOrderOut(BaseModel):
     created_at: int
     completed_at: Optional[int]
     correlation_id: Optional[str]
+
+
+# ── POS — Point of Sale (POS-001..POS-NNN) ───────────────────────────────────
+
+class RegisterConfig(BaseModel):
+    register_id: Optional[str] = None
+    label: str = Field(min_length=1, max_length=128)
+    location_id: str = Field(min_length=1, max_length=128)
+    default_currency: str = Field(default="USD", min_length=3, max_length=3)
+    created_at: int = 0
+    updated_at: int = 0
+    created_by: Optional[str] = None
+
+
+class RegisterCreateIn(BaseModel):
+    label: str = Field(min_length=1, max_length=128)
+    location_id: str = Field(min_length=1, max_length=128)
+    default_currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class TenderKind(str, Enum):
+    cash = "cash"
+    card = "card"
+    wallet = "wallet"
+
+
+class TenderOut(BaseModel):
+    kind: str                          # cash | card | wallet
+    amount_cents: int = 0
+    change_due_cents: int = 0          # only meaningful for kind=cash
+    payment_method_id: Optional[str] = None  # card/wallet
+    card_ref: Optional[str] = None     # opaque processor ref
+
+
+class RegisterSessionOut(BaseModel):
+    session_id: str
+    register_id: str
+    cashier_sub: str
+    status: str                        # open | closed
+    opening_float_cents: int = 0
+    closing_float_cents: Optional[int] = None
+    expected_cash_cents: Optional[int] = None
+    counted_cash_cents: Optional[int] = None
+    over_short_cents: Optional[int] = None    # signed: positive = over
+    opened_at: int = 0
+    closed_at: Optional[int] = None
+
+
+class PosTransactionOut(BaseModel):
+    txn_id: str
+    session_id: str
+    cart_id: Optional[str] = None
+    order_id: Optional[str] = None
+    status: str                        # draft | tendered | voided | refunded
+    subtotal_cents: int = 0
+    discount_cents: int = 0
+    tax_cents: int = 0
+    total_cents: int = 0
+    tenders: List[TenderOut] = Field(default_factory=list)
+    receipt_id: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class OpenSessionIn(BaseModel):
+    register_id: str = Field(min_length=1, max_length=128)
+    opening_float_cents: int = Field(default=0, ge=0, le=100_000_000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class CloseSessionIn(BaseModel):
+    counted_cash_cents: int = Field(ge=0, le=100_000_000)
+
+
+class TenderIn(BaseModel):
+    kind: Literal["cash", "card", "wallet"]
+    amount_cents: int = Field(ge=0, le=100_000_000)
+    change_due_cents: int = Field(default=0, ge=0, le=100_000_000)
+    payment_method_id: Optional[str] = Field(default=None, max_length=256)
+    card_ref: Optional[str] = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def card_wallet_needs_pm(self) -> "TenderIn":
+        if self.kind in ("card", "wallet") and not self.payment_method_id:
+            raise ValueError("'payment_method_id' is required for card/wallet tenders")
+        return self
+
+
+class TenderRequestIn(BaseModel):
+    tenders: List[TenderIn] = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+    def total_tendered_cents(self) -> int:
+        """Sum of all tender amounts minus change given back."""
+        return sum(t.amount_cents - t.change_due_cents for t in self.tenders)
+
+    def validates_against_total(self, transaction_total_cents: int) -> bool:
+        """Returns True iff net tender covers (equals) the transaction total."""
+        return self.total_tendered_cents() == transaction_total_cents
+
+
+class RefundTxnIn(BaseModel):
+    txn_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class AddLineItemIn(BaseModel):
+    sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    category_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    item_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    quantity: int = Field(default=1, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def sku_or_item_id(self) -> "AddLineItemIn":
+        has_sku = bool(self.sku)
+        has_item = bool(self.item_id)
+        if has_sku == has_item:  # both set or neither
+            raise ValueError("Provide exactly one of 'sku' or 'item_id'")
+        if has_item and not self.category_id:
+            raise ValueError("'category_id' is required when 'item_id' is provided")
+        return self
+
+
+class PosAddLineItemIn(BaseModel):
+    # Catalog path: provide item_id (category_id optional)
+    item_id: Optional[str] = Field(default=None, max_length=128)
+    category_id: Optional[str] = Field(default=None, max_length=128)
+    # Raw-SKU path: provide sku + name + unit_price_cents
+    sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    unit_price_cents: Optional[conint(ge=0, le=100_000_000)] = None  # type: ignore[valid-type]
+    quantity: conint(ge=1, le=1000) = 1  # type: ignore[valid-type]
+
+    @model_validator(mode="after")
+    def _either_catalog_or_sku(self) -> "PosAddLineItemIn":
+        has_catalog = bool(self.item_id)
+        has_sku = bool(self.sku)
+        if has_catalog == has_sku:
+            raise ValueError("Provide exactly one of item_id or sku")
+        if has_sku and (self.name is None or self.unit_price_cents is None):
+            raise ValueError("name and unit_price_cents required for raw-SKU add")
+        return self
+
+
+class PosSetLineQtyIn(BaseModel):
+    quantity: conint(ge=0, le=1000) = 0  # type: ignore[valid-type]
+
+
+class PosTxnDraftOut(BaseModel):
+    txn_id: str
+    session_id: str
+    cashier_sub: str
+    status: str        # "draft" before settlement; "tendered" / "voided" / "refunded" after
+    cart_id: str
+    subtotal_cents: int
+    tax_cents: int = 0
+    discount_cents: int = 0
+    total_cents: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class PosBindTxnIn(BaseModel):
+    correlation_id: str = Field(min_length=1, max_length=256)
+
+
+class PosCashTenderIn(BaseModel):
+    amount_tendered_cents: int = Field(ge=0, le=100_000_000)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
+class PosTxnVoidIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class PosSessionReportOut(BaseModel):
+    session_id: str
+    register_id: str
+    cashier_sub: str
+    status: str
+    opening_float_cents: int
+    closing_float_cents: Optional[int] = None
+    expected_cash_cents: Optional[int] = None
+    counted_cash_cents: Optional[int] = None
+    over_short_cents: Optional[int] = None
+    opened_at: int
+    closed_at: Optional[int] = None
+    transaction_count: int = 0
+    total_sales_cents: int = 0
+    total_cash_tendered_cents: int = 0
+    total_change_given_cents: int = 0
