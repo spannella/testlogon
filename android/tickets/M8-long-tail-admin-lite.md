@@ -4,7 +4,8 @@ Decomposition of milestone **M8** (epics **E47–E53**). Format: **Type · Prior
 **Scope**, **Acceptance Criteria**.
 
 **Milestone exit criteria:** boost/sponsorship usable; tickets/projects; trust & safety flows; public
-surfaces; read-only webhooks/analytics. Full admin/agents/infra remain out of scope (E53).
+surfaces; read-only webhooks/analytics. Full admin/agents/infra remain out of scope (E53; see
+decision record AND-405 at `android/docs/decisions/AND-405-scope-admin-agents-infra.md`).
 
 ---
 
@@ -234,6 +235,14 @@ surfaces; read-only webhooks/analytics. Full admin/agents/infra remain out of sc
 
 ## Epic E53 — Admin-lite (optional / scoped)
 
+> **Out of scope (mobile):** full admin consoles, agent/bot fleet management,
+> compute/k8s/EC2/instance ops, SSH bastion, VNC, and internal devtools are
+> excluded from the Android port per the scope decision **AND-405**
+> (`android/docs/decisions/AND-405-scope-admin-agents-infra.md`). The only
+> in-scope exceptions are the read-only, role-gated views **AND-403** and
+> **AND-404**. There are no open implementation tickets for the excluded
+> categories; reversing any exclusion requires a superseding ADR referencing AND-405.
+
 ### AND-403 — Read-only admin alerts/dashboards
 **Type:** Feature · **Priority:** P2 · **Deps:** AND-027
 **Scope:** Scoped read-only admin alerts/metrics only (no mutations).
@@ -264,5 +273,7 @@ devtools are **out of scope for mobile**; capture any exceptions.
 
 ## Backlog complete
 - **8 milestones · 53 feature epics (+4 cross-cutting) · 406 tickets (AND-001…AND-406).**
-- Out of scope for mobile (per E53/AND-405): full admin consoles, agent/bot fleet management,
-  compute/k8s/EC2/instance monitoring, SSH bastion, VNC, internal devtools.
+- Out of scope for mobile (per E53 / decision record AND-405,
+  `android/docs/decisions/AND-405-scope-admin-agents-infra.md`): full admin consoles, agent/bot
+  fleet management, compute/k8s/EC2/instance monitoring, SSH bastion, VNC, internal devtools.
+  In-scope exceptions: read-only role-gated AND-403 / AND-404 only.
