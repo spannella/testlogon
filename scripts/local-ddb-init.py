@@ -41,6 +41,11 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        TableDef(
+            _resolve_table_name(S.rent_period_markers_table_name, "rent_period_markers"),
+            "pk",
+            "sk",
+        ),
         # INV-002: currency registry. pk=CURRENCY#{iso}, sk=META.
         # GSI1=active currencies alphabetically (CURRENCIES#ACTIVE / iso_code, string).
         TableDef(

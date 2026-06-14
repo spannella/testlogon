@@ -2465,6 +2465,12 @@ class Settings:
     # PLATFORM-013: per-user theme customization
     user_themes_table_name: str = os.environ.get("USER_THEMES_TABLE_NAME", "user_themes")
     # Agent Orchestration (AGENT-002 / AGENT-003)
+    # Rent Ledger (open-property vertical, RNT cluster). Default-OFF.
+    rent_ledger_enabled: bool = os.environ.get("RENT_LEDGER_ENABLED", "0") not in ("0", "false", "False")
+    rent_run_enabled: bool = os.environ.get("RENT_RUN_ENABLED", "0") not in ("0", "false", "False")
+    rent_run_poll_interval: int = int(os.environ.get("RENT_RUN_POLL_INTERVAL", "3600"))
+    rent_period_markers_table_name: str = os.environ.get("RENT_PERIOD_MARKERS_TABLE_NAME", "rent_period_markers")
+    rent_periods_default_count: int = int(os.environ.get("RENT_PERIODS_DEFAULT_COUNT", "12"))
     # Compute Cost Tracking (INFRA-005)
     compute_billing_table_name: str = os.environ.get("COMPUTE_BILLING_TABLE_NAME", "compute_billing")
     compute_billing_enabled: bool = os.environ.get("COMPUTE_BILLING_ENABLED", "1") not in ("0", "false", "False")

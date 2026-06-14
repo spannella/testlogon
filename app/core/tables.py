@@ -383,6 +383,7 @@ class Tables:
     ats_skills: Any
     hotel_reservations: Any
     txn_requests: Any
+    rent_period_markers: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -701,4 +702,5 @@ T = Tables(
     ats_skills=_safe_table(S.ats_skills_table_name),
     hotel_reservations=_safe_table(S.hotel_reservations_table_name),
     txn_requests=_safe_table(S.txn_requests_table_name),
+    rent_period_markers=_safe_table(S.rent_period_markers_table_name),
 )

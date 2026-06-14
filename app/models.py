@@ -18615,3 +18615,138 @@ class TaxRateOut(BaseModel):
 class TaxRateListOut(BaseModel):
     tax_rates: List[TaxRateOut] = Field(default_factory=list)
     next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# Rent Ledger (open-property vertical, RNT-001..RNT-006). Additive.
+# ---------------------------------------------------------------------------
+class RentChargeOut(BaseModel):
+    """Response shape for a posted rent_charge ledger row."""
+    pk: str
+    sk: str
+    entry_id: str
+    ts: int
+    type: Literal["rent_charge"]
+    state: str
+    amount_cents: int
+    reason: str
+    ledger_date: str
+    lease_id: str
+    property_id: str = ""
+    unit_id: str = ""
+    tenant_id: str = ""
+    period: str
+    rent_kind: Literal["charge"]
+    currency: str
+    signed_amount_cents: Optional[int] = None
+
+
+class RentChargeSkipOut(BaseModel):
+    skipped: bool
+    reason: Literal["already_charged"]
+    period: str
+
+
+class RentPaymentIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    method: Literal["cash", "check", "bank_transfer", "card_external", "other"]
+    paid_on: Optional[int] = Field(default=None)
+    reference: Optional[str] = Field(default="", max_length=256)
+    period: Optional[str] = Field(default=None, pattern=r"^\d{4}-(?:0[1-9]|1[0-2])$")
+    notes: Optional[str] = Field(default="", max_length=1024)
+
+
+class RentLedgerRowOut(BaseModel):
+    sk: str
+    ts: int
+    type: str
+    rent_kind: str
+    amount_cents: int
+    state: str
+    reason: str
+    period: Optional[str] = None
+    lease_id: Optional[str] = None
+    property_id: Optional[str] = None
+    unit_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    currency: Optional[str] = None
+    signed_amount_cents: Optional[int] = None
+    status: Optional[str] = None
+    method: Optional[str] = None
+    reference: Optional[str] = None
+    paid_on: Optional[int] = None
+    ledger_date: Optional[str] = None
+
+
+class RentPaymentOut(BaseModel):
+    ledger_sk: str
+    period: str
+    amount_cents: int
+    method: str
+    reference: str
+    paid_on: Optional[int] = None
+    charge_status: Optional[str] = None
+
+
+class RentChargeListOut(BaseModel):
+    lease_id: str
+    charges: List[RentLedgerRowOut]
+    as_of_ts: int
+
+
+class RentHistoryOut(BaseModel):
+    rows: List[RentLedgerRowOut]
+    count: int
+    next_cursor: Optional[str] = None
+
+
+class RentVoidIn(BaseModel):
+    reason: str = ""
+
+
+class RentVoidOut(BaseModel):
+    ok: bool
+    ledger_sk: str
+    state: str
+
+
+class RentAgingOut(BaseModel):
+    current_cents: int
+    days_30_cents: int
+    days_60_cents: int
+    days_90_plus_cents: int
+    total_open_cents: int
+    open_item_count: int
+    source: str
+
+
+class RentPeriodSummaryOut(BaseModel):
+    period: str
+    scope: str
+    charged_cents: int
+    collected_cents: int
+    outstanding_cents: int
+    overdue_cents: int
+    due_settled_cents_all_time: int
+    charge_count: int
+    payment_count: int
+    lease_count: int
+    aging: Optional[RentAgingOut] = None
+
+
+class RentPeriodsOut(BaseModel):
+    periods: List[str]
+    count: int
+
+
+class RentRunTriggerIn(BaseModel):
+    period: Optional[str] = None
+
+
+class RentRunResultOut(BaseModel):
+    period: str
+    charged: int
+    skipped: int
+    lease_count: int
