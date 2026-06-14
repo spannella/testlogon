@@ -258,6 +258,22 @@ const KycQueuePage = lazy(() => import("@/pages/admin/KycQueuePage"));
 const KycCaseDetailPage = lazy(() => import("@/pages/admin/KycCaseDetailPage"));
 const KycMetricsDashboard = lazy(() => import("@/pages/admin/KycMetricsDashboard"));
 
+// OFBiz frontend batch 1 (PRD, ORD, POS, MFG, FXA, PUR)
+const CatalogDepthPage = lazy(() => import("@/pages/catalogDepth/CatalogDepthPage"));
+const OrdersPage = lazy(() => import("@/pages/orders/OrdersPage"));
+const OrderDetailPage = lazy(() => import("@/pages/orders/OrderDetailPage"));
+const PosTerminalPage = lazy(() => import("@/pages/pos/PosTerminalPage"));
+const PosReportsPage = lazy(() => import("@/pages/pos/PosReportsPage"));
+const BomEditorPage = lazy(() => import("@/pages/manufacturing/BomEditorPage"));
+const WorkOrderQueuePage = lazy(() => import("@/pages/manufacturing/WorkOrderQueuePage"));
+const MrpPage = lazy(() => import("@/pages/manufacturing/MrpPage"));
+const WorkCentersPage = lazy(() => import("@/pages/manufacturing/WorkCentersPage"));
+const FixedAssetsPage = lazy(() => import("@/pages/fixedAssets/FixedAssetsPage"));
+const MaintenanceQueuePage = lazy(() => import("@/pages/fixedAssets/MaintenanceQueuePage"));
+const PurchasingPage = lazy(() => import("@/pages/purchasing/PurchasingPage"));
+const PurchaseOrderDetailPage = lazy(() => import("@/pages/purchasing/PurchaseOrderDetailPage"));
+const SupplierDetailPage = lazy(() => import("@/pages/purchasing/SupplierDetailPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -328,6 +344,21 @@ export default function App() {
           <Route path="signing/inbox" element={<SigningInboxPage />} />
           <Route path="signing/inbox/:packetId" element={<SigningInboxPage />} />
           <Route path="projects" element={<ProjectsPage />} />
+          {/* OFBiz frontend batch 1 */}
+          <Route path="orders" element={<OrdersPage />} />
+          <Route path="orders/:orderId" element={<OrderDetailPage />} />
+          <Route path="ofbiz/catalog-depth" element={<CatalogDepthPage />} />
+          <Route path="ofbiz/pos" element={<PosTerminalPage />} />
+          <Route path="ofbiz/pos/reports" element={<PosReportsPage />} />
+          <Route path="ofbiz/fixed-assets" element={<FixedAssetsPage />} />
+          <Route path="ofbiz/fixed-assets/maintenance" element={<MaintenanceQueuePage />} />
+          <Route path="manufacturing/boms" element={<BomEditorPage />} />
+          <Route path="manufacturing/work-orders" element={<WorkOrderQueuePage />} />
+          <Route path="manufacturing/mrp" element={<MrpPage />} />
+          <Route path="manufacturing/work-centers" element={<WorkCentersPage />} />
+          <Route path="purchasing" element={<PurchasingPage />} />
+          <Route path="purchasing/purchase-orders/:poId" element={<PurchaseOrderDetailPage />} />
+          <Route path="purchasing/suppliers/:supplierId" element={<SupplierDetailPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />

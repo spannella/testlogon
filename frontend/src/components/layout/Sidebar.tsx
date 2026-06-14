@@ -67,6 +67,9 @@ import {
   Gauge,
   Receipt,
   Terminal,
+  Package,
+  Factory,
+  Hammer,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -244,6 +247,22 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Background Jobs", i18nKey: "nav.backgroundJobs", path: "/admin/jobs", icon: <Activity className="h-5 w-5" /> },
       { label: "Ad Fraud", i18nKey: "nav.adFraud", path: "/admin/ads/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Ad Platform", path: "/admin/ad-platform", icon: <Megaphone className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Operations (OFBiz)",
+    items: [
+      { label: "Order Lifecycle", path: "/orders", icon: <Package className="h-5 w-5" /> },
+      { label: "POS Terminal", path: "/ofbiz/pos", icon: <Store className="h-5 w-5" /> },
+      { label: "POS Reports", path: "/ofbiz/pos/reports", icon: <BarChart3 className="h-5 w-5" /> },
+      { label: "Catalog Depth", path: "/ofbiz/catalog-depth", icon: <Boxes className="h-5 w-5" /> },
+      { label: "Purchasing", path: "/purchasing", icon: <ShoppingCart className="h-5 w-5" /> },
+      { label: "BOMs", path: "/manufacturing/boms", icon: <Layers className="h-5 w-5" /> },
+      { label: "Work Orders", path: "/manufacturing/work-orders", icon: <Factory className="h-5 w-5" /> },
+      { label: "MRP", path: "/manufacturing/mrp", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Work Centers", path: "/manufacturing/work-centers", icon: <Hammer className="h-5 w-5" /> },
+      { label: "Fixed Assets", path: "/ofbiz/fixed-assets", icon: <Boxes className="h-5 w-5" /> },
+      { label: "Maintenance Queue", path: "/ofbiz/fixed-assets/maintenance", icon: <Wrench className="h-5 w-5" /> },
     ],
   },
 ];
