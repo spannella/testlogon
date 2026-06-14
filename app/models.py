@@ -1352,7 +1352,7 @@ class EventsPageOut(BaseModel):
 
 
 class RecurrenceRule(BaseModel):
-    freq: Literal["DAILY", "WEEKLY", "MONTHLY"]
+    freq: Literal["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
     interval: int = Field(default=1, ge=1)
     until_utc: Optional[str] = None
     count: Optional[int] = Field(default=None, ge=1)
@@ -19310,3 +19310,226 @@ class OAuthErrorResponse(BaseModel):
     error: str
     error_description: Optional[str] = None
 
+
+
+    freq: Literal["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
+
+
+# ─── CRM Activities (ACT-002): Calendar RSVP ─────────────────────────────────
+
+class EventAttendeeRsvpStatus(str, Enum):
+    accepted = "accepted"
+    declined = "declined"
+    tentative = "tentative"
+    no_response = "no_response"
+
+
+class EventAttendeeOut(BaseModel):
+    user_sub: str
+    rsvp_status: EventAttendeeRsvpStatus = EventAttendeeRsvpStatus.no_response
+    responded_at: Optional[int] = None   # Unix epoch; None when no_response
+
+
+class EventRsvpUpdateIn(BaseModel):
+    status: EventAttendeeRsvpStatus
+
+
+class EventAttendeeListOut(BaseModel):
+    attendees: List[EventAttendeeOut]
+
+
+class UserRsvpListOut(BaseModel):
+    items: List[dict]
+    next_cursor: Optional[str] = None
+
+
+# ─── CRM Activities (ACT-004): Event Reminders/Alarms ───────────────────────
+
+class EventReminderMethod(str, Enum):
+    email = "email"
+    in_app = "in_app"
+
+
+class EventReminderIn(BaseModel):
+    minutes_before: int = Field(ge=1, le=10080)   # 1 min to 1 week
+    method: EventReminderMethod = EventReminderMethod.in_app
+
+
+class EventRemindersSetIn(BaseModel):
+    reminders: List[EventReminderIn] = Field(default_factory=list, max_length=5)
+
+
+class EventReminderOut(BaseModel):
+    reminder_id: str
+    calendar_id: str
+    event_id: str
+    user_sub: str
+    minutes_before: int
+    method: EventReminderMethod
+    fire_at: int
+    fired: bool
+    created_at: int
+
+
+class EventRemindersOut(BaseModel):
+    reminders: List[EventReminderOut]
+    count: int
+
+
+# ─── CRM Activities (ACT-006/ACT-007): CRM Call Logging ─────────────────────
+
+class CallOutcome(str, Enum):
+    connected = "connected"
+    not_connected = "not_connected"
+    left_message = "left_message"
+    wrong_number = "wrong_number"
+    busy = "busy"
+
+
+class CallLogCreateIn(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    direction: Literal["inbound", "outbound"]
+    duration_seconds: int = Field(default=0, ge=0)
+    outcome: CallOutcome
+    call_type: Literal["audio", "video", "phone"] = "phone"
+    contact_user_sub: Optional[str] = None
+    # ACT-007: entity link (opaque, PTY will resolve once shipped)
+    linked_entity_type: Optional[Literal["contact", "lead", "account", "opportunity"]] = None
+    linked_entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CallLogUpdateIn(BaseModel):
+    subject: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    outcome: Optional[CallOutcome] = None
+
+
+class CallLogOut(BaseModel):
+    call_id: str
+    user_sub: str
+    subject: str
+    description: str
+    direction: str
+    duration_seconds: int
+    outcome: str
+    call_type: str
+    contact_user_sub: Optional[str] = None
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CallLogListResponse(BaseModel):
+    items: List[CallLogOut]
+    next_cursor: Optional[str] = None
+
+
+# ─── CRM Activities (ACT-008): CRM Tasks ────────────────────────────────────
+
+class CrmTaskStatus(str, Enum):
+    not_started = "not_started"
+    in_progress = "in_progress"
+    completed = "completed"
+    deferred = "deferred"
+    waiting = "waiting"
+
+
+class CrmTaskPriority(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    urgent = "urgent"
+
+
+class CrmTaskCreateIn(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    status: CrmTaskStatus = CrmTaskStatus.not_started
+    priority: CrmTaskPriority = CrmTaskPriority.medium
+    due_date_ts: Optional[int] = None   # Unix epoch seconds
+    assignee_sub: Optional[str] = None
+    linked_entity_type: Optional[Literal["contact", "lead", "account", "opportunity"]] = None
+    linked_entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CrmTaskUpdateIn(BaseModel):
+    subject: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    status: Optional[CrmTaskStatus] = None
+    priority: Optional[CrmTaskPriority] = None
+    due_date_ts: Optional[int] = None
+    assignee_sub: Optional[str] = None
+
+
+class CrmTaskOut(BaseModel):
+    task_id: str
+    user_sub: str
+    subject: str
+    description: str
+    status: str
+    priority: str
+    due_date_ts: Optional[int] = None
+    assignee_sub: Optional[str] = None
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmTaskListOut(BaseModel):
+    items: List[CrmTaskOut]
+    next_cursor: Optional[str] = None
+    count: int = 0
+
+
+# ─── CRM Activities (ACT-009): CRM Activity Timeline ────────────────────────
+
+class CrmActivityOut(BaseModel):
+    activity_id: str
+    entity_type: str
+    entity_id: str
+    activity_type: str   # call | task | note | calendar_event | email
+    user_sub: str
+    summary: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int
+
+
+class CrmActivityTimelineOut(BaseModel):
+    entity_type: str
+    entity_id: str
+    items: List[CrmActivityOut]
+    next_cursor: Optional[str] = None
+
+
+# ─── CRM Activities (ACT-010): CRM Notes ────────────────────────────────────
+
+class CrmNoteCreateIn(BaseModel):
+    body: str = Field(default="", max_length=20_000)
+    linked_entity_type: Optional[Literal["contact", "lead", "account", "opportunity"]] = None
+    linked_entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CrmNoteUpdateIn(BaseModel):
+    body: str = Field(max_length=20_000)
+
+
+class CrmNoteOut(BaseModel):
+    note_id: str
+    user_sub: str
+    body: str
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[str] = None
+    attachment_s3_key: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_content_type: Optional[str] = None
+    attachment_url: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmNoteListOut(BaseModel):
+    notes: List[CrmNoteOut]
+    next_cursor: Optional[str] = None

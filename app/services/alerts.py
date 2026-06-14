@@ -38,6 +38,7 @@ ALERT_CATEGORIES: Dict[str, set] = {
                  "totp_device_added", "totp_device_removed", "device_new",
                  "rate_limited", "access_denied", "security_event"},
     "updates":  {"calendar_event_created", "calendar_event_updated",
+                 "calendar_event_reminder",
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
     "commerce": {"cart.abandoned"},
@@ -550,6 +551,61 @@ def _stamp_html_flag(to_emails: List[str], subject: str, message_id: str) -> Non
             )
         except Exception:
             pass
+def send_calendar_invite_email(
+    to_emails: List[str],
+    subject: str,
+    body_text: str,
+    ics_content: str,
+    event_name: str,
+) -> None:
+    """Send a calendar invitation email with ICS attachment (ACT-003).
+
+    In dev mode writes a structured entry to S.dev_email_log.
+    In production sends a multipart/mixed MIME message via SES send_raw_email.
+    Never raises — failures are best-effort.
+    """
+    if not to_emails:
+        return
+    if S.dev_mode:
+        from datetime import datetime, timezone as tz
+        ts = datetime.now(tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for addr in to_emails:
+            entry = (
+                f"[{ts}] CALENDAR_INVITE TO={addr}\n"
+                f"  Subject: {subject}\n"
+                f"  Body: {body_text}\n"
+                f"  ICS:\n{ics_content}\n\n"
+            )
+            _write_dev_log(S.dev_email_log, entry)
+        return
+    if not S.alerts_email_enabled or not S.alerts_from_email:
+        return
+    try:
+        import boto3
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+        ses = boto3.client("ses")
+        for addr in to_emails:
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject[:200]
+            msg["From"] = S.alerts_from_email
+            msg["To"] = addr
+            msg.attach(MIMEText(body_text, "plain", "utf-8"))
+            ics_part = MIMEBase("text", "calendar", charset="UTF-8", method="REQUEST")
+            ics_part.set_payload(ics_content.encode("utf-8"))
+            encoders.encode_base64(ics_part)
+            ics_part.add_header("Content-Disposition", 'attachment; filename="invite.ics"')
+            msg.attach(ics_part)
+            ses.send_raw_email(
+                Source=S.alerts_from_email,
+                Destinations=[addr],
+                RawMessage={"Data": msg.as_string()},
+            )
+    except Exception:
+        logger.exception("Failed to send calendar invite email to %s", to_emails)
+
 
 def send_alert_sms(to_numbers: List[str], body_text: str) -> List[Dict[str, Any]]:
     """Send SMS via the production pipeline. Returns list of result dicts.

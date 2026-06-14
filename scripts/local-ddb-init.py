@@ -41,6 +41,53 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # ── CRM Activities scaffold (ACT-001) ────────────────────────────────
+        TableDef(
+            _resolve_table_name(S.crm_tasks_table_name, "crm_tasks"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus",   "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByAssignee", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_notes_table_name, "crm_notes"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByEntity", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_activity_timeline_table_name, "crm_activity_timeline"),
+            "entity_key",
+            "sk",
+            gsi=[
+                {"index_name": "ByType", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_event_rsvp_table_name, "crm_event_rsvp"),
+            "event_key",
+            "attendee_sub",
+            gsi=[
+                {"index_name": "ByUser", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_event_reminders_table_name, "crm_event_reminders"),
+            "reminder_key",
+            "reminder_id",
+            gsi=[
+                {"index_name": "DueReminders", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
         # PRT-001: ATS Career Portal
         TableDef(
             _resolve_table_name(S.career_portal_table_name, "CareerPortal"),

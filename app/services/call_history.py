@@ -186,3 +186,197 @@ def _item_to_out(item: Dict[str, Any]) -> Dict[str, Any]:
         "direction": item.get("direction", "outgoing"),
         "created_at": int(item.get("created_at", 0)),
     }
+
+
+# ─── ACT-006 / ACT-007: CRM Call Log ────────────────────────────────────────
+
+_INVERTED_MAX = 9_999_999_999_999
+
+
+def _make_calllog_sk(created_at: int, call_id: str) -> str:
+    inverted = _INVERTED_MAX - created_at
+    return f"CALLLOG#{inverted:013d}#{call_id}"
+
+
+def _calllog_item_to_out(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "call_id": item["call_id"],
+        "user_sub": item["user_id"],
+        "subject": item.get("subject", ""),
+        "description": item.get("description", ""),
+        "direction": item.get("direction", "outbound"),
+        "duration_seconds": int(item.get("duration_seconds", 0)),
+        "outcome": item.get("outcome", "connected"),
+        "call_type": item.get("call_type", "phone"),
+        "contact_user_sub": item.get("contact_user_sub"),
+        # ACT-007: entity link fields
+        "linked_entity_type": item.get("linked_entity_type"),
+        "linked_entity_id": item.get("linked_entity_id"),
+        "created_at": int(item.get("created_at", 0)),
+        "updated_at": int(item.get("updated_at", 0)),
+    }
+
+
+def create_crm_call_log(
+    user_sub: str,
+    subject: str,
+    description: str,
+    direction: str,
+    duration_seconds: int,
+    outcome: str,
+    call_type: str = "phone",
+    contact_user_sub: Optional[str] = None,
+    linked_entity_type: Optional[str] = None,
+    linked_entity_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    import uuid as _uuid
+    ts = now_ts()
+    call_id = _uuid.uuid4().hex
+    sk = _make_calllog_sk(ts, call_id)
+    item: Dict[str, Any] = {
+        "user_id": user_sub,
+        "sk": sk,
+        "call_id": call_id,
+        "subject": subject,
+        "description": description or "",
+        "direction": direction,
+        "duration_seconds": duration_seconds,
+        "outcome": outcome,
+        "call_type": call_type,
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    if contact_user_sub:
+        item["contact_user_sub"] = contact_user_sub
+    if linked_entity_type:
+        item["linked_entity_type"] = linked_entity_type
+    if linked_entity_id:
+        item["linked_entity_id"] = linked_entity_id
+    T.call_history.put_item(Item=item)
+    # ACT-007: fire-and-forget timeline write
+    if linked_entity_type and linked_entity_id:
+        try:
+            from app.services.crm_activity_timeline import record_crm_activity
+            record_crm_activity(
+                entity_type=linked_entity_type,
+                entity_id=linked_entity_id,
+                activity_type="call",
+                activity_id=call_id,
+                user_sub=user_sub,
+                summary=subject or f"{direction} call",
+                metadata={"outcome": outcome, "duration_seconds": duration_seconds},
+            )
+        except Exception:
+            logger.warning("crm_activity_timeline unavailable; skipping", exc_info=True)
+    return _calllog_item_to_out(item)
+
+
+def list_crm_call_logs(
+    user_sub: str,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+) -> Dict[str, Any]:
+    from boto3.dynamodb.conditions import Key as _Key
+    kwargs: Dict[str, Any] = dict(
+        KeyConditionExpression=(
+            _Key("user_id").eq(user_sub) & _Key("sk").begins_with("CALLLOG#")
+        ),
+        ScanIndexForward=True,
+        Limit=limit,
+    )
+    if cursor:
+        kwargs["ExclusiveStartKey"] = decode_cursor(cursor)
+    resp = T.call_history.query(**kwargs)
+    items = [_calllog_item_to_out(i) for i in resp.get("Items", [])]
+    lek = resp.get("LastEvaluatedKey")
+    return {"items": items, "next_cursor": encode_cursor(lek) if lek else None}
+
+
+def get_crm_call_log(user_sub: str, call_id: str) -> Optional[Dict[str, Any]]:
+    """Scan by PK + filter — call logs don't have a GSI for call_id lookup."""
+    from boto3.dynamodb.conditions import Attr as _Attr, Key as _Key
+    resp = T.call_history.query(
+        KeyConditionExpression=_Key("user_id").eq(user_sub) & _Key("sk").begins_with("CALLLOG#"),
+        FilterExpression=_Attr("call_id").eq(call_id),
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    return _calllog_item_to_out(items[0])
+
+
+def update_crm_call_log(
+    user_sub: str,
+    call_id: str,
+    subject: Optional[str] = None,
+    description: Optional[str] = None,
+    outcome: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    from boto3.dynamodb.conditions import Attr as _Attr, Key as _Key
+    resp = T.call_history.query(
+        KeyConditionExpression=_Key("user_id").eq(user_sub) & _Key("sk").begins_with("CALLLOG#"),
+        FilterExpression=_Attr("call_id").eq(call_id),
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    item = items[0]
+    ts = now_ts()
+    updates: Dict[str, Any] = {"updated_at": ts}
+    if subject is not None:
+        updates["subject"] = subject
+    if description is not None:
+        updates["description"] = description
+    if outcome is not None:
+        updates["outcome"] = outcome
+    updated = {**item, **updates}
+    T.call_history.put_item(Item=updated)
+    return _calllog_item_to_out(updated)
+
+
+def delete_crm_call_log(user_sub: str, call_id: str) -> bool:
+    from boto3.dynamodb.conditions import Attr as _Attr, Key as _Key
+    resp = T.call_history.query(
+        KeyConditionExpression=_Key("user_id").eq(user_sub) & _Key("sk").begins_with("CALLLOG#"),
+        FilterExpression=_Attr("call_id").eq(call_id),
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return False
+    T.call_history.delete_item(Key={"user_id": user_sub, "sk": items[0]["sk"]})
+    return True
+
+
+# ACT-007: list logs by entity (filter on call_history, no GSI needed at this volume)
+def list_crm_call_logs_for_entity(
+    user_sub: str,
+    entity_type: str,
+    entity_id: str,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+) -> Dict[str, Any]:
+    from boto3.dynamodb.conditions import Attr as _Attr, Key as _Key
+    collected: list = []
+    kwargs: Dict[str, Any] = dict(
+        KeyConditionExpression=_Key("user_id").eq(user_sub) & _Key("sk").begins_with("CALLLOG#"),
+        FilterExpression=(
+            _Attr("linked_entity_type").eq(entity_type) & _Attr("linked_entity_id").eq(entity_id)
+        ),
+        ScanIndexForward=True,
+    )
+    if cursor:
+        kwargs["ExclusiveStartKey"] = decode_cursor(cursor)
+    last_lek = None
+    safety = 0
+    while len(collected) < limit and safety < 10:
+        resp = T.call_history.query(**kwargs)
+        for item in resp.get("Items", []):
+            if len(collected) >= limit:
+                break
+            collected.append(_calllog_item_to_out(item))
+        last_lek = resp.get("LastEvaluatedKey")
+        if not last_lek:
+            break
+        kwargs["ExclusiveStartKey"] = last_lek
+        safety += 1
+    return {"items": collected, "next_cursor": encode_cursor(last_lek) if last_lek else None}

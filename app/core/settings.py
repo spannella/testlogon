@@ -3300,5 +3300,52 @@ class Settings:
         "OAUTH_PROVIDER_SCOPE_ENFORCEMENT_ENABLED", "0"
     ) not in ("0", "false", "False")
 
+    # ── CRM Activities (ACT-001..ACT-010) ────────────────────────────────────
+    # Master switch — all sub-flags AND table access depend on this being true.
+    # Default OFF; sub-flags also default OFF so enabling master alone is safe.
+    crm_activities_enabled: bool = os.environ.get(
+        "CRM_ACTIVITIES_ENABLED", "false"
+    ).lower() == "true"
+
+    # Module-level sub-flags
+    crm_tasks_enabled: bool = os.environ.get(
+        "CRM_TASKS_ENABLED", "false"
+    ).lower() == "true"
+    crm_notes_enabled: bool = os.environ.get(
+        "CRM_NOTES_ENABLED", "false"
+    ).lower() == "true"
+    crm_activity_timeline_enabled: bool = os.environ.get(
+        "CRM_ACTIVITY_TIMELINE_ENABLED", "false"
+    ).lower() == "true"
+    crm_event_rsvp_enabled: bool = os.environ.get(
+        "CRM_EVENT_RSVP_ENABLED", "false"
+    ).lower() == "true"
+    crm_event_reminders_enabled: bool = os.environ.get(
+        "CRM_EVENT_REMINDERS_ENABLED", "false"
+    ).lower() == "true"
+
+    # DynamoDB table name settings
+    crm_tasks_table_name: str = os.environ.get("DDB_CRM_TASKS_TABLE", "crm_tasks")
+    crm_notes_table_name: str = os.environ.get("DDB_CRM_NOTES_TABLE", "crm_notes")
+    crm_activity_timeline_table_name: str = os.environ.get(
+        "DDB_CRM_ACTIVITY_TIMELINE_TABLE", "crm_activity_timeline"
+    )
+    crm_event_rsvp_table_name: str = os.environ.get(
+        "DDB_CRM_EVENT_RSVP_TABLE", "crm_event_rsvp"
+    )
+    crm_event_reminders_table_name: str = os.environ.get(
+        "DDB_CRM_EVENT_REMINDERS_TABLE", "crm_event_reminders"
+    )
+
+    # ACT-004: poller tuning
+    crm_event_reminders_poll_interval_seconds: int = int(
+        os.environ.get("CRM_EVENT_REMINDERS_POLL_INTERVAL_SECONDS", "60")
+    )
+
+    # ACT-010: S3 bucket for note attachments
+    crm_notes_s3_bucket: str = os.environ.get(
+        "CRM_NOTES_S3_BUCKET", "local-uploads"
+    )
+
 
 S = Settings()

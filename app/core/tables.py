@@ -393,6 +393,12 @@ class Tables:
     # PRT-001: ATS Career Portal
     career_portal: Any
     oauth_consumers: Any
+    # CRM Activities (ACT-001..ACT-010)
+    crm_tasks: Any
+    crm_notes: Any
+    crm_activity_timeline: Any
+    crm_event_rsvp: Any
+    crm_event_reminders: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -721,4 +727,10 @@ T = Tables(
     # PRT-001: ATS Career Portal
     career_portal=_safe_table(S.career_portal_table_name),
     oauth_consumers=_safe_table(S.oauth_consumers_table_name),
+    # CRM Activities (ACT-001..ACT-010)
+    crm_tasks=_safe_table(S.crm_tasks_table_name),
+    crm_notes=_safe_table(S.crm_notes_table_name),
+    crm_activity_timeline=_safe_table(S.crm_activity_timeline_table_name),
+    crm_event_rsvp=_safe_table(S.crm_event_rsvp_table_name),
+    crm_event_reminders=_safe_table(S.crm_event_reminders_table_name),
 )

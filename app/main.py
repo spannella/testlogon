@@ -1157,6 +1157,15 @@ def create_app() -> FastAPI:
     app.include_router(leases_admin_router)
     app.include_router(tenant_leases_router)
     app.add_event_handler("startup", start_leases_renewal_check_task)
+    # ── CRM Activities (ACT-004, ACT-008, ACT-009, ACT-010) ──────────────────
+    from app.routers.crm_tasks import router as crm_tasks_router
+    app.include_router(crm_tasks_router)
+    from app.routers.crm_notes import router as crm_notes_router
+    app.include_router(crm_notes_router)
+    from app.routers.crm_activity_timeline import router as crm_activity_timeline_router
+    app.include_router(crm_activity_timeline_router)
+    from app.services.crm_event_reminders import start_event_reminder_task
+    app.add_event_handler("startup", start_event_reminder_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:
