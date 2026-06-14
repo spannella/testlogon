@@ -70,6 +70,9 @@ import {
   Package,
   Factory,
   Hammer,
+  Truck,
+  Briefcase,
+  ReceiptText,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -263,6 +266,15 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Work Centers", path: "/manufacturing/work-centers", icon: <Hammer className="h-5 w-5" /> },
       { label: "Fixed Assets", path: "/ofbiz/fixed-assets", icon: <Boxes className="h-5 w-5" /> },
       { label: "Maintenance Queue", path: "/ofbiz/fixed-assets/maintenance", icon: <Wrench className="h-5 w-5" /> },
+      { label: "Shipping", path: "/ofbiz/shipping", icon: <Truck className="h-5 w-5" /> },
+      { label: "Marketing", path: "/ofbiz/marketing", icon: <Megaphone className="h-5 w-5" /> },
+      { label: "HR & Payroll", path: "/ofbiz/hr", icon: <Briefcase className="h-5 w-5" /> },
+      { label: "Facilities", path: "/ofbiz/facilities", icon: <Building2 className="h-5 w-5" /> },
+      { label: "Fulfillment", path: "/ofbiz/fulfillment", icon: <Truck className="h-5 w-5" /> },
+      { label: "ERP", path: "/erp", icon: <Boxes className="h-5 w-5" /> },
+      { label: "Storefront", path: "/ofbiz/storefront", icon: <Store className="h-5 w-5" /> },
+      { label: "Cart Pricing", path: "/ofbiz/cart-pricing", icon: <ReceiptText className="h-5 w-5" /> },
+      { label: "Order Tracking", path: "/ofbiz/order-fulfillment", icon: <Truck className="h-5 w-5" /> },
     ],
   },
 ];

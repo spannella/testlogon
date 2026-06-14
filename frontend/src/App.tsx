@@ -274,6 +274,19 @@ const PurchasingPage = lazy(() => import("@/pages/purchasing/PurchasingPage"));
 const PurchaseOrderDetailPage = lazy(() => import("@/pages/purchasing/PurchaseOrderDetailPage"));
 const SupplierDetailPage = lazy(() => import("@/pages/purchasing/SupplierDetailPage"));
 
+// OFBiz frontend batch 2 (SHP, MKT, HRM, ECM, FAC, OFB-core)
+const ShippingPage = lazy(() => import("@/pages/shipping/ShippingPage"));
+const MarketingPage = lazy(() => import("@/pages/marketing/MarketingPage"));
+const HrPage = lazy(() => import("@/pages/hr/HrPage"));
+const StorefrontPage = lazy(() => import("@/pages/storeIntegration/StorefrontPage"));
+const CartPricingPage = lazy(() => import("@/pages/storeIntegration/CartPricingPage"));
+const OrderFulfillmentPage = lazy(() => import("@/pages/storeIntegration/OrderFulfillmentPage"));
+const FacilitiesPage = lazy(() => import("@/pages/facility/FacilitiesPage"));
+const FulfillmentPage = lazy(() => import("@/pages/facility/FulfillmentPage"));
+const ErpOverviewPage = lazy(() => import("@/pages/erp/ErpOverviewPage"));
+const ErpInventoryPage = lazy(() => import("@/pages/erp/InventoryPage"));
+const ErpReturnsPage = lazy(() => import("@/pages/erp/ReturnsPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -359,6 +372,19 @@ export default function App() {
           <Route path="purchasing" element={<PurchasingPage />} />
           <Route path="purchasing/purchase-orders/:poId" element={<PurchaseOrderDetailPage />} />
           <Route path="purchasing/suppliers/:supplierId" element={<SupplierDetailPage />} />
+          {/* OFBiz frontend batch 2 */}
+          <Route path="ofbiz/shipping" element={<ShippingPage />} />
+          <Route path="ofbiz/marketing" element={<MarketingPage />} />
+          <Route path="ofbiz/hr" element={<HrPage />} />
+          <Route path="ofbiz/storefront" element={<StorefrontPage />} />
+          <Route path="ofbiz/cart-pricing" element={<CartPricingPage />} />
+          <Route path="ofbiz/order-fulfillment" element={<OrderFulfillmentPage />} />
+          <Route path="ofbiz/order-fulfillment/:orderId" element={<OrderFulfillmentPage />} />
+          <Route path="ofbiz/facilities" element={<FacilitiesPage />} />
+          <Route path="ofbiz/fulfillment" element={<FulfillmentPage />} />
+          <Route path="erp" element={<ErpOverviewPage />} />
+          <Route path="erp/inventory" element={<ErpInventoryPage />} />
+          <Route path="erp/returns" element={<ErpReturnsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
