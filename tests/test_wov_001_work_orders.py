@@ -168,13 +168,20 @@ def test_bad_priority_422():
 
 def test_unknown_property_404():
     import app.services.maintenance_orders as svc_mod
+    from app.core.settings import S
     mock_get = MagicMock(return_value=None)
-    with patch.dict(sys.modules, {"app.services.property_mgmt": MagicMock(get_property=mock_get)}):
-        body = _make_body(correlation_id="unknown-prop-1")
-        with pytest.raises(HTTPException) as exc:
-            svc_mod.create_work_order("prop-missing", body, "actor-1")
-        assert exc.value.status_code == 404
-        assert "property_not_found" in str(exc.value.detail)
+    # The guard validates the property FK only when property_mgmt is enabled.
+    _prev = getattr(S, "property_mgmt_enabled", False)
+    object.__setattr__(S, "property_mgmt_enabled", True)
+    try:
+        with patch.dict(sys.modules, {"app.services.property_mgmt": MagicMock(get_property=mock_get)}):
+            body = _make_body(correlation_id="unknown-prop-1")
+            with pytest.raises(HTTPException) as exc:
+                svc_mod.create_work_order("prop-missing", body, "actor-1")
+            assert exc.value.status_code == 404
+            assert "property_not_found" in str(exc.value.detail)
+    finally:
+        object.__setattr__(S, "property_mgmt_enabled", _prev)
 
 
 def test_property_import_error_skips_guard():

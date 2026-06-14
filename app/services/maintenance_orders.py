@@ -17,6 +17,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
+from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.core.cursor import encode_cursor, decode_cursor
@@ -169,12 +170,17 @@ def create_work_order(property_id: str, body: MaintenanceOrderIn, actor_sub: str
     if body.priority not in WO_PRIORITIES:
         raise HTTPException(status_code=422, detail={"code": "invalid_priority", "allowed": sorted(WO_PRIORITIES)})
 
-    # Lazy property FK validation (PROP-001 may not be built yet)
+    # Lazy property FK validation (PROP-001 may be unbuilt OR flag-disabled).
+    # Only validate when property_mgmt is importable AND enabled; otherwise skip
+    # (a disabled module can't answer, and get_property 404s when disabled).
     try:
-        from app.services.property_mgmt import get_property  # type: ignore[import]
-        prop = get_property(property_id)
-        if prop is None:
-            raise HTTPException(status_code=404, detail="property_not_found")
+        if getattr(S, "property_mgmt_enabled", False):
+            from app.services.property_mgmt import get_property  # type: ignore[import]
+            prop = get_property(property_id)
+            if prop is None:
+                raise HTTPException(status_code=404, detail="property_not_found")
+        else:
+            logger.warning("property_mgmt disabled; skipping property FK validation for WO create")
     except ImportError:
         logger.warning("property_mgmt not available; skipping property FK validation for WO create")
 
