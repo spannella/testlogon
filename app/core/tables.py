@@ -209,6 +209,10 @@ class Tables:
     group_call_sessions: Any
     sms_delivery: Any
     email_delivery: Any
+    email_settings: Any
+    user_email_accounts: Any
+    user_email_messages: Any
+    email_archive: Any
     admin_messaging_templates: Any
     affiliate_links: Any
     affiliate_clicks: Any
@@ -520,6 +524,10 @@ T = Tables(
     group_call_sessions=_safe_table(S.group_call_sessions_table_name),
     sms_delivery=_safe_table(S.sms_delivery_table_name),
     email_delivery=_safe_table(S.email_delivery_table_name),
+    email_settings=_safe_table(S.email_settings_table_name),
+    user_email_accounts=_safe_table(S.user_email_accounts_table_name),
+    user_email_messages=_safe_table(S.user_email_messages_table_name),
+    email_archive=_safe_table(S.email_archive_table_name),
     admin_messaging_templates=_safe_table(S.admin_messaging_templates_table_name),
     affiliate_links=_safe_table(S.affiliate_links_table_name),
     affiliate_clicks=_safe_table(S.affiliate_clicks_table_name),

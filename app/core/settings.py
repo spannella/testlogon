@@ -2103,6 +2103,30 @@ class Settings:
     # Notification Delivery Enhancements (NOTIFY-001)
     notification_dispatch_enabled: bool = os.environ.get("NOTIFICATION_DISPATCH_ENABLED", "1") not in ("0", "false", "False")
     notification_email_templates_enabled: bool = os.environ.get("NOTIFICATION_EMAIL_TEMPLATES_ENABLED", "1") not in ("0", "false", "False")
+
+    # EML-002: Admin runtime email settings override
+    email_settings_table_name: str = os.environ.get("EMAIL_SETTINGS_TABLE_NAME", "email_settings")
+    email_settings_cache_ttl_seconds: int = int(os.environ.get("EMAIL_SETTINGS_CACHE_TTL_SECONDS", "60"))
+    admin_email_settings_enabled: bool = os.environ.get("ADMIN_EMAIL_SETTINGS_ENABLED", "0") not in ("0", "false", "False")
+
+    # EML-003: Per-user email account connections
+    user_email_accounts_table_name: str = os.environ.get("USER_EMAIL_ACCOUNTS_TABLE_NAME", "user_email_accounts")
+    email_client_enabled: bool = os.environ.get("EMAIL_CLIENT_ENABLED", "0") not in ("0", "false", "False")
+
+    # EML-004: IMAP inbox sync
+    user_email_messages_table_name: str = os.environ.get("USER_EMAIL_MESSAGES_TABLE_NAME", "user_email_messages")
+    email_messages_ttl_days: int = int(os.environ.get("EMAIL_MESSAGES_TTL_DAYS", "90"))
+    email_imap_max_fetch: int = int(os.environ.get("EMAIL_IMAP_MAX_FETCH", "200"))
+    email_imap_timeout_seconds: int = int(os.environ.get("EMAIL_IMAP_TIMEOUT_SECONDS", "30"))
+    email_bodies_s3_bucket: str = os.environ.get("EMAIL_BODIES_S3_BUCKET", "local-uploads")
+    email_bodies_s3_prefix: str = os.environ.get("EMAIL_BODIES_S3_PREFIX", "email-bodies/")
+
+    # EML-007: Email archiving
+    email_archive_table_name: str = os.environ.get("EMAIL_ARCHIVE_TABLE_NAME", "email_archive")
+    email_archiving_enabled: bool = os.environ.get("EMAIL_ARCHIVING_ENABLED", "0") not in ("0", "false", "False")
+
+    # EML-009: Campaign email templates
+    campaign_email_templates_enabled: bool = os.environ.get("CAMPAIGN_EMAIL_TEMPLATES_ENABLED", "0") not in ("0", "false", "False")
     notification_toast_enabled: bool = os.environ.get("NOTIFICATION_TOAST_ENABLED", "1") not in ("0", "false", "False")
     notification_unread_count_enabled: bool = os.environ.get("NOTIFICATION_UNREAD_COUNT_ENABLED", "1") not in ("0", "false", "False")
     toast_default_duration_ms: int = int(os.environ.get("TOAST_DEFAULT_DURATION_MS", "5000"))

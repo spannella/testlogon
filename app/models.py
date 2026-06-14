@@ -18255,3 +18255,207 @@ class ReservationHistoryEntry(BaseModel):
     actor: str
     reason: str
     ts: int
+
+
+
+
+# ---------------------------------------------------------------------------
+# EML-002: Admin email settings
+# ---------------------------------------------------------------------------
+
+class EmailSettingsOut(BaseModel):
+    from_email: str
+    reply_to_email: Optional[str] = None
+    ses_enabled: bool
+    smtp_enabled: bool
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+    source: str  # "ddb_override" | "env_fallback"
+
+
+class EmailSettingsUpdate(BaseModel):
+    from_email: Optional[str] = None
+    reply_to_email: Optional[str] = None
+    ses_enabled: Optional[bool] = None
+    smtp_enabled: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# EML-003: Per-user email account connections
+# ---------------------------------------------------------------------------
+
+class EmailAccountCreateIn(BaseModel):
+    label: str = Field(..., max_length=100)
+    imap_host: str
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    imap_use_ssl: bool = True
+    smtp_host: str
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_use_tls: bool = True
+    username: str
+    password: str = Field(..., min_length=1)
+    is_default: bool = False
+
+
+class EmailAccountUpdateIn(BaseModel):
+    label: Optional[str] = Field(default=None, max_length=100)
+    imap_host: Optional[str] = None
+    imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    imap_use_ssl: Optional[bool] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    smtp_use_tls: Optional[bool] = None
+    username: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=1)
+    is_default: Optional[bool] = None
+
+
+class EmailAccountOut(BaseModel):
+    account_id: str
+    label: str
+    imap_host: str
+    imap_port: int
+    imap_use_ssl: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_use_tls: bool
+    username: str
+    is_default: bool
+    created_at: int
+    updated_at: int
+    status: str
+    last_error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# EML-004: IMAP inbox sync
+# ---------------------------------------------------------------------------
+
+class SyncInboxIn(BaseModel):
+    folder: str = "INBOX"
+    max_fetch: Optional[int] = Field(default=None, ge=1, le=500)
+
+
+class SyncInboxOut(BaseModel):
+    synced: int
+    folder: str
+    last_uid: int
+
+
+class EmailMessageOut(BaseModel):
+    uid: int
+    message_id: str
+    in_reply_to: Optional[str] = None
+    references: List[str] = []
+    thread_id: str
+    subject: str
+    from_addr: str
+    to_addrs: List[str] = []
+    cc_addrs: List[str] = []
+    date_ts: int
+    folder: str
+    flags: List[str] = []
+    snippet: str
+    body_text: Optional[str] = None
+    body_html: Optional[str] = None
+    body_html_url: Optional[str] = None
+    has_attachments: bool = False
+    synced_at: int
+
+
+class EmailMessageListOut(BaseModel):
+    items: List[EmailMessageOut]
+    next_cursor: Optional[str] = None
+
+
+class EmailThreadOut(BaseModel):
+    thread_id: str
+    messages: List[EmailMessageOut]
+
+
+# ---------------------------------------------------------------------------
+# EML-007: Email archiving
+# ---------------------------------------------------------------------------
+
+class ArchiveEmailIn(BaseModel):
+    account_id: str
+    uid: int
+    entity_type: Literal["contact", "ticket"]
+    entity_id: str
+
+
+class ArchivedEmailOut(BaseModel):
+    pk: str
+    sk: str
+    entity_type: str
+    entity_id: str
+    user_sub: str
+    account_id: str
+    uid: int
+    message_id: str
+    message_id_hash: str
+    subject: str
+    from_addr: str
+    snippet: str
+    date_ts: int
+    archived_at: int
+
+
+# ---------------------------------------------------------------------------
+# EML-009: Campaign email template models
+# ---------------------------------------------------------------------------
+
+class CampaignEmailTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=50_000)
+    campaign_id: Optional[str] = Field(default=None, max_length=64)
+    merge_fields: List[str] = Field(default_factory=list)
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _strip_scripts(cls, v):
+        if isinstance(v, str):
+            return re.sub(
+                r"<script[^>]*>.*?</script>", "", v,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+        return v
+
+    @field_validator("merge_fields", mode="before")
+    @classmethod
+    def _validate_merge_fields(cls, v):
+        if not isinstance(v, list):
+            return v
+        for f in v:
+            if not re.fullmatch(r"[a-zA-Z0-9_]{1,64}", str(f)):
+                raise ValueError(f"Invalid merge field name: {f!r}")
+        return v
+
+
+class CampaignEmailTemplateUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    subject: Optional[str] = Field(default=None, max_length=200)
+    body: Optional[str] = Field(default=None, max_length=50_000)
+    campaign_id: Optional[str] = Field(default=None, max_length=64)
+    merge_fields: Optional[List[str]] = None
+    active: Optional[bool] = None
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _strip_scripts(cls, v):
+        if isinstance(v, str):
+            return re.sub(
+                r"<script[^>]*>.*?</script>", "", v,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+        return v
+
+
+class CampaignEmailTemplateOut(NotificationTemplateOut):
+    campaign_id: Optional[str] = None
+    merge_fields: List[str] = Field(default_factory=list)
+
+
+class CampaignEmailTemplatePreviewOut(NotificationTemplatePreviewOut):
+    merge_fields: List[str] = Field(default_factory=list)

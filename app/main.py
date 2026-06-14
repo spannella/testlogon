@@ -251,6 +251,8 @@ from app.routers.admin_jobs import router as admin_jobs_router
 from app.routers.job_dashboard import job_dashboard_router
 from app.routers.admin_sms import router as admin_sms_router
 from app.routers.admin_email import router as admin_email_router
+from app.routers.user_email_accounts import router as user_email_accounts_router
+from app.routers.email_archive import router as email_archive_router
 from app.routers.admin_notifications import router as admin_notifications_router
 from app.routers.ses_notifications import router as ses_notifications_router
 from app.routers.recommendations import (
@@ -818,6 +820,8 @@ def create_app() -> FastAPI:
     app.include_router(job_dashboard_router)
     app.include_router(admin_sms_router)
     app.include_router(admin_email_router)
+    app.include_router(user_email_accounts_router)
+    app.include_router(email_archive_router)
     app.include_router(admin_notifications_router)
     app.include_router(admin_party_router)  # PTY-012
     app.include_router(ses_notifications_router)

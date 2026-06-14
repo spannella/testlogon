@@ -6,14 +6,21 @@ import os
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.auth.deps import get_authenticated_user, AuthenticatedUser
-from app.auth.policy import require_admin_or_root
+from app.auth.policy import require_admin_or_root, require_admin_or_root_csrf, require_root
 from app.core.settings import S
 from app.core.time import now_ts
 from app.models import (
+    CampaignEmailTemplateCreate,
+    CampaignEmailTemplateOut,
+    CampaignEmailTemplatePreviewOut,
+    CampaignEmailTemplateUpdate,
     DashboardBreakdownOut,
     DashboardSuppressionAdd,
     DashboardTimeseriesOut,
     EmailDashboardStatsOut,
+    EmailSettingsOut,
+    EmailSettingsUpdate,
+    NotificationTemplatePreviewRequest,
 )
 from app.services.email_delivery import (
     get_delivery_stats,
@@ -200,3 +207,209 @@ async def add_email_suppression(
         "suppressed_at": now_ts(),
         "suppressed_by": actor.sub,
     }
+
+
+# ---------------------------------------------------------------------------
+# EML-002: Admin runtime email settings
+# ---------------------------------------------------------------------------
+
+
+def _require_email_settings_enabled():
+    if not S.admin_email_settings_enabled:
+        raise HTTPException(status_code=503, detail="Email settings management not enabled")
+
+
+@router.get("/settings", response_model=EmailSettingsOut)
+async def get_email_settings_endpoint(
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Return the effective outbound email settings (env fallback or DDB override)."""
+    _require_email_settings_enabled()
+    from app.services.email_settings import get_email_settings
+    return get_email_settings()
+
+
+@router.patch("/settings", response_model=EmailSettingsOut)
+async def update_email_settings_endpoint(
+    payload: EmailSettingsUpdate = Body(...),
+    actor: AuthenticatedUser = Depends(require_root),
+):
+    """Update outbound email settings (ROOT only)."""
+    _require_email_settings_enabled()
+    from fastapi import Request
+    from app.auth.policy import enforce_cookie_csrf
+    from app.services.email_settings import update_email_settings
+    result = update_email_settings(
+        actor.sub,
+        **payload.model_dump(exclude_none=True),
+    )
+    return result
+
+
+@router.get("/settings/audit")
+async def get_email_settings_audit(
+    limit: int = Query(default=50, ge=1, le=200),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Return the audit history for email settings changes."""
+    _require_email_settings_enabled()
+    from boto3.dynamodb.conditions import Key
+    from app.core.tables import T
+    try:
+        resp = T.alerts.query(
+            KeyConditionExpression=Key("user_sub").eq("system_email_settings"),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        items = resp.get("Items", [])
+    except Exception:
+        items = []
+    return {"items": items, "count": len(items)}
+
+
+# ---------------------------------------------------------------------------
+# EML-009: Campaign email template admin endpoints
+# ---------------------------------------------------------------------------
+
+
+def _require_campaign_templates_enabled():
+    if not S.campaign_email_templates_enabled:
+        raise HTTPException(status_code=503, detail="campaign_email_templates disabled")
+
+
+@router.get("/campaign-templates")
+async def list_campaign_email_templates(
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """List all campaign-channel email templates."""
+    _require_campaign_templates_enabled()
+    from app.services.notification_templates import list_campaign_templates
+    templates = list_campaign_templates()
+    return templates
+
+
+@router.post("/campaign-templates", status_code=201)
+async def create_campaign_email_template(
+    payload: CampaignEmailTemplateCreate = Body(...),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    """Create a new campaign email template."""
+    _require_campaign_templates_enabled()
+    from app.services.notification_templates import create_campaign_template
+    return create_campaign_template(actor.sub, payload.model_dump())
+
+
+@router.patch("/campaign-templates/{template_id}")
+async def update_campaign_email_template(
+    template_id: str,
+    payload: CampaignEmailTemplateUpdate = Body(...),
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    """Update a campaign email template (campaign-channel only)."""
+    _require_campaign_templates_enabled()
+    from app.services.notification_templates import get_template, update_template
+    from app.core.tables import T
+    from app.core.time import now_ts as _now_ts
+
+    tpl = get_template(template_id)
+    if not tpl or tpl.get("channel") != "campaign":
+        raise HTTPException(status_code=404, detail="Template not found or not a campaign template")
+
+    update_kwargs = {}
+    if payload.subject is not None:
+        update_kwargs["subject"] = payload.subject
+    if payload.body is not None:
+        update_kwargs["body"] = payload.body
+    if payload.active is not None:
+        update_kwargs["active"] = payload.active
+
+    if update_kwargs:
+        update_template(template_id, admin_sub=actor.sub, **update_kwargs)
+
+    # Handle campaign-specific extra fields (name, campaign_id, merge_fields)
+    extra_set_parts = []
+    extra_values = {}
+    extra_names = {}
+    if payload.name is not None:
+        extra_set_parts.append("#nm = :nm")
+        extra_names["#nm"] = "name"
+        extra_values[":nm"] = payload.name
+    if payload.campaign_id is not None:
+        extra_set_parts.append("campaign_id = :cid")
+        extra_values[":cid"] = payload.campaign_id
+    if payload.merge_fields is not None:
+        extra_set_parts.append("merge_fields = :mf")
+        extra_values[":mf"] = payload.merge_fields
+
+    if extra_set_parts:
+        extra_values[":ua"] = _now_ts()
+        extra_set_parts.append("updated_at = :ua")
+        kwargs = {
+            "Key": {"pk": f"TEMPLATE#{template_id}", "sk": "META"},
+            "UpdateExpression": "SET " + ", ".join(extra_set_parts),
+            "ExpressionAttributeValues": extra_values,
+        }
+        if extra_names:
+            kwargs["ExpressionAttributeNames"] = extra_names
+        try:
+            T.admin_messaging_templates.update_item(**kwargs)
+        except Exception:
+            pass
+
+    try:
+        from app.services.alerts import audit_event
+        audit_event("campaign_template_updated", actor.sub, template_id=template_id)
+    except Exception:
+        pass
+
+    from app.services.notification_templates import _campaign_to_out
+    resp = T.admin_messaging_templates.get_item(Key={"pk": f"TEMPLATE#{template_id}", "sk": "META"})
+    item = resp.get("Item") or {}
+    return _campaign_to_out(item)
+
+
+@router.delete("/campaign-templates/{template_id}", status_code=204)
+async def delete_campaign_email_template(
+    template_id: str,
+    actor: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    """Soft-delete (deactivate) a campaign email template."""
+    _require_campaign_templates_enabled()
+    from app.services.notification_templates import get_template, update_template
+    tpl = get_template(template_id)
+    if not tpl or tpl.get("channel") != "campaign":
+        raise HTTPException(status_code=404, detail="Template not found or not a campaign template")
+    update_template(template_id, admin_sub=actor.sub, active=False)
+    try:
+        from app.services.alerts import audit_event
+        audit_event("campaign_template_deleted", actor.sub, template_id=template_id)
+    except Exception:
+        pass
+    return None
+
+
+@router.post("/campaign-templates/{template_id}/preview")
+async def preview_campaign_email_template(
+    template_id: str,
+    payload: NotificationTemplatePreviewRequest = Body(default_factory=lambda: NotificationTemplatePreviewRequest()),
+    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """Render a campaign template with sample variables."""
+    _require_campaign_templates_enabled()
+    from app.services.notification_templates import get_template, preview_template, _campaign_to_out
+    from app.core.tables import T
+
+    tpl = get_template(template_id)
+    if not tpl or tpl.get("channel") != "campaign":
+        raise HTTPException(status_code=404, detail="Template not found or not a campaign template")
+
+    preview = preview_template(template_id, sample_vars=payload.sample_vars)
+    if not preview:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    # Fetch merge_fields from raw item
+    resp = T.admin_messaging_templates.get_item(Key={"pk": f"TEMPLATE#{template_id}", "sk": "META"})
+    raw = resp.get("Item") or {}
+    merge_fields = list(raw.get("merge_fields") or [])
+
+    return {**preview, "merge_fields": merge_fields}

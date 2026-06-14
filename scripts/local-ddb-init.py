@@ -41,6 +41,59 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # EML-002: Admin runtime email settings (single CONFIG/GLOBAL row)
+        TableDef(
+            _resolve_table_name(S.email_settings_table_name, "email_settings"),
+            "pk",
+            "sk",
+        ),
+        # EML-003: Per-user IMAP/SMTP account connections
+        TableDef(
+            _resolve_table_name(S.user_email_accounts_table_name, "user_email_accounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByUser",
+                    "partition_key": "pk",
+                    "sort_key": "created_at",
+                }
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # EML-004: IMAP inbox sync messages (and sync cursor rows)
+        TableDef(
+            _resolve_table_name(S.user_email_messages_table_name, "user_email_messages"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByFolder",
+                    "partition_key": "folder_pk",
+                    "sort_key": "date_ts",
+                },
+                {
+                    "index_name": "ByThread",
+                    "partition_key": "pk",
+                    "sort_key": "thread_id",
+                },
+            ],
+            attr_types={"date_ts": "N"},
+        ),
+        # EML-007: Email archiving — relate email to CRM record
+        TableDef(
+            _resolve_table_name(S.email_archive_table_name, "email_archive"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByUser",
+                    "partition_key": "gsi_user_pk",
+                    "sort_key": "archived_at",
+                }
+            ],
+            attr_types={"archived_at": "N"},
+        ),
         # QloApps hotel-PMS vertical (HTL-018): reservation entity with three GSIs.
         # GSI_HOTEL_ARRIVALS: arrivals board (hotel_id/checkin S)
         # GSI_GUEST: guest booking history newest-first (guest_party_id/created_at N)
