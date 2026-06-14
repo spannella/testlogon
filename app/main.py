@@ -66,6 +66,7 @@ from app.routers.calendar import router as calendar_router
 from app.routers.crm_events import router as crm_events_router
 from app.routers.crm_contact_sms import router as crm_contact_sms_router
 from app.routers.audit_export import browse_router as audit_log_browse_router
+from app.routers.ats_integration import router as ats_integration_router
 from app.routers.seo_metadata import seo_metadata_router
 from app.routers.admin_calendar_integrations import router as admin_calendar_integrations_router
 from app.routers.device_trust import router as device_trust_router
@@ -624,6 +625,7 @@ def create_app() -> FastAPI:
         app.get("/metrics")(metrics_endpoint)
 
     app.include_router(ui_session_router)
+    app.include_router(ats_integration_router)
     app.include_router(content_boost_router)
     app.include_router(ui_mfa_router)
     app.include_router(mfa_devices_router)

@@ -449,6 +449,7 @@ class Tables:
     standing_orders: Any
     direct_debit_mandates: Any
     fx_rates: Any
+    ats_integration_links: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -832,4 +833,5 @@ T = Tables(
     standing_orders=_safe_table(S.standing_orders_table_name),
     direct_debit_mandates=_safe_table(S.direct_debit_mandates_table_name),
     fx_rates=_safe_table(S.fx_rates_table_name),
+    ats_integration_links=_safe_table(S.ats_integration_links_table_name),
 )

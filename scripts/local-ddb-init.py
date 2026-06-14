@@ -41,6 +41,16 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        TableDef(
+            _resolve_table_name(S.ats_integration_links_table_name, "ats_integration_links"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_BY_TARGET", "partition_key": "target_key", "sort_key": "created_at"},
+                {"index_name": "GSI_BY_OWNER", "partition_key": "owner_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # OBP PAY cluster (counterparties / standing orders / mandates / FX). Flag-gated default-OFF.
         # Counterparties: per-user payees. GSI ByUserCreatedAt for newest-first listing.
         TableDef(

@@ -22327,3 +22327,54 @@ class CrmMapFeatureFlagsOut(BaseModel):
     default_radius_km: float
     max_radius_km: float
     max_pins: int
+
+
+# ---------------------------------------------------------------------------
+# ATI (OpenCATS ATS Integration) — cross-link bridge models (ATI-owned).
+# Additive, append-only. These describe the ATI-owned link rows that bridge
+# the ATS pipeline (candidate / job_order) to the CRM (contact / opportunity).
+# All ATI link rows live in T.ats_integration_links; the link records are
+# opaque-id pointers only — no sibling schema is duplicated here.
+# ---------------------------------------------------------------------------
+
+
+class AtsCandidateContactLinkIn(BaseModel):
+    candidate_id: str = Field(..., min_length=1, max_length=128)
+    contact_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class AtsCandidateContactLinkOut(BaseModel):
+    link_id: str
+    link_type: Literal["candidate_contact"] = "candidate_contact"
+    candidate_id: str
+    contact_id: str
+    owner_sub: str
+    synced: bool = False
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class AtsJobOpportunityLinkIn(BaseModel):
+    job_order_id: str = Field(..., min_length=1, max_length=128)
+    opportunity_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class AtsJobOpportunityLinkOut(BaseModel):
+    link_id: str
+    link_type: Literal["job_opportunity"] = "job_opportunity"
+    job_order_id: str
+    opportunity_id: str
+    owner_sub: str
+    synced: bool = False
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class AtsIntegrationLinksOut(BaseModel):
+    candidate_contact_links: List[AtsCandidateContactLinkOut] = Field(default_factory=list)
+    job_opportunity_links: List[AtsJobOpportunityLinkOut] = Field(default_factory=list)
+    count: int = 0

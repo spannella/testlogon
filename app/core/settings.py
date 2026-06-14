@@ -3592,5 +3592,9 @@ class Settings:
     crm_map_max_radius_km: float = float(os.environ.get("CRM_MAP_MAX_RADIUS_KM", "500.0"))
     crm_map_max_pins: int = int(os.environ.get("CRM_MAP_MAX_PINS", "200"))
 
+    # ATI (OpenCATS ATS Integration) — ATI-owned cross-link bridge flag + table. Default OFF; AND-ed with candidates_enabled (CND-001 authoritative gate) inside ats_integration.py. Do NOT redeclare candidates_enabled/party_crm_*/job_orders_* here (sibling-owned).
+    ats_integration_enabled: bool = os.environ.get("ATS_INTEGRATION_ENABLED", "0").lower() not in ("0", "false", "no", "off", "")
+    ats_integration_links_table_name: str = os.environ.get("DDB_ATS_INTEGRATION_LINKS_TABLE", "ats_integration_links")
+
 
 S = Settings()
