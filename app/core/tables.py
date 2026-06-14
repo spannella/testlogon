@@ -439,6 +439,11 @@ class Tables:
     fixed_asset_schedule: Any
     pos: Any
     # ECM / OFBiz Phase-1 inventory + reservations (ECM-005/ECM-008)
+    marketing_campaigns: Any
+    contact_lists: Any
+    party_segments: Any
+    tracking_codes: Any
+    marketing_send_log: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -813,4 +818,9 @@ T = Tables(
     fixed_asset_schedule=_safe_table(S.fixed_asset_schedule_table_name),
     pos=_safe_table(S.pos_table_name),
     # ECM / OFBiz Phase-1 inventory + reservations
+    marketing_campaigns=_safe_table(S.marketing_campaigns_table_name),
+    contact_lists=_safe_table(S.contact_lists_table_name),
+    party_segments=_safe_table(S.party_segments_table_name),
+    tracking_codes=_safe_table(S.tracking_codes_table_name),
+    marketing_send_log=_safe_table(S.marketing_send_log_table_name),
 )

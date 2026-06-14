@@ -41,6 +41,57 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # Marketing Campaigns module (MKT-002)
+        TableDef(
+            _resolve_table_name(S.marketing_campaigns_table_name, "MarketingCampaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCampaignId", "partition_key": "campaign_id"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.contact_lists_table_name, "ContactLists"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "ByListJoinedAt", "partition_key": "list_id", "sort_key": "joined_at"},
+            ],
+            attr_types={"created_at": "N", "joined_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.party_segments_table_name, "PartySegments"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "BySegmentSnapTs", "partition_key": "segment_id", "sort_key": "snap_ts"},
+            ],
+            attr_types={"created_at": "N", "snap_ts": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.tracking_codes_table_name, "TrackingCodes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+                {"index_name": "ByCodeTs", "partition_key": "code_slug", "sort_key": "ts"},
+            ],
+            attr_types={"created_at": "N", "ts": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_send_log_table_name, "MarketingCampaignSendLog"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignSentAt", "partition_key": "campaign_id", "sort_key": "sent_at"},
+            ],
+            attr_types={"sent_at": "N"},
+        ),
         # POS-003 — Point of Sale single-table store.
         # Register config, session headers, tender sub-rows, and transaction headers
         # all live in one table keyed by pos_pk/pos_sk.

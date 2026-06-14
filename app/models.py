@@ -21950,3 +21950,179 @@ class OrderFulfillmentStatusOut(BaseModel):
     fulfillment_status: Optional[str] = None
     ship_groups: List[ShipGroupFulfillmentOut] = Field(default_factory=list)
     tracking_numbers: List[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Marketing Campaigns module (MKT-003)
+# ---------------------------------------------------------------------------
+
+VALID_SEGMENT_ATTRIBUTES: frozenset = frozenset({
+    "subscription_tier", "total_spend_cents", "profile_country", "profile_city",
+    "display_name", "first_name", "last_name", "gender", "location", "locale",
+    "birthday", "has_active_subscription", "subscription_status",
+    "order_count", "total_paid_cents", "last_order_at",
+})
+
+VALID_SEGMENT_OPERATORS: frozenset = frozenset({
+    "eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in",
+})
+
+
+class SegmentPredicate(BaseModel):
+    attribute: str
+    operator: str
+    value: Any
+
+    @field_validator("attribute")
+    @classmethod
+    def _validate_attribute(cls, v: str) -> str:
+        if v not in VALID_SEGMENT_ATTRIBUTES:
+            raise ValueError(f"Unknown segment attribute: {v!r}. Must be one of {sorted(VALID_SEGMENT_ATTRIBUTES)}")
+        return v
+
+    @field_validator("operator")
+    @classmethod
+    def _validate_operator(cls, v: str) -> str:
+        if v not in VALID_SEGMENT_OPERATORS:
+            raise ValueError(f"Unknown segment operator: {v!r}. Must be one of {sorted(VALID_SEGMENT_OPERATORS)}")
+        return v
+
+
+class MarketingCampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(..., pattern=r"^(awareness|traffic|conversions|retention)$")
+    budget_cents: int = Field(..., ge=0)
+    ad_campaign_id: Optional[str] = None
+    promo_code_ids: List[str] = []
+    contact_list_ids: List[str] = []
+    segment_ids: List[str] = []
+    tracking_code: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class MarketingCampaignUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    objective: Optional[str] = Field(default=None, pattern=r"^(awareness|traffic|conversions|retention)$")
+    budget_cents: Optional[int] = Field(default=None, ge=0)
+    status: Optional[str] = None
+    ad_campaign_id: Optional[str] = None
+    promo_code_ids: Optional[List[str]] = None
+    contact_list_ids: Optional[List[str]] = None
+    segment_ids: Optional[List[str]] = None
+    tracking_code: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class MarketingCampaignOut(BaseModel):
+    campaign_id: str
+    owner_id: str
+    name: str
+    objective: str
+    status: str
+    budget_cents: int = 0
+    ad_campaign_id: Optional[str] = None
+    ad_account_id: Optional[str] = None
+    promo_code_ids: List[str] = []
+    contact_list_ids: List[str] = []
+    segment_ids: List[str] = []
+    tracking_code: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class CampaignTransitionIn(BaseModel):
+    target_status: str
+
+
+class ContactListCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+
+
+class ContactListUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+
+
+class ContactListOut(BaseModel):
+    list_id: str
+    owner_id: str
+    name: str
+    description: Optional[str] = None
+    member_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ContactListMemberIn(BaseModel):
+    party_id: str
+
+
+class ContactListMemberOut(BaseModel):
+    list_id: str
+    party_id: str
+    joined_at: int = 0
+    suppressed: bool = False
+    display_name: Optional[str] = None
+
+
+class PartySegmentCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    predicates: List[SegmentPredicate] = Field(..., min_length=1)
+    candidate_source: Optional[str] = None
+
+
+class PartySegmentUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    predicates: Optional[List[SegmentPredicate]] = None
+    candidate_source: Optional[str] = None
+
+
+class PartySegmentOut(BaseModel):
+    segment_id: str
+    owner_id: str
+    name: str
+    description: Optional[str] = None
+    predicates: List[SegmentPredicate] = []
+    candidate_source: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class SegmentMemberOut(BaseModel):
+    segment_id: str
+    party_id: str
+    snap_id: str = ""
+    snap_ts: int = 0
+    opted_out: bool = False
+    snapped_at: int = 0
+
+
+class TrackingCodeCreateIn(BaseModel):
+    code_slug: str = Field(..., pattern=r"^[A-Za-z0-9_-]{3,50}$")
+    campaign_id: str
+
+
+class TrackingCodeOut(BaseModel):
+    code_slug: str
+    campaign_id: str
+    owner_id: str
+    visit_count: int = 0
+    order_count: int = 0
+    created_at: int = 0
+
+
+class CampaignAttributionOut(BaseModel):
+    campaign_id: str
+    ad_spend_cents: int = 0
+    promo_discount_cents: int = 0
+    promo_redemptions: int = 0
+    tracking_visits: int = 0
+    tracking_orders: int = 0
+    as_of: int = 0

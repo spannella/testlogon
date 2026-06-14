@@ -3559,4 +3559,13 @@ class Settings:
     pos_default_tax_rate_bps: int = int(os.environ.get("POS_DEFAULT_TAX_RATE_BPS", "0"))
 
 
+    # Marketing Campaigns module (MKT-002). Default OFF.
+    marketing_campaigns_enabled: bool = os.environ.get("MARKETING_CAMPAIGNS_ENABLED", "0") not in ("0", "false", "False")
+    marketing_campaigns_table_name: str = os.environ.get("DDB_MARKETING_CAMPAIGNS", "MarketingCampaigns")
+    contact_lists_table_name: str = os.environ.get("DDB_CONTACT_LISTS", "ContactLists")
+    party_segments_table_name: str = os.environ.get("DDB_PARTY_SEGMENTS", "PartySegments")
+    tracking_codes_table_name: str = os.environ.get("DDB_TRACKING_CODES", "TrackingCodes")
+    marketing_send_log_table_name: str = os.environ.get("DDB_MARKETING_SEND_LOG", "MarketingCampaignSendLog")
+
+
 S = Settings()

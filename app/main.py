@@ -193,6 +193,11 @@ from app.services.deletion_scheduler import start_deletion_scheduler_task
 from app.services.dmca_claims import start_dmca_timer_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
+from app.routers.marketing_campaigns import (
+    router as marketing_campaigns_router,
+    admin_router as marketing_admin_router,
+    public_router as marketing_public_router,
+)
 from app.routers.affiliate_links import router as affiliate_links_router
 from app.routers.ad_creative_affiliate import ad_creative_affiliate_router
 from app.routers.collaborations import router as collaborations_router
@@ -911,6 +916,9 @@ def create_app() -> FastAPI:
     app.include_router(billing_disputes_router)
     app.include_router(achievements_router)
     app.include_router(promo_codes_router)
+    app.include_router(marketing_campaigns_router)
+    app.include_router(marketing_admin_router)
+    app.include_router(marketing_public_router)
     app.include_router(affiliate_links_router)
     app.include_router(ad_creative_affiliate_router)
     app.include_router(collaborations_router)
