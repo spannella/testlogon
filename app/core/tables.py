@@ -408,6 +408,8 @@ class Tables:
     shipment_packages: Any
     customers: Any
     financial_products: Any
+    rent_policy: Any
+    property_documents: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -751,4 +753,6 @@ T = Tables(
     shipment_packages=_safe_table(S.shipment_packages_table_name),
     customers=_safe_table(S.customers_table_name),
     financial_products=_safe_table(S.financial_products_table_name),
+    rent_policy=_safe_table(S.rent_policy_table_name),
+    property_documents=_safe_table(S.property_documents_table_name),
 )

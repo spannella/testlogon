@@ -41,6 +41,25 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # PMD-001: Per-owner rent-policy settings. pk="POLICY#{owner_sub}", sk="CURRENT" or
+        # sk="AUDIT#{ts:010d}#{event_id}". No GSI needed; all access patterns are
+        # single-owner point reads + prefix queries.
+        TableDef(
+            _resolve_table_name(S.rent_policy_table_name, "rent_policy"),
+            "pk",
+            "sk",
+        ),
+        # PMD-002: Property document link store. pk="LINK#{record_type}#{record_id}",
+        # sk="DOC#{doc_id}". GSI allows listing all docs for an owner.
+        # EVT-011 is not yet built; PMD-002 uses this local link store instead.
+        TableDef(
+            _resolve_table_name(S.property_documents_table_name, "property_documents"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "owner-index", "partition_key": "owner_sub", "sort_key": "sk"},
+            ],
+        ),
         TableDef(
             _resolve_table_name(S.customers_table_name, "customers"),
             "pk",

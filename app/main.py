@@ -1124,6 +1124,41 @@ def create_app() -> FastAPI:
     if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "entitlement_requests_enabled", False):
         from app.routers.entitlement_requests import router as entitlement_requests_router
         app.include_router(entitlement_requests_router)
+    # PMD cluster — Property Management Dashboard (flag: PROPERTY_DASHBOARD_ENABLED)
+    from app.routers.rent_policy import rent_policy_router
+    app.include_router(rent_policy_router)
+    from app.routers.property_documents import property_documents_router
+    app.include_router(property_documents_router)
+    from app.routers.portfolio_dashboard import portfolio_dashboard_router
+    app.include_router(portfolio_dashboard_router)
+    # Register RPT-007 dashlet provider for portfolio_summary when available
+    try:
+        from app.services import crm_dashlet_data as _pmd_cdd
+        from app.services import portfolio_dashboard as _pmd_pd
+
+        def _provider_portfolio_summary(user_sub: str, config: dict) -> dict:
+            from app.core.settings import S as _pmd_s
+            if not getattr(_pmd_s, "property_dashboard_enabled", False):
+                raise ValueError("unknown_dashlet_type")
+            try:
+                return _pmd_pd.compute_kpis(user_sub)
+            except Exception as exc:
+                raise ValueError("portfolio_summary_unavailable") from exc
+
+        if hasattr(_pmd_cdd, "register_dashlet_provider"):
+            _pmd_cdd.register_dashlet_provider("portfolio_summary", _provider_portfolio_summary)
+        elif hasattr(_pmd_cdd, "_DASHLET_PROVIDERS"):
+            _pmd_cdd._DASHLET_PROVIDERS["portfolio_summary"] = _provider_portfolio_summary
+        # Extend VALID_DASHLET_TYPES when it exists in crm_dashboard
+        try:
+            from app.services import crm_dashboard as _pmd_cdsh
+            if hasattr(_pmd_cdsh, "VALID_DASHLET_TYPES"):
+                object.__setattr__(_pmd_cdsh, "VALID_DASHLET_TYPES",
+                    _pmd_cdsh.VALID_DASHLET_TYPES | frozenset({"portfolio_summary"}))
+        except Exception:
+            pass
+    except Exception:
+        pass  # RPT-007 not yet deployed; dashlet registration is best-effort
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

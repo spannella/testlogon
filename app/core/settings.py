@@ -323,6 +323,12 @@ class Settings:
     default_monthly_price_cents: int = int(os.environ.get("DEFAULT_MONTHLY_PRICE_CENTS", "999"))
     default_currency_code: int = int(os.environ.get("DEFAULT_CURRENCY_CODE", "840"))
     default_currency: str = os.environ.get("DEFAULT_CURRENCY", "usd")
+    property_dashboard_enabled: bool = os.environ.get("PROPERTY_DASHBOARD_ENABLED", "false").lower() == "true"
+    rent_policy_table_name: str = os.environ.get("RENT_POLICY_TABLE_NAME", "rent_policy")
+    rent_policy_cache_ttl_seconds: int = int(os.environ.get("RENT_POLICY_CACHE_TTL_SECONDS", "60"))
+    property_documents_table_name: str = os.environ.get("PROPERTY_DOCUMENTS_TABLE_NAME", "property_documents")
+    portfolio_kpi_max_ledger_scan_pages: int = int(os.environ.get("PORTFOLIO_KPI_MAX_LEDGER_SCAN_PAGES", "50"))
+    portfolio_priority_items_default_limit: int = int(os.environ.get("PORTFOLIO_PRIORITY_ITEMS_DEFAULT_LIMIT", "20"))
     ccbill_webhook_ip_enforce: bool = os.environ.get("CCBILL_WEBHOOK_IP_ENFORCE", "false").lower() == "true"
     ccbill_webhook_ip_ranges: str = os.environ.get("CCBILL_WEBHOOK_IP_RANGES", "")
     ccbill_webhook_verify_mode: str = os.environ.get("CCBILL_WEBHOOK_VERIFY_MODE", "")

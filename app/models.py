@@ -20368,3 +20368,151 @@ class ProductCollectionListOut(BaseModel):
 
 class ProductCollectionMemberIn(BaseModel):
     product_code: str
+
+
+
+
+# ---------------------------------------------------------------------------
+# PMD-001 — Rent-policy models
+# ---------------------------------------------------------------------------
+
+class RentPolicyUpdateIn(BaseModel):
+    rent_due_day: int = Field(..., ge=1, le=28,
+        description="Day of month rent is due (1-28; 29-31 excluded for Feb safety)")
+    late_fee_cents: int = Field(..., ge=0,
+        description="Flat late fee in cents applied after grace period")
+    grace_period_days: int = Field(..., ge=0,
+        description="Days after due_day before late fee applies")
+    currency: str = Field(..., min_length=3, max_length=3,
+        description="3-letter ISO 4217 currency code, case-insensitive")
+
+    @field_validator("currency")
+    @classmethod
+    def _currency_alpha(cls, v: str) -> str:
+        v = v.strip()
+        if not v.isalpha():
+            raise ValueError("currency must be 3 alphabetic characters")
+        return v.lower()
+
+
+class RentPolicyOut(BaseModel):
+    rent_due_day: int
+    late_fee_cents: int
+    grace_period_days: int
+    currency: str
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+    is_default: bool
+
+
+class RentPolicyAuditEntryOut(BaseModel):
+    actor_sub: str
+    before: Optional[Dict[str, Any]] = None
+    after: Dict[str, Any]
+    created_at: int
+
+
+class RentPolicyAuditOut(BaseModel):
+    entries: List[RentPolicyAuditEntryOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# PMD-002 — Property document link models
+# ---------------------------------------------------------------------------
+
+class PropertyDocumentLinkIn(BaseModel):
+    record_type: str = Field(..., description="One of: property, unit, lease, tenant")
+    record_id: str = Field(..., min_length=1, max_length=200)
+    doc_id: str = Field(..., min_length=1, max_length=200)
+    file_path: str = Field("", max_length=500)
+    crm_category: str = Field("", max_length=200)
+    crm_description: str = Field("", max_length=1000)
+
+
+class PropertyDocumentUnlinkIn(BaseModel):
+    record_type: str
+    record_id: str
+    doc_id: str
+
+
+class PropertyDocumentLinkOut(BaseModel):
+    doc_id: str
+    record_type: str
+    record_id: str
+    file_path: str
+    crm_category: str
+    crm_description: str
+    linked_at: Optional[int] = None
+    owner_sub: str
+
+
+class PropertyDocumentListOut(BaseModel):
+    items: List[PropertyDocumentLinkOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# PMD-003 — Portfolio dashboard KPI models
+# ---------------------------------------------------------------------------
+
+class PortfolioKpisOut(BaseModel):
+    occupancy_rate: float
+    unit_count: int
+    occupied_units: int
+    active_lease_count: int
+    outstanding_rent_cents: int
+    open_work_order_count: int
+    computed_at: int
+
+
+class RentSnapshotOut(BaseModel):
+    year: int
+    month: int
+    charged_cents: int
+    collected_cents: int
+    outstanding_cents: int
+    overdue_cents: int
+    rent_due_day: int
+    grace_period_days: int
+    computed_at: int
+
+
+class PriorityItemOut(BaseModel):
+    kind: str
+    # Lease-expiring fields (Optional)
+    lease_id: Optional[str] = None
+    lease_number: Optional[str] = None
+    unit_id: Optional[str] = None
+    property_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    end_date: Optional[int] = None
+    monthly_rent_cents: Optional[int] = None
+    # Work-order / ticket fields (Optional)
+    work_order_id: Optional[str] = None
+    ticket_id: Optional[str] = None
+    subject: Optional[str] = None
+    title: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    updated_at: Optional[int] = None
+
+
+class PriorityItemsOut(BaseModel):
+    upcoming_expirations: List[PriorityItemOut]
+    open_work_orders: List[PriorityItemOut]
+    items: List[PriorityItemOut]
+    count: int
+
+
+class PortfolioSummaryData(BaseModel):
+    """Dashlet payload for RPT-007 portfolio_summary dashlet."""
+    occupancy_rate: float
+    unit_count: int
+    occupied_units: int
+    active_lease_count: int
+    outstanding_rent_cents: int
+    open_work_order_count: int
+    computed_at: int
