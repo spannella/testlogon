@@ -542,37 +542,112 @@ def dispose_asset(asset_id: str, body: FixedAssetDisposeIn, actor_sub: str) -> F
             logger.error("fixed_assets: disposal GL post failed: %s", exc)
             raise HTTPException(status_code=500, detail="gl_post_failed") from exc
 
-    # Handle cash proceeds via Stripe refund_payment (lazy import, flag-guarded)
+    # FXA-011 — route cash disposal proceeds through the real money layer.
+    # Disposal proceeds are money IN to the asset owner, so the correct billing
+    # primitive is a fresh credit ledger entry (new_ledger_entry, entry_type
+    # "credit") + apply_balance_delta — NOT refund_payment (which reverses a
+    # prior charge). This mirrors the billing_shared reuse in
+    # hotel_cancellation.apply_cancellation. The GL closing journal stays
+    # non-cash (spec §10 Q1 / §13 / §14 — proceeds live in the billing ledger,
+    # not the GL, to avoid double-counting against the trial balance).
+    #
+    # Gating (spec §5.2 step 10): money moves only when an actual cash receipt is
+    # supplied (``proceeds_payment_intent_id``) AND ``proceeds > 0``. The
+    # ``proceeds`` figure still drives the GL gain/loss above regardless. The
+    # credit is idempotent via a stored ledger-sk marker on the asset so a
+    # re-disposal cannot double-credit.
+    proceeds_ledger_sk = None
     if body.proceeds_payment_intent_id and proceeds > 0:
-        try:
-            from app.routers.billing import refund_payment  # type: ignore[import]
-            from app.models import StripeRefundReq  # type: ignore[import]
-            # refund_payment is a FastAPI handler — call only if it can be imported as a plain function
-            # (see FXA-001 §5.4 open question 4; actual invocation depends on billing extraction).
-            # Best-effort; failure logged but does not block disposal.
-            logger.info(
-                "fixed_assets: disposal proceeds %d cents via PI %s — billing integration pending",
-                proceeds, body.proceeds_payment_intent_id,
-            )
-        except ImportError:
-            logger.warning("fixed_assets: billing refund_payment not available")
+        proceeds_ledger_sk = _route_disposal_proceeds(
+            asset_id=asset_id,
+            owner_sub=asset["owner_sub"],
+            proceeds_cents=proceeds,
+            already_marked=asset.get("disposal_proceeds_ledger_sk"),
+        )
 
     ts = now_ts()
 
     # Cancel all remaining scheduled periods (paginate GSI_DUE by pk)
     _cancel_remaining_periods(asset_id, ts)
 
-    # Mark asset disposed
+    # Mark asset disposed (and persist the proceeds ledger marker for audit +
+    # belt-and-suspenders idempotency).
+    update_expr = "SET #s = :s, updated_at = :t, disposal_proceeds_cents = :p"
+    expr_vals: dict = {":s": "disposed", ":t": ts, ":p": proceeds}
+    if proceeds_ledger_sk:
+        update_expr += ", disposal_proceeds_ledger_sk = :pl"
+        expr_vals[":pl"] = proceeds_ledger_sk
     T.fixed_assets.update_item(
         Key={"pk": f"ASSET#{asset_id}", "sk": "META"},
-        UpdateExpression="SET #s = :s, updated_at = :t",
+        UpdateExpression=update_expr,
         ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": "disposed", ":t": ts},
+        ExpressionAttributeValues=expr_vals,
     )
 
     _audit("fixed_asset.disposed", actor_sub, asset_id=asset_id, proceeds=proceeds)
     refreshed = _get_asset_raw(asset_id)
     return _item_to_asset(refreshed)
+
+
+def _route_disposal_proceeds(
+    *,
+    asset_id: str,
+    owner_sub: str,
+    proceeds_cents: int,
+    already_marked: Optional[str] = None,
+) -> Optional[str]:
+    """Route disposal cash proceeds through the shared billing money layer.
+
+    Proceeds are a fresh CREDIT to the asset owner (money in). Posts exactly one
+    ``new_ledger_entry`` (entry_type "credit", provider-attributed
+    "fixed_asset_disposal", meta carries asset_id) + an ``apply_balance_delta``
+    crediting ``payments_settled_cents``. Reuses billing_shared primitives only —
+    no ledger math forked (mirrors hotel_cancellation.apply_cancellation).
+
+    Idempotent + gated:
+      - No-op (returns None) when proceeds_cents <= 0.
+      - No-op when ``already_marked`` is set (a prior disposal already credited;
+        belt-and-suspenders on top of the 'disposed' status guard).
+
+    A money-post failure is surfaced as HTTP 500 (raised BEFORE the asset status
+    flip in dispose_asset) so the disposal is not left in a half-committed state.
+
+    Returns the persisted ledger SK on success, else None.
+    """
+    if proceeds_cents <= 0:
+        return None
+    if already_marked:
+        # Proceeds were already credited on a prior disposal attempt — never
+        # double-credit.
+        return already_marked
+
+    try:
+        from app.services.billing_shared import (  # lazy import (avoids circular dep)
+            new_ledger_entry,
+            apply_balance_delta,
+            user_pk,
+            ddb_put,
+        )
+        pk = user_pk(owner_sub)
+        led_sk, led_item = new_ledger_entry(
+            key_name="pk",
+            key_value=pk,
+            entry_type="credit",
+            amount_cents=proceeds_cents,
+            state="settled",
+            reason="fixed_asset_disposal",
+            meta={"asset_id": asset_id, "reason": "fixed_asset_disposal_proceeds"},
+            extra={"provider": "fixed_asset_disposal", "asset_id": asset_id},
+        )
+        ddb_put(T.billing, led_item)
+        apply_balance_delta(
+            T.billing, pk,
+            {"payments_settled_cents": proceeds_cents},
+        )
+        return led_sk
+    except Exception as exc:  # noqa: BLE001
+        logger.error("fixed_assets: disposal proceeds money-post failed: %s", exc)
+        raise HTTPException(status_code=500, detail="disposal_proceeds_post_failed") from exc
 
 
 def _cancel_remaining_periods(asset_id: str, ts: int) -> None:

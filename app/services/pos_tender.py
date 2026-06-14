@@ -209,6 +209,363 @@ def tender_cash(
     return _build_txn_out_from_item(updated, session_id)
 
 
+# ── tender a transaction (card) ───────────────────────────────────────────────
+
+def tender_card(
+    *,
+    session_id: str,
+    txn_id: str,
+    cashier_sub: str,
+    amount_tendered_cents: int,
+    payment_method_id: str,
+    idempotency_key: str,
+    card_kind: Optional[str] = None,
+    last4: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Complete a POS sale via card payment (POS-007).
+
+    Routes the actual charge through the shared billing layer
+    (``app.routers.billing.charge_once``) — same Stripe PaymentIntent path,
+    provider-toggle 503 gate, and fraud-gate 403 used everywhere else. No
+    billing math is forked here. After the charge settles, the canonical POS
+    sale ledger entry is written (``provider="pos_card"``) and the cart is
+    settled via ``purchase_cart`` (mirrors ``tender_cash``).
+
+    Card decline -> 402 (no tender row, TXN stays 'draft').
+    """
+    _require_enabled()
+
+    txn_item, total_cents = _load_draft_txn_for_tender(
+        session_id=session_id, txn_id=txn_id, cashier_sub=cashier_sub,
+    )
+    if txn_item.get("status") == "tendered":
+        return _build_txn_out_from_item(txn_item, session_id)
+
+    # Card must cover the total exactly (no overpayment/change on a card).
+    if amount_tendered_cents < total_cents:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Card amount ({amount_tendered_cents} cents) does not cover total ({total_cents} cents)",
+        )
+
+    now = now_ts()
+
+    # Idempotency gate on the tender row (before any charge).
+    tender_row: Dict[str, Any] = {
+        "pos_pk": f"SESSION#{session_id}",
+        "pos_sk": f"TENDER#{txn_id}",
+        "txn_id": txn_id,
+        "session_id": session_id,
+        "cashier_sub": cashier_sub,
+        "kind": "card",
+        "amount_cents": amount_tendered_cents,
+        "change_due_cents": 0,
+        "total_cents": total_cents,
+        "payment_method_id": payment_method_id,
+        "created_at": now,
+        "idempotency_key": idempotency_key,
+    }
+    if card_kind:
+        tender_row["card_kind"] = card_kind
+    if last4:
+        tender_row["last4"] = last4
+    if card_kind or last4:
+        # card_ref drives the receipt brand/last4 projection ("visa_4242").
+        tender_row["card_ref"] = f"{card_kind or 'card'}_{last4 or '????'}"
+
+    try:
+        T.pos.put_item(
+            Item=tender_row,
+            ConditionExpression="attribute_not_exists(pos_pk)",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            fresh = T.pos.get_item(Key=_txn_pk(txn_id)).get("Item", txn_item)
+            return _build_txn_out_from_item(fresh, session_id)
+        raise
+
+    # Charge the card through the shared billing layer (provider toggle + fraud
+    # gate + Stripe PaymentIntent all live inside charge_once). On decline we
+    # roll back the tender row and surface a 402 (TXN stays 'draft').
+    pi_id: Optional[str] = None
+    try:
+        from app.routers.billing import charge_once  # lazy import (RULE-1)
+        from app.models import StripeChargeReq  # lazy import (RULE-1)
+        result = charge_once(
+            StripeChargeReq(
+                amount_cents=total_cents,
+                payment_method_id=payment_method_id,
+                description=f"POS card tender txn:{txn_id}",
+                idempotency_key=f"pos_card:{txn_id}:{idempotency_key}",
+            ),
+            req=None,
+            ctx={"user_sub": cashier_sub},
+            actor=None,
+        )
+        status = (result or {}).get("status")
+        pi_id = (result or {}).get("payment_intent_id")
+        if status == "failed":
+            # Card declined — undo the tender row, leave TXN draft.
+            T.pos.delete_item(Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"})
+            raise HTTPException(
+                status_code=402,
+                detail=str((result or {}).get("reason") or "Card declined"),
+            )
+    except HTTPException:
+        # Provider-disabled (503), fraud (403), or our own 402 — undo tender row.
+        T.pos.delete_item(Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"})
+        raise
+    except Exception as exc:
+        T.pos.delete_item(Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"})
+        raise HTTPException(status_code=502, detail=f"Card charge failed: {exc}") from exc
+
+    if pi_id:
+        T.pos.update_item(
+            Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"},
+            UpdateExpression="SET pi_id = :p",
+            ExpressionAttributeValues={":p": pi_id},
+        )
+
+    return _settle_noncash_tender(
+        txn_item=txn_item,
+        session_id=session_id,
+        txn_id=txn_id,
+        cashier_sub=cashier_sub,
+        total_cents=total_cents,
+        ledger_provider="pos_card",
+        ledger_reason="pos_card_sale",
+        ledger_meta={"pi_id": pi_id or ""},
+        now=now,
+        audit_event_name="pos_card_tendered",
+        audit_extra={"payment_method_id": payment_method_id, "pi_id": pi_id or ""},
+    )
+
+
+# ── tender a transaction (wallet) ─────────────────────────────────────────────
+
+def tender_wallet(
+    *,
+    session_id: str,
+    txn_id: str,
+    cashier_sub: str,
+    amount_tendered_cents: int,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    """Complete a POS sale via in-platform wallet debit (POS-007).
+
+    Debits the cashier-user's wallet via ``billing_shared.apply_wallet_delta``
+    (insufficient balance -> 402). Writes the canonical POS sale ledger entry
+    (``provider="pos_wallet"``) and settles the cart. No billing math forked.
+    """
+    _require_enabled()
+
+    txn_item, total_cents = _load_draft_txn_for_tender(
+        session_id=session_id, txn_id=txn_id, cashier_sub=cashier_sub,
+    )
+    if txn_item.get("status") == "tendered":
+        return _build_txn_out_from_item(txn_item, session_id)
+
+    if amount_tendered_cents < total_cents:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Wallet amount ({amount_tendered_cents} cents) does not cover total ({total_cents} cents)",
+        )
+
+    now = now_ts()
+
+    tender_row: Dict[str, Any] = {
+        "pos_pk": f"SESSION#{session_id}",
+        "pos_sk": f"TENDER#{txn_id}",
+        "txn_id": txn_id,
+        "session_id": session_id,
+        "cashier_sub": cashier_sub,
+        "kind": "wallet",
+        "amount_cents": amount_tendered_cents,
+        "change_due_cents": 0,
+        "total_cents": total_cents,
+        "payment_method_id": "wallet",
+        "created_at": now,
+        "idempotency_key": idempotency_key,
+    }
+
+    try:
+        T.pos.put_item(
+            Item=tender_row,
+            ConditionExpression="attribute_not_exists(pos_pk)",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            fresh = T.pos.get_item(Key=_txn_pk(txn_id)).get("Item", txn_item)
+            return _build_txn_out_from_item(fresh, session_id)
+        raise
+
+    # Debit the wallet via the shared primitive. Insufficient balance raises a
+    # ConditionalCheckFailedException (botocore ClientError) -> 402.
+    try:
+        from app.services.billing_shared import apply_wallet_delta, user_pk  # lazy import (RULE-1)
+        apply_wallet_delta(T.billing, user_pk(cashier_sub), -int(total_cents))
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        T.pos.delete_item(Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"})
+        if code == "ConditionalCheckFailedException":
+            raise HTTPException(status_code=402, detail="Insufficient wallet balance")
+        raise
+    except HTTPException:
+        T.pos.delete_item(Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"})
+        raise
+    except Exception as exc:
+        T.pos.delete_item(Key={"pos_pk": f"SESSION#{session_id}", "pos_sk": f"TENDER#{txn_id}"})
+        raise HTTPException(status_code=502, detail=f"Wallet debit failed: {exc}") from exc
+
+    return _settle_noncash_tender(
+        txn_item=txn_item,
+        session_id=session_id,
+        txn_id=txn_id,
+        cashier_sub=cashier_sub,
+        total_cents=total_cents,
+        ledger_provider="pos_wallet",
+        ledger_reason="pos_wallet_sale",
+        ledger_meta={},
+        now=now,
+        audit_event_name="pos_wallet_tendered",
+        audit_extra={},
+    )
+
+
+# ── shared non-cash settlement helper ─────────────────────────────────────────
+
+def _load_draft_txn_for_tender(
+    *, session_id: str, txn_id: str, cashier_sub: str,
+) -> tuple[Dict[str, Any], int]:
+    """Load + validate a draft TXN for tender. Returns (txn_item, total_cents).
+
+    Mirrors tender_cash's validation: 404 (missing), 403 (wrong cashier),
+    409 (not draft, except the idempotent 'tendered' case which the caller
+    short-circuits). total_cents = subtotal + global tax.
+    """
+    txn_item = T.pos.get_item(Key=_txn_pk(txn_id)).get("Item")
+    if not txn_item:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if txn_item.get("cashier_sub") != cashier_sub:
+        raise HTTPException(status_code=403, detail="Cashier does not own this transaction")
+
+    status = txn_item.get("status")
+    if status == "tendered":
+        # Caller short-circuits to an idempotent return.
+        return txn_item, _to_int(txn_item.get("total_cents")) or _to_int(txn_item.get("subtotal_cents"))
+    if status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Transaction status is '{status}'; cannot tender",
+        )
+
+    subtotal_cents = _to_int(txn_item.get("subtotal_cents"))
+    tax_rate_bps = getattr(S, "pos_default_tax_rate_bps", 0)
+    tax_cents = int(subtotal_cents * tax_rate_bps / 10000)
+    total_cents = subtotal_cents + tax_cents
+    return txn_item, total_cents
+
+
+def _settle_noncash_tender(
+    *,
+    txn_item: Dict[str, Any],
+    session_id: str,
+    txn_id: str,
+    cashier_sub: str,
+    total_cents: int,
+    ledger_provider: str,
+    ledger_reason: str,
+    ledger_meta: Dict[str, Any],
+    now: int,
+    audit_event_name: str,
+    audit_extra: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Settle a card/wallet tender: purchase_cart -> ledger entry -> mark TXN
+    tendered. Mirrors the tail of tender_cash. Money has already moved before
+    this is called; the canonical POS sale ledger row is written here.
+    """
+    cart_id = txn_item.get("cart_id", "")
+    subtotal_cents = _to_int(txn_item.get("subtotal_cents"))
+    tax_cents = total_cents - subtotal_cents
+
+    # Settle the cart (stock decrement + order creation).
+    order_id: Optional[str] = None
+    try:
+        from app.services.shoppingcart import purchase_cart  # lazy import (RULE-1)
+        purchase_result = purchase_cart(cashier_sub, cart_id)
+        order_id = purchase_result.get("order_id") or purchase_result.get("cart_id")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cart purchase failed: {exc}") from exc
+
+    # Write the canonical POS sale ledger entry (provider-attributed).
+    ledger_sk_val: Optional[str] = None
+    try:
+        from app.services.billing_shared import new_ledger_entry, user_pk  # lazy import (RULE-1)
+        meta = {"txn_id": txn_id, "session_id": session_id, "order_id": order_id or ""}
+        meta.update(ledger_meta)
+        sk_val, led_item = new_ledger_entry(
+            key_name="pk",
+            key_value=user_pk(cashier_sub),
+            entry_type="sale",
+            amount_cents=total_cents,
+            state="settled",
+            reason=ledger_reason,
+            meta=meta,
+            extra={"provider": ledger_provider, "signed_amount_cents": -total_cents},
+        )
+        T.billing.put_item(Item=led_item)
+        ledger_sk_val = sk_val
+    except Exception:
+        _audit(f"{ledger_provider}_ledger_failed", cashier_sub, txn_id=txn_id)
+
+    # Mark TXN as tendered.
+    update_expr = (
+        "SET #status = :tendered, order_id = :oid, tax_cents = :tax, "
+        "total_cents = :total, updated_at = :now"
+    )
+    expr_vals: Dict[str, Any] = {
+        ":tendered": "tendered",
+        ":oid": order_id or "",
+        ":tax": tax_cents,
+        ":total": total_cents,
+        ":now": now,
+    }
+    if ledger_sk_val:
+        update_expr += ", ledger_sk = :lsk"
+        expr_vals[":lsk"] = ledger_sk_val
+
+    T.pos.update_item(
+        Key=_txn_pk(txn_id),
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues=expr_vals,
+    )
+
+    _audit(
+        audit_event_name,
+        cashier_sub,
+        txn_id=txn_id,
+        session_id=session_id,
+        total_cents=total_cents,
+        order_id=order_id or "",
+        **audit_extra,
+    )
+
+    # POS-009 — best-effort receipt generation; never blocks settlement.
+    try:
+        from app.services.pos_receipt import get_or_create_pos_receipt  # lazy import (RULE-1)
+        get_or_create_pos_receipt(txn_id)
+    except Exception:
+        pass
+
+    updated = T.pos.get_item(Key=_txn_pk(txn_id)).get("Item", txn_item)
+    return _build_txn_out_from_item(updated, session_id)
+
+
 # ── void a transaction ────────────────────────────────────────────────────────
 
 def void_txn(

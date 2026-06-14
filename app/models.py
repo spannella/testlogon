@@ -21905,6 +21905,22 @@ class PosCashTenderIn(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=256)
 
 
+class PosCardTenderIn(BaseModel):
+    # POS-007 — card tender. Charge routes through the shared billing layer.
+    amount_tendered_cents: int = Field(ge=1, le=100_000_000)
+    payment_method_id: str = Field(min_length=1, max_length=256)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    # Display-only card provenance (NO PAN). card_kind="visa", last4="4242".
+    card_kind: Optional[str] = Field(default=None, max_length=64)
+    last4: Optional[str] = Field(default=None, min_length=2, max_length=4)
+
+
+class PosWalletTenderIn(BaseModel):
+    # POS-007 — wallet tender. Debits the cashier-user's in-platform wallet.
+    amount_tendered_cents: int = Field(ge=1, le=100_000_000)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
 class PosTxnVoidIn(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 

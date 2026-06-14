@@ -30,6 +30,8 @@ from app.services.pos_register import (
 )
 from app.services.pos_tender import (
     tender_cash,
+    tender_card,
+    tender_wallet,
     void_txn,
     refund_txn,
     get_session_report,
@@ -52,6 +54,8 @@ from app.models import (
     PosAddLineItemIn,
     PosSetLineQtyIn,
     PosCashTenderIn,
+    PosCardTenderIn,
+    PosWalletTenderIn,
     PosTxnVoidIn,
     RefundTxnIn,
     PosSessionReportOut,
@@ -344,6 +348,45 @@ async def tender_cash_endpoint(
 ) -> Dict[str, Any]:
     _require_enabled()
     return tender_cash(
+        session_id=session_id,
+        txn_id=txn_id,
+        cashier_sub=session["user_sub"],
+        amount_tendered_cents=body.amount_tendered_cents,
+        idempotency_key=body.idempotency_key,
+    )
+
+
+@pos_router.post("/sessions/{session_id}/transactions/{txn_id}/tender-card",
+                 response_model=PosTransactionOut)
+async def tender_card_endpoint(
+    session_id: str,
+    txn_id: str,
+    body: PosCardTenderIn,
+    session: Dict[str, Any] = Depends(require_ui_session),
+) -> Dict[str, Any]:
+    _require_enabled()
+    return tender_card(
+        session_id=session_id,
+        txn_id=txn_id,
+        cashier_sub=session["user_sub"],
+        amount_tendered_cents=body.amount_tendered_cents,
+        payment_method_id=body.payment_method_id,
+        idempotency_key=body.idempotency_key,
+        card_kind=body.card_kind,
+        last4=body.last4,
+    )
+
+
+@pos_router.post("/sessions/{session_id}/transactions/{txn_id}/tender-wallet",
+                 response_model=PosTransactionOut)
+async def tender_wallet_endpoint(
+    session_id: str,
+    txn_id: str,
+    body: PosWalletTenderIn,
+    session: Dict[str, Any] = Depends(require_ui_session),
+) -> Dict[str, Any]:
+    _require_enabled()
+    return tender_wallet(
         session_id=session_id,
         txn_id=txn_id,
         cashier_sub=session["user_sub"],
