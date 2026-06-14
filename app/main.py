@@ -1086,6 +1086,12 @@ def create_app() -> FastAPI:
     if _S.crm_studio_enabled:
         from app.routers.crm_studio import router as crm_studio_router
         app.include_router(crm_studio_router)
+    # Knowledge Base (KB-001..KB-011)
+    from app.routers.kb_articles import router as kb_articles_router, public_router as kb_public_router
+    from app.services.kb_articles import start_kb_expiry_checker_task
+    app.include_router(kb_articles_router)
+    app.include_router(kb_public_router)
+    app.add_event_handler("startup", start_kb_expiry_checker_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

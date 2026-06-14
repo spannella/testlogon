@@ -41,6 +41,19 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # Knowledge Base (KB-001) — crm_kb_articles single-table for all KB data
+        TableDef(
+            _resolve_table_name(S.kb_articles_table, "crm_kb_articles"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCategory", "partition_key": "category",   "sort_key": "published_at"},
+                {"index_name": "ByStatus",   "partition_key": "status",     "sort_key": "published_at"},
+                {"index_name": "ByAuthor",   "partition_key": "author_sub", "sort_key": "created_at"},
+                {"index_name": "ByTag",      "partition_key": "tag",        "sort_key": "created_at"},
+            ],
+            attr_types={"published_at": "N", "created_at": "N"},
+        ),
         # TEN-001: Property management — tenant directory
         # GSI_OWNER: newest-first listing per landlord (sort key created_at is numeric)
         # GSI_PARTY: reverse-lookup from PTY party_id → tenant META row

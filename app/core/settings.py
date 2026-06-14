@@ -3089,6 +3089,14 @@ class Settings:
     ats_pipeline_table_name: str = os.environ.get(
         "ATS_PIPELINE_TABLE_NAME", "ats_pipeline"
     )
+    # Knowledge Base (KB-001)
+    knowledge_base_enabled: bool = os.environ.get("KNOWLEDGE_BASE_ENABLED", "0") not in ("0", "false", "False")
+    kb_articles_table: str = os.environ.get("KB_ARTICLES_TABLE", "crm_kb_articles")
+    kb_attachments_bucket: str = os.environ.get("KB_ATTACHMENTS_BUCKET", "local-uploads")
+    kb_attachments_s3_prefix: str = os.environ.get("KB_ATTACHMENTS_S3_PREFIX", "kb-attachments/")
+    kb_attachment_max_bytes: int = int(os.environ.get("KB_ATTACHMENT_MAX_BYTES", str(20 * 1024 * 1024)))
+    # KB-002: expiry checker
+    kb_expiry_checker_interval_seconds: int = int(os.environ.get("KB_EXPIRY_CHECKER_INTERVAL_SECONDS", "3600"))
 
 
 S = Settings()

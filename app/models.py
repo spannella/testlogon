@@ -14636,6 +14636,136 @@ class AffiliateTopProductItem(BaseModel):
     commission_earned_cents: int
 
 
+# ─── Knowledge Base (KB-001..KB-011) ─────────────────────────────────────────
+
+
+class KbArticleOut(BaseModel):
+    article_id: str
+    title: str
+    body_html: str = ""
+    excerpt: str = ""
+    status: str = "draft"          # "draft" | "published" | "expired"
+    category_id: Optional[str] = None
+    category: Optional[str] = None
+    author_sub: str = ""
+    tags: List[str] = []
+    created_at: int = 0
+    updated_at: int = 0
+    published_at: Optional[int] = None
+    expires_at: Optional[int] = None
+    expired_at: Optional[int] = None
+    expiry_reason: Optional[str] = None
+    view_count: int = 0
+    helpful_count: int = 0
+    not_helpful_count: int = 0
+    attachments: List[dict] = []
+
+
+class KbArticleSummaryOut(BaseModel):
+    article_id: str
+    title: str
+    excerpt: str = ""
+    status: str = "draft"
+    category_id: Optional[str] = None
+    category: Optional[str] = None
+    author_sub: str = ""
+    tags: List[str] = []
+    created_at: int = 0
+    updated_at: int = 0
+    published_at: Optional[int] = None
+    view_count: int = 0
+    helpful_count: int = 0
+    not_helpful_count: int = 0
+
+
+class KbArticleCreateIn(BaseModel):
+    title: str
+    body_html: str = ""
+    excerpt: str = ""
+    category_id: Optional[str] = None
+    tags: List[str] = []
+    expires_at: Optional[int] = None
+
+
+class KbArticleUpdateIn(BaseModel):
+    title: Optional[str] = None
+    body_html: Optional[str] = None
+    excerpt: Optional[str] = None
+    category_id: Optional[str] = None
+    tags: Optional[List[str]] = None
+    expires_at: Optional[int] = None
+
+
+class KbExpireReq(BaseModel):
+    reason: str = ""
+
+
+class KbRateReq(BaseModel):
+    helpful: bool
+
+
+class KbRateOut(BaseModel):
+    ok: bool = True
+    already_rated: bool = False
+    helpful_count: int = 0
+    not_helpful_count: int = 0
+
+
+class KbAttachmentOut(BaseModel):
+    attachment_id: str
+    article_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    url: str = ""
+    uploaded_by: str
+    created_at: int
+
+
+class KbCategoryIn(BaseModel):
+    name: str
+    parent_id: Optional[str] = None
+    description: str = ""
+    sort_order: int = 0
+
+
+class KbCategoryOut(BaseModel):
+    category_id: str
+    name: str
+    parent_id: Optional[str] = None
+    path: str = ""
+    description: str = ""
+    sort_order: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    children: List[dict] = []
+
+
+class KbArticleListOut(BaseModel):
+    items: List[KbArticleSummaryOut]
+    cursor: Optional[str] = None
+    total: int = 0
+
+
+class KbCategoryListOut(BaseModel):
+    categories: List[KbCategoryOut]
+
+
+class KbTagStats(BaseModel):
+    tag: str
+    article_count: int = 0
+
+
+class KbTagListOut(BaseModel):
+    tags: List[KbTagStats]
+
+
+class KbSearchOut(BaseModel):
+    items: List[KbArticleSummaryOut]
+    query: str = ""
+    cursor: Optional[str] = None
+
+
 class AffiliateTopProductsOut(BaseModel):
     items: List[AffiliateTopProductItem]
 

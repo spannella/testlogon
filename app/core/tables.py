@@ -141,6 +141,7 @@ class Tables:
     signature_packet_artifacts: Any
     signature_templates: Any
     tickets: Any
+    kb_articles: Any
     questionnaires: Any
     kyc_cases: Any
     kyc_business_cases: Any
@@ -446,6 +447,7 @@ T = Tables(
     signature_packet_artifacts=_safe_table(S.signature_packet_artifacts_table_name),
     signature_templates=_safe_table(S.signature_templates_table_name),
     tickets=_safe_table(S.tickets_table_name),
+    kb_articles=_safe_table(S.kb_articles_table),
     questionnaires=_safe_table(S.questionnaire_table_name),
     kyc_cases=_safe_table(S.kyc_cases_table_name),
     kyc_business_cases=_safe_table(S.kyc_business_cases_table_name),
