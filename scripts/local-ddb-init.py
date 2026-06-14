@@ -41,6 +41,24 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # HRM-002: HR single-table for positions, employments, and payroll runs.
+        # PK/SK are uppercase per OFBiz ERP convention.  GSI1 enables status-
+        # filtered listing; GSI2 enables party reverse-lookup; GSI_CREATED
+        # enables newest-first listing across all entity types.
+        # attr_types={"created_at": "N"} prevents ValidationException when the
+        # GSI_CREATED sort key (an integer Unix timestamp) is queried with
+        # integer values (CLAUDE.md "DynamoDB numeric GSI sort keys" gotcha).
+        TableDef(
+            _resolve_table_name(S.hr_table_name, "hr"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1",        "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2",        "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI_CREATED", "partition_key": "entity_type", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # MFG-002: Manufacturing/MRP tables (flag-gated; always provisioned, never
         # accessed when manufacturing_mrp_enabled=false).
         TableDef(

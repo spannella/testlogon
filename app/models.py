@@ -21459,3 +21459,107 @@ class MrpRunOut(BaseModel):
     requirement_count: int
     user_sub: str
     requirements: List[MrpRequirementOut] = Field(default_factory=list)
+
+
+# ── Human Resources (HRM-003) — Phase M OFBiz HR models ──────────────────────
+
+
+class Position(BaseModel):
+    position_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=200)
+    department: Optional[str] = Field(default=None, max_length=100)
+    status: Literal["OPEN", "FILLED", "CLOSED"]
+    created_at: int
+    updated_at: int
+
+
+PositionOut = Position
+
+
+class CreatePositionIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    department: Optional[str] = Field(default=None, max_length=100)
+    correlation_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class UpdatePositionStatusIn(BaseModel):
+    status: Literal["OPEN", "FILLED", "CLOSED"]
+
+
+class Employment(BaseModel):
+    employment_id: str = Field(..., min_length=1)
+    party_id: str = Field(..., min_length=1)
+    position_id: str = Field(..., min_length=1)
+    org_party_id: str = Field(..., min_length=1)
+    status: Literal["ACTIVE", "TERMINATED", "ON_LEAVE"]
+    start_date: int
+    end_date: Optional[int] = None
+    pay_rate_cents: int = Field(..., ge=0)
+    pay_period: Literal["MONTHLY", "BIWEEKLY", "WEEKLY", "HOURLY"]
+    currency: str = Field(..., min_length=3, max_length=3)
+    created_at: int
+    updated_at: int
+
+
+EmploymentOut = Employment
+
+
+class CreateEmploymentIn(BaseModel):
+    party_id: str = Field(..., min_length=1)
+    position_id: str = Field(..., min_length=1)
+    org_party_id: str = Field(..., min_length=1)
+    start_date: int = Field(..., ge=0)
+    end_date: Optional[int] = Field(default=None, ge=0)
+    pay_rate_cents: int = Field(..., ge=0)
+    pay_period: Literal["MONTHLY", "BIWEEKLY", "WEEKLY", "HOURLY"]
+    currency: str = Field(..., min_length=3, max_length=3)
+    correlation_id: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> "CreateEmploymentIn":
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date must be >= start_date")
+        return self
+
+
+class TerminateEmploymentIn(BaseModel):
+    end_date: int = Field(..., ge=0)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class PayrollLine(BaseModel):
+    employment_id: str = Field(..., min_length=1)
+    party_id: str = Field(..., min_length=1)
+    gross_cents: int = Field(..., ge=0)
+    currency: str = Field(..., min_length=3, max_length=3)
+
+
+PayrollLineOut = PayrollLine
+
+
+class PayrollRun(BaseModel):
+    payroll_run_id: str = Field(..., min_length=1)
+    period_start: int
+    period_end: int
+    status: Literal["DRAFT", "APPROVED", "POSTED"]
+    lines: List[PayrollLine] = Field(default_factory=list)
+    created_at: int
+    updated_at: int
+    approved_by: Optional[str] = None
+    posted_at: Optional[int] = None
+
+
+PayrollRunOut = PayrollRun
+
+
+class CreatePayrollRunIn(BaseModel):
+    period_start: int = Field(..., ge=0)
+    period_end: int = Field(..., ge=0)
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    correlation_id: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _check_period(self) -> "CreatePayrollRunIn":
+        if self.period_end < self.period_start:
+            raise ValueError("period_end must be >= period_start")
+        return self

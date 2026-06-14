@@ -433,6 +433,7 @@ class Tables:
     mfg_work_centers: Any
     mfg_work_orders: Any
     mfg_mrp: Any
+    hr: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -801,4 +802,5 @@ T = Tables(
     mfg_work_centers=_safe_table(S.mfg_work_centers_table_name),
     mfg_work_orders=_safe_table(S.mfg_work_orders_table_name),
     mfg_mrp=_safe_table(S.mfg_mrp_table_name),
+    hr=_safe_table(S.hr_table_name),
 )

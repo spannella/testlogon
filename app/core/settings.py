@@ -3512,5 +3512,23 @@ class Settings:
     hotel_kpi_max_range_days: int = int(os.environ.get("HOTEL_KPI_MAX_RANGE_DAYS", "366"))
     hotel_kpi_max_stay_nights: int = int(os.environ.get("HOTEL_KPI_MAX_STAY_NIGHTS", "370"))
 
+    # Human Resources (HRM-001) — Phase M of the OFBiz ERP buildout.
+    # Master switch defaults OFF: with it off all HR endpoints 404 and the
+    # hr DynamoDB table need not exist; no other module is affected.
+    hr_enabled: bool = os.environ.get("HR_ENABLED", "0") not in ("0", "false", "False")
+    # Sub-gate for payroll run CRUD. Checked only when hr_enabled is True.
+    hr_payroll_enabled: bool = os.environ.get("HR_PAYROLL_ENABLED", "0") not in ("0", "false", "False")
+    # Sub-gate for double-entry GL journal-entry write on payroll approval.
+    # Checked only when hr_payroll_enabled is True.
+    hr_payroll_gl_posting_enabled: bool = os.environ.get("HR_PAYROLL_GL_POSTING_ENABLED", "0") not in ("0", "false", "False")
+    # DynamoDB table name for all HR single-table rows.
+    hr_table_name: str = os.environ.get("DDB_HR_TABLE", "hr")
+    # GL account code for the Salaries & Wages Expense debit side of payroll
+    # journal entries (HRM-010). Must match a code in the seeded chart of
+    # accounts (OFB-013). Default "6000" = conventional OFBiz expense code.
+    hr_payroll_expense_account_code: str = os.environ.get("HR_PAYROLL_EXPENSE_ACCOUNT_CODE", "6000")
+    # If True, terminating an employment reverts the linked position to OPEN.
+    hr_position_revert_on_terminate: bool = os.environ.get("HR_POSITION_REVERT_ON_TERMINATE", "1") not in ("0", "false", "False")
+
 
 S = Settings()
