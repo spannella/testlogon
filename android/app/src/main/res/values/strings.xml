@@ -3442,4 +3442,29 @@
     <string name="analytics_audience_devices">By device</string>
 
     <string name="analytics_section_error">Couldn\'t load this section.</string>
+
+    <!-- AND-400: READ-ONLY public SEO metadata inspector -->
+    <string name="more_entry_seo">SEO preview</string>
+    <string name="seo_title">SEO preview</string>
+    <string name="seo_back">Back</string>
+    <string name="seo_read_only_caption">Read-only preview of what crawlers and social cards see.</string>
+    <string name="seo_copied">Copied to clipboard</string>
+    <string name="seo_copy_label">Copy %1$s</string>
+    <string name="seo_section_primary">Primary</string>
+    <string name="seo_section_og">Open Graph</string>
+    <string name="seo_section_twitter">Twitter card</string>
+    <string name="seo_section_image">Preview image</string>
+    <string name="seo_section_json_ld">Structured data (JSON-LD)</string>
+    <string name="seo_label_title">Title</string>
+    <string name="seo_label_description">Description</string>
+    <string name="seo_label_canonical">Canonical URL</string>
+    <string name="seo_label_site_name">Site name</string>
+    <string name="seo_label_locale">Locale</string>
+    <string name="seo_label_image_url">Image URL</string>
+    <string name="seo_image_description">SEO preview image</string>
+    <string name="seo_image_failed">Preview image failed to load</string>
+    <string name="seo_json_ld_description">Structured data, JSON-LD</string>
+    <string name="seo_empty_title">No SEO metadata</string>
+    <string name="seo_empty_body">No SEO metadata available for this resource yet.</string>
+    <string name="seo_error_validation_title">Couldn\'t load SEO metadata</string>
 </resources>

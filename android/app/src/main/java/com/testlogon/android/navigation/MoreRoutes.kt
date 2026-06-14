@@ -182,6 +182,11 @@ object MoreRoutes {
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
     const val AD_ANALYTICS = AdAnalyticsDest.STUB_ROUTE
 
+    // AND-400: READ-ONLY public SEO metadata inspector (title / og / twitter / json-ld a crawler sees).
+    // No per-resource detail surface wires it this wave, so the hub opens a known sample profile resource
+    // (plain constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
+    const val SEO = SeoDest.STUB_ROUTE
+
     // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
     const val TICKETS = TicketSpacesListDest.ROUTE
 
@@ -266,6 +271,7 @@ object MoreRoutes {
             SPONSORSHIPS,
             ADS_BILLING,
             AD_ANALYTICS,
+            SEO,
             TICKETS,
             WEBHOOKS,
             PROJECTS,

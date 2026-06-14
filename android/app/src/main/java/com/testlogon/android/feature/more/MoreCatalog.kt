@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Slideshow
@@ -405,6 +406,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_ad_analytics,
             icon = Icons.Outlined.Insights,
             route = MoreRoutes.AD_ANALYTICS,
+            section = MoreSection.ACCOUNT,
+        ),
+        // AND-400: READ-ONLY public SEO metadata inspector (preview of crawler/social-card metadata).
+        MoreEntry(
+            id = "seo",
+            labelRes = R.string.more_entry_seo,
+            icon = Icons.Outlined.Public,
+            route = MoreRoutes.SEO,
             section = MoreSection.ACCOUNT,
         ),
         // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces -> tickets -> thread.

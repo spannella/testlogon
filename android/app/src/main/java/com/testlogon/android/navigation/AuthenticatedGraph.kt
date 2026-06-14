@@ -122,6 +122,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // selectable date range). Route reachable via navigateToAdAnalytics(accountId); the More-hub uses a
         // sample account id (no ads-accounts list yet).
         adAnalyticsDestination(navController)
+        // AND-400: READ-ONLY public SEO metadata inspector (seo/{resourceType}/{id}). Diagnostic preview
+        // of the title / og / twitter / json-ld a crawler sees. Route reachable via navigateToSeo(type, id);
+        // the More-hub uses a sample profile resource (no per-resource detail wiring this wave).
+        seoDestination(navController)
         // AND-183: tag pages (in-app nav + App Link / dev-host deep links).
         tagPageDestination(navController)
         // AND-185: global multi-entity search (distinct from AND-152 message search).
