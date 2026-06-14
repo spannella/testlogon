@@ -41,6 +41,80 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # OFBiz Facility/Fulfillment (FAC-002) — Milestone 4+
+        # facilities: facility headers (SK=META) + location rows (SK=LOC#{id}).
+        # GSI_OWNER for per-owner list; GSI_STATUS for admin queue.
+        TableDef(
+            _resolve_table_name(S.facilities_table_name, "facilities"),
+            "facility_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",  "partition_key": "owner_sub",  "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status",     "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # transfers: header (SK=META) + per-SKU line rows (SK=ITEM#{n}).
+        TableDef(
+            _resolve_table_name(S.transfers_table_name, "transfers"),
+            "transfer_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS",   "partition_key": "status",           "sort_key": "created_at"},
+                {"index_name": "GSI_FROM_LOC", "partition_key": "from_location_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # receipts: inbound goods receipts. Header (SK=META) + line rows (SK=ITEM#{n}).
+        # GSI_FACILITY for per-facility listing; GSI_PO consumed by PUR module;
+        # GSI_STATUS for admin queue.
+        TableDef(
+            _resolve_table_name(S.receipts_table_name, "receipts"),
+            "receipt_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_FACILITY", "partition_key": "facility_id", "sort_key": "created_at"},
+                {"index_name": "GSI_PO",       "partition_key": "po_id",       "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS",   "partition_key": "status",      "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # picklists: pick work orders. Header (SK=META) + line rows (SK=LINE#{n}).
+        TableDef(
+            _resolve_table_name(S.picklists_table_name, "picklists"),
+            "picklist_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ORDER",  "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status",   "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # shipments: outbound shipment records. Header (SK=META) + package rows (SK=PKG#{n}).
+        # Note: shipped_at is a non-key numeric field; excluded from attr_types per
+        # DynamoDB AttributeDefinitions constraint (only key attributes may be listed).
+        TableDef(
+            _resolve_table_name(S.shipments_table_name, "shipments"),
+            "shipment_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ORDER",  "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status",   "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # lot_serial: reserved for FAC-011+ lot/serial tracking. Not wired in T
+        # until FAC-014 explicitly enables it. Created now to avoid a breaking
+        # just-restart when that ticket ships.
+        TableDef(
+            _resolve_table_name(S.lot_serial_table_name, "lot_serial"),
+            "sku",
+            "sk",   # LOT#{lot_id}  or  SERIAL#{serial}
+            gsi=[
+                {"index_name": "GSI_LOT_STATUS", "partition_key": "lot_status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         TableDef(
             _resolve_table_name(S.rent_period_markers_table_name, "rent_period_markers"),
             "pk",

@@ -330,6 +330,7 @@ from app.routers.hotels import hotels_router
 from app.routers.hotel_rate_plans import hotel_rate_plans_router
 from app.routers.hotel_rooms import hotel_rooms_router
 from app.routers.hotel_reservations import hotel_reservations_router
+from app.routers.facilities import facilities_router, fulfillment_router
 from app.routers.theme_customization import theme_customization_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
@@ -938,6 +939,12 @@ def create_app() -> FastAPI:
     app.include_router(hotel_rate_plans_router)
     app.include_router(hotel_rooms_router)
     app.include_router(hotel_reservations_router)
+    app.include_router(facilities_router)        # FAC-005: facility CRUD
+    app.include_router(fulfillment_router)       # FAC-011: transfers/receiving/picklists/shipments
+    # FAC-004: ensure default warehouse on startup when flag is on
+    if bool(getattr(__import__("app.core.settings", fromlist=["S"]).S, "facility_fulfillment_enabled", False)):
+        from app.services.facilities import ensure_default_facility
+        app.add_event_handler("startup", ensure_default_facility)
     app.include_router(theme_customization_router)
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)

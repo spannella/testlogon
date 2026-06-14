@@ -2883,6 +2883,24 @@ class Settings:
     hotel_reservations_table_name: str = os.environ.get(
         "HOTEL_RESERVATIONS_TABLE_NAME", "hotel_reservations"
     )
+    # OFBiz Facility / Fulfillment (FAC-001..FAC-010, ADR-001 Milestone 4+).
+    # Master switch defaults OFF. With it off every facility/transfer/receiving/
+    # picklist/shipment endpoint returns 404 and all service modules are dormant.
+    # Existing inventory, shop, cart, orders, and billing paths are unchanged.
+    facility_fulfillment_enabled: bool = os.environ.get(
+        "FACILITY_FULFILLMENT_ENABLED", "false"
+    ).lower() == "true"
+    # Table name settings (default to literal names; override in prod for prefix).
+    facilities_table_name: str = os.environ.get("FACILITIES_TABLE_NAME", "facilities")
+    transfers_table_name: str = os.environ.get("TRANSFERS_TABLE_NAME", "transfers")
+    receipts_table_name: str = os.environ.get("RECEIPTS_TABLE_NAME", "receipts")
+    picklists_table_name: str = os.environ.get("PICKLISTS_TABLE_NAME", "picklists")
+    shipments_table_name: str = os.environ.get("SHIPMENTS_TABLE_NAME", "shipments")
+    # Stretch: lot/serial tracking (deferred to FAC-011+, default OFF).
+    facility_lot_serial_enabled: bool = os.environ.get(
+        "FACILITY_LOT_SERIAL_ENABLED", "false"
+    ).lower() == "true"
+    lot_serial_table_name: str = os.environ.get("LOT_SERIAL_TABLE_NAME", "lot_serial")
 
     # INFRA-001: Host Inventory Management
     ddb_host_inventory_table: str = os.environ.get(

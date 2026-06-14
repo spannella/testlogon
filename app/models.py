@@ -18750,3 +18750,342 @@ class RentRunResultOut(BaseModel):
     charged: int
     skipped: int
     lease_count: int
+
+
+
+
+# ── OFBiz Facility/Fulfillment (FAC-003) ─────────────────────────────────────
+# Pydantic models for facility CRUD, stock transfers, inbound receiving,
+# pick/pack/ship lifecycle, and optional lot/serial tracking.
+# All Out models coerce DynamoDB Decimal → int via field_validator(mode="before").
+# Importable unconditionally; flag gate enforced at service layer (FAC-004+).
+
+
+class FacilityIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    facility_type: str = Field(
+        default="warehouse",
+        pattern="^(warehouse|retail|virtual|drop_ship)$",
+    )
+    description: Optional[str] = Field(default=None, max_length=1000)
+    # address stored as DDB Map (M) per FAC-001/002 authoritative schema.
+    address: Optional[dict] = Field(default=None)
+    owner_sub: Optional[str] = Field(default=None, max_length=256)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class FacilityOut(BaseModel):
+    facility_id: str
+    name: str
+    facility_type: str = "warehouse"
+    description: Optional[str] = None
+    address: Optional[dict] = None
+    owner_sub: Optional[str] = None
+    status: str = "active"  # active | archived
+    created_at: int = 0
+    updated_at: int = 0
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class FacilityLocationIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    location_type: str = Field(
+        default="bulk",
+        pattern="^(bulk|bin|aisle|shelf|staging|receiving|shipping)$",
+    )
+    description: Optional[str] = Field(default=None, max_length=500)
+    parent_location_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class FacilityLocationOut(BaseModel):
+    facility_id: str
+    location_id: str
+    name: str
+    location_type: str = "bulk"
+    description: Optional[str] = None
+    parent_location_id: Optional[str] = None
+    status: str = "active"  # active | archived
+    created_at: int = 0
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class FacilityListOut(BaseModel):
+    facilities: List[FacilityOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class FacilityLocationListOut(BaseModel):
+    locations: List[FacilityLocationOut] = Field(default_factory=list)
+
+
+# Transfer models
+
+class TransferItemIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class TransferIn(BaseModel):
+    from_facility_id: str = Field(min_length=1, max_length=128)
+    from_location_id: str = Field(min_length=1, max_length=128)
+    to_facility_id: str = Field(min_length=1, max_length=128)
+    to_location_id: str = Field(min_length=1, max_length=128)
+    lines: List[TransferItemIn] = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class TransferItemOut(BaseModel):
+    sku: str
+    quantity: int = 0
+    picked_quantity: int = 0  # units physically moved
+    status: str = "pending"  # pending | moved | short
+
+    @field_validator("quantity", "picked_quantity", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class TransferOut(BaseModel):
+    transfer_id: str
+    from_facility_id: str
+    from_location_id: str
+    to_facility_id: str
+    to_location_id: str
+    status: str  # requested | in_transit | completed | cancelled
+    notes: Optional[str] = None
+    lines: List[TransferItemOut] = Field(default_factory=list)
+    created_by: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+    completed_at: Optional[int] = None
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("completed_at", mode="before")
+    @classmethod
+    def _coerce_opt_ts(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class TransferListOut(BaseModel):
+    transfers: List[TransferOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# Receiving models
+
+class ReceiveLineIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+    unit_cost_cents: Optional[int] = Field(default=None, ge=0, le=1_000_000_000)
+    lot_label: Optional[str] = Field(default=None, max_length=128)
+    serials: List[str] = Field(default_factory=list, max_length=10_000)
+
+
+class ReceiveIn(BaseModel):
+    facility_id: str = Field(min_length=1, max_length=128)
+    location_id: str = Field(min_length=1, max_length=128)
+    lines: List[ReceiveLineIn] = Field(min_length=1, max_length=500)
+    po_id: Optional[str] = Field(default=None, max_length=128)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    # Required to enforce idempotency: sha256(correlation_id) → receipt_id.
+    correlation_id: str = Field(min_length=1, max_length=256)
+
+
+class ReceiptLineOut(BaseModel):
+    sku: str
+    ordered_quantity: int = 0  # from linked PO line; 0 if no PO
+    received_quantity: int = 0
+    unit_cost_cents: int = 0
+    receipt_status: str = "received"  # received | short | over
+    lot_id: Optional[str] = None
+
+    @field_validator("ordered_quantity", "received_quantity", "unit_cost_cents", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class ReceiptOut(BaseModel):
+    receipt_id: str
+    facility_id: str
+    location_id: str
+    po_id: Optional[str] = None
+    correlation_id: str
+    status: str  # received | partial | over | cancelled
+    notes: Optional[str] = None
+    lines: List[ReceiptLineOut] = Field(default_factory=list)
+    received_by: Optional[str] = None
+    created_at: int = 0
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class ReceiptListOut(BaseModel):
+    receipts: List[ReceiptOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# Pick / pack / ship models
+
+class PickLineOut(BaseModel):
+    line_id: str  # e.g. "LINE#1"
+    order_line_id: str
+    sku: str
+    requested_quantity: int = 0
+    picked_quantity: int = 0
+    from_facility_id: str = ""
+    from_location_id: str = ""
+    reservation_id: Optional[str] = None
+    status: str = "pending"  # pending | picked | short | cancelled
+
+    @field_validator("requested_quantity", "picked_quantity", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class PicklistOut(BaseModel):
+    picklist_id: str
+    order_id: str
+    status: str  # pending | picking | picked | packed | cancelled
+    lines: List[PickLineOut] = Field(default_factory=list)
+    created_by: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+    packed_at: Optional[int] = None
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("packed_at", mode="before")
+    @classmethod
+    def _coerce_opt_ts(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class PackageLineIn(BaseModel):
+    order_line_id: str = Field(min_length=1, max_length=128)
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class PackageIn(BaseModel):
+    weight_grams: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    length_mm: Optional[int] = Field(default=None, ge=0)
+    width_mm: Optional[int] = Field(default=None, ge=0)
+    height_mm: Optional[int] = Field(default=None, ge=0)
+    contents: List[PackageLineIn] = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class PackageOut(BaseModel):
+    package_id: str  # e.g. "1" (PKG# prefix stripped by service layer)
+    weight_grams: int = 0
+    length_mm: int = 0
+    width_mm: int = 0
+    height_mm: int = 0
+    contents: List[PackageLineIn] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+    @field_validator("weight_grams", "length_mm", "width_mm", "height_mm", mode="before")
+    @classmethod
+    def _coerce_dim(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class ShipmentIn(BaseModel):
+    picklist_id: str = Field(min_length=1, max_length=128)
+    carrier: str = Field(min_length=1, max_length=100)
+    tracking_number: str = Field(min_length=1, max_length=200)
+    service_level: Optional[str] = Field(default=None, max_length=100)
+    packages: List[PackageIn] = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class ShipmentOut(BaseModel):
+    shipment_id: str
+    order_id: str
+    picklist_id: str
+    status: str  # draft | packed | shipped | delivered | cancelled
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    service_level: Optional[str] = None
+    packages: List[PackageOut] = Field(default_factory=list)
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: int = 0
+    shipped_at: Optional[int] = None
+    delivered_at: Optional[int] = None
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("shipped_at", "delivered_at", mode="before")
+    @classmethod
+    def _coerce_opt_ts(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class ShipmentListOut(BaseModel):
+    shipments: List[ShipmentOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# Lot / serial models (FAC-014, optional; defined here to prevent a second models.py PR)
+
+class LotSummaryOut(BaseModel):
+    """Simplified lot view owned by FAC-003. FAC-014 adds the full LotOut."""
+    sku: str
+    lot_id: str
+    quantity: int = 0
+    received_at: int = 0
+    expires_at: Optional[int] = None
+    receipt_id: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("quantity", "received_at", mode="before")
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def _coerce_opt_int(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class SerialOut(BaseModel):
+    sku: str
+    serial: str
+    lot_id: Optional[str] = None
+    status: str = "on_hand"  # on_hand | picked | shipped | returned
+    receipt_id: Optional[str] = None
+    shipment_id: Optional[str] = None
+    received_at: int = 0
+
+    @field_validator("received_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)

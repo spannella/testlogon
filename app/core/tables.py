@@ -384,6 +384,12 @@ class Tables:
     hotel_reservations: Any
     txn_requests: Any
     rent_period_markers: Any
+    facilities: Any       # FAC-002
+    transfers: Any        # FAC-002
+    receipts: Any         # FAC-002
+    picklists: Any        # FAC-002
+    shipments: Any        # FAC-002
+    lot_serial: Any       # FAC-002 (reserved; no service uses it until FAC-011+)
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -703,4 +709,10 @@ T = Tables(
     hotel_reservations=_safe_table(S.hotel_reservations_table_name),
     txn_requests=_safe_table(S.txn_requests_table_name),
     rent_period_markers=_safe_table(S.rent_period_markers_table_name),
+    facilities=_safe_table(S.facilities_table_name),    # FAC-002
+    transfers=_safe_table(S.transfers_table_name),      # FAC-002
+    receipts=_safe_table(S.receipts_table_name),        # FAC-002
+    picklists=_safe_table(S.picklists_table_name),      # FAC-002
+    shipments=_safe_table(S.shipments_table_name),      # FAC-002
+    lot_serial=_safe_table(S.lot_serial_table_name),    # FAC-002 (reserved)
 )
