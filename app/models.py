@@ -21124,3 +21124,136 @@ class AuditLogBrowseOut(BaseModel):
     category: str
     from_ts: int
     to_ts: int
+
+
+class ApiKeyRateLimitOverrides(BaseModel):
+    """PLT-001: Per-key rate-limit overrides (None = use account default)."""
+    minute: Optional[int] = Field(None, ge=0)
+    hour: Optional[int] = Field(None, ge=0)
+    day: Optional[int] = Field(None, ge=0)
+    week: Optional[int] = Field(None, ge=0)
+    month: Optional[int] = Field(None, ge=0)
+
+
+    rate_limit_overrides: Optional[ApiKeyRateLimitOverrides] = None  # PLT-001
+
+
+# ---------------------------------------------------------------------------
+# PLT-002: Metrics Leaderboard
+# ---------------------------------------------------------------------------
+
+class LeaderboardItem(BaseModel):
+    rank: int
+    id: str
+    user_sub: str
+    calls_total: int
+    billable_calls_total: int
+    request_units_total: int
+    cost_subtotal_micros: int
+    unit_price_micros: int = 0
+
+
+class LeaderboardResponse(BaseModel):
+    period_id: str
+    dimension: Literal["consumers", "endpoints"]
+    metric: Literal["calls_total", "cost_subtotal_micros", "request_units_total"]
+    top_n: int
+    scope: Literal["platform", "user"]
+    items: List[LeaderboardItem]
+    total_rows_scanned: int
+
+
+# ---------------------------------------------------------------------------
+# PLT-003: Glossary
+# ---------------------------------------------------------------------------
+
+class GlossaryTermOut(BaseModel):
+    term_id: str
+    term: str
+    definition: str
+    tags: List[str] = []
+    created_at: int
+    updated_at: int
+    updated_by: str
+
+
+class GlossaryListOut(BaseModel):
+    terms: List[GlossaryTermOut]
+    next_cursor: Optional[str] = None
+    count: int
+
+
+class GlossaryCreateIn(BaseModel):
+    term: str = Field(..., min_length=1, max_length=200)
+    definition: str = Field(..., min_length=1, max_length=4096)
+    tags: Optional[List[str]] = None
+
+
+class GlossaryPatchIn(BaseModel):
+    term: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    definition: Optional[str] = Field(default=None, min_length=1, max_length=4096)
+    tags: Optional[List[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# PLT-004: Sandbox JSON import
+# ---------------------------------------------------------------------------
+
+class SandboxCustomerIn(BaseModel):
+    user_sub: Optional[str] = None
+    email: str
+    full_name: Optional[str] = None
+    display_name: Optional[str] = None
+    bio: Optional[str] = None
+
+
+class SandboxAccountIn(BaseModel):
+    user_sub: str
+    initial_balance_cents: int = Field(default=0, ge=0)
+    currency: str = "usd"
+
+
+class SandboxTransactionIn(BaseModel):
+    user_sub: str
+    entry_type: Literal["credit", "debit", "adjustment"]
+    amount_cents: int = Field(ge=0)
+    state: str = "settled"
+    reason: str
+    currency: str = "usd"
+
+
+class SandboxImportIn(BaseModel):
+    customers: List[SandboxCustomerIn] = []
+    accounts: List[SandboxAccountIn] = []
+    transactions: List[SandboxTransactionIn] = []
+
+
+class SandboxRowError(BaseModel):
+    section: str
+    index: int
+    code: str
+    message: str
+
+
+class SandboxImportResult(BaseModel):
+    customers_created: int
+    accounts_created: int
+    transactions_created: int
+    errors: List[SandboxRowError]
+    ok: bool
+
+
+# ---------------------------------------------------------------------------
+# PLT-005: Wallet threshold (account/ledger webhooks)
+# ---------------------------------------------------------------------------
+
+class SetWalletThresholdReq(BaseModel):
+    threshold_cents: int = Field(ge=0, description="0 = disable threshold")
+
+
+class WalletBalanceOut(BaseModel):
+    wallet_balance_cents: int
+    currency: str
+    updated_at: int
+    threshold_cents: Optional[int] = None
+    threshold_active: Optional[bool] = None

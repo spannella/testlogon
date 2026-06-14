@@ -41,6 +41,14 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # PLT-003: Glossary endpoint (GSI sort key is string — no attr_types needed)
+        TableDef(
+            _resolve_table_name(S.glossary_table_name, "glossary"),
+            "term_id",
+            gsi=[
+                {"index_name": "GSI_BY_TERM", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
         # EVT-001: CRM Events — event metadata + invitee rows
         TableDef(
             _resolve_table_name(S.crm_events_table_name, "crm_events"),

@@ -44,6 +44,7 @@ from app.models import (
     VerifyMicrodepositsReq,
     WalletDepositReq,
     WalletWithdrawReq,
+    SetWalletThresholdReq,  # PLT-005
 )
 from app.services.sessions import require_ui_session
 from app.services.alerts import audit_event
@@ -2638,3 +2639,34 @@ def wallet_withdraw(body: WalletWithdrawReq, req: Request = None, ctx=Depends(re
         **admin_tags,
     )
     return {"ok": True, "wallet_balance_cents": wallet_balance_cents}
+
+
+# PLT-005: Balance threshold configuration endpoint
+@dual_route("PUT", "/billing/wallet/threshold")
+def set_wallet_threshold(
+    body: SetWalletThresholdReq,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+) -> Dict[str, Any]:
+    """PLT-005: Set or clear the low-balance alert threshold for the authenticated user."""
+    user_id = ctx["user_sub"]
+    pk = user_pk(user_id)
+    threshold = int(body.threshold_cents)
+    update_expr = "SET balance_threshold_cents = :t"
+    expr_vals: Dict[str, Any] = {":t": threshold}
+    if threshold == 0:
+        # Clear any stale edge state when disabling the threshold
+        update_expr += ", last_threshold_crossed = :f"
+        expr_vals[":f"] = False
+    T.billing.update_item(
+        Key={"pk": pk, "sk": "WALLET"},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_vals,
+    )
+    audit_event(
+        "wallet_threshold_set",
+        user_id,
+        req,
+        threshold_cents=threshold,
+    )
+    return {"ok": True, "threshold_cents": threshold, "currency": "usd"}

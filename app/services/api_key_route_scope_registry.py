@@ -94,6 +94,9 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "GET:/open-data/branches/{branch_id}": {"reason": "OBP open-data public endpoint, no auth required"},
     "GET:/open-data/atms": {"reason": "OBP open-data public endpoint, no auth required"},
     "GET:/open-data/atms/{atm_id}": {"reason": "OBP open-data public endpoint, no auth required"},
+    # PLT-003: Public glossary reads — unauthenticated, no API key required
+    "GET:/v1/glossary": {"reason": "public unauthenticated glossary read endpoint"},
+    "GET:/v1/glossary/{term_id}": {"reason": "public unauthenticated glossary term read"},
     "DELETE:/messaging/conversations/{conversation_id}": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "DELETE:/messaging/conversations/{conversation_id}/drafts/{draft_id}": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "DELETE:/messaging/conversations/{conversation_id}/messages/{message_id}/hide": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},

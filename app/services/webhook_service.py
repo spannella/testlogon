@@ -134,6 +134,11 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     "account.api_key_created": "An API key was created",
     "account.api_key_revoked": "An API key was revoked",
 
+    # PLT-005: account/ledger events
+    "transaction.created": "A new ledger transaction was recorded",
+    "balance.threshold": "An account balance crossed a configured threshold",
+    "account.balance_low": "Account balance fell below the low-balance threshold",
+
     # Referrals
     "referral.signup": "A referred user signed up",
     "referral.commission": "A referral commission was earned",

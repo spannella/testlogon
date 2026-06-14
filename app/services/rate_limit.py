@@ -454,6 +454,63 @@ def rate_limit_consent(consent_id: str, category: str) -> None:
             },
             headers={"Retry-After": str(win)},
         )
+def _get_api_key_item_for_rl(api_key_id: str):
+    """Thin wrapper around get_api_key_item for PLT-001; allows test patching."""
+    try:
+        from app.services.api_keys import get_api_key_item
+        return get_api_key_item(api_key_id)
+    except Exception:
+        return {}
+
+
+def rate_limit_api_consumer(api_key_id: str, route_id: str) -> None:
+    """Per-consumer windowed rate limiter for all metered API routes (PLT-001).
+
+    Checks five fixed windows in order from narrowest to widest. Raises
+    HTTPException(429) at the first window that is exhausted. Uses the same
+    DDB-backed _bucket_limit primitive as rate_limit_kyc_partner_api.
+
+    Args:
+        api_key_id: resolved key ID (non-empty; caller guards empty case)
+        route_id:   METHOD:/path/with/{placeholders} from route_id_from_request
+    """
+    if not (getattr(S, "open_bank_project_enabled", False) and getattr(S, "api_consumer_rate_limit_enabled", False)):
+        return
+
+    item = _get_api_key_item_for_rl(api_key_id)
+    # Fail-open for missing or revoked keys; auth middleware will reject them
+    if not item or item.get("revoked", False):
+        return
+
+    overrides = item.get("rate_limit_overrides") or {}
+
+    _WINDOWS = [
+        ("minute", 60, getattr(S, "api_consumer_rate_limit_minute", 0)),
+        ("hour", 3600, getattr(S, "api_consumer_rate_limit_hour", 0)),
+        ("day", 86400, getattr(S, "api_consumer_rate_limit_day", 0)),
+        ("week", 604800, getattr(S, "api_consumer_rate_limit_week", 0)),
+        ("month", 2592000, getattr(S, "api_consumer_rate_limit_month", 0)),
+    ]
+
+    key = f"apikey:{api_key_id}"
+    for window_name, win, default_cap in _WINDOWS:
+        override_val = overrides.get(window_name)
+        cap = int(override_val) if override_val is not None else int(default_cap or 0)
+        if cap <= 0:
+            continue  # 0 = disabled for this window
+        sid = f"rl#api#{window_name}"
+        if not _bucket_limit(key, sid, cap, win):
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "api_consumer_rate_limited",
+                    "message": "API rate limit exceeded for this key",
+                    "window": window_name,
+                    "limit": cap,
+                    "window_seconds": win,
+                },
+                headers={"Retry-After": str(win), "x-api-limit-code": "api_consumer_rate_limited"},
+            )
 
 
 def rate_limit_filemgr_mount_onboarding(user_sub: str, ip: str) -> None:

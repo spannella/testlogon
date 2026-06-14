@@ -249,11 +249,16 @@ WALLET_SK = "WALLET"
 
 def get_wallet_balance(table: Any, pk: str) -> Dict[str, Any]:
     row = ddb_get(table, pk, WALLET_SK) or {}
-    return {
+    result: Dict[str, Any] = {
         "wallet_balance_cents": int(row.get("wallet_balance_cents", 0)),
         "currency": row.get("currency", "usd"),
         "updated_at": row.get("updated_at"),
     }
+    # PLT-005: include threshold fields when present
+    if "balance_threshold_cents" in row:
+        result["threshold_cents"] = int(row["balance_threshold_cents"] or 0)
+        result["threshold_active"] = bool(row.get("last_threshold_crossed", False))
+    return result
 
 
 def apply_wallet_delta(table: Any, pk: str, delta_cents: int, *, currency: str = "usd") -> int:
@@ -284,7 +289,93 @@ def apply_wallet_delta(table: Any, pk: str, delta_cents: int, *, currency: str =
             ExpressionAttributeValues={":d": delta_cents, ":t": now_ts(), ":needed": needed},
             ReturnValues="ALL_NEW",
         )
-    return int(result["Attributes"].get("wallet_balance_cents", 0))
+    attrs = result["Attributes"]
+    new_balance = int(attrs.get("wallet_balance_cents", 0))
+    # PLT-005: edge-trigger balance threshold check (best-effort, never raises)
+    _check_balance_threshold(table, pk, new_balance, attrs, currency)
+    return new_balance
+
+
+def _check_balance_threshold(
+    table: Any,
+    pk: str,
+    new_balance: int,
+    attrs: Dict[str, Any],
+    currency: str,
+) -> None:
+    """PLT-005: Edge-trigger threshold check. Must never raise."""
+    try:
+        from app.core.settings import S
+        if not (getattr(S, "account_ledger_webhooks_enabled", False) and getattr(S, "webhooks_enabled", False)):
+            return
+        threshold = int(attrs.get("balance_threshold_cents") or 0)
+        if threshold <= 0:
+            return
+        last_crossed = bool(attrs.get("last_threshold_crossed", False))
+        if new_balance < threshold and not last_crossed:
+            # Downward crossing: set flag and fire events
+            try:
+                table.update_item(
+                    Key={"pk": pk, "sk": WALLET_SK},
+                    UpdateExpression="SET last_threshold_crossed = :t",
+                    ExpressionAttributeValues={":t": True},
+                )
+            except Exception:
+                pass
+            data = {
+                "balance_cents": new_balance,
+                "threshold_cents": threshold,
+                "currency": currency,
+                "direction": "below",
+            }
+            # Extract user_sub from pk (format USER#{user_sub})
+            user_sub = str(pk).removeprefix("USER#")
+            try:
+                from app.services.webhook_service import dispatch_webhook_event
+                dispatch_webhook_event("balance.threshold", user_sub, data)
+                dispatch_webhook_event("account.balance_low", user_sub, data)
+            except Exception:
+                pass
+        elif new_balance >= threshold and last_crossed:
+            # Recovery: reset flag, no event
+            try:
+                table.update_item(
+                    Key={"pk": pk, "sk": WALLET_SK},
+                    UpdateExpression="SET last_threshold_crossed = :f",
+                    ExpressionAttributeValues={":f": False},
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def emit_ledger_webhook(user_sub: str, item: Dict[str, Any]) -> None:
+    """PLT-005: Fire a best-effort transaction.created webhook after a ledger persist.
+
+    Must be called with the item dict returned by new_ledger_entry, after
+    the table.put_item call has succeeded. Never raises.
+    """
+    try:
+        from app.core.settings import S
+        if not (getattr(S, "account_ledger_webhooks_enabled", False) and getattr(S, "webhooks_enabled", False)):
+            return
+        payload = {
+            "transaction_id": str(item.get("entry_id") or ""),
+            "type": str(item.get("type") or ""),
+            "amount_cents": int(item.get("amount_cents") or 0),
+            "currency": str(item.get("currency") or "usd"),
+            "reason": str(item.get("reason") or ""),
+            "state": str(item.get("state") or ""),
+            "ledger_date": str(item.get("ledger_date") or ""),
+        }
+        if item.get("provider"):
+            payload["provider"] = str(item["provider"])
+        from app.services.webhook_service import dispatch_webhook_event
+        dispatch_webhook_event("transaction.created", user_sub, payload)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("emit_ledger_webhook failed", exc_info=True)
 
 
 def ulidish() -> str:

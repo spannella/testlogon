@@ -427,6 +427,8 @@ class Tables:
     crm_events: Any
     crm_event_registrations: Any
     crm_contact_sms_log: Any
+    # PLT-003: Glossary endpoint
+    glossary: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -789,4 +791,6 @@ T = Tables(
     crm_events=_safe_table(S.crm_events_table_name),
     crm_event_registrations=_safe_table(S.crm_event_registrations_table_name),
     crm_contact_sms_log=_safe_table(S.crm_contact_sms_log_table_name),
+    # PLT-003: Glossary endpoint
+    glossary=_safe_table(S.glossary_table_name),
 )

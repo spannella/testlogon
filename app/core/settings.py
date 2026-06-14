@@ -3410,8 +3410,6 @@ class Settings:
     po_receipts_table_name: str = os.environ.get("PO_RECEIPTS_TABLE_NAME", "po_receipts")
     purchase_order_reorder_suggestions_enabled: bool = os.environ.get("PURCHASE_ORDER_REORDER_SUGGESTIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
 
-    # OBP umbrella master flag (CSN / ACC / TXR / VEW series)
-    open_bank_project_enabled: bool = os.environ.get("OPEN_BANK_PROJECT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
 
     # PSD2 Consents (CSN-001/002)
     psd2_consents_enabled: bool = os.environ.get("PSD2_CONSENTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
@@ -3474,6 +3472,32 @@ class Settings:
     # CRM Audit Log Browse (EVT-015) — default OFF
     crm_audit_log_browse_enabled: bool = os.environ.get("CRM_AUDIT_LOG_BROWSE_ENABLED", "false") == "1"
     crm_audit_log_browse_rate_limit_per_minute: int = int(os.environ.get("CRM_AUDIT_LOG_BROWSE_RATE_LIMIT", "60"))
+
+    # OBP umbrella master flag (ACC-001 §6) — single kill-switch for the entire
+
+    # PLT-001: Per-consumer API rate-limit middleware
+    api_consumer_rate_limit_enabled: bool = os.environ.get("API_CONSUMER_RATE_LIMIT_ENABLED", "0") not in ("0", "false", "False")
+    api_consumer_rate_limit_minute: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_MINUTE", "0"))
+    api_consumer_rate_limit_hour: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_HOUR", "0"))
+    api_consumer_rate_limit_day: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_DAY", "0"))
+    api_consumer_rate_limit_week: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_WEEK", "0"))
+    api_consumer_rate_limit_month: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_MONTH", "0"))
+
+    # PLT-002: Top-N API usage metrics leaderboard
+    metrics_leaderboard_enabled: bool = os.environ.get("METRICS_LEADERBOARD_ENABLED", "0") not in ("0", "false", "False")
+    metrics_leaderboard_max_top_n: int = int(os.environ.get("METRICS_LEADERBOARD_MAX_TOP_N", "100"))
+
+    # PLT-003: Glossary endpoint
+    glossary_enabled: bool = os.environ.get("GLOSSARY_ENABLED", "0") not in ("0", "false", "False")
+    glossary_table_name: str = os.environ.get("GLOSSARY_TABLE_NAME", "glossary")
+    glossary_definition_max_chars: int = int(os.environ.get("GLOSSARY_DEFINITION_MAX_CHARS", "4096"))
+
+    # PLT-004: Sandbox JSON import
+    sandbox_import_enabled: bool = os.environ.get("SANDBOX_IMPORT_ENABLED", "0") not in ("0", "false", "False")
+    sandbox_import_max_items: int = int(os.environ.get("SANDBOX_IMPORT_MAX_ITEMS", "500"))
+
+    # PLT-005: Account/ledger webhook events
+    account_ledger_webhooks_enabled: bool = os.environ.get("ACCOUNT_LEDGER_WEBHOOKS_ENABLED", "0") not in ("0", "false", "False")
 
 
 S = Settings()

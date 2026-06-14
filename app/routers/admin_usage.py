@@ -21,7 +21,10 @@ from app.services.api_usage_metering import (
     export_api_billing_reconciliation_report,
     run_api_billing_shadow_validation,
     record_api_billing_cutover_signoff,
+    aggregate_leaderboard,  # PLT-002
 )
+from app.services.usage_metering import period_id_for_datetime  # PLT-002
+from app.models import LeaderboardItem, LeaderboardResponse  # PLT-002
 from app.services.alerts import audit_event
 from app.services.api_key_rollout import get_api_key_rollout_state
 
@@ -466,3 +469,75 @@ def admin_api_keys_rollout_state(
         stale_route_status=str(((out.get("registry_drift") or {}).get("status") or "ok")),
     )
     return out
+
+
+# PLT-002: Top-N API usage metrics leaderboard
+@router.get("/api-usage/leaderboard")
+async def get_api_usage_leaderboard(
+    req: Request,
+    period_id: Optional[str] = None,
+    dimension: Literal["consumers", "endpoints"] = "consumers",
+    metric: Literal["calls_total", "cost_subtotal_micros", "request_units_total"] = "cost_subtotal_micros",
+    top_n: int = 10,
+    user_sub_filter: Optional[str] = None,
+    admin_user: str = Depends(_require_admin_user),
+) -> LeaderboardResponse:
+    if not (getattr(S, "open_bank_project_enabled", False) and getattr(S, "metrics_leaderboard_enabled", False)):
+        raise HTTPException(status_code=404, detail="metrics leaderboard not enabled")
+    if not period_id:
+        period_id = period_id_for_datetime()
+    max_n = int(getattr(S, "metrics_leaderboard_max_top_n", 100) or 100)
+    top_n = max(1, min(top_n, max_n))
+    table = _api_usage_table()
+    if table is None:
+        return LeaderboardResponse(
+            period_id=period_id,
+            dimension=dimension,
+            metric=metric,
+            top_n=top_n,
+            scope="platform" if user_sub_filter is None else "user",
+            items=[],
+            total_rows_scanned=0,
+        )
+    result = aggregate_leaderboard(
+        table,
+        period_id=period_id,
+        dimension=dimension,
+        metric=metric,
+        top_n=top_n,
+        user_sub=user_sub_filter,
+    )
+    audit_event(
+        "api_usage_leaderboard_view",
+        admin_user,
+        req,
+        period_id=period_id,
+        dimension=dimension,
+        metric=metric,
+        top_n=top_n,
+        scope="user" if user_sub_filter else "platform",
+    )
+    raw_items = result.get("items") or []
+    id_field = "api_key_id" if dimension == "consumers" else "route_id"
+    items = [
+        LeaderboardItem(
+            rank=i + 1,
+            id=str(row.get(id_field) or ""),
+            user_sub=str(row.get("user_sub") or ""),
+            calls_total=int(row.get("calls_total") or 0),
+            billable_calls_total=int(row.get("billable_calls_total") or 0),
+            request_units_total=int(row.get("request_units_total") or 0),
+            cost_subtotal_micros=int(row.get("cost_subtotal_micros") or 0),
+            unit_price_micros=int(row.get("unit_price_micros") or 0),
+        )
+        for i, row in enumerate(raw_items)
+    ]
+    return LeaderboardResponse(
+        period_id=period_id,
+        dimension=dimension,
+        metric=metric,
+        top_n=top_n,
+        scope="user" if user_sub_filter else "platform",
+        items=items,
+        total_rows_scanned=int(result.get("total_rows_scanned") or 0),
+    )

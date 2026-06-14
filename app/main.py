@@ -230,7 +230,11 @@ from app.services.api_key_route_scope_registry import (
     API_KEY_ROUTE_SCOPE_REGISTRY,
     is_route_registered_or_exempt,
     summarize_registry_drift,
+    get_route_exemption,
 )
+from app.services.api_usage_metering import _extract_api_key_id  # PLT-001
+from app.services.api_metering_contract import route_id_from_request  # PLT-001
+from app.services.rate_limit import rate_limit_api_consumer  # PLT-001
 from app.services.api_key_rollout import validate_api_key_rollout_settings
 from app.services.playback_entitlements import validate_playback_entitlement, PlaybackEntitlementError
 from app.services.broadcast_reconciler import start_broadcast_reconciler_task
@@ -390,6 +394,30 @@ def _api_usage_metering_middleware():
             pass
         return response
     return _middleware
+
+def _api_consumer_rate_limit_middleware():
+    """PLT-001: Per-consumer windowed rate limiter registered between IP rate-limit and metering."""
+    async def _middleware(request: Request, call_next):
+        if not (getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "api_consumer_rate_limit_enabled", False)):
+            return await call_next(request)
+        api_key_id = _extract_api_key_id(request)
+        if not api_key_id:
+            return await call_next(request)
+        rid = route_id_from_request(request)
+        if not rid:
+            return await call_next(request)
+        if get_route_exemption(rid) is not None:
+            return await call_next(request)
+        try:
+            rate_limit_api_consumer(api_key_id, rid)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"code": "api_consumer_rate_limited"}
+            win_secs = detail.get("window_seconds", 60)
+            headers = {"Retry-After": str(win_secs), "x-api-limit-code": str(detail.get("code", ""))}
+            return JSONResponse(status_code=429, content={"detail": detail}, headers=headers)
+        return await call_next(request)
+    return _middleware
+
 
 def _playback_entitlement_middleware():
     async def _middleware(request: Request, call_next):
@@ -576,6 +604,7 @@ def create_app() -> FastAPI:
         app.add_middleware(TenantMiddleware)
     app.middleware("http")(_crawler_meta_middleware())
     app.middleware("http")(rate_limit_middleware_factory())
+    app.middleware("http")(_api_consumer_rate_limit_middleware())   # PLT-001: between IP RL and metering
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
     if METRICS_ENABLED:
@@ -891,6 +920,14 @@ def create_app() -> FastAPI:
     app.include_router(fan_club_router)
     app.include_router(fan_club_public_router)
     app.include_router(geo_rules_router)
+    # PLT-003: Glossary endpoint (conditionally registered when enabled)
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "glossary_enabled", False):
+        from app.routers.glossary import router as glossary_router
+        app.include_router(glossary_router)
+    # PLT-004: Sandbox import endpoint (conditionally registered when enabled)
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "sandbox_import_enabled", False):
+        from app.routers.sandbox import router as sandbox_router
+        app.include_router(sandbox_router)
     app.include_router(scheduler_router)
     app.include_router(i18n_router)
     app.include_router(watermark_internal_router)

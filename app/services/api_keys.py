@@ -289,6 +289,7 @@ def set_api_key_self_limits(
     monthly_calls_cap: int,
     monthly_spend_cap_micros: int,
     route_caps: Dict[str, Dict[str, Any]] | None,
+    rate_limit_overrides: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     calls_cap = _coerce_non_negative_int(monthly_calls_cap)
     spend_cap = _coerce_non_negative_int(monthly_spend_cap_micros)
@@ -299,18 +300,45 @@ def set_api_key_self_limits(
         route_caps=normalized_route_caps,
     )
 
+    # PLT-001: validate rate_limit_overrides
+    normalized_rlo: Dict[str, Any] = {}
+    _VALID_WINDOWS = {"minute", "hour", "day", "week", "month"}
+    _WINDOW_SETTINGS = {
+        "minute": "api_consumer_rate_limit_minute",
+        "hour": "api_consumer_rate_limit_hour",
+        "day": "api_consumer_rate_limit_day",
+        "week": "api_consumer_rate_limit_week",
+        "month": "api_consumer_rate_limit_month",
+    }
+    if rate_limit_overrides:
+        for win_name, val in (rate_limit_overrides or {}).items():
+            if win_name not in _VALID_WINDOWS:
+                continue
+            if val is None:
+                normalized_rlo[win_name] = None
+                continue
+            int_val = int(val)
+            if int_val < 0:
+                raise HTTPException(400, f"rate_limit_override for {win_name} must be non-negative")
+            # Guardrail: override cannot exceed account-level ceiling
+            ceiling = int(getattr(S, _WINDOW_SETTINGS[win_name], 0) or 0)
+            if ceiling > 0 and int_val > ceiling:
+                raise HTTPException(400, f"rate_limit_override exceeds account ceiling for window: {win_name}")
+            normalized_rlo[win_name] = int_val
+
     try:
         T.api_keys.update_item(
             Key={"key_id": key_id},
             UpdateExpression=(
                 "SET monthly_calls_cap = :mc, monthly_spend_cap_micros = :ms, "
-                "route_caps = :rc, updated_at = :now"
+                "route_caps = :rc, rate_limit_overrides = :rlo, updated_at = :now"
             ),
             ConditionExpression="user_sub = :u",
             ExpressionAttributeValues={
                 ":mc": calls_cap,
                 ":ms": spend_cap,
                 ":rc": normalized_route_caps,
+                ":rlo": normalized_rlo,
                 ":u": user_sub,
                 ":now": now_ts(),
             },
@@ -323,6 +351,7 @@ def set_api_key_self_limits(
         "monthly_calls_cap": calls_cap,
         "monthly_spend_cap_micros": spend_cap,
         "route_caps": normalized_route_caps,
+        "rate_limit_overrides": normalized_rlo,
     }
 
 
