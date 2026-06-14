@@ -203,6 +203,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         billingConfigDestination(navController)
         // AND-403: read-only admin alerts/dashboards (client-aggregated job + webhook health; 403 self-gate).
         adminDashboardDestination(navController)
+        // AND-404: read-only admin email/SMS delivery dashboards (per-channel stats + recent activity; 403
+        // self-gate). One generic VM; channel via nav arg.
+        messagingDashboardDestinations(navController)
         // AND-252/253: creator earnings dashboard (totals + Canvas chart + breakdown) and the
         // per-content revenue list (cursor-paged, sortable).
         earningsDestinations(navController)

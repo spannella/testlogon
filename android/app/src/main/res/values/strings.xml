@@ -3396,6 +3396,30 @@
     <string name="admin_metric_webhook_failed">Failed (24h)</string>
     <string name="admin_metric_webhook_dead_letter">Dead-lettered (24h)</string>
 
+    <!-- AND-404: admin email/SMS delivery dashboards (read-only). -->
+    <string name="more_entry_admin_email_dashboard">Email delivery</string>
+    <string name="more_entry_admin_sms_dashboard">SMS delivery</string>
+    <string name="admin_email_dashboard_title">Email delivery</string>
+    <string name="admin_sms_dashboard_title">SMS delivery</string>
+    <string name="admin_messaging_dashboard_activity_title">Recent activity</string>
+    <string name="admin_messaging_dashboard_no_activity">No delivery activity in this window</string>
+    <string name="admin_messaging_dashboard_activity_unavailable">Recent activity couldn\'t be loaded. Metrics are still shown.</string>
+    <string name="admin_messaging_dashboard_activity_footer">Showing the %1$d most recent</string>
+    <string name="admin_messaging_dashboard_empty_body">There is no delivery activity to display right now.</string>
+    <string name="admin_messaging_metric_sent">Sent</string>
+    <string name="admin_messaging_metric_delivered">Delivered</string>
+    <string name="admin_messaging_metric_bounced">Bounced</string>
+    <string name="admin_messaging_metric_failed">Failed</string>
+    <string name="admin_messaging_metric_suppressed">Suppressed</string>
+    <string name="admin_messaging_metric_segments">Segments</string>
+    <string name="admin_messaging_metric_delivery_rate">Delivery rate</string>
+    <string name="admin_delivery_status_delivered">Delivered</string>
+    <string name="admin_delivery_status_sent">Sent</string>
+    <string name="admin_delivery_status_pending">Pending</string>
+    <string name="admin_delivery_status_bounced">Bounced</string>
+    <string name="admin_delivery_status_failed">Failed</string>
+    <string name="admin_delivery_status_unknown">Unknown</string>
+
     <!-- AND-398: Webhooks config (light). -->
     <string name="more_entry_webhooks">Webhooks</string>
     <string name="webhooks_back">Back</string>

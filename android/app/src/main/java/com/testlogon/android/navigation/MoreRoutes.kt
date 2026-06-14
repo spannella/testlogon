@@ -198,6 +198,12 @@ object MoreRoutes {
     // pattern); a non-admin sees no admin data.
     const val ADMIN_DASHBOARD = AdminDashboardDest.ROUTE
 
+    // AND-404: READ-ONLY admin email/SMS delivery dashboards (per-channel stats + recent activity). Self-gate
+    // via the backend 403 -> the screen's Forbidden state (cf. the AND-403 admin-dashboard pattern); a non-admin
+    // sees no admin data. Two concrete entry routes off the shared `{channel}` destination template.
+    const val ADMIN_EMAIL_DASHBOARD = MessagingDashboardDest.EMAIL_ROUTE
+    const val ADMIN_SMS_DASHBOARD = MessagingDashboardDest.SMS_ROUTE
+
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
 
@@ -280,6 +286,8 @@ object MoreRoutes {
             TICKETS,
             WEBHOOKS,
             ADMIN_DASHBOARD,
+            ADMIN_EMAIL_DASHBOARD,
+            ADMIN_SMS_DASHBOARD,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,

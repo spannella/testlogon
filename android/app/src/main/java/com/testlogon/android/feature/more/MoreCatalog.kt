@@ -18,6 +18,8 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Diversity3
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.Sms
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Handshake
@@ -440,6 +442,24 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_admin_dashboard,
             icon = Icons.Outlined.Security,
             route = MoreRoutes.ADMIN_DASHBOARD,
+            section = MoreSection.SECURITY,
+        ),
+        // AND-404: READ-ONLY admin EMAIL delivery dashboard (per-channel stats + recent activity). Self-gates
+        // via the backend 403 -> the screen's Forbidden state; a non-admin sees no admin data.
+        MoreEntry(
+            id = "admin_email_dashboard",
+            labelRes = R.string.more_entry_admin_email_dashboard,
+            icon = Icons.Outlined.Email,
+            route = MoreRoutes.ADMIN_EMAIL_DASHBOARD,
+            section = MoreSection.SECURITY,
+        ),
+        // AND-404: READ-ONLY admin SMS delivery dashboard (per-channel stats + recent activity). Self-gates via
+        // the backend 403 -> the screen's Forbidden state; a non-admin sees no admin data.
+        MoreEntry(
+            id = "admin_sms_dashboard",
+            labelRes = R.string.more_entry_admin_sms_dashboard,
+            icon = Icons.Outlined.Sms,
+            route = MoreRoutes.ADMIN_SMS_DASHBOARD,
             section = MoreSection.SECURITY,
         ),
         // AND-374: projects (paged list -> detail + account-scoped Google Drive provider connect flow).
