@@ -21257,3 +21257,45 @@ class WalletBalanceOut(BaseModel):
     updated_at: int
     threshold_cents: Optional[int] = None
     threshold_active: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Hotel PMS — Cancellation + KPI Reports (HTL-033..HTL-036)
+# ---------------------------------------------------------------------------
+
+
+class CancellationPolicyIn(BaseModel):
+    """Input for PUT /ui/hotels/{hotel_id}/cancellation-policy (HTL-034)."""
+    free_until_days_before: int = Field(default=0, ge=0)
+    penalty_pct: int = Field(default=0, ge=0, le=100)
+    penalty_fixed_cents: int = Field(default=0, ge=0)
+    no_show_fee_cents: int = Field(default=0, ge=0)
+
+
+class CancellationPolicyOut(BaseModel):
+    """Response for GET/PUT /ui/hotels/{hotel_id}/cancellation-policy (HTL-034)."""
+    hotel_id: str
+    policy_id: str
+    scope: str = "default"
+    free_until_days_before: int = 0
+    penalty_pct: int = 0
+    penalty_fixed_cents: int = 0
+    no_show_fee_cents: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class HotelKpisOut(BaseModel):
+    """Response for GET /ui/hotels/{hotel_id}/reports/kpis (HTL-035)."""
+    hotel_id: str
+    from_ts: int
+    to_ts: int
+    rooms_available: int
+    rooms_sold: int
+    occupancy_pct: float
+    room_revenue_cents: int
+    adr_cents: int
+    revpar_cents: int
+    arrivals: int
+    departures: int
+    currency: str

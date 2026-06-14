@@ -3499,5 +3499,9 @@ class Settings:
     # PLT-005: Account/ledger webhook events
     account_ledger_webhooks_enabled: bool = os.environ.get("ACCOUNT_LEDGER_WEBHOOKS_ENABLED", "0") not in ("0", "false", "False")
 
+    # HTL-035 KPI caps (hotel_pms_enabled + hotel table names declared above)
+    hotel_kpi_max_range_days: int = int(os.environ.get("HOTEL_KPI_MAX_RANGE_DAYS", "366"))
+    hotel_kpi_max_stay_nights: int = int(os.environ.get("HOTEL_KPI_MAX_STAY_NIGHTS", "370"))
+
 
 S = Settings()
