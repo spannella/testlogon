@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AND-393 - strings for the public donation flow. Externalized (no hardcoded composable literals). -->
+<resources>
+    <string name="donation_amount_label">Amount (%1$s)</string>
+    <string name="donation_name_label">Your name (optional)</string>
+    <string name="donation_email_label">Email for receipt (optional)</string>
+    <string name="donation_submit">Donate</string>
+    <string name="donation_submitting">Submitting your donation</string>
+    <string name="donation_retry">Retry</string>
+    <string name="donation_close">Close</string>
+    <string name="donation_load_error">Couldn\'t load this fundraiser. Try again.</string>
+    <string name="donation_unavailable">This fundraiser isn\'t accepting donations right now.</string>
+    <string name="donation_thanks">Thank you for your donation!</string>
+    <string name="donation_receipt_amount">You donated %1$s</string>
+    <string name="donation_receipt_id">Receipt: %1$s</string>
+    <string name="donation_cover_cd">Cover image for %1$s</string>
+    <string name="donation_raised_of_goal">%1$s raised of %2$s goal</string>
+    <string name="donation_raised">%1$s raised</string>
+    <string name="donation_count">%1$d donations</string>
+</resources>

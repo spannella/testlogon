@@ -1,0 +1,34 @@
+{
+  "sessions": [
+    {
+      "session_id": "sess-1",
+      "is_current": true,
+      "user_agent": "TestLogonAndroid/1.0 (Android 15; Pixel 8)",
+      "ip": "203.0.113.7",
+      "created_at": 1748786531,
+      "last_seen_at": 1749116204,
+      "revoked": false,
+      "revoked_at": null
+    },
+    {
+      "session_id": "sess-2",
+      "is_current": false,
+      "user_agent": "okhttp/4.12",
+      "ip": "198.51.100.22",
+      "created_at": 1748700000,
+      "last_seen_at": 1749000000,
+      "revoked": false,
+      "revoked_at": null
+    },
+    {
+      "session_id": "sess-3",
+      "is_current": false,
+      "user_agent": "Mozilla/5.0 (Macintosh)",
+      "ip": "192.0.2.9",
+      "created_at": 1748600000,
+      "last_seen_at": 1748900000,
+      "revoked": false,
+      "revoked_at": null
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "auth_required": true,
+  "challenge_id": "chal_01HZX",
+  "required_factors": ["totp"],
+  "session_id": null
+}

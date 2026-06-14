@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        AND-111/AND-112 — count-bearing copy uses <plurals> with CLDR quantity keys, never manual
+        if (n == 1) selection in Kotlin (FR-3). English needs only one/other; zero/two/few/many are
+        reserved for locales whose CLDR rules use them. The count is passed as a positional %1$d so
+        the resource owns placement. Ported from the web reference feed.comments_one/_other. -->
+    <plurals name="i18n_feed_comments">
+        <item quantity="one">%1$d comment</item>
+        <item quantity="other">%1$d comments</item>
+    </plurals>
+</resources>

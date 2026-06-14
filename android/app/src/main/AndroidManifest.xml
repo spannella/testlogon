@@ -1,0 +1,552 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- AND-107: runtime notification permission (requested at runtime on Android 13+ / API 33). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- AND-297: full-screen incoming-call notification (CATEGORY_CALL qualifies on API 34+). The
+         notifier still degrades to a heads-up call notification when canUseFullScreenIntent() is false. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- AND-133: microphone for voice messages (requested at runtime, API 23+).
+         AND-288: also used by the host go-live broadcasting flow (RECORD_AUDIO, requested at runtime). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- AND-304: self-managed Telecom (ConnectionService). Lets the app model its 1:1 calls to the OS
+         (audio focus, DND, headset/Bluetooth answer) UNDER the AND-296/297 flow. Self-managed is API 26+;
+         on unsupported devices the integration no-ops and the AND-297 full-screen path remains the fallback. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+
+    <!-- AND-288: camera for host live broadcasting (requested at runtime via activity-result). The
+         go-live engine (BroadcastPublisher) is FLAGGED/stubbed until the native WebRTC SDK decision is
+         made, so this permission is inert today — nothing opens the camera. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- AND-288: optional capture-service permission declared per spec; NO real capture service is
+         started while the WebRTC engine is FLAGGED. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- AND-288: hardware is optional so Play Store availability stays broad; the app degrades where
+         camera/mic are absent. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <application
+        android:name=".TestLogonApp"
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TestLogon">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.TestLogon">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- AND-061: magic-link verify App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/magic-link-verify" />
+            </intent-filter>
+
+            <!-- AND-061: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/magic-link-verify" />
+            </intent-filter>
+
+            <!-- AND-063: SSO/SAML ACS callback App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/auth/sso/callback" />
+            </intent-filter>
+
+            <!-- AND-063: custom-scheme SSO callback fallback for the plaintext dev host that cannot
+                 serve assetlinks (NOT auto-verified). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="com.testlogon.android"
+                    android:host="auth"
+                    android:pathPrefix="/sso/callback" />
+            </intent-filter>
+
+            <!-- AND-073: public profile App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/u/" />
+            </intent-filter>
+
+            <!-- AND-073: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/u/" />
+            </intent-filter>
+
+            <!-- AND-073: custom-scheme public-profile fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="u" />
+            </intent-filter>
+
+            <!-- AND-100: read-only post detail App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/post/" />
+            </intent-filter>
+
+            <!-- AND-100: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/post/" />
+            </intent-filter>
+
+            <!-- AND-100: custom-scheme post-detail fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="post" />
+            </intent-filter>
+
+            <!-- AND-183: tag-page App Link on the production host (HTTPS, auto-verified).
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/discover/tags/" />
+            </intent-filter>
+
+            <!-- AND-183: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/discover/tags/" />
+            </intent-filter>
+
+            <!-- AND-183: custom-scheme tag-page fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="discover" />
+            </intent-filter>
+
+            <!-- AND-190: video detail App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /gallery/{video_id} page. Requires assetlinks.json (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/gallery/" />
+            </intent-filter>
+
+            <!-- AND-190: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/gallery/" />
+            </intent-filter>
+
+            <!-- AND-190: custom-scheme video-detail fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="gallery" />
+            </intent-filter>
+
+            <!-- AND-196: public clip App Link on the production host (HTTPS, auto-verified), mirroring
+                 the web /c/{clipId} share page. Works for unauthenticated users. Requires
+                 assetlinks.json (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/c/" />
+            </intent-filter>
+
+            <!-- AND-196: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/c/" />
+            </intent-filter>
+
+            <!-- AND-196: custom-scheme public-clip fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="c" />
+            </intent-filter>
+
+            <!-- AND-272: public event App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /event/{calendarId}/{eventId} page. Works for unauthenticated
+                 users. Requires assetlinks.json (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/event/" />
+            </intent-filter>
+
+            <!-- AND-272: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/event/" />
+            </intent-filter>
+
+            <!-- AND-272: custom-scheme public-event fallback for share flows. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="event" />
+            </intent-filter>
+
+            <!-- AND-231: payment redirect return App Link on the production host (HTTPS, auto-verified).
+                 Providers (PayPal/CCBill/hosted checkout) 302 the browser back here after authorization.
+                 Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/app/billing/return" />
+            </intent-filter>
+
+            <!-- AND-231: custom-scheme payment-return fallback for the plaintext dev host that cannot
+                 serve assetlinks (NOT auto-verified). testlogon://payments/return?provider=...&status=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="payments" />
+            </intent-filter>
+
+            <!-- AND-273: Google Calendar OAuth return App Link on the production host (HTTPS,
+                 auto-verified). The backend 302s the browser back here after consent. Requires
+                 /.well-known/assetlinks.json with the release cert fingerprint (web/ops). The PRIMARY
+                 return path is Custom-Tab-return -> refreshStatus; this deep link is the optional path
+                 used only if the backend registers it as the redirect URI. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/app/calendar/integrations/google/callback" />
+            </intent-filter>
+
+            <!-- AND-273: custom-scheme Google Calendar OAuth-return fallback for the plaintext dev host
+                 that cannot serve assetlinks (NOT auto-verified).
+                 testlogon://calendar-integrations/google/callback?code=&state=&error= -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="calendar-integrations" />
+            </intent-filter>
+
+            <!-- AND-374: custom-scheme project Google Drive OAuth-return deep link (server-mediated OAuth).
+                 The backend redirects here after the user authorizes; the Activity parses it and resumes the
+                 project detail screen. NOT auto-verified (plaintext dev host cannot serve assetlinks).
+                 testlogon://projects/{projectId}/providers/google_drive/callback?code=&state=&error= -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="projects" />
+            </intent-filter>
+
+            <!-- AND-230: US-bank micro-deposit verification deep link (from a "verify your bank account"
+                 email/notification). com.testlogon.android://billing/us-bank/verify?sid={setup_intent_id} -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="com.testlogon.android"
+                    android:host="billing"
+                    android:pathPrefix="/us-bank/verify" />
+            </intent-filter>
+
+            <!-- AND-312: custom-scheme guest-accept deep link from a co-broadcast invite. Identity is the
+                 (sessionId, inviteId) query pair (NOT a token), routed to the guest accept screen.
+                 testlogon://guest/accept?sessionId={sessionId}&inviteId={inviteId} -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="guest"
+                    android:pathPrefix="/accept" />
+            </intent-filter>
+
+            <!-- AND-392: PUBLIC share download App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /share/<linkId> public-download page. Works for UNAUTHENTICATED
+                 recipients (registered in both nav graphs). Requires /.well-known/assetlinks.json with
+                 the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/share/" />
+            </intent-filter>
+
+            <!-- AND-392: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. The
+                 plaintext dev host cannot serve assetlinks, so this filter is not auto-verified. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/share/" />
+            </intent-filter>
+
+            <!-- AND-335: custom-scheme PUBLIC share deep link. The link id is the path segment, routed to
+                 the session-free public share screen (registered in both nav graphs - the recipient may be
+                 signed out). Accepted on all builds. testlogon://share/<linkId> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="share" />
+            </intent-filter>
+
+            <!-- AND-393: PUBLIC fundraiser-donation App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /donate/<fundraiserId> public-donation page. Works for ANONYMOUS donors
+                 (registered in both nav graphs). Requires /.well-known/assetlinks.json with the release
+                 cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/donate/" />
+            </intent-filter>
+
+            <!-- AND-393: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. The
+                 plaintext dev host cannot serve assetlinks, so this filter is not auto-verified. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/donate/" />
+            </intent-filter>
+
+            <!-- AND-393: custom-scheme PUBLIC donation deep link. The fundraiser id is the path segment,
+                 routed to the session-free donation screen (registered in both nav graphs - the donor may
+                 be signed out). Accepted on all builds. testlogon://donate/<fundraiserId> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="donate" />
+            </intent-filter>
+
+            <!-- AND-349: PUBLIC questionnaire-respond App Link on the production host (HTTPS,
+                 auto-verified), mirroring the web .../questionnaires/published/{slug}/respond page. Works
+                 for anonymous users (registered in both nav graphs). Requires
+                 /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/questionnaires/published/"
+                    android:pathPattern="/questionnaires/published/.*/respond" />
+            </intent-filter>
+
+            <!-- AND-349: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/questionnaires/published/"
+                    android:pathPattern="/questionnaires/published/.*/respond" />
+            </intent-filter>
+        </activity>
+
+        <!-- AND-297: lock-screen-capable full-screen incoming-call Activity. Launched by the call
+             notification's fullScreenIntent (and its accept/decline action buttons). showWhenLocked /
+             turnScreenOn are also set programmatically in onCreate for API 27+. excludeFromRecents so a
+             dismissed call doesn't linger in the recents list. exported=false (only the app launches it). -->
+        <activity
+            android:name=".feature.call.incoming.IncomingCallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.TestLogon" />
+
+        <!-- AND-132: FileProvider for handing downloaded message attachments to external viewers via
+             a transient content:// read grant (no file:// leaves the app). Scoped to attachments/. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- AND-105: FCM service. exported=false so only the signed Firebase intent can reach it. -->
+        <service
+            android:name=".push.TlFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- AND-304: self-managed Telecom ConnectionService. exported=true + the
+             BIND_TELECOM_CONNECTION_SERVICE permission so ONLY the OS Telecom subsystem can bind it. The
+             OS instantiates it when TelecomCallController places/reports a self-managed call (API 26+); it
+             is inert on older OS and degrades gracefully (the AND-296/297 flow is the fallback). -->
+        <service
+            android:name=".feature.call.telecom.TestLogonConnectionService"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+
+        <!-- AND-105/107: default channel + small icon the system uses for notification-type FCM
+             messages auto-displayed while backgrounded. App-controlled data messages route through
+             NotificationPresenter to the typed channels instead. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="@string/default_notification_channel_id" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notification" />
+    </application>
+</manifest>

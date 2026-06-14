@@ -1,0 +1,155 @@
+package com.testlogon.android.feature.broadcast.host
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.broadcast.BroadcastInputType
+import com.testlogon.android.data.broadcast.BroadcastRepository
+import com.testlogon.android.data.webrtc.BroadcastPublisher
+import com.testlogon.android.data.webrtc.GoLiveResult
+import com.testlogon.android.data.webrtc.PublishState
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/**
+ * AND-308 — host broadcast INGEST presentation logic (camera/mic publish driver).
+ *
+ * Drives the broadcast INPUTS control plane (REAL) + the FLAGGED publish engine:
+ *  1. [start] creates the host's "primary" ingest input via [BroadcastRepository.createInput] (REAL POST).
+ *  2. On success it hands the allocated inputId to the FLAGGED [BroadcastPublisher.goLive].
+ *  3. The bound publisher is [com.testlogon.android.data.webrtc.StubBroadcastPublisher], which ALWAYS
+ *     returns [GoLiveResult.NotConfigured] and stays in [PublishState.Unavailable] — it NEVER opens a
+ *     camera/mic, NEVER creates a PeerConnection, NEVER produces an SDP offer. So [start] resolves to
+ *     [IngestPhase.Unavailable] with [IngestUiState.mediaUnavailable] = true and the screen shows the
+ *     "broadcasting unavailable — not configured" banner. STOP-AND-FLAG.
+ *
+ * The REAL publish path (once the native WebRTC SDK is added) would, from the primary input: open the
+ * front camera + mic, build a PeerConnection, produce an SDP offer, exchange it via the AND-290
+ * [com.testlogon.android.data.webrtc.SignalingRepository.exchangeBroadcastOffer] host-publish path
+ * (POST broadcast/sessions/{sessionId}/inputs/{inputId}/webrtc-offer), apply the SFU answer, then
+ * activate the input. AND-308 deliberately does NOT add that dependency; the offer/answer endpoint is
+ * already modeled and REUSED rather than duplicated.
+ *
+ * [stop] stops the publisher and best-effort deactivates + removes the created input. State updates use
+ * MutableStateFlow + update (no distinctUntilChanged on a StateFlow). The publisher's hot [state] is
+ * collected and folded into the phase machine.
+ */
+@HiltViewModel
+class IngestViewModel @Inject constructor(
+    private val broadcastRepository: BroadcastRepository,
+    private val broadcastPublisher: BroadcastPublisher,
+    savedState: SavedStateHandle,
+) : ViewModel() {
+
+    val sessionId: String = savedState.get<String>(ARG_SESSION_ID).orEmpty()
+
+    private val _uiState = MutableStateFlow(IngestUiState())
+    val uiState: StateFlow<IngestUiState> = _uiState.asStateFlow()
+
+    init {
+        // Fold the FLAGGED publisher's hot state into the phase machine. The stub stays Unavailable.
+        viewModelScope.launch {
+            broadcastPublisher.state.collect { publishState ->
+                _uiState.update { current -> current.reduce(publishState) }
+            }
+        }
+    }
+
+    /**
+     * The host tapped "Go Live" (CAMERA + RECORD_AUDIO assumed already granted by the screen). Creates the
+     * primary ingest input, then drives the FLAGGED publisher.
+     */
+    fun start() {
+        if (!_uiState.value.canStart) return
+        if (sessionId.isBlank()) {
+            _uiState.update { it.copy(phase = IngestPhase.Failed, error = NO_SESSION) }
+            return
+        }
+        _uiState.update { it.copy(phase = IngestPhase.CreatingInput, error = null) }
+        viewModelScope.launch {
+            when (val created = broadcastRepository.createInput(sessionId, BroadcastInputType.PRIMARY, HOST_LABEL)) {
+                is ApiResult.Success -> {
+                    val inputId = created.data.inputId
+                    _uiState.update { it.copy(phase = IngestPhase.Negotiating, inputId = inputId) }
+                    goLive(inputId)
+                }
+                is ApiResult.Failure ->
+                    _uiState.update { it.copy(phase = IngestPhase.Failed, error = created.error.message) }
+                is ApiResult.NetworkError ->
+                    _uiState.update { it.copy(phase = IngestPhase.Failed, error = OFFLINE) }
+            }
+        }
+    }
+
+    /**
+     * Drives the FLAGGED publisher. The stub returns [GoLiveResult.NotConfigured] -> Unavailable +
+     * mediaUnavailable. A real engine would reach [GoLiveResult.Started] -> Connected.
+     */
+    private suspend fun goLive(inputId: String) {
+        when (broadcastPublisher.goLive(sessionId, inputId)) {
+            GoLiveResult.Started ->
+                _uiState.update { it.copy(phase = IngestPhase.Connected) }
+            is GoLiveResult.Failed ->
+                _uiState.update { it.copy(phase = IngestPhase.Failed, error = GO_LIVE_FAILED) }
+            GoLiveResult.NotConfigured ->
+                _uiState.update {
+                    it.copy(phase = IngestPhase.Unavailable, mediaUnavailable = true)
+                }
+        }
+    }
+
+    /** Stops the publisher and best-effort deactivates + removes the created input. Idempotent. */
+    fun stop() {
+        broadcastPublisher.stop()
+        val inputId = _uiState.value.inputId
+        _uiState.update { it.copy(phase = IngestPhase.PreviewReady, inputId = null) }
+        if (inputId != null && sessionId.isNotBlank()) {
+            viewModelScope.launch {
+                // Best-effort teardown; failures here do not surface to the user.
+                broadcastRepository.deactivateInput(sessionId, inputId)
+                broadcastRepository.removeInput(sessionId, inputId)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        broadcastPublisher.stop()
+    }
+
+    /**
+     * Folds the FLAGGED publisher [PublishState] into the phase machine WITHOUT overriding a terminal
+     * control-plane Failed or a resolved Unavailable. The stub only ever emits [PublishState.Unavailable].
+     */
+    private fun IngestUiState.reduce(publishState: PublishState): IngestUiState = when (publishState) {
+        PublishState.Idle -> this
+        PublishState.Starting ->
+            if (phase == IngestPhase.Failed) this else copy(phase = IngestPhase.Negotiating)
+        PublishState.Live -> copy(phase = IngestPhase.Connected)
+        is PublishState.Failed ->
+            copy(phase = IngestPhase.Failed, error = publishState.reason)
+        PublishState.Unavailable ->
+            // The FLAGGED engine reports not-configured: surface the banner, but only once a start
+            // attempt has been made (Idle/PreviewReady should not show the banner pre-emptively).
+            if (phase == IngestPhase.Idle || phase == IngestPhase.PreviewReady) this
+            else copy(phase = IngestPhase.Unavailable, mediaUnavailable = true)
+    }
+
+    companion object {
+        /** Nav arg carrying the broadcast session id (the session created by AND-307). */
+        const val ARG_SESSION_ID = "sessionId"
+
+        /** Label for the host's own primary camera/mic input. */
+        private const val HOST_LABEL = "Host camera"
+
+        // Non-resource fallbacks (the screen prefers stringResource where it has a Context).
+        private const val NO_SESSION = "No broadcast session is available."
+        private const val GO_LIVE_FAILED = "Couldn't start your broadcast. Try again."
+        private const val OFFLINE = "Couldn't reach the server. Try again."
+    }
+}

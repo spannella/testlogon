@@ -1,0 +1,148 @@
+# AND-008 / AND-050 / AND-051 — Android CI.
+#
+# IMPORTANT: GitHub only discovers workflows under the REPO ROOT `.github/workflows/`.
+# This file is committed here under the staging tree as `_github/workflows/android.yml`;
+# move it to the repo-root `.github/workflows/android.yml` when wiring up the real repo.
+# All Gradle steps run with `android/` as the working directory.
+
+name: Android CI
+
+on:
+  push:
+    branches: [android-port]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    branches: [android-port]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # AND-008 + AND-050 — debug build + JVM unit tests.
+  build-and-unit-test:
+    name: Build + unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/android-port' }}
+
+      - name: Build + unit test
+        run: ./gradlew assembleDebug testDebugUnitTest --stacktrace --no-daemon
+
+      - name: Upload unit-test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            android/**/build/reports/tests/
+            android/**/build/test-results/
+          retention-days: 7
+
+      - name: Upload debug APK
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  # AND-051 — instrumented tests on a headless emulator.
+  instrumented-tests:
+    name: Instrumented tests (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: build-and-unit-test
+    defaults:
+      run:
+        working-directory: android
+    strategy:
+      fail-fast: true
+      matrix:
+        api-level: [34]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/android-port' }}
+
+      # KVM is required for hardware-accelerated x86_64 emulation on Linux runners.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+        working-directory: .
+
+      - name: Run instrumented tests on headless emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 2048M
+          disk-size: 2048M
+          force-avd-creation: false
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save -gpu swiftshader_indirect -accel on
+          disable-animations: true
+          working-directory: android
+          script: ./gradlew connectedDebugAndroidTest --stacktrace --no-daemon
+
+      - name: Upload instrumented-test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumented-test-reports-api${{ matrix.api-level }}
+          path: |
+            android/**/build/reports/androidTests/
+            android/**/build/outputs/androidTest-results/
+          retention-days: 7

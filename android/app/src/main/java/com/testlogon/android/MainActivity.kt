@@ -1,0 +1,241 @@
+package com.testlogon.android
+
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavHostController
+import com.testlogon.android.core.network.AppThemeMode
+import com.testlogon.android.core.network.ThemePreferencesStore
+import com.testlogon.android.core.ui.theme.TestLogonTheme
+import com.testlogon.android.data.gcal.GoogleCalendarReturnHandler
+import com.testlogon.android.data.payments.PaymentReturnDispatcher
+import com.testlogon.android.data.payments.PaymentReturnHandler
+import com.testlogon.android.feature.projects.provider.ProjectDriveReturnHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import com.testlogon.android.feature.health.HealthBannerHost
+import com.testlogon.android.navigation.AppNavHost
+import com.testlogon.android.navigation.applink.DeepLinkRouter
+import com.testlogon.android.navigation.deeplink.DeepLinkParser
+import com.testlogon.android.navigation.deeplink.NotificationDeepLink
+import com.testlogon.android.navigation.deeplink.PushTapRouting
+import com.testlogon.android.navigation.navigateToNotificationTarget
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+
+    // Hoisted so onNewIntent can deliver warm/foreground deep links (AND-061, singleTask launchMode).
+    // NavHostController so AND-108 push-tap routing can reuse the notification target extension.
+    private var navController: NavHostController? = null
+
+    // AND-108: a notification-tap deep link parsed from the launch/new intent, buffered until the
+    // NavController is ready (cold start) and then routed exactly once. Survives the onCreate/first-
+    // composition race; idempotent because the source Intent is marked consumed when parsed.
+    private var pendingNotificationDeepLink: NotificationDeepLink? = null
+
+    // AND-396: the central HTTP(S) App Link router. Observes a VIEW intent's URL, resolves it to a
+    // typed route, and buffers it until the NavHost is ready / a session exists. Coexists with the
+    // per-feature navDeepLink registrations (handleDeepLink below) — this seam adds the cold/warm
+    // buffering + auth-deferral + telemetry the spec (FR-3..7) requires.
+    @Inject
+    lateinit var deepLinkRouter: DeepLinkRouter
+
+    // AND-081: the device-local appearance preference drives TestLogonTheme at the app root.
+    @Inject
+    lateinit var themePreferencesStore: ThemePreferencesStore
+
+    // AND-231: the provider-agnostic payment redirect/return handler + dispatcher. The handler dedupes,
+    // correlates against the in-flight intent, and (via onParsed) hands the parsed return to the
+    // provider sub-flows through the dispatcher.
+    @Inject
+    lateinit var paymentReturnHandler: PaymentReturnHandler
+
+    @Inject
+    lateinit var paymentReturnDispatcher: PaymentReturnDispatcher
+
+    // AND-273: optional custom-scheme Google Calendar OAuth return handler (mirrors the AND-231 pattern).
+    // The primary return path is Custom-Tab-return -> refreshStatus on the connect screen; this handles a
+    // deep-link return if the backend registers the custom scheme as the redirect URI.
+    @Inject
+    lateinit var googleCalendarReturnHandler: GoogleCalendarReturnHandler
+
+    // AND-374: custom-scheme project Google Drive OAuth return handler (mirrors the AND-273 pattern). Parses a
+    // testlogon://projects/{id}/providers/google_drive/callback deep link and emits it to the detail ViewModel
+    // via the ProjectDriveReturnDispatcher; the detail screen validates state + completes the connection.
+    @Inject
+    lateinit var projectDriveReturnHandler: ProjectDriveReturnHandler
+
+    private val returnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        // AND-108: parse a cold-start notification deep link before the NavHost composes; route it
+        // once the NavController becomes available (onNavControllerReady below).
+        handleNotificationDeepLink(intent)
+        // AND-231: a cold-start payment return (provider -> browser -> app). Dispatched to the provider
+        // sub-flow; generic terminal routing is handled there once the graph is ready.
+        handlePaymentReturn(intent)
+        // AND-273: a cold-start Google Calendar OAuth return (optional custom-scheme deep link).
+        handleGoogleCalendarReturn(intent)
+        // AND-374: a cold-start project Drive OAuth return (custom-scheme deep link).
+        handleProjectDriveReturn(intent)
+        // AND-396: record a cold-start HTTP(S) App Link so the central router can buffer an authed
+        // target until a session exists and resume it after finalize (FR-4/6). Custom-scheme returns
+        // above are handled by their own handlers; this is HTTP(S) App Links only.
+        handleAppLink(intent, source = "cold")
+        setContent {
+            // AND-081: resolve the persisted appearance preference into TestLogonTheme inputs so the
+            // whole app (incl. system bars) re-themes immediately when the user changes it.
+            val appearance by themePreferencesStore.preferences.collectAsStateWithLifecycle()
+            val darkTheme = when (appearance.mode) {
+                AppThemeMode.LIGHT -> false
+                AppThemeMode.DARK -> true
+                AppThemeMode.SYSTEM -> isSystemInDarkTheme()
+            }
+            val dynamicColor = appearance.dynamicColor &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+            TestLogonTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize()) {
+                        // AND-042: a single global health banner above all app content.
+                        HealthBannerHost(modifier = Modifier.fillMaxWidth())
+                        AppNavHost(
+                            modifier = Modifier.fillMaxSize(),
+                            // The NavHost handles the cold-start launch intent automatically; we keep a
+                            // reference so onNewIntent can forward warm/foreground magic-link taps.
+                            onNavControllerReady = {
+                                navController = it
+                                // AND-108: drain any buffered cold-start notification deep link now
+                                // that the graph is ready.
+                                routePendingNotificationDeepLink()
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * AND-061: with singleTask launchMode, re-tapping a magic link while the Activity is resident
+     * delivers here instead of recreating it. Forward the VIEW intent into the NavController so the
+     * deep link resolves to the verify destination.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // AND-108: a warm-start notification tap arrives here (singleTask). Route immediately.
+        handleNotificationDeepLink(intent)
+        routePendingNotificationDeepLink()
+        // AND-231: a warm payment return arrives here when the Custom Tab bounces back into the task.
+        handlePaymentReturn(intent)
+        // AND-273: a warm Google Calendar OAuth return (optional custom-scheme deep link).
+        handleGoogleCalendarReturn(intent)
+        // AND-374: a warm project Drive OAuth return (custom-scheme deep link).
+        handleProjectDriveReturn(intent)
+        // AND-396: a warm HTTP(S) App Link (singleTask onNewIntent). Record it then let the central
+        // router consume it against the live NavController + session.
+        handleAppLink(intent, source = "warm")
+        if (intent.data != null) {
+            navController?.handleDeepLink(intent)
+        }
+    }
+
+    /**
+     * AND-396 — feeds a VIEW intent's HTTP(S) data URL to the central [DeepLinkRouter]. The router
+     * parses (host-allowlisted, I/O-free), buffers an authed target until a session exists, and emits
+     * path-template telemetry. Custom-scheme (`testlogon://`) links are out of scope here and continue
+     * to flow through their per-feature handlers / navDeepLink registrations. Idempotent re-delivery is
+     * harmless: the router only navigates once the NavController consumes the buffer.
+     */
+    private fun handleAppLink(intent: Intent?, source: String) {
+        val data = intent?.data ?: return
+        val scheme = data.scheme?.lowercase()
+        if (scheme != "https" && scheme != "http") return
+        deepLinkRouter.onIntent(data.toString(), host = data.host?.lowercase(), source = source)
+    }
+
+    /**
+     * AND-231 — feeds a VIEW intent's data URL to the [PaymentReturnHandler]. The handler returns null
+     * for non-billing URLs (so other deep-link handlers run) and for duplicate deliveries (idempotency);
+     * for a recognized billing return it emits the parsed result to the [PaymentReturnDispatcher] so the
+     * originating provider flow (PayPal/CCBill/hosted checkout) reacts. android.net.Uri parsing happens
+     * only here — the pure parser logic uses java.net.URI.
+     */
+    private fun handlePaymentReturn(intent: Intent?) {
+        val url = intent?.data?.toString() ?: return
+        returnScope.launch {
+            paymentReturnHandler.handle(url) { parsed -> paymentReturnDispatcher.emit(parsed) }
+        }
+    }
+
+    /**
+     * AND-273 — feeds a VIEW intent's data URL to the [GoogleCalendarReturnHandler]. Returns true (and
+     * stops) only for a recognized Google-Calendar return URL; otherwise other deep-link handlers run.
+     * android.net.Uri parsing happens only here — the pure parser uses java.net.URI.
+     */
+    private fun handleGoogleCalendarReturn(intent: Intent?): Boolean {
+        val url = intent?.data?.toString() ?: return false
+        return googleCalendarReturnHandler.handle(url)
+    }
+
+    /**
+     * AND-374 — feeds a VIEW intent's data URL to the [ProjectDriveReturnHandler]. Returns true (and stops)
+     * only for a recognized project-Drive return URL; otherwise other deep-link handlers run. android.net.Uri
+     * parsing happens only here — the pure parser uses java.net.URI.
+     */
+    private fun handleProjectDriveReturn(intent: Intent?): Boolean {
+        val url = intent?.data?.toString() ?: return false
+        return projectDriveReturnHandler.handle(url)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        returnScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    /** AND-108: parse + buffer a notification deep link from [intent], marking it consumed (idempotent). */
+    private fun handleNotificationDeepLink(intent: Intent?) {
+        val link = DeepLinkParser.parse(intent) ?: return
+        DeepLinkParser.markConsumed(intent)
+        pendingNotificationDeepLink = link
+    }
+
+    /**
+     * AND-108: navigate to the buffered notification deep link's resolved route, once.
+     *
+     * If unauthenticated, the [AppNavHost] auth gate keeps the user on the login graph and the
+     * requested authenticated route is simply not reachable yet; the navigate call is a safe no-op in
+     * that case. The buffered link is cleared after the attempt so rotation/recomposition never
+     * re-routes (idempotency).
+     */
+    private fun routePendingNotificationDeepLink() {
+        val controller = navController ?: return
+        val link = pendingNotificationDeepLink ?: return
+        pendingNotificationDeepLink = null
+        // AND-108: reuse the notification feature's target routing (NotificationTargetResolver ->
+        // navigateToNotificationTarget) so push taps land on the same destinations as in-app taps.
+        runCatching {
+            controller.navigateToNotificationTarget(PushTapRouting.targetFor(link))
+        }
+    }
+}

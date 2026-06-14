@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Input composables (AND-020) -->
+    <string name="cd_show_password">Show password</string>
+    <string name="cd_hide_password">Hide password</string>
+
+    <!-- Stale/reconnect UX hooks (AND-117) -->
+    <string name="stale_offline_saved">Offline — showing saved data.</string>
+    <string name="stale_refresh_failed">Couldn\'t refresh — showing saved data.</string>
+    <string name="stale_showing_saved">Showing saved data.</string>
+    <string name="stale_reconnecting">Reconnecting…</string>
+    <string name="stale_retry">Try again</string>
+
+    <!-- State composables (AND-021) -->
+    <string name="state_loading">Loading</string>
+    <string name="state_error_title">Something went wrong</string>
+    <string name="state_empty_title">Nothing here yet</string>
+    <string name="state_offline_message">You appear to be offline</string>
+    <string name="action_retry">Retry</string>
+
+    <!--
+        AND-112 — representative locale catalog ported from the web reference
+        (reference/src/i18n/locales/{en,es,fr}.json). These shared, cross-feature strings live in
+        :core-ui so every feature module resolves them through the platform resolver and the typed
+        accessors in com.testlogon.android.core.ui.i18n (AND-111). Keys map the web's flat dotted
+        i18next keys (e.g. "common.save") to Android snake_case resource names (i18n_common_save)
+        so the converter mapping stays deterministic. Default (en) here; values-es/ holds Spanish;
+        any key missing from a translated catalog falls back to this default (Android resource
+        fallback) — never an empty string or the raw key (AND-112 FR-3). -->
+
+    <!-- common.* -->
+    <string name="i18n_common_save">Save</string>
+    <string name="i18n_common_cancel">Cancel</string>
+    <string name="i18n_common_delete">Delete</string>
+    <string name="i18n_common_loading">Loading…</string>
+    <string name="i18n_common_error">Something went wrong</string>
+    <string name="i18n_common_retry">Try again</string>
+    <string name="i18n_common_close">Close</string>
+    <string name="i18n_common_back">Back</string>
+    <string name="i18n_common_search">Search</string>
+    <string name="i18n_common_yes">Yes</string>
+    <string name="i18n_common_no">No</string>
+
+    <!-- auth.* -->
+    <string name="i18n_auth_login">Log In</string>
+    <string name="i18n_auth_logout">Log Out</string>
+    <string name="i18n_auth_email">Email address</string>
+    <string name="i18n_auth_password">Password</string>
+    <string name="i18n_auth_no_account">Don\'t have an account?</string>
+
+    <!-- settings.* (drives the in-app Language section, AND-114) -->
+    <string name="i18n_settings_title">Settings</string>
+    <string name="i18n_settings_language">Language</string>
+    <string name="i18n_settings_language_description">Choose your preferred language for the interface</string>
+    <string name="i18n_settings_appearance">Appearance</string>
+
+    <!-- errors.* — interpolated copy uses positional args so translators control placement (FR-4) -->
+    <string name="i18n_errors_network">Network error. Check your connection.</string>
+    <string name="i18n_errors_rate_limited">Too many requests. Please try again in %1$d seconds.</string>
+
+    <!--
+        AND-114 — the in-app language picker (the only client-authored copy this epic adds).
+        "System default" follows the device language; per-locale rows show their endonym. -->
+    <string name="language_picker_title">Language</string>
+    <string name="language_picker_system_default">System default</string>
+    <string name="language_picker_back">Back</string>
+    <string name="language_picker_selected_cd">Selected</string>
+
+    <!-- Settings hub entry for Language (AND-114) -->
+    <string name="settings_section_language_title">Language</string>
+    <string name="settings_section_language_subtitle">Display language for the app</string>
+</resources>

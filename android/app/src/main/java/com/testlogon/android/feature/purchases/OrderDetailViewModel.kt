@@ -1,0 +1,111 @@
+package com.testlogon.android.feature.purchases
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.cart.CartItem
+import com.testlogon.android.data.cart.CartRepository
+import com.testlogon.android.data.purchases.PurchaseDetail
+import com.testlogon.android.data.purchases.PurchasesRepository
+import com.testlogon.android.data.tracking.TrackingRepository
+import com.testlogon.android.feature.tracking.TrackingUiState
+import com.testlogon.android.feature.tracking.TrackingViewModel
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/**
+ * AND-220 — order (transaction) detail state. Reachable from the purchase-history list (AND-219); the
+ * nav arg name is kept as `orderId` but the value is a txn_id. Content carries the mapped [PurchaseDetail]
+ * (header/status/dates/amount), the resolved cart line [items] (from metadata.cart_id via the existing
+ * AND-206/210 [CartRepository] — no new endpoint), and the embedded AND-215 [tracking] state. Tracking is
+ * isolated: a tracking failure renders an inline tracking error but never fails the whole screen.
+ */
+sealed interface OrderDetailUiState {
+    data object Loading : OrderDetailUiState
+    data class Content(
+        val order: PurchaseDetail,
+        val items: List<CartItem>,
+        val tracking: TrackingUiState,
+    ) : OrderDetailUiState
+    data class Error(val message: String, val retryable: Boolean) : OrderDetailUiState
+}
+
+@HiltViewModel
+class OrderDetailViewModel @Inject constructor(
+    private val purchasesRepository: PurchasesRepository,
+    private val cartRepository: CartRepository,
+    private val trackingRepository: TrackingRepository, // AND-215, reused (no duplication)
+    savedState: SavedStateHandle,
+) : ViewModel() {
+
+    // Nav arg name kept as the standalone tracking route's arg for reuse; value is a txn_id.
+    private val txnId: String = savedState[ARG_TXN_ID] ?: ""
+
+    private val _state = MutableStateFlow<OrderDetailUiState>(OrderDetailUiState.Loading)
+    val state: StateFlow<OrderDetailUiState> = _state.asStateFlow()
+
+    init {
+        load()
+    }
+
+    fun load() {
+        if (txnId.isBlank()) {
+            _state.value = OrderDetailUiState.Error(GENERIC_ERROR, retryable = false)
+            return
+        }
+        _state.update { OrderDetailUiState.Loading }
+        viewModelScope.launch {
+            when (val detail = purchasesRepository.detail(txnId)) {
+                is ApiResult.Success -> {
+                    val order = detail.data
+                    val items = resolveItems(order)
+                    val tracking = resolveTracking(order)
+                    _state.value = OrderDetailUiState.Content(order = order, items = items, tracking = tracking)
+                }
+                is ApiResult.Failure ->
+                    _state.value = OrderDetailUiState.Error(
+                        message = detail.error.message,
+                        // 404/422 (bad/unknown txn) is terminal; other server errors are retryable.
+                        retryable = detail.error.status != 404 && detail.error.status != 422,
+                    )
+                is ApiResult.NetworkError ->
+                    _state.value = OrderDetailUiState.Error(OFFLINE, retryable = true)
+            }
+        }
+    }
+
+    fun retry() = load()
+
+    /** Resolves cart line items from metadata.cart_id; empty when absent / on a cart-fetch failure. */
+    private suspend fun resolveItems(order: PurchaseDetail): List<CartItem> {
+        val cartId = order.cartId ?: return emptyList()
+        return when (val r = cartRepository.itemsForCart(cartId)) {
+            is ApiResult.Success -> r.data
+            // Items are best-effort; a failure must not fail the detail screen.
+            is ApiResult.Failure, is ApiResult.NetworkError -> emptyList()
+        }
+    }
+
+    /**
+     * Resolves the embedded AND-215 tracking state. When the transaction has no shipping at all, there
+     * is nothing to track -> NotShipped. Otherwise GET tracking and reduce via the AND-215 pure reducer
+     * so the embedded TrackingSection renders identically to the standalone route.
+     */
+    private suspend fun resolveTracking(order: PurchaseDetail): TrackingUiState {
+        if (order.shipping?.hasShipment != true) return TrackingUiState.NotShipped
+        return TrackingViewModel.reduce(trackingRepository.tracking(txnId))
+    }
+
+    companion object {
+        // Reuse the standalone tracking route's nav-arg name so one destination contract serves both.
+        const val ARG_TXN_ID = TrackingViewModel.ARG_TXN_ID
+        private const val GENERIC_ERROR = "Couldn't load order."
+        private const val OFFLINE = "You're offline"
+    }
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AND-112 — Spanish plural; es CLDR rules use one/other like English. -->
+    <plurals name="i18n_feed_comments">
+        <item quantity="one">%1$d comentario</item>
+        <item quantity="other">%1$d comentarios</item>
+    </plurals>
+</resources>

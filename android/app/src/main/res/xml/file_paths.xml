@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AND-132: FileProvider roots. Only downloaded message attachments under cacheDir/attachments/
+     are shareable to external viewers; nothing else in the app cache is exposed. -->
+<paths>
+    <cache-path
+        name="attachments"
+        path="attachments/" />
+    <!-- AND-276: exported .ics documents shared via ACTION_SEND (text/calendar). -->
+    <cache-path
+        name="ics"
+        path="ics/" />
+    <!-- AND-321: KYC document-capture output handed to the system camera (TakePicture) via a transient
+         content:// write grant. Scoped to cacheDir/kyc-capture/. -->
+    <cache-path
+        name="kyc-capture"
+        path="kyc-capture/" />
+    <!-- AND-349: downloaded questionnaire-response PDFs handed to an external viewer (system chooser)
+         via a transient content:// read grant. Scoped to cacheDir/questionnaire-pdf/. -->
+    <cache-path
+        name="questionnaire-pdf"
+        path="questionnaire-pdf/" />
+</paths>

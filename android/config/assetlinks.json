@@ -1,0 +1,16 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.testlogon.android",
+      "sha256_cert_fingerprints": [
+        "C3:F0:20:28:B9:ED:87:C2:1A:85:49:F9:F2:97:53:ED:76:44:F9:AE:E5:2F:41:CA:A5:3B:2F:C6:FC:DE:92:BF",
+        "REPLACE_WITH_STAGING_INTERNAL_UPLOAD_KEY_SHA256_FINGERPRINT",
+        "REPLACE_WITH_PLAY_APP_SIGNING_KEY_SHA256_FINGERPRINT"
+      ]
+    }
+  }
+]
