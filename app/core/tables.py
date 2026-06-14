@@ -438,6 +438,7 @@ class Tables:
     fixed_assets: Any
     fixed_asset_schedule: Any
     pos: Any
+    # ECM / OFBiz Phase-1 inventory + reservations (ECM-005/ECM-008)
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -811,4 +812,5 @@ T = Tables(
     fixed_assets=_safe_table(S.fixed_assets_table_name),
     fixed_asset_schedule=_safe_table(S.fixed_asset_schedule_table_name),
     pos=_safe_table(S.pos_table_name),
+    # ECM / OFBiz Phase-1 inventory + reservations
 )

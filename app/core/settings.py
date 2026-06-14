@@ -931,6 +931,15 @@ class Settings:
     # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
     # Master switch defaults OFF: with it off the returns/RMA endpoints 404 and
     # the module is dormant; existing order/billing behavior is unchanged.
+    # Store integration layer (ECM-002 / Phase 8-J). Master switch: when False the entire store-integration layer is dormant and the catalog/cart/checkout paths are byte-for-byte unchanged.
+    store_integration_enabled: bool = os.environ.get("STORE_INTEGRATION_ENABLED", "false").lower() == "true"
+    # Per-surface sub-flags — each is AND-ed with the master switch inside _integration_enabled(sub_flag). All default false so production deployments can enable surfaces incrementally without a code change.
+    store_show_live_availability: bool = os.environ.get("STORE_SHOW_LIVE_AVAILABILITY", "false").lower() == "true"
+    store_apply_pricing_rules: bool = os.environ.get("STORE_APPLY_PRICING_RULES", "false").lower() == "true"
+    store_show_fulfillment_status: bool = os.environ.get("STORE_SHOW_FULFILLMENT_STATUS", "false").lower() == "true"
+    store_variant_selection_enabled: bool = os.environ.get("STORE_VARIANT_SELECTION_ENABLED", "false").lower() == "true"
+    # ECM-008: reserve-on-add-to-cart flag (both this AND inventory_reservations_enabled must be true)
+    store_cart_reservations_enabled: bool = os.environ.get("STORE_CART_RESERVATIONS_ENABLED", "false").lower() == "true"
     returns_rma_enabled: bool = os.environ.get("RETURNS_RMA_ENABLED", "false").lower() == "true"
     returns_table_name: str = os.environ.get("RETURNS_TABLE_NAME", "returns")
 

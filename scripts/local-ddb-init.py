@@ -3607,6 +3607,7 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "created_at"},
                 {"index_name": "GSI_EXPIRY", "partition_key": "gsi_expiry_pk", "sort_key": "expires_at"},
+                {"index_name": "GSI_CART", "partition_key": "cart_id", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N", "expires_at": "N"},
         ),

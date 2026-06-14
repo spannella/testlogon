@@ -686,6 +686,9 @@ class CatalogItemOut(BaseModel):
     low_stock_threshold: int = 5
     stock_updated_at: Optional[str] = None
     position: Optional[int] = None
+    # ECM-003: integration layer enrichment (default None = flag off / not enriched)
+    variants: Optional[List["StorefrontVariantOut"]] = None
+    availability: Optional["StorefrontAvailabilityOut"] = None
 
 
 class CatalogItemListOut(CatalogPageOut):
@@ -983,6 +986,8 @@ class ShoppingCartTotalOut(BaseModel):
     cart_id: str
     total_cents: int
     currency: str = "USD"
+    # ECM-003: pricing rules breakdown (None = flag off or rules not applicable)
+    pricing_breakdown: Optional["CartPricingBreakdownOut"] = None
 
 
 class CartPurchaseIn(BaseModel):
@@ -21866,3 +21871,82 @@ class PosSessionReportOut(BaseModel):
     total_sales_cents: int = 0
     total_cash_tendered_cents: int = 0
     total_change_given_cents: int = 0
+
+
+# ── ECM-003: Store integration Pydantic models ──────────────────────────────
+
+
+class StorefrontAvailabilityOut(BaseModel):
+    """Reservation-adjusted availability projection for one SKU/location pair.
+
+    - available: on_hand − reserved (may be negative if oversold)
+    - low_stock: True when available > 0 AND available <= reorder_point
+    - stock_status: mirrors existing catalog vocabulary (in_stock|low_stock|out_of_stock)
+    """
+    available: int
+    on_hand: int
+    reserved: int
+    low_stock: bool
+    stock_status: str
+
+
+class StorefrontVariantOut(BaseModel):
+    """A single product variant (SKU, option selections, per-variant effective price)."""
+    variant_id: str
+    sku: str
+    option_selections: Dict[str, Any]
+    price_cents: int = Field(ge=0)
+    availability: Optional[StorefrontAvailabilityOut] = None
+
+
+class AppliedPricingRuleLineOut(BaseModel):
+    """One rule line from the pricing-rules engine applied to this cart."""
+    rule_id: str
+    rule_name: str
+    discount_type: str
+    discount_cents: int = Field(ge=0)
+    applies_to_skus: List[str] = Field(default_factory=list)
+
+
+class CartPricingBreakdownOut(BaseModel):
+    """Itemised pricing breakdown for a cart."""
+    cart_id: str
+    subtotal_cents: int
+    applied_rules: List[AppliedPricingRuleLineOut] = Field(default_factory=list)
+    discount_cents: int = Field(default=0, ge=0)
+    final_total_cents: int
+    currency: str = "USD"
+
+    @model_validator(mode="after")
+    def _check_invariant(self) -> "CartPricingBreakdownOut":
+        expected = self.subtotal_cents - self.discount_cents
+        if expected < 0:
+            # Clamp: over-discount reduces final to 0
+            object.__setattr__(self, "discount_cents", self.subtotal_cents)
+            object.__setattr__(self, "final_total_cents", 0)
+        elif self.final_total_cents != expected:
+            raise ValueError(
+                f"final_total_cents ({self.final_total_cents}) must equal "
+                f"subtotal_cents ({self.subtotal_cents}) - discount_cents ({self.discount_cents})"
+            )
+        return self
+
+
+class ShipGroupFulfillmentOut(BaseModel):
+    """Fulfillment status for one ship group within an order."""
+    ship_group_id: str
+    status: str
+    items: List[str] = Field(default_factory=list)
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    shipped_at: Optional[int] = None
+    estimated_delivery: Optional[str] = None
+
+
+class OrderFulfillmentStatusOut(BaseModel):
+    """Post-purchase order state: lifecycle phase, ship groups, and tracking numbers."""
+    order_id: str
+    lifecycle_status: Optional[str] = None
+    fulfillment_status: Optional[str] = None
+    ship_groups: List[ShipGroupFulfillmentOut] = Field(default_factory=list)
+    tracking_numbers: List[str] = Field(default_factory=list)

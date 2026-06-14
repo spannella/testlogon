@@ -15,6 +15,7 @@ from app.models import (
     CartAbandonmentSweepOut,
     CartPurchaseIn,
     CatalogCartItemIn,
+    OrderFulfillmentStatusOut,
     ShoppingCartItemIn,
     ShoppingCartItemOut,
     ShoppingCartItemsOut,
@@ -168,8 +169,13 @@ async def ui_remove_item(
 
 @router.get("/carts/{cart_id}/total", response_model=ShoppingCartTotalOut)
 async def ui_cart_total(cart_id: str, ctx=Depends(require_ui_session)):
-    total = cart_total_cents(ctx["user_sub"], cart_id)
-    return {"cart_id": cart_id, "total_cents": total, "currency": "USD"}
+    # ECM-010: enrich with pricing-rules breakdown when STORE_APPLY_PRICING_RULES is on
+    try:
+        from app.services.store_integration import cart_total_with_breakdown
+        return cart_total_with_breakdown(ctx["user_sub"], cart_id)
+    except Exception:
+        total = cart_total_cents(ctx["user_sub"], cart_id)
+        return {"cart_id": cart_id, "total_cents": total, "currency": "USD"}
 
 
 @router.post("/carts/{cart_id}/purchase", response_model=ShoppingCartPurchaseOut)
@@ -202,6 +208,23 @@ async def ui_purchase_cart(
         purchase_txn_id=purchase.get("purchase_txn_id"),
     )
     return purchase
+
+
+# ─── ECM-007: Buyer order fulfillment view ─────────────────────────────────────
+
+
+@router.get("/orders/{order_id}", response_model=OrderFulfillmentStatusOut)
+async def ui_order_fulfillment(order_id: str, ctx=Depends(require_ui_session)):
+    """Return lifecycle + ship-group fulfillment status for a buyer's order.
+
+    When STORE_SHOW_FULFILLMENT_STATUS is off, returns the minimal shape
+    with all optional fields None (backward-compatible — no existing tests assert
+    the absence of this endpoint since it is net-new).
+
+    Security: enforces user_sub == order.user_sub before returning.
+    """
+    from app.services.store_integration import get_order_fulfillment_status  # ECM-007
+    return get_order_fulfillment_status(order_id, user_sub=ctx["user_sub"])
 
 
 # ─── SHOP-003: Admin Cart Abandonment Stats ────────────────────────────────────

@@ -127,6 +127,35 @@ def _catalog_item_out(item: dict) -> CatalogItemOut:
     )
 
 
+def _ecm_enrich_item(item: dict, ctx: dict) -> CatalogItemOut:
+    """ECM-004: enrich a raw catalog item dict with variant topology when flag is on.
+
+    Falls back to _catalog_item_out unchanged on any error or when the flag is off.
+    This is the single enrichment call-site; _safe_upstream is inside enrich_catalog_item.
+    """
+    try:
+        from app.services.store_integration import enrich_catalog_item
+        return enrich_catalog_item(item, viewer=ctx)
+    except Exception:
+        return _catalog_item_out(item)
+
+
+def _ecm_apply_batch_availability(items: List[CatalogItemOut]) -> List[CatalogItemOut]:
+    """ECM-005: batch live availability enrichment; returns list unchanged on any error."""
+    try:
+        from app.services.store_integration import (
+            availability_for_skus,
+            _apply_live_availability,
+        )
+        skus = [it.item_id for it in items]
+        avail_map = availability_for_skus(skus)
+        if not avail_map:
+            return items
+        return [_apply_live_availability(it, avail_map) for it in items]
+    except Exception:
+        return items
+
+
 def _item_geo_blocked(request: Request, item: dict) -> bool:
     """Return True if the viewer's resolved country is blocked from this item.
 
@@ -412,7 +441,9 @@ async def list_items(
         # GEO-001 (GAP-0216): drop items the viewer's region is blocked from.
         if _item_geo_blocked(request, item):
             continue
-        out.append(_catalog_item_out(item))
+        out.append(_ecm_enrich_item(item, ctx))
+    # ECM-005: batch live availability enrichment when flag on
+    out = _ecm_apply_batch_availability(out)
     # Sort by position (items without position sorted to end)
     out.sort(key=lambda x: (x.position is None, x.position if x.position is not None else 0))
     return CatalogItemListOut(items=out, next_token=encode_next_token(lek))
@@ -488,13 +519,14 @@ async def search_items(
             if _item_geo_blocked(request, item):
                 continue
             if _catalog_matches(query_tokens, item):
-                matches.append(_catalog_item_out(item))
+                matches.append(_ecm_enrich_item(item, ctx))
                 if len(matches) >= page_size:
                     break
         last_evaluated = resp.get("LastEvaluatedKey")
         if not last_evaluated:
             break
 
+    matches = _ecm_apply_batch_availability(matches)
     return CatalogItemListOut(items=matches, next_token=encode_next_token(last_evaluated))
 
 
