@@ -921,6 +921,10 @@ class Settings:
     filemgr_icloud_mount_rollout_mode_by_env: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ROLLOUT_MODE_BY_ENV", "")
     filemgr_icloud_mount_kill_switch: bool = os.environ.get("FILEMGR_ICLOUD_MOUNT_KILL_SWITCH", "0") == "1"
     filemgr_icloud_mount_enabled_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ENABLED_TENANT_IDS", "")
+
+    # Property management — Tenants (TEN-001)
+    property_tenants_enabled: bool = os.environ.get("PROPERTY_TENANTS_ENABLED", "0") not in ("0", "false", "False")
+    property_tenants_table_name: str = os.environ.get("DDB_PROPERTY_TENANTS_TABLE", "property_tenants")
     filemgr_icloud_mount_disabled_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_DISABLED_TENANT_IDS", "")
     filemgr_icloud_mount_internal_user_subs: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_INTERNAL_USER_SUBS", "")
     filemgr_icloud_mount_internal_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_INTERNAL_TENANT_IDS", "")

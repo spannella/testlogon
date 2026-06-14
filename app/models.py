@@ -17606,3 +17606,125 @@ class PlacementOut(BaseModel):
     status_at_placement: str
     notes: Optional[str]
     created_at: int
+
+
+
+
+# ─── Property Management — Tenants (TEN-001..TEN-003) ──────────────────────
+
+
+class CreateTenantIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    party_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+class UpdateTenantIn(BaseModel):
+    display_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: Optional[str] = None  # "prospect" | "active" | "past"
+
+
+class PropertyTenantOut(BaseModel):
+    """Named PropertyTenantOut (not TenantOut) to avoid collision with ENTERPRISE-001
+    class TenantOut at app/models.py:4158."""
+
+    tenant_id: str
+    owner_id: str
+    party_id: str = ""
+    display_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: str = "prospect"
+    active_unit_id: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class TenantListOut(BaseModel):
+    tenants: List[PropertyTenantOut]
+    count: int
+    next_cursor: Optional[str] = None
+
+
+class EmploymentIn(BaseModel):
+    employer_name: Optional[str] = None
+    job_title: Optional[str] = None
+    employment_type: Optional[str] = None
+    start_date: Optional[str] = None
+    employer_phone: Optional[str] = None
+
+
+class IncomeIn(BaseModel):
+    annual_income_cents: Optional[int] = None
+    income_currency: str = "usd"
+    pay_frequency: Optional[str] = None
+
+
+class EmergencyContactIn(BaseModel):
+    ec_id: Optional[str] = None
+    name: str
+    relationship: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+
+class TenantProfileIn(BaseModel):
+    employment: Optional[EmploymentIn] = None
+    income: Optional[IncomeIn] = None
+    emergency_contacts: Optional[List[EmergencyContactIn]] = None
+
+
+class TenantProfileOut(BaseModel):
+    employment: dict = {}
+    income: dict = {}
+    emergency_contacts: List[dict] = []
+    updated_at: Optional[int] = None
+
+
+class IncomeDocOut(BaseModel):
+    doc_id: str
+    tenant_id: str
+    file_node_path: str
+    file_name: str
+    content_type: str
+    size_bytes: int
+    doc_kind: str
+    uploaded_at: int
+    uploaded_by: str
+
+
+class IncomeDocListOut(BaseModel):
+    docs: List[IncomeDocOut]
+    next_cursor: Optional[str] = None
+    count: int
+
+
+class ActiveUnitIn(BaseModel):
+    property_id: Optional[str] = None
+    unit_id: Optional[str] = None
+
+
+class SetIncomeVerificationIn(BaseModel):
+    status: str  # unverified | pending | verified | rejected
+
+
+class TenantLeaseSummaryOut(BaseModel):
+    lease_id: str
+    unit_id: str
+    status: str
+    start_date: int
+    end_date: Optional[int] = None
+    monthly_rent_cents: int
+    security_deposit_cents: int
+    currency: str
+    lease_number: Optional[str] = None
+
+
+class TenantLeaseListOut(BaseModel):
+    leases: List[TenantLeaseSummaryOut]
+    count: int
+    next_cursor: Optional[str] = None

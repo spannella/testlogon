@@ -369,6 +369,7 @@ class Tables:
     hotel_rate_plans: Any
     product_depth: Any
     ats_pipeline: Any
+    property_tenants: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -673,4 +674,5 @@ T = Tables(
     hotel_rate_plans=_safe_table(S.hotel_rate_plans_table_name),
     product_depth=_safe_table(S.product_depth_table_name),
     ats_pipeline=_safe_table(S.ats_pipeline_table_name),
+    property_tenants=_safe_table(S.property_tenants_table_name),
 )

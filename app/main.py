@@ -91,6 +91,7 @@ from app.routers.job_orders import router as job_orders_router
 from app.routers.opportunities import router as opportunities_router
 from app.routers.opportunities import router_admin as opportunities_admin_router
 from app.routers.leads import router as leads_router  # CRM Leads (LED-013)
+from app.routers.property_tenant import router as property_tenant_router
 from app.routers.social import router as social_router
 from app.routers.activity_feed import router as activity_feed_router
 from app.routers.discovery import router as discovery_router
@@ -719,6 +720,7 @@ def create_app() -> FastAPI:
     app.include_router(opportunities_router)
     app.include_router(opportunities_admin_router)
     app.include_router(leads_router)  # CRM Leads (LED-013)
+    app.include_router(property_tenant_router)
     app.include_router(social_router)
     app.include_router(activity_feed_router)
     app.include_router(discovery_router)

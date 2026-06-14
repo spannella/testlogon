@@ -41,6 +41,19 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # TEN-001: Property management — tenant directory
+        # GSI_OWNER: newest-first listing per landlord (sort key created_at is numeric)
+        # GSI_PARTY: reverse-lookup from PTY party_id → tenant META row
+        TableDef(
+            _resolve_table_name(S.property_tenants_table_name, "property_tenants"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_OWNER", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "GSI_PARTY", "partition_key": "party_id", "sort_key": "SK"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # PIP-001: ATS Recruiting Pipeline junction table.
         # Stores pipeline entries (USER#{owner_sub} / PIPE#{job_id}#CAND#{cand_id}),
         # the status-config singleton (PIPELINE_STATUS_CONFIG / META), and
