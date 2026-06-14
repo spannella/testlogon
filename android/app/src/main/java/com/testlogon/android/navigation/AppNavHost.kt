@@ -44,6 +44,22 @@ fun AppNavHost(
             .collect { targetGraph -> navController.routeToGraph(targetGraph) }
     }
 
+    // AND-396: drain a buffered HTTP(S) App Link once the NavHost is composed (cold start, FR-4) and
+    // whenever a new link buffers (warm onNewIntent). consume() is single-shot + idempotent.
+    LaunchedEffect(navController) {
+        viewModel.pendingDeepLink.collect { buffered ->
+            if (buffered != null) viewModel.consumeDeepLink(navController)
+        }
+    }
+
+    // AND-396: flush a buffered AUTHED App Link after the session becomes authenticated (FR-6). The
+    // StateFlow already conflates equal values; exactly-once because the router clears the buffer.
+    LaunchedEffect(navController) {
+        viewModel.isAuthenticated.collect { authed ->
+            if (authed) viewModel.resumeDeepLinkAfterAuth(navController)
+        }
+    }
+
     NavHost(
         navController = navController,
         startDestination = TlGraphs.UNAUTHENTICATED,

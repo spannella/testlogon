@@ -30,6 +30,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.testlogon.android.feature.health.HealthBannerHost
 import com.testlogon.android.navigation.AppNavHost
+import com.testlogon.android.navigation.applink.DeepLinkRouter
 import com.testlogon.android.navigation.deeplink.DeepLinkParser
 import com.testlogon.android.navigation.deeplink.NotificationDeepLink
 import com.testlogon.android.navigation.deeplink.PushTapRouting
@@ -48,6 +49,13 @@ class MainActivity : ComponentActivity() {
     // NavController is ready (cold start) and then routed exactly once. Survives the onCreate/first-
     // composition race; idempotent because the source Intent is marked consumed when parsed.
     private var pendingNotificationDeepLink: NotificationDeepLink? = null
+
+    // AND-396: the central HTTP(S) App Link router. Observes a VIEW intent's URL, resolves it to a
+    // typed route, and buffers it until the NavHost is ready / a session exists. Coexists with the
+    // per-feature navDeepLink registrations (handleDeepLink below) — this seam adds the cold/warm
+    // buffering + auth-deferral + telemetry the spec (FR-3..7) requires.
+    @Inject
+    lateinit var deepLinkRouter: DeepLinkRouter
 
     // AND-081: the device-local appearance preference drives TestLogonTheme at the app root.
     @Inject
@@ -89,6 +97,10 @@ class MainActivity : ComponentActivity() {
         handleGoogleCalendarReturn(intent)
         // AND-374: a cold-start project Drive OAuth return (custom-scheme deep link).
         handleProjectDriveReturn(intent)
+        // AND-396: record a cold-start HTTP(S) App Link so the central router can buffer an authed
+        // target until a session exists and resume it after finalize (FR-4/6). Custom-scheme returns
+        // above are handled by their own handlers; this is HTTP(S) App Links only.
+        handleAppLink(intent, source = "cold")
         setContent {
             // AND-081: resolve the persisted appearance preference into TestLogonTheme inputs so the
             // whole app (incl. system bars) re-themes immediately when the user changes it.
@@ -140,9 +152,26 @@ class MainActivity : ComponentActivity() {
         handleGoogleCalendarReturn(intent)
         // AND-374: a warm project Drive OAuth return (custom-scheme deep link).
         handleProjectDriveReturn(intent)
+        // AND-396: a warm HTTP(S) App Link (singleTask onNewIntent). Record it then let the central
+        // router consume it against the live NavController + session.
+        handleAppLink(intent, source = "warm")
         if (intent.data != null) {
             navController?.handleDeepLink(intent)
         }
+    }
+
+    /**
+     * AND-396 — feeds a VIEW intent's HTTP(S) data URL to the central [DeepLinkRouter]. The router
+     * parses (host-allowlisted, I/O-free), buffers an authed target until a session exists, and emits
+     * path-template telemetry. Custom-scheme (`testlogon://`) links are out of scope here and continue
+     * to flow through their per-feature handlers / navDeepLink registrations. Idempotent re-delivery is
+     * harmless: the router only navigates once the NavController consumes the buffer.
+     */
+    private fun handleAppLink(intent: Intent?, source: String) {
+        val data = intent?.data ?: return
+        val scheme = data.scheme?.lowercase()
+        if (scheme != "https" && scheme != "http") return
+        deepLinkRouter.onIntent(data.toString(), host = data.host?.lowercase(), source = source)
     }
 
     /**
