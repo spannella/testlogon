@@ -41,6 +41,23 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # QloApps hotel-PMS vertical (HTL-018): reservation entity with three GSIs.
+        # GSI_HOTEL_ARRIVALS: arrivals board (hotel_id/checkin S)
+        # GSI_GUEST: guest booking history newest-first (guest_party_id/created_at N)
+        # GSI_HOTEL_STATUS: hotel reservations by lifecycle status (hotel_id/status S)
+        # attr_types: created_at is numeric (GSI_GUEST SK) — omitting would cause
+        #             ValidationException when querying with integer values.
+        TableDef(
+            _resolve_table_name(S.hotel_reservations_table_name, "hotel_reservations"),
+            "reservation_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_HOTEL_ARRIVALS", "partition_key": "hotel_id",       "sort_key": "checkin"},
+                {"index_name": "GSI_GUEST",          "partition_key": "guest_party_id", "sort_key": "created_at"},
+                {"index_name": "GSI_HOTEL_STATUS",   "partition_key": "hotel_id",       "sort_key": "status"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # RSK-001: ATS skill registry + assignment store.
         # GSI1 (ByName) enables autocomplete prefix scan: GSI1PK="NAME_PREFIX#{c}" / GSI1SK=name_lc (STRING).
         # GSI1SK is a STRING sort key — do NOT add "N" to attr_types.

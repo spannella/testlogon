@@ -18133,3 +18133,125 @@ class SkillSearchResultsOut(BaseModel):
     total: int
     query_skill_ids: List[str]
     match: str
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel PMS — Stay-Search + Reservation Lifecycle (HTL-017..HTL-021)
+# ---------------------------------------------------------------------------
+
+
+class NightLineOut(BaseModel):
+    """Per-night price line from HTL-015 compute_stay_price (reusable shape)."""
+    date: str
+    base_cents: int = 0
+    applied_cents: int = 0
+    rule_id: Optional[str] = None
+
+
+class StaySearchIn(BaseModel):
+    """HTL-017 stay-search request payload."""
+    hotel_id: Optional[str] = None   # one of hotel_id | city required (else 422)
+    city: Optional[str] = None
+    checkin: str                     # "YYYY-MM-DD" (inclusive — first night)
+    checkout: str                    # "YYYY-MM-DD" (exclusive — departure day)
+    adults: int = Field(ge=1)
+    children: int = Field(default=0, ge=0)
+    rooms: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _check_target(self) -> "StaySearchIn":
+        if not (self.hotel_id or self.city):
+            raise ValueError("one of hotel_id or city is required")
+        return self
+
+
+class StayRoomTypeResult(BaseModel):
+    """HTL-017 — one available room type in a stay-search result."""
+    hotel_id: str
+    room_type_id: str
+    name: str
+    available: bool                   # always True for a surviving result
+    min_remaining: int
+    rooms: int
+    per_night: List[Any] = []        # List[NightLineOut] — typed as Any until HTL-015 merges
+    total_cents: int
+    currency: str
+    applied_rule_ids: List[str] = []
+
+
+class StaySearchResult(BaseModel):
+    """HTL-017 — full stay-search response."""
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    results: List[StayRoomTypeResult]
+    result_count: int
+
+
+class ReservationCreateIn(BaseModel):
+    """HTL-018 — reservation creation payload."""
+    hotel_id: str
+    guest_party_id: str
+    room_type_id: str
+    checkin: str                      # "YYYY-MM-DD"
+    checkout: str                     # "YYYY-MM-DD" (exclusive)
+    adults: int = Field(ge=1)
+    children: int = Field(ge=0, default=0)
+    rooms: int = Field(ge=1, default=1)
+    deposit_cents: int = Field(ge=0, default=0)
+
+
+class StayReservationOut(BaseModel):
+    """HTL-018 — full reservation read response (named StayReservationOut to avoid
+    collision with the live inventory ReservationOut at app/models.py:618)."""
+    reservation_id: str
+    hotel_id: str
+    guest_party_id: str
+    room_type_id: str
+    assigned_room_ids: List[str]
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    total_cents: int
+    deposit_cents: int
+    currency: str
+    status: Literal["confirmed", "checked_in", "checked_out", "cancelled", "no_show"]
+    hold_id: str
+    version: int
+    created_at: int
+    updated_at: int
+
+
+class ReservationTransitionIn(BaseModel):
+    """HTL-019 — lifecycle transition request."""
+    target_status: Literal["checked_in", "checked_out", "cancelled", "no_show"]
+    reason: str = ""
+    assigned_room_ids: Optional[List[str]] = None   # required by the service on → checked_in
+
+
+class ReservationModifyIn(BaseModel):
+    """HTL-019 — modify-reservation request (all fields optional; None = keep current)."""
+    checkin: Optional[str] = None
+    checkout: Optional[str] = None
+    room_type_id: Optional[str] = None
+    adults: Optional[int] = Field(default=None, ge=1)
+    children: Optional[int] = Field(default=None, ge=0)
+    rooms: Optional[int] = Field(default=None, ge=1)
+
+
+class ReservationHistoryEntry(BaseModel):
+    """HTL-019 — one append-only HIST# child row."""
+    event_id: str
+    from_status: str
+    to_status: str
+    actor: str
+    reason: str
+    ts: int

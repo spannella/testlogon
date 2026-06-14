@@ -2815,6 +2815,14 @@ class Settings:
         "KYC_TEMPLATE_READINESS_GATE", "true"
     ).lower() in ("1", "true", "yes", "on")
 
+    # QloApps hotel-PMS vertical (HTL) — master flag + reservations (HTL-001..HTL-021)
+    hotel_pms_enabled: bool = os.environ.get(
+        "HOTEL_PMS_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    hotel_reservations_table_name: str = os.environ.get(
+        "HOTEL_RESERVATIONS_TABLE_NAME", "hotel_reservations"
+    )
+
     # INFRA-001: Host Inventory Management
     ddb_host_inventory_table: str = os.environ.get(
         "DDB_HOST_INVENTORY_TABLE", "host_inventory"

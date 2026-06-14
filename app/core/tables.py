@@ -375,6 +375,7 @@ class Tables:
     hotel_rooms: Any
     leases: Any
     ats_skills: Any
+    hotel_reservations: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -685,4 +686,5 @@ T = Tables(
     hotel_rooms=_safe_table(S.hotel_rooms_table_name),
     leases=_safe_table(S.leases_table_name),
     ats_skills=_safe_table(S.ats_skills_table_name),
+    hotel_reservations=_safe_table(S.hotel_reservations_table_name),
 )
