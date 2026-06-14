@@ -666,6 +666,18 @@ def _table_defs() -> List[TableDef]:
             "key_id",
             gsi=[{"index_name": S.api_keys_user_index, "partition_key": "user_sub"}],
         ),
+        # OAU-001: OAuth consumer-app registry (single-table: META + CODE# + GRANT# + OIDC_SIGNING_KEY rows)
+        TableDef(
+            _resolve_table_name(S.oauth_consumers_table_name, "oauth_consumers"),
+            "client_id",
+            "sk",
+            gsi=[{
+                "index_name": S.oauth_consumers_owner_index,
+                "partition_key": "owner_sub",
+                "sort_key": "created_at",
+            }],
+            attr_types={"created_at": "N"},
+        ),
         TableDef(_resolve_table_name(S.alerts_table_name, "alerts"), "user_sub", "alert_id"),
         TableDef(_resolve_table_name(S.alert_prefs_table_name, "alert_prefs"), "user_sub"),
         TableDef(_resolve_table_name(S.push_devices_table_name, "push_devices"), "user_sub", "device_id"),

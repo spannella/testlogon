@@ -19255,3 +19255,58 @@ class CareerResumePresignOut(BaseModel):
     key: str                 # S3 object key
     path: str                # file-manager path: /career-portal/resumes/{job_order_id}/{uuid}.ext
     content_type: str
+
+
+
+# ---------------------------------------------------------------------------
+# OAU-001 / OAU-005: OAuth consumer-app registry models
+# ---------------------------------------------------------------------------
+
+class CreateConsumerReq(BaseModel):
+    name: str
+    description: str = ""
+    redirect_uris: List[str]
+    allowed_scopes: List[str]
+    is_confidential: bool = True
+
+
+class UpdateConsumerReq(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    redirect_uris: Optional[List[str]] = None
+    allowed_scopes: Optional[List[str]] = None
+
+
+class ConsumerOut(BaseModel):
+    client_id: str
+    client_secret_prefix: str
+    owner_sub: str
+    name: str
+    description: str = ""
+    redirect_uris: List[str] = []
+    allowed_scopes: List[str] = []
+    is_confidential: bool = True
+    enabled: bool = True
+    created_at: int = 0
+    updated_at: int = 0
+    secret_rotated_at: int = 0
+
+
+class CreateConsumerOut(ConsumerOut):
+    client_secret: str  # present only at creation/rotation; omitted on subsequent reads
+
+
+# OAU-002: OAuth2 token models
+class OAuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    scope: str
+    refresh_token: Optional[str] = None
+    id_token: Optional[str] = None
+
+
+class OAuthErrorResponse(BaseModel):
+    error: str
+    error_description: Optional[str] = None
+

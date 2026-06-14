@@ -579,6 +579,17 @@ def create_app() -> FastAPI:
     app.include_router(ui_mfa_router)
     app.include_router(mfa_devices_router)
     app.include_router(api_keys_router)
+    # OAU-001..OAU-005: Open Bank Project OAuth2/OIDC consumer registry + authorization server
+    if _S.open_bank_project_enabled and _S.oauth_provider_enabled:
+        from app.routers.oauth_consumers import router as oauth_consumers_router
+        from app.routers.oauth_authorize import router as oauth_authorize_router
+        from app.routers.oauth_token import router as oauth_token_router
+        app.include_router(oauth_consumers_router)
+        app.include_router(oauth_authorize_router)
+        app.include_router(oauth_token_router)
+        if _S.oauth_provider_oidc_enabled:
+            from app.routers.oauth_oidc import router as oauth_oidc_router
+            app.include_router(oauth_oidc_router)
     app.include_router(api_usage_router)
     app.include_router(alerts_router)
     app.include_router(account_router)

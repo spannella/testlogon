@@ -3274,5 +3274,31 @@ class Settings:
     )
     # HTL front-desk (HTL-022..024) reuses hotel_pms_enabled + the hotel_reservations / hotel_rooms tables (declared above)
 
+    # OBP umbrella gate (ACC-001 §6, decision D4) — kills the entire OBP banking vertical.
+    # Every OBP series _require_enabled() gate is S.open_bank_project_enabled AND S.<series>_enabled.
+    # REUSE: do NOT redefine if already present from sibling ACC-001 code.
+
+    # OAU-001: OAuth consumer-app registry
+    oauth_provider_enabled: bool = os.environ.get("OAUTH_PROVIDER_ENABLED", "0") not in ("0", "false", "False")
+    oauth_consumers_table_name: str = os.environ.get("OAUTH_CONSUMERS_TABLE_NAME", "oauth_consumers")
+    oauth_consumers_owner_index: str = os.environ.get("OAUTH_CONSUMERS_OWNER_INDEX", "ByOwner")
+
+    # OAU-002: Authorization-code flow + token settings
+    oauth_access_token_ttl_seconds: int = int(os.environ.get("OAUTH_ACCESS_TOKEN_TTL_SECONDS", "900"))
+    oauth_code_ttl_seconds: int = int(os.environ.get("OAUTH_CODE_TTL_SECONDS", "60"))
+    oauth_refresh_token_ttl_seconds: int = int(os.environ.get("OAUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000"))
+    oauth_always_issue_refresh_token: bool = os.environ.get("OAUTH_ALWAYS_ISSUE_REFRESH_TOKEN", "0") not in ("0", "false", "False")
+    oauth_provider_directlogin_enabled: bool = os.environ.get("OAUTH_PROVIDER_DIRECTLOGIN_ENABLED", "0") not in ("0", "false", "False")
+
+    # OAU-003: OIDC layer
+    oauth_provider_oidc_enabled: bool = os.environ.get("OAUTH_PROVIDER_OIDC_ENABLED", "0") not in ("0", "false", "False")
+    oidc_id_token_ttl_seconds: int = int(os.environ.get("OIDC_ID_TOKEN_TTL_SECONDS", "3600"))
+    oidc_issuer_url: str = os.environ.get("OIDC_ISSUER_URL", "")
+
+    # OAU-004: Per-consumer scope enforcement
+    oauth_provider_scope_enforcement_enabled: bool = os.environ.get(
+        "OAUTH_PROVIDER_SCOPE_ENFORCEMENT_ENABLED", "0"
+    ) not in ("0", "false", "False")
+
 
 S = Settings()

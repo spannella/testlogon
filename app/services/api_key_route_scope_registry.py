@@ -79,6 +79,13 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
 
 API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "GET:/feed/for-you": {"reason": "session-auth newsfeed For-You route, not in initial API-key rollout scope"},
+    # OAU-002: OAuth2 authorization-server endpoints
+    "GET:/oauth/authorize": {"reason": "OAuth2 authorization endpoint, auth handled by require_ui_session"},
+    "POST:/oauth/token": {"reason": "OAuth2 token endpoint, auth handled by client credentials"},
+    # OAU-003: OIDC public endpoints
+    "GET:/.well-known/openid-configuration": {"reason": "OIDC discovery endpoint, no-auth public"},
+    "GET:/oauth/jwks": {"reason": "OIDC public key endpoint, no-auth public"},
+    "GET:/userinfo": {"reason": "OIDC userinfo, auth handled by OAuth bearer branch"},
     "GET:/health": {"reason": "health probe endpoint, not product API traffic"},
     "GET:/metrics": {"reason": "internal metrics endpoint"},
     "GET:/openapi.json": {"reason": "schema discovery endpoint"},
