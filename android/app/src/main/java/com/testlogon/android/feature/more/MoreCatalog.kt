@@ -432,6 +432,16 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.WEBHOOKS,
             section = MoreSection.ACCOUNT,
         ),
+        // AND-403: READ-ONLY admin alerts/dashboards (client-aggregated job + webhook health). Self-gates via
+        // the backend 403 -> the screen's Forbidden state; a non-admin sees no admin data (no client role flag
+        // is available on the cookie-session client, so the entry is visible and the server 403 is authority).
+        MoreEntry(
+            id = "admin_dashboard",
+            labelRes = R.string.more_entry_admin_dashboard,
+            icon = Icons.Outlined.Security,
+            route = MoreRoutes.ADMIN_DASHBOARD,
+            section = MoreSection.SECURITY,
+        ),
         // AND-374: projects (paged list -> detail + account-scoped Google Drive provider connect flow).
         MoreEntry(
             id = "projects",

@@ -3366,6 +3366,36 @@
     <string name="privacy_deletion_cancel_confirm">Cancel deletion</string>
     <string name="privacy_deletion_keep">Keep deleting</string>
 
+    <!-- AND-403: Read-only admin alerts/dashboards. -->
+    <string name="more_entry_admin_dashboard">Admin alerts</string>
+    <string name="admin_dashboard_title">Admin alerts</string>
+    <string name="admin_dashboard_back">Back</string>
+    <string name="admin_dashboard_refresh">Refresh</string>
+    <string name="admin_dashboard_metrics_title">Metrics</string>
+    <string name="admin_dashboard_alerts_title">Alerts</string>
+    <string name="admin_dashboard_no_alerts">No active alerts</string>
+    <string name="admin_dashboard_empty_title">Nothing to show</string>
+    <string name="admin_dashboard_empty_body">There are no alerts or metrics to display right now.</string>
+    <string name="admin_dashboard_forbidden_title">No access</string>
+    <string name="admin_dashboard_forbidden_body">You don\'t have access to admin alerts.</string>
+    <string name="admin_dashboard_error_network">Couldn\'t reach the server. Pull down or tap Retry.</string>
+    <string name="admin_dashboard_error_server">Something went wrong loading admin alerts. Try again.</string>
+    <string name="admin_dashboard_error_auth">Your session expired. Please sign in again.</string>
+    <string name="admin_alert_source">Source: %1$s</string>
+    <string name="admin_metric_content_description">%1$s: %2$s</string>
+    <string name="admin_severity_critical">Critical</string>
+    <string name="admin_severity_warning">Warning</string>
+    <string name="admin_severity_info">Info</string>
+    <string name="admin_severity_unknown">Unknown</string>
+    <string name="admin_metric_total_jobs">Background jobs</string>
+    <string name="admin_metric_unhealthy_jobs">Unhealthy jobs</string>
+    <string name="admin_metric_webhook_endpoints">Webhook endpoints</string>
+    <string name="admin_metric_webhook_enabled">Enabled endpoints</string>
+    <string name="admin_metric_webhook_deliveries">Deliveries (24h)</string>
+    <string name="admin_metric_webhook_success">Successful (24h)</string>
+    <string name="admin_metric_webhook_failed">Failed (24h)</string>
+    <string name="admin_metric_webhook_dead_letter">Dead-lettered (24h)</string>
+
     <!-- AND-398: Webhooks config (light). -->
     <string name="more_entry_webhooks">Webhooks</string>
     <string name="webhooks_back">Back</string>

@@ -193,6 +193,11 @@ object MoreRoutes {
     // AND-398: WEBHOOKS config (light) - list outbound webhook endpoints -> detail -> a LIGHT create.
     const val WEBHOOKS = WebhooksListDest.ROUTE
 
+    // AND-403: READ-ONLY admin alerts/dashboards (client-aggregated job + webhook health). Self-gates via the
+    // backend 403 role signal -> the screen's Forbidden state (cf. the helpdesk-dashboard / billing-config
+    // pattern); a non-admin sees no admin data.
+    const val ADMIN_DASHBOARD = AdminDashboardDest.ROUTE
+
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
 
@@ -274,6 +279,7 @@ object MoreRoutes {
             SEO,
             TICKETS,
             WEBHOOKS,
+            ADMIN_DASHBOARD,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,
