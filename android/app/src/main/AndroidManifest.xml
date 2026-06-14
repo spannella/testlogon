@@ -426,6 +426,44 @@
                     android:host="share" />
             </intent-filter>
 
+            <!-- AND-393: PUBLIC fundraiser-donation App Link on the production host (HTTPS, auto-verified),
+                 mirroring the web /donate/<fundraiserId> public-donation page. Works for ANONYMOUS donors
+                 (registered in both nav graphs). Requires /.well-known/assetlinks.json with the release
+                 cert fingerprint (web/ops). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="@string/applink_host"
+                    android:pathPrefix="/donate/" />
+            </intent-filter>
+
+            <!-- AND-393: dev host (plaintext HTTP, NOT auto-verified) for tap-through during dev. The
+                 plaintext dev host cannot serve assetlinks, so this filter is not auto-verified. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="http"
+                    android:host="18.222.237.167"
+                    android:pathPrefix="/donate/" />
+            </intent-filter>
+
+            <!-- AND-393: custom-scheme PUBLIC donation deep link. The fundraiser id is the path segment,
+                 routed to the session-free donation screen (registered in both nav graphs - the donor may
+                 be signed out). Accepted on all builds. testlogon://donate/<fundraiserId> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="donate" />
+            </intent-filter>
+
             <!-- AND-349: PUBLIC questionnaire-respond App Link on the production host (HTTPS,
                  auto-verified), mirroring the web .../questionnaires/published/{slug}/respond page. Works
                  for anonymous users (registered in both nav graphs). Requires

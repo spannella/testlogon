@@ -338,6 +338,9 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         guestAcceptDestination(navController)
         // AND-335: public share (testlogon://share/<linkId>) works while signed out (a recipient may be).
         publicShareDestination(navController)
+        // AND-393: public fundraiser donation (App Link /donate/{fundraiserId}) works while signed out (a
+        // donor may be anonymous - the flow never requires a session).
+        donationDestination(navController)
         // AND-349: public questionnaire respond (App Link .../published/{slug}/respond) works while signed
         // out (a respondent may be anonymous).
         questionnaireRespondDestination(navController)

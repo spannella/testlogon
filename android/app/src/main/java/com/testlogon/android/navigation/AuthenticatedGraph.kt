@@ -147,6 +147,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // (also registered unauthenticated, since a recipient may be signed out).
         shareSheetDestination(navController)
         publicShareDestination(navController)
+        // AND-393: public fundraiser donation (App Link /donate/{fundraiserId}), anonymous-capable; also
+        // registered unauthenticated since a donor may be signed out.
+        donationDestination(navController)
         // AND-349: public questionnaire respond (App Link .../published/{slug}/respond), anonymous; also
         // registered unauthenticated since a respondent may be signed out.
         questionnaireRespondDestination(navController)
