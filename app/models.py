@@ -22126,3 +22126,140 @@ class CampaignAttributionOut(BaseModel):
     tracking_visits: int = 0
     tracking_orders: int = 0
     as_of: int = 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBP PAY cluster — Counterparties, Standing Orders, Direct-Debit Mandates, FX
+# (PAY-001..PAY-004). Additive, flag-gated default-OFF. Money-out is NEVER done
+# here — standing orders / mandates emit COUNTERPARTY Transaction Requests (TXR).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class CounterpartyRouting(BaseModel):
+    scheme: Literal["IBAN", "ACCOUNT_SORT_CODE", "ACCOUNT_NUMBER", "BANK"]
+    iban: Optional[str] = None
+    account_number: Optional[str] = None
+    sort_code: Optional[str] = None
+    bank_code: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_holder: Optional[str] = None
+    currency: str = "usd"
+
+
+class CounterpartyCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    is_beneficiary: bool = True
+    routing: CounterpartyRouting
+    description: Optional[str] = None
+    bespoke: Optional[Dict[str, Any]] = None
+
+
+class CounterpartyUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    is_beneficiary: Optional[bool] = None
+    description: Optional[str] = None
+    bespoke: Optional[Dict[str, Any]] = None
+
+
+class CounterpartyRoutingOut(BaseModel):
+    scheme: str
+    iban_last4: Optional[str] = None
+    account_number_last4: Optional[str] = None
+    sort_code: Optional[str] = None
+    bank_code: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_holder: Optional[str] = None
+    currency: str = "usd"
+
+
+class CounterpartyOut(BaseModel):
+    counterparty_id: str
+    name: str
+    is_beneficiary: bool
+    routing: CounterpartyRoutingOut
+    description: Optional[str] = None
+    bespoke: Optional[Dict[str, Any]] = None
+    created_at: int
+    updated_at: int
+
+
+class StandingOrderCreateIn(BaseModel):
+    counterparty_id: str
+    amount_cents: int = Field(gt=0)
+    currency: str = "usd"
+    cadence: Literal["weekly", "biweekly", "monthly"]
+    start_at: int
+    end_at: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class StandingOrderUpdateIn(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, gt=0)
+    cadence: Optional[Literal["weekly", "biweekly", "monthly"]] = None
+    end_at: Optional[int] = None
+    paused: Optional[bool] = None
+
+
+class StandingOrderOut(BaseModel):
+    standing_order_id: str
+    counterparty_id: str
+    amount_cents: int
+    currency: str
+    cadence: str
+    status: str
+    next_run_at: Optional[int] = None
+    last_run_at: Optional[int] = None
+    runs_count: int
+    created_at: int
+    updated_at: int
+
+
+class MandateCreateIn(BaseModel):
+    counterparty_id: str
+    max_amount_cents: int = Field(gt=0)
+    currency: str = "usd"
+    cadence: Literal["weekly", "monthly"]
+    start_at: int
+    end_at: Optional[int] = None
+    reference: Optional[str] = None
+
+
+class MandateOut(BaseModel):
+    mandate_id: str
+    counterparty_id: str
+    max_amount_cents: int
+    currency: str
+    cadence: str
+    status: str
+    next_run_at: Optional[int] = None
+    last_run_at: Optional[int] = None
+    pulled_this_window_cents: int
+    runs_count: int
+    created_at: int
+    updated_at: int
+
+
+class FxRateSetIn(BaseModel):
+    source_currency: str = Field(min_length=2, max_length=8)
+    target_currency: str = Field(min_length=2, max_length=8)
+    rate: float = Field(gt=0)
+    source: Literal["admin", "fetched"] = "admin"
+
+
+class FxRateOut(BaseModel):
+    pair: str
+    source_currency: str
+    target_currency: str
+    rate: float
+    source: str
+    as_of: int
+    set_by: str
+
+
+class FxConvertOut(BaseModel):
+    source_currency: str
+    target_currency: str
+    source_amount_cents: int
+    target_amount_cents: int
+    rate: float
+    as_of: int

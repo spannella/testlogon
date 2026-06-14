@@ -41,6 +41,44 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # OBP PAY cluster (counterparties / standing orders / mandates / FX). Flag-gated default-OFF.
+        # Counterparties: per-user payees. GSI ByUserCreatedAt for newest-first listing.
+        TableDef(
+            _resolve_table_name(S.counterparties_table_name, "counterparties"),
+            "user_sub",
+            "counterparty_id",
+            gsi=[
+                {"index_name": "ByUserCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Standing orders: recurring outbound. GSI ByDue (GSI_DUE_PK="DUE" / next_run_at N) for the scheduler.
+        TableDef(
+            _resolve_table_name(S.standing_orders_table_name, "standing_orders"),
+            "user_sub",
+            "standing_order_id",
+            gsi=[
+                {"index_name": "ByDue", "partition_key": "GSI_DUE_PK", "sort_key": "next_run_at"},
+            ],
+            attr_types={"next_run_at": "N"},
+        ),
+        # Direct-debit mandates: capped pull authorizations. Same ByDue due-index discipline.
+        TableDef(
+            _resolve_table_name(S.direct_debit_mandates_table_name, "direct_debit_mandates"),
+            "user_sub",
+            "mandate_id",
+            gsi=[
+                {"index_name": "ByDue", "partition_key": "GSI_DUE_PK", "sort_key": "next_run_at"},
+            ],
+            attr_types={"next_run_at": "N"},
+        ),
+        # FX rates: currency-pair history. PK=pair (SRC_TGT), SK=as_of (N) — newest read with ScanIndexForward=False, Limit=1.
+        TableDef(
+            _resolve_table_name(S.fx_rates_table_name, "fx_rates"),
+            "pair",
+            "as_of",
+            attr_types={"as_of": "N"},
+        ),
         # Marketing Campaigns module (MKT-002)
         TableDef(
             _resolve_table_name(S.marketing_campaigns_table_name, "MarketingCampaigns"),

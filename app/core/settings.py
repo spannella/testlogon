@@ -3567,5 +3567,12 @@ class Settings:
     tracking_codes_table_name: str = os.environ.get("DDB_TRACKING_CODES", "TrackingCodes")
     marketing_send_log_table_name: str = os.environ.get("DDB_MARKETING_SEND_LOG", "MarketingCampaignSendLog")
 
+    # OBP PAY cluster (counterparties, standing orders, mandates, FX). Owns ONLY the per-series flag + tables; umbrella S.open_bank_project_enabled (D4) is declared by ACC and read via getattr — never redeclared here.
+    payments_counterparties_enabled: bool = os.environ.get("PAYMENTS_COUNTERPARTIES_ENABLED", "0").lower() not in ("0", "false", "no")
+    counterparties_table_name: str = os.environ.get("COUNTERPARTIES_TABLE_NAME", "counterparties")
+    standing_orders_table_name: str = os.environ.get("STANDING_ORDERS_TABLE_NAME", "standing_orders")
+    direct_debit_mandates_table_name: str = os.environ.get("DIRECT_DEBIT_MANDATES_TABLE_NAME", "direct_debit_mandates")
+    fx_rates_table_name: str = os.environ.get("FX_RATES_TABLE_NAME", "fx_rates")
+
 
 S = Settings()

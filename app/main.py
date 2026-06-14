@@ -351,6 +351,11 @@ from app.routers.customers import router as customers_router
 from app.routers.cards_resource import router as cards_resource_router
 from app.routers.financial_products import router as financial_products_router
 from app.routers.hotel_folios import hotel_folios_router
+# OBP PAY cluster (counterparties / standing orders / mandates / FX) — flag-gated default-OFF
+from app.routers.counterparties import counterparties_router
+from app.routers.standing_orders import standing_orders_router
+from app.routers.direct_debit_mandates import mandates_router
+from app.routers.fx_rates import fx_rates_router
 from app.routers.theme_customization import theme_customization_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
@@ -1025,6 +1030,10 @@ def create_app() -> FastAPI:
     app.include_router(cards_resource_router)
     app.include_router(financial_products_router)
     app.include_router(hotel_folios_router)
+    app.include_router(counterparties_router)
+    app.include_router(standing_orders_router)
+    app.include_router(mandates_router)
+    app.include_router(fx_rates_router)
     app.include_router(theme_customization_router)
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)

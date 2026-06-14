@@ -444,6 +444,11 @@ class Tables:
     party_segments: Any
     tracking_codes: Any
     marketing_send_log: Any
+    # OBP PAY cluster (counterparties / standing orders / mandates / FX) — owned by PAY
+    counterparties: Any
+    standing_orders: Any
+    direct_debit_mandates: Any
+    fx_rates: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -823,4 +828,8 @@ T = Tables(
     party_segments=_safe_table(S.party_segments_table_name),
     tracking_codes=_safe_table(S.tracking_codes_table_name),
     marketing_send_log=_safe_table(S.marketing_send_log_table_name),
+    counterparties=_safe_table(S.counterparties_table_name),
+    standing_orders=_safe_table(S.standing_orders_table_name),
+    direct_debit_mandates=_safe_table(S.direct_debit_mandates_table_name),
+    fx_rates=_safe_table(S.fx_rates_table_name),
 )
