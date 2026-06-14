@@ -30,7 +30,7 @@ _STUB_NAMES = [
 ]
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _install_module_stubs():
     """Install lightweight stubs for unbuilt forward-dep modules."""
     saved = {}
