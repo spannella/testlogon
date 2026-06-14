@@ -112,10 +112,14 @@ def test_link_candidate_degrades_when_siblings_absent(ati):
     assert row["link_type"] == "candidate_contact"
     assert row["candidate_id"] == "cand_a"
     assert row["owner_sub"] == "rec1"
-    # Siblings absent/flag-off on stale base -> degraded, not raised.
+    # Siblings flag-off/data-absent -> degraded, not raised. The exact reason
+    # varies by environment: "candidates_absent" when the module is unimportable
+    # (stale base) vs "candidate_not_found" when it imports but the flag is off /
+    # the candidate row does not exist (integrated tree). Both reference the
+    # candidate sibling, so match the "candidate" stem.
     assert row["degraded"] is True
     assert row["synced"] is False
-    assert "candidates" in (row["degraded_reason"] or "")
+    assert "candidate" in (row["degraded_reason"] or "")
 
 
 def test_link_candidate_with_explicit_contact_id(ati):
