@@ -106,6 +106,13 @@ fun MessageActionsSheet(
                 )
             }
 
+            if (!message.isTombstone) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_reply),
+                    tag = "msg_action_reply",
+                ) { onAction(ThreadAction.Reply(message.key)); onDismiss() }
+            }
+
             if (MessageAction.PIN in allowed) {
                 if (message.isPinned) {
                     ActionRow(

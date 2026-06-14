@@ -47,6 +47,7 @@ data class MessageEntity(
     val conversationId: String,
     val senderId: String,
     val text: String,
+    val replyToMessageId: String? = null,
     val createdAtEpochSeconds: Long,
     /** Locally-attached client correlation id (for outbox cleanup); the server never returns it. */
     val clientId: String?,

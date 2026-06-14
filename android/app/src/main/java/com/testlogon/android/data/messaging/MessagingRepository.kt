@@ -70,7 +70,12 @@ interface MessagingRepository {
     suspend fun enqueueOptimistic(conversationId: String, clientId: String, text: String, nowSeconds: Long)
 
     /** POST the send and reconcile the outbox row; marks FAILED on error. */
-    suspend fun sendOutbox(conversationId: String, clientId: String, text: String): ApiResult<Message>
+    suspend fun sendOutbox(
+        conversationId: String,
+        clientId: String,
+        text: String,
+        replyToMessageId: String? = null,
+    ): ApiResult<Message>
 
     /** Apply an inbound realtime new-message event to the caches. */
     suspend fun applyInboundMessage(event: MessagingEvent.NewMessage)
@@ -617,8 +622,10 @@ class MessagingRepositoryImpl @Inject constructor(
         conversationId: String,
         clientId: String,
         text: String,
+        replyToMessageId: String?,
     ): ApiResult<Message> = withContext(io) {
-        when (val result = apiCall { api.sendMessage(conversationId, SendTextMessageReq(text)) }) {
+        val req = SendTextMessageReq(text = text, replyToMessageId = replyToMessageId)
+        when (val result = apiCall { api.sendMessage(conversationId, req) }) {
             is ApiResult.Success -> {
                 // Reconcile: persist the server message (stamped with our clientId for cleanup),
                 // then drop the optimistic outbox row.
@@ -2070,6 +2077,7 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         conversationId = conversationId,
         senderId = senderId,
         text = text,
+        replyToMessageId = replyToMessageId,
         createdAtEpochSeconds = createdAtEpochSeconds,
         clientId = clientId,
         kind = kind,
@@ -2187,6 +2195,7 @@ internal fun MessageEntity.toDomain(): Message = Message(
     conversationId = conversationId,
     senderId = senderId,
     text = text,
+    replyToMessageId = replyToMessageId,
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = SendStatus.SENT,
     kind = kind,

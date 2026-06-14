@@ -602,6 +602,7 @@
     <!-- AND-140 — message actions (reactions / pins / edits / delete / revoke / hide) -->
     <string name="action_cancel">Cancel</string>
     <string name="msg_action_pin">Pin</string>
+    <string name="msg_action_reply">Reply</string>
     <string name="msg_action_unpin">Unpin</string>
     <string name="msg_action_edit">Edit</string>
     <string name="msg_action_edit_history">Edit history</string>

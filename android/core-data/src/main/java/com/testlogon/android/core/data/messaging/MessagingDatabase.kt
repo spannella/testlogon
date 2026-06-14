@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -227,6 +227,13 @@ abstract class MessagingDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** Adds the reply-to link to `messages` (additive, nullable). */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToMessageId TEXT")
+            }
+        }
     }
 }
 
@@ -249,6 +256,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_4_5,
             MessagingDatabase.MIGRATION_5_6,
             MessagingDatabase.MIGRATION_6_7,
+            MessagingDatabase.MIGRATION_7_8,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

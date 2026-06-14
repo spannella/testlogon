@@ -421,6 +421,7 @@ class ThreadViewModel @Inject constructor(
         val body = composer.draft.trim()
         if (body.isEmpty() || composer.overLimit) return
         val clientId = UUID.randomUUID().toString()
+        val replyToId = composer.replyingTo?.messageId
         // AND-146 — sending the message ends the typing signal.
         typingController.onInput(TypingInput.Sent)
         // Clear the composer + the persisted draft immediately (AND-141 FR-4).
@@ -431,10 +432,30 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             repository.enqueueOptimistic(conversationId, clientId, body, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            val result = repository.sendOutbox(conversationId, clientId, body)
+            val result = repository.sendOutbox(conversationId, clientId, body, replyToId)
             // AND-141 — clear the draft on a successful send.
             if (result is ApiResult.Success) draftRepository.clearDraft(conversationId)
         }
+    }
+
+    private fun startReply(messageId: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageId } ?: return
+        if (msg.isTombstone) return
+        val preview = msg.text.ifBlank {
+            when {
+                msg.isImage -> "Photo"
+                msg.isVideo -> "Video"
+                msg.isVoice || msg.isVoicemail -> "Voice message"
+                msg.isGif -> "GIF"
+                msg.isSticker -> "Sticker"
+                else -> "Message"
+            }
+        }.take(80)
+        val label = if (msg.isOwn) "yourself" else "them"
+        _state.update {
+            it.copy(composer = it.composer.copy(replyingTo = ReplyDraft(messageId, preview, label)))
+        }
+        _events.trySend(ThreadEvent.ScrollToBottom)
     }
 
     fun onRetry(clientId: String) {
@@ -1103,6 +1124,9 @@ class ThreadViewModel @Inject constructor(
             is ThreadAction.OpenReactionDetails -> openReactionDetails(action.messageId)
             is ThreadAction.SetPinned -> setPinned(action.messageId, action.pinned)
             ThreadAction.OpenPinsList -> openPinsList()
+            is ThreadAction.Reply -> startReply(action.messageId)
+            ThreadAction.CancelReply ->
+                _state.update { it.copy(composer = it.composer.copy(replyingTo = null)) }
             is ThreadAction.StartEdit -> startEdit(action.messageId)
             is ThreadAction.SubmitEdit -> submitEdit(action.messageId, action.body)
             ThreadAction.CancelEdit -> updateActions { it.copy(editing = null) }
@@ -1511,4 +1535,5 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     isEdited = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.EDITED || editedAtEpochSeconds != null,
     deliveredCount = deliveredToCount,
     seenCount = readByCount,
+    replyToMessageId = replyToMessageId,
 )

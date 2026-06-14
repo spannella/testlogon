@@ -527,6 +527,7 @@ fun ThreadScreen(
                         onAttachMedia = onOpenMediaPicker,
                         onAttachPoll = onOpenPollComposer,
                         onAttachCountdown = onAttachCountdown,
+                        onCancelReply = { onAction(ThreadAction.CancelReply) },
                     )
                 }
             }
@@ -686,8 +687,12 @@ private fun ThreadList(
             modifier = Modifier.fillMaxSize().testTag(ThreadTestTags.LIST),
         ) {
             items(reversed, key = { it.key }) { message ->
+                val repliedTo = message.replyToMessageId?.let { rid -> reversed.firstOrNull { it.key == rid } }
                 MessageBubble(
                     message = message,
+                    repliedToPreview = repliedTo?.let {
+                        (if (it.isOwn) "You" else "them") + ": " + it.text.ifBlank { "message" }
+                    },
                     download = state.downloads[message.key] ?: FileDownloadUi.NotDownloaded,
                     voicePlayback = voicePlayback,
                     polls = state.polls,
@@ -758,6 +763,7 @@ private fun MessageBubble(
     onToggleReaction: (String) -> Unit = {},
     onSeeWhoReacted: () -> Unit = {},
     onOpenEditHistory: () -> Unit = {},
+    repliedToPreview: String? = null,
 ) {
     val alignment = if (message.isOwn) Alignment.End else Alignment.Start
     val bubbleColor = if (message.isOwn) {
@@ -813,6 +819,23 @@ private fun MessageBubble(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.semantics { stateDescription = "Pinned" },
             )
+        }
+        // Quoted reply context: the message this bubble is replying to.
+        if (repliedToPreview != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.widthIn(max = 280.dp).padding(bottom = 2.dp).testTag("thread_reply_quote"),
+            ) {
+                Text(
+                    text = repliedToPreview,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
         }
         when (val media = message.media) {
             is MessageMedia.Image -> ImageBubble(media = media, onOpenImage = onOpenImage)
@@ -1112,6 +1135,7 @@ private fun MessageComposer(
     onAttachMedia: () -> Unit,
     onAttachPoll: () -> Unit,
     onAttachCountdown: () -> Unit,
+    onCancelReply: () -> Unit = {},
 ) {
     Surface(tonalElevation = 2.dp) {
         var actionsExpanded by remember { mutableStateOf(false) }
@@ -1123,6 +1147,35 @@ private fun MessageComposer(
                 .padding(horizontal = 4.dp, vertical = 8.dp)
                 .testTag(ThreadTestTags.COMPOSER),
         ) {
+            // Reply banner: shows which message the next send will reply to, with a cancel.
+            composer.replyingTo?.let { reply ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("thread_reply_banner"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Replying to ${reply.senderLabel}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = reply.preview,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(
+                        onClick = onCancelReply,
+                        modifier = Modifier.size(40.dp).testTag("thread_cancel_reply"),
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
             // The attachment actions are tucked behind the + toggle so the text field gets the full
             // width when typing; tapping + reveals them (and any choice collapses the row again).
             if (actionsExpanded) {

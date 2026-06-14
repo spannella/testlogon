@@ -95,6 +95,8 @@ sealed interface ThreadAction {
     data class OpenReactionDetails(val messageId: String) : ThreadAction
     data class SetPinned(val messageId: String, val pinned: Boolean) : ThreadAction
     data object OpenPinsList : ThreadAction
+    data class Reply(val messageId: String) : ThreadAction
+    data object CancelReply : ThreadAction
     data class StartEdit(val messageId: String) : ThreadAction
     data class SubmitEdit(val messageId: String, val body: String) : ThreadAction
     data object CancelEdit : ThreadAction
@@ -273,6 +275,8 @@ data class ThreadMessageUi(
     /** AND-147 receipt counts (drive the own-message Sent/Delivered/Read indicator). */
     val deliveredCount: Int = 0,
     val seenCount: Int = 0,
+    /** Server id of the message this one replies to (null when not a reply). */
+    val replyToMessageId: String? = null,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
@@ -296,10 +300,18 @@ data class ThreadMessageUi(
     val isPaid: Boolean get() = media is MessageMedia.Paid
 }
 
+/** The message currently being replied to (drives the composer reply banner). */
+data class ReplyDraft(
+    val messageId: String,
+    val preview: String,
+    val senderLabel: String,
+)
+
 data class ComposerState(
     val draft: String = "",
     val charCount: Int = 0,
     val overLimit: Boolean = false,
+    val replyingTo: ReplyDraft? = null,
 ) {
     val isSendEnabled: Boolean get() = draft.isNotBlank() && !overLimit
 

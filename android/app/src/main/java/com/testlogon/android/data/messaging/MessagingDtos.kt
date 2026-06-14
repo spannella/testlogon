@@ -67,6 +67,7 @@ data class MessageDto(
     val kind: String = "text",
     val text: String? = null,
     val preview: String? = null,
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
     @Json(name = "edited_at") val editedAt: Long? = null,
     @Json(name = "edited_by") val editedBy: String? = null,
     @Json(name = "read_by_count") val readByCount: Int? = null,
@@ -190,6 +191,7 @@ data class ConversationDto(
 @JsonClass(generateAdapter = true)
 data class SendTextMessageReq(
     val text: String,
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
 )
 
 /** POST read body = app__routers__messaging__MarkReadIn (both fields optional). */

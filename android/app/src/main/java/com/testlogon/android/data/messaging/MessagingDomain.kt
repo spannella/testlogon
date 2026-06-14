@@ -250,6 +250,8 @@ data class Message(
     val conversationId: String,
     val senderId: String,
     val text: String,
+    /** Server id of the message this one replies to (null when not a reply). */
+    val replyToMessageId: String? = null,
     /** Epoch SECONDS. Local placeholder for an optimistic row until the server ack replaces it. */
     val createdAtEpochSeconds: Long,
     val sendStatus: SendStatus = SendStatus.SENT,
@@ -325,6 +327,7 @@ internal fun MessageDto.toDomain(
         conversationId = conversationId,
         senderId = senderId,
         text = safeText,
+        replyToMessageId = replyToMessageId,
         createdAtEpochSeconds = createdAt,
         sendStatus = sendStatus,
         kind = kind,
