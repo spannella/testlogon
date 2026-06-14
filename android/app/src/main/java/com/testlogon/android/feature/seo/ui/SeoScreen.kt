@@ -62,6 +62,7 @@ import kotlinx.coroutines.launch
 /** AND-400 - stable testTags for the read-only SEO inspector. */
 object SeoTestTags {
     const val SCREEN = "seo_screen"
+    const val LIST = "seo_list"
     const val EMPTY = "seo_empty"
     const val ERROR_RETRY = "seo_error_retry"
     const val IMAGE = "seo_image"
@@ -182,7 +183,7 @@ private fun SeoContent(
         modifier = Modifier.fillMaxSize(),
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(SeoTestTags.LIST),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

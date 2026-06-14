@@ -5,9 +5,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.model.ads.AdAnalyticsSummary
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
@@ -85,10 +87,14 @@ class AdAnalyticsScreenTest {
         rule.onNodeWithTag(AdAnalyticsTestTags.kpi("impressions"), useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag(AdAnalyticsTestTags.kpi("spend"), useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag(AdAnalyticsTestTags.kpi("ctr"), useUnmergedTree = true).assertIsDisplayed()
-        // Charts + breakdown rows live further down the LazyColumn; assert they are composed (exist) rather
-        // than necessarily on-screen (performScrollTo does not apply to lazy lists).
-        rule.onNodeWithTag(AdAnalyticsTestTags.CHART_SPEND, useUnmergedTree = true).assertExists()
-        rule.onNodeWithTag(AdAnalyticsTestTags.breakdownRow(0), useUnmergedTree = true).assertExists()
+        // Charts + breakdown rows live further down the LazyColumn; off-screen lazy items are NOT composed,
+        // so scroll the list to each before asserting it exists/is displayed (performScrollToNode for lazy).
+        rule.onNodeWithTag(AdAnalyticsTestTags.LIST)
+            .performScrollToNode(hasTestTag(AdAnalyticsTestTags.CHART_SPEND))
+        rule.onNodeWithTag(AdAnalyticsTestTags.CHART_SPEND, useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag(AdAnalyticsTestTags.LIST)
+            .performScrollToNode(hasTestTag(AdAnalyticsTestTags.breakdownRow(0)))
+        rule.onNodeWithTag(AdAnalyticsTestTags.breakdownRow(0), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

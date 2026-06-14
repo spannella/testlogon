@@ -53,6 +53,7 @@ import com.testlogon.android.feature.charts.TestLogonSeriesChart
 /** AND-368 - stable testTags for the READ-ONLY ad-analytics dashboard. */
 object AdAnalyticsTestTags {
     const val SCREEN = "ad_analytics_screen"
+    const val LIST = "ad_analytics_list"
     const val EMPTY = "ad_analytics_empty"
     const val ERROR_RETRY = "ad_analytics_error_retry"
     const val CHART_SPEND = "ad_chart_spend"
@@ -194,7 +195,7 @@ private fun AdAnalyticsContent(
         modifier = Modifier.fillMaxSize(),
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(AdAnalyticsTestTags.LIST),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

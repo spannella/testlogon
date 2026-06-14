@@ -1,10 +1,13 @@
 package com.testlogon.android.feature.seo
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.ui.theme.TestLogonTheme
 import com.testlogon.android.feature.seo.data.SeoMetadata
@@ -51,10 +54,20 @@ class SeoScreenTest {
                 SeoScreen(state = content(), onBack = {}, onRefresh = {}, onRetry = {})
             }
         }
+        // Sections render as items of the SEO LazyColumn; off-screen items are not composed, so scroll the
+        // list to each section (and the canonical-url value) before asserting it is displayed.
+        rule.onNodeWithTag(SeoTestTags.LIST)
+            .performScrollToNode(hasTestTag(SeoTestTags.section("primary")))
         rule.onNodeWithTag(SeoTestTags.section("primary"), useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(SeoTestTags.section("og"), useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(SeoTestTags.section("twitter"), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag(SeoTestTags.LIST)
+            .performScrollToNode(hasText("https://testlogon.example/u/alice"))
         rule.onNodeWithText("https://testlogon.example/u/alice", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag(SeoTestTags.LIST)
+            .performScrollToNode(hasTestTag(SeoTestTags.section("og")))
+        rule.onNodeWithTag(SeoTestTags.section("og"), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag(SeoTestTags.LIST)
+            .performScrollToNode(hasTestTag(SeoTestTags.section("twitter")))
+        rule.onNodeWithTag(SeoTestTags.section("twitter"), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

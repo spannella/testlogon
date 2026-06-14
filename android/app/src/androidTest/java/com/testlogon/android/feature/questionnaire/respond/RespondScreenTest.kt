@@ -16,6 +16,7 @@ import com.testlogon.android.core.model.questionnaire.QuestionnaireField
 import com.testlogon.android.core.model.questionnaire.RespondentSession
 import com.testlogon.android.core.model.questionnaire.SessionStatus
 import com.testlogon.android.core.ui.theme.TestLogonTheme
+import com.testlogon.android.feature.questionnaire.render.QuestionFieldTestTags
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -146,7 +147,9 @@ class RespondScreenTest {
                 fieldErrors = mapOf("q1" to "This field is required"),
             ),
         )
-        rule.onNodeWithText("This field is required", substring = true).assertIsDisplayed()
+        // The error text appears both as the field's supporting text (merged into the OutlinedTextField)
+        // and as the dedicated error node; target the latter by its stable tag to avoid the ambiguity.
+        rule.onNodeWithTag(QuestionFieldTestTags.error("q1"), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

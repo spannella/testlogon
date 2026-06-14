@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.ui.theme.TestLogonTheme
@@ -102,7 +103,10 @@ class ShareSheetTest {
                 links = listOf(sampleLink("a")),
             ),
         )
-        rule.onNodeWithTag(ShareSheetTestTags.REVOKE, useUnmergedTree = true).performClick()
+        // REVOKE is a merging-semantics IconButton (contentDescription set without clearing), so its testTag
+        // is in the merged tree; with the row's text column on Modifier.weight(1f) the button is on-screen,
+        // so a direct performClick injects a real tap on it.
+        rule.onNodeWithTag(ShareSheetTestTags.REVOKE).performClick()
         rule.onNodeWithTag(ShareSheetTestTags.link("a"), useUnmergedTree = true).assertDoesNotExist()
     }
 }

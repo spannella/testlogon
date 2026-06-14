@@ -82,7 +82,10 @@ class HelpdeskQueueClaimRowTest {
         var claims = 0
         setRow(item(), claimEnabled = false, onClaim = { claims++ })
         rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM).assertIsNotEnabled()
-        rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM_CAPTION).assertIsDisplayed()
+        // The caption is a plain Text leaf that merges into the clickable row in the default (merged) tree,
+        // so it must be matched in the unmerged tree to be found.
+        rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM_CAPTION, useUnmergedTree = true)
+            .assertIsDisplayed()
         rule.onNodeWithTag(HelpdeskQueueTestTags.ROW_CLAIM).performClick()
         assertEquals(0, claims)
     }

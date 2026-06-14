@@ -6,6 +6,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -76,8 +78,12 @@ class DocumentCaptureScreenTest {
         )
         rule.onNodeWithTag(DocumentCaptureTestTags.TYPE_ID_FRONT, useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag(DocumentCaptureTestTags.TYPE_ID_BACK, useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(DocumentCaptureTestTags.TAKE_PHOTO, useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(DocumentCaptureTestTags.PICK, useUnmergedTree = true).assertIsDisplayed()
+        // Each type card hosts its own capture buttons, so TAKE_PHOTO / PICK appear once per card - assert
+        // the first instance is shown rather than matching a single node.
+        rule.onAllNodesWithTag(DocumentCaptureTestTags.TAKE_PHOTO, useUnmergedTree = true)
+            .onFirst().assertIsDisplayed()
+        rule.onAllNodesWithTag(DocumentCaptureTestTags.PICK, useUnmergedTree = true)
+            .onFirst().assertIsDisplayed()
         // No upload button yet (not all confirmed).
         rule.onNodeWithTag(DocumentCaptureTestTags.UPLOAD).assertDoesNotExist()
     }

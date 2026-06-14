@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,13 +28,14 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -116,6 +117,7 @@ fun ShareSheetContent(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -186,12 +188,14 @@ fun ShareSheetContent(
 
         // ── Existing links ──
         Text(text = stringResource(R.string.share_existing_label))
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(state.visibleLinks, key = { it.linkId }) { link ->
-                ShareLinkRow(link = link, onCopy = { onCopy(link) }, onRevoke = { onRevoke(link.linkId) })
+        // The whole sheet scrolls as one (the outer Column owns the scroll), so the links render in a plain
+        // Column - a nested LazyColumn here would create a second scroll container whose rows can land off
+        // the visible area with no reachable scroll parent.
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            state.visibleLinks.forEach { link ->
+                key(link.linkId) {
+                    ShareLinkRow(link = link, onCopy = { onCopy(link) }, onRevoke = { onRevoke(link.linkId) })
+                }
             }
         }
     }
@@ -212,7 +216,7 @@ private fun ShareLinkRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(modifier = Modifier.fillMaxWidth(0.6f)) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(text = link.shareUrl, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val count = link.downloadCount ?: 0
             val max = link.maxDownloads
@@ -227,7 +231,7 @@ private fun ShareLinkRow(
         IconButton(
             onClick = onCopy,
             modifier = Modifier
-                .clearAndSetSemantics { contentDescription = copyCd }
+                .semantics { contentDescription =copyCd }
                 .testTag(ShareSheetTestTags.COPY),
         ) {
             Text("⧉")
@@ -235,7 +239,7 @@ private fun ShareLinkRow(
         IconButton(
             onClick = onRevoke,
             modifier = Modifier
-                .clearAndSetSemantics { contentDescription = revokeCd }
+                .semantics { contentDescription =revokeCd }
                 .testTag(ShareSheetTestTags.REVOKE),
         ) {
             Text("✕")

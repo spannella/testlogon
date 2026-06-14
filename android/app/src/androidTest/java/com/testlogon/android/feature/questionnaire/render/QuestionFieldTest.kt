@@ -2,6 +2,7 @@ package com.testlogon.android.feature.questionnaire.render
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -46,7 +47,7 @@ class QuestionFieldTest {
     ) {
         rule.setContent {
             TestLogonTheme {
-                var answer by mutableStateOf(initial)
+                var answer by remember { mutableStateOf(initial) }
                 QuestionField(
                     field = field,
                     answer = answer,
@@ -71,8 +72,11 @@ class QuestionFieldTest {
             recorder = rec,
         )
         rule.onNodeWithTag(QuestionFieldTestTags.field("q1"), useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(QuestionFieldTestTags.field("q1"), useUnmergedTree = true)
+        // performTextInput needs the text-editing semantics, which the OutlinedTextField exposes on its
+        // MERGED node (the tag sits on that node); resolving in the unmerged tree would miss SetText.
+        rule.onNodeWithTag(QuestionFieldTestTags.field("q1"))
             .performTextInput("Alice")
+        rule.waitForIdle()
         rule.runOnIdle {
             assertEquals("q1", rec.last().first)
             assertEquals(AnswerValue.Text("Alice"), rec.last().second)
@@ -127,7 +131,11 @@ class QuestionFieldTest {
             recorder = rec,
         )
         rule.onNodeWithTag(QuestionFieldTestTags.option("ms", 2), useUnmergedTree = true).performClick()
+        // Let the first toggle recompose so the second click's toggle closure sees the updated selection
+        // ([C]); otherwise it captures the pre-click empty selection and emits only [A].
+        rule.waitForIdle()
         rule.onNodeWithTag(QuestionFieldTestTags.option("ms", 0), useUnmergedTree = true).performClick()
+        rule.waitForIdle()
         rule.runOnIdle {
             // Selected C then A -> emitted in option order [A, C].
             assertEquals(AnswerValue.Choices(listOf("A", "C")), rec.last().second)
@@ -255,8 +263,11 @@ class QuestionFieldTest {
                 configJson = mapOf("requiredFields" to listOf("line1", "city"))),
             recorder = rec,
         )
-        rule.onNodeWithTag(QuestionFieldTestTags.addressPart("ad", "line1"), useUnmergedTree = true)
+        // performTextInput targets the text-editing semantics on the field's MERGED node (the tag lives
+        // there); the unmerged tree would miss SetText and capture nothing.
+        rule.onNodeWithTag(QuestionFieldTestTags.addressPart("ad", "line1"))
             .performTextInput("1 Main St")
+        rule.waitForIdle()
         rule.runOnIdle {
             val v = rec.last().second
             assertTrue(v is AnswerValue.Text)

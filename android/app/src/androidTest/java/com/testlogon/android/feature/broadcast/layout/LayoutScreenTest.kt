@@ -7,6 +7,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -126,7 +128,10 @@ class LayoutScreenTest {
     @Test
     fun needsSource_hintShown_cardStillSelectable() {
         launch(content(current = LayoutModeUi.SINGLE, needsSource = true))
-        rule.onNodeWithTag(LayoutTestTags.NEEDS_SOURCE, useUnmergedTree = true)
+        // The needs-source hint renders on every selectable card (the in-test reducer flags them all),
+        // so the tag is shared by 4 sibling nodes - assert the first is shown rather than matching one.
+        rule.onAllNodesWithTag(LayoutTestTags.NEEDS_SOURCE, useUnmergedTree = true)
+            .onFirst()
             .assertIsDisplayed()
         // The non-live card stays selectable despite the needs-source hint.
         rule.onNodeWithTag(LayoutTestTags.mode(LayoutModeUi.GRID)).performClick()

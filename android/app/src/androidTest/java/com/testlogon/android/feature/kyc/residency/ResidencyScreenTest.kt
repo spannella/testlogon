@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.ui.theme.TestLogonTheme
 import com.testlogon.android.feature.kyc.residency.model.AddrDecision
@@ -82,8 +83,11 @@ class ResidencyScreenTest {
         rule.onNodeWithTag(ResidencyTestTags.ISSUER, useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag(ResidencyTestTags.CAPTURE, useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag(ResidencyTestTags.PICK, useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(ResidencyTestTags.ADDRESS_LINE1, useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(ResidencyTestTags.ADDRESS_VERIFY, useUnmergedTree = true).assertIsDisplayed()
+        // The address controls live below the fold in the verticalScroll Column - scroll them into view.
+        rule.onNodeWithTag(ResidencyTestTags.ADDRESS_LINE1, useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag(ResidencyTestTags.ADDRESS_VERIFY, useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -133,7 +137,9 @@ class ResidencyScreenTest {
     @Test
     fun addressResultInline_isShownWhenPresentInEditing() {
         launch(ResidencyUiState.Editing(addressResult = verification()))
-        rule.onNodeWithTag(ResidencyTestTags.ADDRESS_RESULT, useUnmergedTree = true).assertIsDisplayed()
+        // The inline address-result card is the last element in the verticalScroll Column - scroll to it.
+        rule.onNodeWithTag(ResidencyTestTags.ADDRESS_RESULT, useUnmergedTree = true)
+            .performScrollTo().assertIsDisplayed()
     }
 
     private fun document(status: ResidencyStatus) = ResidencyDocument(
