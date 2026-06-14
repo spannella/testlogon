@@ -415,6 +415,15 @@ class Tables:
     supplier_products: Any
     purchase_orders: Any
     po_receipts: Any
+    # CSN: PSD2 Consents
+    consents: Any
+    # CSN-003: Dynamic Entities
+    dynamic_entity_defs: Any
+    dynamic_entity_rows: Any
+    # CSN-004: Dynamic Endpoints
+    dynamic_endpoints: Any
+    # CSN-005: Open Data
+    open_data: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -765,4 +774,13 @@ T = Tables(
     supplier_products=_safe_table(S.supplier_products_table_name),
     purchase_orders=_safe_table(S.purchase_orders_table_name),
     po_receipts=_safe_table(S.po_receipts_table_name),
+    # CSN: PSD2 Consents
+    consents=_safe_table(S.consents_table_name),
+    # CSN-003: Dynamic Entities
+    dynamic_entity_defs=_safe_table(S.dynamic_entity_defs_table_name),
+    dynamic_entity_rows=_safe_table(S.dynamic_entity_rows_table_name),
+    # CSN-004: Dynamic Endpoints
+    dynamic_endpoints=_safe_table(S.dynamic_endpoints_table_name),
+    # CSN-005: Open Data (Branches + ATMs)
+    open_data=_safe_table(S.open_data_table_name),
 )

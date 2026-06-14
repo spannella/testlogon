@@ -20764,3 +20764,221 @@ class ApPayableOut(BaseModel):
 class PoSettlePaymentIn(BaseModel):
     payment_ref: str
     provider: str = "internal"
+
+
+
+
+# ---------------------------------------------------------------------------
+# CSN-001 / CSN-002: PSD2 AIS/PIS Consents
+# ---------------------------------------------------------------------------
+
+class ConsentCreateIn(BaseModel):
+    consumer_ref: str = Field(..., max_length=256)
+    consent_type: Literal["AIS", "PIS"] = "AIS"
+    account_refs: List[str] = Field(default_factory=list)
+    view_refs: List[str] = Field(default_factory=lambda: ["owner"])
+    payment_ref: Optional[str] = None
+    valid_until: Optional[int] = None
+    recurring: bool = True
+    reason: Optional[str] = Field(None, max_length=512)
+
+
+class ConsentOut(BaseModel):
+    consent_id: str
+    owner_sub: str
+    consumer_ref: str
+    consent_type: str
+    account_refs: List[str]
+    view_refs: List[str]
+    status: str
+    valid_from: int
+    valid_until: int
+    sca_challenge_id: Optional[str]
+    recurring: bool
+    reason: Optional[str]
+    created_at: int
+    updated_at: int
+    revoked_at: Optional[int]
+
+
+class ConsentListOut(BaseModel):
+    consents: List[ConsentOut]
+    cursor: Optional[str]
+    count: int
+
+
+class ConsentScaOut(BaseModel):
+    challenge_id: str
+    required_factors: List[str]
+    consent_id: str
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# CSN-003: Dynamic Entities
+# ---------------------------------------------------------------------------
+
+class DynamicEntityRegisterIn(BaseModel):
+    entity_name: str
+    json_schema: dict
+    description: Optional[str] = None
+    expected_version: Optional[int] = None
+
+
+class DynamicEntityDefOut(BaseModel):
+    entity_name: str
+    json_schema: dict
+    description: Optional[str]
+    version: int
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class DynamicEntityRowIn(BaseModel):
+    data: dict
+
+
+class DynamicEntityRowOut(BaseModel):
+    entity_name: str
+    row_id: str
+    owner_sub: str
+    data: dict
+    created_at: int
+    updated_at: int
+
+
+class DynamicEntityListDefsOut(BaseModel):
+    defs: List[DynamicEntityDefOut]
+    cursor: Optional[str] = None
+
+
+class DynamicEntityListRowsOut(BaseModel):
+    rows: List[DynamicEntityRowOut]
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CSN-004: Dynamic Endpoints
+# ---------------------------------------------------------------------------
+
+class DynamicEndpointCreateIn(BaseModel):
+    method: Literal["GET", "POST", "PUT", "DELETE"]
+    path: str
+    connector_kind: Literal["static_response", "dynamic_entity_proxy"]
+    connector_config: dict
+    openapi_spec: Optional[dict] = None
+
+
+class DynamicEndpointOut(BaseModel):
+    endpoint_id: str
+    method: str
+    path: str
+    connector_kind: str
+    connector_config: dict
+    openapi_spec: dict
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class DynamicEndpointListOut(BaseModel):
+    endpoints: List[DynamicEndpointOut]
+    cursor: Optional[str] = None
+
+
+class DynamicEndpointsOpenApiOut(BaseModel):
+    paths: dict
+
+
+# ---------------------------------------------------------------------------
+# CSN-005: Open Data (Branches + ATMs)
+# ---------------------------------------------------------------------------
+
+class OpeningHours(BaseModel):
+    day: Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    opens: str
+    closes: str
+
+    @field_validator("opens", "closes")
+    @classmethod
+    def _validate_time(cls, v: str) -> str:
+        if not re.match(r"^\d{2}:\d{2}$", v):
+            raise ValueError("must be HH:MM format")
+        return v
+
+    @model_validator(mode="after")
+    def _opens_before_closes(self) -> "OpeningHours":
+        if self.opens >= self.closes:
+            raise ValueError("opens must be before closes")
+        return self
+
+
+class AddressIn(BaseModel):
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: Optional[str] = None
+    country: str
+    postcode: str
+
+    @field_validator("country")
+    @classmethod
+    def _validate_country(cls, v: str) -> str:
+        if not re.match(r"^[A-Z]{2}$", v):
+            raise ValueError("must be ISO 3166-1 alpha-2 (2 uppercase letters)")
+        return v
+
+
+class LocationIn(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+class BranchIn(BaseModel):
+    name: str
+    address: AddressIn
+    location: LocationIn
+    opening_hours: List[OpeningHours] = Field(default_factory=list)
+    accessibility: List[str] = Field(default_factory=list)
+    phone: Optional[str] = None
+    is_active: bool = True
+
+
+class BranchOut(BaseModel):
+    branch_id: str
+    name: str
+    address: AddressIn
+    location: LocationIn
+    opening_hours: List[OpeningHours]
+    accessibility: List[str]
+    phone: Optional[str]
+    is_active: bool
+    created_at: int
+    updated_at: int
+
+
+class AtmIn(BaseModel):
+    name: str
+    address: AddressIn
+    location: LocationIn
+    is_active: bool = True
+    has_deposit: bool = False
+    is_accessible: bool = False
+
+
+class AtmOut(BaseModel):
+    atm_id: str
+    name: str
+    address: AddressIn
+    location: LocationIn
+    is_active: bool
+    has_deposit: bool
+    is_accessible: bool
+    created_at: int
+    updated_at: int
+
+
+class OpenDataListOut(BaseModel):
+    items: List[Any]
+    next_cursor: Optional[str]

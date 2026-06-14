@@ -89,6 +89,11 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "GET:/health": {"reason": "health probe endpoint, not product API traffic"},
     "GET:/metrics": {"reason": "internal metrics endpoint"},
     "GET:/openapi.json": {"reason": "schema discovery endpoint"},
+    # CSN-005: Open Data public endpoints — no auth required
+    "GET:/open-data/branches": {"reason": "OBP open-data public endpoint, no auth required"},
+    "GET:/open-data/branches/{branch_id}": {"reason": "OBP open-data public endpoint, no auth required"},
+    "GET:/open-data/atms": {"reason": "OBP open-data public endpoint, no auth required"},
+    "GET:/open-data/atms/{atm_id}": {"reason": "OBP open-data public endpoint, no auth required"},
     "DELETE:/messaging/conversations/{conversation_id}": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "DELETE:/messaging/conversations/{conversation_id}/drafts/{draft_id}": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},
     "DELETE:/messaging/conversations/{conversation_id}/messages/{message_id}/hide": {"reason": "session-auth messaging route, not in initial API-key rollout scope"},

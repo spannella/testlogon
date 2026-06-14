@@ -1163,6 +1163,33 @@ def create_app() -> FastAPI:
         pass  # RPT-007 not yet deployed; dashlet registration is best-effort
     from app.routers.purchasing import purchasing_router
     app.include_router(purchasing_router)
+    # CSN: OBP PSD2 Consents (CSN-001/002)
+    if _S.open_bank_project_enabled and _S.psd2_consents_enabled:
+        from app.routers.psd2_consents import router as psd2_consents_router
+        from app.services.psd2_consents import start_consent_expiry_task
+        app.include_router(psd2_consents_router)
+        app.add_event_handler("startup", start_consent_expiry_task)
+
+    # CSN: Dynamic Entities (CSN-003)
+    if _S.dynamic_entities_enabled:
+        from app.routers.dynamic_entities import def_router as dynamic_entity_def_router
+        from app.routers.dynamic_entities import crud_router as dynamic_entity_crud_router
+        app.include_router(dynamic_entity_def_router)
+        app.include_router(dynamic_entity_crud_router)
+
+    # CSN: Dynamic Endpoints (CSN-004)
+    if _S.dynamic_endpoints_enabled:
+        from app.routers.dynamic_endpoints import router as dynamic_endpoints_router
+        from app.routers.dynamic_endpoints import gateway_router as dynamic_endpoints_gateway_router
+        app.include_router(dynamic_endpoints_router)
+        app.include_router(dynamic_endpoints_gateway_router)
+
+    # CSN: Open Data — Branches + ATMs (CSN-005)
+    if _S.open_data_enabled:
+        from app.routers.open_data import router as open_data_admin_router
+        from app.routers.open_data import public_router as open_data_public_router
+        app.include_router(open_data_admin_router)
+        app.include_router(open_data_public_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

@@ -41,6 +41,89 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # CSN-001: PSD2 AIS/PIS Consents
+        TableDef(
+            _resolve_table_name(S.consents_table_name, "consents"),
+            "owner_sub",
+            "consent_id",
+            gsi=[
+                {
+                    "index_name": S.consents_consumer_index,
+                    "partition_key": "consumer_ref",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": S.consents_status_index,
+                    "partition_key": "status",
+                    "sort_key": "valid_until",
+                },
+                {
+                    "index_name": S.consents_by_payment_ref_index,
+                    "partition_key": "payment_ref",
+                },
+            ],
+            attr_types={"created_at": "N", "valid_until": "N"},
+        ),
+        # CSN-003: Dynamic Entity Definitions
+        TableDef(
+            _resolve_table_name(S.dynamic_entity_defs_table_name, "dynamic_entity_defs"),
+            "entity_name",
+            "sk",
+            gsi=[
+                {
+                    "index_name": S.dynamic_entity_defs_creator_index,
+                    "partition_key": "created_by",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CSN-003: Dynamic Entity Rows (generic per-entity row store)
+        TableDef(
+            _resolve_table_name(S.dynamic_entity_rows_table_name, "dynamic_entity_rows"),
+            "entity_name",
+            "row_id",
+            gsi=[
+                {
+                    "index_name": S.dynamic_entity_rows_owner_index,
+                    "partition_key": "owner_sub",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CSN-004: Dynamic Endpoints
+        TableDef(
+            _resolve_table_name(S.dynamic_endpoints_table_name, "dynamic_endpoints"),
+            "endpoint_id",
+            "sk",
+            gsi=[
+                {
+                    "index_name": S.dynamic_endpoints_method_path_index,
+                    "partition_key": "method_path",
+                    "sort_key": "sk",
+                },
+                {
+                    "index_name": S.dynamic_endpoints_created_by_index,
+                    "partition_key": "created_by",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CSN-005: Open Data (Branches + ATMs)
+        TableDef(
+            _resolve_table_name(S.open_data_table_name, "open_data"),
+            "kind",
+            "resource_id",
+            gsi=[
+                {
+                    "index_name": S.open_data_active_index,
+                    "partition_key": "kind_active",
+                    "sort_key": "name",
+                },
+            ],
+        ),
         # PUR-002: Purchasing / SCM tables
         TableDef(
             _resolve_table_name(S.suppliers_table_name, "suppliers"),

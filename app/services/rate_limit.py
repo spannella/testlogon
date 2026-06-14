@@ -423,6 +423,39 @@ def rate_limit_kyc_partner_api(api_key_id: str, category: str) -> None:
         )
 
 
+def rate_limit_consent(consent_id: str, category: str) -> None:
+    """Per-consent hourly rate limit for AIS data reads under a consent (CSN-002).
+
+    Keyed on consent:{consent_id} — each granted consent gets its own budget.
+    Categories:
+      * ``read``    — S.psd2_consent_rl_read_per_hour    (default 1000)
+      * ``refresh`` — S.psd2_consent_rl_refresh_per_hour (default 100)
+    Same 429 shape as rate_limit_kyc_partner_api.
+    """
+    caps = {
+        "read":    int(getattr(S, "psd2_consent_rl_read_per_hour",    1000) or 1000),
+        "refresh": int(getattr(S, "psd2_consent_rl_refresh_per_hour", 100)  or 100),
+    }
+    cap = caps.get(category)
+    if cap is None:
+        return
+    win = 3600
+    sid = f"rl#consent#{category}"
+    key = f"consent:{consent_id or 'unknown'}"
+    if not _bucket_limit(key, sid, cap, win):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "consent_rate_limited",
+                "message": "Too many requests under this consent; try again later",
+                "category": category,
+                "limit": cap,
+                "window_seconds": win,
+            },
+            headers={"Retry-After": str(win)},
+        )
+
+
 def rate_limit_filemgr_mount_onboarding(user_sub: str, ip: str) -> None:
     sid = "rl#filemgr_mount_onboarding"
     max_n = int(getattr(S, "filemgr_mount_initiate_max_per_window", 5) or 5)
