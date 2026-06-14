@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.services.sessions import require_ui_session
 from app.auth.policy import require_admin_or_root_csrf
@@ -35,6 +35,11 @@ from app.services.pos_tender import (
     get_session_report,
     list_session_txns,
 )
+from app.services.pos_reports import session_report
+from app.services.pos_receipt import (
+    get_or_create_pos_receipt,
+    get_pos_receipt_bytes,
+)
 from app.models import (
     RegisterConfig,
     RegisterCreateIn,
@@ -50,6 +55,8 @@ from app.models import (
     PosTxnVoidIn,
     RefundTxnIn,
     PosSessionReportOut,
+    ReceiptLinkOut,
+    SessionReportOut,
 )
 
 pos_router = APIRouter(prefix="/ui/pos", tags=["pos"])
@@ -159,6 +166,34 @@ async def session_report_endpoint(
     return get_session_report(session_id)
 
 
+@pos_router.get("/sessions/{session_id}/report/x", response_model=SessionReportOut)
+async def session_x_report_endpoint(
+    session_id: str,
+    session: Dict[str, Any] = Depends(require_ui_session),
+) -> Dict[str, Any]:
+    _require_enabled()
+    return session_report(
+        session_id,
+        "x",
+        cashier_sub=session["user_sub"],
+        role=session.get("role", "user"),
+    )
+
+
+@pos_router.get("/sessions/{session_id}/report/z", response_model=SessionReportOut)
+async def session_z_report_endpoint(
+    session_id: str,
+    session: Dict[str, Any] = Depends(require_ui_session),
+) -> Dict[str, Any]:
+    _require_enabled()
+    return session_report(
+        session_id,
+        "z",
+        cashier_sub=session["user_sub"],
+        role=session.get("role", "user"),
+    )
+
+
 @pos_router.get("/sessions/{session_id}/transactions", response_model=List[PosTransactionOut])
 async def list_session_txns_endpoint(
     session_id: str,
@@ -191,6 +226,50 @@ async def get_txn_endpoint(
 ) -> Dict[str, Any]:
     _require_enabled()
     return get_txn_draft(cashier_sub=session["user_sub"], txn_id=txn_id)
+
+
+# ── receipt (POS-009) ─────────────────────────────────────────────────────────
+
+def _require_txn_owner_or_admin(txn_id: str, session: Dict[str, Any]) -> None:
+    """Cashier may only access their own txn's receipt; admin/root any."""
+    from app.core.tables import T
+    from app.auth.roles import Role
+
+    item = T.pos.get_item(Key={"pos_pk": f"TXN#{txn_id}", "pos_sk": "META"}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    user_role = session.get("role", Role.USER)
+    role_val = getattr(user_role, "value", user_role)
+    is_admin = role_val in ("admin", "root")
+    if not is_admin and item.get("cashier_sub") != session["user_sub"]:
+        raise HTTPException(status_code=403, detail="You may only access your own receipts")
+
+
+@pos_router.get("/txns/{txn_id}/receipt", response_model=ReceiptLinkOut)
+async def get_txn_receipt_endpoint(
+    txn_id: str,
+    session: Dict[str, Any] = Depends(require_ui_session),
+) -> Dict[str, Any]:
+    _require_enabled()
+    _require_txn_owner_or_admin(txn_id, session)
+    return get_or_create_pos_receipt(txn_id)
+
+
+@pos_router.get("/txns/{txn_id}/receipt/pdf")
+async def get_txn_receipt_pdf_endpoint(
+    txn_id: str,
+    session: Dict[str, Any] = Depends(require_ui_session),
+) -> Response:
+    _require_enabled()
+    _require_txn_owner_or_admin(txn_id, session)
+    pdf_bytes = get_pos_receipt_bytes(txn_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="pos-receipt-{txn_id}.pdf"',
+        },
+    )
 
 
 @pos_router.post("/txns/{txn_id}/lines")

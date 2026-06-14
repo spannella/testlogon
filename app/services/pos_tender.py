@@ -198,6 +198,13 @@ def tender_cash(
         order_id=order_id or "",
     )
 
+    # POS-009 — best-effort receipt generation; never blocks settlement.
+    try:
+        from app.services.pos_receipt import get_or_create_pos_receipt  # lazy import (RULE-1)
+        get_or_create_pos_receipt(txn_id)
+    except Exception:
+        pass
+
     updated = T.pos.get_item(Key=_txn_pk(txn_id)).get("Item", txn_item)
     return _build_txn_out_from_item(updated, session_id)
 

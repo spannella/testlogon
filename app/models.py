@@ -21873,6 +21873,48 @@ class PosSessionReportOut(BaseModel):
     total_change_given_cents: int = 0
 
 
+# ── POS-010: X/Z till-summary report models ──────────────────────────────────
+
+
+class TenderBreakdownItem(BaseModel):
+    kind: str                       # "cash" | "card" | "wallet"
+    gross_cents: int = 0
+    refund_cents: int = 0
+    net_cents: int = 0              # gross_cents - refund_cents
+    transaction_count: int = 0
+
+
+class SessionReportCashSection(BaseModel):
+    opening_float_cents: int = 0
+    cash_in_cents: int = 0
+    change_out_cents: int = 0
+    expected_cash_cents: int = 0
+    counted_cash_cents: Optional[int] = None   # null for X report
+    over_short_cents: Optional[int] = None     # null for X report
+
+
+class SessionReportOut(BaseModel):
+    report_kind: str                # "x" or "z"
+    session_id: str
+    register_id: str
+    cashier_sub: str
+    opened_at: int = 0
+    closed_at: Optional[int] = None
+    generated_at: int = 0
+    z_report_printed_at: Optional[int] = None   # null for X; null if Z not finalized
+
+    gross_sales_cents: int = 0
+    discount_cents: int = 0
+    tax_cents: int = 0
+    net_sales_cents: int = 0        # gross - discount (before tax)
+    refund_total_cents: int = 0
+    void_count: int = 0
+    transaction_count: int = 0      # count of settled transactions
+
+    tender_breakdown: List[TenderBreakdownItem] = Field(default_factory=list)
+    cash: SessionReportCashSection
+
+
 # ── ECM-003: Store integration Pydantic models ──────────────────────────────
 
 

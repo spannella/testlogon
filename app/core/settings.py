@@ -3562,6 +3562,7 @@ class Settings:
     pos_table_name: str = os.environ.get("POS_TABLE_NAME", "pos")
     pos_cash_drawer_required: bool = os.environ.get("POS_CASH_DRAWER_REQUIRED", "false").lower() == "true"
     pos_default_tax_rate_bps: int = int(os.environ.get("POS_DEFAULT_TAX_RATE_BPS", "0"))
+    pos_receipt_store_name: str = os.environ.get("POS_RECEIPT_STORE_NAME", "")
 
 
     # Marketing Campaigns module (MKT-002). Default OFF.
