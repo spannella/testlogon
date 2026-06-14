@@ -94,6 +94,12 @@ import {
   Eye,
   ArrowLeftRight,
   UserCheck,
+  Hotel,
+  Star,
+  CalendarRange,
+  ConciergeBell,
+  BedDouble,
+  LineChart,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -364,6 +370,21 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Financial Products", path: "/bank/products", icon: <Landmark className="h-5 w-5" /> },
       { label: "OAuth Apps", path: "/bank/oauth-clients", icon: <KeyRound className="h-5 w-5" /> },
       { label: "Developer Platform", path: "/bank/platform", icon: <Gauge className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Hospitality (QloApps)",
+    items: [
+      { label: "Book a Stay", path: "/hotels/book", icon: <BedDouble className="h-5 w-5" /> },
+      { label: "Reservations", path: "/hotels/reservations", icon: <ReceiptText className="h-5 w-5" /> },
+      { label: "Front Desk", path: "/hotels/front-desk", icon: <ConciergeBell className="h-5 w-5" /> },
+      { label: "Guest Folios", path: "/hotels/folios", icon: <ReceiptText className="h-5 w-5" /> },
+      { label: "Hotels", path: "/hotels/setup", icon: <Hotel className="h-5 w-5" /> },
+      { label: "Amenities", path: "/hotels/setup/amenities", icon: <Star className="h-5 w-5" /> },
+      { label: "Availability", path: "/hotels/availability", icon: <CalendarRange className="h-5 w-5" /> },
+      { label: "Rate Plans", path: "/hotels/rate-plans", icon: <ConciergeBell className="h-5 w-5" /> },
+      { label: "Cancellation Policies", path: "/hotels/policies", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Hotel KPI Reports", path: "/hotels/reports", icon: <LineChart className="h-5 w-5" /> },
     ],
   },
 ];

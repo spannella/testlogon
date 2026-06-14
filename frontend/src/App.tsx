@@ -390,6 +390,28 @@ const StandingOrdersPage = lazy(() => import("@/pages/bankPayments/StandingOrder
 const MandatesPage = lazy(() => import("@/pages/bankPayments/MandatesPage"));
 const FxRatesPage = lazy(() => import("@/pages/bankPayments/FxRatesPage"));
 
+// QloApps (hotel PMS) frontend
+const HotelsListPage = lazy(() => import("@/pages/hotels/setup/HotelsListPage"));
+const HotelDetailPage = lazy(() => import("@/pages/hotels/setup/HotelDetailPage"));
+const HotelAmenitiesPage = lazy(() => import("@/pages/hotels/setup/AmenitiesPage"));
+const RoomTypesPage = lazy(() => import("@/pages/hotels/setup/RoomTypesPage"));
+const RoomsPage = lazy(() => import("@/pages/hotels/setup/RoomsPage"));
+const HousekeepingBoardPage = lazy(() => import("@/pages/hotels/setup/HousekeepingBoardPage"));
+const AvailabilityCalendarPage = lazy(() => import("@/pages/hotels/inventory/AvailabilityCalendarPage"));
+const RatePlansPage = lazy(() => import("@/pages/hotels/rate-plans/RatePlansPage"));
+const HotelBookingPage = lazy(() => import("@/pages/hotels/booking/HotelBookingPage"));
+const HotelReservationsPage = lazy(() => import("@/pages/hotels/booking/HotelReservationsPage"));
+const HotelReservationDetailPage = lazy(() => import("@/pages/hotels/booking/ReservationDetailPage"));
+const FrontDeskDashboard = lazy(() => import("@/pages/hotels/frontdesk/FrontDeskDashboard"));
+const CheckInPage = lazy(() => import("@/pages/hotels/frontdesk/CheckInPage"));
+const CheckOutPage = lazy(() => import("@/pages/hotels/frontdesk/CheckOutPage"));
+const WalkInPage = lazy(() => import("@/pages/hotels/frontdesk/WalkInPage"));
+const ManageReservationPage = lazy(() => import("@/pages/hotels/frontdesk/ManageReservationPage"));
+const FolioListPage = lazy(() => import("@/pages/hotels/folios/FolioListPage"));
+const FolioDetailPage = lazy(() => import("@/pages/hotels/folios/FolioDetailPage"));
+const CancellationPolicyPage = lazy(() => import("@/pages/hotels/reports/CancellationPolicyPage"));
+const HotelKpiDashboard = lazy(() => import("@/pages/hotels/reports/HotelKpiDashboard"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -588,6 +610,29 @@ export default function App() {
           <Route path="bank/payments/standing-orders" element={<StandingOrdersPage />} />
           <Route path="bank/payments/mandates" element={<MandatesPage />} />
           <Route path="bank/payments/fx" element={<FxRatesPage />} />
+          {/* QloApps (hotel PMS) — static segments rank above dynamic in RR v6 */}
+          <Route path="hotels/setup" element={<HotelsListPage />} />
+          <Route path="hotels/setup/amenities" element={<HotelAmenitiesPage />} />
+          <Route path="hotels/setup/:hotelId" element={<HotelDetailPage />} />
+          <Route path="hotels/:hotelId/room-types" element={<RoomTypesPage />} />
+          <Route path="hotels/:hotelId/rooms" element={<RoomsPage />} />
+          <Route path="hotels/:hotelId/housekeeping" element={<HousekeepingBoardPage />} />
+          <Route path="hotels/availability" element={<AvailabilityCalendarPage />} />
+          <Route path="hotels/rate-plans" element={<RatePlansPage />} />
+          <Route path="hotels/book" element={<HotelBookingPage />} />
+          <Route path="hotels/reservations" element={<HotelReservationsPage />} />
+          <Route path="hotels/reservations/:hotelId/:reservationId" element={<HotelReservationDetailPage />} />
+          <Route path="hotels/front-desk" element={<FrontDeskDashboard />} />
+          <Route path="hotels/front-desk/walk-in" element={<WalkInPage />} />
+          <Route path="hotels/front-desk/check-in/:reservationId" element={<CheckInPage />} />
+          <Route path="hotels/front-desk/check-out/:reservationId" element={<CheckOutPage />} />
+          <Route path="hotels/front-desk/manage/:reservationId" element={<ManageReservationPage />} />
+          <Route path="hotels/folios" element={<FolioListPage />} />
+          <Route path="hotels/folios/:hotelId/:rid" element={<FolioDetailPage />} />
+          <Route path="hotels/policies" element={<CancellationPolicyPage />} />
+          <Route path="hotels/policies/:hotelId" element={<CancellationPolicyPage />} />
+          <Route path="hotels/reports" element={<HotelKpiDashboard />} />
+          <Route path="hotels/reports/:hotelId" element={<HotelKpiDashboard />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
