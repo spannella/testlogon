@@ -379,6 +379,7 @@ from app.services.workflow_scheduler import start_workflow_scheduler_task
 # CRM Project Management (PRJ-001)
 from app.routers.crm_projects import router as crm_projects_router
 from app.routers.hotel_availability import hotel_availability_router
+from app.routers.crm_campaigns import router as crm_campaigns_router
 
 logger = logging.getLogger(__name__)
 
@@ -1144,6 +1145,7 @@ def create_app() -> FastAPI:
     app.include_router(consumer_tax_documents_admin_router)
     from app.routers.tax_form_1099 import tax_form_1099_router
     app.include_router(tax_form_1099_router)
+    app.include_router(crm_campaigns_router)
 
     # CRM Reports & Dashboards (RPT-001..RPT-009)
     from app.routers.crm_reports import router as crm_reports_router

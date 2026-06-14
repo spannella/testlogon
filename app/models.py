@@ -22528,3 +22528,175 @@ class CctHierarchyOut(BaseModel):
 class CctReportsToOut(BaseModel):
     direction: str
     chain: List[CctRelationshipOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# CMP-001..CMP-008 — SuiteCRM Campaigns-Extra (campaign waves, templates, etc.)
+# ---------------------------------------------------------------------------
+
+CAMPAIGN_TYPES = {"email", "phone", "mail", "fax", "sms"}
+
+# CMP-001: campaign type + channel support
+class CrmCampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: Optional[str] = Field(default=None, max_length=500)
+    budget_cents: int = Field(default=0, ge=0)
+    ad_campaign_id: Optional[str] = None
+    promo_code_ids: List[str] = Field(default_factory=list)
+    contact_list_ids: List[str] = Field(default_factory=list)
+    segment_ids: List[str] = Field(default_factory=list)
+    tracking_code: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    campaign_type: str = Field(default="email", pattern=r"^(email|phone|mail|fax|sms)$")
+    email_template_id: Optional[str] = None
+    questionnaire_id: Optional[str] = None
+    variants: Optional[List[Dict[str, Any]]] = None
+
+class CrmCampaignUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    objective: Optional[str] = Field(default=None, max_length=500)
+    budget_cents: Optional[int] = Field(default=None, ge=0)
+    contact_list_ids: Optional[List[str]] = None
+    segment_ids: Optional[List[str]] = None
+    tracking_code: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    campaign_type: Optional[str] = Field(default=None, pattern=r"^(email|phone|mail|fax|sms)$")
+    email_template_id: Optional[str] = None
+    questionnaire_id: Optional[str] = None
+    variants: Optional[List[Dict[str, Any]]] = None
+
+class CrmCampaignOut(BaseModel):
+    campaign_id: str
+    owner_id: str
+    name: str
+    status: str = "draft"
+    objective: Optional[str] = None
+    budget_cents: int = 0
+    contact_list_ids: List[str] = Field(default_factory=list)
+    segment_ids: List[str] = Field(default_factory=list)
+    tracking_code: Optional[str] = None
+    email_template_id: Optional[str] = None
+    questionnaire_id: Optional[str] = None
+    questionnaire_url: Optional[str] = None
+    campaign_type: str = "email"
+    variants: Optional[List[Dict[str, Any]]] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+class MarketingCampaignListOut(BaseModel):
+    campaigns: List[CrmCampaignOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+class MarketingCampaignSendIn(BaseModel):
+    dry_run: bool = False
+    snapshot_ts: Optional[int] = None
+
+class MarketingCampaignSendOut(BaseModel):
+    campaign_id: str
+    total_resolved: int = 0
+    total_sent: int = 0
+    total_skipped: int = 0
+    dry_run: bool = False
+    send_id: Optional[str] = None
+
+class MarketingCampaignAttributionOut(BaseModel):
+    campaign_id: str
+    total_sent: int = 0
+    email_sent: int = 0
+    open_count: int = 0
+    open_rate: float = 0.0
+    click_count: int = 0
+    click_rate: float = 0.0
+
+# CMP-002: HTML email templates
+class MarketingEmailTemplateCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    subject_template: str = Field(..., min_length=1, max_length=500)
+    body_html_template: str = Field(..., min_length=1, max_length=50000)
+
+class MarketingEmailTemplateUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    subject_template: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    body_html_template: Optional[str] = Field(default=None, min_length=1, max_length=50000)
+    status: Optional[str] = Field(default=None, pattern=r"^(draft|active)$")
+
+class MarketingEmailTemplateOut(BaseModel):
+    template_id: str
+    owner_id: str
+    name: str
+    subject_template: str
+    body_html_template: str
+    variables: List[str] = Field(default_factory=list)
+    status: str = "draft"
+    created_at: int = 0
+    updated_at: int = 0
+
+class MarketingEmailTemplateListOut(BaseModel):
+    templates: List[MarketingEmailTemplateOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+class MarketingEmailTemplatePreviewIn(BaseModel):
+    sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+class MarketingEmailTemplatePreviewOut(BaseModel):
+    subject: str
+    body_html: str
+    variables: List[str] = Field(default_factory=list)
+    missing_vars: List[str] = Field(default_factory=list)
+
+# CMP-006: web-to-lead capture
+class WebLeadCaptureIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: str = Field(..., min_length=1, max_length=200)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default=None, max_length=200)
+    message: Optional[str] = Field(default=None, max_length=2000)
+    campaign_id: Optional[str] = None
+    honeypot: Optional[str] = Field(default=None, description="Bot trap — must be empty")
+    contact_list_id: Optional[str] = None
+
+class WebLeadCaptureOut(BaseModel):
+    capture_id: str
+    ok: bool = True
+
+class WebLeadListOut(BaseModel):
+    leads: List[Dict[str, Any]] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+# CMP-004: unsubscribe
+class MarketingUnsubscribeOut(BaseModel):
+    ok: bool = True
+    message: str = "You have been unsubscribed from marketing emails."
+
+# CMP-007: A/B test results
+class MarketingAbVariantStats(BaseModel):
+    variant_id: str
+    label: str = ""
+    sent: int = 0
+    opens: int = 0
+    clicks: int = 0
+    open_rate: float = 0.0
+    click_rate: float = 0.0
+
+class MarketingAbResultsOut(BaseModel):
+    campaign_id: str
+    variant_stats: List[MarketingAbVariantStats] = Field(default_factory=list)
+    significance: Optional[Dict[str, Any]] = None
+
+# CMP-008: merge-tag preview
+class MarketingEmailPreviewIn(BaseModel):
+    sample_party_id: Optional[str] = None
+    sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+class MarketingEmailPreviewOut(BaseModel):
+    subject: str
+    body_text: str
+    body_html: Optional[str] = None
+    merge_vars_used: Dict[str, str] = Field(default_factory=dict)
+    merge_vars_missing: List[str] = Field(default_factory=list)

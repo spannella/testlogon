@@ -3599,5 +3599,21 @@ class Settings:
     # CCT (SuiteCRM Contacts Extra) — PTY-001 + CCT-001..CCT-006
     party_dedup_match_threshold: float = float(os.environ.get("PARTY_DEDUP_MATCH_THRESHOLD", "0.70"))
 
+    # CMP-001..CMP-008: SuiteCRM Campaigns-Extra subsystem (default OFF)
+    crm_campaigns_enabled: bool = os.environ.get("CRM_CAMPAIGNS_ENABLED", "0") not in ("0", "false", "False")
+    crm_campaigns_table_name: str = os.environ.get("DDB_MARKETING_CAMPAIGNS", "CrmCampaigns")
+    crm_campaign_send_log_table_name: str = os.environ.get("DDB_MARKETING_SEND_LOG", "CrmCampaignSendLog")
+    marketing_email_templates_table_name: str = os.environ.get("DDB_MARKETING_EMAIL_TEMPLATES", "MarketingEmailTemplates")
+    marketing_contact_lists_table_name: str = os.environ.get("DDB_MARKETING_CONTACT_LISTS", "MarketingContactLists")
+    marketing_tracking_codes_table_name: str = os.environ.get("DDB_MARKETING_TRACKING_CODES", "MarketingTrackingCodes")
+    marketing_web_lead_captures_table_name: str = os.environ.get("DDB_WEB_LEAD_CAPTURES_TABLE", "WebLeadCaptures")
+    marketing_unsubscribe_secret: str = (os.environ.get("MARKETING_UNSUBSCRIBE_SECRET") or os.environ.get("UI_ACCESS_TOKEN_SECRET", ""))
+    marketing_open_tracking_enabled: bool = os.environ.get("MARKETING_OPEN_TRACKING_ENABLED", "0") not in ("0", "false", "False")
+    marketing_open_tracking_bot_ignore_uas: str = os.environ.get("MARKETING_OPEN_TRACKING_BOT_IGNORE_UAS", "Barracuda,Proofpoint,SafeBrowsing,Google Image Proxy,Yahoo! Slurp,Googlebot")
+    web_to_lead_enabled: bool = os.environ.get("WEB_TO_LEAD_ENABLED", "0") not in ("0", "false", "False")
+    web_to_lead_autoresponder_enabled: bool = os.environ.get("WEB_TO_LEAD_AUTORESPONDER_ENABLED", "0") not in ("0", "false", "False")
+    web_to_lead_max_per_ip_per_hour: int = int(os.environ.get("WEB_TO_LEAD_MAX_PER_IP_PER_HOUR", "10"))
+    marketing_unsubscribe_token_ttl_days: int = int(os.environ.get("MARKETING_UNSUBSCRIBE_TOKEN_TTL_DAYS", "30"))
+
 
 S = Settings()

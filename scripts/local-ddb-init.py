@@ -41,6 +41,60 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # CMP-001..CMP-008: SuiteCRM Campaigns-Extra subsystem
+        TableDef(
+            _resolve_table_name(S.crm_campaigns_table_name, "CrmCampaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_campaign_send_log_table_name, "CrmCampaignSendLog"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignSentAt", "partition_key": "campaign_id", "sort_key": "sent_at"},
+                {"index_name": "ByCampaignVariant", "partition_key": "campaign_id", "sort_key": "variant_id"},
+            ],
+            attr_types={"sent_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_email_templates_table_name, "MarketingEmailTemplates"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_contact_lists_table_name, "MarketingContactLists"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_tracking_codes_table_name, "MarketingTrackingCodes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+                {"index_name": "ByCodeTs", "partition_key": "code_slug", "sort_key": "ts"},
+            ],
+            attr_types={"created_at": "N", "ts": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_web_lead_captures_table_name, "WebLeadCaptures"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         TableDef(
             _resolve_table_name(S.ats_integration_links_table_name, "ats_integration_links"),
             "pk",

@@ -450,6 +450,12 @@ class Tables:
     direct_debit_mandates: Any
     fx_rates: Any
     ats_integration_links: Any
+    crm_campaigns: Any
+    crm_campaign_send_log: Any
+    marketing_email_templates: Any
+    marketing_contact_lists: Any
+    marketing_tracking_codes: Any
+    marketing_web_lead_captures: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -834,4 +840,10 @@ T = Tables(
     direct_debit_mandates=_safe_table(S.direct_debit_mandates_table_name),
     fx_rates=_safe_table(S.fx_rates_table_name),
     ats_integration_links=_safe_table(S.ats_integration_links_table_name),
+    crm_campaigns=_safe_table(S.crm_campaigns_table_name),
+    crm_campaign_send_log=_safe_table(S.crm_campaign_send_log_table_name),
+    marketing_email_templates=_safe_table(S.marketing_email_templates_table_name),
+    marketing_contact_lists=_safe_table(S.marketing_contact_lists_table_name),
+    marketing_tracking_codes=_safe_table(S.marketing_tracking_codes_table_name),
+    marketing_web_lead_captures=_safe_table(S.marketing_web_lead_captures_table_name),
 )
