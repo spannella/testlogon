@@ -17858,3 +17858,126 @@ class TenantLeaseListOut(BaseModel):
     leases: List[TenantLeaseSummaryOut]
     count: int
     next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel-PMS models — HTL-005 (Room Types)
+# ---------------------------------------------------------------------------
+
+class RoomTypeIn(BaseModel):
+    name: str
+    description: str = ""
+    base_occupancy_adults: int = Field(ge=0)
+    base_occupancy_children: int = Field(default=0, ge=0)
+    max_occupancy: int = Field(ge=1)
+    bed_type: Literal["single", "twin", "double", "queen", "king", "suite"]
+    size_sqft: int = Field(default=0, ge=0)
+    base_nightly_rate_cents: int = Field(ge=0)
+    photo_urls: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_occupancy(self) -> "RoomTypeIn":
+        if self.max_occupancy < self.base_occupancy_adults + self.base_occupancy_children:
+            raise ValueError(
+                "max_occupancy must be >= base_occupancy_adults + base_occupancy_children"
+            )
+        return self
+
+
+class RoomTypeOut(BaseModel):
+    hotel_id: str
+    room_type_id: str
+    name: str
+    description: str
+    base_occupancy_adults: int
+    base_occupancy_children: int
+    max_occupancy: int
+    bed_type: Literal["single", "twin", "double", "queen", "king", "suite"]
+    size_sqft: int
+    base_nightly_rate_cents: int
+    photo_urls: List[str]
+    status: Literal["active", "archived"]
+    created_at: int
+    updated_at: int
+
+
+class RoomTypeUpdateIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    base_occupancy_adults: Optional[int] = Field(default=None, ge=0)
+    base_occupancy_children: Optional[int] = Field(default=None, ge=0)
+    max_occupancy: Optional[int] = Field(default=None, ge=1)
+    bed_type: Optional[Literal["single", "twin", "double", "queen", "king", "suite"]] = None
+    size_sqft: Optional[int] = Field(default=None, ge=0)
+    base_nightly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    photo_urls: Optional[List[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel-PMS models — HTL-006 (Individual Rooms)
+# ---------------------------------------------------------------------------
+
+class RoomIn(BaseModel):
+    room_type_id: str
+    room_number: str
+    floor: int
+    status: Literal["available", "out_of_service"] = "available"
+
+
+class RoomOut(BaseModel):
+    hotel_id: str
+    room_id: str
+    room_type_id: str
+    room_number: str
+    floor: int
+    status: Literal["available", "out_of_service"]
+    housekeeping_status: Literal["clean", "dirty", "inspected", "out_of_service"]
+    created_at: int
+    updated_at: int
+
+
+class RoomUpdateIn(BaseModel):
+    room_type_id: Optional[str] = None
+    room_number: Optional[str] = None
+    floor: Optional[int] = None
+    status: Optional[Literal["available", "out_of_service"]] = None
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel-PMS models — HTL-007 (Housekeeping)
+# ---------------------------------------------------------------------------
+
+class HousekeepingStatusIn(BaseModel):
+    housekeeping_status: Literal["clean", "dirty", "inspected", "out_of_service"]
+
+
+class HkTaskIn(BaseModel):
+    room_id: str
+    assignee_sub: str = ""
+    due_at: int = Field(default=0, ge=0)
+    notes: str = ""
+
+
+class HkTaskOut(BaseModel):
+    hotel_id: str
+    task_id: str
+    room_id: str
+    assignee_sub: str
+    status: Literal["open", "in_progress", "done"]
+    due_at: int
+    notes: str
+    created_at: int
+    updated_at: int
+    completed_at: int
+
+
+class HkTaskAssignIn(BaseModel):
+    assignee_sub: str
+
+
+class HkTaskUpdateIn(BaseModel):
+    status: Optional[Literal["open", "in_progress", "done"]] = None
+    notes: Optional[str] = None
+    due_at: Optional[int] = Field(default=None, ge=0)

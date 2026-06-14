@@ -371,6 +371,8 @@ class Tables:
     product_depth: Any
     ats_pipeline: Any
     property_tenants: Any
+    # QloApps hotel-PMS vertical (HTL-001..HTL-009)
+    hotel_rooms: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -677,4 +679,6 @@ T = Tables(
     product_depth=_safe_table(S.product_depth_table_name),
     ats_pipeline=_safe_table(S.ats_pipeline_table_name),
     property_tenants=_safe_table(S.property_tenants_table_name),
+    # QloApps hotel-PMS vertical (HTL-001..HTL-009)
+    hotel_rooms=_safe_table(S.hotel_rooms_table_name),
 )

@@ -3097,6 +3097,8 @@ class Settings:
     kb_attachment_max_bytes: int = int(os.environ.get("KB_ATTACHMENT_MAX_BYTES", str(20 * 1024 * 1024)))
     # KB-002: expiry checker
     kb_expiry_checker_interval_seconds: int = int(os.environ.get("KB_EXPIRY_CHECKER_INTERVAL_SECONDS", "3600"))
+    # QloApps hotel-PMS (HTL-005..009): rooms table (master flag hotel_pms_enabled defined above)
+    hotel_rooms_table_name: str = os.environ.get("HOTEL_ROOMS_TABLE_NAME", "hotel_rooms")
 
 
 S = Settings()

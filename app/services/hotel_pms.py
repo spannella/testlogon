@@ -10,9 +10,10 @@ no ``dev_mode`` branch anywhere in this file.
 from __future__ import annotations
 
 import hashlib
+from uuid import uuid4
 from typing import Any
 
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
@@ -420,3 +421,611 @@ def list_amenities_for(*, target_type: str, target_id: str) -> list[dict]:
         }
         result.append(entry)
     return result
+
+
+
+# ── HTL-005..009: room types + rooms + housekeeping (appended) ──────────────
+
+def _assert_hotel_owner(hotel_id: str, user_sub: str) -> dict:
+    """Read META row; raise 404/403 on missing/wrong owner. Returns the META dict."""
+    resp = T.hotels.get_item(Key=_meta_key(hotel_id))
+    meta = resp.get("Item")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Hotel not found")
+    if meta.get("owner_sub") != user_sub:
+        raise HTTPException(status_code=403, detail="Not the hotel owner")
+    return meta
+
+
+# ---------------------------------------------------------------------------
+# HTL-005: Room Type SK helper + Decimal coercion
+# ---------------------------------------------------------------------------
+
+_ROOMTYPE_INT_FIELDS = (
+    "base_occupancy_adults", "base_occupancy_children", "max_occupancy",
+    "size_sqft", "base_nightly_rate_cents", "created_at", "updated_at",
+)
+
+
+def _roomtype_sk(room_type_id: str) -> str:
+    return f"ROOMTYPE#{room_type_id}"
+
+
+def _coerce_room_type(item: dict) -> dict:
+    for f in _ROOMTYPE_INT_FIELDS:
+        if f in item:
+            item[f] = _to_int(item[f])
+    if "photo_urls" not in item:
+        item["photo_urls"] = []
+    return item
+
+
+# ---------------------------------------------------------------------------
+# HTL-005: Room Type CRUD
+# ---------------------------------------------------------------------------
+
+
+def create_room_type(
+    hotel_id: str,
+    *,
+    name: str,
+    description: str = "",
+    base_occupancy_adults: int,
+    base_occupancy_children: int = 0,
+    max_occupancy: int,
+    bed_type: str,
+    size_sqft: int = 0,
+    base_nightly_rate_cents: int,
+    photo_urls: list[str] | None = None,
+    user_sub: str,
+) -> dict:
+    _require_enabled()
+    # Validate parent hotel + ownership
+    _assert_hotel_owner(hotel_id, user_sub)
+    # Occupancy invariant
+    if max_occupancy < base_occupancy_adults + base_occupancy_children:
+        raise HTTPException(
+            status_code=422,
+            detail="max_occupancy must be >= base_occupancy_adults + base_occupancy_children",
+        )
+    room_type_id = uuid4().hex
+    ts = now_ts()
+    item: dict = {
+        "hotel_id": hotel_id,
+        "sk": _roomtype_sk(room_type_id),
+        "room_type_id": room_type_id,
+        "name": name,
+        "description": description,
+        "base_occupancy_adults": base_occupancy_adults,
+        "base_occupancy_children": base_occupancy_children,
+        "max_occupancy": max_occupancy,
+        "bed_type": bed_type,
+        "size_sqft": size_sqft,
+        "base_nightly_rate_cents": base_nightly_rate_cents,
+        "photo_urls": photo_urls or [],
+        "status": "active",
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    T.hotels.put_item(Item=item)
+    _audit("hotel.room_type.created", user_sub, hotel_id=hotel_id, room_type_id=room_type_id, name=name)
+    return _coerce_room_type(item)
+
+
+def get_room_type(hotel_id: str, room_type_id: str) -> dict | None:
+    _require_enabled()
+    resp = T.hotels.get_item(Key={"hotel_id": hotel_id, "sk": _roomtype_sk(room_type_id)})
+    item = resp.get("Item")
+    return _coerce_room_type(item) if item else None
+
+
+def list_room_types(
+    hotel_id: str,
+    *,
+    status: str = "active",
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict:
+    _require_enabled()
+    from app.core.cursor import decode_cursor, encode_cursor
+
+    kwargs: dict = {
+        "IndexName": "GSI_HOTEL_ROOMTYPES",
+        "KeyConditionExpression": Key("hotel_id").eq(hotel_id),
+        "ScanIndexForward": False,
+        "Limit": min(limit, 200),
+    }
+    if cursor:
+        lek = decode_cursor(cursor)
+        if lek:
+            kwargs["ExclusiveStartKey"] = lek
+
+    resp = T.hotels.query(**kwargs)
+    raw_items = resp.get("Items", [])
+    # Exclude the META row and any non-ROOMTYPE# rows; apply status filter
+    items = []
+    for it in raw_items:
+        sk = it.get("sk", "")
+        if sk == "META" or not sk.startswith("ROOMTYPE#"):
+            continue
+        if status not in ("all", None) and it.get("status") != status:
+            continue
+        items.append(_coerce_room_type(it))
+
+    next_key = resp.get("LastEvaluatedKey")
+    return {
+        "room_types": items,
+        "count": len(items),
+        "cursor": encode_cursor(next_key) if next_key else None,
+    }
+
+
+def update_room_type(hotel_id: str, room_type_id: str, *, user_sub: str, **kwargs: Any) -> dict:
+    _require_enabled()
+    existing = get_room_type(hotel_id, room_type_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Room type not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+
+    # Merged occupancy invariant
+    adults = _to_int(kwargs.get("base_occupancy_adults", existing.get("base_occupancy_adults", 0)))
+    children = _to_int(kwargs.get("base_occupancy_children", existing.get("base_occupancy_children", 0)))
+    max_occ = _to_int(kwargs.get("max_occupancy", existing.get("max_occupancy", 1)))
+    if max_occ < adults + children:
+        raise HTTPException(
+            status_code=422,
+            detail="max_occupancy must be >= base_occupancy_adults + base_occupancy_children",
+        )
+
+    _ALLOWED = {
+        "name", "description", "base_occupancy_adults", "base_occupancy_children",
+        "max_occupancy", "bed_type", "size_sqft", "base_nightly_rate_cents", "photo_urls",
+    }
+    updates = {k: v for k, v in kwargs.items() if k in _ALLOWED}
+    ts = now_ts()
+    # Build UpdateExpression (escape 'name' reserved word)
+    expr_parts = []
+    expr_names: dict = {}
+    expr_values: dict = {":ts": ts}
+    for i, (k, v) in enumerate(updates.items()):
+        alias = f"#f{i}"
+        val_alias = f":v{i}"
+        expr_names[alias] = k
+        expr_values[val_alias] = v
+        expr_parts.append(f"{alias} = {val_alias}")
+    expr_parts.append("updated_at = :ts")
+
+    rt_update_kwargs: dict = {
+        "Key": {"hotel_id": hotel_id, "sk": _roomtype_sk(room_type_id)},
+        "UpdateExpression": "SET " + ", ".join(expr_parts),
+        "ExpressionAttributeValues": expr_values,
+        "ReturnValues": "ALL_NEW",
+    }
+    if expr_names:
+        rt_update_kwargs["ExpressionAttributeNames"] = expr_names
+    resp = T.hotels.update_item(**rt_update_kwargs)
+    _audit("hotel.room_type.updated", user_sub, hotel_id=hotel_id, room_type_id=room_type_id, fields=list(updates.keys()))
+    return _coerce_room_type(resp["Attributes"])
+
+
+def archive_room_type(hotel_id: str, room_type_id: str, *, user_sub: str) -> dict:
+    _require_enabled()
+    existing = get_room_type(hotel_id, room_type_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Room type not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+    ts = now_ts()
+    resp = T.hotels.update_item(
+        Key={"hotel_id": hotel_id, "sk": _roomtype_sk(room_type_id)},
+        UpdateExpression="SET #s = :archived, updated_at = :ts",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":archived": "archived", ":ts": ts},
+        ReturnValues="ALL_NEW",
+    )
+    _audit("hotel.room_type.archived", user_sub, hotel_id=hotel_id, room_type_id=room_type_id)
+    return _coerce_room_type(resp["Attributes"])
+
+
+# ---------------------------------------------------------------------------
+# HTL-006: Room SK helper + Decimal coercion
+# ---------------------------------------------------------------------------
+
+_ROOM_INT_FIELDS = ("floor", "created_at", "updated_at")
+_IMMUTABLE_ROOM_FIELDS = {"hotel_id", "sk", "room_id", "created_at", "housekeeping_status"}
+
+
+def _room_sk(room_id: str) -> str:
+    return f"ROOM#{room_id}"
+
+
+def _coerce_room(item: dict) -> dict:
+    for f in _ROOM_INT_FIELDS:
+        if f in item:
+            item[f] = _to_int(item[f])
+    return item
+
+
+# ---------------------------------------------------------------------------
+# HTL-006: Room CRUD
+# ---------------------------------------------------------------------------
+
+
+def create_room(
+    hotel_id: str,
+    *,
+    room_type_id: str,
+    room_number: str,
+    floor: int,
+    status: str = "available",
+    user_sub: str,
+) -> dict:
+    _require_enabled()
+    if not room_number:
+        raise HTTPException(status_code=422, detail="room_number must not be empty")
+    # Validate parent hotel + ownership
+    _assert_hotel_owner(hotel_id, user_sub)
+    # FK: room_type_id must resolve on this hotel
+    if get_room_type(hotel_id, room_type_id) is None:
+        raise HTTPException(status_code=404, detail="Room type not found")
+    room_id = uuid4().hex
+    ts = now_ts()
+    item: dict = {
+        "hotel_id": hotel_id,
+        "sk": _room_sk(room_id),
+        "room_id": room_id,
+        "room_type_id": room_type_id,
+        "room_number": room_number,
+        "floor": floor,
+        "status": status,
+        "housekeeping_status": "clean",
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    T.hotel_rooms.put_item(Item=item)
+    _audit("hotel.room.created", user_sub, hotel_id=hotel_id, room_id=room_id,
+           room_type_id=room_type_id, room_number=room_number)
+    return _coerce_room(item)
+
+
+def get_room(hotel_id: str, room_id: str) -> dict | None:
+    _require_enabled()
+    resp = T.hotel_rooms.get_item(Key={"hotel_id": hotel_id, "sk": _room_sk(room_id)})
+    item = resp.get("Item")
+    return _coerce_room(item) if item else None
+
+
+def list_rooms(
+    hotel_id: str,
+    *,
+    room_type_id: str | None = None,
+    status: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict:
+    _require_enabled()
+    from app.core.cursor import decode_cursor, encode_cursor
+
+    limit = min(limit, 200)
+    start_key = decode_cursor(cursor) if cursor else None
+
+    if room_type_id is not None:
+        # GSI_ROOMTYPE: by room type
+        kwargs: dict = {
+            "IndexName": "GSI_ROOMTYPE",
+            "KeyConditionExpression": Key("room_type_id").eq(room_type_id),
+            "ScanIndexForward": False,
+        }
+    else:
+        # Base table: by hotel, only ROOM# rows
+        kwargs = {
+            "KeyConditionExpression": (
+                Key("hotel_id").eq(hotel_id) & Key("sk").begins_with("ROOM#")
+            ),
+        }
+
+    if status is not None:
+        kwargs["FilterExpression"] = Attr("status").eq(status)
+
+    if start_key:
+        kwargs["ExclusiveStartKey"] = start_key
+
+    items: list = []
+    last_key = None
+    # Loop LastEvaluatedKey when filtering (FilterExpression doesn't reduce page size)
+    while True:
+        resp = T.hotel_rooms.query(**kwargs)
+        for it in resp.get("Items", []):
+            items.append(_coerce_room(it))
+            if len(items) >= limit:
+                break
+        last_key = resp.get("LastEvaluatedKey")
+        if len(items) >= limit or not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+
+    return {
+        "rooms": items,
+        "count": len(items),
+        "cursor": encode_cursor(last_key) if last_key else None,
+    }
+
+
+def update_room(hotel_id: str, room_id: str, *, user_sub: str, **kwargs: Any) -> dict:
+    _require_enabled()
+    existing = get_room(hotel_id, room_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+
+    # Drop immutable + protected fields (housekeeping_status routes through set_room_housekeeping_status)
+    for drop in list(_IMMUTABLE_ROOM_FIELDS):
+        kwargs.pop(drop, None)
+
+    # FK re-validation if room_type_id changes
+    if "room_type_id" in kwargs:
+        if get_room_type(hotel_id, kwargs["room_type_id"]) is None:
+            raise HTTPException(status_code=404, detail="Room type not found")
+
+    if not kwargs:
+        # Nothing to update; return existing
+        return existing
+
+    ts = now_ts()
+    expr_parts = []
+    expr_names: dict = {}
+    expr_values: dict = {":ts": ts}
+    for i, (k, v) in enumerate(kwargs.items()):
+        alias = f"#f{i}"
+        val_alias = f":v{i}"
+        expr_names[alias] = k
+        expr_values[val_alias] = v
+        expr_parts.append(f"{alias} = {val_alias}")
+    expr_parts.append("updated_at = :ts")
+
+    update_kwargs: dict = {
+        "Key": {"hotel_id": hotel_id, "sk": _room_sk(room_id)},
+        "UpdateExpression": "SET " + ", ".join(expr_parts),
+        "ExpressionAttributeValues": expr_values,
+        "ReturnValues": "ALL_NEW",
+    }
+    if expr_names:
+        update_kwargs["ExpressionAttributeNames"] = expr_names
+    resp = T.hotel_rooms.update_item(**update_kwargs)
+    _audit("hotel.room.updated", user_sub, hotel_id=hotel_id, room_id=room_id, fields=list(kwargs.keys()))
+    return _coerce_room(resp["Attributes"])
+
+
+def delete_room(hotel_id: str, room_id: str, *, user_sub: str) -> bool:
+    """Hard-delete a room row. Returns True if it existed, False if absent (no-raise)."""
+    _require_enabled()
+    existing = get_room(hotel_id, room_id)
+    if existing is None:
+        return False
+    # Best-effort ownership check; if parent hotel gone, delete the orphaned row anyway
+    try:
+        resp = T.hotels.get_item(Key=_meta_key(hotel_id))
+        meta = resp.get("Item")
+        if meta and meta.get("owner_sub") != user_sub:
+            raise HTTPException(status_code=403, detail="Not the hotel owner")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    T.hotel_rooms.delete_item(Key={"hotel_id": hotel_id, "sk": _room_sk(room_id)})
+    _audit("hotel.room.deleted", user_sub, hotel_id=hotel_id, room_id=room_id)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# HTL-007: Housekeeping status transition
+# ---------------------------------------------------------------------------
+
+_VALID_HK_STATUS = {"clean", "dirty", "inspected", "out_of_service"}
+_HKTASK_INT_FIELDS = ("due_at", "created_at", "updated_at", "completed_at")
+
+
+def _hktask_sk(task_id: str) -> str:
+    return f"HKTASK#{task_id}"
+
+
+def _coerce_task(item: dict) -> dict:
+    for f in _HKTASK_INT_FIELDS:
+        if f in item:
+            item[f] = _to_int(item[f])
+    # assignee_sub may be absent (sparse GSI — unassigned task); default to ""
+    item.setdefault("assignee_sub", "")
+    return item
+
+
+def set_room_housekeeping_status(
+    hotel_id: str,
+    room_id: str,
+    *,
+    housekeeping_status: str,
+    user_sub: str,
+) -> dict:
+    _require_enabled()
+    if housekeeping_status not in _VALID_HK_STATUS:
+        raise HTTPException(status_code=422, detail="Invalid housekeeping status")
+    existing = get_room(hotel_id, room_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+    ts = now_ts()
+    T.hotel_rooms.update_item(
+        Key={"hotel_id": hotel_id, "sk": _room_sk(room_id)},
+        UpdateExpression="SET housekeeping_status = :hk, updated_at = :ts",
+        ExpressionAttributeValues={":hk": housekeeping_status, ":ts": ts},
+    )
+    _audit("hotel.room.housekeeping_status", user_sub, hotel_id=hotel_id, room_id=room_id,
+           housekeeping_status=housekeeping_status)
+    # Re-read and return the updated row
+    updated = get_room(hotel_id, room_id)
+    return updated  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# HTL-007: Housekeeping task CRUD
+# ---------------------------------------------------------------------------
+
+
+def create_hk_task(
+    hotel_id: str,
+    *,
+    room_id: str,
+    assignee_sub: str = "",
+    due_at: int = 0,
+    notes: str = "",
+    user_sub: str,
+) -> dict:
+    _require_enabled()
+    # FK: room must exist on this hotel
+    if get_room(hotel_id, room_id) is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+    task_id = uuid4().hex
+    ts = now_ts()
+    item: dict = {
+        "hotel_id": hotel_id,
+        "sk": _hktask_sk(task_id),
+        "task_id": task_id,
+        "room_id": room_id,
+        "status": "open",
+        "due_at": int(due_at),
+        "notes": notes or "",
+        "created_at": ts,
+        "updated_at": ts,
+        "completed_at": 0,
+    }
+    # assignee_sub="" means unassigned; omit from item so the row is sparse in
+    # GSI_HK_ASSIGNEE (DynamoDB/moto reject empty strings as GSI partition keys).
+    # The field is always returned as "" if absent (coerced in _coerce_task).
+    if assignee_sub:
+        item["assignee_sub"] = assignee_sub
+    T.hotel_rooms.put_item(Item=item)
+    _audit("hotel.hk_task.created", user_sub, hotel_id=hotel_id, room_id=room_id,
+           task_id=task_id, assignee_sub=assignee_sub)
+    return _coerce_task(item)
+
+
+def assign_hk_task(
+    hotel_id: str,
+    task_id: str,
+    *,
+    assignee_sub: str,
+    user_sub: str,
+) -> dict:
+    _require_enabled()
+    resp = T.hotel_rooms.get_item(Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)})
+    if not resp.get("Item"):
+        raise HTTPException(status_code=404, detail="Task not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+    ts = now_ts()
+    if assignee_sub:
+        # Write the assignee — naturally projects the row into GSI_HK_ASSIGNEE
+        T.hotel_rooms.update_item(
+            Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)},
+            UpdateExpression="SET assignee_sub = :a, updated_at = :ts",
+            ExpressionAttributeValues={":a": assignee_sub, ":ts": ts},
+        )
+    else:
+        # Unassigning: remove the attribute so the row is sparse in GSI_HK_ASSIGNEE
+        T.hotel_rooms.update_item(
+            Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)},
+            UpdateExpression="REMOVE assignee_sub SET updated_at = :ts",
+            ExpressionAttributeValues={":ts": ts},
+        )
+    _audit("hotel.hk_task.assigned", user_sub, hotel_id=hotel_id, task_id=task_id,
+           assignee_sub=assignee_sub)
+    resp2 = T.hotel_rooms.get_item(Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)})
+    return _coerce_task(resp2["Item"])
+
+
+def list_hk_tasks(
+    hotel_id: str | None = None,
+    *,
+    status: str | None = None,
+    assignee_sub: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict:
+    _require_enabled()
+    if hotel_id is None and assignee_sub is None:
+        raise HTTPException(status_code=422, detail="hotel_id or assignee_sub required")
+
+    from app.core.cursor import decode_cursor, encode_cursor
+
+    limit = min(limit, 200)
+    start_key = decode_cursor(cursor) if cursor else None
+
+    if assignee_sub is not None:
+        # By assignee → GSI_HK_ASSIGNEE
+        kwargs: dict = {
+            "IndexName": "GSI_HK_ASSIGNEE",
+            "KeyConditionExpression": Key("assignee_sub").eq(assignee_sub),
+            "ScanIndexForward": False,
+        }
+        if status is not None:
+            kwargs["FilterExpression"] = Attr("status").eq(status) & Attr("sk").begins_with("HKTASK#")
+        else:
+            kwargs["FilterExpression"] = Attr("sk").begins_with("HKTASK#")
+    elif status is not None:
+        # By hotel + status → GSI_HK_TASK_STATUS
+        kwargs = {
+            "IndexName": "GSI_HK_TASK_STATUS",
+            "KeyConditionExpression": Key("hotel_id").eq(hotel_id) & Key("status").eq(status),
+            "FilterExpression": Attr("sk").begins_with("HKTASK#"),
+        }
+    else:
+        # By hotel (all tasks) → base table PK + begins_with HKTASK#
+        kwargs = {
+            "KeyConditionExpression": (
+                Key("hotel_id").eq(hotel_id) & Key("sk").begins_with("HKTASK#")
+            ),
+        }
+
+    if start_key:
+        kwargs["ExclusiveStartKey"] = start_key
+
+    items: list = []
+    last_key = None
+    while True:
+        resp = T.hotel_rooms.query(**kwargs)
+        for it in resp.get("Items", []):
+            items.append(_coerce_task(it))
+            if len(items) >= limit:
+                break
+        last_key = resp.get("LastEvaluatedKey")
+        if len(items) >= limit or not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+
+    return {
+        "tasks": items,
+        "count": len(items),
+        "cursor": encode_cursor(last_key) if last_key else None,
+    }
+
+
+def complete_hk_task(hotel_id: str, task_id: str, *, user_sub: str) -> dict:
+    _require_enabled()
+    resp = T.hotel_rooms.get_item(Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)})
+    if not resp.get("Item"):
+        raise HTTPException(status_code=404, detail="Task not found")
+    _assert_hotel_owner(hotel_id, user_sub)
+    ts = now_ts()
+    try:
+        T.hotel_rooms.update_item(
+            Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)},
+            UpdateExpression="SET #s = :done, completed_at = :ts, updated_at = :ts",
+            ConditionExpression="#s <> :done",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":done": "done", ":ts": ts},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        # Already done — idempotent no-op
+    _audit("hotel.hk_task.completed", user_sub, hotel_id=hotel_id, task_id=task_id)
+    resp2 = T.hotel_rooms.get_item(Key={"hotel_id": hotel_id, "sk": _hktask_sk(task_id)})
+    return _coerce_task(resp2["Item"])

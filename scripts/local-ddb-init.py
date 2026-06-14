@@ -41,6 +41,42 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # QloApps hotel-PMS vertical (HTL-001 + HTL-005): hotel entity table.
+        # META header row + ROOMTYPE#{room_type_id} + AMEN#{amenity_id} child rows.
+        # GSI_OWNER: list a hotelier's hotels newest-first (PK=owner_sub, SK=created_at).
+        # GSI_STATUS: admin listing by status (PK=status, SK=created_at).
+        # GSI_HOTEL_ROOMTYPES: list a hotel's room types newest-first (PK=hotel_id, SK=created_at).
+        # attr_types: created_at is N (integer Unix seconds from now_ts()).
+        TableDef(
+            _resolve_table_name(S.hotels_table_name, "hotels"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",  "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS",         "partition_key": "status",     "sort_key": "created_at"},
+                {"index_name": "GSI_HOTEL_ROOMTYPES","partition_key": "hotel_id",   "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QloApps hotel-PMS vertical (HTL-006 + HTL-007): individual rooms table.
+        # ROOM#{room_id} rows + HKTASK#{task_id} child rows on the hotel partition.
+        # GSI_ROOMTYPE: list rooms of a given type newest-first (PK=room_type_id, SK=created_at).
+        # GSI_HK_STATUS: query a hotel's rooms by housekeeping status (PK=hotel_id, SK=hk_status).
+        # GSI_HK_TASK_STATUS: list a hotel's tasks by status (PK=hotel_id, SK=status).
+        # GSI_HK_ASSIGNEE: list a staffer's assigned tasks newest-first (PK=assignee_sub, SK=created_at).
+        # attr_types: created_at is N; housekeeping_status and status are S (no override needed).
+        TableDef(
+            _resolve_table_name(S.hotel_rooms_table_name, "hotel_rooms"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ROOMTYPE",       "partition_key": "room_type_id", "sort_key": "created_at"},
+                {"index_name": "GSI_HK_STATUS",      "partition_key": "hotel_id",     "sort_key": "housekeeping_status"},
+                {"index_name": "GSI_HK_TASK_STATUS", "partition_key": "hotel_id",     "sort_key": "status"},
+                {"index_name": "GSI_HK_ASSIGNEE",    "partition_key": "assignee_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Knowledge Base (KB-001) — crm_kb_articles single-table for all KB data
         TableDef(
             _resolve_table_name(S.kb_articles_table, "crm_kb_articles"),
@@ -2936,20 +2972,6 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",         "sort_key": "created_at"},
                 {"index_name": "GSI_STATUS",         "partition_key": "status",            "sort_key": "created_at"},
                 {"index_name": "GSI_UNIT_OCCUPANCY", "partition_key": "property_id",       "sort_key": "occupancy_status"},
-            ],
-            attr_types={"created_at": "N"},
-        ),
-        # QloApps hotel-PMS vertical (HTL-001): hotel entity table.
-        # GSI_OWNER: list a hotelier's hotels newest-first (PK=owner_sub, SK=created_at).
-        # GSI_STATUS: admin listing by status (PK=status, SK=created_at).
-        # attr_types: created_at is N (integer Unix seconds from now_ts()).
-        TableDef(
-            _resolve_table_name(S.hotels_table_name, "hotels"),
-            "hotel_id",
-            "sk",
-            gsi=[
-                {"index_name": "GSI_OWNER",  "partition_key": "owner_sub",  "sort_key": "created_at"},
-                {"index_name": "GSI_STATUS", "partition_key": "status",     "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),

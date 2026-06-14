@@ -28,46 +28,86 @@ from moto import mock_aws
 # ---------------------------------------------------------------------------
 
 def _make_stub_module(module_name: str) -> types.ModuleType:
-    """Create and register a minimal stub module so lazy imports don't ImportError."""
+    """Create and register a minimal stub module so lazy imports don't ImportError.
+
+    Registers it BOTH in sys.modules (used by ``import app.services.x``) AND as the
+    parent-package attribute (used by ``from app.services import x``) so the test
+    and the service-under-test resolve to the same object regardless of import order.
+    """
     mod = types.ModuleType(module_name)
     sys.modules[module_name] = mod
+    parent, _, leaf = module_name.rpartition(".")
+    if parent in sys.modules:
+        setattr(sys.modules[parent], leaf, mod)
     return mod
 
 
+_STUBBED_MODULES = [
+    "app.services.job_orders",
+    "app.services.candidates",
+    "app.services.crm_activity_timeline",
+    "app.services.ats_job_orders",
+]
+
+
 def _ensure_stubs() -> None:
-    """Pre-populate stub modules that ats_pipeline.py lazy-imports."""
-    for name in [
-        "app.services.job_orders",
-        "app.services.candidates",
-        "app.services.crm_activity_timeline",
-        "app.services.ats_job_orders",
-    ]:
-        if name not in sys.modules:
-            _make_stub_module(name)
+    """Force-install stub modules that ats_pipeline.py lazy-imports.
 
-    # Provide no-op implementations so lazy imports succeed
-    jo = sys.modules["app.services.job_orders"]
-    if not hasattr(jo, "get_job_order"):
-        def _get_job_order(job_id: str) -> Dict[str, Any]:
-            return {"job_order_id": job_id, "title": "Test Job"}
-        jo.get_job_order = _get_job_order  # type: ignore[assignment]
+    These intentionally REPLACE the real modules for the duration of this test
+    module so the pipeline join logic runs against deterministic stubs; the
+    autouse fixture below restores the originals afterward so sibling test
+    files (e.g. test_cnd_candidates) see the real modules again.
+    """
+    jo = _make_stub_module("app.services.job_orders")
 
-    cnd = sys.modules["app.services.candidates"]
-    if not hasattr(cnd, "get_candidate"):
-        def _get_candidate(candidate_id: str) -> Dict[str, Any]:
-            return {"candidate_id": candidate_id, "name": "Test Candidate"}
-        cnd.get_candidate = _get_candidate  # type: ignore[assignment]
+    def _get_job_order(job_id: str) -> Dict[str, Any]:
+        return {"job_order_id": job_id, "title": "Test Job"}
 
-    crm = sys.modules["app.services.crm_activity_timeline"]
-    if not hasattr(crm, "record_crm_activity"):
-        crm.record_crm_activity = MagicMock()  # type: ignore[assignment]
+    jo.get_job_order = _get_job_order  # type: ignore[assignment]
 
-    ajo = sys.modules["app.services.ats_job_orders"]
-    if not hasattr(ajo, "adjust_placed_count"):
-        ajo.adjust_placed_count = MagicMock()  # type: ignore[assignment]
+    cnd = _make_stub_module("app.services.candidates")
+
+    def _get_candidate(candidate_id: str) -> Dict[str, Any]:
+        return {"candidate_id": candidate_id, "name": "Test Candidate"}
+
+    cnd.get_candidate = _get_candidate  # type: ignore[assignment]
+
+    crm = _make_stub_module("app.services.crm_activity_timeline")
+    crm.record_crm_activity = MagicMock()  # type: ignore[assignment]
+
+    ajo = _make_stub_module("app.services.ats_job_orders")
+    ajo.adjust_placed_count = MagicMock()  # type: ignore[assignment]
 
 
-_ensure_stubs()
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_cross_cluster_stubs():
+    """Install the cross-cluster stubs for this module only, then restore both
+    sys.modules AND the parent-package attributes so the real modules are
+    available to other test files."""
+    _MISSING = object()
+    saved_mod = {n: sys.modules.get(n) for n in _STUBBED_MODULES}
+    saved_attr = {}
+    for n in _STUBBED_MODULES:
+        parent, _, leaf = n.rpartition(".")
+        p = sys.modules.get(parent)
+        saved_attr[n] = getattr(p, leaf, _MISSING) if p is not None else _MISSING
+    _ensure_stubs()
+    try:
+        yield
+    finally:
+        for n in _STUBBED_MODULES:
+            if saved_mod[n] is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = saved_mod[n]
+            parent, _, leaf = n.rpartition(".")
+            p = sys.modules.get(parent)
+            if p is not None:
+                if saved_attr[n] is _MISSING:
+                    if hasattr(p, leaf):
+                        delattr(p, leaf)
+                else:
+                    setattr(p, leaf, saved_attr[n])
 
 
 # ---------------------------------------------------------------------------
