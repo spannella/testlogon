@@ -3024,10 +3024,6 @@ class Settings:
 
     # OpenBankProject umbrella master flag (cross-series, decision D4).
     # One kill-switch for the entire banking vertical; every OBP series gate
-    # ANDs this with its own per-series flag. Default OFF.
-    open_bank_project_enabled: bool = os.environ.get(
-        "OPEN_BANK_PROJECT_ENABLED", "false"
-    ).lower() == "true"
 
     # Banking accounts feature flags (ACC-001..ACC-004), all default OFF.
     banking_accounts_enabled: bool = os.environ.get(
@@ -3370,6 +3366,17 @@ class Settings:
     maintenance_escrow_max_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MAX_CENTS", "10000000"))
     maintenance_escrow_fee_bps: int = int(os.environ.get("MAINTENANCE_ESCROW_FEE_BPS", "0"))
     maintenance_escrow_payout_hold_seconds: int = int(os.environ.get("MAINTENANCE_ESCROW_PAYOUT_HOLD_SECONDS", "0"))
+
+    # QloApps Booking-Engine Storefront (HTL-025..HTL-027) — master flag reused from HTL-001 vertical (hotel_pms_enabled defined above via getattr). Table + RL settings owned here.
+    hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
+    hotel_booking_search_rl_max: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_RL_MAX", "60"))
+    hotel_booking_search_rl_window: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_RL_WINDOW", "3600"))
+    hotel_booking_search_max_los_nights: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_MAX_LOS_NIGHTS", "30"))
+    hotel_booking_search_max_rooms: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_MAX_ROOMS", "8"))
+    hotel_booking_cart_rl_max: int = int(os.environ.get("HOTEL_BOOKING_CART_RL_MAX", "120"))
+    hotel_booking_cart_rl_window: int = int(os.environ.get("HOTEL_BOOKING_CART_RL_WINDOW", "3600"))
+    hotel_booking_checkout_rl_max: int = int(os.environ.get("HOTEL_BOOKING_CHECKOUT_RL_MAX", "20"))
+    hotel_booking_checkout_rl_window: int = int(os.environ.get("HOTEL_BOOKING_CHECKOUT_RL_WINDOW", "3600"))
 
 
 S = Settings()

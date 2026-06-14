@@ -19821,3 +19821,171 @@ class EntitlementAuditEventOut(BaseModel):
 class EntitlementQueueOut(BaseModel):
     requests: List[EntitlementRequestOut]
     next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps Booking-Engine Storefront (HTL-025 .. HTL-027)
+# Public, unauthenticated, storefront-safe projections.
+# These are append-only additions; no existing model is modified.
+# ---------------------------------------------------------------------------
+
+class HotelAddress(BaseModel):
+    """HTL-025: Storefront-safe hotel address (mirrors HTL-001 HotelAddress)."""
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
+class HotelPolicies(BaseModel):
+    """HTL-025: Storefront-safe hotel policies (mirrors HTL-001 HotelPolicies)."""
+    cancellation_text: str = ""
+    pet_policy: str = ""
+    smoking: bool = False
+    children: bool = True
+
+
+class HotelContact(BaseModel):
+    """HTL-025: Storefront-safe hotel contact (mirrors HTL-001 HotelContact)."""
+    phone: str = ""
+    email: str = ""
+    website: str = ""
+
+
+class PublicHotelOut(BaseModel):
+    """HTL-025: Storefront-safe hotel projection (no owner_sub, no status, no internal fields)."""
+    hotel_id: str
+    name: str
+    description: str = ""
+    star_rating: int
+    check_in_time: str
+    check_out_time: str
+    address: HotelAddress
+    amenities: List[str] = []
+    photos: List[str] = []
+    policies: HotelPolicies
+    contact: HotelContact
+
+
+class PublicRoomTypeOut(BaseModel):
+    """HTL-025: Storefront-safe room-type projection."""
+    room_type_id: str
+    name: str
+    description: str = ""
+    occupancy_adults: int
+    occupancy_children: int
+    max_occupancy: int
+    bed_type: str
+    size_sqft: int
+    amenities: List[str] = []
+    photos: List[str] = []
+    base_rate_cents: int
+    currency: str = "usd"
+
+
+class PublicRoomTypeListOut(BaseModel):
+    """HTL-025: Storefront-safe list of room types."""
+    room_types: List[PublicRoomTypeOut]
+    count: int
+
+
+class PerNightAvailOut(BaseModel):
+    """HTL-026: Per-night availability + rate line in a stay quote."""
+    date: str
+    rooms_available: int
+    rate_cents: int
+
+
+class StayQuoteResultOut(BaseModel):
+    """HTL-026: One available room type's availability + total in a stay quote."""
+    room_type: PublicRoomTypeOut
+    available_rooms: int
+    per_night: List[PerNightAvailOut]
+    total_price_cents: int
+    currency: str
+
+
+class BookingStayQuoteOut(BaseModel):
+    """HTL-026: Full stay-search quote envelope (public booking-engine response)."""
+    hotel_id: str
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    results: List[StayQuoteResultOut]
+    currency: str
+
+
+class AddRoomToCartIn(BaseModel):
+    """HTL-027: Add a room-night selection to the booking cart."""
+    hotel_id: str
+    room_type_id: str
+    checkin: str
+    checkout: str
+    adults: int = Field(ge=1, default=1)
+    children: int = Field(ge=0, default=0)
+    rooms: int = Field(ge=1, default=1)
+
+
+class GuestDetailsIn(BaseModel):
+    """HTL-027: Guest snapshot for set_guest_details."""
+    name: str
+    email: str
+    phone: str
+    address: Optional[HotelAddress] = None
+
+
+class BookingCheckoutIn(BaseModel):
+    """HTL-027: Checkout payload."""
+    payment_method_token: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class BookingCartLineOut(BaseModel):
+    """HTL-027: A single room-night line in the booking cart projection."""
+    room_type_id: str
+    room_type_name: str
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    unit_price_cents: int
+    line_total_cents: int
+    currency: str
+
+
+class GuestSnapshotOut(BaseModel):
+    """HTL-027: Guest snapshot in the booking cart projection."""
+    name: str
+    email: str
+    phone: str
+    address: Optional[HotelAddress] = None
+
+
+class BookingCartOut(BaseModel):
+    """HTL-027: Storefront-safe booking cart projection."""
+    booking_cart_id: str
+    hotel_id: str
+    status: str
+    currency: str
+    lines: List[BookingCartLineOut]
+    total_cents: int
+    guest: Optional[GuestSnapshotOut] = None
+    created_at: str
+
+
+class BookingCheckoutResult(BaseModel):
+    """HTL-027: Checkout response."""
+    reservation_ids: List[str]
+    order_id: str
+    total_price_cents: int
+    currency: str
+    confirmation: dict

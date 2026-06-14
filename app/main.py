@@ -60,6 +60,7 @@ from app.routers.file_share_links import router as file_share_links_router
 from app.routers.file_share_links import public_router as file_share_links_public_router
 from app.routers.calendar import public_router as calendar_public_router
 from app.routers.calendar import public_event_router as calendar_public_event_router
+from app.routers.booking_engine import booking_engine_router
 from app.routers.calendar import integration_router as calendar_integration_router
 from app.routers.calendar import router as calendar_router
 from app.routers.seo_metadata import seo_metadata_router
@@ -635,6 +636,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_calendar_integrations_router)
     app.include_router(calendar_public_router)
     app.include_router(calendar_public_event_router)
+    app.include_router(booking_engine_router)
     app.include_router(file_share_links_router)
     app.include_router(file_share_links_public_router)
     app.include_router(seo_metadata_router)
