@@ -3100,5 +3100,17 @@ class Settings:
     # QloApps hotel-PMS (HTL-005..009): rooms table (master flag hotel_pms_enabled defined above)
     hotel_rooms_table_name: str = os.environ.get("HOTEL_ROOMS_TABLE_NAME", "hotel_rooms")
 
+    # Leases (open-property vertical — LSE cluster)
+    leases_enabled: bool = os.environ.get("LEASES_ENABLED", "0") not in (
+        "0", "false", "False"
+    )
+    leases_table_name: str = os.environ.get("LEASES_TABLE_NAME", "leases")
+    leases_renewal_notifications_enabled: bool = os.environ.get(
+        "LEASES_RENEWAL_NOTIFICATIONS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    leases_renewal_check_interval_seconds: int = int(
+        os.environ.get("LEASES_RENEWAL_CHECK_INTERVAL_SECONDS", "3600")
+    )
+
 
 S = Settings()

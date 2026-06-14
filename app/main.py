@@ -1094,6 +1094,17 @@ def create_app() -> FastAPI:
     app.include_router(kb_articles_router)
     app.include_router(kb_public_router)
     app.add_event_handler("startup", start_kb_expiry_checker_task)
+    # LSE — open-property Lease subsystem
+    from app.routers.leases import (
+        router as leases_router,
+        admin_router as leases_admin_router,
+        tenant_leases_router,
+    )
+    from app.services.leases import start_leases_renewal_check_task
+    app.include_router(leases_router)
+    app.include_router(leases_admin_router)
+    app.include_router(tenant_leases_router)
+    app.add_event_handler("startup", start_leases_renewal_check_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

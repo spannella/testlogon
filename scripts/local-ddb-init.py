@@ -41,6 +41,26 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # LSE-001 (open-property Lease entity). Two GSIs; numeric sort keys declared
+        # in attr_types to avoid ValidationException when queried with integer values.
+        TableDef(
+            _resolve_table_name(S.leases_table_name, "leases"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "leases-all-index",
+                    "partition_key": "GSI1PK",
+                    "sort_key": "GSI1SK",
+                },
+                {
+                    "index_name": "leases-by-status-index",
+                    "partition_key": "GSI2PK",
+                    "sort_key": "GSI2SK",
+                },
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
         # QloApps hotel-PMS vertical (HTL-001 + HTL-005): hotel entity table.
         # META header row + ROOMTYPE#{room_type_id} + AMEN#{amenity_id} child rows.
         # GSI_OWNER: list a hotelier's hotels newest-first (PK=owner_sub, SK=created_at).

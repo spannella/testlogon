@@ -17981,3 +17981,80 @@ class HkTaskUpdateIn(BaseModel):
     status: Optional[Literal["open", "in_progress", "done"]] = None
     notes: Optional[str] = None
     due_at: Optional[int] = Field(default=None, ge=0)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Leases (open-property vertical — LSE-001 / LSE-002 / LSE-003)
+# ---------------------------------------------------------------------------
+
+
+class LeaseCreateIn(BaseModel):
+    tenant_id: str
+    property_id: str
+    unit_id: str
+    start_date: int                                     # Unix ts; required
+    end_date: Optional[int] = None                      # Unix ts; None = month-to-month
+    monthly_rent_cents: int = Field(ge=0)
+    security_deposit_cents: int = Field(default=0, ge=0)
+    rent_due_day: int = Field(ge=1, le=28)
+    late_fee_type: str = "none"                         # none | flat | percent
+    late_fee_cents: int = Field(default=0, ge=0)
+    late_fee_percent_bps: int = Field(default=0, ge=0, le=10000)
+    late_fee_grace_days: int = Field(default=0, ge=0)
+    currency: str = "usd"
+    notes: str = ""
+    renewal_notice_days: int = Field(default=30, ge=1, le=365)
+    force_draft: bool = False
+
+
+class LeasePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    end_date: Optional[int] = None
+    monthly_rent_cents: Optional[int] = Field(default=None, ge=0)
+    security_deposit_cents: Optional[int] = Field(default=None, ge=0)
+    rent_due_day: Optional[int] = Field(default=None, ge=1, le=28)
+    late_fee_type: Optional[str] = None
+    late_fee_cents: Optional[int] = Field(default=None, ge=0)
+    late_fee_percent_bps: Optional[int] = Field(default=None, ge=0, le=10000)
+    late_fee_grace_days: Optional[int] = Field(default=None, ge=0)
+    currency: Optional[str] = None
+    notes: Optional[str] = None
+    renewal_notice_days: Optional[int] = Field(default=None, ge=1, le=365)
+
+
+class LeaseStatusTransitionIn(BaseModel):
+    status: str  # upcoming | active | ended
+
+
+class LeaseOut(BaseModel):
+    lease_id: str
+    lease_number: str
+    user_sub: str
+    tenant_id: str
+    property_id: str
+    unit_id: str
+    status: str
+    start_date: int
+    end_date: Optional[int] = None
+    monthly_rent_cents: int
+    security_deposit_cents: int
+    rent_due_day: int
+    late_fee_type: str
+    late_fee_cents: int
+    late_fee_percent_bps: int
+    late_fee_grace_days: int
+    currency: str
+    notes: str
+    renewal_notice_days: int
+    renewal_notified_at: Optional[int] = None
+    created_at: int
+    updated_at: int
+
+
+class LeaseListOut(BaseModel):
+    leases: List[LeaseOut]
+    count: int
+    next_cursor: Optional[str] = None
