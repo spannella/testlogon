@@ -367,6 +367,29 @@ const CandidateSkillProfilePage = lazy(() => import("@/pages/ats/skills/Candidat
 const ResumeSkillSearchPage = lazy(() => import("@/pages/ats/search/ResumeSkillSearchPage"));
 const AtsIntegrationPage = lazy(() => import("@/pages/ats/integration/AtsIntegrationPage"));
 
+// OBP (Open Bank Project) frontend — ACC, OAU, PLT, VEW, CUS, TXR, CSN, PAY
+const BankAccountsPage = lazy(() => import("@/pages/bankAccounts/BankAccountsPage"));
+const BankAccountDetailPage = lazy(() => import("@/pages/bankAccounts/BankAccountDetailPage"));
+const OAuthClientsPage = lazy(() => import("@/pages/oauthClients/OAuthClientsPage"));
+const OAuthClientDetailPage = lazy(() => import("@/pages/oauthClients/OAuthClientDetailPage"));
+const BankPlatformPage = lazy(() => import("@/pages/bankPlatform/BankPlatformPage"));
+const AccountViewsPage = lazy(() => import("@/pages/accountViews/AccountViewsPage"));
+const ViewResourcePage = lazy(() => import("@/pages/accountViews/ViewResourcePage"));
+const PublicViewPage = lazy(() => import("@/pages/accountViews/PublicViewPage"));
+const BankCustomersPage = lazy(() => import("@/pages/bankCustomers/BankCustomersPage"));
+const BankCardsPage = lazy(() => import("@/pages/bankCustomers/BankCardsPage"));
+const BankProductsPage = lazy(() => import("@/pages/bankCustomers/BankProductsPage"));
+const TransfersPage = lazy(() => import("@/pages/bankTransfers/TransfersPage"));
+const CreateTransferPage = lazy(() => import("@/pages/bankTransfers/CreateTransferPage"));
+const TransferDetailPage = lazy(() => import("@/pages/bankTransfers/TransferDetailPage"));
+const ConsentsPage = lazy(() => import("@/pages/bankConsents/ConsentsPage"));
+const CreateConsentPage = lazy(() => import("@/pages/bankConsents/CreateConsentPage"));
+const ConsentDetailPage = lazy(() => import("@/pages/bankConsents/ConsentDetailPage"));
+const CounterpartiesPage = lazy(() => import("@/pages/bankPayments/CounterpartiesPage"));
+const StandingOrdersPage = lazy(() => import("@/pages/bankPayments/StandingOrdersPage"));
+const MandatesPage = lazy(() => import("@/pages/bankPayments/MandatesPage"));
+const FxRatesPage = lazy(() => import("@/pages/bankPayments/FxRatesPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -543,6 +566,28 @@ export default function App() {
           <Route path="ats/skills/candidate/:candidateId" element={<CandidateSkillProfilePage />} />
           <Route path="ats/search" element={<ResumeSkillSearchPage />} />
           <Route path="ats/integration" element={<AtsIntegrationPage />} />
+          {/* OBP (Open Bank Project) — literals before dynamic params */}
+          <Route path="bank/accounts" element={<BankAccountsPage />} />
+          <Route path="bank/accounts/:accountId" element={<BankAccountDetailPage />} />
+          <Route path="bank/oauth-clients" element={<OAuthClientsPage />} />
+          <Route path="bank/oauth-clients/:clientId" element={<OAuthClientDetailPage />} />
+          <Route path="bank/platform" element={<BankPlatformPage />} />
+          <Route path="bank/views" element={<AccountViewsPage />} />
+          <Route path="bank/views/read/:resourceType/:resourceId/:viewId" element={<ViewResourcePage />} />
+          <Route path="bank/views/public/:token" element={<PublicViewPage />} />
+          <Route path="bank/customers" element={<BankCustomersPage />} />
+          <Route path="bank/cards" element={<BankCardsPage />} />
+          <Route path="bank/products" element={<BankProductsPage />} />
+          <Route path="bank/transfers" element={<TransfersPage />} />
+          <Route path="bank/transfers/new" element={<CreateTransferPage />} />
+          <Route path="bank/transfers/:requestId" element={<TransferDetailPage />} />
+          <Route path="bank/consents" element={<ConsentsPage />} />
+          <Route path="bank/consents/new" element={<CreateConsentPage />} />
+          <Route path="bank/consents/:consentId" element={<ConsentDetailPage />} />
+          <Route path="bank/payments/counterparties" element={<CounterpartiesPage />} />
+          <Route path="bank/payments/standing-orders" element={<StandingOrdersPage />} />
+          <Route path="bank/payments/mandates" element={<MandatesPage />} />
+          <Route path="bank/payments/fx" element={<FxRatesPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />

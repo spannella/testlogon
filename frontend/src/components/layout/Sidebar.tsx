@@ -89,6 +89,11 @@ import {
   Contact,
   GitMerge,
   FileSearch,
+  Landmark,
+  KeyRound,
+  Eye,
+  ArrowLeftRight,
+  UserCheck,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -341,6 +346,24 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Skill Registry", path: "/ats/skills", icon: <Tag className="h-5 w-5" /> },
       { label: "Resume & Skill Search", path: "/ats/search", icon: <FileSearch className="h-5 w-5" /> },
       { label: "ATS Integration", path: "/ats/integration", icon: <GitMerge className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Banking (OBP)",
+    items: [
+      { label: "Bank Accounts", path: "/bank/accounts", icon: <Landmark className="h-5 w-5" /> },
+      { label: "Transfers", path: "/bank/transfers", icon: <ArrowLeftRight className="h-5 w-5" /> },
+      { label: "Counterparties", path: "/bank/payments/counterparties", icon: <UserCheck className="h-5 w-5" /> },
+      { label: "Standing Orders", path: "/bank/payments/standing-orders", icon: <Repeat className="h-5 w-5" /> },
+      { label: "Mandates", path: "/bank/payments/mandates", icon: <FileText className="h-5 w-5" /> },
+      { label: "FX Rates", path: "/bank/payments/fx", icon: <ArrowLeftRight className="h-5 w-5" /> },
+      { label: "Consents", path: "/bank/consents", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Account Views", path: "/bank/views", icon: <Eye className="h-5 w-5" /> },
+      { label: "My Cards", path: "/bank/cards", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Customers", path: "/bank/customers", icon: <Users className="h-5 w-5" /> },
+      { label: "Financial Products", path: "/bank/products", icon: <Landmark className="h-5 w-5" /> },
+      { label: "OAuth Apps", path: "/bank/oauth-clients", icon: <KeyRound className="h-5 w-5" /> },
+      { label: "Developer Platform", path: "/bank/platform", icon: <Gauge className="h-5 w-5" /> },
     ],
   },
 ];

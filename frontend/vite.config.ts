@@ -71,6 +71,9 @@ export default defineConfig({
       "/kb": "http://localhost:8000",
       // OpenCATS public career portal router (mounted at /public/careers, outside /ui).
       "/public/careers": "http://localhost:8000",
+      // OBP OAuth2/OIDC discovery + authorize/token/jwks (mounted at root, outside /ui).
+      "/oauth": "http://localhost:8000",
+      "/.well-known": "http://localhost:8000",
       // Browser SSH terminal WebSocket — needs ws:true for the upgrade to proxy.
       // Must precede the generic "/api" entry so the WS path matches here first.
       "/api/browser-ssh": { target: "http://localhost:8000", ws: true, changeOrigin: true },
