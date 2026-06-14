@@ -310,6 +310,8 @@ private fun DetailContent(
                 )
                 RelatedRail(items = state.related, onOpenVideo = onOpenVideo)
             }
+
+            VideoCommentsSection()
         }
     }
 }
