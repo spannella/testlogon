@@ -57,7 +57,16 @@ class FeedViewModel @Inject constructor(
     private val actions: PostActionsRepository,
     private val bookmarks: FeedBookmarkRepository,
     private val polls: PollRepository,
+    private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
 ) : ViewModel() {
+
+    /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
+    val authorNames: StateFlow<Map<String, String>> = displayNames.names
+
+    /** Kick off (cached) resolution of an author's display name; UI reads it from [authorNames]. */
+    fun resolveAuthor(authorId: String) {
+        displayNames.resolve(authorId)
+    }
 
     private val refreshTrigger = MutableStateFlow(0L)
 

@@ -80,6 +80,7 @@ fun FeedRoute(
     val shareLauncher = remember { ShareLauncher() }
     val savedIds by viewModel.savedIds.collectAsState()
     val pollStates by viewModel.pollUiStates.collectAsState()
+    val authorNames by viewModel.authorNames.collectAsState()
     val unlockStates by paywallViewModel.states.collectAsState()
     val tipState by tipViewModel.state.collectAsState()
 
@@ -175,6 +176,8 @@ fun FeedRoute(
         },
         onTip = { post -> tipViewModel.open(post.id) },
         onEnsurePoll = viewModel::ensurePollState,
+        authorNames = authorNames,
+        onEnsureAuthorName = viewModel::resolveAuthor,
         onPollOptionClick = viewModel::onPollOptionSelected,
         onPollRetry = viewModel::onPollRetry,
         modifier = modifier,
@@ -215,6 +218,8 @@ fun FeedScreen(
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit = {},
+    authorNames: Map<String, String> = emptyMap(),
+    onEnsureAuthorName: (authorId: String) -> Unit = {},
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
 ) {
@@ -276,6 +281,8 @@ fun FeedScreen(
                         onShare = onShare,
                         onTip = onTip,
                         onEnsurePoll = onEnsurePoll,
+                        authorNames = authorNames,
+                        onEnsureAuthorName = onEnsureAuthorName,
                         onPollOptionClick = onPollOptionClick,
                         onPollRetry = onPollRetry,
                     )
@@ -305,6 +312,8 @@ private fun FeedList(
     onShare: (FeedPost) -> Unit,
     onTip: (FeedPost) -> Unit,
     onEnsurePoll: (FeedPost) -> Unit,
+    authorNames: Map<String, String>,
+    onEnsureAuthorName: (authorId: String) -> Unit,
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit,
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit,
 ) {
@@ -317,8 +326,11 @@ private fun FeedList(
             if (item != null) {
                 // Seed per-post poll state once the post is composed (idempotent).
                 LaunchedEffect(item.id) { if (item.poll != null) onEnsurePoll(item) }
+                // Resolve the author's display name once the post is composed (idempotent + cached).
+                LaunchedEffect(item.authorId) { onEnsureAuthorName(item.authorId) }
                 PostItem(
                     post = item,
+                    authorName = authorNames[item.authorId],
                     onPostClick = onPostClick,
                     onAuthorClick = onAuthorClick,
                     onMediaClick = { post, _ -> onPostClick(post) },

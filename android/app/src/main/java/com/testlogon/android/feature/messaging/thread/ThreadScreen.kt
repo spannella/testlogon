@@ -6,7 +6,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1092,115 +1096,111 @@ private fun MessageComposer(
     onAttachCountdown: () -> Unit,
 ) {
     Surface(tonalElevation = 2.dp) {
-        Row(
+        var actionsExpanded by remember { mutableStateOf(false) }
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 4.dp, vertical = 8.dp)
                 .testTag(ThreadTestTags.COMPOSER),
-            verticalAlignment = Alignment.Bottom,
         ) {
-            IconButton(
-                onClick = onAttachImage,
-                modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_IMAGE),
-            ) {
-                Icon(
-                    Icons.Filled.Image,
-                    contentDescription = stringResource(R.string.thread_attach_image),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
+            // The attachment actions are tucked behind the + toggle so the text field gets the full
+            // width when typing; tapping + reveals them (and any choice collapses the row again).
+            if (actionsExpanded) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachImage() },
+                        modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_IMAGE),
+                    ) {
+                        Icon(Icons.Filled.Image, contentDescription = stringResource(R.string.thread_attach_image), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachFile() },
+                        modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_FILE),
+                    ) {
+                        Icon(Icons.Filled.AttachFile, contentDescription = stringResource(R.string.thread_attach_file), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onShareVideo() },
+                        modifier = Modifier.size(44.dp).testTag(ThreadTestTags.SHARE_VIDEO),
+                    ) {
+                        Icon(Icons.Filled.Videocam, contentDescription = stringResource(R.string.thread_share_video), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onRecordVoice() },
+                        modifier = Modifier.size(44.dp).testTag(VoiceTestTags.RECORD),
+                    ) {
+                        Icon(Icons.Filled.Mic, contentDescription = stringResource(R.string.thread_record_voice), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachMedia() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_MEDIA),
+                    ) {
+                        Icon(Icons.Filled.EmojiEmotions, contentDescription = stringResource(R.string.composer_add_media), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachPoll() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_POLL),
+                    ) {
+                        Icon(Icons.Filled.Poll, contentDescription = stringResource(R.string.composer_add_poll), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachCountdown() },
+                        modifier = Modifier.size(44.dp).testTag(PaidMessageTestTags.COUNTDOWN_BUBBLE + "_attach"),
+                    ) {
+                        Icon(Icons.Filled.Timer, contentDescription = stringResource(R.string.composer_add_countdown), tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
             }
-            IconButton(
-                onClick = onAttachFile,
-                modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_FILE),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                Icon(
-                    Icons.Filled.AttachFile,
-                    contentDescription = stringResource(R.string.thread_attach_file),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(
-                onClick = onShareVideo,
-                modifier = Modifier.size(44.dp).testTag(ThreadTestTags.SHARE_VIDEO),
-            ) {
-                Icon(
-                    Icons.Filled.Videocam,
-                    contentDescription = stringResource(R.string.thread_share_video),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(
-                onClick = onRecordVoice,
-                modifier = Modifier.size(44.dp).testTag(VoiceTestTags.RECORD),
-            ) {
-                Icon(
-                    Icons.Filled.Mic,
-                    contentDescription = stringResource(R.string.thread_record_voice),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(
-                onClick = onAttachMedia,
-                modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_MEDIA),
-            ) {
-                Icon(
-                    Icons.Filled.EmojiEmotions,
-                    contentDescription = stringResource(R.string.composer_add_media),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(
-                onClick = onAttachPoll,
-                modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_POLL),
-            ) {
-                Icon(
-                    Icons.Filled.Poll,
-                    contentDescription = stringResource(R.string.composer_add_poll),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(
-                onClick = onAttachCountdown,
-                modifier = Modifier.size(44.dp).testTag(PaidMessageTestTags.COUNTDOWN_BUBBLE + "_attach"),
-            ) {
-                Icon(
-                    Icons.Filled.Timer,
-                    contentDescription = stringResource(R.string.composer_add_countdown),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            OutlinedTextField(
-                value = composer.draft,
-                onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f).testTag("thread_input"),
-                placeholder = { Text(stringResource(R.string.thread_composer_hint)) },
-                isError = composer.overLimit,
-                maxLines = 5,
-                supportingText = if (composer.overLimit) {
-                    { Text(stringResource(R.string.thread_composer_over_limit)) }
-                } else {
-                    null
-                },
-            )
-            IconButton(
-                onClick = onSend,
-                enabled = composer.isSendEnabled,
-                modifier = Modifier
-                    .padding(start = 4.dp)
-                    .size(48.dp)
-                    .testTag(ThreadTestTags.SEND),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = stringResource(R.string.thread_send),
-                    tint = if (composer.isSendEnabled) {
-                        MaterialTheme.colorScheme.primary
+                IconButton(
+                    onClick = { actionsExpanded = !actionsExpanded },
+                    modifier = Modifier.size(44.dp).testTag("thread_actions_toggle"),
+                ) {
+                    Icon(
+                        if (actionsExpanded) Icons.Filled.Close else Icons.Filled.Add,
+                        contentDescription = if (actionsExpanded) "Hide attachment options" else "Show attachment options",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                OutlinedTextField(
+                    value = composer.draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.weight(1f).testTag("thread_input"),
+                    placeholder = { Text(stringResource(R.string.thread_composer_hint)) },
+                    isError = composer.overLimit,
+                    maxLines = 5,
+                    supportingText = if (composer.overLimit) {
+                        { Text(stringResource(R.string.thread_composer_over_limit)) }
                     } else {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        null
                     },
                 )
+                IconButton(
+                    onClick = onSend,
+                    enabled = composer.isSendEnabled,
+                    modifier = Modifier
+                        .padding(start = 4.dp)
+                        .size(48.dp)
+                        .testTag(ThreadTestTags.SEND),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = stringResource(R.string.thread_send),
+                        tint = if (composer.isSendEnabled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        },
+                    )
+                }
             }
         }
     }

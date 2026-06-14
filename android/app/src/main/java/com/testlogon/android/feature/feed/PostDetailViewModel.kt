@@ -42,10 +42,19 @@ sealed interface PostDetailUiState {
 class PostDetailViewModel @Inject constructor(
     private val repository: FeedRepository,
     private val engagement: PostEngagementRepository,
+    private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     val postId: String = savedStateHandle.get<String>(PostDetailDest.ARG_POST_ID).orEmpty()
+
+    /** author id (email/user_sub) -> display name, resolved lazily for the shown post. */
+    val authorNames: StateFlow<Map<String, String>> = displayNames.names
+
+    /** Kick off (cached) resolution of the post author's display name; UI reads it from [authorNames]. */
+    fun resolveAuthor(authorId: String) {
+        displayNames.resolve(authorId)
+    }
 
     private val _uiState = MutableStateFlow<PostDetailUiState>(PostDetailUiState.Loading)
     val uiState: StateFlow<PostDetailUiState> = _uiState.asStateFlow()

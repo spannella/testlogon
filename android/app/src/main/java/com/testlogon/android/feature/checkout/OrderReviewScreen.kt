@@ -172,28 +172,36 @@ private fun OrderReviewContent(session: CheckoutSession) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(session.lineItems, key = { it.sku }) { line ->
-            OrderReviewLine(line)
+            OrderReviewLine(line, session.currency)
             HorizontalDivider()
         }
     }
 }
 
 @Composable
-private fun OrderReviewLine(line: CheckoutLineItem) {
+private fun OrderReviewLine(line: CheckoutLineItem, currency: String) {
     Row(
-        Modifier.fillMaxWidth().testTag(OrderReviewTestTags.line(line.sku)),
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag(OrderReviewTestTags.line(line.sku)),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                text = line.name,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(R.string.checkout_line_qty, line.quantity) +
+                    "  ·  " + formatPrice(line.unitPriceCents, currency) + " each",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
-            text = line.name,
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(end = 12.dp),
-        )
-        Text(
-            text = stringResource(R.string.checkout_line_qty, line.quantity),
-            style = MaterialTheme.typography.bodyMedium,
+            text = formatPrice(line.lineTotalCents, currency),
+            style = MaterialTheme.typography.titleSmall,
         )
     }
 }

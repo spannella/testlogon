@@ -49,14 +49,18 @@ fun PostDetailRoute(
     viewModel: PostDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val authorNames by viewModel.authorNames.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             if (effect is PostDetailEffect.ShowError) snackbarHostState.showSnackbar(effect.message)
         }
     }
+    val shownAuthorId = (state as? PostDetailUiState.Content)?.post?.authorId
+    LaunchedEffect(shownAuthorId) { shownAuthorId?.let { viewModel.resolveAuthor(it) } }
     PostDetailScreen(
         state = state,
+        authorName = shownAuthorId?.let { authorNames[it] },
         onBack = onBack,
         onRetry = viewModel::retry,
         onRefresh = viewModel::refresh,
@@ -77,6 +81,7 @@ fun PostDetailScreen(
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    authorName: String? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
@@ -135,6 +140,7 @@ fun PostDetailScreen(
                         // Detail reuses PostItem; like/comment/overflow wired here (AND-173/174/175).
                         PostItem(
                             post = state.post,
+                            authorName = authorName,
                             onAuthorClick = onAuthorClick,
                             onLinkClick = onLinkClick,
                             onLikeToggle = { onLikeToggle() },

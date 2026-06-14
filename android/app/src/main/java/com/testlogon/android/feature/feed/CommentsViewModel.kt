@@ -54,10 +54,19 @@ sealed interface CommentsEffect {
 @HiltViewModel
 class CommentsViewModel @Inject constructor(
     private val repository: CommentsRepository,
+    private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     val postId: String = savedStateHandle.get<String>(PostDetailDest.ARG_POST_ID).orEmpty()
+
+    /** comment author id (email/user_sub) -> display name, resolved lazily for visible comments. */
+    val authorNames: StateFlow<Map<String, String>> = displayNames.names
+
+    /** Kick off (cached) resolution of a commenter's display name; UI reads it from [authorNames]. */
+    fun resolveAuthor(authorId: String) {
+        displayNames.resolve(authorId)
+    }
 
     val repliesSupported: Boolean get() = repository.repliesSupported
 

@@ -48,6 +48,8 @@ fun PostItem(
     modifier: Modifier = Modifier,
     onPostClick: (FeedPost) -> Unit = {},
     onAuthorClick: (authorId: String) -> Unit = {},
+    // Resolved human display name for the author; falls back to authorId when null/blank.
+    authorName: String? = null,
     onMediaClick: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
@@ -82,6 +84,7 @@ fun PostItem(
         ) {
             PostAuthorHeader(
                 authorId = post.authorId,
+                authorName = authorName,
                 createdAtEpochSeconds = post.createdAtEpochSeconds,
                 isLocked = post.isLocked,
                 onClick = { onAuthorClick(post.authorId) },
@@ -141,11 +144,13 @@ fun PostItem(
 @Composable
 private fun PostAuthorHeader(
     authorId: String,
+    authorName: String?,
     createdAtEpochSeconds: Long,
     isLocked: Boolean,
     onClick: () -> Unit,
 ) {
-    val initials = remember(authorId) { monogram(authorId) }
+    val label = authorName?.takeIf { it.isNotBlank() } ?: authorId
+    val initials = remember(label) { monogram(label) }
     val relative = relativeTime(createdAtEpochSeconds)
     Row(
         modifier = Modifier
@@ -170,7 +175,7 @@ private fun PostAuthorHeader(
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = authorId,
+                text = label,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,

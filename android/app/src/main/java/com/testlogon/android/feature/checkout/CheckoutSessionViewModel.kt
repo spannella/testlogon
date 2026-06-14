@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.cart.CartRepository
+import com.testlogon.android.data.checkout.CheckoutLineItem
 import com.testlogon.android.data.checkout.CheckoutRepository
 import com.testlogon.android.data.checkout.CheckoutSession
 import com.testlogon.android.data.checkout.CheckoutSessionRequest
@@ -95,11 +96,32 @@ class CheckoutSessionViewModel @Inject constructor(
                 currency = currency,
             )
             _state.value = when (val r = checkoutRepository.createSession(request)) {
-                is ApiResult.Success -> OrderReviewUiState.Ready(r.data)
+                is ApiResult.Success -> OrderReviewUiState.Ready(enrichFromCart(r.data))
                 is ApiResult.Failure -> OrderReviewUiState.Error(r.error.message, retryable = true)
                 is ApiResult.NetworkError -> OrderReviewUiState.Error(OFFLINE_MESSAGE, retryable = true)
             }
         }
+    }
+
+    /**
+     * The checkout-session response carries line items WITHOUT product names (only sku + amounts), so
+     * the screen would otherwise show raw skus and no prices. The cart has the real names + unit/line
+     * prices — merge them in. Falls back to the session's own items if the cart can't be read.
+     */
+    private suspend fun enrichFromCart(session: CheckoutSession): CheckoutSession {
+        val items = (cartRepository.loadCart() as? ApiResult.Success)?.data?.items
+        if (items.isNullOrEmpty()) return session
+        return session.copy(
+            lineItems = items.map {
+                CheckoutLineItem(
+                    sku = it.sku,
+                    name = it.name,
+                    quantity = it.quantity,
+                    unitPriceCents = it.unitPriceCents,
+                    lineTotalCents = it.lineTotalCents,
+                )
+            },
+        )
     }
 
     fun retry() = start()

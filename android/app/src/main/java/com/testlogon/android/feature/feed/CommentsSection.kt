@@ -75,6 +75,7 @@ fun CommentsSection(
 ) {
     val comments = viewModel.comments.collectAsLazyPagingItems()
     val composer by viewModel.composer.collectAsStateWithLifecycle()
+    val authorNames by viewModel.authorNames.collectAsStateWithLifecycle()
     val refreshSignal by viewModel.refreshSignal.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Comment?>(null) }
@@ -105,6 +106,8 @@ fun CommentsSection(
             onRetry = viewModel::retry,
             onDiscard = viewModel::discard,
             onDelete = { pendingDelete = it },
+            authorNames = authorNames,
+            onEnsureAuthorName = viewModel::resolveAuthor,
         )
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -151,6 +154,8 @@ private fun CommentsList(
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
+    authorNames: Map<String, String>,
+    onEnsureAuthorName: (authorId: String) -> Unit,
 ) {
     val refresh = comments.loadState.refresh
     when {
@@ -179,6 +184,8 @@ private fun CommentsList(
                 val comment = comments[index] ?: continue
                 CommentRow(
                     comment = comment,
+                    authorName = authorNames[comment.authorId],
+                    onEnsureAuthorName = onEnsureAuthorName,
                     repliesSupported = repliesSupported,
                     onReply = onReply,
                     onRetry = onRetry,
@@ -207,6 +214,8 @@ private fun CommentsList(
 @Composable
 private fun CommentRow(
     comment: Comment,
+    authorName: String?,
+    onEnsureAuthorName: (authorId: String) -> Unit,
     repliesSupported: Boolean,
     onReply: (Comment) -> Unit,
     onRetry: (String) -> Unit,
@@ -214,6 +223,9 @@ private fun CommentRow(
     onDelete: (Comment) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    androidx.compose.runtime.LaunchedEffect(comment.authorId) {
+        if (comment.authorId.isNotBlank()) onEnsureAuthorName(comment.authorId)
+    }
     if (comment.deleted) {
         Text(
             text = stringResource(R.string.comments_deleted_tombstone),
@@ -237,7 +249,7 @@ private fun CommentRow(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            text = comment.authorId.ifBlank { "You" },
+            text = authorName?.takeIf { it.isNotBlank() } ?: comment.authorId.ifBlank { "You" },
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
