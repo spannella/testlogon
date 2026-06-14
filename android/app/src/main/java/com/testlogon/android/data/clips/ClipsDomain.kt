@@ -116,3 +116,32 @@ fun ClipListResponseDto.toDomain(): ClipsPage = ClipsPage(
     items = clips.asSequence().filter { it.clipId.isNotBlank() }.map { it.toDomain() }.toList(),
     nextCursor = nextCursor,
 )
+
+/**
+ * AND-394 — outcome of recording a share (POST .../share). [shareUrl] is the server-canonical URL the
+ * web copies; it may be blank when the server omits it, in which case the caller falls back to the
+ * locally-built canonical URL. [shareCount] is the post-increment server count.
+ */
+data class PublicClipShareResult(
+    val shareUrl: String,
+    val shareCount: Int,
+)
+
+fun PublicClipShareDto.toDomain(): PublicClipShareResult = PublicClipShareResult(
+    shareUrl = shareUrl.trim(),
+    shareCount = shareCount,
+)
+
+/**
+ * AND-394 — canonical, auth-free public clip share artifacts. Pure / JVM-unit-testable.
+ *
+ * The verified web route is `/c/{clipId}` (reference src/App.tsx:283). The public host is the
+ * spec-stated canonical `https://testlogon.com` (§7/FR-7/AC-6). The shared payload carries ONLY this
+ * public URL + the clip title — never a cookie, CSRF, bearer, session id, or user id.
+ */
+object PublicClipShareLinks {
+    const val WEB_BASE = "https://testlogon.com"
+
+    /** The canonical local fallback share URL for a clip (used when the server omits `share_url`). */
+    fun urlFor(clipId: String): String = "$WEB_BASE/c/$clipId"
+}

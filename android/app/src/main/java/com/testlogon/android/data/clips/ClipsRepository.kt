@@ -49,6 +49,21 @@ interface ClipsRepository {
      * Never throws and never synthesizes a URL.
      */
     suspend fun resolvePlaybackUrl(clip: Clip): String?
+
+    /**
+     * AND-394 — records a public view (POST .../view), mirroring the web's fire-and-forget on mount.
+     * Best-effort: any HTTP/transport failure is swallowed (returns silently). NEVER throws and never
+     * blocks playback. Non-idempotent, so it is issued exactly once per entry by the caller.
+     */
+    suspend fun recordPublicView(clipId: String)
+
+    /**
+     * AND-394 — records a public share (POST .../share) and returns the server's canonical share URL +
+     * count. On any failure returns [ApiResult.Failure]/[ApiResult.NetworkError] so the caller can fall
+     * back to the locally-built canonical URL. Non-idempotent: issued once per Share tap (double-submit
+     * guarded by the caller).
+     */
+    suspend fun recordPublicShare(clipId: String): ApiResult<PublicClipShareResult>
 }
 
 @Singleton
@@ -80,6 +95,19 @@ class ClipsRepositoryImpl @Inject constructor(
             else -> null
         }
     }
+
+    override suspend fun recordPublicView(clipId: String) {
+        withContext(io) {
+            // Fire-and-forget: swallow everything (a failed view-count must never break playback).
+            // CancellationException still propagates because `call` re-throws it.
+            call { api.recordPublicView(clipId) }
+        }
+    }
+
+    override suspend fun recordPublicShare(clipId: String): ApiResult<PublicClipShareResult> =
+        withContext(io) {
+            call { api.recordPublicShare(clipId) }.map { it.toDomain() }
+        }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

@@ -1,6 +1,7 @@
 package com.testlogon.android.data.clips
 
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -46,6 +47,15 @@ interface ClipsApi {
 
     @GET("broadcast/public/clips/{clip_id}")
     suspend fun getPublicClip(@Path("clip_id") clipId: String): PublicClipDto
+
+    // AND-394 — additive, verified (openapi.index.txt:137-138). Mirror the web view/share behavior:
+    // a view is recorded (fire-and-forget) on entry, and Share records + returns a canonical share_url.
+    // Both are non-idempotent POSTs with no request body and require no auth params server-side.
+    @POST("broadcast/public/clips/{clip_id}/view")
+    suspend fun recordPublicView(@Path("clip_id") clipId: String): PublicClipViewDto
+
+    @POST("broadcast/public/clips/{clip_id}/share")
+    suspend fun recordPublicShare(@Path("clip_id") clipId: String): PublicClipShareDto
 
     companion object {
         // Server `limit` supports a small page; the app keeps it small for fast paint.

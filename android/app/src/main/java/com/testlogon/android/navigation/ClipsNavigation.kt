@@ -65,6 +65,14 @@ fun NavGraphBuilder.publicClipDestination(navController: NavHostController) {
             onOpenFeed = {
                 navController.navigate(ClipsFeedDest.ROUTE) { launchSingleTop = true }
             },
+            // AND-394 — anonymous→app bridge (FR-6/AC-7). The public destination is registered in BOTH
+            // graphs, so we route to the current graph's start: the login screen when unauthenticated, or
+            // the authenticated home when a session exists. The destination is best-effort (the screen
+            // already decides the CTA label by session); a missing route falls back to the graph start.
+            onOpenAuth = {
+                val start = navController.graph.startDestinationRoute ?: TlGraphs.UNAUTHENTICATED
+                navController.navigate(start) { launchSingleTop = true }
+            },
         )
     }
 }

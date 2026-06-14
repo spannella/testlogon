@@ -1162,6 +1162,15 @@
     <string name="clip_action_mute">Mute</string>
     <string name="clip_action_unmute">Unmute</string>
 
+    <!-- AND-394: public clip metadata, attribution, counts, and the anonymous-&gt;app CTA -->
+    <string name="clip_attribution_full">Clipped from %1$s · Created by %2$s</string>
+    <string name="clip_attribution_broadcaster">Clipped from %1$s</string>
+    <string name="clip_attribution_creator">Created by %1$s</string>
+    <string name="clip_view_count">%1$d views</string>
+    <string name="clip_share_count">%1$d shares</string>
+    <string name="clip_cta_sign_in">Sign in</string>
+    <string name="clip_cta_open_in_app">Open in app</string>
+
     <!-- AND-199 / AND-200: Stories tray + viewer -->
     <string name="more_entry_gallery">Gallery</string>
     <string name="story_ring_unseen">Story from %1$s, unseen</string>

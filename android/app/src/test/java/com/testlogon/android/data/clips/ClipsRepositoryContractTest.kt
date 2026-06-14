@@ -138,4 +138,50 @@ class ClipsRepositoryContractTest {
         backend.enqueue(Fixtures.timeout())
         assertTrue(repo().feed(cursor = null, limit = 10) is ApiResult.NetworkError)
     }
+
+    // ---- AND-394: public view/share recording ----
+
+    @Test
+    fun recordPublicView_postsToViewPath_swallowsResult() = runTest {
+        backend.enqueue(Fixtures.okBody("""{"ok":true,"view_count":10424}"""))
+        repo().recordPublicView("clp_1")
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/public/clips/clp_1/view", req.requestUrl?.encodedPath)
+        // No auth headers — genuinely unauthenticated.
+        assertNull(req.getHeader("Authorization"))
+    }
+
+    @Test
+    fun recordPublicView_failure_isSilent() = runTest {
+        backend.enqueue(Fixtures.error("\"boom\"", 500))
+        // Must not throw despite the 500.
+        repo().recordPublicView("clp_1")
+        assertEquals("/broadcast/public/clips/clp_1/view", backend.takeRequest().requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun recordPublicShare_postsToSharePath_decodesShareUrl() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"ok":true,"share_count":13,"share_url":"https://testlogon.com/c/clp_1"}""",
+            ),
+        )
+        val result = repo().recordPublicShare("clp_1")
+        assertTrue(result is ApiResult.Success)
+        val share = (result as ApiResult.Success).data
+        assertEquals("https://testlogon.com/c/clp_1", share.shareUrl)
+        assertEquals(13, share.shareCount)
+
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/broadcast/public/clips/clp_1/share", req.requestUrl?.encodedPath)
+        assertNull(req.getHeader("Authorization"))
+    }
+
+    @Test
+    fun recordPublicShare_5xx_mapsToFailure() = runTest {
+        backend.enqueue(Fixtures.error("\"boom\"", 503))
+        assertTrue(repo().recordPublicShare("clp_1") is ApiResult.Failure)
+    }
 }

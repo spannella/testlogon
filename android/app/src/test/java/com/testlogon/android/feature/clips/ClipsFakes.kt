@@ -5,6 +5,7 @@ import com.testlogon.android.data.clips.Clip
 import com.testlogon.android.data.clips.ClipStatus
 import com.testlogon.android.data.clips.ClipsPage
 import com.testlogon.android.data.clips.ClipsRepository
+import com.testlogon.android.data.clips.PublicClipShareResult
 
 /**
  * AND-196 / AND-198 — shared fake [ClipsRepository] for paging + ViewModel tests. Feed pages are keyed
@@ -20,6 +21,12 @@ class FakeClipsRepository : ClipsRepository {
     var playbackUrlResult: String? = null
     var publicClipCalls = 0
 
+    // AND-394 — view/share recording observability + configurable share outcome.
+    val recordedViews = mutableListOf<String>()
+    val recordedShares = mutableListOf<String>()
+    var shareResult: ApiResult<PublicClipShareResult> =
+        ApiResult.Success(PublicClipShareResult(shareUrl = "https://testlogon.com/c/clp_1", shareCount = 13))
+
     override suspend fun feed(cursor: String?, sort: String?, limit: Int): ApiResult<ClipsPage> {
         requestedCursors += cursor
         return pages[cursor] ?: ApiResult.Success(ClipsPage(emptyList(), null))
@@ -33,6 +40,15 @@ class FakeClipsRepository : ClipsRepository {
     }
 
     override suspend fun resolvePlaybackUrl(clip: Clip): String? = playbackUrlResult
+
+    override suspend fun recordPublicView(clipId: String) {
+        recordedViews += clipId
+    }
+
+    override suspend fun recordPublicShare(clipId: String): ApiResult<PublicClipShareResult> {
+        recordedShares += clipId
+        return shareResult
+    }
 
     companion object {
         fun sampleClip(

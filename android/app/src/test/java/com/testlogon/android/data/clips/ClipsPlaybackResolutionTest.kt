@@ -80,5 +80,7 @@ class ClipsPlaybackResolutionTest {
         override suspend fun getMyClips(): ClipListResponseDto = throw UnsupportedOperationException()
         override suspend fun getClip(clipId: String): ClipDto = throw UnsupportedOperationException()
         override suspend fun getPublicClip(clipId: String): PublicClipDto = throw UnsupportedOperationException()
+        override suspend fun recordPublicView(clipId: String): PublicClipViewDto = throw UnsupportedOperationException()
+        override suspend fun recordPublicShare(clipId: String): PublicClipShareDto = throw UnsupportedOperationException()
     }
 }

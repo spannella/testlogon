@@ -66,3 +66,25 @@ data class PublicClipDto(
     @Json(name = "broadcaster_display_name") val broadcasterDisplayName: String = "",
     @Json(name = "profile_id") val profileId: String = "",
 )
+
+/**
+ * AND-394 — POST broadcast/public/clips/{clip_id}/view response `{ ok, view_count }` (verified
+ * openapi.index.txt:138; reference recordPublicClipView). Fired fire-and-forget on screen entry.
+ */
+@JsonClass(generateAdapter = true)
+data class PublicClipViewDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "view_count") val viewCount: Int = 0,
+)
+
+/**
+ * AND-394 — POST broadcast/public/clips/{clip_id}/share response `{ ok, share_count, share_url }`
+ * (verified openapi.index.txt:137; reference recordPublicClipShare). The web copies origin + share_url;
+ * we prefer the returned [shareUrl] for the system share sheet, falling back to the local canonical URL.
+ */
+@JsonClass(generateAdapter = true)
+data class PublicClipShareDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "share_count") val shareCount: Int = 0,
+    @Json(name = "share_url") val shareUrl: String = "",
+)
