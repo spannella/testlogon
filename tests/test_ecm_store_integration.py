@@ -822,6 +822,13 @@ class TestECM008Reservations:
         object.__setattr__(S, "store_cart_reservations_enabled", False)
         object.__setattr__(S, "inventory_reservations_enabled", False)
         sys.modules.pop("app.services.inventory", None)
+        # store_integration imports inventory via `from app.services import inventory`,
+        # which resolves the package ATTRIBUTE (set once the real module is imported by
+        # any other test). Clear it so our sys.modules stub is honoured regardless of
+        # test ordering.
+        import app.services as _svc_pkg
+        if hasattr(_svc_pkg, "inventory"):
+            delattr(_svc_pkg, "inventory")
 
     def teardown_method(self):
         from app.core.settings import S
@@ -829,6 +836,9 @@ class TestECM008Reservations:
         object.__setattr__(S, "store_cart_reservations_enabled", False)
         object.__setattr__(S, "inventory_reservations_enabled", False)
         sys.modules.pop("app.services.inventory", None)
+        import app.services as _svc_pkg
+        if hasattr(_svc_pkg, "inventory"):
+            delattr(_svc_pkg, "inventory")
 
     def test_reservations_disabled_flag_off(self):
         from app.services.store_integration import _reservations_enabled_for_sku
@@ -865,6 +875,8 @@ class TestECM008Reservations:
 
         mock_inv = SimpleNamespace(reserve=fake_reserve)
         sys.modules["app.services.inventory"] = mock_inv
+        import app.services as _svc_pkg
+        _svc_pkg.inventory = mock_inv
 
         res_id = reserve_for_cart(user_sub="u1", cart_id="cart123", sku="MY-SKU", quantity=3)
         expected_id = _reservation_id_for("cart123", "MY-SKU")
@@ -885,6 +897,8 @@ class TestECM008Reservations:
 
         mock_inv = SimpleNamespace(reserve=_fail_reserve)
         sys.modules["app.services.inventory"] = mock_inv
+        import app.services as _svc_pkg
+        _svc_pkg.inventory = mock_inv
 
         # Should not raise; returns None on failure
         result = reserve_for_cart(user_sub="u1", cart_id="c1", sku="SKU-B", quantity=1)
@@ -922,6 +936,8 @@ class TestECM008Reservations:
 
         mock_inv = SimpleNamespace(commit_reservation=fake_commit)
         sys.modules["app.services.inventory"] = mock_inv
+        import app.services as _svc_pkg
+        _svc_pkg.inventory = mock_inv
 
         items = [{"sku": "SKU-A", "quantity": 1}, {"sku": "SKU-B", "quantity": 2}]
         result = commit_cart_reservations(user_sub="u1", cart_id="c1", items=items)

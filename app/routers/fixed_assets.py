@@ -18,9 +18,9 @@ from app.models import (
     FixedAssetIn,
     FixedAssetOut,
     FixedAssetPatchIn,
-    MaintenanceOrderIn,
-    MaintenanceOrderOut,
-    MaintenanceOrderTransitionIn,
+    AssetMaintenanceOrderIn,
+    AssetMaintenanceOrderOut,
+    AssetMaintenanceOrderTransitionIn,
 )
 
 router = APIRouter(prefix="/ui/fixed-assets", tags=["fixed-assets"])
@@ -77,13 +77,13 @@ async def list_work_orders_queue(
 
 
 # PATCH /work-orders/{work_order_id} must precede /{asset_id} to avoid capture
-@router.patch("/work-orders/{work_order_id}", response_model=MaintenanceOrderOut)
+@router.patch("/work-orders/{work_order_id}", response_model=AssetMaintenanceOrderOut)
 async def transition_work_order_endpoint(
     work_order_id: str,
     asset_id: str = Query(...),
-    body: MaintenanceOrderTransitionIn = ...,
+    body: AssetMaintenanceOrderTransitionIn = ...,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
-) -> MaintenanceOrderOut:
+) -> AssetMaintenanceOrderOut:
     from app.services.fixed_assets import transition_work_order
     return transition_work_order(work_order_id, asset_id, body, user.user_sub)
 
@@ -150,12 +150,12 @@ async def post_period_endpoint(
 # Work orders
 # ---------------------------------------------------------------------------
 
-@router.post("/{asset_id}/work-orders", response_model=MaintenanceOrderOut)
+@router.post("/{asset_id}/work-orders", response_model=AssetMaintenanceOrderOut)
 async def create_work_order_endpoint(
     asset_id: str,
-    body: MaintenanceOrderIn,
+    body: AssetMaintenanceOrderIn,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
-) -> MaintenanceOrderOut:
+) -> AssetMaintenanceOrderOut:
     from app.services.fixed_assets import create_work_order
     return create_work_order(asset_id, body, user.user_sub)
 

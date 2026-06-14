@@ -34,9 +34,9 @@ from app.models import (
     FixedAssetIn,
     FixedAssetOut,
     FixedAssetPatchIn,
-    MaintenanceOrderIn,
-    MaintenanceOrderOut,
-    MaintenanceOrderTransitionIn,
+    AssetMaintenanceOrderIn,
+    AssetMaintenanceOrderOut,
+    AssetMaintenanceOrderTransitionIn,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,8 +109,8 @@ def _item_to_period(item: dict) -> DepreciationPeriodOut:
     )
 
 
-def _item_to_work_order(item: dict) -> MaintenanceOrderOut:
-    return MaintenanceOrderOut(
+def _item_to_work_order(item: dict) -> AssetMaintenanceOrderOut:
+    return AssetMaintenanceOrderOut(
         work_order_id=item["work_order_id"],
         asset_id=item["asset_id"],
         title=item["title"],
@@ -598,8 +598,8 @@ def _cancel_remaining_periods(asset_id: str, ts: int) -> None:
 # ---------------------------------------------------------------------------
 
 def create_work_order(
-    asset_id: str, body: MaintenanceOrderIn, actor_sub: str
-) -> MaintenanceOrderOut:
+    asset_id: str, body: AssetMaintenanceOrderIn, actor_sub: str
+) -> AssetMaintenanceOrderOut:
     _require_enabled()
     asset = _get_asset_raw(asset_id)
     if asset.get("status") == "disposed":
@@ -647,7 +647,7 @@ def list_work_orders(
     assignee_sub: Optional[str] = None,
     cursor: Optional[str] = None,
     limit: int = 50,
-) -> tuple[list[MaintenanceOrderOut], Optional[str]]:
+) -> tuple[list[AssetMaintenanceOrderOut], Optional[str]]:
     _require_enabled()
     exclusive_start = decode_cursor(cursor) if cursor else None
     kwargs: dict = {"Limit": limit}
@@ -678,9 +678,9 @@ def list_work_orders(
 def transition_work_order(
     work_order_id: str,
     asset_id: str,
-    body: MaintenanceOrderTransitionIn,
+    body: AssetMaintenanceOrderTransitionIn,
     actor_sub: str,
-) -> MaintenanceOrderOut:
+) -> AssetMaintenanceOrderOut:
     _require_enabled()
     resp = T.maintenance_orders.get_item(
         Key={"pk": f"ASSET#{asset_id}", "sk": f"WO#{work_order_id}"}

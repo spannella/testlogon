@@ -21654,7 +21654,7 @@ class DepreciationScheduleOut(BaseModel):
     remaining_periods: int
 
 
-class MaintenanceOrderIn(BaseModel):
+class AssetMaintenanceOrderIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=2000)
     assignee_sub: Optional[str] = None
@@ -21662,13 +21662,13 @@ class MaintenanceOrderIn(BaseModel):
     correlation_id: Optional[str] = None
 
 
-class MaintenanceOrderTransitionIn(BaseModel):
+class AssetMaintenanceOrderTransitionIn(BaseModel):
     target_status: Literal["in_progress", "completed", "cancelled"]
     cost_cents: Optional[int] = Field(default=None, ge=0)
     assignee_sub: Optional[str] = None
 
 
-class MaintenanceOrderOut(BaseModel):
+class AssetMaintenanceOrderOut(BaseModel):
     work_order_id: str
     asset_id: str
     title: str

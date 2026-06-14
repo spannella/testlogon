@@ -98,27 +98,25 @@ def _cost_tables():
         wo_tbl = _make_work_orders_table(ddb)
         billing_tbl = _make_billing_table(ddb)
 
-        fake_T = SimpleNamespace(
-            mfg_boms=boms_tbl,
-            mfg_work_orders=wo_tbl,
-            billing=billing_tbl,
-        )
-
-        import app.services.manufacturing_bom as bom_mod
-        import app.services.manufacturing_work_orders as wo_mod
-        import app.core.tables as tables_mod
+        # Robust isolation: mutate the FROZEN T instance via object.__setattr__ so
+        # EVERY module that did `from app.core.tables import T` at import time (incl.
+        # billing_shared and manufacturing_work_orders) sees the moto tables. Module-
+        # attribute reassignment (tables_mod.T = fake) is fragile because those other
+        # modules already captured the original frozen instance, and full-suite test
+        # ordering can leave that instance mutated by a sibling test.
+        from app.core.tables import T
         from app.core.settings import S
 
-        orig_bom_T = getattr(bom_mod, "T", None)
-        orig_wo_T = getattr(wo_mod, "T", None)
-        orig_tables_T = getattr(tables_mod, "T", None)
+        orig_billing = getattr(T, "billing", None)
+        orig_mfg_boms = getattr(T, "mfg_boms", None)
+        orig_mfg_wo = getattr(T, "mfg_work_orders", None)
         orig_flag = getattr(S, "manufacturing_mrp_enabled", False)
         orig_inv_flag = getattr(S, "inventory_reservations_enabled", False)
         orig_cost_flag = getattr(S, "manufacturing_cost_posting_enabled", False)
 
-        bom_mod.T = fake_T
-        wo_mod.T = fake_T
-        tables_mod.T = fake_T  # so _post_cost_entry's T.billing points to fake
+        object.__setattr__(T, "billing", billing_tbl)
+        object.__setattr__(T, "mfg_boms", boms_tbl)
+        object.__setattr__(T, "mfg_work_orders", wo_tbl)
         object.__setattr__(S, "manufacturing_mrp_enabled", True)
         object.__setattr__(S, "inventory_reservations_enabled", False)
         object.__setattr__(S, "manufacturing_cost_posting_enabled", False)
@@ -137,12 +135,12 @@ def _cost_tables():
 
         yield
 
-        if orig_bom_T is not None:
-            bom_mod.T = orig_bom_T
-        if orig_wo_T is not None:
-            wo_mod.T = orig_wo_T
-        if orig_tables_T is not None:
-            tables_mod.T = orig_tables_T
+        if orig_billing is not None:
+            object.__setattr__(T, "billing", orig_billing)
+        if orig_mfg_boms is not None:
+            object.__setattr__(T, "mfg_boms", orig_mfg_boms)
+        if orig_mfg_wo is not None:
+            object.__setattr__(T, "mfg_work_orders", orig_mfg_wo)
         object.__setattr__(S, "manufacturing_mrp_enabled", orig_flag)
         object.__setattr__(S, "inventory_reservations_enabled", orig_inv_flag)
         object.__setattr__(S, "manufacturing_cost_posting_enabled", orig_cost_flag)

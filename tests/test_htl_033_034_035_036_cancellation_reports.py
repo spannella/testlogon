@@ -1016,7 +1016,13 @@ class TestTaxCurrencyWireIn:
         object.__setattr__(htc.S, "crm_tax_rates_enabled", True)
         object.__setattr__(htc.S, "aos_per_line_tax_enabled", True)
         try:
-            with patch.dict(sys.modules, {"app.services.crm_tax_rates": fake_crm_tax}):
+            # hotel_tax_currency does `from app.services import crm_tax_rates`, which
+            # reads the package ATTRIBUTE first (set once the real module is imported
+            # by any other test). Patch that attribute too, else our stub is shadowed
+            # under full-suite ordering.
+            import app.services as _svc
+            with patch.object(_svc, "crm_tax_rates", fake_crm_tax, create=True), \
+                 patch.dict(sys.modules, {"app.services.crm_tax_rates": fake_crm_tax}):
                 result = resolve_tax_cents(10000, tax_rate_id="rate-1")
             assert result == 1500  # 10000 * 1500 // 10000
         finally:
@@ -1069,7 +1075,11 @@ class TestTaxCurrencyWireIn:
         object.__setattr__(htc.S, "crm_currencies_enabled", True)
         object.__setattr__(htc.S, "aos_invoice_currency_conversion_enabled", True)
         try:
-            with patch.dict(sys.modules, {"app.services.crm_currencies": fake_crm_cur}):
+            # See note in test_tax_registry_consume_via_stub: patch the package
+            # attribute too so the stub survives full-suite import ordering.
+            import app.services as _svc
+            with patch.object(_svc, "crm_currencies", fake_crm_cur, create=True), \
+                 patch.dict(sys.modules, {"app.services.crm_currencies": fake_crm_cur}):
                 amount, orig, usd = resolve_currency_amount(10000, "eur")
             assert amount == 10000
             assert orig == "eur"

@@ -600,11 +600,11 @@ class TestWorkOrders:
 
     def test_create_work_order_active_asset(self):
         from app.services.fixed_assets import create_work_order
-        from app.models import MaintenanceOrderIn
+        from app.models import AssetMaintenanceOrderIn
         asset = self._create_asset("wo-create-001")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Replace fan", correlation_id="wo-001"),
+            AssetMaintenanceOrderIn(title="Replace fan", correlation_id="wo-001"),
             "actor-sub",
         )
         assert wo.wo_status == "open"
@@ -613,67 +613,67 @@ class TestWorkOrders:
 
     def test_create_work_order_on_disposed_asset_raises_400(self):
         from app.services.fixed_assets import create_work_order, dispose_asset
-        from app.models import MaintenanceOrderIn, FixedAssetDisposeIn
+        from app.models import AssetMaintenanceOrderIn, FixedAssetDisposeIn
         import pytest
         asset = self._create_asset("wo-disposed-001")
         dispose_asset(asset.asset_id, FixedAssetDisposeIn(), "actor-sub")
         with pytest.raises(Exception) as exc_info:
             create_work_order(
                 asset.asset_id,
-                MaintenanceOrderIn(title="Maintenance", correlation_id="wo-disposed-001"),
+                AssetMaintenanceOrderIn(title="Maintenance", correlation_id="wo-disposed-001"),
                 "actor-sub",
             )
         assert exc_info.value.status_code == 400
 
     def test_create_work_order_idempotent(self):
         from app.services.fixed_assets import create_work_order
-        from app.models import MaintenanceOrderIn
+        from app.models import AssetMaintenanceOrderIn
         asset = self._create_asset("wo-idem-001")
         wo1 = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Check", correlation_id="wo-idem-001"),
+            AssetMaintenanceOrderIn(title="Check", correlation_id="wo-idem-001"),
             "actor-sub",
         )
         wo2 = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Check", correlation_id="wo-idem-001"),
+            AssetMaintenanceOrderIn(title="Check", correlation_id="wo-idem-001"),
             "actor-sub",
         )
         assert wo1.work_order_id == wo2.work_order_id
 
     def test_transition_open_to_in_progress(self):
         from app.services.fixed_assets import create_work_order, transition_work_order
-        from app.models import MaintenanceOrderIn, MaintenanceOrderTransitionIn
+        from app.models import AssetMaintenanceOrderIn, AssetMaintenanceOrderTransitionIn
         asset = self._create_asset("wo-trans-001")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Inspect", correlation_id="wo-t001"),
+            AssetMaintenanceOrderIn(title="Inspect", correlation_id="wo-t001"),
             "actor-sub",
         )
         updated = transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="in_progress"),
+            AssetMaintenanceOrderTransitionIn(target_status="in_progress"),
             "actor-sub",
         )
         assert updated.wo_status == "in_progress"
 
     def test_transition_in_progress_to_completed(self):
         from app.services.fixed_assets import create_work_order, transition_work_order
-        from app.models import MaintenanceOrderIn, MaintenanceOrderTransitionIn
+        from app.models import AssetMaintenanceOrderIn, AssetMaintenanceOrderTransitionIn
         asset = self._create_asset("wo-trans-002")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Fix pump", correlation_id="wo-t002"),
+            AssetMaintenanceOrderIn(title="Fix pump", correlation_id="wo-t002"),
             "actor-sub",
         )
         transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="in_progress"),
+            AssetMaintenanceOrderTransitionIn(target_status="in_progress"),
             "actor-sub",
         )
         completed = transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="completed", cost_cents=5000),
+            AssetMaintenanceOrderTransitionIn(target_status="completed", cost_cents=5000),
             "actor-sub",
         )
         assert completed.wo_status == "completed"
@@ -682,60 +682,60 @@ class TestWorkOrders:
 
     def test_transition_completed_to_open_raises_409(self):
         from app.services.fixed_assets import create_work_order, transition_work_order
-        from app.models import MaintenanceOrderIn, MaintenanceOrderTransitionIn
+        from app.models import AssetMaintenanceOrderIn, AssetMaintenanceOrderTransitionIn
         import pytest
         asset = self._create_asset("wo-trans-003")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Illegal transition", correlation_id="wo-t003"),
+            AssetMaintenanceOrderIn(title="Illegal transition", correlation_id="wo-t003"),
             "actor-sub",
         )
         transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="in_progress"),
+            AssetMaintenanceOrderTransitionIn(target_status="in_progress"),
             "actor-sub",
         )
         transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="completed"),
+            AssetMaintenanceOrderTransitionIn(target_status="completed"),
             "actor-sub",
         )
         with pytest.raises(Exception) as exc_info:
             transition_work_order(
                 wo.work_order_id, asset.asset_id,
-                MaintenanceOrderTransitionIn(target_status="in_progress"),
+                AssetMaintenanceOrderTransitionIn(target_status="in_progress"),
                 "actor-sub",
             )
         assert exc_info.value.status_code == 409
 
     def test_transition_in_progress_to_cancelled(self):
         from app.services.fixed_assets import create_work_order, transition_work_order
-        from app.models import MaintenanceOrderIn, MaintenanceOrderTransitionIn
+        from app.models import AssetMaintenanceOrderIn, AssetMaintenanceOrderTransitionIn
         asset = self._create_asset("wo-trans-004")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Cancel me", correlation_id="wo-t004"),
+            AssetMaintenanceOrderIn(title="Cancel me", correlation_id="wo-t004"),
             "actor-sub",
         )
         transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="in_progress"),
+            AssetMaintenanceOrderTransitionIn(target_status="in_progress"),
             "actor-sub",
         )
         cancelled = transition_work_order(
             wo.work_order_id, asset.asset_id,
-            MaintenanceOrderTransitionIn(target_status="cancelled"),
+            AssetMaintenanceOrderTransitionIn(target_status="cancelled"),
             "actor-sub",
         )
         assert cancelled.wo_status == "cancelled"
 
     def test_list_work_orders_by_status(self):
         from app.services.fixed_assets import create_work_order, list_work_orders
-        from app.models import MaintenanceOrderIn
+        from app.models import AssetMaintenanceOrderIn
         asset = self._create_asset("wo-list-001")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Listed WO", correlation_id="wo-list-001"),
+            AssetMaintenanceOrderIn(title="Listed WO", correlation_id="wo-list-001"),
             "actor-sub",
         )
         items, _ = list_work_orders(wo_status="open")
@@ -744,11 +744,11 @@ class TestWorkOrders:
 
     def test_list_work_orders_for_asset(self):
         from app.services.fixed_assets import create_work_order, list_work_orders
-        from app.models import MaintenanceOrderIn
+        from app.models import AssetMaintenanceOrderIn
         asset = self._create_asset("wo-list-asset-001")
         wo = create_work_order(
             asset.asset_id,
-            MaintenanceOrderIn(title="Asset WO", correlation_id="wo-la-001"),
+            AssetMaintenanceOrderIn(title="Asset WO", correlation_id="wo-la-001"),
             "actor-sub",
         )
         items, _ = list_work_orders(asset_id=asset.asset_id)
