@@ -87,6 +87,8 @@ import {
   ScrollText,
   Copy,
   Contact,
+  GitMerge,
+  FileSearch,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -326,6 +328,19 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Reports-To Chain", path: "/crm/reports-to", icon: <Users className="h-5 w-5" /> },
       { label: "Duplicate Contacts", path: "/crm/party-dedup", icon: <Copy className="h-5 w-5" /> },
       { label: "vCard Import", path: "/crm/vcard-import", icon: <Contact className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "ATS (OpenCATS)",
+    items: [
+      { label: "Job Orders", path: "/ats/jobs", icon: <Briefcase className="h-5 w-5" /> },
+      { label: "Candidates", path: "/ats/candidates", icon: <Users className="h-5 w-5" /> },
+      { label: "Pipeline", path: "/ats/pipeline", icon: <GitMerge className="h-5 w-5" /> },
+      { label: "Job Board", path: "/ats/portal/jobs", icon: <Globe className="h-5 w-5" /> },
+      { label: "Career Portal Config", path: "/ats/applications", icon: <Briefcase className="h-5 w-5" /> },
+      { label: "Skill Registry", path: "/ats/skills", icon: <Tag className="h-5 w-5" /> },
+      { label: "Resume & Skill Search", path: "/ats/search", icon: <FileSearch className="h-5 w-5" /> },
+      { label: "ATS Integration", path: "/ats/integration", icon: <GitMerge className="h-5 w-5" /> },
     ],
   },
 ];

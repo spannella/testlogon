@@ -349,6 +349,24 @@ const CampaignsPage = lazy(() => import("@/pages/crmCampaigns/CampaignsPage"));
 const WebLeadsPage = lazy(() => import("@/pages/crmCampaigns/WebLeadsPage"));
 const LeadCaptureFormPage = lazy(() => import("@/pages/crmCampaigns/LeadCaptureFormPage"));
 
+// OpenCATS frontend (JOB, CND, PIP, PRT, RSK, ATI)
+const JobOrdersPage = lazy(() => import("@/pages/ats/JobOrdersPage"));
+const JobOrderDetailPage = lazy(() => import("@/pages/ats/JobOrderDetailPage"));
+const CandidatesListPage = lazy(() => import("@/pages/ats/candidates/CandidatesListPage"));
+const CreateCandidatePage = lazy(() => import("@/pages/ats/candidates/CreateCandidatePage"));
+const CandidateDetailPage = lazy(() => import("@/pages/ats/candidates/CandidateDetailPage"));
+const PipelineBoardPage = lazy(() => import("@/pages/ats/pipeline/PipelineBoardPage"));
+const PipelineDetailPage = lazy(() => import("@/pages/ats/pipeline/PipelineDetailPage"));
+const CandidatePipelinePage = lazy(() => import("@/pages/ats/pipeline/CandidatePipelinePage"));
+const JobBoardPage = lazy(() => import("@/pages/ats/portal/JobBoardPage"));
+const PortalJobDetailPage = lazy(() => import("@/pages/ats/portal/JobDetailPage"));
+const ApplicationConfirmationPage = lazy(() => import("@/pages/ats/portal/ApplicationConfirmationPage"));
+const AdminPortalConfigPage = lazy(() => import("@/pages/ats/portal/AdminPortalConfigPage"));
+const SkillsRegistryPage = lazy(() => import("@/pages/ats/skills/SkillsRegistryPage"));
+const CandidateSkillProfilePage = lazy(() => import("@/pages/ats/skills/CandidateSkillProfilePage"));
+const ResumeSkillSearchPage = lazy(() => import("@/pages/ats/search/ResumeSkillSearchPage"));
+const AtsIntegrationPage = lazy(() => import("@/pages/ats/integration/AtsIntegrationPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -508,6 +526,23 @@ export default function App() {
           <Route path="crm/campaigns" element={<CampaignsPage />} />
           <Route path="crm/web-leads" element={<WebLeadsPage />} />
           <Route path="crm/lead-capture" element={<LeadCaptureFormPage />} />
+          {/* OpenCATS (ATS) — literals before dynamic params */}
+          <Route path="ats/jobs" element={<JobOrdersPage />} />
+          <Route path="ats/jobs/:jobId" element={<JobOrderDetailPage />} />
+          <Route path="ats/candidates" element={<CandidatesListPage />} />
+          <Route path="ats/candidates/new" element={<CreateCandidatePage />} />
+          <Route path="ats/candidates/:candidateId" element={<CandidateDetailPage />} />
+          <Route path="ats/pipeline" element={<PipelineBoardPage />} />
+          <Route path="ats/pipeline/detail/:jobOrderId/:candidateId" element={<PipelineDetailPage />} />
+          <Route path="ats/pipeline/candidate/:candidateId" element={<CandidatePipelinePage />} />
+          <Route path="ats/portal/jobs" element={<JobBoardPage />} />
+          <Route path="ats/portal/jobs/:slug" element={<PortalJobDetailPage />} />
+          <Route path="ats/portal/confirmation/:applicationId" element={<ApplicationConfirmationPage />} />
+          <Route path="ats/applications" element={<AdminPortalConfigPage />} />
+          <Route path="ats/skills" element={<SkillsRegistryPage />} />
+          <Route path="ats/skills/candidate/:candidateId" element={<CandidateSkillProfilePage />} />
+          <Route path="ats/search" element={<ResumeSkillSearchPage />} />
+          <Route path="ats/integration" element={<AtsIntegrationPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />

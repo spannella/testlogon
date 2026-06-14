@@ -69,6 +69,8 @@ export default defineConfig({
       // not under /ui or /api — proxy them so the KB frontend reaches the backend in dev.
       "/public/kb": "http://localhost:8000",
       "/kb": "http://localhost:8000",
+      // OpenCATS public career portal router (mounted at /public/careers, outside /ui).
+      "/public/careers": "http://localhost:8000",
       // Browser SSH terminal WebSocket — needs ws:true for the upgrade to proxy.
       // Must precede the generic "/api" entry so the WS path matches here first.
       "/api/browser-ssh": { target: "http://localhost:8000", ws: true, changeOrigin: true },
