@@ -43,6 +43,14 @@ logger = logging.getLogger(__name__)
 
 _MONTH_SECONDS = 30 * 86_400  # 30-day period approximation (FXA-001 §5.2)
 
+# FXA-008 — default chart-of-accounts codes (seeded in gl_accounts.DEFAULT_ACCOUNTS).
+_FXA_ASSET_ACCT = "1500"          # Fixed Assets (asset)
+_FXA_ACCUM_DEPR_ACCT = "1600"     # Accumulated Depreciation (contra_asset)
+_FXA_DEPR_EXPENSE_ACCT = "6100"   # Depreciation Expense (expense)
+_FXA_GAIN_ACCT = "4800"           # Gain on Disposal (revenue)
+_FXA_LOSS_ACCT = "5800"           # Loss on Disposal (expense)
+_FXA_CASH_ACCT = "1000"           # Cash / Bank (asset) — disposal proceeds
+
 # Legal work-order transitions — FXA-001 §5.5
 _VALID_TRANSITIONS: dict[str, set[str]] = {
     "open": {"in_progress", "cancelled"},
@@ -156,11 +164,14 @@ def create_asset(owner_sub: str, body: FixedAssetIn) -> FixedAssetOut:
         "depreciation_method": body.depreciation_method,
         "status": "active",
         "accumulated_depreciation_cents": 0,
-        "gl_asset_account_id": body.gl_asset_account_id or "",
-        "gl_accum_depr_account_id": body.gl_accum_depr_account_id or "",
-        "gl_depr_expense_account_id": body.gl_depr_expense_account_id or "",
-        "gl_gain_account_id": body.gl_gain_account_id or "",
-        "gl_loss_account_id": body.gl_loss_account_id or "",
+        # FXA-008: default to the seeded fixed-asset chart accounts (gl_accounts
+        # DEFAULT_ACCOUNTS) when the caller does not pin explicit account ids, so
+        # depreciation/disposal journals reference real accounts.
+        "gl_asset_account_id": body.gl_asset_account_id or _FXA_ASSET_ACCT,
+        "gl_accum_depr_account_id": body.gl_accum_depr_account_id or _FXA_ACCUM_DEPR_ACCT,
+        "gl_depr_expense_account_id": body.gl_depr_expense_account_id or _FXA_DEPR_EXPENSE_ACCT,
+        "gl_gain_account_id": body.gl_gain_account_id or _FXA_GAIN_ACCT,
+        "gl_loss_account_id": body.gl_loss_account_id or _FXA_LOSS_ACCT,
         "correlation_id": corr,
         "created_at": ts,
         "updated_at": ts,
@@ -508,8 +519,8 @@ def dispose_asset(asset_id: str, body: FixedAssetDisposeIn, actor_sub: str) -> F
                 {"account_id": asset.get("gl_accum_depr_account_id") or "", "debit": accum, "credit": 0},
                 # Remove original cost (asset, debit-normal → credit to remove)
                 {"account_id": asset.get("gl_asset_account_id") or "", "debit": 0, "credit": cost},
-                # Cash proceeds (if any) — debit cash/AR
-                {"account_id": "CASH_OR_AR", "debit": proceeds, "credit": 0},
+                # Cash proceeds (if any) — debit cash/AR (FXA-008: real account)
+                {"account_id": asset.get("gl_cash_account_id") or _FXA_CASH_ACCT, "debit": proceeds, "credit": 0},
             ]
             if gain >= 0:
                 # Gain on disposal (credit-normal revenue account)

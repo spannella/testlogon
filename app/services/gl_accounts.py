@@ -50,6 +50,18 @@ DEFAULT_ACCOUNTS: List[Dict[str, Any]] = [
      "description": "Contra-revenue for refunds and reversals"},
     {"account_code": "5100", "name": "Processor Fees", "account_class": "expense",
      "description": "Payment gateway and processor transaction fees"},
+    # FXA-008 — fixed-asset chart accounts (so depreciation/disposal journals
+    # post against real accounts and roll up in GL reports).
+    {"account_code": "1500", "name": "Fixed Assets", "account_class": "asset",
+     "description": "Capitalised fixed-asset cost"},
+    {"account_code": "1600", "name": "Accumulated Depreciation", "account_class": "contra_asset",
+     "description": "Contra-asset accumulating depreciation against fixed assets"},
+    {"account_code": "6100", "name": "Depreciation Expense", "account_class": "expense",
+     "description": "Periodic depreciation charge"},
+    {"account_code": "4800", "name": "Gain on Disposal", "account_class": "revenue",
+     "description": "Gain realised on fixed-asset disposal"},
+    {"account_code": "5800", "name": "Loss on Disposal", "account_class": "expense",
+     "description": "Loss realised on fixed-asset disposal"},
 ]
 
 
