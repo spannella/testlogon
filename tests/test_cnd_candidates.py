@@ -821,6 +821,22 @@ class TestCandidateHistory(unittest.TestCase):
         prev_s = S.candidates_enabled
         object.__setattr__(S, "candidates_enabled", True)
         self.addCleanup(lambda: object.__setattr__(S, "candidates_enabled", prev_s))
+        # These tests exercise CND's own ACTIVITY# history fallback. Once the ACT
+        # cluster (crm_activity_timeline) is present, the adapter prefers it, so
+        # force the fallback by making that module unavailable for this class
+        # (mirrors the pre-ACT condition these tests were written for).
+        import sys as _sys
+        _MISSING = object()
+        _act_name = "app.services.crm_activity_timeline"
+        _prev_act_mod = _sys.modules.get(_act_name, _MISSING)
+        _sys.modules[_act_name] = None  # `from ... import X` now raises -> CND falls back
+
+        def _restore_act():
+            if _prev_act_mod is _MISSING:
+                _sys.modules.pop(_act_name, None)
+            else:
+                _sys.modules[_act_name] = _prev_act_mod
+        self.addCleanup(_restore_act)
 
     def _call_record(self, candidate_id="cand_hist1", actor="user1",
                      change_type="updated", summary="test"):
