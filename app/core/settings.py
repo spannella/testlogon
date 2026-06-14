@@ -865,6 +865,17 @@ class Settings:
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
     catalog_stock_alerts_enabled: bool = os.environ.get("CATALOG_STOCK_ALERTS_ENABLED", "1") not in ("0", "false", "False")
+    # OFBiz Catalog/Product Depth (PRD-001..PRD-016)
+    # Master switch defaults OFF. Sub-flags default True so enabling the master
+    # activates all depth features; operators can disable individual axes.
+    product_depth_enabled: bool = os.environ.get("PRODUCT_DEPTH_ENABLED", "false").lower() == "true"
+    product_depth_table_name: str = os.environ.get("PRODUCT_DEPTH_TABLE_NAME", "product_depth")
+    product_depth_variants_enabled: bool = os.environ.get("PRODUCT_DEPTH_VARIANTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_bundles_enabled: bool = os.environ.get("PRODUCT_DEPTH_BUNDLES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_features_enabled: bool = os.environ.get("PRODUCT_DEPTH_FEATURES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_price_components_enabled: bool = os.environ.get("PRODUCT_DEPTH_PRICE_COMPONENTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_max_category_depth: int = int(os.environ.get("PRODUCT_DEPTH_MAX_CATEGORY_DEPTH", "10"))
+    product_depth_max_variants_per_item: int = int(os.environ.get("PRODUCT_DEPTH_MAX_VARIANTS_PER_ITEM", "1000"))
 
     # OFBiz commerce/ERP — Phase 1: inventory & soft reservations (ADR-001, OFB-002/003/004).
     # Master switch defaults OFF: with it off, the catalog/cart/billing decrement-at-purchase

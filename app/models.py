@@ -17248,3 +17248,114 @@ class StayQuoteOut(BaseModel):   # serialization of HTL-015's StayPriceResult
     total_cents: int              # final, all rules applied, × rooms, floored >= 0
     currency: str
     applied_rule_ids: List[str]
+
+
+
+
+# ---------------------------------------------------------------------------
+# PRD-003 / PRD-006 / PRD-007 / PRD-012  — OFBiz Catalog Depth models
+# All models are ADDITIVE; CatalogItemOut above is unchanged.
+# ---------------------------------------------------------------------------
+
+class ProductTypeEnum(str, Enum):
+    virtual    = "virtual"
+    variant    = "variant"
+    standalone = "standalone"
+    bundle     = "bundle"
+    kit        = "kit"
+    digital    = "digital"
+
+
+class PriceTypeEnum(str, Enum):
+    LIST         = "LIST"
+    DEFAULT      = "DEFAULT"
+    PROMO        = "PROMO"
+    COMPETITIVE  = "COMPETITIVE"
+    MINIMUM      = "MINIMUM"
+    AVERAGE_COST = "AVERAGE_COST"
+
+
+# --- Feature categories / values ---
+
+class FeatureCategoryCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=500)
+    feature_category_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class FeatureValueCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    price_delta_cents: int = Field(default=0, ge=-10_000_000_00, le=10_000_000_00)
+    position: int = Field(default=0, ge=0, le=9999)
+
+
+class FeatureValueOut(BaseModel):
+    feature_value_id: str
+    feature_category_id: str
+    name: str
+    price_delta_cents: int = 0
+    position: int = 0
+
+
+class FeatureCategoryOut(BaseModel):
+    feature_category_id: str
+    name: str
+    description: Optional[str] = None
+    creator_id: str
+    created_at: int
+    values: List[FeatureValueOut] = Field(default_factory=list)
+
+
+class AttachFeatureCategoryIn(BaseModel):
+    feature_category_id: str
+
+
+# --- Variants ---
+
+class VariantCreateIn(BaseModel):
+    feature_values: Dict[str, str]  # {feature_category_id: feature_value_id}
+    sku_override: Optional[str] = None
+
+
+class VariantOut(BaseModel):
+    variant_id: str
+    parent_item_id: str
+    sku: str
+    feature_values: Dict[str, str]
+    price_delta_cents: int
+    effective_price_cents: int
+    creator_id: str
+    created_at: int
+
+
+# --- Price components ---
+
+class ProductPriceComponentIn(BaseModel):
+    price_type: PriceTypeEnum
+    amount_cents: int = Field(ge=0, le=10_000_000_00)
+    currency: str = "USD"
+    effective_at: int = Field(ge=0)
+    expires_at: Optional[int] = Field(default=None, ge=0)
+
+
+class ProductPriceComponentOut(BaseModel):
+    price_component_id: str
+    item_id: str
+    price_type: str
+    amount_cents: int
+    currency: str
+    effective_at: int
+    expires_at: Optional[int] = None
+    is_active: bool = False
+
+
+class PriceResolution(BaseModel):
+    amount_cents: int
+    currency: str = "USD"
+    price_component_id: Optional[str] = None
+    source: str  # "price_component" | "scalar_fallback"
+
+
+class SetPriceComponentsIn(BaseModel):
+    price_type: PriceTypeEnum
+    components: List[ProductPriceComponentIn] = Field(default_factory=list)

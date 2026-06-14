@@ -998,3 +998,161 @@ async def bulk_update_items(
     succeeded = sum(1 for r in results if r["ok"])
     failed = sum(1 for r in results if not r["ok"])
     return {"results": results, "succeeded": succeeded, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# PRD-006 / PRD-007 / PRD-012 — OFBiz Catalog Depth endpoints
+# All gated on S.product_depth_enabled via each service's _require_enabled().
+# Routes are APPENDED here — no existing routes are modified.
+# ---------------------------------------------------------------------------
+
+def _require_item_owner(item_id: str, user_sub: str) -> Dict[str, Any]:
+    """Resolve a catalog item by item_id and assert the caller owns it.
+    Raises 404 if not found, 403 if wrong owner.
+    """
+    item = _find_item_by_id(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Catalog item not found.")
+    creator_id = item.get("creator_id")
+    if creator_id and creator_id != user_sub:
+        raise HTTPException(status_code=403, detail="Not authorized to manage this item.")
+    return item
+
+
+@router.post("/feature-categories")
+async def create_feature_category_endpoint(body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    from app.services.product_features import create_feature_category as _svc
+    return _svc(
+        name=body["name"],
+        user_sub=ctx["user_sub"],
+        feature_category_id=body.get("feature_category_id"),
+        description=body.get("description"),
+    )
+
+
+@router.get("/feature-categories")
+async def list_feature_categories_endpoint(include_values: bool = False, ctx=Depends(require_ui_session)):
+    from app.services.product_features import list_feature_categories as _svc
+    items = _svc(ctx["user_sub"], include_values=include_values)
+    return {"feature_categories": items, "count": len(items)}
+
+
+@router.delete("/feature-categories/{fc_id}", status_code=204)
+async def delete_feature_category_endpoint(fc_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_features import delete_feature_category as _svc
+    _svc(fc_id, ctx["user_sub"])
+
+
+@router.post("/feature-categories/{fc_id}/values")
+async def add_feature_value_endpoint(fc_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    from app.services.product_features import add_feature_value as _svc
+    return _svc(
+        fc_id=fc_id,
+        name=body["name"],
+        user_sub=ctx["user_sub"],
+        price_delta_cents=int(body.get("price_delta_cents", 0)),
+        position=int(body.get("position", 0)),
+    )
+
+
+@router.delete("/feature-categories/{fc_id}/values/{fv_id}", status_code=204)
+async def delete_feature_value_endpoint(fc_id: str, fv_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_features import delete_feature_value as _svc
+    _svc(fc_id, fv_id, ctx["user_sub"])
+
+
+@router.post("/items/{item_id}/product-type")
+async def set_product_type_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_variants import set_product_type as _svc
+    return _svc(item_id, body.get("product_type", "standalone"), ctx["user_sub"])
+
+
+@router.get("/items/{item_id}/product-type")
+async def get_product_type_endpoint(item_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_variants import get_product_type as _svc
+    pt = _svc(item_id)
+    return {"item_id": item_id, "product_type": pt or "standalone"}
+
+
+@router.post("/items/{item_id}/feature-categories")
+async def attach_feature_category_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    from app.services.product_features import attach_feature_category_to_product as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    return _svc(item_id, body["feature_category_id"], ctx["user_sub"])
+
+
+@router.delete("/items/{item_id}/feature-categories/{fc_id}", status_code=204)
+async def detach_feature_category_endpoint(item_id: str, fc_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_features import detach_feature_category_from_product as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    _svc(item_id, fc_id, ctx["user_sub"])
+
+
+@router.get("/items/{item_id}/features")
+async def list_item_features_endpoint(item_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_features import list_product_features as _svc
+    features = _svc(item_id)
+    return {"item_id": item_id, "features": features, "count": len(features)}
+
+
+@router.post("/items/{item_id}/variants")
+async def create_variant_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    from app.services.product_variants import create_variant as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    return _svc(
+        parent_item_id=item_id,
+        feature_values=body["feature_values"],
+        user_sub=ctx["user_sub"],
+        sku_override=body.get("sku_override"),
+    )
+
+
+@router.get("/items/{item_id}/variants")
+async def list_variants_endpoint(item_id: str, limit: int = 100, ctx=Depends(require_ui_session)):
+    from app.services.product_variants import list_variants as _svc
+    items, _ = _svc(item_id, limit=limit)
+    return {"item_id": item_id, "variants": items, "count": len(items)}
+
+
+@router.delete("/items/{item_id}/variants/{variant_id}", status_code=204)
+async def delete_variant_endpoint(item_id: str, variant_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_variants import delete_variant as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    _svc(item_id, variant_id, ctx["user_sub"])
+
+
+@router.put("/items/{item_id}/price-components")
+async def set_price_components_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    from app.services.product_price_components import set_price_components as _svc
+    from app.models import ProductPriceComponentIn, PriceTypeEnum
+    _require_item_owner(item_id, ctx["user_sub"])
+    price_type = body["price_type"]
+    components = [ProductPriceComponentIn(**c) for c in body.get("components", [])]
+    results = _svc(item_id=item_id, price_type=price_type, components=components, creator_id=ctx["user_sub"])
+    return {"item_id": item_id, "price_type": price_type, "components": [r.model_dump() for r in results]}
+
+
+@router.post("/items/{item_id}/price-components")
+async def add_price_component_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
+    from app.services.product_price_components import set_price_component as _svc
+    from app.models import ProductPriceComponentIn
+    _require_item_owner(item_id, ctx["user_sub"])
+    comp = ProductPriceComponentIn(**body)
+    result = _svc(item_id=item_id, creator_id=ctx["user_sub"], body=comp)
+    return result.model_dump()
+
+
+@router.get("/items/{item_id}/price-components")
+async def list_price_components_endpoint(item_id: str, price_type: Optional[str] = None, ctx=Depends(require_ui_session)):
+    from app.services.product_price_components import list_price_components as _svc
+    results = _svc(item_id, price_type=price_type)
+    return {"item_id": item_id, "components": [r.model_dump() for r in results], "count": len(results)}
+
+
+@router.get("/items/{item_id}/effective-price")
+async def get_effective_price_endpoint(item_id: str, price_type: str = "DEFAULT", as_of: Optional[int] = None, ctx=Depends(require_ui_session)):
+    from app.services.product_price_components import resolve_effective_price as _svc
+    ts = as_of if as_of is not None else int(__import__("time").time())
+    result = _svc(item_id, as_of=ts, price_type=price_type)
+    return result.model_dump()

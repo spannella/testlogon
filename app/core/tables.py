@@ -367,6 +367,7 @@ class Tables:
     crm_pm_templates: Any
     hotel_availability: Any
     hotel_rate_plans: Any
+    product_depth: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -669,4 +670,5 @@ T = Tables(
     crm_pm_templates=_safe_table(S.crm_pm_templates_table_name),
     hotel_availability=_safe_table(S.hotel_availability_table_name),
     hotel_rate_plans=_safe_table(S.hotel_rate_plans_table_name),
+    product_depth=_safe_table(S.product_depth_table_name),
 )

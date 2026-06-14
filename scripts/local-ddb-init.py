@@ -41,6 +41,27 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # PRD-002 (OFBiz Catalog Depth): dedicated product_depth table for virtual/variant
+        # products, feature categories, price components, bundles, and associations.
+        # All numeric GSI sort keys declared in attr_types per CLAUDE.md convention.
+        TableDef(
+            _resolve_table_name(S.product_depth_table_name, "product_depth"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "ByParent",          "partition_key": "GSI_PARENT_PK", "sort_key": "GSI_PARENT_SK"},
+                {"index_name": "ByFeatureCategory", "partition_key": "GSI_FTCAT_PK",  "sort_key": "GSI_FTCAT_SK"},
+                {"index_name": "ByVirtualParent",   "partition_key": "GSI_VIRT_PK",   "sort_key": "GSI_VIRT_SK"},
+                {"index_name": "ByAssocSource",     "partition_key": "GSI_ASSOC_PK",  "sort_key": "GSI_ASSOC_SK"},
+                {"index_name": "ByItemPrice",       "partition_key": "GSI_PRICE_PK",  "sort_key": "GSI_PRICE_SK"},
+            ],
+            attr_types={
+                "GSI_PARENT_SK": "N",   # category position (int)
+                "GSI_FTCAT_SK":  "N",   # feature-value position (int)
+                "GSI_VIRT_SK":   "N",   # variant created_at (int)
+                "GSI_PRICE_SK":  "N",   # price effective_at (int)
+            },
+        ),
         # OFBiz GL Milestone 4 — chart of accounts (OFB-013).
         # gl_accounts: one row per account (PK=account_code, SK=META).
         # GSI_CLASS groups accounts by class for OFB-014 mapping.
