@@ -41,6 +41,14 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005)
+        TableDef(
+            _resolve_table_name(S.txn_requests_table_name, "txn_requests"),
+            "user_sub",
+            "request_id",
+            gsi=[{"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
         # EML-002: Admin runtime email settings (single CONFIG/GLOBAL row)
         TableDef(
             _resolve_table_name(S.email_settings_table_name, "email_settings"),

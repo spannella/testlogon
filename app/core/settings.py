@@ -3156,6 +3156,47 @@ class Settings:
     ats_resume_extract_max_bytes: int = int(
         os.environ.get("ATS_RESUME_EXTRACT_MAX_BYTES", str(10 * 1024 * 1024))
     )
+    # --- OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005) ---
+    # Per-series flag (default OFF). The effective gate ANDs this with the
+    # umbrella S.open_bank_project_enabled (defined in ACC-001; referenced
+    # defensively via getattr so this series builds independently of ACC).
+    txn_requests_enabled: bool = os.environ.get(
+        "TXN_REQUESTS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    txn_requests_table_name: str = os.environ.get(
+        "TXN_REQUESTS_TABLE", "txn_requests"
+    )
+    # TXR-002 — per-type amount ceilings (0 = no limit).
+    txn_request_limit_wallet_transfer_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_WALLET_TRANSFER_CENTS", "0")
+    )
+    txn_request_limit_counterparty_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_COUNTERPARTY_CENTS", "0")
+    )
+    txn_request_limit_payout_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_PAYOUT_CENTS", "0")
+    )
+    txn_request_limit_refund_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_REFUND_CENTS", "0")
+    )
+    txn_request_limit_free_form_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_FREE_FORM_CENTS", "0")
+    )
+    # TXR-003 — step-up SCA threshold + always-sensitive types.
+    txn_request_sca_threshold_cents: int = int(
+        os.environ.get("TXN_REQUEST_SCA_THRESHOLD_CENTS", "5000")
+    )
+    txn_request_sca_sensitive_types: frozenset = frozenset(
+        t.strip().upper()
+        for t in os.environ.get(
+            "TXN_REQUEST_SCA_SENSITIVE_TYPES", "PAYOUT,REFUND,COUNTERPARTY"
+        ).split(",")
+        if t.strip()
+    )
+    # TXR-004 — transient IN_FLIGHT cleanup TTL (seconds).
+    txn_request_in_flight_ttl_seconds: int = int(
+        os.environ.get("TXN_REQUEST_IN_FLIGHT_TTL_SECONDS", "300")
+    )
 
 
 S = Settings()

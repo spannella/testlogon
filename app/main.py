@@ -1067,6 +1067,8 @@ def create_app() -> FastAPI:
     # RSK-003/RSK-004: Résumé full-text search + skill-based candidate/job-order search
     from app.routers.ats_recruiting import router as ats_recruiting_router
     app.include_router(ats_recruiting_router)
+    from app.routers.txn_requests import router as txn_requests_router
+    app.include_router(txn_requests_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

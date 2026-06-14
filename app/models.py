@@ -18459,3 +18459,49 @@ class CampaignEmailTemplateOut(NotificationTemplateOut):
 
 class CampaignEmailTemplatePreviewOut(NotificationTemplatePreviewOut):
     merge_fields: List[str] = Field(default_factory=list)
+
+
+
+
+# ---------------------------------------------------------------------------
+# OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005)
+# ---------------------------------------------------------------------------
+
+
+class TxnRequestType(str, Enum):
+    WALLET_TRANSFER = "WALLET_TRANSFER"
+    COUNTERPARTY = "COUNTERPARTY"
+    PAYOUT = "PAYOUT"
+    REFUND = "REFUND"
+    FREE_FORM = "FREE_FORM"
+
+
+class TxnRequestCreateIn(BaseModel):
+    type: TxnRequestType
+    amount_cents: int = Field(..., gt=0, description="Amount in cents, must be > 0")
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    target: Dict[str, Any] = Field(default_factory=dict)
+    reason: Optional[str] = None
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+
+
+class TxnRequestOut(BaseModel):
+    request_id: str
+    type: TxnRequestType
+    amount_cents: int
+    currency: str
+    target: Dict[str, Any]
+    # INITIATED | PENDING | IN_FLIGHT (transient) | COMPLETED | FAILED
+    status: str
+    sca_challenge_id: Optional[str] = None
+    required_factors: Optional[List[str]] = None
+    sca_required_factors: Optional[List[str]] = None
+    ledger_refs: List[str] = []
+    created_at: int
+    updated_at: int
+    failure_reason: Optional[str] = None
+
+
+class TxnRequestListOut(BaseModel):
+    items: List[TxnRequestOut]
+    next_cursor: Optional[str] = None
