@@ -21299,3 +21299,163 @@ class HotelKpisOut(BaseModel):
     arrivals: int
     departures: int
     currency: str
+
+
+# ---------------------------------------------------------------------------
+# MFG-003: Manufacturing / MRP models (additive; visible when flag is off but
+# no endpoint exposes them).
+# ---------------------------------------------------------------------------
+
+class BomComponentIn(BaseModel):
+    """One component line in a new Bill of Materials."""
+    component_sku: str = Field(..., min_length=1, max_length=256)
+    quantity_per: float = Field(..., gt=0)
+    scrap_pct: float = Field(default=0.0, ge=0.0, lt=1.0)
+    unit_of_measure: str = Field(default="each", max_length=64)
+
+
+class BomCreateIn(BaseModel):
+    product_sku: str = Field(..., min_length=1, max_length=256)
+    name: str = Field(..., min_length=1, max_length=256)
+    output_quantity: int = Field(default=1, ge=1)
+    components: List[BomComponentIn] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
+
+
+class BomUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    status: Optional[str] = None
+
+
+class BomComponentOut(BaseModel):
+    component_sku: str
+    quantity_per: float
+    scrap_pct: float
+    unit_of_measure: str
+    seq: int
+
+
+class BomOut(BaseModel):
+    bom_id: str
+    product_sku: str
+    name: str
+    output_quantity: int
+    status: str
+    created_at: int
+    updated_at: int
+    created_by: str
+    components: List[BomComponentOut] = Field(default_factory=list)
+
+
+class ExplodedComponentOut(BaseModel):
+    component_sku: str
+    required_qty: float
+    depth: int
+
+
+class BomExplosionOut(BaseModel):
+    bom_id: str
+    build_qty: int
+    components: List[ExplodedComponentOut]
+
+
+# Work-center models
+
+class WorkCenterCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    capacity_per_hour: int = Field(default=0, ge=0)
+    cost_per_hour_cents: int = Field(default=0, ge=0)
+    correlation_id: Optional[str] = None
+
+
+class WorkCenterUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    capacity_per_hour: Optional[int] = Field(default=None, ge=0)
+    cost_per_hour_cents: Optional[int] = Field(default=None, ge=0)
+    status: Optional[str] = None
+
+
+class WorkCenterOut(BaseModel):
+    work_center_id: str
+    name: str
+    capacity_per_hour: int
+    cost_per_hour_cents: int
+    status: str
+    created_at: int
+    updated_at: int
+
+
+# Work-order models
+
+class WorkOrderCreateIn(BaseModel):
+    product_sku: str = Field(..., min_length=1, max_length=256)
+    quantity: int = Field(..., ge=1)
+    bom_id: Optional[str] = None
+    work_center_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+class IssueRowOut(BaseModel):
+    component_sku: str
+    required_quantity: float
+    issued_quantity: float
+    location_id: str
+    issued_at: int
+
+
+class WorkOrderOut(BaseModel):
+    work_order_id: str
+    product_sku: str
+    quantity: int
+    produced_qty: int
+    bom_id: str
+    work_center_id: str
+    status: str
+    correlation_id: str
+    issues_guard: str
+    produce_guard: str
+    created_at: int
+    updated_at: int
+    user_sub: str
+    issues: List[IssueRowOut] = Field(default_factory=list)
+
+
+class WorkOrderCompleteIn(BaseModel):
+    produced_qty: Optional[int] = Field(default=None, ge=1)
+    location_id: str = Field(default="warehouse")
+
+
+class WorkOrderCancelIn(BaseModel):
+    reason: Optional[str] = None
+
+
+# MRP models
+
+class MrpRunIn(BaseModel):
+    horizon_days: Optional[int] = Field(default=None, ge=1, le=365)
+    location_id: str = Field(default="warehouse")
+    correlation_id: Optional[str] = None
+
+
+class MrpRequirementOut(BaseModel):
+    sku: str
+    gross_requirement: int
+    on_hand_available: int
+    scheduled_receipts: int
+    net_requirement: int
+    suggested_action: str
+    suggested_quantity: int
+    depth: int = 0
+    bom_id: str = ""
+
+
+class MrpRunOut(BaseModel):
+    mrp_run_id: str
+    status: str
+    horizon_days: int
+    location_id: str
+    created_at: int
+    completed_at: int
+    requirement_count: int
+    user_sub: str
+    requirements: List[MrpRequirementOut] = Field(default_factory=list)

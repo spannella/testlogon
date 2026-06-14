@@ -41,6 +41,45 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # MFG-002: Manufacturing/MRP tables (flag-gated; always provisioned, never
+        # accessed when manufacturing_mrp_enabled=false).
+        TableDef(
+            _resolve_table_name(S.mfg_boms_table_name, "mfg_boms"),
+            "bom_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_PRODUCT", "partition_key": "product_sku", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mfg_work_centers_table_name, "mfg_work_centers"),
+            "work_center_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mfg_work_orders_table_name, "mfg_work_orders"),
+            "work_order_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "GSI_PRODUCT", "partition_key": "product_sku", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mfg_mrp_table_name, "mfg_mrp"),
+            "mrp_run_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_RUN_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # PLT-003: Glossary endpoint (GSI sort key is string — no attr_types needed)
         TableDef(
             _resolve_table_name(S.glossary_table_name, "glossary"),

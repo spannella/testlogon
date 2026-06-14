@@ -1567,6 +1567,11 @@ def create_app() -> FastAPI:
 
     app.openapi = _custom_openapi
 
+    # MFG-011: Manufacturing / MRP router (flag-gated: all handlers call
+    # _require_enabled(); safe to mount unconditionally).
+    from app.routers.manufacturing import manufacturing_router
+    app.include_router(manufacturing_router)
+
     return app
 
 app = create_app()

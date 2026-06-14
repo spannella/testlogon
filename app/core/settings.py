@@ -888,6 +888,15 @@ class Settings:
         or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
     )
     cart_recovery_link_ttl_days: int = int(os.environ.get("CART_RECOVERY_LINK_TTL_DAYS", "7"))
+    # OFBiz Manufacturing/MRP (MFG-001..MFG-014). Master switch defaults OFF.
+    manufacturing_mrp_enabled: bool = os.environ.get("MANUFACTURING_MRP_ENABLED", "false").lower() == "true"
+    mfg_boms_table_name: str = os.environ.get("MFG_BOMS_TABLE_NAME", "mfg_boms")
+    mfg_work_centers_table_name: str = os.environ.get("MFG_WORK_CENTERS_TABLE_NAME", "mfg_work_centers")
+    mfg_work_orders_table_name: str = os.environ.get("MFG_WORK_ORDERS_TABLE_NAME", "mfg_work_orders")
+    mfg_mrp_table_name: str = os.environ.get("MFG_MRP_TABLE_NAME", "mfg_mrp")
+    mfg_mrp_default_horizon_days: int = int(os.environ.get("MFG_MRP_DEFAULT_HORIZON_DAYS", "30"))
+    mfg_bom_max_explosion_depth: int = int(os.environ.get("MFG_BOM_MAX_EXPLOSION_DEPTH", "5"))
+    manufacturing_cost_posting_enabled: bool = os.environ.get("MANUFACTURING_COST_POSTING_ENABLED", "false").lower() == "true"
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
