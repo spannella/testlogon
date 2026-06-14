@@ -14,7 +14,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.testlogon.android.core.network.AppThemeMode
@@ -114,7 +117,16 @@ class MainActivity : ComponentActivity() {
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
             TestLogonTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                // Expose Compose testTags to UIAutomator as view resource-ids so on-device UI
+                // automation (Maestro feature-demo capture, instrumented device tests) can target
+                // every tagged node by id. Recommended by Google for production UI automation; no
+                // runtime behaviour change beyond the semantics tree.
+                @OptIn(ExperimentalComposeUiApi::class)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .semantics { testTagsAsResourceId = true },
+                ) {
                     Column(Modifier.fillMaxSize()) {
                         // AND-042: a single global health banner above all app content.
                         HealthBannerHost(modifier = Modifier.fillMaxWidth())

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application>
+    <!-- Debug builds talk to the cleartext (HTTP) dev backend, which API 28+ blocks by default.
+         Release builds are unaffected (HTTPS only). -->
+    <application android:usesCleartextTraffic="true">
         <activity
             android:name="com.testlogon.android.HiltTestActivity"
             android:exported="false"
