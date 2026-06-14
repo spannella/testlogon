@@ -3451,5 +3451,29 @@ class Settings:
     open_data_active_index: str = os.environ.get("OPEN_DATA_ACTIVE_INDEX", "ByActive")
     open_data_list_max_limit: int = int(os.environ.get("OPEN_DATA_LIST_MAX_LIMIT", "200"))
 
+    # CRM Events (EVT-001) — Master flag default OFF.
+    # With flag off: all /ui/crm/events/* routes return 404; no workers start.
+    crm_events_enabled: bool = os.environ.get("CRM_EVENTS_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    crm_events_table_name: str = os.environ.get("CRM_EVENTS_TABLE_NAME", "crm_events")
+    crm_event_registrations_table_name: str = os.environ.get("CRM_EVENT_REGISTRATIONS_TABLE_NAME", "crm_event_registrations")
+
+    # CRM Survey Distribution (EVT-008) — default OFF
+    crm_survey_distribution_enabled: bool = os.environ.get("CRM_SURVEY_DISTRIBUTION_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    survey_distribution_rate_limit_max: int = int(os.environ.get("SURVEY_DISTRIBUTION_RATE_LIMIT_MAX", "10"))
+    survey_distribution_rate_limit_window: int = int(os.environ.get("SURVEY_DISTRIBUTION_RATE_LIMIT_WINDOW", "3600"))
+
+    # CRM Document Library (EVT-011) — default OFF
+    crm_document_library_enabled: bool = os.environ.get("CRM_DOCUMENT_LIBRARY_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
+    # CRM Contact SMS (EVT-014) — default OFF
+    crm_contact_sms_enabled: bool = os.environ.get("CRM_CONTACT_SMS_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    crm_contact_sms_log_table_name: str = os.environ.get("CRM_CONTACT_SMS_LOG_TABLE", "crm_contact_sms_log")
+    crm_contact_sms_rate_max: int = int(os.environ.get("CRM_CONTACT_SMS_RATE_MAX", "20"))
+    crm_contact_sms_rate_window_seconds: int = int(os.environ.get("CRM_CONTACT_SMS_RATE_WINDOW_SECONDS", "3600"))
+
+    # CRM Audit Log Browse (EVT-015) — default OFF
+    crm_audit_log_browse_enabled: bool = os.environ.get("CRM_AUDIT_LOG_BROWSE_ENABLED", "false") == "1"
+    crm_audit_log_browse_rate_limit_per_minute: int = int(os.environ.get("CRM_AUDIT_LOG_BROWSE_RATE_LIMIT", "60"))
+
 
 S = Settings()

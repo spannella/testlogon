@@ -424,6 +424,9 @@ class Tables:
     dynamic_endpoints: Any
     # CSN-005: Open Data
     open_data: Any
+    crm_events: Any
+    crm_event_registrations: Any
+    crm_contact_sms_log: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -783,4 +786,7 @@ T = Tables(
     dynamic_endpoints=_safe_table(S.dynamic_endpoints_table_name),
     # CSN-005: Open Data (Branches + ATMs)
     open_data=_safe_table(S.open_data_table_name),
+    crm_events=_safe_table(S.crm_events_table_name),
+    crm_event_registrations=_safe_table(S.crm_event_registrations_table_name),
+    crm_contact_sms_log=_safe_table(S.crm_contact_sms_log_table_name),
 )

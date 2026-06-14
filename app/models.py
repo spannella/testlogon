@@ -20982,3 +20982,145 @@ class AtmOut(BaseModel):
 class OpenDataListOut(BaseModel):
     items: List[Any]
     next_cursor: Optional[str]
+
+
+
+
+# ── EVT-002: CRM Event invitee management ──────────────────────────────────
+
+class CrmEventCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    calendar_event_id: Optional[str] = Field(default=None, max_length=200)
+    max_attendance: Optional[int] = Field(default=None, ge=1)
+
+
+class CrmEventOut(BaseModel):
+    event_id: str
+    owner_sub: str
+    name: str
+    description: str
+    calendar_event_id: Optional[str]
+    max_attendance: Optional[int]
+    created_at: int
+    updated_at: int
+
+
+class CrmInviteeAddIn(BaseModel):
+    invitee_sub: str = Field(min_length=1, max_length=128)
+
+
+class CrmInviteeBulkImportIn(BaseModel):
+    user_subs: List[str] = Field(min_length=1, max_length=500)
+
+    @field_validator("user_subs")
+    @classmethod
+    def validate_subs(cls, v: List[str]) -> List[str]:
+        for sub in v:
+            if not sub or len(sub) > 128:
+                raise ValueError("Each user_sub must be 1-128 characters")
+        return v
+
+
+class CrmInviteeOut(BaseModel):
+    event_id: str
+    invitee_sub: str
+    invite_status: str
+    invited_at: int
+    responded_at: Optional[int]
+    display_name: Optional[str]
+
+
+class CrmInviteeListOut(BaseModel):
+    invitees: List[CrmInviteeOut]
+    cursor: Optional[str]
+
+
+class CrmSendInvitationsOut(BaseModel):
+    sent: int
+    skipped: int
+    failed: int
+
+
+# ── EVT-003: CRM Event registration/RSVP ──────────────────────────────────
+
+class CrmRegistrationOut(BaseModel):
+    event_id: str
+    registrant_sub: str
+    status: str
+    registered_at: int
+    responded_at: Optional[int]
+    checked_in_at: Optional[int]
+    waitlist_position: Optional[int]
+    invited: Optional[bool]
+
+
+class CrmRegistrationListOut(BaseModel):
+    registrations: List[CrmRegistrationOut]
+    cursor: Optional[str]
+
+
+class CrmRespondIn(BaseModel):
+    new_status: str = Field(pattern="^(accepted|declined)$")
+
+
+# ── EVT-004: CRM Event capacity / waitlist ────────────────────────────────
+
+class CrmCapacityOut(BaseModel):
+    event_id: str
+    max_attendance: Optional[int]
+    accepted_count: int
+    waitlisted_count: int
+    available_spots: Optional[int]
+
+
+# ── EVT-008: Survey distribution ──────────────────────────────────────────
+
+class DistributeSurveyReq(BaseModel):
+    recipients: List[str] = Field(min_length=1, max_length=500)
+    subject: str = Field(default="You've been invited to complete a survey", max_length=120)
+    message: Optional[str] = Field(default=None, max_length=2000)
+    contact_list_id: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class DistributeSurveyResp(BaseModel):
+    sent: int
+    skipped: int
+    failed: int
+
+
+class DistributionSummaryResp(BaseModel):
+    total_sent: int
+    total_responses: int
+    response_rate: float
+
+
+# ── EVT-014: CRM Contact SMS ──────────────────────────────────────────────
+
+class CrmContactSmsSendIn(BaseModel):
+    body: str = Field(min_length=1, max_length=1600)
+
+
+class CrmContactSmsOut(BaseModel):
+    sms_id: str
+    contact_id: str
+    contact_phone: str
+    status: str
+    message_id: str
+    sent_at_ts: int
+
+
+class CrmContactSmsLogListOut(BaseModel):
+    items: List[CrmContactSmsOut]
+    cursor: Optional[str]
+
+
+# ── EVT-015: Audit Log Browse ─────────────────────────────────────────────
+
+class AuditLogBrowseOut(BaseModel):
+    items: List[dict]
+    cursor: Optional[str]
+    total_scanned: int
+    category: str
+    from_ts: int
+    to_ts: int

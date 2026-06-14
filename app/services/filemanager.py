@@ -4953,3 +4953,121 @@ def create_billing_adjustment_admin(
         "adjustment_type": adjustment_type,
         "adjustment_sk": adj_sk,
     }
+
+
+# ── EVT-011: CRM Document Library metadata helpers ─────────────────────────
+
+from typing import Any as _Any, Optional as _Opt, Tuple as _Tuple, List as _List
+
+_LINKED_RECORD_TYPES: frozenset[str] = frozenset({"contact", "ticket", "account", "party"})
+
+
+def update_crm_metadata(
+    owner: str,
+    path: str,
+    *,
+    crm_category: _Opt[str],
+    crm_description: _Opt[str],
+    linked_record_type: _Opt[str],
+    linked_record_id: _Opt[str],
+) -> dict:
+    """Write or clear CRM metadata on an existing file node.
+
+    Returns the refreshed node dict.  Raises HTTP 400/404 on invalid input.
+    """
+    from fastapi import HTTPException  # local import
+
+    path = norm_path(path, is_folder=False)
+    # 404 if absent or soft-deleted
+    get_node(owner, path)
+
+    if crm_category is not None and len(crm_category) > 200:
+        raise HTTPException(status_code=400, detail="crm_category max 200 chars")
+    if crm_description is not None and len(crm_description) > 2000:
+        raise HTTPException(status_code=400, detail="crm_description max 2000 chars")
+    if linked_record_type is not None and linked_record_type not in _LINKED_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail={"code": "invalid_linked_record_type"})
+    if (linked_record_type is None) != (linked_record_id is None):
+        raise HTTPException(status_code=400, detail={"code": "linked_record_pair_required"})
+
+    set_parts: list[str] = ["crm_metadata_updated_at=:ts"]
+    remove_parts: list[str] = []
+    eav: dict[str, _Any] = {":ts": now_iso()}
+
+    for attr, val in [
+        ("crm_category", crm_category),
+        ("crm_description", crm_description),
+        ("linked_record_type", linked_record_type),
+        ("linked_record_id", linked_record_id),
+    ]:
+        if val is not None:
+            placeholder = f":{attr}"
+            eav[placeholder] = val
+            set_parts.append(f"{attr}={placeholder}")
+        else:
+            remove_parts.append(attr)
+
+    update_expr = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        update_expr += " REMOVE " + ", ".join(remove_parts)
+
+    _table().update_item(
+        Key=node_key(owner, path),
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=eav,
+    )
+    return get_node(owner, path)
+
+
+def search_by_linked_record(
+    owner: str,
+    linked_record_type: str,
+    linked_record_id: str,
+    *,
+    limit: int = 50,
+    cursor: _Opt[dict] = None,
+) -> _Tuple[_List[dict], _Opt[dict]]:
+    """Return file nodes linked to a CRM record (user-scoped scan).
+
+    Returns (items, last_evaluated_key).
+    """
+    from fastapi import HTTPException  # local import
+    from boto3.dynamodb.conditions import Attr  # local import
+
+    if linked_record_type not in _LINKED_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail={"code": "invalid_linked_record_type"})
+
+    limit = max(1, min(limit, 200))
+
+    filter_expr = (
+        Attr("PK").eq(pk_user(owner))
+        & Attr("SK").begins_with("NODE#")
+        & Attr("linked_record_type").eq(linked_record_type)
+        & Attr("linked_record_id").eq(linked_record_id)
+    )
+
+    results: list[dict] = []
+    lek = cursor
+    scan_rounds = 0
+    last_lek: _Opt[dict] = None
+
+    while len(results) < limit and scan_rounds < 30:
+        scan_rounds += 1
+        kwargs: dict[str, _Any] = {
+            "FilterExpression": filter_expr,
+        }
+        if lek:
+            kwargs["ExclusiveStartKey"] = lek
+        resp = _table().scan(**kwargs)
+        for item in resp.get("Items", []):
+            # Strip DynamoDB internal keys
+            clean = {k: v for k, v in item.items() if k not in ("PK", "SK", "GSI1PK", "GSI1SK", "GSI2PK", "GSI2SK")}
+            results.append(clean)
+            if len(results) >= limit:
+                break
+        lek = resp.get("LastEvaluatedKey")
+        last_lek = lek if len(results) < limit else lek
+        if not lek:
+            break
+
+    return results[:limit], last_lek

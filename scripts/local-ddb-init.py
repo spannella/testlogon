@@ -41,6 +41,38 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # EVT-001: CRM Events — event metadata + invitee rows
+        TableDef(
+            _resolve_table_name(S.crm_events_table_name, "crm_events"),
+            "event_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_sub", "sort_key": "created_at"},
+                {"index_name": "ByCalendar", "partition_key": "calendar_event_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # EVT-001: CRM Event Registrations — one row per registrant per event
+        TableDef(
+            _resolve_table_name(S.crm_event_registrations_table_name, "crm_event_registrations"),
+            "event_id",
+            "registrant_sub",
+            gsi=[
+                {"index_name": "ByRegistrant", "partition_key": "registrant_sub", "sort_key": "registered_at"},
+            ],
+            attr_types={"registered_at": "N"},
+        ),
+        # EVT-014: CRM Contact SMS Log — per-contact outbound SMS history
+        TableDef(
+            _resolve_table_name(S.crm_contact_sms_log_table_name, "crm_contact_sms_log"),
+            "sender_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByContact", "partition_key": "contact_id", "sort_key": "sent_at_ts"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "sent_at_ts"},
+            ],
+            attr_types={"sent_at_ts": "N"},
+        ),
         # CSN-001: PSD2 AIS/PIS Consents
         TableDef(
             _resolve_table_name(S.consents_table_name, "consents"),

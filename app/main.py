@@ -63,6 +63,9 @@ from app.routers.calendar import public_event_router as calendar_public_event_ro
 from app.routers.booking_engine import booking_engine_router
 from app.routers.calendar import integration_router as calendar_integration_router
 from app.routers.calendar import router as calendar_router
+from app.routers.crm_events import router as crm_events_router
+from app.routers.crm_contact_sms import router as crm_contact_sms_router
+from app.routers.audit_export import browse_router as audit_log_browse_router
 from app.routers.seo_metadata import seo_metadata_router
 from app.routers.admin_calendar_integrations import router as admin_calendar_integrations_router
 from app.routers.device_trust import router as device_trust_router
@@ -641,6 +644,8 @@ def create_app() -> FastAPI:
     app.include_router(calendar_public_router)
     app.include_router(calendar_public_event_router)
     app.include_router(booking_engine_router)
+    app.include_router(crm_events_router)
+    app.include_router(crm_contact_sms_router)
     app.include_router(file_share_links_router)
     app.include_router(file_share_links_public_router)
     app.include_router(seo_metadata_router)
@@ -862,6 +867,7 @@ def create_app() -> FastAPI:
     app.include_router(csv_export_router)
     app.include_router(audit_export_router)
     app.include_router(legal_export_router)
+    app.include_router(audit_log_browse_router)
     app.include_router(refund_requests_router)
     app.include_router(fraud_detection_router)
     app.include_router(security_honeytokens_router)
