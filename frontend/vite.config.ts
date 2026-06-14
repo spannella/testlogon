@@ -65,6 +65,10 @@ export default defineConfig({
     proxy: {
       "/saml": "http://localhost:8000",
       "/ui": "http://localhost:8000",
+      // SuiteCRM Knowledge Base router is mounted at /kb (auth) + /public/kb (public),
+      // not under /ui or /api — proxy them so the KB frontend reaches the backend in dev.
+      "/public/kb": "http://localhost:8000",
+      "/kb": "http://localhost:8000",
       // Browser SSH terminal WebSocket — needs ws:true for the upgrade to proxy.
       // Must precede the generic "/api" entry so the WS path matches here first.
       "/api/browser-ssh": { target: "http://localhost:8000", ws: true, changeOrigin: true },

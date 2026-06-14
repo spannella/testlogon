@@ -306,6 +306,28 @@ const CrmReportsListPage = lazy(() => import("@/pages/crm/reports/ReportsListPag
 const CrmReportViewerPage = lazy(() => import("@/pages/crm/reports/ReportViewerPage"));
 const CrmDashboardPage = lazy(() => import("@/pages/crm/reports/DashboardPage"));
 
+// SuiteCRM frontend batch 2 (KB, EML, INV, WFL, STU, PRJ)
+const KnowledgeBasePage = lazy(() => import("@/pages/knowledge-base/KnowledgeBasePage"));
+const KbManagePage = lazy(() => import("@/pages/knowledge-base/KbManagePage"));
+const KbArticleEditorPage = lazy(() => import("@/pages/knowledge-base/KbArticleEditorPage"));
+const KbArticlePage = lazy(() => import("@/pages/knowledge-base/KbArticlePage"));
+const KbTagPage = lazy(() => import("@/pages/knowledge-base/KbTagPage"));
+const KbPortalPage = lazy(() => import("@/pages/knowledge-base/KbPortalPage"));
+const KbPortalArticlePage = lazy(() => import("@/pages/knowledge-base/KbPortalArticlePage"));
+const EmailTemplatesPage = lazy(() => import("@/pages/crmEmail/EmailTemplatesPage"));
+const EmailComposePage = lazy(() => import("@/pages/crmEmail/EmailComposePage"));
+const EmailLogPage = lazy(() => import("@/pages/crmEmail/EmailLogPage"));
+const CrmInvoicesPage = lazy(() => import("@/pages/crmInvoices/CrmInvoicesPage"));
+const CrmConvertQuotePage = lazy(() => import("@/pages/crmInvoices/CrmConvertQuotePage"));
+const CrmInvoiceDetailPage = lazy(() => import("@/pages/crmInvoices/CrmInvoiceDetailPage"));
+const CrmBillingSettingsPage = lazy(() => import("@/pages/crmInvoices/CrmBillingSettingsPage"));
+const WorkflowRulesPage = lazy(() => import("@/pages/crmWorkflow/WorkflowRulesPage"));
+const WorkflowDripSequencesPage = lazy(() => import("@/pages/crmWorkflow/WorkflowDripSequencesPage"));
+const CrmSecurityPage = lazy(() => import("@/pages/crmStudio/CrmSecurityPage"));
+const CrmStudioPage = lazy(() => import("@/pages/crmStudio/CrmStudioPage"));
+const CrmProjectsListPage = lazy(() => import("@/pages/crmProjects/ProjectsPage"));
+const CrmProjectDetailPage = lazy(() => import("@/pages/crmProjects/ProjectDetailPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -423,6 +445,28 @@ export default function App() {
           <Route path="crm/reports" element={<CrmReportsListPage />} />
           <Route path="crm/reports/:reportId" element={<CrmReportViewerPage />} />
           <Route path="crm/dashboard" element={<CrmDashboardPage />} />
+          {/* SuiteCRM frontend batch 2 (literals before dynamic params) */}
+          <Route path="crm/knowledge-base" element={<KnowledgeBasePage />} />
+          <Route path="crm/knowledge-base/manage" element={<KbManagePage />} />
+          <Route path="crm/knowledge-base/articles/new" element={<KbArticleEditorPage />} />
+          <Route path="crm/knowledge-base/articles/:articleId/edit" element={<KbArticleEditorPage />} />
+          <Route path="crm/knowledge-base/articles/:articleId" element={<KbArticlePage />} />
+          <Route path="crm/knowledge-base/tags/:tag" element={<KbTagPage />} />
+          <Route path="crm/knowledge-base/portal" element={<KbPortalPage />} />
+          <Route path="crm/knowledge-base/portal/articles/:articleId" element={<KbPortalArticlePage />} />
+          <Route path="crm/email/templates" element={<EmailTemplatesPage />} />
+          <Route path="crm/email/compose" element={<EmailComposePage />} />
+          <Route path="crm/email/log" element={<EmailLogPage />} />
+          <Route path="crm/invoices" element={<CrmInvoicesPage />} />
+          <Route path="crm/invoices/convert" element={<CrmConvertQuotePage />} />
+          <Route path="crm/invoices/:invoiceNumber" element={<CrmInvoiceDetailPage />} />
+          <Route path="crm/billing-settings" element={<CrmBillingSettingsPage />} />
+          <Route path="crm/workflow" element={<WorkflowRulesPage />} />
+          <Route path="crm/workflow/drip-sequences" element={<WorkflowDripSequencesPage />} />
+          <Route path="crm/security" element={<CrmSecurityPage />} />
+          <Route path="crm/studio" element={<CrmStudioPage />} />
+          <Route path="crm/projects" element={<CrmProjectsListPage />} />
+          <Route path="crm/projects/:projectId" element={<CrmProjectDetailPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />

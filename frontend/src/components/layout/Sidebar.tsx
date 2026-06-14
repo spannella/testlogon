@@ -79,6 +79,9 @@ import {
   FileSignature,
   FileBarChart,
   History,
+  Mail,
+  Coins,
+  GitBranch,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -295,6 +298,16 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Activity Timeline", path: "/crm/timeline", icon: <History className="h-5 w-5" /> },
       { label: "CRM Reports", path: "/crm/reports", icon: <FileBarChart className="h-5 w-5" /> },
       { label: "CRM Dashboard", path: "/crm/dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
+      { label: "Knowledge Base", path: "/crm/knowledge-base", icon: <BookOpen className="h-5 w-5" /> },
+      { label: "Email Templates", path: "/crm/email/templates", icon: <FileText className="h-5 w-5" /> },
+      { label: "Email Compose", path: "/crm/email/compose", icon: <Mail className="h-5 w-5" /> },
+      { label: "Email Log", path: "/crm/email/log", icon: <History className="h-5 w-5" /> },
+      { label: "CRM Invoices", path: "/crm/invoices", icon: <Receipt className="h-5 w-5" /> },
+      { label: "Currency & Tax", path: "/crm/billing-settings", icon: <Coins className="h-5 w-5" /> },
+      { label: "Workflows", path: "/crm/workflow", icon: <GitBranch className="h-5 w-5" /> },
+      { label: "CRM Security", path: "/crm/security", icon: <Shield className="h-5 w-5" /> },
+      { label: "CRM Studio", path: "/crm/studio", icon: <Wrench className="h-5 w-5" /> },
+      { label: "CRM Projects", path: "/crm/projects", icon: <FolderKanban className="h-5 w-5" /> },
     ],
   },
 ];
