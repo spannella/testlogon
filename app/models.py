@@ -19089,3 +19089,81 @@ class SerialOut(BaseModel):
     @classmethod
     def _coerce_ts(cls, v: Any) -> int:
         return 0 if v is None else int(v)
+
+
+
+
+# ── Hotel Front Desk (HTL-022..024) ─────────────────────────────────────────
+# Additive read-only and action models for the QloApps hotel front-desk
+# console.  No existing model is modified; these are appended at the end
+# per CLAUDE.md "APPEND new Pydantic models at END of app/models.py".
+
+
+class FrontDeskRow(BaseModel):
+    """A reservation projection for a front-desk console row (HTL-022)."""
+    reservation_id: str
+    hotel_id: str
+    room_type_id: str
+    guest_name: str
+    guest_sub: str
+    checkin: str              # "YYYY-MM-DD"
+    checkout: str             # "YYYY-MM-DD"
+    status: Literal["confirmed", "checked_in", "checked_out", "cancelled", "no_show"]
+    nights: int
+    occupancy_adults: int
+    occupancy_children: int
+    assigned_room_ids: List[str] = []
+    total_cents: int
+
+
+class FrontDeskListOut(BaseModel):
+    """Paginated list envelope for the front-desk console (HTL-022)."""
+    rows: List[FrontDeskRow]
+    count: int
+    cursor: Optional[str] = None
+
+
+class OccupancySnapshotOut(BaseModel):
+    """Live occupancy snapshot for a hotel on a given date (HTL-022)."""
+    hotel_id: str
+    date: str                 # "YYYY-MM-DD"
+    rooms_total: int
+    rooms_occupied: int
+    rooms_available: int
+    rooms_out_of_service: int
+    occupancy_rate: float     # rooms_occupied / max(rooms_total, 1); 0.0..1.0
+    arrivals_count: int
+    departures_count: int
+    in_house_count: int
+
+
+class WalkInBookingIn(BaseModel):
+    """Walk-in create+check-in request body (HTL-023)."""
+    room_type_id: str
+    checkin: str              # "YYYY-MM-DD"
+    checkout: str             # "YYYY-MM-DD"
+    occupancy_adults: int = Field(default=1, ge=1)
+    occupancy_children: int = Field(default=0, ge=0)
+    guest_name: str
+    guest_sub: Optional[str] = None
+    assigned_room_ids: Optional[List[str]] = None
+    total_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class AssignRoomIn(BaseModel):
+    """Assign / change room request body (HTL-023)."""
+    assigned_room_ids: List[str]
+    version: int = Field(ge=0)
+
+
+class RoomMoveIn(BaseModel):
+    """Room-move request body (HTL-023)."""
+    from_room_id: str
+    to_room_id: str
+    version: int = Field(ge=0)
+
+
+class FrontDeskActionOut(BaseModel):
+    """Action response: updated reservation row + affected room rows (HTL-023)."""
+    reservation: FrontDeskRow
+    affected_rooms: List[dict] = []

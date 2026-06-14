@@ -3251,6 +3251,7 @@ class Settings:
     txn_request_in_flight_ttl_seconds: int = int(
         os.environ.get("TXN_REQUEST_IN_FLIGHT_TTL_SECONDS", "300")
     )
+    # HTL front-desk (HTL-022..024) reuses hotel_pms_enabled + the hotel_reservations / hotel_rooms tables (declared above)
 
 
 S = Settings()

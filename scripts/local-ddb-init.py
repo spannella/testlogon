@@ -41,6 +41,56 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # QloApps Hotel PMS — HTL-018: hotel_reservations
+        # PK=reservation_id, SK=sk (META header + HIST#* history rows).
+        # GSI_HOTEL_ARRIVALS: PK=hotel_id, SK=checkin (S) — arrivals board.
+        # GSI_GUEST:          PK=guest_party_id, SK=created_at (N) — guest history.
+        # GSI_HOTEL_STATUS:   PK=hotel_id, SK=status (S) — in-house / confirmed buckets.
+        TableDef(
+            _resolve_table_name(S.hotel_reservations_table_name, "hotel_reservations"),
+            "reservation_id",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "GSI_HOTEL_ARRIVALS",
+                    "partition_key": "hotel_id",
+                    "sort_key": "checkin",
+                },
+                {
+                    "index_name": "GSI_GUEST",
+                    "partition_key": "guest_party_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "GSI_HOTEL_STATUS",
+                    "partition_key": "hotel_id",
+                    "sort_key": "status",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QloApps Hotel PMS — HTL-006: hotel_rooms
+        # PK=hotel_id, SK=ROOM#{room_id}.
+        # GSI_ROOMTYPE:  PK=room_type_id, SK=created_at (N).
+        # GSI_HK_STATUS: PK=hotel_id, SK=housekeeping_status (S) — HK board.
+        TableDef(
+            _resolve_table_name(S.hotel_rooms_table_name, "hotel_rooms"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "GSI_ROOMTYPE",
+                    "partition_key": "room_type_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "GSI_HK_STATUS",
+                    "partition_key": "hotel_id",
+                    "sort_key": "housekeeping_status",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # OFBiz Facility/Fulfillment (FAC-002) — Milestone 4+
         # facilities: facility headers (SK=META) + location rows (SK=LOC#{id}).
         # GSI_OWNER for per-owner list; GSI_STATUS for admin queue.
