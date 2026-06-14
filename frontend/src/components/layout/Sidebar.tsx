@@ -82,6 +82,11 @@ import {
   Mail,
   Coins,
   GitBranch,
+  FileBox,
+  MapPin,
+  ScrollText,
+  Copy,
+  Contact,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -308,6 +313,19 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "CRM Security", path: "/crm/security", icon: <Shield className="h-5 w-5" /> },
       { label: "CRM Studio", path: "/crm/studio", icon: <Wrench className="h-5 w-5" /> },
       { label: "CRM Projects", path: "/crm/projects", icon: <FolderKanban className="h-5 w-5" /> },
+      { label: "Events", path: "/crm/events", icon: <CalendarDays className="h-5 w-5" /> },
+      { label: "Surveys", path: "/crm/surveys", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "CRM Documents", path: "/crm/documents", icon: <FileBox className="h-5 w-5" /> },
+      { label: "CRM Maps", path: "/crm/maps", icon: <MapPin className="h-5 w-5" /> },
+      { label: "SMS Compose", path: "/crm/sms", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Audit Log", path: "/crm/audit-log", icon: <ScrollText className="h-5 w-5" /> },
+      { label: "Campaigns", path: "/crm/campaigns", icon: <Megaphone className="h-5 w-5" /> },
+      { label: "Web Leads", path: "/crm/web-leads", icon: <Users className="h-5 w-5" /> },
+      { label: "Lead Capture", path: "/crm/lead-capture", icon: <Target className="h-5 w-5" /> },
+      { label: "Org Accounts", path: "/crm/org-accounts", icon: <Building2 className="h-5 w-5" /> },
+      { label: "Reports-To Chain", path: "/crm/reports-to", icon: <Users className="h-5 w-5" /> },
+      { label: "Duplicate Contacts", path: "/crm/party-dedup", icon: <Copy className="h-5 w-5" /> },
+      { label: "vCard Import", path: "/crm/vcard-import", icon: <Contact className="h-5 w-5" /> },
     ],
   },
 ];

@@ -328,6 +328,27 @@ const CrmStudioPage = lazy(() => import("@/pages/crmStudio/CrmStudioPage"));
 const CrmProjectsListPage = lazy(() => import("@/pages/crmProjects/ProjectsPage"));
 const CrmProjectDetailPage = lazy(() => import("@/pages/crmProjects/ProjectDetailPage"));
 
+// SuiteCRM frontend batch 3 (EVT subs, CCT, CMP)
+const CrmEventsPage = lazy(() => import("@/pages/crmEvents/CrmEventsPage"));
+const CrmEventCreatePage = lazy(() => import("@/pages/crmEvents/CrmEventCreatePage"));
+const CrmEventDetailPage = lazy(() => import("@/pages/crmEvents/CrmEventDetailPage"));
+const CrmSurveysPage = lazy(() => import("@/pages/crmSurveys/CrmSurveysPage"));
+const CrmSurveyBuilderPage = lazy(() => import("@/pages/crmSurveys/CrmSurveyBuilderPage"));
+const CrmSurveyResultsPage = lazy(() => import("@/pages/crmSurveys/CrmSurveyResultsPage"));
+const CrmDocumentsListPage = lazy(() => import("@/pages/crmDocuments/CrmDocumentsListPage"));
+const CrmDocumentUploadPage = lazy(() => import("@/pages/crmDocuments/CrmDocumentUploadPage"));
+const CrmDocumentDetailPage = lazy(() => import("@/pages/crmDocuments/CrmDocumentDetailPage"));
+const CrmMapsPage = lazy(() => import("@/pages/crm-maps/CrmMapsPage"));
+const CrmSmsPage = lazy(() => import("@/pages/crmSms/CrmSmsPage"));
+const CrmAuditLogPage = lazy(() => import("@/pages/crmAuditLog/CrmAuditLogPage"));
+const OrgAccountsPage = lazy(() => import("@/pages/crm/OrgAccountsPage"));
+const ManagerChainPage = lazy(() => import("@/pages/crm/ManagerChainPage"));
+const PartyDedupPage = lazy(() => import("@/pages/crm/PartyDedupPage"));
+const VcardImportPage = lazy(() => import("@/pages/crm/VcardImportPage"));
+const CampaignsPage = lazy(() => import("@/pages/crmCampaigns/CampaignsPage"));
+const WebLeadsPage = lazy(() => import("@/pages/crmCampaigns/WebLeadsPage"));
+const LeadCaptureFormPage = lazy(() => import("@/pages/crmCampaigns/LeadCaptureFormPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -467,6 +488,26 @@ export default function App() {
           <Route path="crm/studio" element={<CrmStudioPage />} />
           <Route path="crm/projects" element={<CrmProjectsListPage />} />
           <Route path="crm/projects/:projectId" element={<CrmProjectDetailPage />} />
+          {/* SuiteCRM frontend batch 3 (literals before dynamic params) */}
+          <Route path="crm/events" element={<CrmEventsPage />} />
+          <Route path="crm/events/new" element={<CrmEventCreatePage />} />
+          <Route path="crm/events/:eventId" element={<CrmEventDetailPage />} />
+          <Route path="crm/surveys" element={<CrmSurveysPage />} />
+          <Route path="crm/surveys/:surveyId/build" element={<CrmSurveyBuilderPage />} />
+          <Route path="crm/surveys/:surveyId/results" element={<CrmSurveyResultsPage />} />
+          <Route path="crm/documents" element={<CrmDocumentsListPage />} />
+          <Route path="crm/documents/upload" element={<CrmDocumentUploadPage />} />
+          <Route path="crm/documents/detail/:docPath" element={<CrmDocumentDetailPage />} />
+          <Route path="crm/maps" element={<CrmMapsPage />} />
+          <Route path="crm/sms" element={<CrmSmsPage />} />
+          <Route path="crm/audit-log" element={<CrmAuditLogPage />} />
+          <Route path="crm/org-accounts" element={<OrgAccountsPage />} />
+          <Route path="crm/reports-to" element={<ManagerChainPage />} />
+          <Route path="crm/party-dedup" element={<PartyDedupPage />} />
+          <Route path="crm/vcard-import" element={<VcardImportPage />} />
+          <Route path="crm/campaigns" element={<CampaignsPage />} />
+          <Route path="crm/web-leads" element={<WebLeadsPage />} />
+          <Route path="crm/lead-capture" element={<LeadCaptureFormPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
