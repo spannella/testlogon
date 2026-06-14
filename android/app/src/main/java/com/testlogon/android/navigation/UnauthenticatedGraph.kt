@@ -341,9 +341,13 @@ fun NavGraphBuilder.unauthenticatedGraph(navController: NavHostController) {
         // AND-393: public fundraiser donation (App Link /donate/{fundraiserId}) works while signed out (a
         // donor may be anonymous - the flow never requires a session).
         donationDestination(navController)
-        // AND-349: public questionnaire respond (App Link .../published/{slug}/respond) works while signed
-        // out (a respondent may be anonymous).
+        // AND-349: editable questionnaire respondent renderer (reached after the AND-395 entry resolves a
+        // session). Works while signed out (a respondent may be anonymous).
         questionnaireRespondDestination(navController)
+        // AND-395: PUBLIC unauthenticated entry (App Link .../published/{slug}/respond) - resolves the
+        // slug + an anonymous session, then forwards to the renderer above. The unauth gate must not
+        // bounce it to login.
+        publicQuestionnaireRespondDestination(navController)
     }
 }
 

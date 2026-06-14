@@ -133,7 +133,41 @@ interface RespondentSessionRepository {
      * (submitted) status, so the screen opens directly in the Submitted state rather than re-editing.
      */
     suspend fun isAlreadySubmitted(slug: String): Boolean
+
+    /**
+     * AND-395 FR-2 - confirms the published questionnaire for [slug] exists / is reachable (the
+     * idempotent GET behind the public-entry "loading" state). The schema body is owned by AND-346/347;
+     * the public entry only needs the typed [ApiResult] (Success / Failure(status 404/422 -> NotFound) /
+     * NetworkError -> retryable Error). The call is ANONYMOUS (no CSRF, no auth-refresh on 401).
+     */
+    suspend fun loadPublished(slug: String): ApiResult<com.testlogon.android.core.model.questionnaire.PublishedQuestionnaireEnvelope>
+
+    /**
+     * AND-395 FR-3/8 - the locally-persisted session for [slug], or null if none exists yet. Used by the
+     * public entry to RESUME-before-START (no duplicate session) and to route a TERMINAL (submitted)
+     * session straight to AND-349's confirmation. Returns [PersistedSession] (id + terminal flag); a
+     * non-blank persisted sessionId whose server status is "submitted" is terminal. Errors / offline are
+     * treated as non-terminal so the user can keep working.
+     */
+    suspend fun persistedSession(slug: String): PersistedSession?
+
+    /**
+     * AND-395 FR-3 - starts a FRESH ANONYMOUS session for [slug] (POST, NON-idempotent, NO auto-retry)
+     * and persists it. The "anonymous" semantics come from the request not carrying auth/CSRF (the
+     * [com.testlogon.android.core.network.Anonymous] tag on the API), not a separate endpoint. Returns
+     * the started [RespondentSession] on success.
+     */
+    suspend fun startAnonymousSession(slug: String): ApiResult<RespondentSession>
 }
+
+/**
+ * AND-395 - a locally-persisted session pointer for the public-entry resume/terminal routing.
+ * [isTerminal] is true when the server reports the session as submitted (AND-349 confirmation routing).
+ */
+data class PersistedSession(
+    val id: String,
+    val isTerminal: Boolean,
+)
 
 @Singleton
 class RespondentSessionRepositoryImpl(
@@ -381,6 +415,41 @@ class RespondentSessionRepositoryImpl(
             is ApiResult.Failure, is ApiResult.NetworkError -> false
         }
     }
+
+    override suspend fun loadPublished(
+        slug: String,
+    ): ApiResult<com.testlogon.android.core.model.questionnaire.PublishedQuestionnaireEnvelope> =
+        withContext(dispatcher) {
+            // AND-395 FR-2: idempotent anonymous GET. The bounded-backoff retry is applied by the
+            // OkHttp RetryInterceptor (GET-only); this layer only wraps the outcome in ApiResult.
+            call { api.getPublished(slug) }
+        }
+
+    override suspend fun persistedSession(slug: String): PersistedSession? = withContext(dispatcher) {
+        val draft = draftDao.getBySlug(slug)?.takeIf { it.sessionId.isNotBlank() }
+            ?: return@withContext null
+        // AND-395 FR-3: terminality is the server's authority (the local draft has no status column).
+        // Any error (offline / missing) is treated as NON-terminal so the user can resume / retry.
+        val terminal = when (val result = call { api.getSession(slug, draft.sessionId).toDomain(slug) }) {
+            is ApiResult.Success -> result.data.status == SessionStatus.SUBMITTED
+            is ApiResult.Failure, is ApiResult.NetworkError -> false
+        }
+        PersistedSession(id = draft.sessionId, isTerminal = terminal)
+    }
+
+    override suspend fun startAnonymousSession(slug: String): ApiResult<RespondentSession> =
+        withContext(dispatcher) {
+            // AND-395 FR-3: NON-idempotent POST (no auto-retry). Anonymous via the API's @Tag(Anonymous).
+            val result = call {
+                val envelope = api.startSession(slug, ResponseSessionStartReq())
+                val state = envelope.session.toSessionState()
+                state.toDomain(slug, emptyMap())
+            }
+            if (result is ApiResult.Success) {
+                persistClean(result.data)
+            }
+            result
+        }
 
     // ---- internals ----
 

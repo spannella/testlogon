@@ -2883,6 +2883,11 @@
     <string name="respond_schema_reload">Reload</string>
     <string name="respond_empty_form">No questions to show.</string>
 
+    <!-- AND-395 - public (unauthenticated) respondent entry shim -->
+    <string name="public_respond_opening">Opening questionnaire…</string>
+    <string name="public_respond_not_found_title">Questionnaire unavailable</string>
+    <string name="public_respond_not_found_body">This questionnaire isn\'t available. It may have been unpublished or the link is incorrect.</string>
+
     <!-- AND-350 - conditional logic / validation (form-level banner + server-confirm notice) -->
     <string name="respond_form_errors_title">Please fix the following</string>
     <string name="respond_validate_offline">Couldn\'t reach the server to confirm. Submit stays disabled until it\'s reachable.</string>

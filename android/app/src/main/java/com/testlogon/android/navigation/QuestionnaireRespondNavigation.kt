@@ -71,9 +71,14 @@ data object QuestionnaireRespondDest {
 }
 
 /**
- * AND-349 - registers the public respond destination + its App Link deep links. Registered in BOTH
- * top-level graphs (an anonymous respondent may not be signed in). On a deep-link cold start the back
- * stack may be empty; Back falls back to the graph start destination.
+ * AND-349 - registers the editable RESPONDENT RENDERER destination. Registered in BOTH top-level graphs
+ * (an anonymous respondent may not be signed in). On a deep-link cold start the back stack may be empty;
+ * Back falls back to the graph start destination.
+ *
+ * AND-395: the App Link deep links are NO LONGER attached here - they were re-pointed to the public
+ * ENTRY destination ([PublicRespondDest]), which resolves the slug + anonymous session BEFORE forwarding
+ * here once a session id exists (spec §4). This destination is now reached internally via
+ * [QuestionnaireRespondDest.build].
  */
 fun NavGraphBuilder.questionnaireRespondDestination(navController: NavHostController) {
     composable(
@@ -84,7 +89,6 @@ fun NavGraphBuilder.questionnaireRespondDestination(navController: NavHostContro
                 defaultValue = ""
             },
         ),
-        deepLinks = QuestionnaireRespondDest.deepLinks(),
     ) {
         RespondRoute(
             onBack = {

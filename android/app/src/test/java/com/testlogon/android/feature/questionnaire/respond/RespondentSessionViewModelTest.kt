@@ -109,6 +109,19 @@ class RespondentSessionViewModelTest {
         }
 
         override suspend fun isAlreadySubmitted(slug: String): Boolean = alreadySubmitted
+
+        // AND-395 additions (unused by this VM; satisfied for the shared interface).
+        override suspend fun loadPublished(
+            slug: String,
+        ): ApiResult<com.testlogon.android.core.model.questionnaire.PublishedQuestionnaireEnvelope> =
+            ApiResult.Failure(ApiError(ApiError.STATUS_PARSE, "not-used"))
+
+        override suspend fun persistedSession(
+            slug: String,
+        ): com.testlogon.android.feature.questionnaire.respond.data.PersistedSession? = null
+
+        override suspend fun startAnonymousSession(slug: String): ApiResult<RespondentSession> =
+            ApiResult.Failure(ApiError(ApiError.STATUS_PARSE, "not-used"))
     }
 
     private fun vm(repo: RespondentSessionRepository, slug: String? = SLUG): RespondentSessionViewModel {

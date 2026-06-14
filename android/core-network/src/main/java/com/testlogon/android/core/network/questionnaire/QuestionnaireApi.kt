@@ -1,5 +1,6 @@
 package com.testlogon.android.core.network.questionnaire
 
+import com.testlogon.android.core.network.Anonymous
 import com.testlogon.android.core.model.questionnaire.PublishedQuestionnaireEnvelope
 import com.testlogon.android.core.model.questionnaire.QuestionnaireValidationRequest
 import com.testlogon.android.core.model.questionnaire.QuestionnaireValidationResponse
@@ -18,6 +19,7 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Streaming
+import retrofit2.http.Tag
 
 /**
  * AND-346 - Retrofit interface for the published-questionnaire RESPONDENT surface (epic E45).
@@ -40,18 +42,28 @@ import retrofit2.http.Streaming
  */
 interface QuestionnaireApi {
 
-    /** GET a published questionnaire by slug. Returns the enveloped published version (version.schema_json). */
+    /**
+     * GET a published questionnaire by slug. Returns the enveloped published version
+     * (version.schema_json). AND-395: tagged [Anonymous] - this public read carries no
+     * `X-CSRF-Token` and a 401 never triggers the auth-refresh.
+     */
     @GET("questionnaires/published/{published_slug}")
     suspend fun getPublished(
         @Path("published_slug") publishedSlug: String,
+        @Tag anon: Anonymous = Anonymous,
     ): PublishedQuestionnaireEnvelope
 
-    /** POST create/open a respondent session. The web client posts an empty body. */
+    /**
+     * POST create/open a respondent session. The web client posts an empty body. AND-395: tagged
+     * [Anonymous] - the public session-start carries no `X-CSRF-Token` and a 401 never triggers
+     * the auth-refresh / login bounce.
+     */
     @Headers("Content-Type: application/json")
     @POST("questionnaires/published/{published_slug}/sessions")
     suspend fun startSession(
         @Path("published_slug") publishedSlug: String,
         @Body body: ResponseSessionStartReq,
+        @Tag anon: Anonymous = Anonymous,
     ): ResponseSessionEnvelope
 
     /** GET the current state of a respondent session (session + answers_by_question_id). */

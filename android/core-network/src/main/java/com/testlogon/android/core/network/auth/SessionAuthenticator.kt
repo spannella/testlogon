@@ -1,5 +1,6 @@
 package com.testlogon.android.core.network.auth
 
+import com.testlogon.android.core.network.Anonymous
 import com.testlogon.android.core.network.SettingsStore
 import com.testlogon.android.core.network.cookie.PersistentCookieJar
 import okhttp3.Authenticator
@@ -34,6 +35,11 @@ fun interface AuthEventSink {
  *
  * The refresh call uses a derived client with the authenticator removed (loop-safe) while keeping
  * the cookie jar + interceptors, supplied lazily via [refreshClient] to avoid a provider cycle.
+ *
+ * AND-395: a request tagged [Anonymous] (the public-respondent surface) is NEVER refreshed and NEVER
+ * triggers a logout - a 401 there means "session expired / not found", not "the auth session lapsed".
+ * The 401 is propagated unchanged (return null with NO cookie-jar clear and NO [AuthEventSink] event),
+ * so a public, never-logged-in user is not bounced toward login.
  */
 class SessionAuthenticator(
     private val refreshClient: Provider<OkHttpClient>,
@@ -45,6 +51,10 @@ class SessionAuthenticator(
     private val lock = Any()
 
     override fun authenticate(route: Route?, response: Response): Request? {
+        // AND-395: anonymous public calls never refresh and never log out; propagate the 401 untouched.
+        if (response.request.tag(Anonymous::class.java) != null) {
+            return null
+        }
         // Never refresh in response to the refresh call itself.
         if (response.request.header(REFRESH_HEADER) != null) {
             failLogout()

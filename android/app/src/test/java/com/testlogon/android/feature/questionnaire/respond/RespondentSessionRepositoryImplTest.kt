@@ -91,12 +91,16 @@ class RespondentSessionRepositoryImplTest {
         var saveThrows: Throwable? = null
         var submitThrows: Throwable? = null
 
-        override suspend fun getPublished(publishedSlug: String) =
+        override suspend fun getPublished(
+            publishedSlug: String,
+            anon: com.testlogon.android.core.network.Anonymous,
+        ): com.testlogon.android.core.model.questionnaire.PublishedQuestionnaireEnvelope =
             throw UnsupportedOperationException("not used")
 
         override suspend fun startSession(
             publishedSlug: String,
             body: ResponseSessionStartReq,
+            anon: com.testlogon.android.core.network.Anonymous,
         ): ResponseSessionEnvelope {
             startCalls++
             return startEnvelope

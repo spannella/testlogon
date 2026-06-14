@@ -150,9 +150,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-393: public fundraiser donation (App Link /donate/{fundraiserId}), anonymous-capable; also
         // registered unauthenticated since a donor may be signed out.
         donationDestination(navController)
-        // AND-349: public questionnaire respond (App Link .../published/{slug}/respond), anonymous; also
-        // registered unauthenticated since a respondent may be signed out.
+        // AND-349: editable questionnaire respondent renderer (reached after the AND-395 entry resolves a
+        // session); anonymous, also registered unauthenticated.
         questionnaireRespondDestination(navController)
+        // AND-395: PUBLIC unauthenticated entry (App Link .../published/{slug}/respond) - resolves the
+        // slug + an anonymous session, then forwards to the renderer above; also registered unauthenticated.
+        publicQuestionnaireRespondDestination(navController)
         // AND-205: storefront catalog / category browse grid (cells open the product detail route).
         catalogDestination(navController)
         // AND-206: real product detail (item derived from the category-items list; add-to-cart).

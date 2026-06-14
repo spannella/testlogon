@@ -117,6 +117,49 @@ class QuestionnaireApiTest {
         assertEquals("sess_abc", envelope.session["response_session_id"])
     }
 
+    // ---- AND-395: the anonymous public surface carries the @Tag(Anonymous) opt-out marker ----
+
+    /**
+     * AND-395 (TC-04/05 wiring) - getPublished + startSession must attach the
+     * [com.testlogon.android.core.network.Anonymous] request tag so the CSRF interceptor (AND-012) and
+     * 401-refresh authenticator (AND-013) pass them through (no X-CSRF-Token, no refresh on 401). A
+     * capturing interceptor reads request.tag(Anonymous::class.java) off the outgoing request.
+     */
+    private fun apiWith(client: OkHttpClient): QuestionnaireApi = Retrofit.Builder()
+        .baseUrl(server.url("/"))
+        .client(client)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(QuestionnaireApi::class.java)
+
+    @Test
+    fun getPublished_carriesAnonymousTag() = runTest {
+        var tagged = false
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            tagged = chain.request().tag(com.testlogon.android.core.network.Anonymous::class.java) != null
+            chain.proceed(chain.request())
+        }.build()
+        server.enqueue(jsonResponse(PUBLISHED_ENVELOPE))
+
+        apiWith(client).getPublished("intake-2026")
+
+        assertTrue("getPublished must carry the Anonymous tag", tagged)
+    }
+
+    @Test
+    fun startSession_carriesAnonymousTag() = runTest {
+        var tagged = false
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            tagged = chain.request().tag(com.testlogon.android.core.network.Anonymous::class.java) != null
+            chain.proceed(chain.request())
+        }.build()
+        server.enqueue(jsonResponse("""{"session":{"response_session_id":"sess_abc","status":"in_progress"}}"""))
+
+        apiWith(client).startSession("intake-2026", ResponseSessionStartReq())
+
+        assertTrue("startSession must carry the Anonymous tag", tagged)
+    }
+
     // ---- getSession: GET + both path tokens substituted ----
 
     @Test

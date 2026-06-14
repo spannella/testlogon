@@ -1,5 +1,6 @@
 package com.testlogon.android.core.network.csrf
 
+import com.testlogon.android.core.network.Anonymous
 import com.testlogon.android.core.network.cookie.PersistentCookieJar
 import okhttp3.Interceptor
 import okhttp3.Response
@@ -15,6 +16,8 @@ import javax.inject.Singleton
  * - If no `ui_csrf` cookie applies to the request URL, the request proceeds unchanged.
  * - The value is read per-request from the shared cookie jar, so a rotated token is picked up
  *   automatically on the next call.
+ * - AND-395: a request tagged [Anonymous] is passed through untouched (no `X-CSRF-Token`); the
+ *   public-respondent surface is anonymous and must not carry the authenticated CSRF token.
  */
 @Singleton
 class CsrfInterceptor @Inject constructor(
@@ -23,6 +26,11 @@ class CsrfInterceptor @Inject constructor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
+
+        // AND-395: anonymous public calls opt out of the CSRF header entirely.
+        if (request.tag(Anonymous::class.java) != null) {
+            return chain.proceed(request)
+        }
 
         if (!isMutating(request.method) || request.header(CSRF_HEADER) != null) {
             return chain.proceed(request)
