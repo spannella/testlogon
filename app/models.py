@@ -22263,3 +22263,67 @@ class FxConvertOut(BaseModel):
     target_amount_cents: int
     rate: float
     as_of: int
+
+
+# ---------------------------------------------------------------------------
+# EVT-005: CRM Geocoding models
+# ---------------------------------------------------------------------------
+
+class GeocodedAddressOut(BaseModel):
+    """A single geocoded address item (EVT-005)."""
+    address_id: str
+    lat: float
+    lng: float
+    geocoded_at: int
+    line1: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+
+
+class GeocodedAddressListOut(BaseModel):
+    """List of geocoded addresses with count (EVT-005)."""
+    addresses: List[GeocodedAddressOut]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# EVT-006: CRM Proximity Search models
+# ---------------------------------------------------------------------------
+
+class ProximityResultItem(BaseModel):
+    """A single result item from the proximity search (EVT-006)."""
+    entity_type: str
+    entity_id: str
+    name: str
+    lat: float
+    lng: float
+    distance_km: float
+    address_id: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+
+
+class ProximitySearchOut(BaseModel):
+    """Proximity search response envelope (EVT-006)."""
+    results: List[ProximityResultItem]
+    count: int
+    center_lat: float
+    center_lng: float
+    radius_km: float
+    entity_type: str
+
+
+# ---------------------------------------------------------------------------
+# EVT-007: CRM Map Feature Flags model
+# ---------------------------------------------------------------------------
+
+class CrmMapFeatureFlagsOut(BaseModel):
+    """Feature flags and map defaults served to the frontend (EVT-007)."""
+    crm_geocoding_enabled: bool
+    default_lat: float
+    default_lng: float
+    default_radius_km: float
+    max_radius_km: float
+    max_pins: int

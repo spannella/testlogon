@@ -3574,5 +3574,23 @@ class Settings:
     direct_debit_mandates_table_name: str = os.environ.get("DIRECT_DEBIT_MANDATES_TABLE_NAME", "direct_debit_mandates")
     fx_rates_table_name: str = os.environ.get("FX_RATES_TABLE_NAME", "fx_rates")
 
+    # EVT-005: CRM Geocoding — address-to-lat/lng (default OFF)
+    crm_geocoding_enabled: bool = os.environ.get("CRM_GEOCODING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    crm_geocoding_provider_url: str = os.environ.get("CRM_GEOCODING_PROVIDER_URL", "")
+    crm_geocoding_batch_limit: int = int(os.environ.get("CRM_GEOCODING_BATCH_LIMIT", "100"))
+
+    # EVT-006: CRM Proximity Search — Haversine radius query (default OFF)
+    crm_proximity_search_enabled: bool = os.environ.get("CRM_PROXIMITY_SEARCH_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    crm_proximity_search_max_radius_km: float = float(os.environ.get("CRM_PROXIMITY_SEARCH_MAX_RADIUS_KM", "20000.0"))
+    crm_proximity_search_rate_limit_n: int = int(os.environ.get("CRM_PROXIMITY_SEARCH_RATE_LIMIT_N", "30"))
+    crm_proximity_search_rate_limit_win: int = int(os.environ.get("CRM_PROXIMITY_SEARCH_RATE_LIMIT_WIN", "60"))
+
+    # EVT-007: CRM Map View — Leaflet pin-drop page (default OFF, controlled by crm_geocoding_enabled)
+    crm_map_default_lat: float = float(os.environ.get("CRM_MAP_DEFAULT_LAT", "37.7749"))
+    crm_map_default_lng: float = float(os.environ.get("CRM_MAP_DEFAULT_LNG", "-122.4194"))
+    crm_map_default_radius_km: float = float(os.environ.get("CRM_MAP_DEFAULT_RADIUS_KM", "50.0"))
+    crm_map_max_radius_km: float = float(os.environ.get("CRM_MAP_MAX_RADIUS_KM", "500.0"))
+    crm_map_max_pins: int = int(os.environ.get("CRM_MAP_MAX_PINS", "200"))
+
 
 S = Settings()

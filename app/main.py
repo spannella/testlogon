@@ -1259,6 +1259,13 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_depreciation_poster_task)
     from app.routers.pos import pos_router
     app.include_router(pos_router)
+    # EVT-005: CRM Geocoding (address-to-lat/lng)
+    from app.routers.crm_geocoding import router as crm_geocoding_router
+    app.include_router(crm_geocoding_router)
+
+    # EVT-006 + EVT-007: CRM Maps (proximity search + feature-flags)
+    from app.routers.crm_maps import router as crm_maps_router
+    app.include_router(crm_maps_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
