@@ -20582,3 +20582,185 @@ class FolioPaymentIn(BaseModel):
     amount_cents: int = Field(ge=1)
     method: Literal["wallet", "card_external", "cash", "check", "bank_transfer", "deposit_applied"]
     reference: str = ""
+
+
+
+
+# ── Purchasing / SCM (PUR-001..PUR-012) ──────────────────────────────────────
+
+class SupplierCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str = "USD"
+    payment_terms_days: int = Field(default=30, ge=0, le=365)
+
+
+class SupplierPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
+
+
+class SupplierStatusIn(BaseModel):
+    status: str  # "active" | "inactive"
+
+
+class SupplierOut(BaseModel):
+    supplier_id: str
+    name: str
+    status: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str
+    payment_terms_days: int
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class SupplierListOut(BaseModel):
+    suppliers: List[SupplierOut]
+    cursor: Optional[str] = None
+
+
+class SupplierProductUpsertIn(BaseModel):
+    unit_cost_cents: int = Field(ge=0, le=10_000_000_00)
+    currency: str = "USD"
+    lead_time_days: int = Field(default=0, ge=0, le=3650)
+    min_order_qty: int = Field(default=1, ge=1, le=10_000_000)
+    supplier_sku: Optional[str] = Field(default=None, max_length=256)
+    preferred: bool = False
+
+
+class SupplierProductOut(BaseModel):
+    supplier_id: str
+    sku: str
+    supplier_sku: Optional[str] = None
+    unit_cost_cents: int
+    currency: str
+    lead_time_days: int
+    min_order_qty: int
+    preferred: bool
+    updated_at: int
+
+
+class SupplierProductListOut(BaseModel):
+    products: List[SupplierProductOut]
+
+
+class PurchaseOrderLineIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity_ordered: int = Field(ge=1, le=10_000_000)
+    unit_cost_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class PurchaseOrderLineOut(BaseModel):
+    line_no: int
+    sku: str
+    quantity_ordered: int
+    quantity_received: int
+    unit_cost_cents: int
+    line_total_cents: int
+
+
+class PurchaseOrderCreateIn(BaseModel):
+    supplier_id: str
+    lines: List[PurchaseOrderLineIn] = Field(min_length=1)
+    currency: str = "USD"
+    expected_delivery_date: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+class PurchaseOrderOut(BaseModel):
+    po_id: str
+    supplier_id: str
+    status: str
+    currency: str
+    subtotal_cents: int
+    expected_delivery_date: Optional[str] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[int] = None
+    rejected_by: Optional[str] = None
+    rejected_reason: Optional[str] = None
+    ledger_entry_sk: Optional[str] = None
+    paid_at: Optional[int] = None
+    correlation_id: str
+    created_at: int
+    updated_at: int
+    lines: List[PurchaseOrderLineOut] = Field(default_factory=list)
+
+
+class PurchaseOrderListOut(BaseModel):
+    purchase_orders: List[PurchaseOrderOut]
+    cursor: Optional[str] = None
+
+
+class PoTransitionIn(BaseModel):
+    reason: Optional[str] = None
+    rejected_reason: Optional[str] = None
+
+
+class PoReceiveLineIn(BaseModel):
+    line_no: int = Field(ge=1)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class PoReceiveIn(BaseModel):
+    lines: List[PoReceiveLineIn] = Field(min_length=1)
+    receipt_correlation_id: Optional[str] = None
+
+
+class PoReceiptOut(BaseModel):
+    receipt_id: str
+    po_id: str
+    received_by: str
+    lines: List[Dict[str, Any]]
+    created_at: int
+
+
+class PoReceiveOut(BaseModel):
+    receipt: PoReceiptOut
+    po: PurchaseOrderOut
+
+
+class ReorderSuggestionOut(BaseModel):
+    sku: str
+    available: int
+    reorder_point: int
+    suggested_qty: int
+    supplier_id: Optional[str] = None
+    supplier_name: Optional[str] = None
+    unit_cost_cents: Optional[int] = None
+    lead_time_days: Optional[int] = None
+    warning: Optional[str] = None
+
+
+class ReorderSuggestionListOut(BaseModel):
+    suggestions: List[ReorderSuggestionOut]
+    no_supplier_skus: List[str] = Field(default_factory=list)
+
+
+class ReorderCreatePoIn(BaseModel):
+    skus: List[str] = Field(min_length=1)
+
+
+class ApPayableOut(BaseModel):
+    po_id: str
+    entry_id: str
+    amount_cents: int
+    state: str
+    ledger_date: str
+    supplier_id: str
+    ts: int
+
+
+class PoSettlePaymentIn(BaseModel):
+    payment_ref: str
+    provider: str = "internal"

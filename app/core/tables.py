@@ -411,6 +411,10 @@ class Tables:
     rent_policy: Any
     property_documents: Any
     hotel_folios: Any
+    suppliers: Any
+    supplier_products: Any
+    purchase_orders: Any
+    po_receipts: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -757,4 +761,8 @@ T = Tables(
     rent_policy=_safe_table(S.rent_policy_table_name),
     property_documents=_safe_table(S.property_documents_table_name),
     hotel_folios=_safe_table(S.hotel_folios_table_name),
+    suppliers=_safe_table(S.suppliers_table_name),
+    supplier_products=_safe_table(S.supplier_products_table_name),
+    purchase_orders=_safe_table(S.purchase_orders_table_name),
+    po_receipts=_safe_table(S.po_receipts_table_name),
 )

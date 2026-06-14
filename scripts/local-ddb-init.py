@@ -41,6 +41,43 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # PUR-002: Purchasing / SCM tables
+        TableDef(
+            _resolve_table_name(S.suppliers_table_name, "suppliers"),
+            "supplier_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.supplier_products_table_name, "supplier_products"),
+            "supplier_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "unit_cost_cents"},
+            ],
+            attr_types={"unit_cost_cents": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.purchase_orders_table_name, "purchase_orders"),
+            "po_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_SUPPLIER", "partition_key": "supplier_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.po_receipts_table_name, "po_receipts"),
+            "po_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_RECEIPT", "partition_key": "receipt_id"},
+            ],
+        ),
         # HTL-029: Guest folio entity — running stay-balance table.
         # PK=reservation_id, SK=META (header) or LINE#{line_id} (charge rows).
         # GSI_FOLIO_HOTEL: hotel_id (S) / created_at (N) — lists a hotel's

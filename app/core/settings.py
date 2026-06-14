@@ -3400,9 +3400,15 @@ class Settings:
     financial_products_table_name: str = os.environ.get("FINANCIAL_PRODUCTS_TABLE_NAME", "financial_products")
 
     # QloApps hotel-PMS vertical (HTL) — master flag + folio/payments tables
-    # (HTL-001 master flag + HTL-029..HTL-032 folio cluster)
-    hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     hotel_folios_table_name: str = os.environ.get("HOTEL_FOLIOS_TABLE_NAME", "hotel_folios")
+
+    # PUR-001/002: Purchasing / SCM
+    purchasing_scm_enabled: bool = os.environ.get("PURCHASING_SCM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    suppliers_table_name: str = os.environ.get("SUPPLIERS_TABLE_NAME", "suppliers")
+    supplier_products_table_name: str = os.environ.get("SUPPLIER_PRODUCTS_TABLE_NAME", "supplier_products")
+    purchase_orders_table_name: str = os.environ.get("PURCHASE_ORDERS_TABLE_NAME", "purchase_orders")
+    po_receipts_table_name: str = os.environ.get("PO_RECEIPTS_TABLE_NAME", "po_receipts")
+    purchase_order_reorder_suggestions_enabled: bool = os.environ.get("PURCHASE_ORDER_REORDER_SUGGESTIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
 
 
 S = Settings()

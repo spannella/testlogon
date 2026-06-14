@@ -1161,6 +1161,8 @@ def create_app() -> FastAPI:
             pass
     except Exception:
         pass  # RPT-007 not yet deployed; dashlet registration is best-effort
+    from app.routers.purchasing import purchasing_router
+    app.include_router(purchasing_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
