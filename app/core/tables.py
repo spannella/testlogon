@@ -401,6 +401,8 @@ class Tables:
     crm_event_reminders: Any
     maintenance_orders: Any
     maintenance_vendors: Any
+    account_views: Any
+    entitlement_requests: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -737,4 +739,6 @@ T = Tables(
     crm_event_reminders=_safe_table(S.crm_event_reminders_table_name),
     maintenance_orders=_safe_table(S.maintenance_orders_table_name),
     maintenance_vendors=_safe_table(S.maintenance_vendors_table_name),
+    account_views=_safe_table(S.account_views_table_name),
+    entitlement_requests=_safe_table(S.entitlement_requests_table_name),
 )

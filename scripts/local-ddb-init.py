@@ -41,6 +41,26 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        TableDef(
+            _resolve_table_name(S.account_views_table_name, "account_views"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "by-owner", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "by-grantee", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.entitlement_requests_table_name, "entitlement_requests"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "by-status", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "by-requester", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
         # WOV-001: maintenance work orders — co-located by property partition.
         # GSI_WO_STATUS: system-wide status queue (Kanban columns).
         # GSI_WO_ASSIGNEE: sparse — WOs with assignee_sub only; drives "my work" view.

@@ -1106,6 +1106,14 @@ def create_app() -> FastAPI:
     from app.routers.career_portal import public_router as career_portal_public_router
     app.include_router(career_portal_admin_router)
     app.include_router(career_portal_public_router)
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "account_views_enabled", False):
+        from app.routers.account_views import router as account_views_router, public_router as account_views_public_router
+        app.include_router(account_views_public_router)
+        app.include_router(account_views_router)
+
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "entitlement_requests_enabled", False):
+        from app.routers.entitlement_requests import router as entitlement_requests_router
+        app.include_router(entitlement_requests_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

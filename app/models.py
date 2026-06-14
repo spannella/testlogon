@@ -19651,3 +19651,173 @@ class VendorListOut(BaseModel):
     cursor: Optional[str] = None
     count: int
 
+
+
+
+
+# ---------------------------------------------------------------------------
+# VEW-001 — Account Views models
+# ---------------------------------------------------------------------------
+
+class ViewGrantsMatrix(BaseModel):
+    """Per-field boolean grants — all default False (deny-by-default)."""
+    can_see_balance: bool = False
+    can_see_available_balance: bool = False
+    can_see_transaction_list: bool = False
+    can_see_transaction_amount: bool = False
+    can_see_transaction_description: bool = False
+    can_see_counterparty: bool = False
+    can_see_counterparty_name: bool = False
+    can_see_owners: bool = False
+    can_see_account_label: bool = False
+    can_see_payout_destination_masked: bool = False
+    can_add_comment: bool = False
+    can_add_tag: bool = False
+    can_add_narrative: bool = False
+    can_delete_comment: bool = False
+
+
+class ViewCreateIn(BaseModel):
+    name: str
+    grants: ViewGrantsMatrix
+    preset: Optional[str] = None
+    description: str = ""
+    metadata_visibility: str = ""
+
+
+class ViewUpdateIn(BaseModel):
+    name: Optional[str] = None
+    grants: Optional[ViewGrantsMatrix] = None
+    description: Optional[str] = None
+    metadata_visibility: Optional[str] = None
+
+
+class ViewOut(BaseModel):
+    view_id: str
+    resource_type: str
+    resource_id: str
+    owner_sub: str
+    name: str
+    description: str
+    is_system_alias: bool
+    grants: Dict[str, bool]
+    preset: Optional[str]
+    metadata_visibility: str
+    created_at: int
+    updated_at: int
+
+
+class ViewGrantCatalogOut(BaseModel):
+    fields: List[str]
+    presets: List[Dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# VEW-002 — Grant models
+# ---------------------------------------------------------------------------
+
+class ViewGrantIn(BaseModel):
+    grantee_sub: str
+
+
+class ViewGrantRespondIn(BaseModel):
+    accept: bool
+
+
+class ViewGrantOut(BaseModel):
+    grant_id: str
+    view_id: str
+    grantee_sub: str
+    owner_sub: str
+    resource_type: str
+    resource_id: str
+    status: str
+    invited_at: int
+    accepted_at: int
+    updated_at: int
+
+
+class ViewGrantListOut(BaseModel):
+    grants: List[ViewGrantOut]
+    next_cursor: Optional[str] = None
+
+
+class PublicViewLinkIn(BaseModel):
+    ttl_days: Optional[int] = None
+
+
+class PublicViewLinkOut(BaseModel):
+    url: str
+    token: str
+    expires_at: int
+
+
+class PublicViewDataOut(BaseModel):
+    resource_type: str
+    resource_id: str
+    data: Dict[str, Any]
+    expires_at: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# VEW-003 — Projection models
+# ---------------------------------------------------------------------------
+
+class ViewProvenanceOut(BaseModel):
+    view_id: str
+    view_name: str
+    preset: Optional[str]
+    granted_fields: List[str]
+
+
+class ViewedResourceOut(BaseModel):
+    resource_type: str
+    resource_id: str
+    data: Dict[str, Any]
+    view: ViewProvenanceOut = Field(alias="_view")
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# VEW-004 — Entitlement-request models
+# ---------------------------------------------------------------------------
+
+class EntitlementRequestCreateIn(BaseModel):
+    entitlement_kind: str = Field(..., pattern="^(acl_role|admin_scope)$")
+    target_ref: str = Field(..., min_length=1, max_length=200)
+    justification: str = Field(..., min_length=10, max_length=2000)
+
+
+class EntitlementDecisionIn(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
+class EntitlementRequestOut(BaseModel):
+    request_id: str
+    requester_sub: str
+    entitlement_kind: str
+    target_ref: str
+    justification: str
+    status: str
+    claimed_by_sub: Optional[str]
+    claimed_at: Optional[int]
+    decided_by_sub: Optional[str]
+    decided_at: Optional[int]
+    decision_reason: Optional[str]
+    grant_pending_acl: bool
+    created_at: int
+    updated_at: int
+
+
+class EntitlementAuditEventOut(BaseModel):
+    event_type: str
+    actor_sub: str
+    from_status: Optional[str]
+    to_status: Optional[str]
+    reason: str
+    created_at: int
+
+
+class EntitlementQueueOut(BaseModel):
+    requests: List[EntitlementRequestOut]
+    next_cursor: Optional[str] = None
