@@ -41,6 +41,22 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # RSK-001: ATS skill registry + assignment store.
+        # GSI1 (ByName) enables autocomplete prefix scan: GSI1PK="NAME_PREFIX#{c}" / GSI1SK=name_lc (STRING).
+        # GSI1SK is a STRING sort key — do NOT add "N" to attr_types.
+        TableDef(
+            _resolve_table_name(S.ats_skills_table_name, "ats_skills"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByName",
+                    "partition_key": "GSI1PK",
+                    "sort_key": "GSI1SK",
+                },
+            ],
+            attr_types={},
+        ),
         # LSE-001 (open-property Lease entity). Two GSIs; numeric sort keys declared
         # in attr_types to avoid ValidationException when queried with integer values.
         TableDef(

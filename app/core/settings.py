@@ -3111,6 +3111,19 @@ class Settings:
     leases_renewal_check_interval_seconds: int = int(
         os.environ.get("LEASES_RENEWAL_CHECK_INTERVAL_SECONDS", "3600")
     )
+    # ATS Recruiting — RSK reuses the master flag candidates_enabled owned by CND-001 (defined above)
+    ats_skills_table_name: str = os.environ.get("ATS_SKILLS_TABLE_NAME", "ats_skills")
+    ats_skills_enabled: bool = os.environ.get(
+        "ATS_SKILLS_ENABLED", "1"
+    ) not in ("0", "false", "False")
+
+    # RSK-002 — Résumé text extraction
+    ats_resume_extract_max_chars: int = int(
+        os.environ.get("ATS_RESUME_EXTRACT_MAX_CHARS", "50000")
+    )
+    ats_resume_extract_max_bytes: int = int(
+        os.environ.get("ATS_RESUME_EXTRACT_MAX_BYTES", str(10 * 1024 * 1024))
+    )
 
 
 S = Settings()

@@ -1052,6 +1052,15 @@ def create_app() -> FastAPI:
         from app.routers.ats_pipeline import router_admin as ats_pipeline_admin_router
         app.include_router(ats_pipeline_router)
         app.include_router(ats_pipeline_admin_router)
+    # RSK-001/RSK-004: ATS skill registry + skill-based search
+    from app.routers.ats_skills import router as ats_skills_router
+    app.include_router(ats_skills_router)
+    # RSK-002: Résumé text extraction (re-extract endpoint)
+    from app.routers.ats_resume import router as ats_resume_router
+    app.include_router(ats_resume_router)
+    # RSK-003/RSK-004: Résumé full-text search + skill-based candidate/job-order search
+    from app.routers.ats_recruiting import router as ats_recruiting_router
+    app.include_router(ats_recruiting_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

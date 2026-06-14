@@ -374,6 +374,7 @@ class Tables:
     # QloApps hotel-PMS vertical (HTL-001..HTL-009)
     hotel_rooms: Any
     leases: Any
+    ats_skills: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -683,4 +684,5 @@ T = Tables(
     # QloApps hotel-PMS vertical (HTL-001..HTL-009)
     hotel_rooms=_safe_table(S.hotel_rooms_table_name),
     leases=_safe_table(S.leases_table_name),
+    ats_skills=_safe_table(S.ats_skills_table_name),
 )

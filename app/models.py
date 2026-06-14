@@ -18058,3 +18058,78 @@ class LeaseListOut(BaseModel):
     leases: List[LeaseOut]
     count: int
     next_cursor: Optional[str] = None
+
+
+
+
+# ── ATS Skills (RSK-001) ──────────────────────────────────────────────────────
+
+class SkillOut(BaseModel):
+    skill_id: str
+    name: str
+    usage_count: int = 0
+    weight: Optional[int] = None          # 1-5, candidate proficiency
+    required: Optional[bool] = None       # job_order required flag
+    created_at: int = 0
+
+
+class SkillAssignmentIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    weight: Optional[int] = Field(None, ge=1, le=5)
+    required: Optional[bool] = None
+
+
+class EntitySkillsOut(BaseModel):
+    entity_type: str
+    entity_id: str
+    skills: List[SkillOut]
+
+
+# ── ATS Résumé Search (RSK-002/RSK-003) ─────────────────────────────────────
+
+class ResumeExtractionOut(BaseModel):
+    candidate_id: str
+    attachment_id: str
+    extraction_status: str      # "ok" | "unsupported" | "error" | "disabled"
+    char_count: int
+    extracted_at: Optional[int] = None
+
+
+class ResumeSearchResultItem(BaseModel):
+    candidate_id: str
+    name_snippet: str
+    owner_sub: str
+    updated_at: int
+
+
+class ResumeSearchOut(BaseModel):
+    items: List[ResumeSearchResultItem]
+    query: str
+    total_estimate: int
+    has_more: bool
+
+
+# ── ATS Skill Search (RSK-004) ───────────────────────────────────────────────
+
+class CandidateMatchOut(BaseModel):
+    candidate_id: str
+    name: str
+    email: Optional[str] = None
+    matched_skill_ids: List[str]
+    match_score: float
+    owner_sub: Optional[str] = None
+
+
+class JobOrderMatchOut(BaseModel):
+    job_order_id: str
+    title: str
+    status: str
+    matched_skill_ids: List[str]
+    match_score: float
+
+
+class SkillSearchResultsOut(BaseModel):
+    items: List[Union[CandidateMatchOut, JobOrderMatchOut]]
+    total: int
+    query_skill_ids: List[str]
+    match: str
