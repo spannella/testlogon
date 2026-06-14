@@ -86,7 +86,57 @@ def _item_to_work_order(item: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": int(item.get("created_at", 0)),
         "updated_at": int(item.get("updated_at", 0)),
         "user_sub": item.get("user_sub", ""),
+        "catalog_category_id": item.get("catalog_category_id", ""),
+        "catalog_item_id": item.get("catalog_item_id", ""),
     }
+
+
+# ---------------------------------------------------------------------------
+# MFG-013 — finished-goods → catalog stock mirror (best-effort)
+#
+# RULE-2 sibling guard: the inventory read is guarded on the inventory sibling's
+# own flag (inventory_reservations_enabled). When that flag is off there is no
+# inventory record to mirror, so the helper is a silent no-op. The catalog
+# write itself is best-effort (any exception is swallowed) so a mirror hiccup
+# can never roll back work-order completion.
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _mirror_catalog_stock_count(
+    product_sku: str,
+    catalog_category_id: str,
+    catalog_item_id: str,
+    location_id: str = "warehouse",
+) -> None:
+    """Mirror inventory.available → catalog.stock_count for a finished-goods SKU.
+
+    Skipped silently when the work order is not catalog-linked, when the
+    inventory sibling flag is off, when no inventory record exists, or on any
+    error. Never raises.
+    """
+    if not catalog_category_id or not catalog_item_id:
+        return
+    if not getattr(S, "inventory_reservations_enabled", False):
+        return
+    try:
+        from app.services.inventory import get_inventory  # type: ignore
+        rec = get_inventory(product_sku, location_id)
+        if rec is None:
+            return
+        new_sc = max(0, int(rec["available"]))
+        from app.routers.catalog import cat_pk, item_sk  # type: ignore
+        T.catalog.update_item(
+            Key={"PK": cat_pk(catalog_category_id), "SK": item_sk(catalog_item_id)},
+            UpdateExpression="SET stock_count = :sc, stock_updated_at = :now",
+            ExpressionAttributeValues={":sc": new_sc, ":now": _now_iso()},
+            ConditionExpression="attribute_exists(PK)",
+        )
+    except Exception:
+        pass
 
 
 def _item_to_issue(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -134,6 +184,8 @@ def create_work_order(
     work_center_id: Optional[str] = None,
     correlation_id: Optional[str] = None,
     user_sub: str = "system",
+    catalog_category_id: str = "",
+    catalog_item_id: str = "",
 ) -> Dict[str, Any]:
     _require_enabled()
 
@@ -167,6 +219,8 @@ def create_work_order(
         "created_at": ts,
         "updated_at": ts,
         "user_sub": user_sub,
+        "catalog_category_id": catalog_category_id or "",
+        "catalog_item_id": catalog_item_id or "",
     }
 
     from boto3.dynamodb.conditions import Attr  # type: ignore
@@ -389,6 +443,16 @@ def complete_work_order(
         "produced_qty": qty,
         "completed_at": ts,
     })
+
+    # MFG-013: mirror the new inventory.available to catalog.stock_count so the
+    # storefront reflects produced stock. Best-effort, never blocks completion.
+    _mirror_catalog_stock_count(
+        product_sku=wo["product_sku"],
+        catalog_category_id=wo.get("catalog_category_id", ""),
+        catalog_item_id=wo.get("catalog_item_id", ""),
+        location_id=location_id,
+    )
+
     _write_event(work_order_id, wo["status"], "completed", user_sub)
     _audit("mfg_work_order.completed", user_sub, work_order_id=work_order_id, produced_qty=qty)
 

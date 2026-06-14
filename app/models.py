@@ -21390,6 +21390,45 @@ class WorkCenterOut(BaseModel):
     updated_at: int
 
 
+# Routing-task models (MFG-005) — per-BOM ordered operations
+
+class RoutingTaskIn(BaseModel):
+    work_center_id: str = Field(..., min_length=1, max_length=256)
+    sequence: int = Field(..., ge=0, le=999)
+    setup_minutes: int = Field(default=0, ge=0, le=100_000)
+    run_minutes_per_unit: int = Field(default=0, ge=0, le=100_000)
+    description: str = Field(default="", max_length=512)
+
+
+class RoutingTaskOut(BaseModel):
+    bom_id: str
+    sequence: int
+    work_center_id: str
+    description: str
+    setup_minutes: int
+    run_minutes_per_unit: int
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class RoutingCostTaskOut(BaseModel):
+    sequence: int
+    work_center_id: str
+    task_minutes: int
+    cost_per_hour_cents: int
+    task_cost_cents: int
+
+
+class RoutingCostOut(BaseModel):
+    bom_id: str
+    quantity: int
+    total_setup_minutes: int
+    total_run_minutes: int
+    total_minutes: int
+    total_labor_cost_cents: int
+    tasks: List[RoutingCostTaskOut] = Field(default_factory=list)
+
+
 # Work-order models
 
 class WorkOrderCreateIn(BaseModel):
@@ -21398,6 +21437,9 @@ class WorkOrderCreateIn(BaseModel):
     bom_id: Optional[str] = None
     work_center_id: Optional[str] = None
     correlation_id: Optional[str] = None
+    # MFG-013: optional catalog link for finished-goods stock mirror
+    catalog_category_id: Optional[str] = Field(default=None, max_length=256)
+    catalog_item_id: Optional[str] = Field(default=None, max_length=256)
 
 
 class IssueRowOut(BaseModel):
@@ -21423,11 +21465,23 @@ class WorkOrderOut(BaseModel):
     updated_at: int
     user_sub: str
     issues: List[IssueRowOut] = Field(default_factory=list)
+    # MFG-013: catalog link (empty string when not catalog-linked)
+    catalog_category_id: str = ""
+    catalog_item_id: str = ""
 
 
 class WorkOrderCompleteIn(BaseModel):
     produced_qty: Optional[int] = Field(default=None, ge=1)
     location_id: str = Field(default="warehouse")
+
+
+class WorkOrderCatalogStockOut(BaseModel):
+    work_order_id: str
+    product_sku: str
+    inventory_available: Optional[int] = None
+    inventory_on_hand: Optional[int] = None
+    catalog_stock_count: Optional[int] = None
+    in_sync: Optional[bool] = None
 
 
 class WorkOrderCancelIn(BaseModel):

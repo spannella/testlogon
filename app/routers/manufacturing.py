@@ -20,6 +20,7 @@ from app.models import (
     BomUpdateIn,
     WorkCenterCreateIn,
     WorkCenterUpdateIn,
+    RoutingTaskIn,
     WorkOrderCreateIn,
     WorkOrderCompleteIn,
     WorkOrderCancelIn,
@@ -112,6 +113,61 @@ async def deactivate_bom(
 
 
 # ---------------------------------------------------------------------------
+# BOM routing-task endpoints (MFG-005)
+# IMPORTANT: literal sub-paths (/routing-tasks, /routing-cost) are declared
+# above and never collide with the bare /boms/{bom_id} GET because the path
+# segment after {bom_id} is a literal.
+# ---------------------------------------------------------------------------
+
+@manufacturing_router.post("/boms/{bom_id}/routing-tasks")
+async def add_routing_task(
+    bom_id: str,
+    body: RoutingTaskIn,
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    from app.services.manufacturing_routing import add_routing_task as _add
+    return _add(
+        bom_id,
+        body.work_center_id,
+        sequence=body.sequence,
+        setup_minutes=body.setup_minutes,
+        run_minutes_per_unit=body.run_minutes_per_unit,
+        description=body.description,
+        user_sub=user.sub,
+    )
+
+
+@manufacturing_router.get("/boms/{bom_id}/routing-tasks")
+async def list_routing_tasks(
+    bom_id: str,
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    from app.services.manufacturing_routing import list_routing_tasks as _list
+    return {"tasks": _list(bom_id)}
+
+
+@manufacturing_router.get("/boms/{bom_id}/routing-cost")
+async def routing_cost(
+    bom_id: str,
+    quantity: int = 1,
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    from app.services.manufacturing_routing import compute_routing_cost as _cost
+    return _cost(bom_id, quantity)
+
+
+@manufacturing_router.delete("/boms/{bom_id}/routing-tasks/{sequence}")
+async def delete_routing_task(
+    bom_id: str,
+    sequence: int,
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    from app.services.manufacturing_routing import delete_routing_task as _delete
+    _delete(bom_id, sequence, user_sub=user.sub)
+    return {"ok": True, "bom_id": bom_id, "sequence": sequence}
+
+
+# ---------------------------------------------------------------------------
 # Work-center endpoints
 # ---------------------------------------------------------------------------
 
@@ -175,6 +231,8 @@ async def create_work_order(
         work_center_id=body.work_center_id,
         correlation_id=body.correlation_id,
         user_sub=user.sub,
+        catalog_category_id=body.catalog_category_id or "",
+        catalog_item_id=body.catalog_item_id or "",
     )
 
 
@@ -239,6 +297,58 @@ async def get_work_order_issues(
     from app.services.manufacturing_work_orders import _get_issue_rows, _require_enabled
     _require_enabled()
     return {"issues": _get_issue_rows(work_order_id)}
+
+
+@manufacturing_router.get("/work-orders/{work_order_id}/catalog-stock")
+async def get_work_order_catalog_stock(
+    work_order_id: str,
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+):
+    """MFG-013 diagnostic: compare inventory.available vs catalog.stock_count."""
+    from app.services.manufacturing_work_orders import (
+        get_work_order as _get,
+        _require_enabled,
+    )
+    from app.models import WorkOrderCatalogStockOut
+    from fastapi import HTTPException
+
+    _require_enabled()
+    wo = _get(work_order_id, include_issues=False)
+    if wo is None:
+        raise HTTPException(404, f"Work order not found: {work_order_id}")
+
+    product_sku = wo.get("product_sku", "")
+    location_id = "warehouse"
+    cat_id = wo.get("catalog_category_id", "")
+    item_id = wo.get("catalog_item_id", "")
+
+    inv_rec = None
+    from app.core.settings import S
+    if getattr(S, "inventory_reservations_enabled", False):
+        from app.services.inventory import get_inventory
+        inv_rec = get_inventory(product_sku, location_id)
+
+    catalog_sc = None
+    if cat_id and item_id:
+        from app.core.tables import T
+        from app.routers.catalog import cat_pk, item_sk
+        ci = T.catalog.get_item(Key={"PK": cat_pk(cat_id), "SK": item_sk(item_id)}).get("Item")
+        if ci is not None:
+            sc = ci.get("stock_count")
+            catalog_sc = int(sc) if sc is not None else None
+
+    inv_avail = int(inv_rec["available"]) if inv_rec else None
+    inv_oh = int(inv_rec["on_hand"]) if inv_rec else None
+    in_sync = (inv_avail == catalog_sc) if (inv_avail is not None and catalog_sc is not None) else None
+
+    return WorkOrderCatalogStockOut(
+        work_order_id=work_order_id,
+        product_sku=product_sku,
+        inventory_available=inv_avail,
+        inventory_on_hand=inv_oh,
+        catalog_stock_count=catalog_sc,
+        in_sync=in_sync,
+    )
 
 
 @manufacturing_router.get("/work-orders/{work_order_id}")
