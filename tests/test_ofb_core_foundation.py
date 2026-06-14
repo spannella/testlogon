@@ -211,7 +211,10 @@ def test_seed_idempotent_and_normal_balance(env):
     gl.seed_chart_of_accounts()
     gl.seed_chart_of_accounts()  # second call must not duplicate
     accts = gl.list_accounts()
-    assert len(accts) == 7
+    # Idempotent seed → exactly the canonical chart, no duplicates. Use the
+    # DEFAULT_ACCOUNTS length so the assertion survives additive chart growth
+    # (e.g. FXA-008 added the fixed-asset accounts 1500/1600/6100/4800/5800).
+    assert len(accts) == len(gl.DEFAULT_ACCOUNTS)
     cash = gl.get_account("1000")
     assert cash["normal_balance"] == "debit" and cash["is_system"] is True
     rev = gl.get_account("4000")
