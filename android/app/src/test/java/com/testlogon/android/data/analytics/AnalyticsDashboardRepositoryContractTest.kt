@@ -141,6 +141,47 @@ class AnalyticsDashboardRepositoryContractTest {
     }
 
     @Test
+    fun loadDashboard_hitsOnlyRealPerMetricEndpoints_neverPhantomDashboardOrBreakdown() = runTest {
+        // AND-402 / TC-AND-402-07 (gap fill): the web reference assembles the dashboard from discrete
+        // per-metric GETs; the corrected contract (spec §5/§16 claims 11-13) deleted the phantom
+        // /ui/analytics/dashboard and /ui/analytics/breakdown endpoints. Pin the EXACT path set the
+        // repository touches, assert the phantom endpoints are never requested, and assert every
+        // metric GET carries from_date/to_date from the injected clock.
+        installAll()
+        val result = repo().loadDashboard(AnalyticsDashboardRange.LAST_30)
+        assertTrue(result is ApiResult.Success)
+
+        val requests = (0 until backend.requestCount).map { backend.takeRequest() }
+        val paths = requests.mapNotNull { it.requestUrl?.encodedPath }.toSet()
+
+        // Exactly the real per-metric reads were issued (loadDashboard does not POST refresh).
+        assertEquals(
+            setOf(
+                "/ui/analytics/overview",
+                "/ui/analytics/views",
+                "/ui/analytics/subscribers",
+                "/ui/analytics/top-content",
+                "/ui/analytics/audience",
+            ),
+            paths,
+        )
+
+        // The corrected (non-existent) endpoints are never hit.
+        assertFalse(paths.any { it.startsWith("/ui/analytics/dashboard") })
+        assertFalse(paths.any { it.startsWith("/ui/analytics/breakdown") })
+
+        // Every metric GET is a windowed read carrying from_date/to_date (no start/end).
+        for (req in requests) {
+            assertEquals("GET", req.method)
+            val url = req.requestUrl
+            assertEquals("2026-05-07", url?.queryParameter("from_date"))
+            assertEquals("2026-06-05", url?.queryParameter("to_date"))
+            assertTrue(url?.queryParameter("start") == null)
+            assertTrue(url?.queryParameter("end") == null)
+        }
+    }
+
+    @Test
     fun loadDashboard_populatesCache_forStaleService() = runTest {
         installAll()
         val r = repo()
