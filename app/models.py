@@ -22378,3 +22378,153 @@ class AtsIntegrationLinksOut(BaseModel):
     candidate_contact_links: List[AtsCandidateContactLinkOut] = Field(default_factory=list)
     job_opportunity_links: List[AtsJobOpportunityLinkOut] = Field(default_factory=list)
     count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# CCT-001..CCT-006 — SuiteCRM Contacts Extra (party CRM extension)
+# ---------------------------------------------------------------------------
+
+class CctPartyStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    MERGED = "MERGED"
+    ARCHIVED = "ARCHIVED"
+
+
+class CctPartyType(str, Enum):
+    PERSON = "PERSON"
+    PARTY_GROUP = "PARTY_GROUP"
+
+
+class CctRelationshipType(str, Enum):
+    EMPLOYMENT = "EMPLOYMENT"
+    GROUP_MEMBER = "GROUP_MEMBER"
+    CONTACT_REL = "CONTACT_REL"
+    OWNER = "OWNER"
+    PARENT_ORG = "PARENT_ORG"    # CCT-002: org hierarchy
+    REPORTS_TO = "REPORTS_TO"    # CCT-003: manager chain
+
+
+class CctPartyRoleOut(BaseModel):
+    role_type: str
+    org_party_id: Optional[str] = None
+    granted_at: int
+
+
+class CctRelationshipOut(BaseModel):
+    rel_id: str
+    from_party_id: str
+    to_party_id: str
+    relationship_type: str
+    created_at: int
+    meta: Optional[Dict[str, Any]] = None
+
+
+class CctContactMechOut(BaseModel):
+    mech_id: str
+    mech_type: str   # EMAIL / PHONE / POSTAL
+    value: str
+    purpose: Optional[str] = None
+    created_at: int
+
+
+class CctPartyOut(BaseModel):
+    party_id: str
+    party_type: CctPartyType
+    status: CctPartyStatus
+    name: str
+    display_name: Optional[str] = None
+    owner_user_sub: str
+    created_at: int
+    updated_at: int
+    merged_into_party_id: Optional[str] = None
+    manager_party_id: Optional[str] = None        # CCT-003
+    direct_report_count: int = 0                  # CCT-003
+
+
+class CctOrgAccountOut(BaseModel):
+    party_id: str
+    name: str
+    status: CctPartyStatus
+    roles: List[CctPartyRoleOut] = Field(default_factory=list)
+    member_count: int = 0
+    created_at: int
+    updated_at: int
+    # CCT-001: business metadata fields
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    employee_count: Optional[int] = None
+    annual_revenue_cents: Optional[int] = None
+    # CCT-002: hierarchy
+    parent_org_party_id: Optional[str] = None
+    child_org_count: int = 0
+
+
+class CctCreatePartyIn(BaseModel):
+    party_type: CctPartyType
+    name: str
+    display_name: Optional[str] = None
+    correlation_id: Optional[str] = None  # idempotency
+
+
+class CctCreateOrgAccountIn(BaseModel):
+    name: str
+    correlation_id: Optional[str] = None
+    # CCT-001 optional business fields
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    employee_count: Optional[int] = Field(default=None, ge=0)
+    annual_revenue_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class CctOrgAccountUpdateIn(BaseModel):
+    name: Optional[str] = None
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    employee_count: Optional[int] = Field(default=None, ge=0)
+    annual_revenue_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class CctSetParentOrgIn(BaseModel):
+    parent_org_party_id: str
+
+
+class CctSetManagerIn(BaseModel):
+    manager_party_id: str
+
+
+class CctAddContactMechIn(BaseModel):
+    mech_type: str    # EMAIL / PHONE / POSTAL
+    value: str
+    purpose: Optional[str] = None   # WORK / HOME / etc.
+    postal_address: Optional[Dict[str, Any]] = None   # for POSTAL mechs
+
+
+class CctDuplicateCandidateOut(BaseModel):
+    party_a_id: str
+    party_b_id: str
+    score: float
+    match_signals: List[str]
+
+
+class CctDuplicateCandidateListOut(BaseModel):
+    items: List[CctDuplicateCandidateOut]
+    cursor: Optional[str] = None
+
+
+class CctMergePartyIn(BaseModel):
+    winner_party_id: str
+    loser_party_id: str
+
+
+class CctHierarchyOut(BaseModel):
+    ancestors: List[CctRelationshipOut] = Field(default_factory=list)
+    children: List[CctRelationshipOut] = Field(default_factory=list)
+
+
+class CctReportsToOut(BaseModel):
+    direction: str
+    chain: List[CctRelationshipOut] = Field(default_factory=list)

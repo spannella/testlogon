@@ -1268,6 +1268,15 @@ def create_app() -> FastAPI:
     # EVT-006 + EVT-007: CRM Maps (proximity search + feature-flags)
     from app.routers.crm_maps import router as crm_maps_router
     app.include_router(crm_maps_router)
+    # CCT-001..CCT-006 (SuiteCRM Contacts Extra) — always register; flag-gated per endpoint
+    from app.routers.party_cct import org_router as party_cct_org_router
+    from app.routers.party_cct import party_router as party_cct_party_router
+    from app.routers.party_cct import vcard_router as party_cct_vcard_router
+    from app.routers.party_cct import admin_router as party_cct_admin_router
+    app.include_router(party_cct_vcard_router)   # /ui/party/vcard-import — before /{party_id}
+    app.include_router(party_cct_org_router)
+    app.include_router(party_cct_party_router)
+    app.include_router(party_cct_admin_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005

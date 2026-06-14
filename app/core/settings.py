@@ -3596,5 +3596,8 @@ class Settings:
     ats_integration_enabled: bool = os.environ.get("ATS_INTEGRATION_ENABLED", "0").lower() not in ("0", "false", "no", "off", "")
     ats_integration_links_table_name: str = os.environ.get("DDB_ATS_INTEGRATION_LINKS_TABLE", "ats_integration_links")
 
+    # CCT (SuiteCRM Contacts Extra) — PTY-001 + CCT-001..CCT-006
+    party_dedup_match_threshold: float = float(os.environ.get("PARTY_DEDUP_MATCH_THRESHOLD", "0.70"))
+
 
 S = Settings()
