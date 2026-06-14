@@ -19989,3 +19989,169 @@ class BookingCheckoutResult(BaseModel):
     total_price_cents: int
     currency: str
     confirmation: dict
+
+
+
+
+# ── Shipping / Logistics (SHP-003, Phase 8 Module H) ────────────────────────
+
+class CarrierIn(BaseModel):
+    carrier_code: str = Field(pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    display_name: str = Field(min_length=1, max_length=100)
+
+
+class CarrierOut(BaseModel):
+    carrier_id: str
+    carrier_code: str
+    display_name: str
+    online_tracking: bool
+    enabled: bool
+    created_at: int
+    updated_at: int
+
+
+class ShipmentMethodIn(BaseModel):
+    method_code: str = Field(pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+    method_label: str = Field(min_length=1, max_length=100)
+    base_rate_cents: int = Field(ge=0)
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    transit_days_min: Optional[int] = Field(default=None, ge=0)
+    transit_days_max: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _transit_days_order(self) -> "ShipmentMethodIn":
+        if self.transit_days_min is not None and self.transit_days_max is not None:
+            if self.transit_days_min > self.transit_days_max:
+                raise ValueError("transit_days_min must be <= transit_days_max")
+        return self
+
+
+class ShipmentMethodOut(BaseModel):
+    carrier_id: str
+    carrier_code: str
+    method_code: str
+    method_label: str
+    base_rate_cents: int
+    currency: str
+    transit_days_min: Optional[int] = None
+    transit_days_max: Optional[int] = None
+    enabled: bool = True
+
+
+class ShippingRateRequest(BaseModel):
+    carrier_code: str = Field(pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    method_code: str = Field(pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+    weight_oz: int = Field(ge=0)
+    destination_zip: str = Field(min_length=1, max_length=20)
+    origin_zip: Optional[str] = Field(default=None, max_length=20)
+
+
+class ShippingRateOption(BaseModel):
+    carrier_code: str
+    method_code: str
+    rate_cents: int
+    currency: str
+    transit_days_min: Optional[int] = None
+    transit_days_max: Optional[int] = None
+    estimated_delivery: Optional[str] = None
+
+
+class ShippingRateQuote(BaseModel):
+    request_id: str
+    options: List["ShippingRateOption"]
+    currency: str
+    generated_at: int
+
+
+class ShipGroupIn(BaseModel):
+    ship_to_address: Dict[str, Any] = Field(min_length=1)
+    ship_method_id: Optional[str] = None
+    carrier_code: Optional[str] = Field(default=None, pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    method_code: Optional[str] = Field(default=None, pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+
+
+class ShipGroupOut(BaseModel):
+    ship_to_address: Dict[str, Any]
+    ship_method_id: Optional[str] = None
+    carrier_code: Optional[str] = None
+    method_code: Optional[str] = None
+
+
+class ShipmentPackageContentIn(BaseModel):
+    item_id: str
+    sku: Optional[str] = None
+    quantity: int = Field(ge=1)
+
+
+class ShipmentPackageIn(BaseModel):
+    weight_oz: int = Field(ge=0)
+    length_in: Optional[float] = Field(default=None, ge=0)
+    width_in: Optional[float] = Field(default=None, ge=0)
+    height_in: Optional[float] = Field(default=None, ge=0)
+    contents: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ShipmentPackageOut(BaseModel):
+    package_seq: str
+    weight_oz: int
+    length_in: Optional[float] = None
+    width_in: Optional[float] = None
+    height_in: Optional[float] = None
+    contents: List[Dict[str, Any]] = Field(default_factory=list)
+    billed_weight_oz: Optional[int] = None
+
+
+class ShipmentItemOut(BaseModel):
+    item_id: str
+    sku: Optional[str] = None
+    quantity: int
+    order_id: Optional[str] = None
+
+
+class ShipmentIn(BaseModel):
+    order_id: str = Field(min_length=1, max_length=128)
+    carrier_code: str = Field(pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    method_code: str = Field(pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+    ship_to_address: Dict[str, Any]
+    line_items: List[Dict[str, Any]] = Field(min_length=1)
+    packages: List[ShipmentPackageIn] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
+    ship_group_seq: int = Field(default=1, ge=1)
+    purchase_txn_id: Optional[str] = None
+
+
+class ShipmentOut(BaseModel):
+    shipment_id: str
+    order_id: str
+    user_id: str
+    status: str
+    carrier_code: str
+    method_code: str
+    ship_method_id: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
+    ship_to_address: Dict[str, Any]
+    ship_group_seq: int = 1
+    estimated_delivery: Optional[str] = None
+    shipped_at: Optional[int] = None
+    delivered_at: Optional[int] = None
+    created_at: int
+    updated_at: int
+    version: int = 1
+    items: List[ShipmentItemOut] = Field(default_factory=list)
+    packages: List[ShipmentPackageOut] = Field(default_factory=list)
+
+
+class ShipmentTrackingUpdateIn(BaseModel):
+    tracking_number: str = Field(min_length=1, max_length=100)
+    carrier_code: Optional[str] = Field(default=None, pattern=r"^(ups|fedex|usps|dhl|manual)$")
+
+
+class ShipmentAdvanceIn(BaseModel):
+    target_status: str = Field(min_length=1, max_length=50)
+    reason: Optional[str] = None
+
+
+class ShipmentCancelIn(BaseModel):
+    reason: str = Field(default="cancelled", min_length=1, max_length=500)
+    refund_shipping: bool = False

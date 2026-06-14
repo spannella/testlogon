@@ -3378,5 +3378,15 @@ class Settings:
     hotel_booking_checkout_rl_max: int = int(os.environ.get("HOTEL_BOOKING_CHECKOUT_RL_MAX", "20"))
     hotel_booking_checkout_rl_window: int = int(os.environ.get("HOTEL_BOOKING_CHECKOUT_RL_WINDOW", "3600"))
 
+    # OFBiz Phase 8 — Shipping/Logistics (SHP-001+). Master switch defaults OFF. With it off all new shipping endpoints return 404 and existing shop/cart/orders/billing is unchanged.
+    shipping_enabled: bool = os.environ.get("SHIPPING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    shipping_rate_estimation_enabled: bool = os.environ.get("SHIPPING_RATE_ESTIMATION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    shipping_default_currency: str = os.environ.get("SHIPPING_DEFAULT_CURRENCY", "usd")
+    shipping_default_item_weight_oz: int = int(os.environ.get("SHIPPING_DEFAULT_ITEM_WEIGHT_OZ", "16"))
+    shipping_dim_divisor: int = int(os.environ.get("SHIPPING_DIM_DIVISOR", "139"))
+    shipping_carriers_table_name: str = os.environ.get("SHIPPING_CARRIERS_TABLE_NAME", "shipping_carriers")
+    shipment_items_table_name: str = os.environ.get("SHIPMENT_ITEMS_TABLE_NAME", "shipment_items")
+    shipment_packages_table_name: str = os.environ.get("SHIPMENT_PACKAGES_TABLE_NAME", "shipment_packages")
+
 
 S = Settings()

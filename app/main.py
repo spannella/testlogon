@@ -732,6 +732,8 @@ def create_app() -> FastAPI:
     app.include_router(ups_router)
     app.include_router(carrier_tracking_mock_router)
     app.include_router(carrier_tracking_poller_router)
+    from app.routers.shipping import shipping_router
+    app.include_router(shipping_router)
     app.include_router(projects_router)
     app.include_router(contacts_router)
     app.include_router(party_router)  # PTY-011

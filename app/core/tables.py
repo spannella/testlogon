@@ -403,6 +403,9 @@ class Tables:
     maintenance_vendors: Any
     account_views: Any
     entitlement_requests: Any
+    shipping_carriers: Any
+    shipment_items: Any
+    shipment_packages: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -741,4 +744,7 @@ T = Tables(
     maintenance_vendors=_safe_table(S.maintenance_vendors_table_name),
     account_views=_safe_table(S.account_views_table_name),
     entitlement_requests=_safe_table(S.entitlement_requests_table_name),
+    shipping_carriers=_safe_table(S.shipping_carriers_table_name),
+    shipment_items=_safe_table(S.shipment_items_table_name),
+    shipment_packages=_safe_table(S.shipment_packages_table_name),
 )

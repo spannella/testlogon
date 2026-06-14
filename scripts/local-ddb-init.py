@@ -41,6 +41,34 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # OFBiz Phase 8 — Shipping/Logistics (SHP-002). Four new tables. All
+        # default OFF (SHIPPING_ENABLED=false); existing paths byte-for-byte
+        # unchanged when the flag is off.
+        TableDef(
+            _resolve_table_name(S.shipping_carriers_table_name, "shipping_carriers"),
+            "carrier_id",
+            "sk",
+            gsi=[{"index_name": "GSI_CODE", "partition_key": "carrier_code", "sort_key": "sk"}],
+        ),
+        TableDef(
+            _resolve_table_name(S.shipments_table_name, "shipments"),
+            "shipment_id",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.shipment_items_table_name, "shipment_items"),
+            "shipment_id",
+            "item_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.shipment_packages_table_name, "shipment_packages"),
+            "shipment_id",
+            "package_seq",
+        ),
         TableDef(
             _resolve_table_name(S.account_views_table_name, "account_views"),
             "pk",
@@ -234,19 +262,6 @@ def _table_defs() -> List[TableDef]:
         TableDef(
             _resolve_table_name(S.picklists_table_name, "picklists"),
             "picklist_id",
-            "sk",
-            gsi=[
-                {"index_name": "GSI_ORDER",  "partition_key": "order_id", "sort_key": "created_at"},
-                {"index_name": "GSI_STATUS", "partition_key": "status",   "sort_key": "created_at"},
-            ],
-            attr_types={"created_at": "N"},
-        ),
-        # shipments: outbound shipment records. Header (SK=META) + package rows (SK=PKG#{n}).
-        # Note: shipped_at is a non-key numeric field; excluded from attr_types per
-        # DynamoDB AttributeDefinitions constraint (only key attributes may be listed).
-        TableDef(
-            _resolve_table_name(S.shipments_table_name, "shipments"),
-            "shipment_id",
             "sk",
             gsi=[
                 {"index_name": "GSI_ORDER",  "partition_key": "order_id", "sort_key": "created_at"},
