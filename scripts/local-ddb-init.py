@@ -41,6 +41,16 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # PIP-001: ATS Recruiting Pipeline junction table.
+        # Stores pipeline entries (USER#{owner_sub} / PIPE#{job_id}#CAND#{cand_id}),
+        # the status-config singleton (PIPELINE_STATUS_CONFIG / META), and
+        # placement sub-rows (USER#{owner_sub} / PIPE#{job_id}#CAND#{cand_id}#PLACEMENT).
+        # No numeric GSI sort keys in PIP-001..PIP-006; no attr_types needed.
+        TableDef(
+            _resolve_table_name(S.ats_pipeline_table_name, "ats_pipeline"),
+            "pk",
+            "sk",
+        ),
         # PRD-002 (OFBiz Catalog Depth): dedicated product_depth table for virtual/variant
         # products, feature categories, price components, bundles, and associations.
         # All numeric GSI sort keys declared in attr_types per CLAUDE.md convention.

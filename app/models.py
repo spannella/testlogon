@@ -17505,3 +17505,104 @@ class OrderCancelIn(BaseModel):
 
 OrderLifecycleOut.model_rebuild()
 OrderTransitionResult.model_rebuild()
+
+
+
+
+# ---------------------------------------------------------------------------
+# ATS Pipeline (PIP-001..PIP-006)
+# ---------------------------------------------------------------------------
+
+class PipelineEntryCreateIn(BaseModel):
+    job_order_id: str
+    candidate_id: str
+    status: Optional[str] = None  # defaults to "100_no_contact" in service
+
+
+class PipelineEntryOut(BaseModel):
+    pipeline_id: str
+    job_order_id: str
+    candidate_id: str
+    owner_sub: str
+    status: str
+    status_rank: int
+    rating: int
+    created_at: int
+    updated_at: int
+
+
+class PipelineStatusChangeIn(BaseModel):
+    new_status: str = Field(..., min_length=1, max_length=80)
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class PipelineRatingIn(BaseModel):
+    rating: int = Field(
+        ..., ge=0, le=5,
+        description="1–5 star rating; 0 clears the rating (unrated).",
+    )
+
+
+class PipelineStatusItemIn(BaseModel):
+    status_key: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=80)
+    rank: int = Field(..., ge=0)
+    order: int = Field(ge=0, default=0)
+    is_submitted: bool = False
+    is_placed: bool = False
+    is_terminal: bool = False
+    color: Optional[str] = Field(None, max_length=7)  # "#RRGGBB"
+
+
+class PipelineStatusConfigIn(BaseModel):
+    statuses: List[PipelineStatusItemIn]
+
+    @model_validator(mode="after")
+    def _validate_constraints(self) -> "PipelineStatusConfigIn":
+        keys = [s.status_key for s in self.statuses]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate_status_key")
+        placed_count = sum(1 for s in self.statuses if s.is_placed)
+        if placed_count != 1:
+            raise ValueError("exactly_one_is_placed_required")
+        submitted_count = sum(1 for s in self.statuses if s.is_submitted)
+        if submitted_count > 1:
+            raise ValueError("at_most_one_is_submitted_allowed")
+        if not (1 <= len(self.statuses) <= 20):
+            raise ValueError("statuses_count_out_of_range")
+        return self
+
+
+class PipelineStatusItemOut(BaseModel):
+    status_key: str
+    label: str
+    rank: int
+    order: int
+    is_submitted: bool
+    is_placed: bool
+    is_terminal: bool
+    color: Optional[str]
+
+
+class PipelineStatusConfigOut(BaseModel):
+    statuses: List[PipelineStatusItemOut]
+    updated_at: Optional[int]
+    updated_by_sub: Optional[str]
+
+
+class PlacementIn(BaseModel):
+    start_date: int = Field(..., description="Unix epoch seconds for the candidate's start date")
+    fee_cents: int = Field(..., ge=0, description="Placement fee in integer cents; 0 = pro-bono")
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class PlacementOut(BaseModel):
+    placement_id: str
+    job_order_id: str
+    candidate_id: str
+    owner_sub: str
+    start_date: int
+    fee_cents: int
+    status_at_placement: str
+    notes: Optional[str]
+    created_at: int

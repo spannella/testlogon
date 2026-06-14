@@ -3078,5 +3078,13 @@ class Settings:
     # Hotel rate plans (HTL-014). Gated by the existing HOTEL_PMS_ENABLED master flag.
     hotel_rate_plans_table_name: str = os.environ.get("HOTEL_RATE_PLANS_TABLE_NAME", "hotel_rate_plans")
 
+    # PIP-001: ATS Recruiting Pipeline
+    ats_pipeline_enabled: bool = (
+        os.environ.get("ATS_PIPELINE_ENABLED", "false").lower() == "true"
+    )
+    ats_pipeline_table_name: str = os.environ.get(
+        "ATS_PIPELINE_TABLE_NAME", "ats_pipeline"
+    )
+
 
 S = Settings()

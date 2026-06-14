@@ -1042,6 +1042,12 @@ def create_app() -> FastAPI:
     app.include_router(hotel_availability_router)
     from app.services.hotel_availability import start_hotel_hold_expiry_task
     app.add_event_handler("startup", start_hotel_hold_expiry_task)
+    # PIP-008: ATS Recruiting Pipeline (flag-gated, default OFF)
+    if _S.ats_pipeline_enabled:
+        from app.routers.ats_pipeline import router as ats_pipeline_router
+        from app.routers.ats_pipeline import router_admin as ats_pipeline_admin_router
+        app.include_router(ats_pipeline_router)
+        app.include_router(ats_pipeline_admin_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
