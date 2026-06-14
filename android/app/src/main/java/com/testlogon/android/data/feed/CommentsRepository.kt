@@ -43,6 +43,8 @@ interface CommentsRepository {
 
     suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit>
 
+    suspend fun editComment(postId: String, commentId: String, body: String): ApiResult<Comment>
+
     /** Capability flag; false by default (no replies endpoint / flat web rendering). */
     val repliesSupported: Boolean
 }
@@ -81,6 +83,15 @@ class CommentsRepositoryImpl @Inject constructor(
 
     override suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit> =
         withContext(io) { ackCall { api.deleteComment(postId, commentId) } }
+
+    override suspend fun editComment(
+        postId: String,
+        commentId: String,
+        body: String,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall { api.editComment(postId, commentId, EditCommentRequest(body = body)) }.map { it.toDomain(me) }
+    }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

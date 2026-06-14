@@ -52,6 +52,13 @@ interface EngagementApi {
         @Body body: CreateCommentRequest,
     ): CommentDto
 
+    @retrofit2.http.PATCH("posts/{post_id}/comments/{comment_id}")
+    suspend fun editComment(
+        @Path("post_id") postId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: EditCommentRequest,
+    ): CommentDto
+
     @DELETE("posts/{post_id}/comments/{comment_id}")
     suspend fun deleteComment(
         @Path("post_id") postId: String,

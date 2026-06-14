@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -106,6 +107,10 @@ fun CommentsSection(
             onRetry = viewModel::retry,
             onDiscard = viewModel::discard,
             onDelete = { pendingDelete = it },
+            onEdit = { c ->
+                draft = c.body
+                viewModel.startEdit(c)
+            },
             authorNames = authorNames,
             onEnsureAuthorName = viewModel::resolveAuthor,
         )
@@ -123,6 +128,10 @@ fun CommentsSection(
                 draft = ""
             },
             onCancelReply = viewModel::cancelReply,
+            onCancelEdit = {
+                draft = ""
+                viewModel.cancelEdit()
+            },
         )
     }
 
@@ -151,6 +160,7 @@ private fun CommentsList(
     comments: LazyPagingItems<Comment>,
     repliesSupported: Boolean,
     onReply: (Comment) -> Unit,
+    onEdit: (Comment) -> Unit,
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
@@ -188,6 +198,7 @@ private fun CommentsList(
                     onEnsureAuthorName = onEnsureAuthorName,
                     repliesSupported = repliesSupported,
                     onReply = onReply,
+                    onEdit = onEdit,
                     onRetry = onRetry,
                     onDiscard = onDiscard,
                     onDelete = onDelete,
@@ -218,6 +229,7 @@ private fun CommentRow(
     onEnsureAuthorName: (authorId: String) -> Unit,
     repliesSupported: Boolean,
     onReply: (Comment) -> Unit,
+    onEdit: (Comment) -> Unit,
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
@@ -276,6 +288,18 @@ private fun CommentRow(
                     Text(stringResource(R.string.comments_reply_action))
                 }
             }
+            if (comment.canEdit && !comment.pending && !comment.failed) {
+                IconButton(
+                    onClick = { onEdit(comment) },
+                    modifier = Modifier.size(48.dp).testTag("comment_edit"),
+                ) {
+                    Icon(
+                        Icons.Outlined.Edit,
+                        contentDescription = "Edit comment",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             if (comment.canDelete && !comment.pending) {
                 IconButton(
                     onClick = { onDelete(comment) },
@@ -299,9 +323,23 @@ private fun CommentComposer(
     onBodyChange: (String) -> Unit,
     onSend: () -> Unit,
     onCancelReply: () -> Unit,
+    onCancelEdit: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(8.dp)) {
+        if (state.isEditing) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Editing comment",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onCancelEdit, modifier = Modifier.size(48.dp).testTag("comment_cancel_edit")) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Cancel edit")
+                }
+            }
+        }
         state.replyTo?.let { parent ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(

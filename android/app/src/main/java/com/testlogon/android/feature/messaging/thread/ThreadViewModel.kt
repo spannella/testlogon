@@ -1509,4 +1509,6 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     isPinned = isPinned,
     lifecycle = lifecycle,
     isEdited = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.EDITED || editedAtEpochSeconds != null,
+    deliveredCount = deliveredToCount,
+    seenCount = readByCount,
 )

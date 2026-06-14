@@ -37,6 +37,8 @@ data class Comment(
     // ---- client-only optimistic flags ----
     /** DERIVED: authorId == current user id (no server field). */
     val canDelete: Boolean = false,
+    /** DERIVED: own, non-deleted comment can be edited. */
+    val canEdit: Boolean = false,
     /** Optimistic, not yet reconciled. */
     val pending: Boolean = false,
     /** Post failed; show Retry / Discard. */
@@ -71,5 +73,6 @@ internal fun CommentDto.toDomain(currentUserId: String?): Comment = Comment(
     deleted = deleted,
     tipTotalCents = tipTotalCents,
     canDelete = !deleted && authorId.isNotBlank() && authorId == currentUserId,
+    canEdit = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     localKey = commentId,
 )

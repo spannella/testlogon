@@ -915,6 +915,24 @@ private fun MessageBubble(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // Delivery/read receipt on the user's own, acked messages (AND-147 counts).
+            if (message.isOwn && !message.isSending && !message.isFailed) {
+                val readLabel = when {
+                    message.seenCount > 0 -> "Read"
+                    message.deliveredCount > 0 -> "Delivered"
+                    else -> "Sent"
+                }
+                Text(
+                    text = "  · $readLabel",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (message.seenCount > 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.testTag("thread_receipt"),
+                )
+            }
             // AND-140 — "edited" marker; tapping opens the edit-history sheet.
             if (message.isEdited) {
                 Text(

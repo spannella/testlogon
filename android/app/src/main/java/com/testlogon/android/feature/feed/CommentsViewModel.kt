@@ -30,8 +30,11 @@ data class ComposerState(
     val text: String = "",
     val replyTo: Comment? = null,
     val sending: Boolean = false,
+    /** Non-null while editing an existing comment (its id); send() then PATCHes instead of POSTs. */
+    val editingId: String? = null,
 ) {
     val canSend: Boolean get() = text.isNotBlank() && !sending
+    val isEditing: Boolean get() = editingId != null
 }
 
 /** AND-174 — one-shot comments UI effects (snackbars). */
@@ -112,10 +115,33 @@ class CommentsViewModel @Inject constructor(
         _composer.update { it.copy(replyTo = null) }
     }
 
+    /** Enter edit mode for an own comment: prefill the composer with its body. */
+    fun startEdit(comment: Comment) {
+        if (!comment.canEdit) return
+        _composer.update { it.copy(text = comment.body, editingId = comment.id, replyTo = null) }
+    }
+
+    fun cancelEdit() {
+        _composer.update { it.copy(text = "", editingId = null) }
+    }
+
     fun send() {
         val current = _composer.value
         val body = current.text.trim()
         if (body.isEmpty() || current.sending) return
+        // Edit path: PATCH the existing comment, then refresh the page.
+        val editingId = current.editingId
+        if (editingId != null) {
+            _composer.value = ComposerState()
+            viewModelScope.launch {
+                when (val r = repository.editComment(postId, editingId, body)) {
+                    is ApiResult.Success -> _refreshSignal.value = _refreshSignal.value + 1L
+                    is ApiResult.Failure -> _effects.trySend(CommentsEffect.ShowError(r.error.message))
+                    is ApiResult.NetworkError -> _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
+                }
+            }
+            return
+        }
         val parentId = current.replyTo?.id?.takeIf { repliesSupported }
         val localKey = UUID.randomUUID().toString()
         val optimistic = Comment(

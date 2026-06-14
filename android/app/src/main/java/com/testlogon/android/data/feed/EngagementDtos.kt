@@ -48,6 +48,12 @@ data class CreateCommentRequest(
     @Json(name = "parent_comment_id") val parentCommentId: String? = null,
 )
 
+/** PATCH /posts/{post_id}/comments/{comment_id} request — edit an own comment's body. */
+@JsonClass(generateAdapter = true)
+data class EditCommentRequest(
+    @Json(name = "body") val body: String,
+)
+
 // ---- Hide / not-interested ----
 
 /** POST /feed/hide and /feed/unhide request: { "post_id": "<id>" } (schema HidePostRequest). */

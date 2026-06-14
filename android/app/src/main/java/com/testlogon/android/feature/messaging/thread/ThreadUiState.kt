@@ -270,6 +270,9 @@ data class ThreadMessageUi(
     val isEdited: Boolean = false,
     /** AND-164 — true when this message is under an active legal hold (suppresses destructive actions). */
     val onHold: Boolean = false,
+    /** AND-147 receipt counts (drive the own-message Sent/Delivered/Read indicator). */
+    val deliveredCount: Int = 0,
+    val seenCount: Int = 0,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
