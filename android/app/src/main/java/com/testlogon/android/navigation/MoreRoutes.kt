@@ -180,6 +180,9 @@ object MoreRoutes {
     // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
     const val TICKETS = TicketSpacesListDest.ROUTE
 
+    // AND-398: WEBHOOKS config (light) - list outbound webhook endpoints -> detail -> a LIGHT create.
+    const val WEBHOOKS = WebhooksListDest.ROUTE
+
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
 
@@ -258,6 +261,7 @@ object MoreRoutes {
             ADS_BILLING,
             AD_ANALYTICS,
             TICKETS,
+            WEBHOOKS,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,

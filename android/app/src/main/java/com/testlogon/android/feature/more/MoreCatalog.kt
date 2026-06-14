@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.Webhook
 import com.testlogon.android.R
 import com.testlogon.android.navigation.MoreRoutes
 import javax.inject.Inject
@@ -405,6 +406,14 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.SupportAgent,
             route = MoreRoutes.TICKETS,
             section = MoreSection.SUPPORT,
+        ),
+        // AND-398: WEBHOOKS config (light) - list outbound webhook endpoints -> detail -> a LIGHT create.
+        MoreEntry(
+            id = "webhooks",
+            labelRes = R.string.more_entry_webhooks,
+            icon = Icons.Outlined.Webhook,
+            route = MoreRoutes.WEBHOOKS,
+            section = MoreSection.ACCOUNT,
         ),
         // AND-374: projects (paged list -> detail + account-scoped Google Drive provider connect flow).
         MoreEntry(

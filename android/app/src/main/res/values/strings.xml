@@ -3365,4 +3365,36 @@
     <string name="privacy_deletion_cancel_dialog_body">This cancels the scheduled deletion and restores your account.</string>
     <string name="privacy_deletion_cancel_confirm">Cancel deletion</string>
     <string name="privacy_deletion_keep">Keep deleting</string>
+
+    <!-- AND-398: Webhooks config (light). -->
+    <string name="more_entry_webhooks">Webhooks</string>
+    <string name="webhooks_back">Back</string>
+    <string name="webhooks_list_title">Webhooks</string>
+    <string name="webhooks_empty_title">No webhooks yet</string>
+    <string name="webhooks_empty_body">Register an outbound webhook endpoint to receive event notifications.</string>
+    <string name="webhooks_create_cta">Create webhook</string>
+    <string name="webhooks_status_enabled">Enabled</string>
+    <string name="webhooks_status_disabled">Disabled</string>
+    <string name="webhooks_row_content_description">Webhook to %1$s, %2$s, %3$s</string>
+    <plurals name="webhooks_event_count">
+        <item quantity="one">%1$d event</item>
+        <item quantity="other">%1$d events</item>
+    </plurals>
+    <string name="webhooks_detail_title">Webhook</string>
+    <string name="webhooks_detail_not_found_title">Webhook not found</string>
+    <string name="webhooks_detail_not_found_body">This webhook may have been removed.</string>
+    <string name="webhooks_field_url">Target URL</string>
+    <string name="webhooks_field_description">Description</string>
+    <string name="webhooks_field_status">Status</string>
+    <string name="webhooks_field_events">Subscribed events</string>
+    <string name="webhooks_field_created">Created</string>
+    <string name="webhooks_events_none">No events subscribed</string>
+    <string name="webhooks_secret_configured">A signing secret is configured for this endpoint.</string>
+    <string name="webhooks_create_title">Create webhook</string>
+    <string name="webhooks_create_url_label">Target URL</string>
+    <string name="webhooks_create_url_placeholder">https://example.com/hooks/tl</string>
+    <string name="webhooks_create_url_hint">Must be a valid https:// URL.</string>
+    <string name="webhooks_create_events_label">Events</string>
+    <string name="webhooks_create_events_unavailable">Event types are unavailable right now. Try again later.</string>
+    <string name="webhooks_create_submit">Create</string>
 </resources>

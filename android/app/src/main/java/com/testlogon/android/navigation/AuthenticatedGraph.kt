@@ -271,6 +271,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // list (Paging-3 over the AND-371 next_cursor) -> a ticket thread (embedded messages, mine-vs-other).
         // Composing / replying / member or status edits are AND-373 and OUT OF SCOPE.
         ticketsDestinations(navController)
+        // AND-398: WEBHOOKS config (light). List of outbound webhook endpoints -> detail -> a LIGHT create
+        // (url + event_types only). Update / delete / rotate / deliveries are FR-6 out-of-scope.
+        webhooksDestinations(navController)
         // AND-374: projects (paged list -> detail with the account-scoped Google Drive provider connect flow,
         // server-mediated OAuth via a Custom Tab + a testlogon://projects/.../callback return deep link).
         projectsDestinations(navController)
