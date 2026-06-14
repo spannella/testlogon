@@ -332,6 +332,7 @@ from app.routers.hotel_rooms import hotel_rooms_router
 from app.routers.hotel_reservations import hotel_reservations_router
 from app.routers.facilities import facilities_router, fulfillment_router
 from app.routers.hotel_front_desk import hotel_front_desk_router
+from app.routers.maintenance_orders import router as maintenance_orders_router
 from app.routers.theme_customization import theme_customization_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
@@ -958,6 +959,7 @@ def create_app() -> FastAPI:
         from app.services.facilities import ensure_default_facility
         app.add_event_handler("startup", ensure_default_facility)
     app.include_router(hotel_front_desk_router)
+    app.include_router(maintenance_orders_router)
     app.include_router(theme_customization_router)
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)

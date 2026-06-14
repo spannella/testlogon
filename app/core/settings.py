@@ -3346,6 +3346,15 @@ class Settings:
     crm_notes_s3_bucket: str = os.environ.get(
         "CRM_NOTES_S3_BUCKET", "local-uploads"
     )
+    # Maintenance Work Orders (WOV-001..WOV-004) — default OFF
+    maintenance_orders_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ENABLED", "false").lower() == "true"
+    maintenance_orders_table_name: str = os.environ.get("MAINTENANCE_ORDERS_TABLE_NAME", "maintenance_orders")
+    maintenance_vendors_table_name: str = os.environ.get("MAINTENANCE_VENDORS_TABLE_NAME", "maintenance_vendors")
+    maintenance_orders_escrow_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ESCROW_ENABLED", "false").lower() == "true"
+    maintenance_escrow_min_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MIN_CENTS", "100"))
+    maintenance_escrow_max_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MAX_CENTS", "10000000"))
+    maintenance_escrow_fee_bps: int = int(os.environ.get("MAINTENANCE_ESCROW_FEE_BPS", "0"))
+    maintenance_escrow_payout_hold_seconds: int = int(os.environ.get("MAINTENANCE_ESCROW_PAYOUT_HOLD_SECONDS", "0"))
 
 
 S = Settings()

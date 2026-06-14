@@ -19533,3 +19533,121 @@ class CrmNoteOut(BaseModel):
 class CrmNoteListOut(BaseModel):
     notes: List[CrmNoteOut]
     next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# Maintenance Work Orders (WOV-001..WOV-004)
+# ---------------------------------------------------------------------------
+
+class MaintenanceOrderIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    priority: str = Field("normal")
+    property_id: str
+    unit_id: Optional[str] = None
+    scheduled_for: Optional[int] = None
+    correlation_id: Optional[str] = None
+    amount_cents: Optional[int] = None  # WOV-003 escrow; ignored when sub-flag off
+
+
+class MaintenanceOrderOut(BaseModel):
+    work_order_id: str
+    property_id: str
+    unit_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    assignee_sub: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    priority: str
+    wo_status: str
+    scheduled_for: Optional[int] = None
+    cost_cents: Optional[int] = None
+    created_at: int
+    updated_at: int
+    completed_at: Optional[int] = None
+    correlation_id: str
+    actor_sub: str
+    escrow_amount_cents: Optional[int] = None  # WOV-003
+    escrow_status: Optional[str] = None         # WOV-003
+
+
+class MaintenanceOrderTransitionIn(BaseModel):
+    property_id: str = Field(..., min_length=1, max_length=64)
+    target_status: Literal["assigned", "in_progress", "completed", "cancelled"]
+    cost_cents: Optional[int] = Field(default=None, ge=0)
+    assignee_sub: Optional[str] = None
+    vendor_id: Optional[str] = None
+
+
+class MaintenanceOrderAssignIn(BaseModel):
+    property_id: str = Field(..., min_length=1, max_length=64)
+    vendor_id: Optional[str] = None
+    unit_id: Optional[str] = None
+    assignee_sub: Optional[str] = None
+
+
+class MaintenanceOrderScheduleIn(BaseModel):
+    property_id: str = Field(..., min_length=1, max_length=64)
+    scheduled_for: int = Field(..., ge=1)
+
+
+class WoListOut(BaseModel):
+    items: List[MaintenanceOrderOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Maintenance Vendors (WOV-004)
+# ---------------------------------------------------------------------------
+
+class VendorCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    trade_category: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str = "USD"
+    payment_terms_days: int = Field(default=30, ge=0, le=365)
+    user_sub: Optional[str] = None  # WOV-003/D2: link to platform account
+
+
+class VendorPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    trade_category: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
+    user_sub: Optional[str] = None  # "" clears link; None leaves unchanged
+
+
+class VendorStatusIn(BaseModel):
+    status: str
+
+
+class VendorOut(BaseModel):
+    vendor_id: str
+    name: str
+    status: str
+    trade_category: str
+    source: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str
+    payment_terms_days: int
+    user_sub: Optional[str] = None  # WOV-003/D2: linked platform account
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class VendorListOut(BaseModel):
+    vendors: List[VendorOut]
+    cursor: Optional[str] = None
+    count: int
+

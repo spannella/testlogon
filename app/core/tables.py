@@ -399,6 +399,8 @@ class Tables:
     crm_activity_timeline: Any
     crm_event_rsvp: Any
     crm_event_reminders: Any
+    maintenance_orders: Any
+    maintenance_vendors: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -733,4 +735,6 @@ T = Tables(
     crm_activity_timeline=_safe_table(S.crm_activity_timeline_table_name),
     crm_event_rsvp=_safe_table(S.crm_event_rsvp_table_name),
     crm_event_reminders=_safe_table(S.crm_event_reminders_table_name),
+    maintenance_orders=_safe_table(S.maintenance_orders_table_name),
+    maintenance_vendors=_safe_table(S.maintenance_vendors_table_name),
 )

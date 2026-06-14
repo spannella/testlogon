@@ -41,6 +41,30 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # WOV-001: maintenance work orders — co-located by property partition.
+        # GSI_WO_STATUS: system-wide status queue (Kanban columns).
+        # GSI_WO_ASSIGNEE: sparse — WOs with assignee_sub only; drives "my work" view.
+        TableDef(
+            _resolve_table_name(S.maintenance_orders_table_name, "maintenance_orders"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_WO_STATUS", "partition_key": "wo_status", "sort_key": "created_at"},
+                {"index_name": "GSI_WO_ASSIGNEE", "partition_key": "assignee_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # WOV-004: standalone vendor directory (used when PUR-002/003 are unbuilt).
+        # GSI_VENDOR_STATUS: active/inactive listing by trade category.
+        TableDef(
+            _resolve_table_name(S.maintenance_vendors_table_name, "maintenance_vendors"),
+            "vendor_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_VENDOR_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # ── CRM Activities scaffold (ACT-001) ────────────────────────────────
         TableDef(
             _resolve_table_name(S.crm_tasks_table_name, "crm_tasks"),
