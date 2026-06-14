@@ -164,13 +164,16 @@ def create_request(
         if target_ref not in VALID_ADMIN_SCOPES:
             raise HTTPException(status_code=400, detail={"code": "invalid_scope", "message": f"Unknown admin scope: {target_ref}"})
     elif entitlement_kind == "acl_role":
-        try:
-            from app.services.crm_acl import get_acl_role
-            role = get_acl_role(target_ref)
-            if not role:
-                raise HTTPException(status_code=404, detail={"code": "role_not_found", "message": f"Role not found: {target_ref}"})
-        except ImportError:
-            pass  # STU not yet available; defer validation to approval time
+        # Validate the target role only when the STU ACL module is enabled; if it's
+        # disabled (or unbuilt) defer validation to approval time (it can't answer).
+        if getattr(S, "crm_acl_enabled", False):
+            try:
+                from app.services.crm_acl import get_acl_role
+                role = get_acl_role(target_ref)
+                if not role:
+                    raise HTTPException(status_code=404, detail={"code": "role_not_found", "message": f"Role not found: {target_ref}"})
+            except ImportError:
+                pass  # STU not yet available; defer validation to approval time
 
     _check_duplicate_open_request(requester_sub, entitlement_kind, target_ref)
 
