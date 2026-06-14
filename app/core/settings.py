@@ -1181,6 +1181,11 @@ class Settings:
     api_entitlement_low_balance_thresholds: str = os.environ.get("API_ENTITLEMENT_LOW_BALANCE_THRESHOLDS", "0.2,0.1,0.05")
     api_entitlement_near_cap_thresholds: str = os.environ.get("API_ENTITLEMENT_NEAR_CAP_THRESHOLDS", "0.8,0.9,0.95")
 
+    # Order lifecycle state machine (ORD-002)
+    order_lifecycle_enabled: bool = os.environ.get("ORDER_LIFECYCLE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    order_lifecycle_auto_approve: bool = os.environ.get("ORDER_LIFECYCLE_AUTO_APPROVE", "false").lower() in ("1", "true", "yes", "on")
+    order_backorder_enabled: bool = os.environ.get("ORDER_BACKORDER_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+
 
     # Newsfeed rich-content feature flags
     newsfeed_markdown_enabled: bool = os.environ.get("NEWSFEED_MARKDOWN_ENABLED", "false").lower() in ("1", "true", "yes", "on")

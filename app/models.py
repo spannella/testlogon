@@ -17359,3 +17359,149 @@ class PriceResolution(BaseModel):
 class SetPriceComponentsIn(BaseModel):
     price_type: PriceTypeEnum
     components: List[ProductPriceComponentIn] = Field(default_factory=list)
+
+
+
+
+# ── Order Lifecycle (ORD-004) ─────────────────────────────────────────────────
+
+
+class OrderLifecycleStatus(str, Enum):
+    CREATED = "created"
+    APPROVED = "approved"
+    ALLOCATED = "allocated"
+    PICKING = "picking"
+    PACKED = "packed"
+    SHIPPED = "shipped"
+    COMPLETED = "completed"
+    HELD = "held"
+    BACKORDER = "backorder"
+    CANCELLED = "cancelled"
+    RETURNED = "returned"
+
+
+class OrderAdjustmentType(str, Enum):
+    DISCOUNT = "discount"
+    SURCHARGE = "surcharge"
+    TAX = "tax"
+    SHIPPING = "shipping"
+    PROMOTION = "promotion"
+
+
+class OrderStatusHistoryEntry(BaseModel):
+    event_id: str = Field(min_length=1, max_length=32)
+    from_status: Optional[str] = None  # None for the initial "created" event
+    to_status: str
+    actor: str = Field(min_length=1, max_length=255)
+    reason: str = Field(default="", max_length=500)
+    ts: int = Field(ge=0)  # Unix seconds (now_ts())
+
+
+class ShipGroup(BaseModel):
+    ship_group_id: str = Field(min_length=1, max_length=64)
+    ship_method: str = Field(default="", max_length=128)
+    address_id: Optional[str] = Field(default=None, max_length=128)
+    item_ids: List[str] = Field(default_factory=list)
+    ship_status: OrderLifecycleStatus = OrderLifecycleStatus.CREATED
+    ship_date_bucket: Optional[str] = Field(default=None, max_length=10)  # YYYY-MM-DD
+    ship_ts: Optional[int] = Field(default=None, ge=0)
+    tracking_number: Optional[str] = Field(default=None, max_length=256)
+    tracking_url: Optional[str] = Field(default=None, max_length=2048)
+    created_at: int = Field(default=0, ge=0)
+    updated_at: int = Field(default=0, ge=0)
+
+
+class OrderAdjustment(BaseModel):
+    adjustment_id: str = Field(min_length=1, max_length=64)
+    adj_type: OrderAdjustmentType
+    amount_cents: int = Field(..., ge=0)  # always non-negative; sign conveyed by adj_type
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    label: str = Field(default="", max_length=255)
+    taxable: bool = False
+    source_rule_ref: Optional[str] = Field(default=None, max_length=128)
+    created_at: int = Field(default=0, ge=0)
+
+
+class OrderTransitionRequest(BaseModel):
+    target_status: OrderLifecycleStatus
+    reason: str = Field(default="", max_length=500)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+
+
+class OrderLineItemOut(BaseModel):
+    item_id: str
+    sku: str = Field(default="", max_length=256)
+    name: str = Field(default="", max_length=512)
+    quantity: int = Field(default=1, ge=1)
+    unit_price_cents: int = Field(default=0, ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class OrderLifecycleOut(BaseModel):
+    # ── Core fields (mirror of DDB order_record written by create_order) ──
+    order_id: str
+    status: str  # legacy mirror
+    created_at: str  # ISO string
+    updated_at: str  # ISO string
+    source_system: str
+    correlation_id: str
+    amount_cents: int = Field(ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    line_item_count: int = Field(default=0, ge=0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    # ── Lifecycle fields (populated only when ORDER_LIFECYCLE_ENABLED is on) ──
+    lifecycle_status: Optional[OrderLifecycleStatus] = None
+    updated_ts: Optional[int] = Field(default=None, ge=0)
+    pre_hold_status: Optional[str] = None
+
+    # ── Enriched collections (None = not fetched; [] = fetched but empty) ──
+    adjustments: Optional[List[OrderAdjustment]] = None
+    ship_groups: Optional[List[ShipGroup]] = None
+    status_history: Optional[List[OrderStatusHistoryEntry]] = None
+
+    # ── Derived from TRANSITIONS graph; populated by get_order_lifecycle ──
+    allowed_transitions: Optional[List[str]] = None
+
+    # ── Joined order items; populated by get_order_lifecycle ──
+    line_items: Optional[List["OrderLineItemOut"]] = None
+
+
+class OrderTransitionResult(BaseModel):
+    order: "OrderLifecycleOut"
+    event_id: str
+    from_status: Optional[str] = None
+    to_status: str
+
+
+# ── Order Lifecycle router-layer request shapes (ORD-011) ──
+
+
+class OrderAdjustmentIn(BaseModel):
+    adj_type: OrderAdjustmentType
+    amount_cents: int = Field(..., ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    label: str = Field(default="", max_length=255)
+    taxable: bool = False
+    source_rule_ref: Optional[str] = Field(default=None, max_length=128)
+
+
+class ShipGroupCreateIn(BaseModel):
+    ship_method: str = Field(default="", max_length=128)
+    address_id: Optional[str] = Field(default=None, max_length=128)
+    item_ids: List[str] = Field(default_factory=list)
+    ship_date_bucket: Optional[str] = Field(default=None, max_length=10)
+
+
+class ShipGroupAssignIn(BaseModel):
+    item_ids: List[str] = Field(min_length=1)
+
+
+class OrderCancelIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+    refund: bool = False
+
+
+OrderLifecycleOut.model_rebuild()
+OrderTransitionResult.model_rebuild()

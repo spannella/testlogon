@@ -598,10 +598,14 @@ def _table_defs() -> List[TableDef]:
         TableDef(
             _resolve_table_name(S.orders_table_name, "orders"),
             "order_id",
+            "sk",
             gsi=[
                 {"index_name": "GSI_USER", "partition_key": "user_id", "sort_key": "created_at"},
                 {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "GSI_ORDER_STATUS", "partition_key": "lifecycle_status", "sort_key": "updated_ts"},
+                {"index_name": "GSI_SHIP_DATE", "partition_key": "ship_date_bucket", "sort_key": "ship_ts"},
             ],
+            attr_types={"updated_ts": "N", "ship_ts": "N"},
         ),
         TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
         TableDef(

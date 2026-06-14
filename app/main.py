@@ -71,6 +71,7 @@ from app.routers.image_optimization import image_optimization_router
 from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router, start_cart_abandonment_task
 from app.routers.catalog import router as catalog_router
+from app.routers.order_lifecycle import router as order_lifecycle_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.admin_entitlements import router as admin_entitlements_router
@@ -698,6 +699,7 @@ def create_app() -> FastAPI:
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
+    app.include_router(order_lifecycle_router)
     app.include_router(commercial_checkout_router)
     app.include_router(entitlements_router)
     app.include_router(subscription_server_router)
