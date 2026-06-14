@@ -24,9 +24,12 @@ from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root_csrf
 from app.models import (
     AmenityAssociationOut, AmenityAttachIn, AmenityIn, AmenityOut,
+    CancellationPolicyIn, CancellationPolicyOut, HotelKpisOut,
     HotelIn, HotelOut, HotelUpdateIn,
 )
 from app.services import hotel_pms as svc
+from app.services import hotel_cancellation as canc_svc
+from app.services import hotel_reports as reports_svc
 from app.services.sessions import require_ui_session
 
 hotels_router = APIRouter(prefix="/ui/hotels", tags=["hotels"])
@@ -217,3 +220,57 @@ async def list_hotel_amenities_endpoint(
     _require_enabled()
     rows = svc.list_amenities_for(target_type="hotel", target_id=hotel_id)
     return [AmenityAssociationOut(**r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# HTL-034 — cancellation policy CRUD (PUT write / GET read)
+# Extra path segment → no capture conflict with the bare /{hotel_id} routes.
+# ---------------------------------------------------------------------------
+
+@hotels_router.put("/{hotel_id}/cancellation-policy", response_model=CancellationPolicyOut)
+async def put_cancellation_policy(
+    hotel_id: str,
+    body: CancellationPolicyIn,
+    scope: str = "default",
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+) -> CancellationPolicyOut:
+    _require_enabled()
+    row = canc_svc.upsert_cancellation_policy(
+        hotel_id,
+        scope=scope,
+        free_until_days_before=body.free_until_days_before,
+        penalty_pct=body.penalty_pct,
+        penalty_fixed_cents=body.penalty_fixed_cents,
+        no_show_fee_cents=body.no_show_fee_cents,
+        user_sub=user.sub,
+    )
+    return CancellationPolicyOut(**row)
+
+
+@hotels_router.get("/{hotel_id}/cancellation-policy", response_model=CancellationPolicyOut)
+async def get_cancellation_policy_endpoint(
+    hotel_id: str,
+    scope: str = "default",
+    session=Depends(require_ui_session),
+) -> CancellationPolicyOut:
+    _require_enabled()
+    row = canc_svc.get_cancellation_policy(hotel_id, scope)
+    if row is None:
+        raise HTTPException(status_code=404, detail="cancellation policy not found")
+    return CancellationPolicyOut(**row)
+
+
+# ---------------------------------------------------------------------------
+# HTL-035 — hotel KPI report (occupancy / ADR / RevPAR)
+# ---------------------------------------------------------------------------
+
+@hotels_router.get("/{hotel_id}/reports/kpis", response_model=HotelKpisOut)
+async def get_hotel_kpis(
+    hotel_id: str,
+    from_ts: int,
+    to_ts: int,
+    session=Depends(require_ui_session),
+) -> HotelKpisOut:
+    _require_enabled()
+    row = reports_svc.compute_hotel_kpis(hotel_id, from_ts=from_ts, to_ts=to_ts)
+    return HotelKpisOut(**row)

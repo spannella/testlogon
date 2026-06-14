@@ -245,6 +245,15 @@ async def cancel_reservation(
         actor=user.sub,
         reason=(body.reason if body else "") or "",
     )
+    # HTL-034: compute + post the cancellation refund (release inventory, one
+    # refund ledger row). Idempotent + best-effort — the FSM has already blocked
+    # a double-cancel, and a refund-posting hiccup must NOT undo the cancellation.
+    try:
+        from app.services import hotel_cancellation as _canc
+        _policy = _canc.resolve_policy_for_reservation(existing)
+        _canc.apply_cancellation(existing, _policy, actor_sub=user.sub)
+    except Exception:
+        pass
     return StayReservationOut(**item)
 
 
@@ -272,6 +281,14 @@ async def no_show_reservation(
         actor=user.sub,
         reason=(body.reason if body else "") or "",
     )
+    # HTL-034: post the no-show fee (one charge ledger row, no inventory release).
+    # Idempotent + best-effort; the FSM blocks a repeat no_show transition.
+    try:
+        from app.services import hotel_cancellation as _canc
+        _policy = _canc.resolve_policy_for_reservation(existing)
+        _canc.apply_no_show(existing, _policy, actor_sub=user.sub)
+    except Exception:
+        pass
     return StayReservationOut(**item)
 
 

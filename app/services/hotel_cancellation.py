@@ -195,6 +195,19 @@ def apply_cancellation(
             except Exception:
                 pass
 
+    # (5) Persist the single-write idempotency token on the reservation. NOT a
+    # status change (HTL-019 FSM still owns status) — guards against a double
+    # refund if cancel is invoked twice. Best-effort; a sentinel is stored even
+    # when nothing was refundable so a retry short-circuits the guard above.
+    try:
+        T.hotel_reservations.update_item(
+            Key={"reservation_id": rid, "sk": "META"},
+            UpdateExpression="SET cancellation_ledger_sk = :s",
+            ExpressionAttributeValues={":s": refund_sk or "REFUND#NONE"},
+        )
+    except Exception:
+        pass
+
     _audit(
         "hotel.reservation.cancelled",
         actor_sub,
@@ -264,6 +277,16 @@ def apply_no_show(
             {"payments_settled_cents": fee},
             currency=currency,
         )
+
+    # Persist single-write idempotency token (best-effort; sentinel when no fee).
+    try:
+        T.hotel_reservations.update_item(
+            Key={"reservation_id": rid, "sk": "META"},
+            UpdateExpression="SET no_show_ledger_sk = :s",
+            ExpressionAttributeValues={":s": fee_sk or "NOSHOW#NONE"},
+        )
+    except Exception:
+        pass
 
     _audit(
         "hotel.reservation.no_show",
