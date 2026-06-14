@@ -73,6 +73,12 @@ import {
   Truck,
   Briefcase,
   ReceiptText,
+  Target,
+  UserPlus,
+  FileText,
+  FileSignature,
+  FileBarChart,
+  History,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -275,6 +281,20 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Storefront", path: "/ofbiz/storefront", icon: <Store className="h-5 w-5" /> },
       { label: "Cart Pricing", path: "/ofbiz/cart-pricing", icon: <ReceiptText className="h-5 w-5" /> },
       { label: "Order Tracking", path: "/ofbiz/order-fulfillment", icon: <Truck className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "CRM (SuiteCRM)",
+    items: [
+      { label: "Leads", path: "/crm/leads", icon: <UserPlus className="h-5 w-5" /> },
+      { label: "Opportunities", path: "/crm/opportunities", icon: <Target className="h-5 w-5" /> },
+      { label: "Cases", path: "/crm/cases", icon: <LifeBuoy className="h-5 w-5" /> },
+      { label: "Quotes", path: "/crm/quotes", icon: <FileText className="h-5 w-5" /> },
+      { label: "Contracts", path: "/crm/contracts", icon: <FileSignature className="h-5 w-5" /> },
+      { label: "Activities", path: "/crm/activities", icon: <Activity className="h-5 w-5" /> },
+      { label: "Activity Timeline", path: "/crm/timeline", icon: <History className="h-5 w-5" /> },
+      { label: "CRM Reports", path: "/crm/reports", icon: <FileBarChart className="h-5 w-5" /> },
+      { label: "CRM Dashboard", path: "/crm/dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
     ],
   },
 ];

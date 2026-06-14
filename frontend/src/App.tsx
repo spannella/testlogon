@@ -287,6 +287,25 @@ const ErpOverviewPage = lazy(() => import("@/pages/erp/ErpOverviewPage"));
 const ErpInventoryPage = lazy(() => import("@/pages/erp/InventoryPage"));
 const ErpReturnsPage = lazy(() => import("@/pages/erp/ReturnsPage"));
 
+// SuiteCRM frontend batch 1 (LED, OPP, CAS, QUO, ACT, RPT)
+const LeadsListPage = lazy(() => import("@/pages/crm/leads/LeadsListPage"));
+const CreateLeadPage = lazy(() => import("@/pages/crm/leads/CreateLeadPage"));
+const LeadDetailPage = lazy(() => import("@/pages/crm/leads/LeadDetailPage"));
+const OpportunitiesPage = lazy(() => import("@/pages/opportunities/OpportunitiesPage"));
+const PipelineReportPage = lazy(() => import("@/pages/opportunities/PipelineReportPage"));
+const OpportunityDetailPage = lazy(() => import("@/pages/opportunities/OpportunityDetailPage"));
+const CasesPage = lazy(() => import("@/pages/crm/cases/CasesPage"));
+const CaseDetailPage = lazy(() => import("@/pages/crm/cases/CaseDetailPage"));
+const QuotesPage = lazy(() => import("@/pages/quotes/QuotesPage"));
+const QuoteDetailPage = lazy(() => import("@/pages/quotes/QuoteDetailPage"));
+const ContractsPage = lazy(() => import("@/pages/quotes/ContractsPage"));
+const ContractDetailPage = lazy(() => import("@/pages/quotes/ContractDetailPage"));
+const MyActivitiesPage = lazy(() => import("@/pages/crmActivities/MyActivitiesPage"));
+const ActivityTimelinePage = lazy(() => import("@/pages/crmActivities/ActivityTimelinePage"));
+const CrmReportsListPage = lazy(() => import("@/pages/crm/reports/ReportsListPage"));
+const CrmReportViewerPage = lazy(() => import("@/pages/crm/reports/ReportViewerPage"));
+const CrmDashboardPage = lazy(() => import("@/pages/crm/reports/DashboardPage"));
+
 // TKB-014: legacy /tickets/spaces/:spaceId → /tickets/boards/:boardId
 // (board_id == space_id), preserving bookmarks/links during the rename.
 function LegacySpaceRedirect() {
@@ -385,6 +404,25 @@ export default function App() {
           <Route path="erp" element={<ErpOverviewPage />} />
           <Route path="erp/inventory" element={<ErpInventoryPage />} />
           <Route path="erp/returns" element={<ErpReturnsPage />} />
+          {/* SuiteCRM frontend batch 1 (literal routes before dynamic params) */}
+          <Route path="crm/leads" element={<LeadsListPage />} />
+          <Route path="crm/leads/new" element={<CreateLeadPage />} />
+          <Route path="crm/leads/:leadId" element={<LeadDetailPage />} />
+          <Route path="crm/opportunities" element={<OpportunitiesPage />} />
+          <Route path="crm/opportunities/pipeline" element={<PipelineReportPage />} />
+          <Route path="crm/opportunities/:oppId" element={<OpportunityDetailPage />} />
+          <Route path="crm/cases" element={<CasesPage />} />
+          <Route path="crm/cases/:caseId" element={<CaseDetailPage />} />
+          <Route path="crm/quotes" element={<QuotesPage />} />
+          <Route path="crm/quotes/:quoteId" element={<QuoteDetailPage />} />
+          <Route path="crm/contracts" element={<ContractsPage />} />
+          <Route path="crm/contracts/:contractId" element={<ContractDetailPage />} />
+          <Route path="crm/activities" element={<MyActivitiesPage />} />
+          <Route path="crm/timeline" element={<ActivityTimelinePage />} />
+          <Route path="crm/timeline/:entityType/:entityId" element={<ActivityTimelinePage />} />
+          <Route path="crm/reports" element={<CrmReportsListPage />} />
+          <Route path="crm/reports/:reportId" element={<CrmReportViewerPage />} />
+          <Route path="crm/dashboard" element={<CrmDashboardPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
