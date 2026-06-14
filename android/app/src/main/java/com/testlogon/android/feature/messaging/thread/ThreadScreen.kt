@@ -1174,7 +1174,7 @@ private fun MessageComposer(
             OutlinedTextField(
                 value = composer.draft,
                 onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).testTag("thread_input"),
                 placeholder = { Text(stringResource(R.string.thread_composer_hint)) },
                 isError = composer.overLimit,
                 maxLines = 5,

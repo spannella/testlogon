@@ -173,7 +173,10 @@ fun AuthedShellScreen(
                             // AND-201: the published video gallery browse grid (outer-graph route).
                             com.testlogon.android.navigation.MoreRoutes.GALLERY,
                             // AND-235: subscription tiers browse (outer-graph route; self-browse).
-                            com.testlogon.android.navigation.MoreRoutes.SUBSCRIPTION_TIERS ->
+                            com.testlogon.android.navigation.MoreRoutes.SUBSCRIPTION_TIERS,
+                            // Commerce: shop catalog + cart (outer-graph routes).
+                            com.testlogon.android.navigation.MoreRoutes.CATALOG,
+                            com.testlogon.android.navigation.MoreRoutes.CART ->
                                 onOpenRoute(route)
                             else -> Unit // coming-soon entries are non-interactive
                         }

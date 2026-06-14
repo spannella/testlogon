@@ -191,6 +191,11 @@ class ThreadViewModel @Inject constructor(
     /** AND-147 — server message ids already reported viewed this VM lifetime (once-guard, FR-1/AC-2). */
     private val reportedViews = mutableSetOf<String>()
 
+    // AND-141: drafts. Declared BEFORE init{} so observeDraftSaver()'s Main.immediate launch (which
+    // touches draftSaver synchronously) doesn't hit it before initialization — that NPE crashed the
+    // thread screen on open.
+    private val draftSaver = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 64)
+
     init {
         observeThread()
         observeRealtime()
@@ -1249,8 +1254,6 @@ class ThreadViewModel @Inject constructor(
     }
 
     // ---- AND-141: drafts ----
-
-    private val draftSaver = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 64)
 
     private fun restoreDraft() {
         viewModelScope.launch {
