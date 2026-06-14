@@ -41,6 +41,16 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # PRT-001: ATS Career Portal
+        TableDef(
+            _resolve_table_name(S.career_portal_table_name, "CareerPortal"),
+            "pk",      # partition key (String)
+            "sk",      # sort key (String)
+            gsi=[
+                {"index_name": "ByJob", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},   # numeric sort key — MUST be declared (CLAUDE.md gotcha)
+        ),
         # QloApps Hotel PMS — HTL-018: hotel_reservations
         # PK=reservation_id, SK=sk (META header + HIST#* history rows).
         # GSI_HOTEL_ARRIVALS: PK=hotel_id, SK=checkin (S) — arrivals board.

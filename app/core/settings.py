@@ -853,6 +853,27 @@ class Settings:
     # Multi-stage cart reminders (GAP-0189 / FIN-003)
     cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "1") not in ("0", "false", "False")
     cart_reminder_config_table_name: str = os.environ.get("CART_REMINDER_CONFIG_TABLE", "cart_reminder_config")
+    # PRT-001: ATS Career Portal
+    career_portal_enabled: bool = os.environ.get("CAREER_PORTAL_ENABLED", "0") not in ("0", "false", "False")
+    career_portal_table_name: str = os.environ.get("DDB_CAREER_PORTAL_TABLE", "CareerPortal")
+    career_portal_apply_rate_limit_per_ip_per_hour: int = int(
+        os.environ.get("CAREER_PORTAL_APPLY_RATE_LIMIT_PER_IP_PER_HOUR", "10")
+    )
+    career_portal_resume_max_bytes: int = int(
+        os.environ.get("CAREER_PORTAL_RESUME_MAX_BYTES", str(10 * 1024 * 1024))
+    )
+    career_portal_slug_prefix: str = os.environ.get("CAREER_PORTAL_SLUG_PREFIX", "")
+    career_portal_rss_max_items: int = int(
+        os.environ.get("CAREER_PORTAL_RSS_MAX_ITEMS", "50")
+    )
+    # PRT-004 apply autoresponder
+    career_portal_apply_autoresponder_enabled: bool = (
+        os.environ.get("CAREER_PORTAL_APPLY_AUTORESPONDER_ENABLED", "0") not in ("0", "false", "False")
+    )
+    career_portal_apply_autoresponder_subject: str = (
+        os.environ.get("CAREER_PORTAL_APPLY_AUTORESPONDER_SUBJECT", "We received your application")
+    )
+    career_portal_apply_notify_email: str = os.environ.get("CAREER_PORTAL_APPLY_NOTIFY_EMAIL", "")
     # Cart recovery one-time link signing (GAP-0190 / FIN-003). Defaults to the
     # UI access-token secret so dev (no extra env) and prod (set via env) both
     # produce verifiable signed tokens — dev/prod parity (SECOPS-007).

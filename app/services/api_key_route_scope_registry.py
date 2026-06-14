@@ -306,6 +306,16 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "GET:/kb/articles/{article_id}/attachments": {"reason": "session-auth KB endpoint, not in initial API-key rollout scope"},
     "POST:/kb/articles/{article_id}/attachments": {"reason": "session-auth KB endpoint, not in initial API-key rollout scope"},
     "DELETE:/kb/articles/{article_id}/attachments/{attachment_id}": {"reason": "session-auth KB endpoint, not in initial API-key rollout scope"},
+    # PRT-001..PRT-005: ATS Career Portal public endpoints (no auth)
+    "GET:/public/careers/config": {"reason": "Public unauthenticated career portal"},
+    "GET:/public/careers/jobs": {"reason": "Public unauthenticated career portal"},
+    "GET:/public/careers/jobs.rss": {"reason": "Public unauthenticated career portal RSS feed"},
+    "GET:/public/careers/jobs/{slug}": {"reason": "Public unauthenticated career portal"},
+    "POST:/public/careers/jobs/{slug}/apply": {"reason": "public career-portal self-apply endpoint; anonymous callers carry no API key"},
+    "POST:/public/careers/jobs/{slug}/resume-presign": {"reason": "public unauthenticated career portal résumé presign — no API key scope required"},
+    # Admin config endpoints (session-auth, not in API-key rollout scope)
+    "GET:/ui/admin/career-portal/config": {"reason": "session-auth admin career portal endpoint, not in API-key rollout scope"},
+    "PUT:/ui/admin/career-portal/config": {"reason": "session-auth admin career portal endpoint, not in API-key rollout scope"},
 }
 
 API_KEY_INITIAL_ROLLOUT_PATH_PREFIXES = (

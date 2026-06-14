@@ -19167,3 +19167,91 @@ class FrontDeskActionOut(BaseModel):
     """Action response: updated reservation row + affected room rows (HTL-023)."""
     reservation: FrontDeskRow
     affected_rooms: List[dict] = []
+
+
+
+
+# ── ATS Career Portal (PRT-001..PRT-005) ─────────────────────────────────────
+
+class CareerPortalConfigIn(BaseModel):
+    portal_name: str = Field(..., min_length=1, max_length=120)
+    intro_copy: str = Field(default="", max_length=4000)
+    logo_file_path: Optional[str] = Field(default=None)
+    primary_color: Optional[str] = Field(
+        default=None,
+        pattern=r"^#[0-9a-fA-F]{6}$",
+    )
+    support_email: Optional[str] = Field(default=None, max_length=254)
+
+
+class CareerPortalConfigOut(BaseModel):
+    portal_name: str
+    intro_copy: str
+    logo_file_path: Optional[str] = None
+    logo_url: Optional[str] = None          # resolved at read time; None when no logo
+    primary_color: Optional[str] = None
+    support_email: Optional[str] = None
+    updated_at: Optional[int] = None        # None when no row persisted yet (default config)
+    updated_by: Optional[str] = None
+
+
+class CareerJobSummaryOut(BaseModel):
+    job_order_id: str
+    slug: str
+    title: str
+    location: Optional[str] = None
+    employment_type: Optional[str] = None   # "full_time"|"part_time"|"contract"|"temp"|"referral"
+    posted_at: int = 0                      # Unix timestamp
+    openings: int = 1
+
+
+class CareerJobDetailOut(CareerJobSummaryOut):
+    public_description: Optional[str] = None
+    screening_questionnaire_slug: Optional[str] = None  # non-None → PRT-005 applies
+    apply_path: str = ""                    # "/public/careers/jobs/{slug}/apply"
+
+
+class CareerJobListOut(BaseModel):
+    items: List[CareerJobSummaryOut]
+    cursor: Optional[str] = None           # opaque HMAC-signed cursor; None = no more pages
+    total_estimate: Optional[int] = None   # always None (DynamoDB GSI queries don't count)
+
+
+# PRT-004: Self-apply
+
+class CareerApplyIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=120)
+    last_name: str = Field(..., min_length=1, max_length=120)
+    email: str = Field(..., max_length=254)
+    phone: Optional[str] = Field(None, max_length=30)
+    cover_note: Optional[str] = Field(None, max_length=4000)
+    # Bot-trap: non-empty → silent fake-success, no DDB write (CMP-006 §5.1).
+    # No max_length so arbitrarily long bot values still hit honeypot, not 422.
+    honeypot: Optional[str] = None
+    # PRT-005 extensions (backward-compatible optional fields)
+    resume_ticket_id: Optional[str] = Field(None, max_length=64)
+    screening_response_session_id: Optional[str] = Field(None, max_length=64)
+
+
+class CareerApplyOut(BaseModel):
+    application_id: str
+    candidate_id: Optional[str] = None
+    status: str  # always "received" on success
+
+
+# PRT-005: Résumé presign
+
+class CareerResumePresignIn(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=260)
+    content_type: str = Field(..., max_length=120)
+    size_bytes: int = Field(..., ge=1)
+    # Bot-trap: identical honeypot semantics to CareerApplyIn (CMP-006 §5.1).
+    honeypot: Optional[str] = None
+
+
+class CareerResumePresignOut(BaseModel):
+    upload_url: str          # /mock/s3/... in dev; presigned PUT URL in prod
+    ticket_id: str
+    key: str                 # S3 object key
+    path: str                # file-manager path: /career-portal/resumes/{job_order_id}/{uuid}.ext
+    content_type: str

@@ -390,6 +390,8 @@ class Tables:
     picklists: Any        # FAC-002
     shipments: Any        # FAC-002
     lot_serial: Any       # FAC-002 (reserved; no service uses it until FAC-011+)
+    # PRT-001: ATS Career Portal
+    career_portal: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -715,4 +717,6 @@ T = Tables(
     picklists=_safe_table(S.picklists_table_name),      # FAC-002
     shipments=_safe_table(S.shipments_table_name),      # FAC-002
     lot_serial=_safe_table(S.lot_serial_table_name),    # FAC-002 (reserved)
+    # PRT-001: ATS Career Portal
+    career_portal=_safe_table(S.career_portal_table_name),
 )

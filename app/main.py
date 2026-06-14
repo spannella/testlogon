@@ -1088,6 +1088,11 @@ def create_app() -> FastAPI:
     app.include_router(ats_recruiting_router)
     from app.routers.txn_requests import router as txn_requests_router
     app.include_router(txn_requests_router)
+    # PRT-001..PRT-005: ATS Career Portal (admin + public)
+    from app.routers.career_portal import router as career_portal_admin_router
+    from app.routers.career_portal import public_router as career_portal_public_router
+    app.include_router(career_portal_admin_router)
+    app.include_router(career_portal_public_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
