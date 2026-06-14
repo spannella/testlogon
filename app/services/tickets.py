@@ -712,7 +712,14 @@ class TicketStore:
                 int(header["bounty_repost_count"])
                 if header.get("bounty_repost_count") is not None else None
             ),
+            # TKA-002: attachments projection (always [] when the flag is off; never raises)
+            "attachments": self._attachments_projection(ticket_id),
         }
+
+    @staticmethod
+    def _attachments_projection(ticket_id: str) -> list[dict[str, Any]]:
+        from app.services import ticket_attachments
+        return ticket_attachments.list_attachments_for_projection(ticket_id)
 
     def _encode_cursor(self, token: dict[str, Any]) -> str:
         raw = json.dumps(token, separators=(",", ":")).encode("utf-8")

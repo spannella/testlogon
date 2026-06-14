@@ -20,6 +20,7 @@ from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
 from app.services import ticket_bounties as bounties
+from app.services import ticket_attachments as attachments
 from app.services.ticket_bounties import TicketBountyError
 from app.services.ticket_watchers import WATCHER_STORE
 from app.services.ticket_links import LINK_STORE
@@ -98,6 +99,48 @@ class TicketOut(BaseModel):
     bounty_paid_at: int | None = None
     bounty_cancelled_at: int | None = None
     bounty_repost_count: int | None = None
+    # --- TKA-002: ticket file attachments (always [] when the flag is off) ---
+    attachments: list["TicketAttachmentOut"] = []
+
+
+class TicketAttachmentOut(BaseModel):
+    attachment_id: str
+    ticket_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    uploaded_by: str
+    created_at: int
+    sha256: str | None = None
+
+
+class TicketAttachmentPresignIn(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=255)
+    content_type: str = Field(default="application/octet-stream", max_length=255)
+
+
+class TicketAttachmentPresignOut(BaseModel):
+    attachment_id: str
+    upload_url: str
+    bucket: str
+    key: str
+    content_type: str
+
+
+class TicketAttachmentConfirmIn(BaseModel):
+    attachment_id: str = Field(..., min_length=1, max_length=64)
+    filename: str = Field(..., min_length=1, max_length=255)
+    content_type: str = Field(default="application/octet-stream", max_length=255)
+    size_bytes: int = Field(..., ge=0)
+    sha256: str | None = Field(default=None, max_length=128)
+
+
+class TicketAttachmentListOut(BaseModel):
+    attachments: list[TicketAttachmentOut]
+
+
+class TicketAttachmentDownloadOut(BaseModel):
+    download_url: str
 
 
 class TicketEnvelope(BaseModel):
@@ -1021,6 +1064,101 @@ def list_open_bounties_endpoint(
     return BountyBoardEnvelope(
         items=[BountyBoardItem.model_validate(b) for b in result["items"]],
         next_cursor=result.get("next_cursor"),
+    )
+
+
+# --- TKA-001/002: ticket file attachments. All gate on attachments._require_enabled
+# (404 when off) and are declared BEFORE the generic GET /{ticket_id} so the literal
+# "attachments" path segment is not captured as a ticket_id. ---
+def _can_manage_attachments(request: Request, user: AuthenticatedUser, ticket: dict) -> bool:
+    """Owner, assignee, or admin may presign/confirm/list/download attachments."""
+    if _is_admin_actor(request, user):
+        return True
+    return user.sub in {
+        ticket.get("owner_sub"),
+        ticket.get("assigned_to_sub"),
+        ticket.get("assigned_admin_sub"),
+    }
+
+
+@router.post("/{ticket_id}/attachments/presign", response_model=TicketAttachmentPresignOut, responses=_error_responses())
+def presign_ticket_attachment(
+    ticket_id: str,
+    body: TicketAttachmentPresignIn,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    attachments._require_enabled()
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_manage_attachments(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to attach files to this ticket", details={"ticket_id": ticket_id})
+    out = attachments.presign_attachment(ticket_id=ticket_id, filename=body.filename, content_type=body.content_type)
+    return TicketAttachmentPresignOut.model_validate(out)
+
+
+@router.post("/{ticket_id}/attachments", response_model=TicketAttachmentOut, responses=_error_responses())
+def confirm_ticket_attachment(
+    ticket_id: str,
+    body: TicketAttachmentConfirmIn,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    attachments._require_enabled()
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_manage_attachments(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to attach files to this ticket", details={"ticket_id": ticket_id})
+    out = attachments.confirm_attachment(
+        ticket_id=ticket_id, attachment_id=body.attachment_id, filename=body.filename,
+        content_type=body.content_type, size_bytes=body.size_bytes, uploaded_by=user.sub, sha256=body.sha256,
+    )
+    return TicketAttachmentOut.model_validate(out)
+
+
+@router.get("/{ticket_id}/attachments", response_model=TicketAttachmentListOut, responses=_error_responses())
+def list_ticket_attachments(
+    ticket_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    attachments._require_enabled()
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_manage_attachments(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to view attachments for this ticket", details={"ticket_id": ticket_id})
+    return TicketAttachmentListOut(attachments=[TicketAttachmentOut.model_validate(a) for a in attachments.list_attachments(ticket_id)])
+
+
+@router.get("/{ticket_id}/attachments/{attachment_id}/download", response_model=TicketAttachmentDownloadOut, responses=_error_responses())
+def download_ticket_attachment(
+    ticket_id: str,
+    attachment_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    attachments._require_enabled()
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_manage_attachments(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to download attachments for this ticket", details={"ticket_id": ticket_id})
+    return TicketAttachmentDownloadOut(download_url=attachments.get_download_url(ticket_id=ticket_id, attachment_id=attachment_id))
+
+
+@router.delete("/{ticket_id}/attachments/{attachment_id}", responses=_error_responses())
+def delete_ticket_attachment(
+    ticket_id: str,
+    attachment_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    attachments._require_enabled()
+    ticket = _ticket_or_404(ticket_id)
+    if not _can_manage_attachments(request, user, ticket):
+        _raise(403, "ticket_access_forbidden", "not authorized to manage attachments for this ticket", details={"ticket_id": ticket_id})
+    return attachments.delete_attachment(
+        ticket_id=ticket_id, attachment_id=attachment_id, actor_sub=user.sub, is_admin=_is_admin_actor(request, user),
     )
 
 

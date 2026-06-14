@@ -48,6 +48,12 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "POST:/tickets/{ticket_id}/bounty/approve": {"product": "tickets", "required_scopes": ["tickets:admin"], "entitlement_required": True},
     "POST:/tickets/{ticket_id}/bounty/reject": {"product": "tickets", "required_scopes": ["tickets:admin"], "entitlement_required": True},
     "POST:/tickets/{ticket_id}/bounty/cancel": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    # TKA-001/002 — ticket file attachments
+    "POST:/tickets/{ticket_id}/attachments/presign": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/attachments": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "GET:/tickets/{ticket_id}/attachments": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "GET:/tickets/{ticket_id}/attachments/{attachment_id}/download": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "DELETE:/tickets/{ticket_id}/attachments/{attachment_id}": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
     # Shopping
     "GET:/ui/catalog/categories": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
     "GET:/ui/catalog/categories/{category_id}/items": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},

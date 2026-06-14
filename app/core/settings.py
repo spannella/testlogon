@@ -454,6 +454,11 @@ class Settings:
     # Reserved / NOT enforced in v1 (audit D3 — no repost cap; bounty_repost_count
     # is tracked but unenforced). Kept so a future opt-in cap is a one-line flip.
     ticket_bounty_max_reposts: int = int(os.environ.get("TICKET_BOUNTY_MAX_REPOSTS", "3"))
+    # TKA-001/002 — ticket file attachments (presign + store, list/download/delete). Default OFF.
+    ticket_attachments_enabled: bool = os.environ.get("TICKET_ATTACHMENTS_ENABLED", "0").lower() not in ("0", "false", "no", "off", "")
+    ticket_attachments_s3_bucket: str = os.environ.get("TICKET_ATTACHMENTS_S3_BUCKET", "")
+    ticket_attachments_presign_ttl_seconds: int = int(os.environ.get("TICKET_ATTACHMENTS_PRESIGN_TTL_SECONDS", "900"))
+    ticket_attachments_download_ttl_seconds: int = int(os.environ.get("TICKET_ATTACHMENTS_DOWNLOAD_TTL_SECONDS", "300"))
     # TBT-002 — sparse ByBounty GSI on the tickets table (funded+unclaimed board).
     tickets_bounty_index_name: str = os.environ.get(
         "TICKETS_BOUNTY_INDEX_NAME", "bounty-open-created_at-index"
