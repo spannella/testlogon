@@ -41,6 +41,21 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # HTL-029: Guest folio entity — running stay-balance table.
+        # PK=reservation_id, SK=META (header) or LINE#{line_id} (charge rows).
+        # GSI_FOLIO_HOTEL: hotel_id (S) / created_at (N) — lists a hotel's
+        # folios newest-first; sparse (only META rows carry hotel_id).
+        # attr_types: created_at must be N or DynamoDB stores it as S →
+        # ValidationException when queried with integer values (CLAUDE.md gotcha).
+        TableDef(
+            _resolve_table_name(S.hotel_folios_table_name, "hotel_folios"),
+            "reservation_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_FOLIO_HOTEL", "partition_key": "hotel_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # PMD-001: Per-owner rent-policy settings. pk="POLICY#{owner_sub}", sk="CURRENT" or
         # sk="AUDIT#{ts:010d}#{event_id}". No GSI needed; all access patterns are
         # single-owner point reads + prefix queries.

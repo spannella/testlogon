@@ -3399,5 +3399,10 @@ class Settings:
     financial_products_enabled: bool = os.environ.get("FINANCIAL_PRODUCTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     financial_products_table_name: str = os.environ.get("FINANCIAL_PRODUCTS_TABLE_NAME", "financial_products")
 
+    # QloApps hotel-PMS vertical (HTL) — master flag + folio/payments tables
+    # (HTL-001 master flag + HTL-029..HTL-032 folio cluster)
+    hotel_pms_enabled: bool = os.environ.get("HOTEL_PMS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    hotel_folios_table_name: str = os.environ.get("HOTEL_FOLIOS_TABLE_NAME", "hotel_folios")
+
 
 S = Settings()

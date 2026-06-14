@@ -410,6 +410,7 @@ class Tables:
     financial_products: Any
     rent_policy: Any
     property_documents: Any
+    hotel_folios: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -755,4 +756,5 @@ T = Tables(
     financial_products=_safe_table(S.financial_products_table_name),
     rent_policy=_safe_table(S.rent_policy_table_name),
     property_documents=_safe_table(S.property_documents_table_name),
+    hotel_folios=_safe_table(S.hotel_folios_table_name),
 )

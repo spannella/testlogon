@@ -20516,3 +20516,69 @@ class PortfolioSummaryData(BaseModel):
     outstanding_rent_cents: int
     open_work_order_count: int
     computed_at: int
+
+
+
+
+# ---------------------------------------------------------------------------
+# Hotel Guest Folio + Payments (HTL-029..HTL-032)
+# ---------------------------------------------------------------------------
+
+
+class FolioLineIn(BaseModel):
+    line_type: Literal["room_night", "addon", "tax", "fee"]
+    description: str
+    quantity: int = Field(ge=1, default=1)
+    unit_price_cents: int = Field(ge=0)
+    sku: str = ""
+
+
+class FolioLineOut(BaseModel):
+    line_id: str
+    line_type: Literal["room_night", "addon", "tax", "fee"]
+    description: str
+    quantity: int
+    unit_price_cents: int
+    amount_cents: int
+    sku: str
+    created_at: int
+
+
+class FolioOut(BaseModel):
+    reservation_id: str
+    folio_id: str
+    hotel_id: str
+    guest_sub: str
+    currency: str
+    status: Literal["open", "closed"]
+    charges_total_cents: int
+    payments_total_cents: int
+    deposit_held_cents: int = 0
+    deposit_policy_kind: Literal["none", "pct", "fixed"] = "none"
+    balance_due_cents: int                   # computed: charges - payments
+    balance_due_on_arrival_cents: int = 0    # HTL-031: charges - payments - deposit_held
+    line_items: List[FolioLineOut]
+    closed_at: Optional[int] = None
+    created_at: int
+    updated_at: int
+
+
+class FolioAddonIn(BaseModel):
+    sku: str
+    quantity: int = Field(default=1, ge=1)
+
+
+class DepositPolicyIn(BaseModel):
+    kind: Literal["none", "pct", "fixed"] = "none"
+    pct_bps: int = Field(ge=0, le=10_000, default=0)
+    fixed_cents: int = Field(ge=0, default=0)
+
+
+class TakeDepositIn(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+
+
+class FolioPaymentIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    method: Literal["wallet", "card_external", "cash", "check", "bank_transfer", "deposit_applied"]
+    reference: str = ""

@@ -337,6 +337,7 @@ from app.routers.maintenance_orders import router as maintenance_orders_router
 from app.routers.customers import router as customers_router
 from app.routers.cards_resource import router as cards_resource_router
 from app.routers.financial_products import router as financial_products_router
+from app.routers.hotel_folios import hotel_folios_router
 from app.routers.theme_customization import theme_customization_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
@@ -970,6 +971,7 @@ def create_app() -> FastAPI:
     app.include_router(customers_router)
     app.include_router(cards_resource_router)
     app.include_router(financial_products_router)
+    app.include_router(hotel_folios_router)
     app.include_router(theme_customization_router)
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)
