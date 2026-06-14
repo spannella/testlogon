@@ -202,6 +202,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         earningsDestinations(navController)
         // AND-254: creator engagement-rate analytics (server rate + trend chart + breakdown).
         engagementDestinations(navController)
+        // AND-399: account-wide analytics dashboards (read) — KPI tiles + views/subscriber charts +
+        // top-content/audience breakdowns over a selectable range (fan-out across /ui/analytics/*).
+        analyticsDashboardDestination(navController)
         // AND-258/259/260: creator payouts — setup (+ FLAGGED KYC gate) + paged history + detail.
         payoutsDestinations(navController)
         // AND-264: referrals dashboard (code/link + stats + share/copy + create-code CTA).

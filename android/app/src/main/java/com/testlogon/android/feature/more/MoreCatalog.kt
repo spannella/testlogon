@@ -3,6 +3,7 @@ package com.testlogon.android.feature.more
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AccountBalance
+import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
@@ -254,6 +255,13 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_engagement,
             icon = Icons.Outlined.Insights,
             route = MoreRoutes.ENGAGEMENT,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "analytics_dashboard",
+            labelRes = R.string.more_entry_analytics_dashboard,
+            icon = Icons.Outlined.Assessment,
+            route = MoreRoutes.ANALYTICS_DASHBOARD,
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(

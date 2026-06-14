@@ -3397,4 +3397,49 @@
     <string name="webhooks_create_events_label">Events</string>
     <string name="webhooks_create_events_unavailable">Event types are unavailable right now. Try again later.</string>
     <string name="webhooks_create_submit">Create</string>
+
+    <!-- AND-399 Analytics dashboards (read): account-wide KPI tiles + charts + breakdowns. -->
+    <string name="more_entry_analytics_dashboard">Analytics</string>
+    <string name="analytics_dashboard_title">Analytics</string>
+    <string name="analytics_dashboard_loading">Loading analytics…</string>
+    <string name="analytics_dashboard_error_generic">Couldn\'t load your analytics.</string>
+    <string name="analytics_dashboard_empty_title">No analytics yet</string>
+    <string name="analytics_dashboard_empty_body">There\'s no analytics data for this range. Try a wider range.</string>
+    <string name="analytics_dashboard_offline_title">You\'re offline</string>
+    <string name="analytics_dashboard_offline_body">Connect to the internet to see your analytics.</string>
+    <string name="analytics_dashboard_stale_banner">Showing saved data</string>
+
+    <string name="analytics_range_7d">7D</string>
+    <string name="analytics_range_30d">30D</string>
+    <string name="analytics_range_90d">90D</string>
+    <string name="analytics_range_1y">1Y</string>
+
+    <string name="analytics_kpi_views">Views</string>
+    <string name="analytics_kpi_revenue">Revenue</string>
+    <string name="analytics_kpi_new_subscribers">New subscribers</string>
+    <string name="analytics_kpi_total_subscribers">Total subscribers</string>
+    <!-- %1$s = KPI label, %2$s = formatted value -->
+    <string name="analytics_kpi_cd">%1$s, %2$s</string>
+
+    <string name="analytics_views_chart_title">Views</string>
+    <string name="analytics_views_chart_subtitle">Watch time: %1$s</string>
+    <!-- %1$s = total views, %2$s = total watch time -->
+    <string name="analytics_views_chart_cd">Views over time. Total %1$s views, %2$s watch time.</string>
+    <string name="analytics_subs_chart_title">Subscriber growth</string>
+    <string name="analytics_subs_chart_subtitle">Total subscribers over the selected range</string>
+    <!-- %1$s = current total, %2$s = net change -->
+    <string name="analytics_subs_chart_cd">Subscriber growth. Current total %1$s, net change %2$s.</string>
+    <string name="analytics_chart_no_data">No data for this range</string>
+
+    <string name="analytics_top_content_title">Top content</string>
+    <string name="analytics_top_content_empty">No content to show for this range.</string>
+    <!-- %1$s = views, %2$s = engagement rate percent -->
+    <string name="analytics_top_content_secondary">%1$s views · %2$s engagement</string>
+
+    <string name="analytics_audience_title">Audience</string>
+    <string name="analytics_audience_empty">No audience data for this range.</string>
+    <string name="analytics_audience_countries">By country</string>
+    <string name="analytics_audience_devices">By device</string>
+
+    <string name="analytics_section_error">Couldn\'t load this section.</string>
 </resources>

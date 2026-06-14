@@ -126,6 +126,11 @@ object MoreRoutes {
     // the registered composable route carries an optional `?period=` deep-link arg.
     const val ENGAGEMENT = EngagementDest.ROUTE_BASE
 
+    // AND-399: account-wide analytics DASHBOARDS (read) - KPI tiles + views/subscriber charts +
+    // top-content/audience breakdowns over a selectable range. Base route (no arg); the registered
+    // composable route carries an optional `?range=` deep-link arg.
+    const val ANALYTICS_DASHBOARD = AnalyticsDashboardDest.ROUTE_BASE
+
     // AND-264: referrals dashboard (referral code/link + stats + share/copy + create-code).
     const val REFERRALS = ReferralsDest.ROUTE
 
@@ -237,6 +242,7 @@ object MoreRoutes {
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
+            ANALYTICS_DASHBOARD,
             REFERRALS,
             AFFILIATES,
             PROMO_CODES,
