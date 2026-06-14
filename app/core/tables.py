@@ -434,6 +434,9 @@ class Tables:
     mfg_work_orders: Any
     mfg_mrp: Any
     hr: Any
+    # OFBiz Fixed Assets (FXA-002)
+    fixed_assets: Any
+    fixed_asset_schedule: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -803,4 +806,7 @@ T = Tables(
     mfg_work_orders=_safe_table(S.mfg_work_orders_table_name),
     mfg_mrp=_safe_table(S.mfg_mrp_table_name),
     hr=_safe_table(S.hr_table_name),
+    # OFBiz Fixed Assets (FXA-002)
+    fixed_assets=_safe_table(S.fixed_assets_table_name),
+    fixed_asset_schedule=_safe_table(S.fixed_asset_schedule_table_name),
 )

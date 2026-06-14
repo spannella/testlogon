@@ -21563,3 +21563,115 @@ class CreatePayrollRunIn(BaseModel):
         if self.period_end < self.period_start:
             raise ValueError("period_end must be >= period_start")
         return self
+
+
+# ---------------------------------------------------------------------------
+# OFBiz Fixed Assets — FXA-004 Pydantic models
+# ---------------------------------------------------------------------------
+
+class FixedAssetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    asset_class: str = Field(min_length=1, max_length=50)
+    acquisition_cost_cents: int = Field(gt=0)
+    salvage_value_cents: int = Field(ge=0)
+    useful_life_months: int = Field(ge=1, le=1200)
+    acquired_at: int  # Unix timestamp
+    depreciation_method: Literal["straight_line"] = "straight_line"
+    correlation_id: Optional[str] = None
+    gl_asset_account_id: Optional[str] = None
+    gl_accum_depr_account_id: Optional[str] = None
+    gl_depr_expense_account_id: Optional[str] = None
+    gl_gain_account_id: Optional[str] = None
+    gl_loss_account_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def salvage_below_cost(self) -> "FixedAssetIn":
+        if self.salvage_value_cents >= self.acquisition_cost_cents:
+            raise ValueError("salvage_value_cents must be less than acquisition_cost_cents")
+        return self
+
+
+class FixedAssetPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    asset_class: Optional[str] = None
+    gl_asset_account_id: Optional[str] = None
+    gl_accum_depr_account_id: Optional[str] = None
+    gl_depr_expense_account_id: Optional[str] = None
+    gl_gain_account_id: Optional[str] = None
+    gl_loss_account_id: Optional[str] = None
+
+
+class FixedAssetOut(BaseModel):
+    asset_id: str
+    owner_sub: str
+    name: str
+    asset_class: str
+    acquisition_cost_cents: int
+    salvage_value_cents: int
+    useful_life_months: int
+    acquired_at: int
+    depreciation_method: str
+    status: str  # active / fully_depreciated / disposed
+    accumulated_depreciation_cents: int
+    net_book_value_cents: int  # computed: cost - accumulated, floor = salvage
+    gl_asset_account_id: Optional[str]
+    gl_accum_depr_account_id: Optional[str]
+    gl_depr_expense_account_id: Optional[str]
+    gl_gain_account_id: Optional[str]
+    gl_loss_account_id: Optional[str]
+    created_at: int
+    updated_at: int
+    correlation_id: Optional[str]
+
+
+class FixedAssetDisposeIn(BaseModel):
+    disposal_reason: Optional[str] = Field(default=None, max_length=500)
+    proceeds_payment_intent_id: Optional[str] = None
+    proceeds_amount_cents: Optional[int] = Field(default=None, ge=0)
+    correlation_id: Optional[str] = None
+
+
+class DepreciationPeriodOut(BaseModel):
+    period: int
+    period_start_ts: int
+    period_end_ts: int
+    amount_cents: int
+    schedule_status: str  # scheduled / posted / cancelled
+    journal_entry_id: Optional[str]
+    posted_at: Optional[int]
+
+
+class DepreciationScheduleOut(BaseModel):
+    asset_id: str
+    periods: List[DepreciationPeriodOut]
+    total_periods: int
+    posted_periods: int
+    remaining_periods: int
+
+
+class MaintenanceOrderIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    assignee_sub: Optional[str] = None
+    scheduled_for: Optional[int] = None  # Unix timestamp
+    correlation_id: Optional[str] = None
+
+
+class MaintenanceOrderTransitionIn(BaseModel):
+    target_status: Literal["in_progress", "completed", "cancelled"]
+    cost_cents: Optional[int] = Field(default=None, ge=0)
+    assignee_sub: Optional[str] = None
+
+
+class MaintenanceOrderOut(BaseModel):
+    work_order_id: str
+    asset_id: str
+    title: str
+    description: Optional[str]
+    wo_status: str
+    assignee_sub: Optional[str]
+    cost_cents: Optional[int]
+    scheduled_for: Optional[int]
+    created_at: int
+    completed_at: Optional[int]
+    correlation_id: Optional[str]

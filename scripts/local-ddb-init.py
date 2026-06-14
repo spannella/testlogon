@@ -41,6 +41,32 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # OFBiz Fixed Assets — FXA-003.
+        # fixed_assets: one row per registered asset (PK=ASSET#{id}, SK=META).
+        # GSI_OWNER lets users list their assets by acquisition date.
+        # GSI_STATUS lets ops filter the active/disposed fleet.
+        TableDef(
+            _resolve_table_name(S.fixed_assets_table_name, "fixed_assets"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER", "partition_key": "owner_sub", "sort_key": "acquired_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "acquired_at"},
+            ],
+            attr_types={"acquired_at": "N"},
+        ),
+        # fixed_asset_schedule: one row per depreciation period per asset.
+        # GSI_DUE lets the background poster find all due-but-unposted periods
+        # efficiently (schedule_status=scheduled, period_end_ts <= now).
+        TableDef(
+            _resolve_table_name(S.fixed_asset_schedule_table_name, "fixed_asset_schedule"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_DUE", "partition_key": "schedule_status", "sort_key": "period_end_ts"},
+            ],
+            attr_types={"period_end_ts": "N"},
+        ),
         # HRM-002: HR single-table for positions, employments, and payroll runs.
         # PK/SK are uppercase per OFBiz ERP convention.  GSI1 enables status-
         # filtered listing; GSI2 enables party reverse-lookup; GSI_CREATED

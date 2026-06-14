@@ -3530,5 +3530,16 @@ class Settings:
     # If True, terminating an employment reverts the linked position to OPEN.
     hr_position_revert_on_terminate: bool = os.environ.get("HR_POSITION_REVERT_ON_TERMINATE", "1") not in ("0", "false", "False")
 
+    # OFBiz Phase N — Fixed Assets (FXA-001/FXA-002).
+    # Master switch defaults OFF: with it off the existing shop/cart/orders/billing
+    # paths are byte-for-byte unchanged; the fixed-assets service is dormant.
+    # FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED is a secondary gate for the
+    # background depreciation poster — meaningful only when the master switch is on.
+    fixed_assets_enabled: bool = os.environ.get("FIXED_ASSETS_ENABLED", "false").lower() == "true"
+    fixed_assets_depreciation_posting_enabled: bool = os.environ.get("FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED", "false").lower() == "true"
+    fixed_assets_depreciation_poll_interval: int = int(os.environ.get("FIXED_ASSETS_DEPRECIATION_POLL_INTERVAL", "86400"))
+    fixed_assets_table_name: str = os.environ.get("FIXED_ASSETS_TABLE_NAME", "fixed_assets")
+    fixed_asset_schedule_table_name: str = os.environ.get("FIXED_ASSET_SCHEDULE_TABLE_NAME", "fixed_asset_schedule")
+
 
 S = Settings()

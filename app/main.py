@@ -1235,6 +1235,11 @@ def create_app() -> FastAPI:
         from app.routers.open_data import public_router as open_data_public_router
         app.include_router(open_data_admin_router)
         app.include_router(open_data_public_router)
+    # OFBiz Fixed Assets (FXA-007 / FXA-010)
+    from app.routers.fixed_assets import router as fixed_assets_router
+    from app.services.fixed_assets import start_depreciation_poster_task
+    app.include_router(fixed_assets_router)
+    app.add_event_handler("startup", start_depreciation_poster_task)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
