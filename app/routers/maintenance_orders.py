@@ -92,7 +92,7 @@ async def assign_work_order_endpoint(
     body: MaintenanceOrderAssignIn,
     user=Depends(require_admin_or_root_csrf),
 ):
-    return assign_work_order(body.property_id, work_order_id, body, user.user_sub)
+    return assign_work_order(body.property_id, work_order_id, body, user.sub)
 
 
 @router.patch("/maintenance/work-orders/{work_order_id}/schedule", response_model=MaintenanceOrderOut)
@@ -101,7 +101,7 @@ async def schedule_work_order_endpoint(
     body: MaintenanceOrderScheduleIn,
     user=Depends(require_admin_or_root_csrf),
 ):
-    return schedule_work_order(body.property_id, work_order_id, body, user.user_sub)
+    return schedule_work_order(body.property_id, work_order_id, body, user.sub)
 
 
 @router.patch("/maintenance/work-orders/{work_order_id}", response_model=MaintenanceOrderOut)
@@ -113,7 +113,7 @@ async def transition_work_order_endpoint(
     # Router-layer validation: cost_cents only valid on completed transition
     if body.cost_cents is not None and body.target_status != "completed":
         raise HTTPException(status_code=422, detail="cost_cents_only_on_completion")
-    return transition_work_order(body.property_id, work_order_id, body, user.user_sub)
+    return transition_work_order(body.property_id, work_order_id, body, user.sub)
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ async def create_work_order_endpoint(
     body: MaintenanceOrderIn,
     user=Depends(require_admin_or_root_csrf),
 ):
-    return create_work_order(property_id, body, user.user_sub)
+    return create_work_order(property_id, body, user.sub)
 
 
 @router.get("/properties/{property_id}/work-orders", response_model=WoListOut)
@@ -171,7 +171,7 @@ async def create_vendor_endpoint(
     body: VendorCreateIn,
     user=Depends(require_admin_or_root_csrf),
 ):
-    return create_vendor(user.user_sub, body)
+    return create_vendor(user.sub, body)
 
 
 @router.get("/maintenance/vendors", response_model=VendorListOut)
@@ -202,7 +202,7 @@ async def update_vendor_endpoint(
     body: VendorPatchIn,
     user=Depends(require_admin_or_root_csrf),
 ):
-    return update_vendor(vendor_id, user.user_sub, body)
+    return update_vendor(vendor_id, user.sub, body)
 
 
 @router.post("/maintenance/vendors/{vendor_id}/status", response_model=VendorOut)
@@ -211,4 +211,4 @@ async def set_vendor_status_endpoint(
     body: VendorStatusIn,
     user=Depends(require_admin_or_root_csrf),
 ):
-    return set_vendor_status(vendor_id, body.status, user.user_sub)
+    return set_vendor_status(vendor_id, body.status, user.sub)
