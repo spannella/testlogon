@@ -4114,7 +4114,28 @@ def main() -> None:
         )
     except Exception:
         pass
+    # Content-moderation reports require allowed-topic sentinel rows (TOPIC#{topic})
+    # for the DB-level condition checks in create_content_report's transact-write.
+    # Without them every moderation report fails 422 on a fresh stack. Seed them
+    # idempotently (mirrors scripts/migrations/20260305_content_reports_schema.py).
+    _seed_content_report_topics(ddb)
+
     print(f"Ensured {len(created)} DynamoDB tables exist.")
+
+
+def _seed_content_report_topics(ddb) -> None:
+    table_name = _resolve_table_name(S.content_reports_table_name, "ContentReports")
+    table = ddb.Table(table_name)
+    for topic in ("sexual", "extortion", "criminal", "spam", "racist"):
+        try:
+            _retry_transient_ddb_call(
+                table.put_item,
+                Item={"report_id": f"TOPIC#{topic}", "entity_type": "content_report_topic", "topic": topic},
+                ConditionExpression="attribute_not_exists(report_id)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
 
 
 if __name__ == "__main__":
