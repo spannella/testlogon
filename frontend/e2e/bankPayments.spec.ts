@@ -511,7 +511,7 @@ test.describe("Section 204 — Feature-flag off: graceful UI (PAY-001..004)", ()
   });
 
   test("204.1 — Counterparties page shows 'not enabled' when feature off", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "domcontentloaded" });
     // When flags off, page shows disabled state
     const hasEnabled = await alicePage.locator("text=not enabled").count();
     const hasItems = await alicePage.locator("[data-testid^='counterparty-']").count();
@@ -520,18 +520,18 @@ test.describe("Section 204 — Feature-flag off: graceful UI (PAY-001..004)", ()
   });
 
   test("204.2 — Standing Orders page loads without crashing", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "domcontentloaded" });
     // Page should render with either content or disabled state
     await expect(alicePage.locator("h1")).toBeVisible();
   });
 
   test("204.3 — Mandates page loads without crashing", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.locator("h1")).toBeVisible();
   });
 
   test("204.4 — FX Rates page loads without crashing", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.locator("h1")).toBeVisible();
   });
 });
@@ -551,12 +551,12 @@ test.describe("Section 205 — Counterparties UI (PAY-001)", () => {
   });
 
   test("205.1 — Counterparties page heading renders", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("heading", { name: "Counterparties", exact: true })).toBeVisible();
   });
 
   test("205.2 — Add counterparty button opens dialog when feature enabled", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -569,7 +569,7 @@ test.describe("Section 205 — Counterparties UI (PAY-001)", () => {
   });
 
   test("205.3 — Create counterparty form accepts IBAN routing", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -590,7 +590,7 @@ test.describe("Section 205 — Counterparties UI (PAY-001)", () => {
   });
 
   test("205.4 — Counterparty list displays items after creation", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/counterparties`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -619,12 +619,12 @@ test.describe("Section 206 — Standing Orders UI (PAY-002)", () => {
   });
 
   test("206.1 — Standing Orders page heading renders", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("heading", { name: "Standing Orders", exact: true })).toBeVisible();
   });
 
   test("206.2 — New standing order button opens dialog when feature enabled", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -637,7 +637,7 @@ test.describe("Section 206 — Standing Orders UI (PAY-002)", () => {
   });
 
   test("206.3 — Standing order form renders cadence options", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -651,7 +651,7 @@ test.describe("Section 206 — Standing Orders UI (PAY-002)", () => {
   });
 
   test("206.4 — Standing order list shows orders or empty state", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/standing-orders`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -679,12 +679,12 @@ test.describe("Section 207 — Direct-Debit Mandates UI (PAY-003)", () => {
   });
 
   test("207.1 — Mandates page heading renders", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("heading", { name: "Direct-Debit Mandates", exact: true })).toBeVisible();
   });
 
   test("207.2 — New mandate button opens dialog when feature enabled", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -697,7 +697,7 @@ test.describe("Section 207 — Direct-Debit Mandates UI (PAY-003)", () => {
   });
 
   test("207.3 — Mandate form has max amount and cadence fields", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -710,7 +710,7 @@ test.describe("Section 207 — Direct-Debit Mandates UI (PAY-003)", () => {
   });
 
   test("207.4 — Mandates list renders without crash", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/mandates`, { waitUntil: "domcontentloaded" });
     // Page should show either content or empty state, never a JS crash
     const heading = alicePage.getByRole("heading", { name: "Direct-Debit Mandates" });
     await expect(heading).toBeVisible();
@@ -732,12 +732,12 @@ test.describe("Section 208 — FX Rates UI (PAY-004)", () => {
   });
 
   test("208.1 — FX Rates page heading renders", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("heading", { name: "FX Rates", exact: true })).toBeVisible();
   });
 
   test("208.2 — Converter form renders with from/to/amount inputs", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=FX Rates not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -750,7 +750,7 @@ test.describe("Section 208 — FX Rates UI (PAY-004)", () => {
   });
 
   test("208.3 — Rate lookup form renders", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=FX Rates not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -762,7 +762,7 @@ test.describe("Section 208 — FX Rates UI (PAY-004)", () => {
   });
 
   test("208.4 — Convert button triggers FX conversion (200 or 404)", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=FX Rates not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");
@@ -779,7 +779,7 @@ test.describe("Section 208 — FX Rates UI (PAY-004)", () => {
   });
 
   test("208.5 — Unknown pair lookup shows error message", async () => {
-    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/bank/payments/fx`, { waitUntil: "domcontentloaded" });
     const isDisabled = await alicePage.locator("text=FX Rates not enabled").count();
     if (isDisabled > 0) {
       test.skip(true, "Feature disabled");

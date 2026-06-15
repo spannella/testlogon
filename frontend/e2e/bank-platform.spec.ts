@@ -72,6 +72,16 @@ async function injectAuth(page: Page, identity: string): Promise<void> {
   const sess = sessions[identity];
   if (!sess) throw new Error(`Unknown identity: ${identity}`);
   await page.context().addCookies(sess.cookies);
+  // The React app gates routes on the persisted `auth-store` localStorage —
+  // cookies alone do not pass the client-side auth guard.
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await page.evaluate(
+    ([userId, accessToken]: [string, string]) => {
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    [sess.user_sub, sess.access_token],
+  );
 }
 
 function getSession(identity: string) {
@@ -91,26 +101,36 @@ function apiGet(page: Page, path: string, params?: Record<string, string>) {
   return page.request.get(`${API}${path}${qs}`);
 }
 
+// NOTE: the /v1/admin/* OBP platform endpoints (leaderboard, glossary admin,
+// sandbox) authenticate via `require_ui_session` (cookie auth), NOT bearer —
+// the seeded `access_token` is a UI HS256 token, not a Cognito JWT, so a Bearer
+// header is rejected with "Unknown Cognito key id". These helpers therefore send
+// the session cookie + CSRF header. (Helper names retained for minimal churn.)
+function cookieHeader(identity: string): string {
+  const s = getSession(identity);
+  return s.cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+}
+
 function apiBearerGet(request: import("@playwright/test").APIRequestContext, identity: string, path: string, params?: Record<string, string>) {
   const s = getSession(identity);
   const qs = params ? "?" + new URLSearchParams(params).toString() : "";
   return request.get(`${API}${path}${qs}`, {
-    headers: { Authorization: `Bearer ${s.access_token}` },
+    headers: { Cookie: cookieHeader(identity), "x-csrf-token": s.csrf_token },
   });
 }
 
 function apiBearerPost(request: import("@playwright/test").APIRequestContext, identity: string, path: string, body: unknown) {
   const s = getSession(identity);
   return request.post(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${s.access_token}`, "Content-Type": "application/json" },
+    headers: { Cookie: cookieHeader(identity), "x-csrf-token": s.csrf_token, "Content-Type": "application/json" },
     data: JSON.stringify(body),
   });
 }
 
-function apiBearerPut(request: import("@playwright/test").APIRequestContext, identity: string, path: string, body: unknown) {
+function apiBearerPatch(request: import("@playwright/test").APIRequestContext, identity: string, path: string, body: unknown) {
   const s = getSession(identity);
-  return request.put(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${s.access_token}`, "Content-Type": "application/json" },
+  return request.patch(`${API}${path}`, {
+    headers: { Cookie: cookieHeader(identity), "x-csrf-token": s.csrf_token, "Content-Type": "application/json" },
     data: JSON.stringify(body),
   });
 }
@@ -173,7 +193,7 @@ test.describe("200 — PLT-003 Glossary API", () => {
 
   test("200.5 — Admin can patch a glossary term", async ({ request }) => {
     if (!createdTermId) return;
-    const resp = await apiBearerPut(request, ROOT_ID, `/v1/admin/glossary/${createdTermId}`, {
+    const resp = await apiBearerPatch(request, ROOT_ID, `/v1/admin/glossary/${createdTermId}`, {
       definition: "Updated definition.",
     });
     if (resp.status() === 403 || resp.status() === 404) return;
@@ -461,12 +481,12 @@ test.describe("206 — PLT-005 Ledger Webhooks UI", () => {
 
   test("206.1 — Ledger Webhooks tab loads", async () => {
     await alicePage.goto(`${BASE}/bank/platform?tab=webhooks`);
-    await expect(alicePage.getByText("Wallet Balance")).toBeVisible({ timeout: 8000 });
+    await expect(alicePage.getByText("Wallet Balance", { exact: true })).toBeVisible({ timeout: 8000 });
   });
 
   test("206.2 — Wallet balance is displayed", async () => {
     await alicePage.goto(`${BASE}/bank/platform?tab=webhooks`);
-    await expect(alicePage.getByText("Wallet Balance")).toBeVisible({ timeout: 6000 });
+    await expect(alicePage.getByText("Wallet Balance", { exact: true })).toBeVisible({ timeout: 6000 });
     // Balance value rendered as $X.XX
     await expect(alicePage.locator("text=/\\$\\d+\\.\\d{2}/")).toBeVisible({ timeout: 5000 });
   });

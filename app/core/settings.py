@@ -2962,17 +2962,19 @@ class Settings:
     host_inventory_max_per_user: int = int(os.environ.get("HOST_INVENTORY_MAX_PER_USER", "500"))
 
     # OBP umbrella flag (ACC-001) — gates entire Open Bank Project vertical
-    open_bank_project_enabled: bool = os.environ.get("OPEN_BANK_PROJECT_ENABLED", "false").lower() == "true"
+    open_bank_project_enabled: bool = os.environ.get(
+        "OPEN_BANK_PROJECT_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
 
     # VEW — Account Views (gates VEW-001..VEW-003)
-    account_views_enabled: bool = os.environ.get("ACCOUNT_VIEWS_ENABLED", "false").lower() == "true"
+    account_views_enabled: bool = os.environ.get("ACCOUNT_VIEWS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     account_views_table_name: str = os.environ.get("ACCOUNT_VIEWS_TABLE", "account_views")
     account_view_public_secret: str = os.environ.get("ACCOUNT_VIEW_PUBLIC_SECRET") or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
     account_view_public_link_ttl_days: int = int(os.environ.get("ACCOUNT_VIEW_PUBLIC_LINK_TTL_DAYS", "7"))
     account_views_max_per_resource: int = int(os.environ.get("ACCOUNT_VIEWS_MAX_PER_RESOURCE", "25"))
 
     # VEW — Entitlement Requests (gates VEW-004)
-    entitlement_requests_enabled: bool = os.environ.get("ENTITLEMENT_REQUESTS_ENABLED", "false").lower() == "true"
+    entitlement_requests_enabled: bool = os.environ.get("ENTITLEMENT_REQUESTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     entitlement_requests_table_name: str = os.environ.get("ENTITLEMENT_REQUESTS_TABLE", "entitlement_requests")
     entitlement_request_max_open_per_user: int = int(os.environ.get("ENTITLEMENT_REQUEST_MAX_OPEN_PER_USER", "10"))
     entitlement_request_max_per_window: int = int(os.environ.get("ENTITLEMENT_REQUEST_MAX_PER_WINDOW", "20"))

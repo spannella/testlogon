@@ -66,17 +66,25 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 
 // ─── Page factory ─────────────────────────────────────────────────────────────
 
-async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
-  const sessions = getAdminSessions();
-  const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
-  return page;
-}
-
 async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getAdminSessions()[identity];
-  await page.goto(`${BASE}/login`);
   await page.context().addCookies(session.cookies);
+  // The React app gates routes on the persisted `auth-store` localStorage —
+  // cookies alone do not pass the client-side auth guard.
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await page.evaluate(
+    ([userId, accessToken]: [string, string]) => {
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    [session.user_sub, session.access_token],
+  );
+}
+
+async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
+  const page = await browser.newPage();
+  await injectAuth(page, identity);
+  return page;
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -624,7 +632,7 @@ test.describe("78 — BankCustomersPage UI", () => {
 
   test("78.3 shows New Customer button when feature enabled", async () => {
     await rootPage.goto(`${BASE}/bank/customers`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     const notAvail = await rootPage.getByText("not available").isVisible();
     if (notAvail) {
       test.skip(true, "feature not enabled");
@@ -635,15 +643,16 @@ test.describe("78 — BankCustomersPage UI", () => {
 
   test("78.4 create customer dialog opens", async () => {
     await rootPage.goto(`${BASE}/bank/customers`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     const notAvail = await rootPage.getByText("not available").isVisible();
     if (notAvail) {
       test.skip(true, "feature not enabled");
       return;
     }
     await rootPage.getByRole("button", { name: /New Customer/i }).click();
-    await expect(rootPage.getByRole("dialog")).toBeVisible();
-    await expect(rootPage.getByText("New Customer")).toBeVisible();
+    const dialog = rootPage.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "New Customer" })).toBeVisible();
   });
 });
 
@@ -667,7 +676,7 @@ test.describe("79 — BankCardsPage UI", () => {
 
   test("79.2 shows empty state or cards grid when feature enabled", async () => {
     await alicePage.goto(`${BASE}/bank/cards`);
-    await alicePage.waitForLoadState("networkidle");
+    await alicePage.waitForLoadState("domcontentloaded");
     const notAvail = await alicePage.getByText("not available").isVisible();
     // Either feature is off (graceful banner) or it shows cards/empty state
     if (!notAvail) {
@@ -704,7 +713,7 @@ test.describe("80 — BankProductsPage UI", () => {
 
   test("80.2 shows Products and Collections tabs when enabled", async () => {
     await rootPage.goto(`${BASE}/bank/products`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     const notAvail = await rootPage.getByText("not available").isVisible();
     if (notAvail) {
       test.skip(true, "feature not enabled");
@@ -716,7 +725,7 @@ test.describe("80 — BankProductsPage UI", () => {
 
   test("80.3 create product dialog opens", async () => {
     await rootPage.goto(`${BASE}/bank/products`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     const notAvail = await rootPage.getByText("not available").isVisible();
     if (notAvail) {
       test.skip(true, "feature not enabled");
@@ -729,7 +738,7 @@ test.describe("80 — BankProductsPage UI", () => {
 
   test("80.4 collections tab loads", async () => {
     await rootPage.goto(`${BASE}/bank/products`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     const notAvail = await rootPage.getByText("not available").isVisible();
     if (notAvail) {
       test.skip(true, "feature not enabled");

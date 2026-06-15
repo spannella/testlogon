@@ -135,10 +135,19 @@ export default function FxRatesPage() {
     },
   });
 
+  // The probe hits GET /ui/fx/rates/usd/eur. A 404 can mean EITHER the feature
+  // is gated off ("not found") OR the feature is enabled but no usd/eur rate is
+  // configured ("fx_rate_missing"). Only the former should render the
+  // feature-disabled state — otherwise an enabled feature with no seeded rate
+  // would be wrongly reported as off.
+  const isRateMissing =
+    gateQuery.error instanceof ApiError &&
+    gateQuery.error.detail === "fx_rate_missing";
   const isDisabled =
     gateQuery.isError &&
     gateQuery.error instanceof ApiError &&
-    (gateQuery.error.status === 404 || gateQuery.error.status === 503);
+    (gateQuery.error.status === 404 || gateQuery.error.status === 503) &&
+    !isRateMissing;
 
   const convertMut = useMutation({
     mutationFn: () => {

@@ -58,17 +58,25 @@ function getSessions(): Record<string, AdminSessionData> {
   return _sessions!;
 }
 
-async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
-  const sessions = getSessions();
-  const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
-  return page;
-}
-
 async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getSessions()[identity];
-  await page.goto(`${BASE}/bank/views`);
   await page.context().addCookies(session.cookies);
+  // The React app gates routes on the persisted `auth-store` localStorage —
+  // cookies alone are not enough to pass the client-side auth guard.
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await page.evaluate(
+    ([userId, accessToken]: [string, string]) => {
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    [session.user_sub, session.access_token],
+  );
+}
+
+async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
+  const page = await browser.newPage();
+  await injectAuth(page, identity);
+  return page;
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -403,17 +411,28 @@ test.describe("VEW-05 — Resource projection API", () => {
     }
   });
 
-  test("GET .../data — returns 403 for unknown view", async ({ browser }) => {
+  test("GET .../data — returns 403 for unknown view (non-owner) and 200 for owner", async ({ browser }) => {
     const page = await newIdentityPage(browser, ALICE);
     const ok = await checkFeatureEnabled(page);
     if (!ok) { test.skip(); return; }
 
-    const resp = await page.request.get(
-      `${API}/ui/views/wallet/${encodeURIComponent(aliceSub)}/nonexistent_view/data`,
+    const ownerSub = getSessions()[ALICE].user_sub;
+
+    // As-built: the owner accessing their OWN resource always gets the full owner
+    // view (200) — the view_id is ignored for self-access.
+    const ownerResp = await page.request.get(
+      `${API}/ui/views/wallet/${encodeURIComponent(ownerSub)}/nonexistent_view/data`,
       { headers: hdrs(ALICE) },
     );
-    // Owner is allowed, non-owner grantee would get 403; here as owner they get 404 for view not found
-    expect([403, 404]).toContain(resp.status());
+    expect(ownerResp.status()).toBe(200);
+
+    // A non-owner (Bob) with no active grant for an unknown view gets 403.
+    const bobPage = await newIdentityPage(browser, BOB);
+    const bobResp = await bobPage.request.get(
+      `${API}/ui/views/wallet/${encodeURIComponent(ownerSub)}/nonexistent_view/data`,
+      { headers: hdrs(BOB) },
+    );
+    expect([403, 404]).toContain(bobResp.status());
   });
 });
 
@@ -443,7 +462,6 @@ test.describe("VEW-07 — Account Views page UI", () => {
   test("renders the page and handles feature-off gracefully", async ({ browser }) => {
     const page = await newIdentityPage(browser, ALICE);
     await page.goto(`${BASE}/bank/views`);
-    await page.waitForLoadState("networkidle");
 
     // Either the page loads normally or shows the feature-off banner
     const heading = page.getByRole("heading", { name: /account views/i, exact: false });
@@ -454,7 +472,6 @@ test.describe("VEW-07 — Account Views page UI", () => {
     const page = await newIdentityPage(browser, ALICE);
     await injectAuth(page, ALICE);
     await page.goto(`${BASE}/bank/views`);
-    await page.waitForLoadState("networkidle");
 
     // If feature off, we see the banner and not the tabs — skip
     const featureOff = await page.getByText(/not enabled/i).isVisible().catch(() => false);
@@ -468,7 +485,6 @@ test.describe("VEW-07 — Account Views page UI", () => {
     const page = await newIdentityPage(browser, ALICE);
     await injectAuth(page, ALICE);
     await page.goto(`${BASE}/bank/views`);
-    await page.waitForLoadState("networkidle");
 
     const featureOff = await page.getByText(/not enabled/i).isVisible().catch(() => false);
     if (featureOff) { test.skip(); return; }
@@ -491,7 +507,6 @@ test.describe("VEW-07 — Account Views page UI", () => {
     const page = await newIdentityPage(browser, ALICE);
     await injectAuth(page, ALICE);
     await page.goto(`${BASE}/bank/views`);
-    await page.waitForLoadState("networkidle");
 
     const featureOff = await page.getByText(/not enabled/i).isVisible().catch(() => false);
     if (featureOff) { test.skip(); return; }
@@ -506,7 +521,6 @@ test.describe("VEW-07 — Account Views page UI", () => {
 
   test("public view page renders token error gracefully", async ({ page }) => {
     await page.goto(`${BASE}/bank/views/public/invalid-token-xyz`);
-    await page.waitForLoadState("networkidle");
 
     // Should show "invalid or expired" message (403 from backend)
     const errMsg = page.getByText(/invalid or expired/i);

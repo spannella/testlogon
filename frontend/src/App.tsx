@@ -476,6 +476,7 @@ export default function App() {
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
         {showCanonicalProfileRoute && <Route path="/u/:identifier" element={<PublicUserProfilePage />} />}
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
+        <Route path="/bank/views/public/:token" element={<PublicViewPage />} />
         <Route path="/sign/:token" element={<PublicSigningPage />} />
         <Route path="/share/:linkId" element={<PublicDownloadPage />} />
         <Route path="/donate/:fundraiserId" element={<PublicDonationPage />} />
@@ -614,7 +615,6 @@ export default function App() {
           <Route path="bank/platform" element={<BankPlatformPage />} />
           <Route path="bank/views" element={<AccountViewsPage />} />
           <Route path="bank/views/read/:resourceType/:resourceId/:viewId" element={<ViewResourcePage />} />
-          <Route path="bank/views/public/:token" element={<PublicViewPage />} />
           <Route path="bank/customers" element={<BankCustomersPage />} />
           <Route path="bank/cards" element={<BankCardsPage />} />
           <Route path="bank/products" element={<BankProductsPage />} />

@@ -54,8 +54,11 @@ import {
 
 // ─── Status filter options ────────────────────────────────────────────────────
 
-const STATUS_OPTIONS: { label: string; value: TxnRequestStatus | "" }[] = [
-  { label: "All statuses", value: "" },
+// Radix <SelectItem> forbids an empty-string value, so "all" is used as the
+// sentinel for the no-filter option and mapped back to "" in state.
+const ALL_STATUSES = "all";
+const STATUS_OPTIONS: { label: string; value: TxnRequestStatus | typeof ALL_STATUSES }[] = [
+  { label: "All statuses", value: ALL_STATUSES },
   { label: "Initiated", value: "INITIATED" },
   { label: "Pending SCA", value: "PENDING" },
   { label: "Processing", value: "IN_FLIGHT" },
@@ -140,7 +143,7 @@ export default function TransfersPage() {
   });
 
   function handleStatusChange(val: string) {
-    setStatusFilter(val as TxnRequestStatus | "");
+    setStatusFilter(val === ALL_STATUSES ? "" : (val as TxnRequestStatus));
     setCursor(undefined);
     setAllItems([]);
     setNextCursor(null);
@@ -225,7 +228,7 @@ export default function TransfersPage() {
 
       {/* Status filter */}
       <div className="flex items-center gap-3">
-        <Select value={statusFilter} onValueChange={handleStatusChange}>
+        <Select value={statusFilter || ALL_STATUSES} onValueChange={handleStatusChange}>
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>

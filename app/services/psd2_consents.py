@@ -299,16 +299,29 @@ def expire_due_consents() -> int:
     return count
 
 
-async def start_consent_expiry_task() -> None:
-    """Startup loop: expire due consents every poll interval."""
-    if not (getattr(S, "open_bank_project_enabled", False) and S.psd2_consents_enabled):
-        return
+async def _consent_expiry_loop() -> None:
+    """Background loop: expire due consents every poll interval."""
     while True:
         try:
             expire_due_consents()
         except Exception:
             pass
         await asyncio.sleep(S.psd2_consent_expiry_poll_interval)
+
+
+def start_consent_expiry_task() -> None:
+    """FastAPI startup hook: launch the consent-expiry loop as a background task.
+
+    Must be a *sync* function that schedules the loop (not an ``async def`` that
+    runs the loop inline) — otherwise Starlette awaits the never-returning loop
+    during application startup and the app never finishes starting.
+    """
+    if not (getattr(S, "open_bank_project_enabled", False) and S.psd2_consents_enabled):
+        return
+    try:
+        asyncio.get_event_loop().create_task(_consent_expiry_loop())
+    except RuntimeError:
+        asyncio.ensure_future(_consent_expiry_loop())
 
 
 # ---------------------------------------------------------------------------

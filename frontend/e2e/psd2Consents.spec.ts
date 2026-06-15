@@ -62,8 +62,20 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
   const sessions = getAdminSessions();
+  const session = sessions[identity];
   const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
+  await page.context().addCookies(session.cookies);
+  // The React app gates routes on the persisted `auth-store` localStorage. Seed
+  // it via addInitScript so it is present BEFORE the app first hydrates the
+  // zustand store — otherwise client-side navigations (e.g. after a form submit)
+  // read a stale in-memory `isAuthenticated: false` and redirect to /login.
+  await page.addInitScript(
+    ([userId, accessToken]: [string, string]) => {
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    [session.user_sub, session.access_token],
+  );
   return page;
 }
 
@@ -361,6 +373,7 @@ test.describe("Section 824: ConsentsPage UI — smoke", () => {
 
   test.beforeAll(async ({ browser }) => {
     page = await newIdentityPage(browser, ALICE_ID);
+    featureEnabled = await isFeatureEnabled(page);
   });
 
   test.afterAll(async () => {
@@ -369,7 +382,7 @@ test.describe("Section 824: ConsentsPage UI — smoke", () => {
 
   test("824.1 /bank/consents renders without crashing", async () => {
     await page.goto(`${BASE}/bank/consents`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Either the consent list or the feature-disabled message should appear
     const header = page.getByText("PSD2 Consents");
@@ -379,7 +392,7 @@ test.describe("Section 824: ConsentsPage UI — smoke", () => {
   test("824.2 feature-disabled banner shown when flag is off", async () => {
     if (featureEnabled) { test.skip(); return; }
     await page.goto(`${BASE}/bank/consents`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const disabled = page.getByText("PSD2 Consents not enabled");
     await expect(disabled).toBeVisible({ timeout: 6000 });
   });
@@ -387,14 +400,14 @@ test.describe("Section 824: ConsentsPage UI — smoke", () => {
   test("824.3 consent list visible when flag is on", async () => {
     if (!featureEnabled) { test.skip(); return; }
     await page.goto(`${BASE}/bank/consents`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const granted = page.getByText("Granted consents");
     await expect(granted).toBeVisible({ timeout: 6000 });
   });
 
   test("824.4 status filter dropdown present", async () => {
     await page.goto(`${BASE}/bank/consents`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const filter = page.getByTestId("status-filter");
     // Filter may not exist if feature disabled — check gracefully
     if (await filter.isVisible()) {
@@ -405,7 +418,7 @@ test.describe("Section 824: ConsentsPage UI — smoke", () => {
   test("824.5 New consent button links to /bank/consents/new", async () => {
     if (!featureEnabled) { test.skip(); return; }
     await page.goto(`${BASE}/bank/consents`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const btn = page.getByTestId("create-consent-btn");
     await expect(btn).toBeVisible({ timeout: 6000 });
     await btn.click();
@@ -420,6 +433,7 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
 
   test.beforeAll(async ({ browser }) => {
     page = await newIdentityPage(browser, ALICE_ID);
+    featureEnabled = await isFeatureEnabled(page);
   });
 
   test.afterAll(async () => {
@@ -428,14 +442,14 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
 
   test("825.1 /bank/consents/new renders form", async () => {
     await page.goto(`${BASE}/bank/consents/new`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const header = page.getByText("New consent");
     await expect(header).toBeVisible({ timeout: 8000 });
   });
 
   test("825.2 consumer-ref input is present", async () => {
     await page.goto(`${BASE}/bank/consents/new`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const input = page.getByTestId("consumer-ref-input");
     if (await input.isVisible()) {
       await expect(input).toBeVisible();
@@ -444,7 +458,7 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
 
   test("825.3 AIS → PIS type toggle shows payment-ref field", async () => {
     await page.goto(`${BASE}/bank/consents/new`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const typeSelect = page.getByTestId("consent-type-select");
     if (!await typeSelect.isVisible()) { return; }
 
@@ -460,7 +474,7 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
 
   test("825.4 submit button is disabled when form is empty", async () => {
     await page.goto(`${BASE}/bank/consents/new`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     const btn = page.getByTestId("create-consent-submit");
     if (await btn.isVisible()) {
       await expect(btn).toBeDisabled();
@@ -470,7 +484,7 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
   test("825.5 filled form enables submit button", async () => {
     if (!featureEnabled) { test.skip(); return; }
     await page.goto(`${BASE}/bank/consents/new`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.getByTestId("consumer-ref-input").fill(`tpp-ui-${TS}`);
     await page.getByTestId("account-refs-input").fill(`acc-ui-${TS}`);
@@ -482,7 +496,7 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
   test("825.6 successful form submit navigates to consent detail", async () => {
     if (!featureEnabled) { test.skip(); return; }
     await page.goto(`${BASE}/bank/consents/new`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.getByTestId("consumer-ref-input").fill(`tpp-nav-${TS}`);
     await page.getByTestId("account-refs-input").fill(`acc-nav-${TS}`);
@@ -492,7 +506,8 @@ test.describe("Section 825: CreateConsentPage UI — smoke", () => {
 
     // Should navigate to /bank/consents/<id>
     await expect(page).toHaveURL(/\/bank\/consents\/csn_/, { timeout: 8000 });
-    const detail = page.getByText("Consent detail");
+    // Scope to the heading — "Consent detail" is a substring of "Consent details".
+    const detail = page.getByRole("heading", { name: "Consent detail", exact: true });
     await expect(detail).toBeVisible({ timeout: 6000 });
   });
 });

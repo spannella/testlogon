@@ -48,8 +48,11 @@ import { STATUS_BADGE, STATUS_LABEL, typeLabel, fmtDate } from "./consentUtils";
 
 // ─── Status filter options ────────────────────────────────────────────────────
 
-const STATUS_OPTIONS: { label: string; value: ConsentStatus | "" }[] = [
-  { label: "All statuses", value: "" },
+// Radix <SelectItem> forbids an empty-string value, so "all" is used as the
+// sentinel for the no-filter option and mapped back to "" in state.
+const ALL_STATUSES = "all";
+const STATUS_OPTIONS: { label: string; value: ConsentStatus | typeof ALL_STATUSES }[] = [
+  { label: "All statuses", value: ALL_STATUSES },
   { label: "Initiated", value: "INITIATED" },
   { label: "Accepted", value: "ACCEPTED" },
   { label: "Revoked", value: "REVOKED" },
@@ -161,9 +164,9 @@ export default function ConsentsPage() {
           {/* Toolbar */}
           <div className="flex flex-wrap items-center gap-3">
             <Select
-              value={statusFilter}
+              value={statusFilter || ALL_STATUSES}
               onValueChange={(v) => {
-                setStatusFilter(v as ConsentStatus | "");
+                setStatusFilter(v === ALL_STATUSES ? "" : (v as ConsentStatus));
                 setCursor(undefined);
               }}
             >

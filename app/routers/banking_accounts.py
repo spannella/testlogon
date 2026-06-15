@@ -366,11 +366,14 @@ async def add_holder_endpoint(
     return {"account": AccountOut(**acc)}
 
 
-@router.delete("/accounts/{account_id}/holders/{user_sub}")
+# NOTE: the path param is named ``holder_sub`` (not ``user_sub``) deliberately —
+# ``require_ui_session`` declares a ``user_sub`` parameter, and a same-named path
+# param would shadow it and break session resolution ("Unknown session").
+@router.delete("/accounts/{account_id}/holders/{holder_sub}")
 async def remove_holder_endpoint(
     account_id: str,
-    user_sub: str,
+    holder_sub: str,
     session: Dict = Depends(require_ui_session),
 ):
-    acc = svc.remove_account_owner(account_id, session["user_sub"], user_sub)
+    acc = svc.remove_account_owner(account_id, session["user_sub"], holder_sub)
     return {"account": AccountOut(**acc)}

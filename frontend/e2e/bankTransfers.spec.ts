@@ -62,8 +62,20 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
   const sessions = getAdminSessions();
+  const session = sessions[identity];
   const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
+  await page.context().addCookies(session.cookies);
+  // The React app gates routes on the persisted `auth-store` localStorage. Seed
+  // it via addInitScript so it is present BEFORE the app first hydrates the
+  // zustand store — otherwise client-side navigations (e.g. after a form submit)
+  // read a stale in-memory `isAuthenticated: false` and redirect to /login.
+  await page.addInitScript(
+    ([userId, accessToken]: [string, string]) => {
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    [session.user_sub, session.access_token],
+  );
   return page;
 }
 
@@ -464,7 +476,9 @@ test.describe("Section 814: TransfersPage UI — smoke tests", () => {
     await expect(alicePage.locator("text=Completed").first()).toBeVisible({ timeout: 4000 });
     // Select Completed
     await alicePage.locator("text=Completed").first().click();
-    // URL or UI should reflect filter
-    await expect(alicePage.locator("text=Completed, text=transfers, text=All").first()).toBeVisible({ timeout: 4000 });
+    // The select trigger should now reflect the chosen filter.
+    await expect(
+      alicePage.locator("[role=combobox]").first()
+    ).toContainText("Completed", { timeout: 4000 });
   });
 });

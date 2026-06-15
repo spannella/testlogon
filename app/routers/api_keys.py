@@ -84,7 +84,7 @@ async def ui_set_api_key_self_limits(req: Request, body: ApiKeySelfLimitsReq, ct
         monthly_calls_cap=body.monthly_calls_cap,
         monthly_spend_cap_micros=body.monthly_spend_cap_micros,
         route_caps={route_id: cap.model_dump() for route_id, cap in body.route_caps.items()},
-        rate_limit_overrides=body.rate_limit_overrides.model_dump() if body.rate_limit_overrides else None,
+        rate_limit_overrides=body.rate_limit_overrides,
     )
     audit_event(
         "api_key_self_limits_set",

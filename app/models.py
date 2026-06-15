@@ -356,6 +356,9 @@ class ApiKeySelfLimitsReq(BaseModel):
     monthly_calls_cap: int = Field(default=0, ge=0)
     monthly_spend_cap_micros: int = Field(default=0, ge=0)
     route_caps: Dict[str, ApiKeyRouteCapReq] = Field(default_factory=dict)
+    # PLT-001: optional per-window rate-limit overrides
+    # (e.g. {"hour": 500, "day": 5000}; null values clear a window).
+    rate_limit_overrides: Optional[Dict[str, Any]] = None
 
     @field_validator("route_caps")
     @classmethod

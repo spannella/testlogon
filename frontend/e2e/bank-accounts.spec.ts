@@ -700,10 +700,10 @@ test.describe("Section 108 — Bank Account detail UI", () => {
       return;
     }
     await alicePage.goto(`${BASE}/bank/accounts/${defaultAccountId}`);
+    // The back-nav link lives inside the main content area (the sidebar also has
+    // a /bank/accounts nav link, so scope to #main-content to avoid strict-mode).
     await expect(
-      alicePage.getByRole("link", { name: /bank accounts/i }).or(
-        alicePage.locator("a[href='/bank/accounts']")
-      )
+      alicePage.locator("#main-content a[href='/bank/accounts']").first()
     ).toBeVisible({ timeout: 10_000 });
   });
 
@@ -742,7 +742,7 @@ test.describe("Section 108 — Bank Account detail UI", () => {
       return;
     }
     await alicePage.goto(`${BASE}/bank/accounts/${defaultAccountId}`);
-    const backLink = alicePage.locator("a[href='/bank/accounts']").first();
+    const backLink = alicePage.locator("#main-content a[href='/bank/accounts']").first();
     if (await backLink.isVisible()) {
       await backLink.click();
       await expect(alicePage).toHaveURL(/\/bank\/accounts$/, { timeout: 5000 });
