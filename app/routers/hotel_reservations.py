@@ -33,7 +33,7 @@ from app.auth.policy import require_admin_or_root_csrf
 from app.models import (
     ReservationCreateIn,
     ReservationModifyIn,
-    ReservationTransitionIn,
+    ReservationActionIn,
     StayReservationOut,
     StaySearchIn,
     StaySearchResult,
@@ -177,7 +177,7 @@ async def confirm_reservation(
 async def check_in_reservation(
     hotel_id: str,
     reservation_id: str,
-    body: ReservationTransitionIn,
+    body: ReservationActionIn,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> StayReservationOut:
     _require_enabled()
@@ -205,7 +205,7 @@ async def check_in_reservation(
 async def check_out_reservation(
     hotel_id: str,
     reservation_id: str,
-    body: Optional[ReservationTransitionIn] = None,
+    body: Optional[ReservationActionIn] = None,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> StayReservationOut:
     _require_enabled()
@@ -232,7 +232,7 @@ async def check_out_reservation(
 async def cancel_reservation(
     hotel_id: str,
     reservation_id: str,
-    body: Optional[ReservationTransitionIn] = None,
+    body: Optional[ReservationActionIn] = None,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> StayReservationOut:
     _require_enabled()
@@ -268,7 +268,7 @@ async def cancel_reservation(
 async def no_show_reservation(
     hotel_id: str,
     reservation_id: str,
-    body: Optional[ReservationTransitionIn] = None,
+    body: Optional[ReservationActionIn] = None,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> StayReservationOut:
     _require_enabled()

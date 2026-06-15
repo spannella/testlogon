@@ -68,6 +68,25 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
 async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getAdminSessions()[identity];
   await page.context().addCookies(session.cookies);
+  // Seed the persisted Zustand auth-store so ProtectedRoute treats the
+  // session as authenticated (cookies alone don't satisfy the client guard).
+  await page.addInitScript(
+    ([userId, accessToken]) => {
+      localStorage.setItem(
+        "auth-store",
+        JSON.stringify({
+          state: {
+            userId,
+            accessToken,
+            isAuthenticated: true,
+            logoutReason: null,
+          },
+          version: 0,
+        }),
+      );
+    },
+    [session.user_sub, session.access_token] as const,
+  );
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -315,9 +334,10 @@ test.describe("72 — Room Types API", () => {
       bed_type: "king",
       size_sqft: 400,
       base_nightly_rate_cents: 15000,
-    })) as { room_type_id: string; name: string; bed_type: string };
+    })) as { room_type_id: string; name: string; bed_type: string; base_nightly_rate_cents: number };
     expect(data.bed_type).toBe("king");
-    expect(data.base_nightly_rate_cents).toBeUndefined();
+    // base_nightly_rate_cents is a first-class field on the room type (RoomTypeOut)
+    expect(Number(data.base_nightly_rate_cents)).toBe(15000);
     roomTypeId = data.room_type_id;
   });
 
@@ -604,7 +624,7 @@ test.describe("76 — Hotels List UI", () => {
 
   test("76.1 hotels list page renders", async () => {
     await page.goto(`${BASE}/hotels/setup`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Either shows hotel list or feature-disabled state
     const heading = page.getByRole("heading", { name: /Hotels/i }).first();
@@ -617,14 +637,14 @@ test.describe("76 — Hotels List UI", () => {
       test.skip(true, "Hotel PMS is enabled — skip disabled-state check");
     }
     await page.goto(`${BASE}/hotels/setup`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     await expect(page.getByText(/not enabled/i)).toBeVisible({ timeout: 10_000 });
   });
 
   test("76.3 add hotel button visible when PMS enabled", async () => {
     test.skip(!(await hotelPmsEnabled(page)), "HOTEL_PMS_ENABLED is off");
     await page.goto(`${BASE}/hotels/setup`);
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     await expect(page.getByRole("button", { name: /add hotel/i })).toBeVisible();
   });
 });
@@ -655,7 +675,7 @@ test.describe("77 — Room Types UI", () => {
   test("77.1 room types page renders", async () => {
     test.skip(!(await hotelPmsEnabled(rootPage)) || !hotelId, "HOTEL_PMS_ENABLED is off");
     await rootPage.goto(`${BASE}/hotels/${hotelId}/room-types`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     await expect(
       rootPage.getByRole("heading", { name: /room types/i }).first(),
     ).toBeVisible({ timeout: 10_000 });
@@ -664,7 +684,7 @@ test.describe("77 — Room Types UI", () => {
   test("77.2 add room type button visible", async () => {
     test.skip(!(await hotelPmsEnabled(rootPage)) || !hotelId, "HOTEL_PMS_ENABLED is off");
     await rootPage.goto(`${BASE}/hotels/${hotelId}/room-types`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     await expect(
       rootPage.getByRole("button", { name: /add room type/i }),
     ).toBeVisible({ timeout: 10_000 });
@@ -697,7 +717,7 @@ test.describe("78 — Housekeeping Board UI", () => {
   test("78.1 housekeeping board page renders", async () => {
     test.skip(!(await hotelPmsEnabled(rootPage)) || !hotelId, "HOTEL_PMS_ENABLED is off");
     await rootPage.goto(`${BASE}/hotels/${hotelId}/housekeeping`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     await expect(
       rootPage.getByRole("heading", { name: /housekeeping board/i }).first(),
     ).toBeVisible({ timeout: 10_000 });
@@ -706,7 +726,7 @@ test.describe("78 — Housekeeping Board UI", () => {
   test("78.2 new task button visible", async () => {
     test.skip(!(await hotelPmsEnabled(rootPage)) || !hotelId, "HOTEL_PMS_ENABLED is off");
     await rootPage.goto(`${BASE}/hotels/${hotelId}/housekeeping`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     await expect(
       rootPage.getByRole("button", { name: /new task/i }),
     ).toBeVisible({ timeout: 10_000 });
@@ -715,15 +735,17 @@ test.describe("78 — Housekeeping Board UI", () => {
   test("78.3 room HK summary cards visible when rooms exist", async () => {
     test.skip(!(await hotelPmsEnabled(rootPage)) || !hotelId, "HOTEL_PMS_ENABLED is off");
     await rootPage.goto(`${BASE}/hotels/${hotelId}/housekeeping`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
     // The HK summary cards show "clean", "dirty", etc.
     // They only render when there are rooms; skip assertion if no rooms.
     const cleanCard = rootPage.getByText("clean", { exact: true }).first();
     // Don't fail if rooms don't exist yet in this test run
-    const visible = await cleanCard.isVisible().catch(() => false);
-    // This is informational — the board itself should have rendered
-    expect(
-      await rootPage.getByRole("button", { name: /new task/i }).isVisible(),
-    ).toBe(true);
+    await cleanCard.isVisible().catch(() => false);
+    // This is informational — the board itself should have rendered.
+    // A "New Task" button may appear in both the header and the empty-state,
+    // so scope to the first match to avoid a strict-mode violation.
+    await expect(
+      rootPage.getByRole("button", { name: /new task/i }).first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 });

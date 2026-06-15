@@ -65,7 +65,7 @@ const CATEGORY_COLOR: Record<string, string> = {
 export default function AmenitiesPage() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
-  const [categoryFilter, setCategoryFilter] = useState<"" | AmenityCategory>("");
+  const [categoryFilter, setCategoryFilter] = useState<"all" | AmenityCategory>("all");
   const [form, setForm] = useState<AmenityIn>({
     name: "",
     category: "general",
@@ -74,7 +74,7 @@ export default function AmenitiesPage() {
 
   const amenitiesQuery = useQuery({
     queryKey: ["hotels", "amenities-dict", categoryFilter],
-    queryFn: () => listAmenities(categoryFilter || undefined),
+    queryFn: () => listAmenities(categoryFilter === "all" ? undefined : categoryFilter),
     retry: (count, err) => {
       if (err instanceof ApiError && (err.status === 404 || err.status === 503)) return false;
       return count < 2;
@@ -124,13 +124,13 @@ export default function AmenitiesPage() {
           <div className="flex items-center gap-2">
             <Select
               value={categoryFilter}
-              onValueChange={(v) => setCategoryFilter(v as "" | AmenityCategory)}
+              onValueChange={(v) => setCategoryFilter(v as "all" | AmenityCategory)}
             >
               <SelectTrigger className="w-40">
                 <SelectValue placeholder="All categories" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All categories</SelectItem>
+                <SelectItem value="all">All categories</SelectItem>
                 {CATEGORIES.map((c) => (
                   <SelectItem key={c} value={c} className="capitalize">
                     {c}

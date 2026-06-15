@@ -56,15 +56,33 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
-  const sessions = getAdminSessions();
   const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
+  await injectAuth(page, identity);
   return page;
 }
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getAdminSessions()[identity];
   await page.context().addCookies(session.cookies);
+  // Seed the persisted Zustand auth-store so ProtectedRoute treats the
+  // session as authenticated (cookies alone don't satisfy the client guard).
+  await page.addInitScript(
+    ([userId, accessToken]) => {
+      localStorage.setItem(
+        "auth-store",
+        JSON.stringify({
+          state: {
+            userId,
+            accessToken,
+            isAuthenticated: true,
+            logoutReason: null,
+          },
+          version: 0,
+        }),
+      );
+    },
+    [session.user_sub, session.access_token] as const,
+  );
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -520,18 +538,16 @@ test.describe("89 — Booking Page UI", () => {
 
   test("89.1 booking page renders or shows disabled state", async () => {
     await rootPage.goto(`${BASE}/hotels/book`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
-    const hasTitle = await rootPage
-      .getByRole("heading", { name: /hotel booking/i })
-      .isVisible()
-      .catch(() => false);
-    const hasDisabled = await rootPage
-      .getByText(/not enabled/i)
-      .isVisible()
-      .catch(() => false);
-
-    expect(hasTitle || hasDisabled).toBe(true);
+    // The page is lazy-loaded; wait for either the title or the disabled state
+    // to render rather than probing with a non-waiting isVisible().
+    await expect(
+      rootPage
+        .getByRole("heading", { name: /hotel booking/i })
+        .or(rootPage.getByText(/not enabled/i))
+        .first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("89.2 booking page shows search form when feature enabled", async () => {
@@ -539,7 +555,7 @@ test.describe("89 — Booking Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/book`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     await expect(
       rootPage.getByRole("heading", { name: /hotel booking/i }),
@@ -552,7 +568,7 @@ test.describe("89 — Booking Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/book`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     await expect(rootPage.getByText(/check-in/i).first()).toBeVisible();
     await expect(rootPage.getByText(/check-out/i).first()).toBeVisible();
@@ -567,7 +583,7 @@ test.describe("89 — Booking Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/book`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     const cityBtn = rootPage.getByRole("button", { name: /by city/i });
     await cityBtn.click();
@@ -579,13 +595,16 @@ test.describe("89 — Booking Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/book`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     // Click search without selecting a hotel
     await rootPage.getByRole("button", { name: /search availability/i }).click();
-    // Should show a toast or validation message
-    const hasToast = await rootPage.getByText(/select a hotel/i).isVisible().catch(() => false);
-    expect(hasToast).toBe(true);
+    // Should show the validation toast. Match the toast's specific copy
+    // ("Please select a hotel") rather than /select a hotel/i, which would also
+    // match the always-present "Select a hotel…" Select placeholder.
+    await expect(
+      rootPage.getByText(/please select a hotel/i).first(),
+    ).toBeVisible({ timeout: 5_000 });
   });
 });
 
@@ -604,18 +623,15 @@ test.describe("90 — Reservations Page UI", () => {
 
   test("90.1 reservations page renders or shows disabled state", async () => {
     await rootPage.goto(`${BASE}/hotels/reservations`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
-    const hasTitle = await rootPage
-      .getByRole("heading", { name: /reservations/i })
-      .isVisible()
-      .catch(() => false);
-    const hasDisabled = await rootPage
-      .getByText(/not enabled/i)
-      .isVisible()
-      .catch(() => false);
-
-    expect(hasTitle || hasDisabled).toBe(true);
+    // Lazy-loaded page: wait for either the title or the disabled state.
+    await expect(
+      rootPage
+        .getByRole("heading", { name: /reservations/i })
+        .or(rootPage.getByText(/not enabled/i))
+        .first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("90.2 reservations page shows hotel picker when enabled", async () => {
@@ -623,7 +639,7 @@ test.describe("90 — Reservations Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/reservations`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     await expect(rootPage.getByText(/select a hotel/i)).toBeVisible();
   });
@@ -633,7 +649,7 @@ test.describe("90 — Reservations Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/reservations`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     await expect(rootPage.getByText(/status/i).first()).toBeVisible();
     await expect(rootPage.getByText(/check-in from/i)).toBeVisible();
@@ -644,7 +660,7 @@ test.describe("90 — Reservations Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/reservations`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     const newBookingLink = rootPage.getByRole("link", { name: /new booking/i });
     await expect(newBookingLink).toBeVisible();
@@ -656,17 +672,15 @@ test.describe("90 — Reservations Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/reservations/htl_bad/res_bad`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
-    const hasNotFound = await rootPage
-      .getByText(/not found/i)
-      .isVisible()
-      .catch(() => false);
-    const hasFailed = await rootPage
-      .getByText(/failed to load/i)
-      .isVisible()
-      .catch(() => false);
-    expect(hasNotFound || hasFailed).toBe(true);
+    // Lazy-loaded page + async query: wait for the error/not-found state.
+    await expect(
+      rootPage
+        .getByText(/not found/i)
+        .or(rootPage.getByText(/failed to load/i))
+        .first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("90.6 booking page link navigates correctly", async () => {
@@ -674,7 +688,7 @@ test.describe("90 — Reservations Page UI", () => {
     test.skip(!enabled, "HOTEL_PMS_ENABLED is off");
 
     await rootPage.goto(`${BASE}/hotels/reservations`);
-    await rootPage.waitForLoadState("networkidle");
+    await rootPage.waitForLoadState("domcontentloaded");
 
     await rootPage.getByRole("link", { name: /new booking/i }).first().click();
     await rootPage.waitForURL(/hotels\/book/);

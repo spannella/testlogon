@@ -70,15 +70,33 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
-  const sessions = getAdminSessions();
   const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
+  await injectAuth(page, identity);
   return page;
 }
 
 async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getAdminSessions()[identity];
   await page.context().addCookies(session.cookies);
+  // Seed the persisted Zustand auth-store so ProtectedRoute treats the
+  // session as authenticated (cookies alone don't satisfy the client guard).
+  await page.addInitScript(
+    ([userId, accessToken]) => {
+      localStorage.setItem(
+        "auth-store",
+        JSON.stringify({
+          state: {
+            userId,
+            accessToken,
+            isAuthenticated: true,
+            logoutReason: null,
+          },
+          version: 0,
+        }),
+      );
+    },
+    [session.user_sub, session.access_token] as const,
+  );
 }
 
 function csrfHeader(identity: string): Record<string, string> {
@@ -455,11 +473,13 @@ test.describe("Section 75: Front-Desk Dashboard UI", () => {
   test("75.2 page shows 'Front Desk' heading or 'not enabled' message", async () => {
     await rootPage.goto(`${BASE}/hotels/front-desk`);
     await rootPage.waitForLoadState("domcontentloaded");
-    const frontDeskHeading = rootPage.getByRole("heading", { name: /front desk/i });
-    const notEnabled = rootPage.getByText(/hotel pms not enabled/i);
-    const eitherVisible =
-      (await frontDeskHeading.isVisible()) || (await notEnabled.isVisible());
-    expect(eitherVisible).toBe(true);
+    // Lazy-loaded page: wait for either the heading or the disabled message.
+    await expect(
+      rootPage
+        .getByRole("heading", { name: /front desk/i })
+        .or(rootPage.getByText(/hotel pms not enabled/i))
+        .first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("75.3 Walk-in button is visible for admin users", async () => {

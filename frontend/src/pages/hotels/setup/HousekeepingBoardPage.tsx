@@ -65,7 +65,7 @@ export default function HousekeepingBoardPage() {
   const qc = useQueryClient();
 
   const [showCreate, setShowCreate] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<"" | TaskStatus>("");
+  const [statusFilter, setStatusFilter] = useState<"all" | TaskStatus>("all");
   const [form, setForm] = useState<HkTaskIn>({
     room_id: "",
     assignee_sub: "",
@@ -87,7 +87,7 @@ export default function HousekeepingBoardPage() {
   const tasksQuery = useQuery({
     queryKey: ["hotels", hotelId, "hk-tasks", statusFilter],
     queryFn: () =>
-      listHkTasks(hotelId!, { status: statusFilter || undefined }),
+      listHkTasks(hotelId!, { status: statusFilter === "all" ? undefined : statusFilter }),
     enabled: !!hotelId,
     retry: (count, err) => {
       if (err instanceof ApiError && (err.status === 404 || err.status === 503)) return false;
@@ -185,13 +185,13 @@ export default function HousekeepingBoardPage() {
             </Button>
             <Select
               value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as "" | TaskStatus)}
+              onValueChange={(v) => setStatusFilter(v as "all" | TaskStatus)}
             >
               <SelectTrigger className="w-36">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All statuses</SelectItem>
+                <SelectItem value="all">All statuses</SelectItem>
                 <SelectItem value="open">Open</SelectItem>
                 <SelectItem value="in_progress">In Progress</SelectItem>
                 <SelectItem value="done">Done</SelectItem>

@@ -51,7 +51,7 @@ const emptyAddress = (): HotelAddress => ({
 export default function HotelsListPage() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<"" | "active" | "archived">("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "archived">("all");
 
   // ── form state ───────────────────────────────────────────────────
   const [form, setForm] = useState<HotelIn>({
@@ -69,7 +69,7 @@ export default function HotelsListPage() {
   // ── queries ───────────────────────────────────────────────────────
   const hotelsQuery = useQuery({
     queryKey: ["hotels", "list", statusFilter],
-    queryFn: () => listHotels({ status: statusFilter || undefined }),
+    queryFn: () => listHotels({ status: statusFilter === "all" ? undefined : statusFilter }),
     retry: (count, err) => {
       if (err instanceof ApiError && (err.status === 404 || err.status === 503)) return false;
       return count < 2;
@@ -115,13 +115,13 @@ export default function HotelsListPage() {
           <div className="flex items-center gap-2">
             <Select
               value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as "" | "active" | "archived")}
+              onValueChange={(v) => setStatusFilter(v as "all" | "active" | "archived")}
             >
               <SelectTrigger className="w-36">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All statuses</SelectItem>
+                <SelectItem value="all">All statuses</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="archived">Archived</SelectItem>
               </SelectContent>

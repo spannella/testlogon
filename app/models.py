@@ -18150,14 +18150,6 @@ class SkillSearchResultsOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class NightLineOut(BaseModel):
-    """Per-night price line from HTL-015 compute_stay_price (reusable shape)."""
-    date: str
-    base_cents: int = 0
-    applied_cents: int = 0
-    rule_id: Optional[str] = None
-
-
 class StaySearchIn(BaseModel):
     """HTL-017 stay-search request payload."""
     hotel_id: Optional[str] = None   # one of hotel_id | city required (else 422)
@@ -18243,6 +18235,15 @@ class ReservationTransitionIn(BaseModel):
     target_status: Literal["checked_in", "checked_out", "cancelled", "no_show"]
     reason: str = ""
     assigned_room_ids: Optional[List[str]] = None   # required by the service on → checked_in
+
+
+class ReservationActionIn(BaseModel):
+    """HTL-019 — body for the dedicated literal lifecycle endpoints
+    (check-in / check-out / cancel / no-show). The target status is implied by
+    the route, so ``target_status`` is NOT required here — only the optional
+    ``reason`` and (for check-in) ``assigned_room_ids``."""
+    reason: str = ""
+    assigned_room_ids: Optional[List[str]] = None
 
 
 class ReservationModifyIn(BaseModel):
@@ -20563,6 +20564,8 @@ class FolioOut(BaseModel):
     payments_total_cents: int
     deposit_held_cents: int = 0
     deposit_policy_kind: Literal["none", "pct", "fixed"] = "none"
+    deposit_pct_bps: int = 0                  # set when deposit_policy_kind == "pct"
+    deposit_fixed_cents: int = 0             # set when deposit_policy_kind == "fixed"
     balance_due_cents: int                   # computed: charges - payments
     balance_due_on_arrival_cents: int = 0    # HTL-031: charges - payments - deposit_held
     line_items: List[FolioLineOut]

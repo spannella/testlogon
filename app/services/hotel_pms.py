@@ -232,6 +232,37 @@ def list_hotels(
     return {"items": items, "count": len(items), "cursor": next_cursor}
 
 
+def list_hotels_by_city(city: str, *, status: str = "active") -> dict:
+    """List active hotels in a city (case-insensitive ``address.city`` match).
+
+    There is no city GSI on the hotels table, so this scans the META rows and
+    filters in Python. Hotels are low-cardinality, so a scan is acceptable here
+    and is the storage-layer support for the stay-search ``city`` branch.
+    Returns the standard ``{items, count, cursor}`` shape.
+    """
+    _require_enabled()
+    target = (city or "").strip().lower()
+    items: list[dict] = []
+    scan_kwargs: dict = {
+        "FilterExpression": "sk = :meta",
+        "ExpressionAttributeValues": {":meta": "META"},
+    }
+    while True:
+        resp = T.hotels.scan(**scan_kwargs)
+        for raw in resp.get("Items", []):
+            h = _coerce_hotel(raw)
+            if status and h.get("status") != status:
+                continue
+            addr = h.get("address") or {}
+            if (addr.get("city") or "").strip().lower() == target:
+                items.append(h)
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        scan_kwargs["ExclusiveStartKey"] = lek
+    return {"items": items, "count": len(items), "cursor": None}
+
+
 # ---------------------------------------------------------------------------
 # Amenity helpers (HTL-002)
 # ---------------------------------------------------------------------------
@@ -320,7 +351,8 @@ def attach_amenity(
     _require_enabled()
     # Validate amenity exists
     a_resp = T.hotel_amenities.get_item(Key={"amenity_id": amenity_id, "sk": "META"})
-    if not a_resp.get("Item"):
+    amenity = a_resp.get("Item")
+    if not amenity:
         raise HTTPException(status_code=404, detail="amenity not found")
     # Validate target exists
     table, pk_attr, pk_val = _target_partition(target_type, target_id)
@@ -336,6 +368,16 @@ def attach_amenity(
         "target_type": target_type,
         "created_at": ts,
     }
+
+    def _decorate(item: dict) -> dict:
+        # Enrich the association row with amenity dictionary fields so the
+        # response model (name/category/icon) can be populated.
+        item["name"] = amenity.get("name", "")
+        item["category"] = amenity.get("category", "")
+        item["icon"] = amenity.get("icon")
+        item["created_at"] = _to_int(item.get("created_at", ts))
+        return item
+
     try:
         table.put_item(
             Item=assoc,
@@ -348,8 +390,7 @@ def attach_amenity(
                 Key={pk_attr: pk_val, "sk": f"AMEN#{amenity_id}"}
             )
             existing = existing_resp.get("Item", assoc)
-            existing["created_at"] = _to_int(existing.get("created_at", ts))
-            return existing
+            return _decorate(existing)
         raise
     _audit(
         "hotel.amenity.attached",
@@ -358,8 +399,7 @@ def attach_amenity(
         target_type=target_type,
         target_id=target_id,
     )
-    assoc["created_at"] = _to_int(assoc["created_at"])
-    return assoc
+    return _decorate(assoc)
 
 
 def detach_amenity(

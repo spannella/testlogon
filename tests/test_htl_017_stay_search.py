@@ -45,6 +45,7 @@ def _install_module_stubs():
     )
     pms_stub = SimpleNamespace(
         list_hotels=MagicMock(return_value={"hotels": [], "count": 0, "cursor": None}),
+        list_hotels_by_city=MagicMock(return_value={"items": [], "count": 0, "cursor": None}),
         list_room_types=MagicMock(return_value={"room_types": [], "count": 0, "cursor": None}),
         set_room_status=MagicMock(),
     )
@@ -113,6 +114,7 @@ def setup(monkeypatch):
     )
     fake_pms = SimpleNamespace(
         list_hotels=MagicMock(return_value={"hotels": [], "count": 0, "cursor": None}),
+        list_hotels_by_city=MagicMock(return_value={"items": [], "count": 0, "cursor": None}),
         list_room_types=MagicMock(return_value={"room_types": [], "count": 0, "cursor": None}),
         set_room_status=MagicMock(),
     )
@@ -340,6 +342,10 @@ def test_city_branch_resolves_hotels_then_room_types(setup):
         "hotels": [{"hotel_id": "h_paris_1"}, {"hotel_id": "h_paris_2"}],
         "count": 2,
         "cursor": None,
+    }
+    fake_pms.list_hotels_by_city.return_value = {
+        "items": [{"hotel_id": "h_paris_1"}, {"hotel_id": "h_paris_2"}],
+        "count": 2, "cursor": None,
     }
     fake_pms.list_room_types.return_value = {
         "room_types": [_rt("rt_a")], "count": 1, "cursor": None

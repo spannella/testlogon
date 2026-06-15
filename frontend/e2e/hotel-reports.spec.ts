@@ -55,9 +55,28 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
-  const sessions = getAdminSessions();
+  const session = getAdminSessions()[identity];
   const page = await browser.newPage();
-  await page.context().addCookies(sessions[identity].cookies);
+  await page.context().addCookies(session.cookies);
+  // Seed the persisted Zustand auth-store so ProtectedRoute treats the
+  // session as authenticated (cookies alone don't satisfy the client guard).
+  await page.addInitScript(
+    ([userId, accessToken]) => {
+      localStorage.setItem(
+        "auth-store",
+        JSON.stringify({
+          state: {
+            userId,
+            accessToken,
+            isAuthenticated: true,
+            logoutReason: null,
+          },
+          version: 0,
+        }),
+      );
+    },
+    [session.user_sub, session.access_token] as const,
+  );
   return page;
 }
 
@@ -530,11 +549,12 @@ test.describe("94 — KPI Dashboard UI", () => {
     await rootPage.waitForLoadState("domcontentloaded");
     await rootPage.waitForTimeout(2500);
 
-    // KPI card labels
-    await expect(rootPage.getByText("Occupancy")).toBeVisible();
+    // KPI card labels — "Occupancy"/"RevPAR" also appear inside a longer
+    // descriptor string, so match the card label exactly.
+    await expect(rootPage.getByText("Occupancy", { exact: true })).toBeVisible();
     await expect(rootPage.getByText("ADR (Avg Daily Rate)")).toBeVisible();
-    await expect(rootPage.getByText("RevPAR")).toBeVisible();
-    await expect(rootPage.getByText("Room Revenue")).toBeVisible();
+    await expect(rootPage.getByText("RevPAR", { exact: true })).toBeVisible();
+    await expect(rootPage.getByText("Room Revenue", { exact: true })).toBeVisible();
   });
 
   test("94.5 Custom preset reveals date pickers", async () => {

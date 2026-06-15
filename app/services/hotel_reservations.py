@@ -170,8 +170,8 @@ def search_stays(
             candidates.append((hotel_id, rt))
     else:
         # city branch
-        hotels_resp = hotel_pms.list_hotels(city=city)
-        hotels = hotels_resp.get("hotels", []) if isinstance(hotels_resp, dict) else hotels_resp
+        hotels_resp = hotel_pms.list_hotels_by_city(city)
+        hotels = hotels_resp.get("items", []) if isinstance(hotels_resp, dict) else hotels_resp
         for h in hotels:
             hid = h["hotel_id"] if isinstance(h, dict) else h
             room_types = _list_all_room_types(hid)

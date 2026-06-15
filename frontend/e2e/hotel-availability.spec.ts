@@ -65,10 +65,15 @@ function getAdminSessions(): Record<string, AdminSessionData> {
 
 // ─── Page factory ─────────────────────────────────────────────────────────────
 
+// Track which identity each page was created for, so the write helpers can
+// send a CSRF token that matches the page's own session cookies.
+const _pageIdentity = new WeakMap<Page, string>();
+
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
   const sessions = getAdminSessions();
   const page = await browser.newPage();
   await page.context().addCookies(sessions[identity].cookies);
+  _pageIdentity.set(page, identity);
   return page;
 }
 
@@ -88,12 +93,21 @@ async function injectAuth(page: Page, identity: string): Promise<void> {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
-async function apiPost(page: Page, identity: string, path: string, body?: unknown) {
+// The write helpers are called as `apiX(page, path, body)`. The CSRF token must
+// match the session cookies carried by `page`, so we look it up from the
+// identity the page was created for (defaulting to "root").
+function csrfForPage(page: Page): string {
+  const identity = _pageIdentity.get(page) ?? "root";
   const sess = getAdminSessions()[identity];
+  if (!sess) throw new Error(`No session for identity: ${identity}`);
+  return sess.csrf_token;
+}
+
+async function apiPost(page: Page, path: string, body?: unknown) {
   return page.request.post(`${API}/${path}`, {
     data: body ?? {},
     headers: {
-      "x-csrf-token": sess.csrf_token,
+      "x-csrf-token": csrfForPage(page),
       "Content-Type": "application/json",
     },
   });
@@ -103,23 +117,21 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
   return page.request.get(`${API}/${path}`, { params });
 }
 
-async function apiPut(page: Page, identity: string, path: string, body?: unknown) {
-  const sess = getAdminSessions()[identity];
+async function apiPut(page: Page, path: string, body?: unknown) {
   return page.request.put(`${API}/${path}`, {
     data: body ?? {},
     headers: {
-      "x-csrf-token": sess.csrf_token,
+      "x-csrf-token": csrfForPage(page),
       "Content-Type": "application/json",
     },
   });
 }
 
-async function apiDelete(page: Page, identity: string, path: string, params?: Record<string, string>) {
-  const sess = getAdminSessions()[identity];
+async function apiDelete(page: Page, path: string, params?: Record<string, string>) {
   return page.request.delete(`${API}/${path}`, {
     params,
     headers: {
-      "x-csrf-token": sess.csrf_token,
+      "x-csrf-token": csrfForPage(page),
       "Content-Type": "application/json",
     },
   });
@@ -864,8 +876,13 @@ test.describe("Section 85: Rate Plans Manager UI", () => {
   test("85.4 — Clicking 'New Plan' opens the create dialog", async () => {
     await rootPage.goto(`${BASE}/hotels/rate-plans`, { waitUntil: "domcontentloaded" });
     await rootPage.getByRole("button", { name: /new plan/i }).click();
-    await expect(rootPage.getByRole("dialog")).toBeVisible({ timeout: 5000 });
-    await expect(rootPage.getByText(/create rate plan/i)).toBeVisible();
+    const dialog = rootPage.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    // "Create Rate Plan" appears as both the dialog title and the submit button,
+    // so scope the assertion to the dialog's heading.
+    await expect(
+      dialog.getByRole("heading", { name: /create rate plan/i }),
+    ).toBeVisible();
     // Close dialog
     await rootPage.keyboard.press("Escape");
   });

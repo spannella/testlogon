@@ -146,7 +146,7 @@ function InfoCard({ label, value }: { label: string; value: string }) {
 export default function HotelReservationsPage() {
   const qc = useQueryClient();
   const [selectedHotelId, setSelectedHotelId] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<ReservationStatus | "">("");
+  const [statusFilter, setStatusFilter] = useState<ReservationStatus | "all">("all");
   const [checkinFrom, setCheckinFrom] = useState("");
   const [checkinTo, setCheckinTo] = useState("");
   const [cursor, setCursor] = useState<string | undefined>(undefined);
@@ -185,7 +185,7 @@ export default function HotelReservationsPage() {
     ],
     queryFn: () =>
       listReservations(selectedHotelId, {
-        status: (statusFilter as ReservationStatus) || undefined,
+        status: statusFilter === "all" ? undefined : (statusFilter as ReservationStatus),
         checkin_from: checkinFrom || undefined,
         checkin_to: checkinTo || undefined,
         cursor,
@@ -532,7 +532,7 @@ export default function HotelReservationsPage() {
               <Select
                 value={statusFilter}
                 onValueChange={(v) => {
-                  setStatusFilter(v as ReservationStatus | "");
+                  setStatusFilter(v as ReservationStatus | "all");
                   setCursor(undefined);
                 }}
               >
@@ -540,7 +540,7 @@ export default function HotelReservationsPage() {
                   <SelectValue placeholder="All statuses" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All Statuses</SelectItem>
+                  <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="confirmed">Confirmed</SelectItem>
                   <SelectItem value="checked_in">Checked In</SelectItem>
                   <SelectItem value="checked_out">Checked Out</SelectItem>
@@ -581,12 +581,12 @@ export default function HotelReservationsPage() {
                 <CalendarRange className="h-4 w-4 mr-1" /> New Booking
               </Button>
             </Link>
-            {(statusFilter || checkinFrom || checkinTo) && (
+            {(statusFilter !== "all" || checkinFrom || checkinTo) && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  setStatusFilter("");
+                  setStatusFilter("all");
                   setCheckinFrom("");
                   setCheckinTo("");
                   setCursor(undefined);
