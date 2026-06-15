@@ -2526,6 +2526,9 @@ export interface FeedComment {
   deleted?: boolean;
   version?: number;
   tip_total_cents?: number;
+  // Emoji reactions on comments (mirrors post reactions)
+  reactions_counts?: Record<string, number>;
+  my_reactions?: string[];
   // FEED-004: emoji/GIF/sticker comments
   kind?: "text" | "gif" | "sticker";
   gif_url?: string | null;

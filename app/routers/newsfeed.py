@@ -1734,6 +1734,9 @@ class CommentResponse(BaseModel):
     body_version: int = 1
     version: int = 1
     tip_total_cents: int = 0
+    # Emoji reactions on comments (mirrors post reactions).
+    reactions_counts: Dict[str, int] = Field(default_factory=dict)
+    my_reactions: List[str] = Field(default_factory=list)
     # FEED-004: emoji/GIF/sticker comments
     kind: str = "text"
     gif_url: Optional[str] = None
@@ -1932,6 +1935,20 @@ class PostTipRequest(BaseModel):
 
 class ReactionRequest(BaseModel):
     emoji: str = Field(..., min_length=1, max_length=10)
+
+
+# Canonical newsfeed reaction emoji allowlist (mirrors the PostCard reaction bar).
+ALLOWED_REACTION_EMOJIS: Tuple[str, ...] = ("👍", "❤️", "😂", "🔥", "😮")
+
+
+class CommentReactionRequest(BaseModel):
+    emoji: str = Field(..., min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_emoji(self):
+        if self.emoji not in ALLOWED_REACTION_EMOJIS:
+            raise ValueError("emoji not in allowed reaction set")
+        return self
 
 class ContentRenderTelemetryRequest(BaseModel):
     reason: Literal["unsupported_format", "render_exception"]
@@ -2337,9 +2354,10 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     }
 
 
-def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
+def _comment_to_dict(it: Dict[str, Any], viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB comment item to the FeedComment shape expected by the frontend."""
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, _body_version = _resolve_read_body_fields(it)
+    reactions_counts, my_reactions = _reaction_summaries(it.get("reactions") or {}, viewer_id)
     if it.get("deleted"):
         body = None
         body_plain = None
@@ -2364,6 +2382,9 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
         "body_version": _body_version,
         "version": int(it.get("version", 1)),
         "tip_total_cents": int(it.get("tip_total_cents", 0)),
+        # Emoji reactions on comments (additive — legacy items lack these)
+        "reactions_counts": reactions_counts,
+        "my_reactions": my_reactions,
         # FEED-004: emoji/GIF/sticker comments (additive — legacy items lack these)
         "kind": it.get("kind", "text"),
         "gif_url": it.get("gif_url"),
@@ -6091,7 +6112,7 @@ def list_comments(
         ExclusiveStartKey=eks if eks else None,
     )
     items = [
-        _comment_to_dict(it)
+        _comment_to_dict(it, viewer_id=user_id)
         for it in resp.get("Items", [])
         if not it.get("moderation_removed")
     ]
@@ -6148,6 +6169,8 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         body_version=int(updated.get("body_version") or 1),
         version=int(updated.get("version", 1)),
         tip_total_cents=int(updated.get("tip_total_cents", 0)),
+        reactions_counts=_reaction_summaries(updated.get("reactions") or {}, user_id)[0],
+        my_reactions=_reaction_summaries(updated.get("reactions") or {}, user_id)[1],
         kind=updated.get("kind", "text"),
         gif_url=updated.get("gif_url"),
         gif_alt_text=updated.get("gif_alt_text"),
@@ -6259,6 +6282,83 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
         )
 
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0)), "payment_intent": pi}
+
+
+# -----------------------------
+# Emoji reactions on comments (mirrors post reactions)
+# -----------------------------
+def _find_comment_item(post_id: str, comment_id: str) -> Optional[Dict[str, Any]]:
+    """Locate a comment's raw DDB item (its sort key embeds created_at, so we scan
+    the post's comment partition — same pattern as tip_comment/edit_comment)."""
+    q = ddb_query(
+        KeyConditionExpression="pk = :pk",
+        ExpressionAttributeValues={":pk": pk_post_comments(post_id)},
+        ScanIndexForward=False,
+        Limit=500,
+    )
+    for it in q.get("Items", []):
+        if it.get("comment_id") == comment_id:
+            return it
+    return None
+
+
+@router.post("/posts/{post_id}/comments/{comment_id}/reactions")
+def add_comment_reaction(post_id: str, comment_id: str, req: CommentReactionRequest, user_id: UserIdDep):
+    target = _find_comment_item(post_id, comment_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    reactions = dict(target.get("reactions") or {})
+    emoji_map = dict(reactions.get(req.emoji, {}))
+    emoji_map[user_id] = True
+    reactions[req.emoji] = emoji_map
+
+    ddb_update_item(
+        key={"pk": target["pk"], "sk": target["sk"]},
+        update_expr="SET reactions = :r",
+        expr_vals={":r": reactions},
+        return_values="NONE",
+    )
+    # Notify the comment author of the new reaction (best-effort; never break).
+    comment_author = target.get("user_id")
+    if comment_author and comment_author != user_id:
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=comment_author,
+                alert_type="post_reaction",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                title=f"{actor_name} reacted to your comment",
+                details={"post_id": post_id, "comment_id": comment_id, "emoji": req.emoji},
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("comment reaction social alert failed comment_id=%s", comment_id, exc_info=True)
+    return {"ok": True}
+
+
+@router.post("/posts/{post_id}/comments/{comment_id}/unreact")
+def remove_comment_reaction(post_id: str, comment_id: str, req: CommentReactionRequest, user_id: UserIdDep):
+    target = _find_comment_item(post_id, comment_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    reactions = dict(target.get("reactions") or {})
+    if req.emoji in reactions:
+        emoji_map = dict(reactions[req.emoji])
+        emoji_map.pop(user_id, None)
+        if emoji_map:
+            reactions[req.emoji] = emoji_map
+        else:
+            del reactions[req.emoji]
+        ddb_update_item(
+            key={"pk": target["pk"], "sk": target["sk"]},
+            update_expr="SET reactions = :r",
+            expr_vals={":r": reactions},
+            return_values="NONE",
+        )
+    return {"ok": True}
 
 
 # -----------------------------

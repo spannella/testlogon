@@ -170,6 +170,12 @@ export const addPostReaction = (postId: string, emoji: string) =>
 export const removePostReaction = (postId: string, emoji: string) =>
   api.post<{ ok: boolean }>(`/posts/${postId}/unreact`, { emoji });
 
+export const reactToComment = (postId: string, commentId: string, emoji: string) =>
+  api.post<{ ok: boolean }>(`/posts/${postId}/comments/${commentId}/reactions`, { emoji });
+
+export const unreactFromComment = (postId: string, commentId: string, emoji: string) =>
+  api.post<{ ok: boolean }>(`/posts/${postId}/comments/${commentId}/unreact`, { emoji });
+
 /** SSE stream URL for real-time feed updates */
 export const feedSseUrl = "/sse";
 

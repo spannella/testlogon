@@ -23,9 +23,12 @@ import {
   editComment,
   deleteComment,
   reportFeedContent,
+  reactToComment,
+  unreactFromComment,
 } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
 import { ApiError } from "@/api/client";
+import { cn } from "@/lib/utils";
 import type { FeedComment, CreateCommentReq } from "@/api/types";
 import { isEmojiOnly } from "@/utils/emoji";
 import { TipDialog } from "./TipDialog";
@@ -36,6 +39,8 @@ import { RichContentRenderer } from "./RichContentRenderer";
 interface CommentsThreadProps {
   postId: string;
 }
+
+const COMMENT_REACTION_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
 
 export function CommentsThread({ postId }: CommentsThreadProps) {
   const userId = useAuthStore((s) => s.userId);
@@ -360,6 +365,26 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
     onError: () => toast.error("Failed to delete comment"),
   });
 
+  const addReactionMut = useMutation({
+    mutationFn: (emoji: string) => reactToComment(postId, comment.comment_id, emoji),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["comments", postId] }),
+    onError: () => toast.error("Failed to react"),
+  });
+
+  const removeReactionMut = useMutation({
+    mutationFn: (emoji: string) => unreactFromComment(postId, comment.comment_id, emoji),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["comments", postId] }),
+    onError: () => toast.error("Failed to remove reaction"),
+  });
+
+  const handleReaction = (emoji: string, isMine: boolean) => {
+    if (isMine) {
+      removeReactionMut.mutate(emoji);
+    } else {
+      addReactionMut.mutate(emoji);
+    }
+  };
+
   if (comment.deleted) {
     return (
       <div className="flex gap-2">
@@ -477,6 +502,33 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
                   Tip
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Reaction bar */}
+          {!comment.deleted && (
+            <div className="mt-1 flex items-center flex-wrap gap-1">
+              {COMMENT_REACTION_EMOJIS.map((emoji) => {
+                const count = (comment.reactions_counts ?? {})[emoji] ?? 0;
+                const isMine = (comment.my_reactions ?? []).includes(emoji);
+                return (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => handleReaction(emoji, isMine)}
+                    disabled={addReactionMut.isPending || removeReactionMut.isPending}
+                    className={cn(
+                      "flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-xs transition-colors",
+                      isMine
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-transparent hover:border-border hover:bg-muted text-muted-foreground",
+                    )}
+                  >
+                    <span>{emoji}</span>
+                    {count > 0 && <span className="text-[10px] font-medium">{count}</span>}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
