@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import enforce_cookie_csrf, require_admin_or_root, require_root
@@ -155,9 +155,10 @@ async def deactivate_entity_field(
     field_key: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     try:
         fields_svc.delete_field(user.sub, entity_type, field_key)
     except FieldNotFoundError:
         raise HTTPException(404, {"code": "field_not_found", "entity_type": entity_type, "field_key": field_key})
+    return Response(status_code=204)
