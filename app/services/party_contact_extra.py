@@ -3,8 +3,23 @@ CCT-001..CCT-003, CCT-005 — SuiteCRM Contacts Extra: account business
 metadata, org hierarchy, manager chain, and party merge.
 
 This module is an ADDITIVE extension over the OFBiz party model (PTY-001..012).
-It NEVER re-creates party.py — all party DDB access goes through lazy imports
-of app.services.party at call time, guarded by the party_crm flags.
+It stores everything in the SAME ``party`` DynamoDB table owned by
+``app.services.party`` and uses that table's REAL key schema:
+
+  * Item key:  Key={"PK": "PARTY#{party_id}", "SK": ...}
+  * GSI1:      GSI1PK / GSI1SK   — role lookup (ROLE#{type} -> PARTY#{id})
+  * GSI2:      GSI2PK / GSI2SK   — contact-mech value lookup (EMAIL#.. -> PARTY#{id})
+  * GSI3:      GSI3PK / GSI3SK   — owner listing (OWNER#{sub})  AND
+                                   reverse-relationship (REL_TO#{to} -> REL#{type}#{from})
+  * GSI_CREATED: type / created_at — newest-first by party_type
+
+Relationship rows follow party.py's convention:
+  primary  PK=PARTY#{from}  SK=REL#{type}#{to}
+  mirror   PK=PARTY#{to}    SK=MIRROR#{type}#{from}  (+ GSI3 reverse keys)
+
+CCT introduces two relationship types that the base party model does not
+manage (PARENT_ORG between orgs, REPORTS_TO between persons); these rows are
+written here directly but in the same shape so GSI3 reverse-lookups work.
 """
 from __future__ import annotations
 
@@ -12,7 +27,7 @@ import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from boto3.dynamodb.conditions import Attr, Key
+from boto3.dynamodb.conditions import Key
 from fastapi import HTTPException
 
 from app.core.settings import S
@@ -31,6 +46,23 @@ INDUSTRY_CHOICES = {
 }
 
 _WEBSITE_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# Key helpers (REAL party-table schema)
+# ---------------------------------------------------------------------------
+
+def _pk(party_id: str) -> str:
+    return f"PARTY#{party_id}"
+
+
+def _meta_key(party_id: str) -> Dict[str, str]:
+    return {"PK": _pk(party_id), "SK": "META"}
+
+
+def _get_meta(party_id: str) -> Optional[Dict[str, Any]]:
+    resp = T.party.get_item(Key=_meta_key(party_id))
+    return resp.get("Item")
 
 
 def _validate_industry(value: Optional[str]) -> Optional[str]:
@@ -69,10 +101,14 @@ def _validate_phone_optional(value: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def _assert_org_admin(org_party_id: str, actor_party_id: str) -> None:
-    """Raise 403 if actor does not hold org_admin or owner role on the org."""
+    """Raise 403 if actor does not hold org_admin or owner role on the org.
+
+    Org membership lives on the actor's GROUP_MEMBER / OWNER relationship
+    primary rows (PK=PARTY#{actor}, SK=REL#{type}#{org}), carrying ``org_role``.
+    """
     for rel_type in ("GROUP_MEMBER", "OWNER"):
         sk = f"REL#{rel_type}#{org_party_id}"
-        resp = T.party.get_item(Key={"party_id": actor_party_id, "sk": sk})
+        resp = T.party.get_item(Key={"PK": _pk(actor_party_id), "SK": sk})
         item = resp.get("Item")
         if item:
             org_role = item.get("org_role", "")
@@ -86,8 +122,7 @@ def _assert_org_admin(org_party_id: str, actor_party_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def get_org_account(org_party_id: str) -> Optional[Dict[str, Any]]:
-    resp = T.party.get_item(Key={"party_id": org_party_id, "sk": "META"})
-    item = resp.get("Item")
+    item = _get_meta(org_party_id)
     if not item or item.get("party_type") != "PARTY_GROUP":
         return None
     return item
@@ -142,7 +177,7 @@ def update_org_account(
         _set("annual_revenue_cents", annual_revenue_cents)
 
     T.party.update_item(
-        Key={"party_id": org_party_id, "sk": "META"},
+        Key=_meta_key(org_party_id),
         UpdateExpression="SET " + ", ".join(set_parts),
         ExpressionAttributeNames=expr_names,
         ExpressionAttributeValues=expr_vals,
@@ -175,17 +210,23 @@ def create_org_account(
     website = _validate_website(website)
     phone = _validate_phone_optional(phone)
 
-    party_id = f"ORG#{uuid4().hex}"
+    party_id = uuid4().hex
     ts = now_ts()
     item: Dict[str, Any] = {
+        "PK": _pk(party_id),
+        "SK": "META",
         "party_id": party_id,
-        "sk": "META",
         "party_type": "PARTY_GROUP",
         "status": "ACTIVE",
         "name": name,
+        # CCT-specific owner attribution; also wire the real GSI3 owner index.
         "owner_user_sub": owner_user_sub,
+        "user_sub": owner_user_sub,
+        "type": "TYPE#PARTY_GROUP",
         "created_at": ts,
         "updated_at": ts,
+        "GSI3PK": f"OWNER#{owner_user_sub}",
+        "GSI3SK": f"PARTY#{party_id}",
     }
     if correlation_id:
         item["correlation_id"] = correlation_id
@@ -200,23 +241,27 @@ def create_org_account(
     if annual_revenue_cents is not None:
         item["annual_revenue_cents"] = annual_revenue_cents
 
-    put_kwargs: Dict[str, Any] = {"Item": item}
     if correlation_id:
-        put_kwargs["ConditionExpression"] = Attr("party_id").not_exists()
-    try:
-        T.party.put_item(**put_kwargs)
-    except Exception as exc:
-        if "ConditionalCheckFailedException" in type(exc).__name__:
-            resp = T.party.query(
-                IndexName="GSI_CREATED",
-                KeyConditionExpression=Key("owner_user_sub").eq(owner_user_sub),
-                FilterExpression=Attr("correlation_id").eq(correlation_id),
-                Limit=1,
+        # Idempotency: a deterministic party_id derived from correlation_id so a
+        # replay collides on the existing META row instead of creating a dup.
+        import hashlib
+        det_id = hashlib.sha256(correlation_id.encode()).hexdigest()[:32]
+        item["party_id"] = det_id
+        item["PK"] = _pk(det_id)
+        item["GSI3SK"] = f"PARTY#{det_id}"
+        try:
+            T.party.put_item(
+                Item=item, ConditionExpression="attribute_not_exists(PK)"
             )
-            items = resp.get("Items", [])
-            if items:
-                return items[0]
-        raise
+        except Exception as exc:
+            if "ConditionalCheckFailedException" in type(exc).__name__:
+                existing = _get_meta(det_id)
+                if existing:
+                    return existing
+            raise
+        return item
+
+    T.party.put_item(Item=item)
     return item
 
 
@@ -224,14 +269,19 @@ def create_org_account(
 # CCT-002: org hierarchy (parent_org)
 # ---------------------------------------------------------------------------
 
+def _query_rel_prefix(party_id: str, prefix: str) -> List[Dict[str, Any]]:
+    resp = T.party.query(
+        KeyConditionExpression=Key("PK").eq(_pk(party_id))
+        & Key("SK").begins_with(prefix),
+    )
+    return resp.get("Items", [])
+
+
 def _walk_parent_chain(org_id: str, depth: int = 10) -> List[str]:
     chain: List[str] = []
     current = org_id
     for _ in range(depth):
-        resp = T.party.query(
-            KeyConditionExpression=Key("party_id").eq(current) & Key("sk").begins_with("REL#PARENT_ORG#"),
-        )
-        items = resp.get("Items", [])
+        items = _query_rel_prefix(current, "REL#PARENT_ORG#")
         if not items:
             break
         parent_id = items[0].get("to_party_id", "")
@@ -240,6 +290,54 @@ def _walk_parent_chain(org_id: str, depth: int = 10) -> List[str]:
         chain.append(parent_id)
         current = parent_id
     return chain
+
+
+def _delete_directed_edge(
+    from_id: str, to_id: str, rel_type: str
+) -> None:
+    """Delete primary + mirror rows for a from->to directed edge."""
+    T.party.delete_item(
+        Key={"PK": _pk(from_id), "SK": f"REL#{rel_type}#{to_id}"}
+    )
+    T.party.delete_item(
+        Key={"PK": _pk(to_id), "SK": f"MIRROR#{rel_type}#{from_id}"}
+    )
+
+
+def _put_directed_edge(
+    from_id: str, to_id: str, rel_type: str, ts: int
+) -> Dict[str, Any]:
+    """Write primary + mirror rows for a from->to directed edge.
+
+    Mirror carries GSI3 reverse keys so children/reports can be queried by
+    REL_TO#{to_id}.
+    """
+    rel_id = uuid4().hex
+    sk = f"REL#{rel_type}#{to_id}"
+    edge_item = {
+        "PK": _pk(from_id),
+        "SK": sk,
+        "rel_id": rel_id,
+        "from_party_id": from_id,
+        "to_party_id": to_id,
+        "relationship_type": rel_type,
+        "created_at": ts,
+    }
+    T.party.put_item(Item=edge_item)
+
+    mirror_item = {
+        "PK": _pk(to_id),
+        "SK": f"MIRROR#{rel_type}#{from_id}",
+        "rel_id": rel_id,
+        "from_party_id": from_id,
+        "to_party_id": to_id,
+        "relationship_type": rel_type,
+        "created_at": ts,
+        "GSI3PK": f"REL_TO#{to_id}",
+        "GSI3SK": f"REL#{rel_type}#{from_id}",
+    }
+    T.party.put_item(Item=mirror_item)
+    return edge_item
 
 
 def set_parent_org(
@@ -267,44 +365,13 @@ def set_parent_org(
 
     ts = now_ts()
 
-    # Remove old PARENT_ORG edge
-    old_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(child_org_id) & Key("sk").begins_with("REL#PARENT_ORG#"),
-    )
-    for old_item in old_resp.get("Items", []):
-        T.party.delete_item(Key={"party_id": child_org_id, "sk": old_item["sk"]})
+    # Remove any existing PARENT_ORG edge (a child has at most one parent).
+    for old_item in _query_rel_prefix(child_org_id, "REL#PARENT_ORG#"):
         old_parent_id = old_item.get("to_party_id", "")
         if old_parent_id:
-            T.party.delete_item(Key={"party_id": old_parent_id, "sk": f"MIRROR#{child_org_id}#PARENT_ORG"})
+            _delete_directed_edge(child_org_id, old_parent_id, "PARENT_ORG")
 
-    rel_id = uuid4().hex
-    sk = f"REL#PARENT_ORG#{parent_org_id}"
-    edge_item = {
-        "party_id": child_org_id,
-        "sk": sk,
-        "rel_id": rel_id,
-        "from_party_id": child_org_id,
-        "to_party_id": parent_org_id,
-        "relationship_type": "PARENT_ORG",
-        "created_at": ts,
-        "rel_sk": sk,
-    }
-    T.party.put_item(Item=edge_item)
-
-    # Mirror on parent (to_party_id=child so GSI_REL_MIRROR picks up children)
-    mirror_item = {
-        "party_id": parent_org_id,
-        "sk": f"MIRROR#{child_org_id}#PARENT_ORG",
-        "rel_id": rel_id,
-        "from_party_id": child_org_id,
-        "to_party_id": parent_org_id,
-        "relationship_type": "PARENT_ORG",
-        "rel_sk": sk,
-        "created_at": ts,
-    }
-    T.party.put_item(Item=mirror_item)
-
-    return edge_item
+    return _put_directed_edge(child_org_id, parent_org_id, "PARENT_ORG", ts)
 
 
 def remove_parent_org(child_org_id: str, *, actor_party_id: str) -> None:
@@ -313,14 +380,10 @@ def remove_parent_org(child_org_id: str, *, actor_party_id: str) -> None:
 
     _assert_org_admin(child_org_id, actor_party_id)
 
-    old_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(child_org_id) & Key("sk").begins_with("REL#PARENT_ORG#"),
-    )
-    for old_item in old_resp.get("Items", []):
-        T.party.delete_item(Key={"party_id": child_org_id, "sk": old_item["sk"]})
+    for old_item in _query_rel_prefix(child_org_id, "REL#PARENT_ORG#"):
         old_parent_id = old_item.get("to_party_id", "")
         if old_parent_id:
-            T.party.delete_item(Key={"party_id": old_parent_id, "sk": f"MIRROR#{child_org_id}#PARENT_ORG"})
+            _delete_directed_edge(child_org_id, old_parent_id, "PARENT_ORG")
 
 
 def _rel_item_to_out(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -334,6 +397,16 @@ def _rel_item_to_out(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _query_children(parent_id: str, rel_type: str) -> List[Dict[str, Any]]:
+    """List child/report edges of ``parent_id`` via the GSI3 reverse index."""
+    resp = T.party.query(
+        IndexName="GSI3",
+        KeyConditionExpression=Key("GSI3PK").eq(f"REL_TO#{parent_id}")
+        & Key("GSI3SK").begins_with(f"REL#{rel_type}#"),
+    )
+    return resp.get("Items", [])
+
+
 def get_org_hierarchy(org_party_id: str, *, direction: str = "both") -> Dict[str, Any]:
     ancestors: List[Dict[str, Any]] = []
     children: List[Dict[str, Any]] = []
@@ -341,10 +414,7 @@ def get_org_hierarchy(org_party_id: str, *, direction: str = "both") -> Dict[str
     if direction in ("ancestors", "both"):
         current = org_party_id
         for _ in range(10):
-            resp = T.party.query(
-                KeyConditionExpression=Key("party_id").eq(current) & Key("sk").begins_with("REL#PARENT_ORG#"),
-            )
-            items = resp.get("Items", [])
+            items = _query_rel_prefix(current, "REL#PARENT_ORG#")
             if not items:
                 break
             edge = items[0]
@@ -354,15 +424,7 @@ def get_org_hierarchy(org_party_id: str, *, direction: str = "both") -> Dict[str
                 break
 
     if direction in ("children", "both"):
-        # Mirror rows have party_id=parent, from_party_id=child
-        # We stored mirror rows with party_id=parent_org_id, to_party_id=parent_org_id
-        # so we need GSI on the parent side.
-        # Query party_id=org_party_id, sk begins_with MIRROR# and filter PARENT_ORG
-        resp = T.party.query(
-            KeyConditionExpression=Key("party_id").eq(org_party_id) & Key("sk").begins_with("MIRROR#"),
-            FilterExpression=Attr("relationship_type").eq("PARENT_ORG"),
-        )
-        for item in resp.get("Items", []):
+        for item in _query_children(org_party_id, "PARENT_ORG"):
             children.append(_rel_item_to_out(item))
 
     return {"ancestors": ancestors, "children": children}
@@ -373,18 +435,14 @@ def get_org_hierarchy(org_party_id: str, *, direction: str = "both") -> Dict[str
 # ---------------------------------------------------------------------------
 
 def _get_party_meta(party_id: str) -> Optional[Dict[str, Any]]:
-    resp = T.party.get_item(Key={"party_id": party_id, "sk": "META"})
-    return resp.get("Item")
+    return _get_meta(party_id)
 
 
 def _walk_reports_to_chain(person_party_id: str, depth: int = 10) -> List[str]:
     chain: List[str] = []
     current = person_party_id
     for _ in range(depth):
-        resp = T.party.query(
-            KeyConditionExpression=Key("party_id").eq(current) & Key("sk").begins_with("REL#REPORTS_TO#"),
-        )
-        items = resp.get("Items", [])
+        items = _query_rel_prefix(current, "REL#REPORTS_TO#")
         if not items:
             break
         mgr_id = items[0].get("to_party_id", "")
@@ -420,58 +478,23 @@ def set_manager(
 
     ts = now_ts()
 
-    # Remove existing REPORTS_TO for this person
-    old_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(person_party_id) & Key("sk").begins_with("REL#REPORTS_TO#"),
-    )
-    for old_item in old_resp.get("Items", []):
-        T.party.delete_item(Key={"party_id": person_party_id, "sk": old_item["sk"]})
+    # A person reports to at most one manager — remove any existing edge.
+    for old_item in _query_rel_prefix(person_party_id, "REL#REPORTS_TO#"):
         old_mgr_id = old_item.get("to_party_id", "")
         if old_mgr_id:
-            T.party.delete_item(Key={"party_id": old_mgr_id, "sk": f"MIRROR#{person_party_id}#REPORTS_TO"})
+            _delete_directed_edge(person_party_id, old_mgr_id, "REPORTS_TO")
 
-    rel_id = uuid4().hex
-    sk = f"REL#REPORTS_TO#{manager_party_id}"
-    edge_item = {
-        "party_id": person_party_id,
-        "sk": sk,
-        "rel_id": rel_id,
-        "from_party_id": person_party_id,
-        "to_party_id": manager_party_id,
-        "relationship_type": "REPORTS_TO",
-        "created_at": ts,
-        "rel_sk": sk,
-    }
-    T.party.put_item(Item=edge_item)
-
-    # Mirror on manager side
-    mirror_item = {
-        "party_id": manager_party_id,
-        "sk": f"MIRROR#{person_party_id}#REPORTS_TO",
-        "rel_id": rel_id,
-        "from_party_id": person_party_id,
-        "to_party_id": manager_party_id,
-        "relationship_type": "REPORTS_TO",
-        "rel_sk": sk,
-        "created_at": ts,
-    }
-    T.party.put_item(Item=mirror_item)
-
-    return edge_item
+    return _put_directed_edge(person_party_id, manager_party_id, "REPORTS_TO", ts)
 
 
 def remove_manager(person_party_id: str, *, actor_party_id: str) -> None:
     if not getattr(S, "party_crm_enabled", False):
         raise HTTPException(503, "party_crm not enabled")
 
-    old_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(person_party_id) & Key("sk").begins_with("REL#REPORTS_TO#"),
-    )
-    for old_item in old_resp.get("Items", []):
-        T.party.delete_item(Key={"party_id": person_party_id, "sk": old_item["sk"]})
+    for old_item in _query_rel_prefix(person_party_id, "REL#REPORTS_TO#"):
         old_mgr_id = old_item.get("to_party_id", "")
         if old_mgr_id:
-            T.party.delete_item(Key={"party_id": old_mgr_id, "sk": f"MIRROR#{person_party_id}#REPORTS_TO"})
+            _delete_directed_edge(person_party_id, old_mgr_id, "REPORTS_TO")
 
 
 def get_reports_to_chain(
@@ -484,10 +507,7 @@ def get_reports_to_chain(
     if direction == "manager_chain":
         current = person_party_id
         for _ in range(10):
-            resp = T.party.query(
-                KeyConditionExpression=Key("party_id").eq(current) & Key("sk").begins_with("REL#REPORTS_TO#"),
-            )
-            items = resp.get("Items", [])
+            items = _query_rel_prefix(current, "REL#REPORTS_TO#")
             if not items:
                 break
             edge = items[0]
@@ -496,12 +516,8 @@ def get_reports_to_chain(
             if not current or current == person_party_id:
                 break
     elif direction == "reports":
-        # Direct reports via mirror rows on person_party_id
-        resp = T.party.query(
-            KeyConditionExpression=Key("party_id").eq(person_party_id) & Key("sk").begins_with("MIRROR#"),
-            FilterExpression=Attr("relationship_type").eq("REPORTS_TO"),
-        )
-        for item in resp.get("Items", []):
+        # Direct reports via the GSI3 reverse index on the manager.
+        for item in _query_children(person_party_id, "REPORTS_TO"):
             result.append(_rel_item_to_out(item))
 
     return {"direction": direction, "chain": result}
@@ -510,6 +526,20 @@ def get_reports_to_chain(
 # ---------------------------------------------------------------------------
 # CCT-005: party merge
 # ---------------------------------------------------------------------------
+
+def _all_rows_for_party(party_id: str) -> List[Dict[str, Any]]:
+    """Return every row under PK=PARTY#{party_id} (paginated)."""
+    items: List[Dict[str, Any]] = []
+    resp = T.party.query(KeyConditionExpression=Key("PK").eq(_pk(party_id)))
+    items.extend(resp.get("Items", []))
+    while resp.get("LastEvaluatedKey"):
+        resp = T.party.query(
+            KeyConditionExpression=Key("PK").eq(_pk(party_id)),
+            ExclusiveStartKey=resp["LastEvaluatedKey"],
+        )
+        items.extend(resp.get("Items", []))
+    return items
+
 
 def merge_parties(
     winner_party_id: str,
@@ -535,80 +565,61 @@ def merge_parties(
 
     ts = now_ts()
 
-    # Collect all loser items
-    loser_items: List[Dict[str, Any]] = []
-    resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(loser_party_id),
-    )
-    loser_items.extend(resp.get("Items", []))
-    while resp.get("LastEvaluatedKey"):
-        resp = T.party.query(
-            KeyConditionExpression=Key("party_id").eq(loser_party_id),
-            ExclusiveStartKey=resp["LastEvaluatedKey"],
-        )
-        loser_items.extend(resp.get("Items", []))
+    loser_items = _all_rows_for_party(loser_party_id)
+    winner_items = _all_rows_for_party(winner_party_id)
 
-    # Collect winner role SKs for dedup
-    winner_role_sks: set = set()
-    winner_role_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(winner_party_id) & Key("sk").begins_with("ROLE#"),
-    )
-    for item in winner_role_resp.get("Items", []):
-        winner_role_sks.add(item["sk"])
+    # Dedup keys already present on winner.
+    winner_role_sks = {i["SK"] for i in winner_items if i.get("SK", "").startswith("ROLE#")}
+    winner_rel_sks = {i["SK"] for i in winner_items if i.get("SK", "").startswith("REL#")}
+    winner_mech_values = {
+        i.get("value")
+        for i in winner_items
+        if i.get("SK", "").startswith("MECH#") and i.get("value") not in (None, "")
+    }
 
-    # Copy ROLE rows
+    # Copy ROLE rows (preserve original SK).
     for item in loser_items:
-        sk = item.get("sk", "")
+        sk = item.get("SK", "")
         if sk.startswith("ROLE#") and sk not in winner_role_sks:
             new_item = dict(item)
+            new_item["PK"] = _pk(winner_party_id)
             new_item["party_id"] = winner_party_id
             new_item["updated_at"] = ts
+            if "GSI1PK" in new_item:
+                new_item["GSI1SK"] = f"PARTY#{winner_party_id}"
             T.party.put_item(Item=new_item)
 
-    # Collect winner REL SKs for dedup
-    winner_rel_sks: set = set()
-    winner_rel_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(winner_party_id) & Key("sk").begins_with("REL#"),
-    )
-    for item in winner_rel_resp.get("Items", []):
-        winner_rel_sks.add(item["sk"])
-
-    # Copy REL rows
+    # Copy REL primary rows (re-point from_party_id at the winner).
     for item in loser_items:
-        sk = item.get("sk", "")
+        sk = item.get("SK", "")
         if sk.startswith("REL#") and sk not in winner_rel_sks:
             new_item = dict(item)
+            new_item["PK"] = _pk(winner_party_id)
             new_item["party_id"] = winner_party_id
             new_item["from_party_id"] = winner_party_id
             T.party.put_item(Item=new_item)
 
-    # Collect winner mech values for dedup
-    winner_mech_values: set = set()
-    winner_mech_resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(winner_party_id) & Key("sk").begins_with("MECH#"),
-    )
-    for item in winner_mech_resp.get("Items", []):
-        mv = item.get("mech_value", "")
-        if mv:
+    # Copy MECH rows (dedup by normalized value; mint a fresh mech_id/SK).
+    for item in loser_items:
+        sk = item.get("SK", "")
+        if sk.startswith("MECH#"):
+            mv = item.get("value")
+            if mv in (None, "") or mv in winner_mech_values:
+                continue
+            new_mech_id = uuid4().hex
+            mech_type = item.get("mech_type", "EMAIL")
+            new_item = dict(item)
+            new_item["PK"] = _pk(winner_party_id)
+            new_item["party_id"] = winner_party_id
+            new_item["SK"] = f"MECH#{mech_type}#{new_mech_id}"
+            new_item["mech_id"] = new_mech_id
+            new_item["GSI2SK"] = f"PARTY#{winner_party_id}"
+            T.party.put_item(Item=new_item)
             winner_mech_values.add(mv)
 
-    # Copy MECH rows (dedup by value)
-    for item in loser_items:
-        sk = item.get("sk", "")
-        if sk.startswith("MECH#"):
-            mv = item.get("mech_value", "")
-            if mv and mv not in winner_mech_values:
-                new_mech_id = uuid4().hex
-                new_item = dict(item)
-                new_item["party_id"] = winner_party_id
-                new_item["sk"] = f"MECH#{new_mech_id}"
-                new_item["mech_id"] = new_mech_id
-                T.party.put_item(Item=new_item)
-                winner_mech_values.add(mv)
-
-    # Mark loser as MERGED
+    # Mark loser as MERGED.
     T.party.update_item(
-        Key={"party_id": loser_party_id, "sk": "META"},
+        Key=_meta_key(loser_party_id),
         UpdateExpression="SET #status = :status, #merged_into = :merged_into, #updated_at = :ts",
         ExpressionAttributeNames={
             "#status": "status",
@@ -622,7 +633,6 @@ def merge_parties(
         },
     )
 
-    # Audit
     try:
         from app.services.alerts import audit_event
         audit_event(

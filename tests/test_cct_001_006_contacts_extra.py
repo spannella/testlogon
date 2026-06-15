@@ -33,44 +33,63 @@ except ImportError:
 
 
 def _make_party_table(ddb):
-    """Create a minimal party table with required GSIs."""
+    """Create the party table matching the REAL production schema.
+
+    Key schema: PK / SK. GSIs match scripts/local-ddb-init.py:
+      GSI1 (GSI1PK/GSI1SK)  — role lookup
+      GSI2 (GSI2PK/GSI2SK)  — normalized contact-mech value lookup (dedup)
+      GSI3 (GSI3PK/GSI3SK)  — owner listing AND reverse-relationship traversal
+      GSI_CREATED (type/created_at) — newest-first by party_type
+    """
     return ddb.create_table(
         TableName="party",
         KeySchema=[
-            {"AttributeName": "party_id", "KeyType": "HASH"},
-            {"AttributeName": "sk", "KeyType": "RANGE"},
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
         ],
         AttributeDefinitions=[
-            {"AttributeName": "party_id", "AttributeType": "S"},
-            {"AttributeName": "sk", "AttributeType": "S"},
-            {"AttributeName": "owner_user_sub", "AttributeType": "S"},
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+            {"AttributeName": "GSI1PK", "AttributeType": "S"},
+            {"AttributeName": "GSI1SK", "AttributeType": "S"},
+            {"AttributeName": "GSI2PK", "AttributeType": "S"},
+            {"AttributeName": "GSI2SK", "AttributeType": "S"},
+            {"AttributeName": "GSI3PK", "AttributeType": "S"},
+            {"AttributeName": "GSI3SK", "AttributeType": "S"},
+            {"AttributeName": "type", "AttributeType": "S"},
             {"AttributeName": "created_at", "AttributeType": "N"},
-            {"AttributeName": "mech_value", "AttributeType": "S"},
-            {"AttributeName": "to_party_id", "AttributeType": "S"},
         ],
         BillingMode="PAY_PER_REQUEST",
         GlobalSecondaryIndexes=[
             {
+                "IndexName": "GSI1",
+                "KeySchema": [
+                    {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+                    {"AttributeName": "GSI1SK", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            },
+            {
+                "IndexName": "GSI2",
+                "KeySchema": [
+                    {"AttributeName": "GSI2PK", "KeyType": "HASH"},
+                    {"AttributeName": "GSI2SK", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            },
+            {
+                "IndexName": "GSI3",
+                "KeySchema": [
+                    {"AttributeName": "GSI3PK", "KeyType": "HASH"},
+                    {"AttributeName": "GSI3SK", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            },
+            {
                 "IndexName": "GSI_CREATED",
                 "KeySchema": [
-                    {"AttributeName": "owner_user_sub", "KeyType": "HASH"},
+                    {"AttributeName": "type", "KeyType": "HASH"},
                     {"AttributeName": "created_at", "KeyType": "RANGE"},
-                ],
-                "Projection": {"ProjectionType": "ALL"},
-            },
-            {
-                "IndexName": "GSI_MECH_VALUE",
-                "KeySchema": [
-                    {"AttributeName": "mech_value", "KeyType": "HASH"},
-                    {"AttributeName": "party_id", "KeyType": "RANGE"},
-                ],
-                "Projection": {"ProjectionType": "ALL"},
-            },
-            {
-                "IndexName": "GSI_REL_MIRROR",
-                "KeySchema": [
-                    {"AttributeName": "to_party_id", "KeyType": "HASH"},
-                    {"AttributeName": "party_id", "KeyType": "RANGE"},
                 ],
                 "Projection": {"ProjectionType": "ALL"},
             },
@@ -81,15 +100,20 @@ def _make_party_table(ddb):
 def _put_party(tbl, party_id: str, party_type: str = "PERSON", name: str = "Test",
                owner: str = "user1", status: str = "ACTIVE", ts: int = 1000, **kwargs):
     item = {
+        "PK": f"PARTY#{party_id}",
+        "SK": "META",
         "party_id": party_id,
-        "sk": "META",
         "party_type": party_type,
         "name": name,
         "display_name": name,
         "owner_user_sub": owner,
+        "user_sub": owner,
         "status": status,
+        "type": f"TYPE#{party_type}",
         "created_at": ts,
         "updated_at": ts,
+        "GSI3PK": f"OWNER#{owner}",
+        "GSI3SK": f"PARTY#{party_id}",
     }
     item.update(kwargs)
     tbl.put_item(Item=item)
@@ -97,24 +121,41 @@ def _put_party(tbl, party_id: str, party_type: str = "PERSON", name: str = "Test
 
 
 def _put_mech(tbl, party_id: str, mech_id: str, mech_type: str, value: str, ts: int = 1000):
+    """Seed a contact-mech row in the REAL shape: value under ``value`` + GSI2 keys."""
+    if mech_type == "EMAIL":
+        gsi2_pk = f"EMAIL#{value.lower()}"
+    elif mech_type == "PHONE":
+        gsi2_pk = f"PHONE#{value}"
+    else:
+        gsi2_pk = f"{mech_type}#{value}"
     item = {
-        "party_id": party_id,
-        "sk": f"MECH#{mech_id}",
+        "PK": f"PARTY#{party_id}",
+        "SK": f"MECH#{mech_type}#{mech_id}",
         "mech_id": mech_id,
+        "party_id": party_id,
         "mech_type": mech_type,
-        "mech_value": value,
-        "purpose": "WORK",
+        "value": value,
+        "purposes": ["WORK_EMAIL" if mech_type == "EMAIL" else "WORK_PHONE"],
+        "verified": False,
         "created_at": ts,
+        "updated_at": ts,
+        "GSI2PK": gsi2_pk,
+        "GSI2SK": f"PARTY#{party_id}",
     }
     tbl.put_item(Item=item)
     return item
 
 
 def _put_org_role(tbl, actor_id: str, org_id: str, org_role: str = "org_admin", ts: int = 1000):
-    """Simulate an org member record with an org_role (for _assert_org_admin)."""
+    """Simulate an org member record with an org_role (for _assert_org_admin).
+
+    Real schema: the role lives on the actor's GROUP_MEMBER relationship primary
+    row (PK=PARTY#{actor}, SK=REL#GROUP_MEMBER#{org}).
+    """
     item = {
+        "PK": f"PARTY#{actor_id}",
+        "SK": f"REL#GROUP_MEMBER#{org_id}",
         "party_id": actor_id,
-        "sk": f"REL#GROUP_MEMBER#{org_id}",
         "org_role": org_role,
         "to_party_id": org_id,
         "relationship_type": "GROUP_MEMBER",
@@ -550,10 +591,11 @@ class TestCct005Merge(unittest.TestCase):
     def _setup_parties(self):
         _put_party(self.tbl, "winner", "PERSON", "Winner", owner="user1", ts=1000)
         _put_party(self.tbl, "loser", "PERSON", "Loser", owner="user1", ts=1001)
-        # Add roles to loser
+        # Add roles to loser (real schema: PK=PARTY#{id}, SK=ROLE#{type})
         self.tbl.put_item(Item={
-            "party_id": "loser", "sk": "ROLE#CUSTOMER#",
-            "role_type": "CUSTOMER", "created_at": 1000,
+            "PK": "PARTY#loser", "SK": "ROLE#CUSTOMER",
+            "party_id": "loser", "role_type": "CUSTOMER", "created_at": 1000,
+            "GSI1PK": "ROLE#CUSTOMER", "GSI1SK": "PARTY#loser",
         })
         # Add mech to loser
         _put_mech(self.tbl, "loser", "m_loser", "EMAIL", "loser@example.com")
@@ -566,21 +608,21 @@ class TestCct005Merge(unittest.TestCase):
 
         # Winner should now have loser's role
         resp = self.tbl.query(
-            KeyConditionExpression="party_id = :pid AND begins_with(sk, :prefix)",
-            ExpressionAttributeValues={":pid": "winner", ":prefix": "ROLE#"},
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues={":pk": "PARTY#winner", ":prefix": "ROLE#"},
         )
-        role_sks = {item["sk"] for item in resp.get("Items", [])}
-        self.assertIn("ROLE#CUSTOMER#", role_sks)
+        role_sks = {item["SK"] for item in resp.get("Items", [])}
+        self.assertIn("ROLE#CUSTOMER", role_sks)
 
     def test_merge_copies_mechs(self):
         self._setup_parties()
         self.svc.merge_parties("winner", "loser", actor_sub="admin1")
 
         resp = self.tbl.query(
-            KeyConditionExpression="party_id = :pid AND begins_with(sk, :prefix)",
-            ExpressionAttributeValues={":pid": "winner", ":prefix": "MECH#"},
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues={":pk": "PARTY#winner", ":prefix": "MECH#"},
         )
-        values = {item.get("mech_value") for item in resp.get("Items", [])}
+        values = {item.get("value") for item in resp.get("Items", [])}
         self.assertIn("winner@example.com", values)
         self.assertIn("loser@example.com", values)
 
@@ -588,7 +630,7 @@ class TestCct005Merge(unittest.TestCase):
         self._setup_parties()
         self.svc.merge_parties("winner", "loser", actor_sub="admin1")
 
-        loser_meta = self.tbl.get_item(Key={"party_id": "loser", "sk": "META"}).get("Item")
+        loser_meta = self.tbl.get_item(Key={"PK": "PARTY#loser", "SK": "META"}).get("Item")
         self.assertEqual(loser_meta["status"], "MERGED")
         self.assertEqual(loser_meta["merged_into_party_id"], "winner")
 
@@ -618,10 +660,10 @@ class TestCct005Merge(unittest.TestCase):
         self.svc.merge_parties("winner", "loser", actor_sub="admin1")
 
         resp = self.tbl.query(
-            KeyConditionExpression="party_id = :pid AND begins_with(sk, :prefix)",
-            ExpressionAttributeValues={":pid": "winner", ":prefix": "MECH#"},
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues={":pk": "PARTY#winner", ":prefix": "MECH#"},
         )
-        email_items = [i for i in resp.get("Items", []) if i.get("mech_value") == shared_email]
+        email_items = [i for i in resp.get("Items", []) if i.get("value") == shared_email]
         self.assertEqual(len(email_items), 1)
 
     def test_flag_off_returns_503(self):
@@ -694,8 +736,8 @@ class TestCct006Vcard(unittest.TestCase):
 
         # Verify mechs were created
         mech_resp = self.tbl.query(
-            KeyConditionExpression="party_id = :pid AND begins_with(sk, :prefix)",
-            ExpressionAttributeValues={":pid": party["party_id"], ":prefix": "MECH#"},
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues={":pk": f"PARTY#{party['party_id']}", ":prefix": "MECH#"},
         )
         mechs = mech_resp.get("Items", [])
         mech_types = {m["mech_type"] for m in mechs}
@@ -740,8 +782,8 @@ class TestCct006Vcard(unittest.TestCase):
         self.assertEqual(len(results), 1)
         party_id = results[0]["party_id"]
         mech_resp = self.tbl.query(
-            KeyConditionExpression="party_id = :pid AND begins_with(sk, :prefix)",
-            ExpressionAttributeValues={":pid": party_id, ":prefix": "MECH#"},
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues={":pk": f"PARTY#{party_id}", ":prefix": "MECH#"},
         )
         email_mechs = [m for m in mech_resp.get("Items", []) if m.get("mech_type") == "EMAIL"]
         # Malformed email should be excluded

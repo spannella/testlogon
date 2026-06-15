@@ -287,7 +287,7 @@ async def export_vcard(
 
     # Build a safe filename
     from app.core.tables import T
-    meta_resp = T.party.get_item(Key={"party_id": party_id, "sk": "META"})
+    meta_resp = T.party.get_item(Key={"PK": f"PARTY#{party_id}", "SK": "META"})
     meta = meta_resp.get("Item") or {}
     display_name = meta.get("display_name") or meta.get("name") or party_id
     safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in display_name)

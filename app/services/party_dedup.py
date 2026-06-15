@@ -7,6 +7,14 @@ Scores candidate party pairs for likely duplication using:
 
 The scoring threshold is configurable via S.party_dedup_match_threshold (default 0.70).
 
+Storage is the SAME ``party`` table owned by app.services.party. This module uses
+that table's REAL key schema (PK/SK) and GSIs:
+  * GSI2 (GSI2PK/GSI2SK) — contact-mech value lookup, keyed on the normalized
+    EMAIL#.. / PHONE#.. value; used to find parties sharing an exact mech.
+  * GSI3 (GSI3PK/GSI3SK) — owner listing, keyed on OWNER#{user_sub}; used to
+    gather same-owner candidates for fuzzy-name scoring.
+Contact-mech values are stored under the ``value`` attribute (not ``mech_value``).
+
 Both service functions are flag-gated on S.party_crm_enabled.
 """
 from __future__ import annotations
@@ -16,7 +24,7 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
-from boto3.dynamodb.conditions import Attr, Key
+from boto3.dynamodb.conditions import Key
 from fastapi import HTTPException
 
 from app.core.settings import S
@@ -24,14 +32,24 @@ from app.core.tables import T
 from app.core.cursor import decode_cursor, encode_cursor
 
 
+def _pk(party_id: str) -> str:
+    return f"PARTY#{party_id}"
+
+
+def _mech_value(item: Dict[str, Any]) -> str:
+    """Read a contact-mech value, tolerating both the real (`value`) and the
+    legacy (`mech_value`) attribute names."""
+    v = item.get("value")
+    if v in (None, ""):
+        v = item.get("mech_value", "")
+    return v if isinstance(v, str) else ""
+
+
 def _normalize_name(name: str) -> str:
-    """Lowercase, strip diacritics, collapse non-alphanumeric to spaces.
-    Mirrors the pattern in app/services/kyc_sanctions_screening.py."""
+    """Lowercase, strip diacritics, collapse non-alphanumeric to spaces."""
     s = name.lower()
-    # Strip diacritics (NFD normalization + remove combining chars)
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    # Collapse non-alphanumeric to spaces
     s = re.sub(r"[^a-z0-9]+", " ", s).strip()
     return s
 
@@ -46,21 +64,20 @@ def _score_pair(
     signals: List[str] = []
     score = 0.0
 
-    # Build lookup sets for party_b mechs
     email_vals_b = {
-        m.get("mech_value", "").lower()
+        _mech_value(m).lower()
         for m in mech_b
         if m.get("mech_type") == "EMAIL"
     }
     phone_vals_b = {
-        m.get("mech_value", "")
+        _mech_value(m)
         for m in mech_b
         if m.get("mech_type") == "PHONE"
     }
 
     for m in mech_a:
         mtype = m.get("mech_type", "")
-        val = m.get("mech_value", "")
+        val = _mech_value(m)
         if mtype == "EMAIL" and val.lower() in email_vals_b:
             score = max(score, 0.90)
             signals.append("email_exact")
@@ -68,9 +85,8 @@ def _score_pair(
             score = max(score, 0.80)
             signals.append("phone_exact")
 
-    # Fuzzy name match
-    name_a = _normalize_name(party_a.get("name", ""))
-    name_b = _normalize_name(party_b.get("name", ""))
+    name_a = _normalize_name(party_a.get("name", "") or party_a.get("display_name", ""))
+    name_b = _normalize_name(party_b.get("name", "") or party_b.get("display_name", ""))
     if name_a and name_b:
         ratio = difflib.SequenceMatcher(None, name_a, name_b).ratio()
         if ratio >= 0.85:
@@ -85,20 +101,30 @@ def _score_pair(
 def _list_mechs_for_party(party_id: str) -> List[Dict[str, Any]]:
     """Return all MECH# rows for a party."""
     resp = T.party.query(
-        KeyConditionExpression=Key("party_id").eq(party_id) & Key("sk").begins_with("MECH#"),
+        KeyConditionExpression=Key("PK").eq(_pk(party_id))
+        & Key("SK").begins_with("MECH#"),
     )
     return resp.get("Items", [])
 
 
-def _find_parties_sharing_mech(
-    mech_type: str,
-    mech_value: str,
-) -> List[str]:
-    """Return party_ids that share an exact contact mech value via GSI_MECH_VALUE."""
+def _get_meta(party_id: str) -> Optional[Dict[str, Any]]:
+    return T.party.get_item(Key={"PK": _pk(party_id), "SK": "META"}).get("Item")
+
+
+def _find_parties_sharing_mech(mech_type: str, mech_value: str) -> List[str]:
+    """Return party_ids that share an exact contact mech value via GSI2.
+
+    GSI2PK is the normalized value key (EMAIL#{norm} / PHONE#{norm}).
+    """
+    if mech_type == "EMAIL":
+        gsi2_pk = f"EMAIL#{mech_value.lower()}"
+    elif mech_type == "PHONE":
+        gsi2_pk = f"PHONE#{mech_value}"
+    else:
+        return []
     resp = T.party.query(
-        IndexName="GSI_MECH_VALUE",
-        KeyConditionExpression=Key("mech_value").eq(mech_value),
-        FilterExpression=Attr("mech_type").eq(mech_type),
+        IndexName="GSI2",
+        KeyConditionExpression=Key("GSI2PK").eq(gsi2_pk),
     )
     return [item.get("party_id", "") for item in resp.get("Items", []) if item.get("party_id")]
 
@@ -117,38 +143,40 @@ def find_duplicates_for_party(
 
     threshold = getattr(S, "party_dedup_match_threshold", 0.70)
 
-    party_meta = T.party.get_item(Key={"party_id": party_id, "sk": "META"}).get("Item")
+    party_meta = _get_meta(party_id)
     if not party_meta:
         raise HTTPException(404, "party_not_found")
 
     mechs_a = _list_mechs_for_party(party_id)
 
-    # Gather candidate party_ids via shared mechs
+    # Gather candidate party_ids via shared mechs (GSI2).
     candidate_ids: set = set()
     for m in mechs_a:
         mtype = m.get("mech_type", "")
-        val = m.get("mech_value", "")
+        val = _mech_value(m)
         if mtype in ("EMAIL", "PHONE") and val:
             for pid in _find_parties_sharing_mech(mtype, val):
                 if pid != party_id:
                     candidate_ids.add(pid)
 
-    # Also gather candidates by name prefix (scan up to 200 via GSI_CREATED)
-    owner_sub = party_meta.get("owner_user_sub", "")
+    # Also gather same-owner candidates for fuzzy-name scoring (GSI3 owner index).
+    owner_sub = party_meta.get("owner_user_sub") or party_meta.get("user_sub", "")
     if owner_sub:
         name_resp = T.party.query(
-            IndexName="GSI_CREATED",
-            KeyConditionExpression=Key("owner_user_sub").eq(owner_sub),
+            IndexName="GSI3",
+            KeyConditionExpression=Key("GSI3PK").eq(f"OWNER#{owner_sub}"),
             Limit=200,
         )
         for item in name_resp.get("Items", []):
+            if item.get("SK") != "META":
+                continue
             pid = item.get("party_id", "")
             if pid and pid != party_id:
                 candidate_ids.add(pid)
 
     results: List[Dict[str, Any]] = []
     for cand_id in candidate_ids:
-        cand_meta = T.party.get_item(Key={"party_id": cand_id, "sk": "META"}).get("Item")
+        cand_meta = _get_meta(cand_id)
         if not cand_meta:
             continue
         mechs_b = _list_mechs_for_party(cand_id)
@@ -161,7 +189,6 @@ def find_duplicates_for_party(
                 "match_signals": signals,
             })
 
-    # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
 
@@ -187,7 +214,7 @@ def list_all_duplicate_candidates(
     exclusive_start = decode_cursor(cursor)
 
     scan_kwargs: Dict[str, Any] = {
-        "FilterExpression": "sk = :meta AND (party_type = :pg OR party_type = :ps)",
+        "FilterExpression": "SK = :meta AND (party_type = :pg OR party_type = :ps)",
         "ExpressionAttributeValues": {
             ":meta": "META",
             ":pg": "PARTY_GROUP",
@@ -203,19 +230,17 @@ def list_all_duplicate_candidates(
     next_cursor = encode_cursor(resp.get("LastEvaluatedKey"))
 
     results: List[Dict[str, Any]] = []
-    # For each party pair found, score them
     seen_pairs: set = set()
-    for i, party_a in enumerate(parties):
+    for party_a in parties:
         pid_a = party_a.get("party_id", "")
         if not pid_a:
             continue
         mechs_a = _list_mechs_for_party(pid_a)
 
-        # Find candidates via shared mechs
         candidate_ids: set = set()
         for m in mechs_a:
             mtype = m.get("mech_type", "")
-            val = m.get("mech_value", "")
+            val = _mech_value(m)
             if mtype in ("EMAIL", "PHONE") and val:
                 for pid in _find_parties_sharing_mech(mtype, val):
                     if pid != pid_a:
@@ -227,7 +252,7 @@ def list_all_duplicate_candidates(
                 continue
             seen_pairs.add(pair_key)
 
-            cand_meta = T.party.get_item(Key={"party_id": cand_id, "sk": "META"}).get("Item")
+            cand_meta = _get_meta(cand_id)
             if not cand_meta:
                 continue
             mechs_b = _list_mechs_for_party(cand_id)
