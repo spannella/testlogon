@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -18,6 +18,7 @@ import {
   Flag,
   MoreHorizontal,
   Reply,
+  ImagePlus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,7 @@ import {
   type AddVideoCommentReq,
 } from "@/api/endpoints/gallery";
 import { getVideoDetail } from "@/api/endpoints/vod";
+import { uploadPostImage } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/lib/utils";
 import SimilarVideos from "@/pages/videos/SimilarVideos";
@@ -142,7 +144,7 @@ function VideoCommentRow({
     else addReactionMut.mutate(emoji);
   };
 
-  const isMedia = comment.kind === "gif" || comment.kind === "sticker";
+  const isMedia = comment.kind === "gif" || comment.kind === "sticker" || comment.kind === "image";
 
   return (
     <>
@@ -210,6 +212,14 @@ function VideoCommentRow({
               className="mt-1 h-20 w-20 object-contain"
               loading="lazy"
               data-testid="video-comment-sticker"
+            />
+          ) : comment.kind === "image" && comment.image_url ? (
+            <img
+              src={comment.image_url}
+              alt={comment.image_alt_text || "Image"}
+              className="mt-1 max-w-[300px] rounded"
+              loading="lazy"
+              data-testid="video-comment-image"
             />
           ) : (
             <p className="text-sm">{comment.text}</p>
@@ -318,6 +328,11 @@ export default function VideoDetailPage() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
+  // Image comment state
+  const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
+  const [pendingImageAlt, setPendingImageAlt] = useState<string>("");
+  const [imageUploading, setImageUploading] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch video detail
   const videoQ = useQuery({
@@ -364,11 +379,34 @@ export default function VideoDetailPage() {
     onSuccess: () => {
       setCommentText("");
       setReplyTo(null);
+      setPendingImageUrl(null);
+      setPendingImageAlt("");
       queryClient.invalidateQueries({ queryKey: ["video-comments", videoId] });
       queryClient.invalidateQueries({ queryKey: ["video", videoId] });
     },
     onError: () => toast.error("Failed to post comment"),
   });
+
+  const handleVideoImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setImageUploading(true);
+    try {
+      const result = await uploadPostImage(file);
+      setPendingImageUrl(result.url);
+      setPendingImageAlt(file.name.replace(/\.[^.]+$/, ""));
+    } catch {
+      toast.error("Image upload failed. Please try again.");
+    } finally {
+      setImageUploading(false);
+    }
+  };
+
+  const removePendingVideoImage = () => {
+    setPendingImageUrl(null);
+    setPendingImageAlt("");
+  };
 
   const handleEmojiInsert = (emoji: string) =>
     setCommentText((prev) => prev + emoji);
@@ -524,6 +562,15 @@ export default function VideoDetailPage() {
             className="space-y-2"
             onSubmit={(e) => {
               e.preventDefault();
+              if (pendingImageUrl) {
+                addCommentMut.mutate({
+                  kind: "image",
+                  image_url: pendingImageUrl,
+                  image_alt_text: pendingImageAlt || undefined,
+                  ...(replyTo ? { parent_comment_id: replyTo } : {}),
+                });
+                return;
+              }
               if (commentText.trim()) {
                 addCommentMut.mutate({
                   kind: "text",
@@ -545,22 +592,54 @@ export default function VideoDetailPage() {
                 </button>
               </div>
             )}
-            <div className="flex gap-2">
-              <Input
-                placeholder={replyTo ? "Write a reply..." : "Add a comment..."}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                maxLength={2000}
-              />
+            {/* Image preview */}
+            {pendingImageUrl && (
+              <div className="relative inline-block">
+                <img
+                  src={pendingImageUrl}
+                  alt={pendingImageAlt || "Comment image preview"}
+                  className="max-h-32 max-w-[200px] rounded border object-cover"
+                  data-testid="video-comment-image-preview"
+                />
+                <button
+                  type="button"
+                  onClick={removePendingVideoImage}
+                  className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow"
+                  aria-label="Remove image"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+            {!pendingImageUrl && (
+              <div className="flex gap-2">
+                <Input
+                  placeholder={replyTo ? "Write a reply..." : "Add a comment..."}
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  maxLength={2000}
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={!commentText.trim() || addCommentMut.isPending}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            {pendingImageUrl && (
               <Button
                 type="submit"
-                size="icon"
-                disabled={!commentText.trim() || addCommentMut.isPending}
+                size="sm"
+                disabled={addCommentMut.isPending}
+                className="w-full"
               >
-                <Send className="h-4 w-4" />
+                <Send className="mr-1 h-4 w-4" />
+                Post image
               </Button>
-            </div>
-            {/* emoji / GIF / sticker toolbar */}
+            )}
+            {/* emoji / GIF / sticker / image toolbar */}
             <div className="flex items-center gap-1">
               <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
                 <PopoverTrigger asChild>
@@ -570,7 +649,7 @@ export default function VideoDetailPage() {
                     size="icon"
                     className="h-7 w-7"
                     aria-label="Insert emoji"
-                    disabled={addCommentMut.isPending}
+                    disabled={addCommentMut.isPending || !!pendingImageUrl}
                   >
                     <Smile className="h-4 w-4" />
                   </Button>
@@ -590,7 +669,7 @@ export default function VideoDetailPage() {
                     size="icon"
                     className="h-7 w-7"
                     aria-label="Add a GIF"
-                    disabled={addCommentMut.isPending}
+                    disabled={addCommentMut.isPending || !!pendingImageUrl}
                   >
                     <Images className="h-4 w-4" />
                   </Button>
@@ -607,7 +686,7 @@ export default function VideoDetailPage() {
                     size="icon"
                     className="h-7 w-7"
                     aria-label="Add a sticker"
-                    disabled={addCommentMut.isPending}
+                    disabled={addCommentMut.isPending || !!pendingImageUrl}
                   >
                     <StickerIcon className="h-4 w-4" />
                   </Button>
@@ -616,6 +695,31 @@ export default function VideoDetailPage() {
                   <StickerPicker onSelect={handleStickerSelect} />
                 </PopoverContent>
               </Popover>
+              {/* Image upload button */}
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                data-testid="video-comment-image-input"
+                onChange={handleVideoImageFileChange}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="Upload an image"
+                data-testid="video-comment-image-button"
+                disabled={addCommentMut.isPending || imageUploading || !!pendingImageUrl}
+                onClick={() => imageInputRef.current?.click()}
+              >
+                {imageUploading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ImagePlus className="h-4 w-4" />
+                )}
+              </Button>
             </div>
           </form>
 

@@ -2529,8 +2529,8 @@ export interface FeedComment {
   // Emoji reactions on comments (mirrors post reactions)
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
-  // FEED-004: emoji/GIF/sticker comments
-  kind?: "text" | "gif" | "sticker";
+  // FEED-004: emoji/GIF/sticker/image comments
+  kind?: "text" | "gif" | "sticker" | "image";
   gif_url?: string | null;
   gif_alt_text?: string | null;
   gif_width?: number | null;
@@ -2539,6 +2539,11 @@ export interface FeedComment {
   sticker_collection_id?: string | null;
   sticker_url?: string | null;
   sticker_alt_text?: string | null;
+  // Image comment fields (kind="image")
+  image_url?: string | null;
+  image_alt_text?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
 }
 
 export interface FeedCapabilities {
@@ -2603,8 +2608,8 @@ export interface CreateCommentReq {
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
   parent_comment_id?: string | null;
-  // FEED-004: emoji/GIF/sticker comments
-  kind?: "text" | "gif" | "sticker";
+  // FEED-004: emoji/GIF/sticker/image comments
+  kind?: "text" | "gif" | "sticker" | "image";
   gif_url?: string | null;
   gif_alt_text?: string | null;
   gif_width?: number | null;
@@ -2613,6 +2618,11 @@ export interface CreateCommentReq {
   sticker_collection_id?: string | null;
   sticker_url?: string | null;
   sticker_alt_text?: string | null;
+  // Image comment fields (kind="image")
+  image_url?: string | null;
+  image_alt_text?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
 }
 
 export interface EditPostReq {

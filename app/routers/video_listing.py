@@ -419,7 +419,7 @@ class VideoCommentIn(BaseModel):
     # Reply threading: optional parent comment id (mirrors newsfeed).
     parent_comment_id: Optional[str] = Field(default=None, max_length=64)
     # Media comments (mirrors newsfeed CreateCommentRequest). `kind` selects type.
-    kind: Literal["text", "gif", "sticker"] = "text"
+    kind: Literal["text", "gif", "sticker", "image"] = "text"
     text: Optional[str] = Field(default=None, max_length=2000)
     # GIF fields (required when kind=gif)
     gif_url: Optional[str] = Field(default=None, max_length=2048)
@@ -431,12 +431,21 @@ class VideoCommentIn(BaseModel):
     sticker_collection_id: Optional[str] = Field(default=None, max_length=64)
     sticker_url: Optional[str] = Field(default=None, max_length=2048)
     sticker_alt_text: Optional[str] = Field(default=None, max_length=256)
+    # Image fields (required when kind=image) — user-uploaded images.
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_alt_text: Optional[str] = Field(default=None, max_length=256)
+    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
+    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
 
     @model_validator(mode="after")
     def _validate_comment_kind(self):
-        # Reuse the SAME GIF/sticker URL validation the newsfeed comments use
+        # Reuse the SAME GIF/sticker/image URL validation the newsfeed comments use
         # (GAP-0182 / GAP-0183) so video and feed enforce identical origins.
-        from app.routers.newsfeed import _validate_gif_url, _validate_sticker_url
+        from app.routers.newsfeed import (
+            _validate_gif_url,
+            _validate_sticker_url,
+            _validate_comment_image_url,
+        )
 
         if self.kind == "text":
             if not (self.text or "").strip():
@@ -451,6 +460,10 @@ class VideoCommentIn(BaseModel):
             if not (self.sticker_url or "").strip():
                 raise ValueError("sticker_url is required for sticker comments")
             self.sticker_url = _validate_sticker_url(self.sticker_url)
+        elif self.kind == "image":
+            if not (self.image_url or "").strip():
+                raise ValueError("image_url is required for image comments")
+            self.image_url = _validate_comment_image_url(self.image_url)
         return self
 
 
@@ -487,6 +500,11 @@ class VideoCommentOut(BaseModel):
     sticker_collection_id: Optional[str] = None
     sticker_url: Optional[str] = None
     sticker_alt_text: Optional[str] = None
+    # Image comment fields (kind="image")
+    image_url: Optional[str] = None
+    image_alt_text: Optional[str] = None
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
     reactions_counts: dict = Field(default_factory=dict)
     my_reactions: List[str] = Field(default_factory=list)
 
@@ -693,6 +711,10 @@ def add_comment_endpoint(
         sticker_collection_id=body.sticker_collection_id,
         sticker_url=body.sticker_url,
         sticker_alt_text=body.sticker_alt_text,
+        image_url=body.image_url,
+        image_alt_text=body.image_alt_text,
+        image_width=body.image_width,
+        image_height=body.image_height,
     )
     return VideoCommentOut(**result)
 

@@ -299,5 +299,95 @@ class TestVideoCommentsParity(unittest.TestCase):
         self.assertEqual(ctx2.exception.status_code, 400)
 
 
+    # ── 6. Image comments (kind="image") ────────────────────────────
+    def test_image_comment_create_and_projection(self):
+        """kind='image' comment stores image_url and surfaces it in projection."""
+        from app.routers.video_listing import VideoCommentIn
+
+        image_url = "/uploads/object?s3_key=uploads%2Falice%2Fatt_x%2Fphoto.jpg"
+        body = VideoCommentIn(
+            kind="image",
+            image_url=image_url,
+            image_alt_text="Nice photo",
+            image_width=1280,
+            image_height=720,
+        )
+        c = self.svc.add_comment(
+            video_id="v7",
+            user_id="alice",
+            kind=body.kind,
+            image_url=body.image_url,
+            image_alt_text=body.image_alt_text,
+            image_width=body.image_width,
+            image_height=body.image_height,
+        )
+        self.assertEqual(c["kind"], "image")
+        self.assertEqual(c["image_url"], image_url)
+        self.assertEqual(c["image_alt_text"], "Nice photo")
+        self.assertEqual(c["image_width"], 1280)
+        self.assertEqual(c["image_height"], 720)
+        self.assertIsNone(c["text"])
+
+    def test_image_comment_projected_in_list(self):
+        """list_comments must surface image_url for kind='image' items."""
+        from app.routers.video_listing import VideoCommentIn
+
+        url = "/uploads/object?s3_key=uploads%2Falice%2Fatt_y%2Ffoo.png"
+        body = VideoCommentIn(kind="image", image_url=url)
+        self.svc.add_comment(video_id="v8", user_id="alice", kind="image", image_url=url)
+        listed = self.svc.list_comments(video_id="v8", viewer_id="alice")["comments"]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["kind"], "image")
+        self.assertEqual(listed[0]["image_url"], url)
+
+    def test_image_comment_missing_image_url_validation_error(self):
+        """kind='image' without image_url → ValidationError (422)."""
+        from app.routers.video_listing import VideoCommentIn
+
+        with self.assertRaises(ValidationError):
+            VideoCommentIn(kind="image")
+
+    def test_image_comment_disallowed_host_validation_error(self):
+        """https URL from arbitrary third-party is accepted (any https host ok)."""
+        from app.routers.video_listing import VideoCommentIn
+
+        # https from any host is accepted (unlike gif_url which requires allowlist)
+        body = VideoCommentIn(
+            kind="image",
+            image_url="https://legitimate-cdn.example.com/photo.jpg",
+        )
+        self.assertEqual(body.image_url, "https://legitimate-cdn.example.com/photo.jpg")
+
+    def test_image_comment_data_uri_rejected(self):
+        from app.routers.video_listing import VideoCommentIn
+
+        with self.assertRaises(ValidationError) as ctx:
+            VideoCommentIn(kind="image", image_url="data:image/png;base64,AAAA")
+        self.assertIn("scheme", str(ctx.exception))
+
+    def test_image_comment_http_rejected(self):
+        from app.routers.video_listing import VideoCommentIn
+
+        with self.assertRaises(ValidationError) as ctx:
+            VideoCommentIn(kind="image", image_url="http://example.com/img.jpg")
+        self.assertIn("scheme", str(ctx.exception))
+
+    def test_image_comment_edit_blocked(self):
+        """edit_comment must reject image comments (kind guard)."""
+        url = "/uploads/object?s3_key=uploads%2Falice%2Fatt_z%2Fb.jpg"
+        c = self.svc.add_comment(video_id="v9", user_id="alice", kind="image", image_url=url)
+        with self.assertRaises(HTTPException) as ctx:
+            self.svc.edit_comment(
+                video_id="v9", comment_id=c["comment_id"], user_id="alice", text="new text"
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_text_comment_image_url_is_none(self):
+        """text comments have no image_url in their projection."""
+        c = self.svc.add_comment(video_id="v10", user_id="alice", text="hello")
+        self.assertEqual(c["kind"], "text")
+        self.assertIsNone(c["image_url"])
+
+
 if __name__ == "__main__":
     unittest.main()

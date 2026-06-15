@@ -1655,11 +1655,39 @@ def _validate_sticker_url(url: str) -> str:
     )
 
 
+def _validate_comment_image_url(url: str) -> str:
+    """Validate an image_url for kind='image' comments.
+
+    Accepts platform-relative ``/uploads/object?s3_key=...`` URLs (produced by
+    ``POST /uploads/image``) and https absolute URLs (e.g. from CDN).  Rejects
+    dangerous schemes (data:, javascript:, file:), scheme-relative forms (//),
+    and plain http origins.  Same logic in dev and prod (SECOPS-007).
+    """
+    url = (url or "").strip()
+    # Platform-relative upload path (produced by upload_image endpoint).
+    if url.startswith("/") and not url.startswith("//"):
+        if url.startswith("/uploads/object"):
+            return url
+        logger.warning("comment image_url rejected (relative path)", extra={"url_prefix": url[:64]})
+        raise ValueError(
+            "image_url relative path must be a platform upload URL (/uploads/object?s3_key=...)"
+        )
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        logger.warning("comment image_url rejected (scheme)", extra={"scheme": parsed.scheme})
+        raise ValueError(
+            f"image_url scheme '{parsed.scheme}' is not allowed; use https:// or /uploads/object"
+        )
+    if not parsed.netloc:
+        raise ValueError("image_url must have a valid host")
+    return url
+
+
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
     # For kind="text" the existing ContentFieldsMixin body_* fields are used.
-    kind: Literal["text", "gif", "sticker"] = "text"
+    kind: Literal["text", "gif", "sticker", "image"] = "text"
     # GIF fields (required when kind=gif) — mirrors MSG-008 message field names.
     gif_url: Optional[str] = Field(default=None, max_length=2048)
     gif_alt_text: Optional[str] = Field(default=None, max_length=256)
@@ -1670,6 +1698,12 @@ class CreateCommentRequest(ContentFieldsMixin):
     sticker_collection_id: Optional[str] = Field(default=None, max_length=64)
     sticker_url: Optional[str] = Field(default=None, max_length=2048)
     sticker_alt_text: Optional[str] = Field(default=None, max_length=256)
+    # Image fields (required when kind=image) — user-uploaded images via
+    # POST /uploads/image.  Mirrors the gif_* field naming convention.
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_alt_text: Optional[str] = Field(default=None, max_length=256)
+    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
+    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
 
     model_config = {
         "json_schema_extra": {
@@ -1688,6 +1722,11 @@ class CreateCommentRequest(ContentFieldsMixin):
                     "sticker_collection_id": "coll_love_pack",
                     "sticker_url": "/mock/s3/stickers/coll_love_pack/stk_love_heart_01.webp",
                     "sticker_alt_text": "Love heart sticker",
+                },
+                {
+                    "kind": "image",
+                    "image_url": "/uploads/object?s3_key=uploads%2Fuser123%2Fatt_abc%2Fphoto.jpg",
+                    "image_alt_text": "My uploaded photo",
                 },
             ]
         }
@@ -1710,6 +1749,11 @@ class CreateCommentRequest(ContentFieldsMixin):
                 raise ValueError("sticker_url is required for sticker comments")
             # GAP-0183: enforce platform-only sticker origin
             self.sticker_url = _validate_sticker_url(self.sticker_url)
+        elif self.kind == "image":
+            if not (self.image_url or "").strip():
+                raise ValueError("image_url is required for image comments")
+            # Enforce platform upload path or https origin.
+            self.image_url = _validate_comment_image_url(self.image_url)
         return self
 
 
@@ -1737,7 +1781,7 @@ class CommentResponse(BaseModel):
     # Emoji reactions on comments (mirrors post reactions).
     reactions_counts: Dict[str, int] = Field(default_factory=dict)
     my_reactions: List[str] = Field(default_factory=list)
-    # FEED-004: emoji/GIF/sticker comments
+    # FEED-004: emoji/GIF/sticker/image comments
     kind: str = "text"
     gif_url: Optional[str] = None
     gif_alt_text: Optional[str] = None
@@ -1747,6 +1791,11 @@ class CommentResponse(BaseModel):
     sticker_collection_id: Optional[str] = None
     sticker_url: Optional[str] = None
     sticker_alt_text: Optional[str] = None
+    # Image comment fields (kind="image")
+    image_url: Optional[str] = None
+    image_alt_text: Optional[str] = None
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
 
 
 class TipRequest(BaseModel):
@@ -2385,7 +2434,7 @@ def _comment_to_dict(it: Dict[str, Any], viewer_id: Optional[str] = None) -> Dic
         # Emoji reactions on comments (additive — legacy items lack these)
         "reactions_counts": reactions_counts,
         "my_reactions": my_reactions,
-        # FEED-004: emoji/GIF/sticker comments (additive — legacy items lack these)
+        # FEED-004: emoji/GIF/sticker/image comments (additive — legacy items lack these)
         "kind": it.get("kind", "text"),
         "gif_url": it.get("gif_url"),
         "gif_alt_text": it.get("gif_alt_text"),
@@ -2395,6 +2444,11 @@ def _comment_to_dict(it: Dict[str, Any], viewer_id: Optional[str] = None) -> Dic
         "sticker_collection_id": it.get("sticker_collection_id"),
         "sticker_url": it.get("sticker_url"),
         "sticker_alt_text": it.get("sticker_alt_text"),
+        # Image comment fields (kind="image")
+        "image_url": it.get("image_url"),
+        "image_alt_text": it.get("image_alt_text"),
+        "image_width": int(it["image_width"]) if it.get("image_width") is not None else None,
+        "image_height": int(it["image_height"]) if it.get("image_height") is not None else None,
     }
 
 
@@ -5895,15 +5949,15 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")
 
     # FEED-004: gate media comments behind feature flag
-    if req.kind in ("gif", "sticker") and not bool(getattr(S, "rich_comments_enabled", True)):
+    if req.kind in ("gif", "sticker", "image") and not bool(getattr(S, "rich_comments_enabled", True)):
         raise HTTPException(status_code=400, detail="Media comments are not enabled")
 
     comment_id = new_id("cmt")
     created_at = now_iso()
     parent = req.parent_comment_id
 
-    # FEED-004: media comments (gif/sticker) carry no body content; text comments
-    # use the existing ContentFieldsMixin envelope.
+    # FEED-004: media comments (gif/sticker/image) carry no body content; text
+    # comments use the existing ContentFieldsMixin envelope.
     if req.kind == "text":
         content = _content_from_payload(req)
     else:
@@ -5926,6 +5980,10 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         "sticker_collection_id": req.sticker_collection_id,
         "sticker_url": req.sticker_url,
         "sticker_alt_text": req.sticker_alt_text,
+        "image_url": req.image_url,
+        "image_alt_text": req.image_alt_text,
+        "image_width": req.image_width,
+        "image_height": req.image_height,
     }
     _emit_newsfeed_content_metric("create_comment", surface="comment", body_format=content.get("body_format", "plain"))
 
@@ -6085,6 +6143,10 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         sticker_collection_id=req.sticker_collection_id,
         sticker_url=req.sticker_url,
         sticker_alt_text=req.sticker_alt_text,
+        image_url=req.image_url,
+        image_alt_text=req.image_alt_text,
+        image_width=req.image_width,
+        image_height=req.image_height,
     )
 
 
@@ -6138,6 +6200,10 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         raise HTTPException(status_code=403, detail="Not your comment")
     if target.get("deleted"):
         raise HTTPException(status_code=409, detail="Comment deleted")
+    # Media comments (gif/sticker/image) cannot be edited via the text editor
+    # (mirrors the frontend isMediaComment guard and the gif/sticker precedent).
+    if target.get("kind", "text") in ("gif", "sticker", "image"):
+        raise HTTPException(status_code=400, detail="Media comments cannot be edited")
 
     key = {"pk": target["pk"], "sk": target["sk"]}
     new_version = int(req.expected_version) + 1
@@ -6180,6 +6246,10 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         sticker_collection_id=updated.get("sticker_collection_id"),
         sticker_url=updated.get("sticker_url"),
         sticker_alt_text=updated.get("sticker_alt_text"),
+        image_url=updated.get("image_url"),
+        image_alt_text=updated.get("image_alt_text"),
+        image_width=int(updated["image_width"]) if updated.get("image_width") is not None else None,
+        image_height=int(updated["image_height"]) if updated.get("image_height") is not None else None,
     )
 
 

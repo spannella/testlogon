@@ -73,7 +73,7 @@ export interface VideoComment {
   created_at: number;
   edited_at?: number | null;
   parent_comment_id?: string | null;
-  kind?: "text" | "gif" | "sticker";
+  kind?: "text" | "gif" | "sticker" | "image";
   gif_url?: string | null;
   gif_alt_text?: string | null;
   gif_width?: number | null;
@@ -82,13 +82,18 @@ export interface VideoComment {
   sticker_collection_id?: string | null;
   sticker_url?: string | null;
   sticker_alt_text?: string | null;
+  // Image comment fields (kind="image")
+  image_url?: string | null;
+  image_alt_text?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
 }
 
 export interface AddVideoCommentReq {
   parent_comment_id?: string;
-  kind?: "text" | "gif" | "sticker";
+  kind?: "text" | "gif" | "sticker" | "image";
   text?: string;
   gif_url?: string;
   gif_alt_text?: string;
@@ -98,6 +103,11 @@ export interface AddVideoCommentReq {
   sticker_collection_id?: string;
   sticker_url?: string;
   sticker_alt_text?: string;
+  // Image comment fields (kind="image")
+  image_url?: string;
+  image_alt_text?: string;
+  image_width?: number;
+  image_height?: number;
 }
 
 export interface VideoCommentListResponse {

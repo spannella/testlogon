@@ -72,6 +72,11 @@ def _comment_projection(item: Dict[str, Any], viewer_id: Optional[str] = None) -
         "sticker_collection_id": item.get("sticker_collection_id"),
         "sticker_url": item.get("sticker_url"),
         "sticker_alt_text": item.get("sticker_alt_text"),
+        # Image comment fields (kind="image")
+        "image_url": item.get("image_url"),
+        "image_alt_text": item.get("image_alt_text"),
+        "image_width": int(item["image_width"]) if item.get("image_width") is not None else None,
+        "image_height": int(item["image_height"]) if item.get("image_height") is not None else None,
         "reactions_counts": reactions_counts,
         "my_reactions": my_reactions,
     }
@@ -149,6 +154,10 @@ def add_comment(
     sticker_collection_id: Optional[str] = None,
     sticker_url: Optional[str] = None,
     sticker_alt_text: Optional[str] = None,
+    image_url: Optional[str] = None,
+    image_alt_text: Optional[str] = None,
+    image_width: Optional[int] = None,
+    image_height: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Add a comment to a video. Increments comment_count on video metadata.
 
@@ -193,6 +202,10 @@ def add_comment(
         ("sticker_collection_id", sticker_collection_id),
         ("sticker_url", sticker_url),
         ("sticker_alt_text", sticker_alt_text),
+        ("image_url", image_url),
+        ("image_alt_text", image_alt_text),
+        ("image_width", image_width),
+        ("image_height", image_height),
     ):
         if val is not None:
             item[key] = val
@@ -242,6 +255,9 @@ def edit_comment(
         raise HTTPException(404, "Comment not found")
     if item.get("user_id") != user_id:
         raise HTTPException(403, "Not your comment")
+    # Media comments (gif/sticker/image) cannot be edited via text editor.
+    if item.get("kind", "text") in ("gif", "sticker", "image"):
+        raise HTTPException(400, "Media comments cannot be edited")
 
     edited_at = now_ts()
     T.video_comments.update_item(
