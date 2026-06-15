@@ -183,7 +183,7 @@ function JobOrderTable({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function JobOrdersPage() {
-  const [statusFilter, setStatusFilter] = useState<JobOrderStatus | "">("");
+  const [statusFilter, setStatusFilter] = useState<JobOrderStatus | "all">("all");
   const [companyFilter, setCompanyFilter] = useState("");
   const [appliedCompany, setAppliedCompany] = useState("");
   const [openCursor, setOpenCursor] = useState<string | undefined>(undefined);
@@ -206,7 +206,7 @@ export default function JobOrdersPage() {
     queryKey: ["ats", "jobs", "open", { statusFilter, appliedCompany, openCursor }],
     queryFn: () =>
       listOpenJobOrders({
-        status: statusFilter || undefined,
+        status: statusFilter === "all" ? undefined : statusFilter || undefined,
         company_id: appliedCompany || undefined,
         cursor: openCursor,
         limit: 25,
@@ -318,7 +318,7 @@ export default function JobOrdersPage() {
                 <Select
                   value={statusFilter}
                   onValueChange={(v) => {
-                    setStatusFilter(v as JobOrderStatus | "");
+                    setStatusFilter(v as JobOrderStatus | "all");
                     setOpenCursor(undefined);
                   }}
                 >
@@ -326,7 +326,7 @@ export default function JobOrdersPage() {
                     <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All statuses</SelectItem>
+                    <SelectItem value="all">All statuses</SelectItem>
                     {JOB_ORDER_OPEN_STATUSES.map((s) => (
                       <SelectItem key={s} value={s}>
                         {s.replace("_", " ")}

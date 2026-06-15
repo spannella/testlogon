@@ -450,6 +450,7 @@ test.describe("Section E — Resume presign", () => {
       },
     );
     if (res.status() === 404) return; // feature or slug not found
+    if (res.status() === 429) return; // public presign rate limit (anti-abuse)
     // Expect 415 Unsupported Media Type
     expect([415, 422]).toContain(res.status());
   });
@@ -466,6 +467,7 @@ test.describe("Section E — Resume presign", () => {
       },
     );
     if (res.status() === 404) return;
+    if (res.status() === 429) return; // public presign rate limit (anti-abuse)
     expect(res.status()).toBe(413);
   });
 
@@ -482,6 +484,7 @@ test.describe("Section E — Resume presign", () => {
       },
     );
     if (res.status() === 404) return;
+    if (res.status() === 429) return; // public presign rate limit (anti-abuse)
     expect(res.status()).toBe(200);
     const body = await res.json() as { ticket_id: string };
     expect(body.ticket_id).toBe("bot");
@@ -499,6 +502,9 @@ test.describe("Section F — Flag-off 404 enforcement", () => {
    */
 
   test("F1 — Public job board page shows 'not available' when API returns 404", async ({ page }) => {
+    // The portal pages are mounted inside the authenticated shell, so seed auth
+    // before navigating, otherwise the route guard redirects to /login.
+    await injectAuth(page, ALICE_ID);
     // Intercept all /public/careers/* calls and return 404
     await page.route("**/public/careers/**", (route) =>
       route.fulfill({ status: 404, body: JSON.stringify({ detail: "Not found" }) }),

@@ -86,12 +86,8 @@ async function injectAuth(page: Page, identity: string): Promise<void> {
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
   await page.evaluate(
     ([userId, accessToken]: [string, string]) => {
-      const raw = localStorage.getItem("auth-storage");
-      const parsed = raw ? JSON.parse(raw) : { state: {} };
-      parsed.state.userId = userId;
-      parsed.state.accessToken = accessToken;
-      parsed.state.isAuthenticated = true;
-      localStorage.setItem("auth-storage", JSON.stringify(parsed));
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
     },
     [session.user_sub, session.access_token],
   );
@@ -597,7 +593,7 @@ test.describe("Section 99 — Skill Registry UI (ats/skills)", () => {
   });
 
   test("99.1 — page loads at /ats/skills", async () => {
-    await page.goto(`${BASE}/ats/skills`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/skills`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: /skill registry/i })).toBeVisible({
       timeout: 10_000,
     });
@@ -632,7 +628,7 @@ test.describe("Section 100 — Résumé & Skill Search UI (ats/search)", () => {
   });
 
   test("100.1 — page loads at /ats/search", async () => {
-    await page.goto(`${BASE}/ats/search`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/search`, { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("heading", { name: /résumé.*skill search/i }),
     ).toBeVisible({ timeout: 10_000 });
@@ -654,21 +650,25 @@ test.describe("Section 100 — Résumé & Skill Search UI (ats/search)", () => {
   });
 
   test("100.5 — Resume Search: search with 'developer' keyword", async () => {
+    await page.goto(`${BASE}/ats/search`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: /resume search/i }).click();
     await page.getByPlaceholder(/python kubernetes react/i).fill("developer");
     await page.getByRole("button", { name: /^search$/i }).click();
-    // Either results list or no-matches message
+    // Either a results count or the empty-state message appears once the
+    // search resolves (use .first() — both can render for a zero-result query).
     await expect(
-      page.getByText(/candidate.* found|no résumés matched/i),
+      page.getByText(/candidate.* found|no résumés matched/i).first(),
     ).toBeVisible({ timeout: 8_000 });
   });
 
   test("100.6 — Skill Search: match mode selector visible", async () => {
+    await page.goto(`${BASE}/ats/search`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: /skill search/i }).click();
     await expect(page.getByText(/match mode/i)).toBeVisible();
   });
 
   test("100.7 — Skill Search: search in Job Orders shows required_only toggle", async () => {
+    await page.goto(`${BASE}/ats/search`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: /skill search/i }).click();
     // Switch target to job orders
     const searchInSelect = page.locator("select, [role=combobox]").nth(1);
@@ -702,7 +702,7 @@ test.describe("Section 101 — Candidate Skill Profile UI", () => {
 
   test("101.1 — page loads at /ats/skills/candidate/:id", async () => {
     await page.goto(`${BASE}/ats/skills/candidate/${candId}`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
     await expect(
       page.getByRole("heading", { name: /skill profile/i }),

@@ -3233,7 +3233,8 @@ class Settings:
 
     # PIP-001: ATS Recruiting Pipeline
     ats_pipeline_enabled: bool = (
-        os.environ.get("ATS_PIPELINE_ENABLED", "false").lower() == "true"
+        os.environ.get("ATS_PIPELINE_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on")
     )
     ats_pipeline_table_name: str = os.environ.get(
         "ATS_PIPELINE_TABLE_NAME", "ats_pipeline"

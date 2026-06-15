@@ -511,7 +511,7 @@ test.describe("Section 74: Flag-off / not-enabled state — UI", () => {
   });
 
   test("74.1 Candidates list page renders without crashing", async () => {
-    await aliceUiPage.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await aliceUiPage.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     // Either the list table or the not-enabled card should be visible
     const heading = aliceUiPage.getByRole("heading", { name: "Candidates", exact: true });
     await expect(heading).toBeVisible({ timeout: 10_000 });
@@ -519,7 +519,7 @@ test.describe("Section 74: Flag-off / not-enabled state — UI", () => {
 
   test("74.2 When flag is off, shows not-enabled card", async () => {
     // Check for either the not-enabled card OR the table (flag may be on in CI)
-    await aliceUiPage.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await aliceUiPage.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     const notEnabled = aliceUiPage.getByText("Candidates module not enabled");
     const table = aliceUiPage.getByRole("table");
     const emptyState = aliceUiPage.getByText("No candidates found");
@@ -548,25 +548,25 @@ test.describe("Section 75: CandidatesListPage UI", () => {
   });
 
   test("75.1 Page title and New Candidate button visible", async () => {
-    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Candidates", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /new candidate/i })).toBeVisible();
   });
 
   test("75.2 Filter controls render — status and source selects", async () => {
-    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     await expect(page.getByText(/all statuses/i)).toBeVisible();
     await expect(page.getByText(/all sources/i)).toBeVisible();
   });
 
   test("75.3 Search input is present", async () => {
-    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     const searchInput = page.getByPlaceholder(/search name/i);
     await expect(searchInput).toBeVisible();
   });
 
   test("75.4 Clicking New Candidate navigates to create page", async () => {
-    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     // Skip if not-enabled (flag off)
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
@@ -575,7 +575,7 @@ test.describe("Section 75: CandidatesListPage UI", () => {
   });
 
   test("75.5 Clicking a candidate row navigates to detail page", async () => {
-    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     const rows = page.getByRole("row").filter({ hasText: "@" });
@@ -604,7 +604,7 @@ test.describe("Section 76: CandidateDetailPage UI", () => {
 
   test("76.1 Detail page renders tabs: Profile, Resumes, Activity", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("tab", { name: /profile/i })).toBeVisible();
     await expect(page.getByRole("tab", { name: /resumes/i })).toBeVisible();
     await expect(page.getByRole("tab", { name: /activity/i })).toBeVisible();
@@ -612,17 +612,17 @@ test.describe("Section 76: CandidateDetailPage UI", () => {
 
   test("76.2 Profile tab shows status badge and email", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     // Status badge visible
     const badge = page.getByText(/active|qualified|placed|on hold|archived/i).first();
     await expect(badge).toBeVisible({ timeout: 8_000 });
     // Email visible somewhere on page
-    await expect(page.getByText(/@test\.local/)).toBeVisible();
+    await expect(page.getByText(/@test\.local/).first()).toBeVisible({ timeout: 8_000 });
   });
 
   test("76.3 Edit button opens edit form", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /edit/i }).click();
     // Edit mode should show Save button
     await expect(page.getByRole("button", { name: /save/i })).toBeVisible();
@@ -630,7 +630,7 @@ test.describe("Section 76: CandidateDetailPage UI", () => {
 
   test("76.4 Cancel edit returns to view mode", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /edit/i }).click();
     await page.getByRole("button", { name: /cancel/i }).click();
     // Edit button should be back
@@ -639,14 +639,14 @@ test.describe("Section 76: CandidateDetailPage UI", () => {
 
   test("76.5 Resumes tab shows upload button", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: /resumes/i }).click();
     await expect(page.getByRole("button", { name: /upload resume/i })).toBeVisible();
   });
 
   test("76.6 Activity tab renders without error", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: /activity/i }).click();
     // Either history events or empty state
     const emptyHistory = page.getByText("No activity recorded yet");
@@ -656,7 +656,7 @@ test.describe("Section 76: CandidateDetailPage UI", () => {
 
   test("76.7 Back button navigates to list page", async () => {
     if (!candidateId) { test.skip(); return; }
-    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/${candidateId}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /back/i }).click();
     await expect(page).toHaveURL(/\/ats\/candidates$/);
   });
@@ -679,7 +679,7 @@ test.describe("Section 77: CreateCandidatePage UI", () => {
   });
 
   test("77.1 Create page renders required fields", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     await expect(page.getByLabel(/first name/i)).toBeVisible();
@@ -688,7 +688,7 @@ test.describe("Section 77: CreateCandidatePage UI", () => {
   });
 
   test("77.2 Create button disabled when required fields empty", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     const createBtn = page.getByRole("button", { name: /create candidate/i });
@@ -696,7 +696,7 @@ test.describe("Section 77: CreateCandidatePage UI", () => {
   });
 
   test("77.3 Filling required fields enables Create button", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     await page.getByLabel(/first name/i).fill("Test");
@@ -707,14 +707,14 @@ test.describe("Section 77: CreateCandidatePage UI", () => {
   });
 
   test("77.4 Key skills character counter visible", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     await expect(page.getByText(/\/4000/)).toBeVisible();
   });
 
   test("77.5 ATS details section rendered (current pay, desired pay)", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     await expect(page.getByText("ATS details")).toBeVisible();
@@ -723,14 +723,14 @@ test.describe("Section 77: CreateCandidatePage UI", () => {
   });
 
   test("77.6 Address section rendered", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
-    await expect(page.getByText("Address")).toBeVisible();
+    await expect(page.getByText("Address", { exact: true })).toBeVisible();
   });
 
   test("77.7 Successful create navigates to detail page", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     const uniq = `UI_${TS}`;
@@ -742,7 +742,7 @@ test.describe("Section 77: CreateCandidatePage UI", () => {
   });
 
   test("77.8 Back to Candidates button navigates to list", async () => {
-    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/ats/candidates/new`, { waitUntil: "domcontentloaded" });
     const notEnabled = page.getByText("Candidates module not enabled");
     if (await notEnabled.isVisible()) { return; }
     await page.getByRole("button", { name: /back to candidates/i }).click();

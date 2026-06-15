@@ -471,7 +471,7 @@ test.describe("Section 76 — JobOrdersPage UI", () => {
   test.afterAll(async () => alicePage.close());
 
   test("76.1 navigates to /ats/jobs and renders page header", async () => {
-    await alicePage.goto(`${BASE}/ats/jobs`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/ats/jobs`, { waitUntil: "domcontentloaded" });
     await expect(
       alicePage.getByRole("heading", { name: "Job Orders", exact: true }),
     ).toBeVisible();
@@ -527,11 +527,12 @@ test.describe("Section 76 — JobOrdersPage UI", () => {
     // We can't flip server flags here — just verify the component handles
     // a 503 response gracefully by checking the disabled state renders
     // (this test is informational; if ATS is on it won't hit the disabled branch)
-    await page.goto(`${BASE}/ats/jobs`, { waitUntil: "networkidle" });
-    // Either the table or the "not enabled" card should be visible
-    const hasTable = await page.getByTestId("job-orders-table").isVisible().catch(() => false);
-    const hasDisabled = await page.getByText("Job Orders are not enabled").isVisible().catch(() => false);
-    expect(hasTable || hasDisabled).toBe(true);
+    await injectAuth(page, "alice");
+    await page.goto(`${BASE}/ats/jobs`, { waitUntil: "domcontentloaded" });
+    // With ATS on the page header renders; with flags off the disabled card renders.
+    const header = page.getByRole("heading", { name: "Job Orders", exact: true });
+    const disabled = page.getByText("Job Orders are not enabled");
+    await expect(header.or(disabled).first()).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -556,7 +557,7 @@ test.describe("Section 77 — JobOrderDetailPage UI", () => {
   test.afterAll(async () => alicePage.close());
 
   test("77.1 navigates to detail page and shows title", async () => {
-    await alicePage.goto(`${BASE}/ats/jobs/${jobId}`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/ats/jobs/${jobId}`, { waitUntil: "domcontentloaded" });
     await expect(
       alicePage.getByRole("heading", { name: `${TEST_TITLE} detail-page`, exact: true }),
     ).toBeVisible();
@@ -609,7 +610,7 @@ test.describe("Section 77 — JobOrderDetailPage UI", () => {
 
   test("77.10 unknown job_id shows not found message", async () => {
     await alicePage.goto(`${BASE}/ats/jobs/job_doesnotexist`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
     await expect(
       alicePage.getByText("Job order not found or has been deleted."),

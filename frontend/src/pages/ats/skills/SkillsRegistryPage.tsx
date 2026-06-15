@@ -212,15 +212,18 @@ function EntitySkillsPanel({
     retry: false,
   });
 
-  const [weight, setWeight] = useState<string>("");
-  const [required, setRequired] = useState<string>("");
+  const [weight, setWeight] = useState<string>("none");
+  const [required, setRequired] = useState<string>("any");
 
   const assignMut = useMutation({
     mutationFn: (name: string) =>
       assignSkill(entityType, entityId, {
         name,
-        weight: weight ? Number(weight) : undefined,
-        required: entityType === "job_order" && required ? required === "true" : undefined,
+        weight: weight && weight !== "none" ? Number(weight) : undefined,
+        required:
+          entityType === "job_order" && required && required !== "any"
+            ? required === "true"
+            : undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey });
@@ -278,7 +281,7 @@ function EntitySkillsPanel({
                 <SelectValue placeholder="—" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">—</SelectItem>
+                <SelectItem value="none">—</SelectItem>
                 {[1, 2, 3, 4, 5].map((n) => (
                   <SelectItem key={n} value={String(n)}>
                     {n}
@@ -298,7 +301,7 @@ function EntitySkillsPanel({
                 <SelectValue placeholder="—" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">—</SelectItem>
+                <SelectItem value="any">—</SelectItem>
                 <SelectItem value="true">Required</SelectItem>
                 <SelectItem value="false">Optional</SelectItem>
               </SelectContent>

@@ -76,15 +76,8 @@ async function injectAuth(page: Page, identity: string): Promise<void> {
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
   await page.evaluate(
     ([userId, accessToken]: [string, string]) => {
-      const raw = localStorage.getItem("auth-storage");
-      const parsed = raw ? JSON.parse(raw) : { state: {} };
-      parsed.state = {
-        ...parsed.state,
-        userId,
-        accessToken,
-        isAuthenticated: true,
-      };
-      localStorage.setItem("auth-storage", JSON.stringify(parsed));
+      const state = { userId, accessToken, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
     },
     [session.user_sub, session.access_token] as [string, string],
   );
@@ -131,7 +124,7 @@ test.describe("81 — Pipeline CRUD (add / list / remove)", () => {
     alicePage = await newIdentityPage(browser, "alice");
 
     // Create a job order to use as anchor
-    const jobResp = await alicePage.request.post(`${API}/ui/ats/job-orders`, {
+    const jobResp = await alicePage.request.post(`${API}/ui/ats/job-orders/`, {
       headers: csrfHeaders("alice"),
       data: {
         title: `E2E Pipeline Job ${TS}`,
@@ -413,7 +406,7 @@ test.describe("85 — Placement record", () => {
 
     // Create a separate job + candidate for placement tests so we don't
     // interfere with section 82/83 tests.
-    const jobResp = await alicePage.request.post(`${API}/ui/ats/job-orders`, {
+    const jobResp = await alicePage.request.post(`${API}/ui/ats/job-orders/`, {
       headers: csrfHeaders("alice"),
       data: {
         title: `E2E Placement Job ${TS}`,
@@ -619,22 +612,18 @@ test.describe("87 — Pipeline Board UI", () => {
 
   test("87.1 /ats/pipeline loads the board page", async () => {
     await page.goto(`${BASE}/ats/pipeline`, { waitUntil: "domcontentloaded" });
-    // Either board or "not enabled" state
-    const hasBoard = await page.locator("h1").filter({ hasText: /Pipeline Board/i }).count();
-    const hasNotEnabled = await page.locator("text=Pipeline Not Enabled").count();
-    const hasLogin = await page.locator("text=Log in").count();
-    expect(hasBoard + hasNotEnabled + hasLogin).toBeGreaterThan(0);
+    // Either board or "not enabled" state (wait for lazy chunk + queries)
+    const board = page.locator("h1").filter({ hasText: /Pipeline Board/i });
+    const notEnabled = page.locator("text=Pipeline Not Enabled");
+    await expect(board.or(notEnabled).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test("87.2 Board page shows job order picker or not-enabled state", async () => {
     await page.goto(`${BASE}/ats/pipeline`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(500);
-    const picker = page.locator('[placeholder="Select a job order to view pipeline…"]');
+    const picker = page.getByText("Select a job order to view pipeline…");
     const notEnabled = page.locator("text=Pipeline Not Enabled");
-    const isPickerVisible = await picker.count() > 0;
-    const isNotEnabled = await notEnabled.count() > 0;
-    // One of the two should be visible
-    expect(isPickerVisible || isNotEnabled).toBe(true);
+    // One of the two should appear once the lazy chunk + queries settle
+    await expect(picker.or(notEnabled).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test("87.3 Empty board shows prompt to select job order", async () => {

@@ -153,7 +153,7 @@ function AddSkillForm({
   onAdded: () => void;
 }) {
   const [skillName, setSkillName] = useState("");
-  const [weight, setWeight] = useState<string>("");
+  const [weight, setWeight] = useState<string>("none");
   const [suggestions, setSuggestions] = useState<SkillOut[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const qc = useQueryClient();
@@ -162,14 +162,14 @@ function AddSkillForm({
     mutationFn: () =>
       assignSkill("candidate", candidateId, {
         name: skillName.trim(),
-        weight: weight ? Number(weight) : undefined,
+        weight: weight && weight !== "none" ? Number(weight) : undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({
         queryKey: ["entity-skills", "candidate", candidateId],
       });
       setSkillName("");
-      setWeight("");
+      setWeight("none");
       setSuggestions([]);
       onAdded();
       toast.success("Skill added");
@@ -247,7 +247,7 @@ function AddSkillForm({
               <SelectValue placeholder="1–5" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">None</SelectItem>
+              <SelectItem value="none">None</SelectItem>
               {[1, 2, 3, 4, 5].map((n) => (
                 <SelectItem key={n} value={String(n)}>
                   {n} — {["Beginner", "Basic", "Intermediate", "Advanced", "Expert"][n - 1]}

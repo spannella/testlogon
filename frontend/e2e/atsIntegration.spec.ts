@@ -341,30 +341,35 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.1 — /ats/integration route loads without crash", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     // Should show the page title
     await expect(uiPage.getByRole("heading", { name: /ATS Integration/i })).toBeVisible();
   });
 
   test("74.2 — Page shows either not-enabled state or tabs when feature is on/off", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
-    // Accept either the disabled callout OR the tabs
-    const hasDisabled = await uiPage.locator("text=ATS Integration is not enabled").isVisible();
-    const hasTabs     = await uiPage.getByRole("tab", { name: /Candidate/i }).isVisible();
-    expect(hasDisabled || hasTabs).toBe(true);
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
+    // Accept either the disabled callout OR the tabs — wait for the lazy chunk
+    // + queries to settle before asserting.
+    const disabled = uiPage.locator("text=ATS Integration is not enabled");
+    const candidateTab = uiPage.getByRole("tab", { name: /Candidate/i });
+    await expect(disabled.or(candidateTab).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("74.3 — When tabs visible: Candidate tab is active by default", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const candidateTab = uiPage.getByRole("tab", { name: /Candidate/i });
+    const disabled = uiPage.locator("text=ATS Integration is not enabled");
+    await expect(candidateTab.or(disabled).first()).toBeVisible({ timeout: 10_000 });
     if (await candidateTab.isVisible()) {
       await expect(candidateTab).toHaveAttribute("data-state", "active");
     }
   });
 
   test("74.4 — When tabs visible: Job Order tab is clickable", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const jobTab = uiPage.getByRole("tab", { name: /Job Order/i });
+    const disabled = uiPage.locator("text=ATS Integration is not enabled");
+    await expect(jobTab.or(disabled).first()).toBeVisible({ timeout: 10_000 });
     if (await jobTab.isVisible()) {
       await jobTab.click();
       await expect(jobTab).toHaveAttribute("data-state", "active");
@@ -372,7 +377,7 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.5 — Refresh button is visible and clickable", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const refreshBtn = uiPage.getByRole("button", { name: /Refresh/i });
     await expect(refreshBtn).toBeVisible();
     await refreshBtn.click();
@@ -380,7 +385,7 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.6 — Not-enabled state shows config hint", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const notEnabled = await uiPage.locator("text=ATS Integration is not enabled").isVisible();
     if (notEnabled) {
       await expect(uiPage.locator("code", { hasText: "ATS_INTEGRATION_ENABLED" })).toBeVisible();
@@ -388,7 +393,7 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.7 — Link Candidate dialog opens when feature is enabled", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const linkBtn = uiPage.getByRole("button", { name: /Link Candidate/i });
     if (await linkBtn.isVisible()) {
       await linkBtn.click();
@@ -400,7 +405,7 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.8 — Job Order tab: Link Job Order dialog opens when feature is enabled", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const jobTab = uiPage.getByRole("tab", { name: /Job Order/i });
     if (await jobTab.isVisible()) {
       await jobTab.click();
@@ -415,7 +420,7 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.9 — Create link with candidate_id fills and submits when feature is on", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const hasTabs = await uiPage.getByRole("tab", { name: /Candidate/i }).isVisible();
     if (!hasTabs) {
       // Feature off — skip create flow
@@ -433,7 +438,7 @@ test.describe("Section 74: AtsIntegrationPage UI", () => {
   });
 
   test("74.10 — Empty state shown when no links exist", async () => {
-    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/ats/integration`, { waitUntil: "domcontentloaded" });
     const hasTabs = await uiPage.getByRole("tab", { name: /Candidate/i }).isVisible();
     if (hasTabs) {
       // With no links we expect an empty state message
