@@ -27,6 +27,7 @@ import {
 import { listBoards, getBoard, listBoardTickets } from "@/api/endpoints/tickets";
 import { Link } from "react-router-dom";
 import { JiraLinkedPanel } from "./JiraLinkedPanel";
+import { TicketAttachmentsPanel } from "./TicketAttachmentsPanel";
 import { TicketKanbanBoard } from "./TicketKanbanBoard";
 import { BoardKanban } from "./BoardKanban";
 
@@ -393,6 +394,8 @@ export default function TicketsPage() {
                   <Textarea rows={3} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Reply to ticket..." />
                   <Button onClick={() => replyMut.mutate()} disabled={!replyBody.trim() || replyMut.isPending}>Send reply</Button>
                 </div>
+
+                <TicketAttachmentsPanel ticketId={selectedTicket.ticket_id} />
 
                 <JiraLinkedPanel ticketId={selectedTicket.ticket_id} currentTicket={selectedTicket as unknown as Record<string, unknown>} />
               </>

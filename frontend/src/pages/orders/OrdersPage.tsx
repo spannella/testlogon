@@ -1,10 +1,9 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { Package, Search, ArrowRight } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/PageHeader";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,104 +26,74 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/api/client";
 import {
-  getOrderLifecycle,
+  listOrders,
   ORDER_LIFECYCLE_STATUSES,
   formatCents,
   prettyStatus,
-  type OrderLifecycle,
+  type OrderListOut,
   type OrderLifecycleStatus,
 } from "@/api/endpoints/orderLifecycle";
 import { OrderStatusBadge } from "./OrderStatusBadge";
 
-const RECENT_KEY = "ord_recent_lookups";
-
-function loadRecent(): string[] {
-  try {
-    const raw = localStorage.getItem(RECENT_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string").slice(0, 20) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRecent(ids: string[]): void {
-  try {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(ids.slice(0, 20)));
-  } catch {
-    /* ignore quota */
-  }
+function fmtTs(ts?: number | null): string {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleString();
 }
 
 export default function OrdersPage() {
   const navigate = useNavigate();
   const [lookupId, setLookupId] = useState("");
-  const [queryId, setQueryId] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | OrderLifecycleStatus>("all");
-  const [recent, setRecent] = useState<string[]>(() => loadRecent());
+  // Cursor stack so "Previous" works without re-querying from scratch.
+  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
+  const cursor = cursorStack[cursorStack.length - 1];
 
-  const lookupQuery = useQuery<OrderLifecycle, ApiError>({
-    queryKey: ["order-lifecycle", "lookup", queryId],
-    queryFn: () => getOrderLifecycle(queryId),
-    enabled: !!queryId,
+  const ordersQuery = useQuery<OrderListOut, ApiError>({
+    queryKey: ["orders", "list", statusFilter, cursor ?? null],
+    queryFn: () =>
+      listOrders({
+        status: statusFilter === "all" ? undefined : statusFilter,
+        cursor,
+        limit: 50,
+      }),
     retry: false,
   });
 
-  // Resolve cached lifecycle entries for the recent ids so the table can render
-  // a multi-row list (the backend has no list endpoint — each row is a read).
-  const recentQueries = useQuery<OrderLifecycle[]>({
-    queryKey: ["order-lifecycle", "recent", recent],
-    enabled: recent.length > 0,
-    retry: false,
-    queryFn: async () => {
-      const results = await Promise.allSettled(recent.map((id) => getOrderLifecycle(id)));
-      return results
-        .filter((r): r is PromiseFulfilledResult<OrderLifecycle> => r.status === "fulfilled")
-        .map((r) => r.value);
-    },
-  });
+  const featureDisabled = ordersQuery.error?.status === 503;
+  const orders = ordersQuery.data?.orders ?? [];
+  const nextCursor = ordersQuery.data?.next_cursor ?? null;
 
-  const rows = useMemo(() => {
-    const data = recentQueries.data ?? [];
-    // De-dupe + apply status filter.
-    const byId = new Map<string, OrderLifecycle>();
-    for (const o of data) byId.set(o.order_id, o);
-    if (lookupQuery.data) byId.set(lookupQuery.data.order_id, lookupQuery.data);
-    let list = Array.from(byId.values());
-    if (statusFilter !== "all") {
-      list = list.filter(
-        (o) => (o.lifecycle_status ?? o.status) === statusFilter,
-      );
-    }
-    return list.sort((a, b) => (b.updated_ts ?? 0) - (a.updated_ts ?? 0));
-  }, [recentQueries.data, lookupQuery.data, statusFilter]);
-
-  function runLookup() {
-    const id = lookupId.trim();
-    if (!id) return;
-    setQueryId(id);
-    const next = [id, ...recent.filter((r) => r !== id)].slice(0, 20);
-    setRecent(next);
-    saveRecent(next);
+  function resetPaging(next: "all" | OrderLifecycleStatus) {
+    setStatusFilter(next);
+    setCursorStack([undefined]);
   }
 
-  const featureDisabled =
-    lookupQuery.error?.status === 503 ||
-    (recentQueries.error instanceof ApiError && recentQueries.error.status === 503);
+  function goNext() {
+    if (nextCursor) setCursorStack((s) => [...s, nextCursor]);
+  }
+
+  function goPrev() {
+    setCursorStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+  }
+
+  function openLookup() {
+    const id = lookupId.trim();
+    if (!id) return;
+    navigate(`/orders/${encodeURIComponent(id)}`);
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Orders"
-        description="Look up an order by ID, inspect its lifecycle status, and manage transitions."
+        description="Browse your orders, inspect lifecycle status, and manage transitions."
       />
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Find an order</CardTitle>
+          <CardTitle className="text-base">Jump to an order</CardTitle>
           <CardDescription>
-            Enter an order ID to load its lifecycle. Recent lookups are kept below.
+            Know the ID? Enter it to open the order directly.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -132,7 +101,7 @@ export default function OrdersPage() {
             className="flex flex-col gap-3 sm:flex-row sm:items-end"
             onSubmit={(e) => {
               e.preventDefault();
-              runLookup();
+              openLookup();
             }}
           >
             <div className="flex-1 space-y-1">
@@ -144,38 +113,11 @@ export default function OrdersPage() {
                 onChange={(e) => setLookupId(e.target.value)}
               />
             </div>
-            <div className="w-full sm:w-56 space-y-1">
-              <Label htmlFor="ord-status-filter">Status</Label>
-              <Select
-                value={statusFilter}
-                onValueChange={(v) => setStatusFilter(v as "all" | OrderLifecycleStatus)}
-              >
-                <SelectTrigger id="ord-status-filter">
-                  <SelectValue placeholder="All statuses" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  {ORDER_LIFECYCLE_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {prettyStatus(s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <Button type="submit" disabled={!lookupId.trim()}>
               <Search className="mr-2 h-4 w-4" />
-              Look up
+              Open
             </Button>
           </form>
-
-          {queryId && lookupQuery.isError && !featureDisabled && (
-            <p className="mt-3 text-sm text-destructive">
-              {lookupQuery.error?.status === 404
-                ? `No order found with ID "${queryId}" (or you don't have access to it).`
-                : lookupQuery.error?.message || "Unable to load that order."}
-            </p>
-          )}
         </CardContent>
       </Card>
 
@@ -190,26 +132,55 @@ export default function OrdersPage() {
 
       {!featureDisabled && (
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Orders</CardTitle>
-            <CardDescription>
-              {statusFilter === "all"
-                ? "Looked-up orders"
-                : `Looked-up orders · ${prettyStatus(statusFilter)}`}
-            </CardDescription>
+          <CardHeader className="flex flex-row flex-wrap items-end justify-between gap-3 space-y-0">
+            <div>
+              <CardTitle className="text-base">Orders</CardTitle>
+              <CardDescription>
+                {statusFilter === "all"
+                  ? "Your most recent orders"
+                  : `Filtered by ${prettyStatus(statusFilter)}`}
+              </CardDescription>
+            </div>
+            <div className="w-full sm:w-56 space-y-1">
+              <Label htmlFor="ord-status-filter" className="text-xs">
+                Status
+              </Label>
+              <Select
+                value={statusFilter}
+                onValueChange={(v) => resetPaging(v as "all" | OrderLifecycleStatus)}
+              >
+                <SelectTrigger id="ord-status-filter">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  {ORDER_LIFECYCLE_STATUSES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {prettyStatus(s)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </CardHeader>
-          <CardContent>
-            {(lookupQuery.isFetching || recentQueries.isLoading) && rows.length === 0 ? (
+          <CardContent className="space-y-3">
+            {ordersQuery.isError && !featureDisabled && (
+              <p className="text-sm text-destructive">
+                {ordersQuery.error?.message || "Unable to load orders."}
+              </p>
+            )}
+
+            {ordersQuery.isLoading ? (
               <div className="space-y-2">
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />
               </div>
-            ) : rows.length === 0 ? (
+            ) : orders.length === 0 ? (
               <div className="py-10 text-center text-sm text-muted-foreground">
                 <Package className="mx-auto mb-3 h-8 w-8 opacity-40" />
-                {recent.length === 0
-                  ? "No orders yet. Look up an order by ID to get started."
+                {statusFilter === "all"
+                  ? "No orders yet."
                   : "No orders match the current filter."}
               </div>
             ) : (
@@ -225,7 +196,7 @@ export default function OrdersPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((o) => (
+                  {orders.map((o) => (
                     <TableRow
                       key={o.order_id}
                       className="cursor-pointer"
@@ -240,9 +211,7 @@ export default function OrdersPage() {
                         {formatCents(o.amount_cents, o.currency)}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {o.updated_at
-                          ? new Date(o.updated_at).toLocaleString()
-                          : "—"}
+                        {fmtTs(o.updated_at)}
                       </TableCell>
                       <TableCell>
                         <Link
@@ -258,38 +227,29 @@ export default function OrdersPage() {
                 </TableBody>
               </Table>
             )}
+
+            {(cursorStack.length > 1 || nextCursor) && (
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={cursorStack.length <= 1 || ordersQuery.isFetching}
+                  onClick={goPrev}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!nextCursor || ordersQuery.isFetching}
+                  onClick={goNext}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
-      )}
-
-      {recent.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">Recent:</span>
-          {recent.slice(0, 8).map((id) => (
-            <Badge
-              key={id}
-              variant="outline"
-              className="cursor-pointer font-mono"
-              onClick={() => {
-                setLookupId(id);
-                setQueryId(id);
-              }}
-            >
-              {id}
-            </Badge>
-          ))}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => {
-              setRecent([]);
-              saveRecent([]);
-            }}
-          >
-            Clear
-          </Button>
-        </div>
       )}
     </div>
   );

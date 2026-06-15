@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { DollarSign, Layers, Plus, Tags, Trash2 } from "lucide-react";
+import { Boxes, DollarSign, Layers, Plus, Tags, Trash2 } from "lucide-react";
 
 import {
   Card,
@@ -40,16 +40,19 @@ import {
 
 import { ApiError } from "@/api/client";
 import {
+  addBundleComponent,
   addPriceComponent,
   attachFeatureCategory,
   createVariant,
   deleteVariant,
   detachFeatureCategory,
   getProductType,
+  listBundleComponents,
   listFeatureCategories,
   listItemFeatures,
   listPriceComponents,
   listVariants,
+  removeBundleComponent,
   setProductType,
   formatCents,
   formatDeltaCents,
@@ -151,6 +154,9 @@ export function ItemDepthPanel({
         <>
           <FeaturesSection itemId={itemId} />
           {productType === "virtual" && <VariantsSection itemId={itemId} />}
+          {(productType === "bundle" || productType === "kit") && (
+            <BundleComponentsSection itemId={itemId} />
+          )}
           <PriceComponentsSection itemId={itemId} />
         </>
       )}
@@ -482,6 +488,152 @@ function VariantsSection({ itemId }: { itemId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </Card>
+  );
+}
+
+// ─── Bundle components ───────────────────────────────────────────────────────
+
+function BundleComponentsSection({ itemId }: { itemId: string }) {
+  const qc = useQueryClient();
+  const [componentId, setComponentId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+
+  const componentsQuery = useQuery({
+    queryKey: ["catalogDepth", "bundleComponents", itemId],
+    queryFn: () => listBundleComponents(itemId),
+    retry: false,
+  });
+
+  const err = componentsQuery.error as ApiError | undefined;
+  const flagOff = err?.status === 404;
+
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["catalogDepth", "bundleComponents", itemId] });
+
+  const addMut = useMutation({
+    mutationFn: () => {
+      const qty = Math.max(1, Math.round(parseInt(quantity || "1", 10) || 1));
+      return addBundleComponent(itemId, {
+        component_item_id: componentId.trim(),
+        quantity: qty,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Component added");
+      setComponentId("");
+      setQuantity("1");
+      invalidate();
+    },
+    onError: (e: ApiError) => toast.error(e.detail || "Failed to add component"),
+  });
+
+  const removeMut = useMutation({
+    mutationFn: (cid: string) => removeBundleComponent(itemId, cid),
+    onSuccess: () => {
+      toast.success("Component removed");
+      invalidate();
+    },
+    onError: (e: ApiError) => toast.error(e.detail || "Failed to remove component"),
+  });
+
+  const components = componentsQuery.data?.components ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Boxes className="h-4 w-4" /> Bundle Components
+        </CardTitle>
+        <CardDescription>
+          The items included in this bundle/kit and their quantities.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {flagOff ? (
+          <p className="text-sm text-muted-foreground">
+            Bundle composition is not enabled on this platform.
+          </p>
+        ) : componentsQuery.isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : components.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No components yet. Add component items below.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>SKU</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Price</TableHead>
+                <TableHead className="w-10" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {components.map((c) => (
+                <TableRow key={c.component_item_id}>
+                  <TableCell>{c.component_name}</TableCell>
+                  <TableCell className="font-mono text-xs">{c.component_sku}</TableCell>
+                  <TableCell className="text-right tabular-nums">{c.quantity}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCents(c.component_price_cents)}
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 text-destructive"
+                      title="Remove component"
+                      disabled={removeMut.isPending}
+                      onClick={() => removeMut.mutate(c.component_item_id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+
+        {!flagOff && (
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="bundle-component-id" className="text-xs">
+                Component item ID
+              </Label>
+              <Input
+                id="bundle-component-id"
+                value={componentId}
+                placeholder="item_…"
+                onChange={(e) => setComponentId(e.target.value)}
+              />
+            </div>
+            <div className="w-24 space-y-1">
+              <Label htmlFor="bundle-component-qty" className="text-xs">
+                Qty
+              </Label>
+              <Input
+                id="bundle-component-qty"
+                type="number"
+                min="1"
+                step="1"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </div>
+            <Button
+              variant="outline"
+              disabled={!componentId.trim() || addMut.isPending}
+              onClick={() => addMut.mutate()}
+            >
+              <Plus className="mr-1 h-4 w-4" /> Add
+            </Button>
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 }

@@ -132,6 +132,48 @@ export interface OrderCancelRequest {
 /** Comma-separated include groups accepted by GET /lifecycle. */
 export type LifecycleInclude = "history" | "adjustments" | "ship_groups";
 
+// ─── List orders (LIVE: GET /ui/orders) ─────────────────────────────────────
+
+/** One row of GET /ui/orders. Owner-scoped for users; admin may filter. */
+export interface OrderListItem {
+  order_id: string;
+  user_id: string;
+  status: string;
+  lifecycle_status: OrderLifecycleStatus | null;
+  created_at: number; // Unix seconds
+  updated_at: number; // Unix seconds
+  source_system: string;
+  correlation_id: string;
+  amount_cents: number;
+  currency: string;
+  line_item_count: number;
+}
+
+export interface OrderListOut {
+  orders: OrderListItem[];
+  next_cursor: string | null;
+}
+
+/**
+ * GET /ui/orders?user_id=&status=&limit=50&cursor=
+ * Normal users list their own orders; admins may pass user_id/status filters.
+ * Feature-gated: returns 503 {code:"feature_disabled"} when the order-lifecycle
+ * flag is off.
+ */
+export const listOrders = (opts?: {
+  userId?: string;
+  status?: OrderLifecycleStatus;
+  limit?: number;
+  cursor?: string;
+}) => {
+  const params: Record<string, string> = {};
+  if (opts?.userId) params["user_id"] = opts.userId;
+  if (opts?.status) params["status"] = opts.status;
+  params["limit"] = String(opts?.limit ?? 50);
+  if (opts?.cursor) params["cursor"] = opts.cursor;
+  return api.get<OrderListOut>("/ui/orders", params);
+};
+
 // ─── Endpoints (LIVE paths under /ui/orders) ────────────────────────────────
 
 /**

@@ -7,6 +7,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Mail,
+  Pencil,
   RefreshCw,
   Send,
   Trash2,
@@ -21,6 +22,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -35,13 +44,14 @@ import {
   addInvitee,
   cancelRegistration,
   checkInAttendee,
+  getEvent,
   getEventCapacity,
-  getLocalEvent,
   listInvitees,
   listRegistrations,
   registerForEvent,
   removeInvitee,
   sendInvitations,
+  updateEvent,
   type CrmInvitee,
   type CrmRegistration,
 } from "@/api/endpoints/crmEvents";
@@ -67,9 +77,20 @@ function isDisabled(err: unknown): boolean {
 export default function CrmEventDetailPage() {
   const { eventId = "" } = useParams();
   const qc = useQueryClient();
-  const local = getLocalEvent(eventId);
 
   const [inviteeSub, setInviteeSub] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editMaxAttendance, setEditMaxAttendance] = useState("");
+
+  const eventQuery = useQuery({
+    queryKey: ["crm-events", "detail", eventId],
+    queryFn: () => getEvent(eventId),
+    enabled: !!eventId,
+    retry: (count, err) => !isDisabled(err) && count < 2,
+  });
+  const event = eventQuery.data;
 
   const capacityQuery = useQuery({
     queryKey: ["crm-events", "capacity", eventId],
@@ -160,8 +181,39 @@ export default function CrmEventDetailPage() {
     onError: onError("cancel registration"),
   });
 
+  const updateMut = useMutation({
+    mutationFn: () =>
+      updateEvent(eventId, {
+        name: editName.trim(),
+        description: editDescription.trim(),
+        max_attendance: editMaxAttendance.trim() ? Number(editMaxAttendance) : null,
+      }),
+    onSuccess: () => {
+      toast.success("Event updated");
+      setEditOpen(false);
+      qc.invalidateQueries({ queryKey: ["crm-events", "detail", eventId] });
+      qc.invalidateQueries({ queryKey: ["crm-events", "list"] });
+      invalidateAll();
+    },
+    onError: onError("update event"),
+  });
+
+  const openEdit = () => {
+    setEditName(event?.name ?? "");
+    setEditDescription(event?.description ?? "");
+    setEditMaxAttendance(
+      event?.max_attendance != null ? String(event.max_attendance) : "",
+    );
+    setEditOpen(true);
+  };
+
+  const editMaxNum = editMaxAttendance.trim() ? Number(editMaxAttendance) : null;
+  const editMaxInvalid =
+    editMaxNum !== null && (!Number.isInteger(editMaxNum) || editMaxNum < 1);
+  const canSaveEdit = editName.trim().length > 0 && !editMaxInvalid && !updateMut.isPending;
+
   // Feature-disabled short-circuit
-  if (isDisabled(capacityQuery.error)) {
+  if (isDisabled(eventQuery.error) || isDisabled(capacityQuery.error)) {
     return (
       <div className="space-y-6">
         <PageHeader title="Event" description="SuiteCRM Events" />
@@ -177,8 +229,8 @@ export default function CrmEventDetailPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={local?.name ?? "Event"}
-        description={local?.description || `Event ${eventId.slice(0, 12)}…`}
+        title={event?.name ?? (eventQuery.isLoading ? "Loading…" : "Event")}
+        description={event?.description || `Event ${eventId.slice(0, 12)}…`}
         actions={
           <div className="flex items-center gap-2">
             <Button asChild variant="outline" size="sm">
@@ -186,6 +238,15 @@ export default function CrmEventDetailPage() {
                 <ArrowLeft className="mr-1 h-4 w-4" />
                 Back
               </Link>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={openEdit}
+              disabled={!event}
+            >
+              <Pencil className="mr-1 h-4 w-4" />
+              Edit
             </Button>
             <Button variant="outline" size="sm" onClick={invalidateAll}>
               <RefreshCw className="mr-1 h-4 w-4" />
@@ -198,6 +259,63 @@ export default function CrmEventDetailPage() {
           </div>
         }
       />
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit event</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-ev-name" className="text-xs">
+                Name *
+              </Label>
+              <Input
+                id="edit-ev-name"
+                value={editName}
+                maxLength={200}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-ev-desc" className="text-xs">
+                Description
+              </Label>
+              <Textarea
+                id="edit-ev-desc"
+                rows={4}
+                value={editDescription}
+                maxLength={5000}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-ev-max" className="text-xs">
+                Max attendance
+              </Label>
+              <Input
+                id="edit-ev-max"
+                type="number"
+                min={1}
+                value={editMaxAttendance}
+                placeholder="Unlimited"
+                onChange={(e) => setEditMaxAttendance(e.target.value)}
+              />
+              {editMaxInvalid && (
+                <p className="text-xs text-destructive">Must be a whole number ≥ 1.</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!canSaveEdit} onClick={() => updateMut.mutate()}>
+              {updateMut.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Capacity summary */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

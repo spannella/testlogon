@@ -159,6 +159,47 @@ export const deleteVariant = (itemId: string, variantId: string) =>
     `/ui/catalog/items/${encodeURIComponent(itemId)}/variants/${encodeURIComponent(variantId)}`,
   );
 
+// ─── Bundle components (product_depth_bundles) ──────────────────────────────
+//
+// Valid only when the parent item's product_type is bundle/kit (else POST 422).
+// Feature-gated: 404 when product_depth_enabled or product_depth_bundles_enabled
+// is off — callers must handle 404 gracefully.
+
+export interface BundleComponentOut {
+  parent_item_id: string;
+  component_item_id: string;
+  quantity: number;
+  component_sku: string;
+  component_name: string;
+  component_price_cents: number;
+  created_at: number;
+}
+
+export interface BundleComponentListResp {
+  parent_item_id: string;
+  components: BundleComponentOut[];
+  count: number;
+}
+
+export const listBundleComponents = (itemId: string) =>
+  api.get<BundleComponentListResp>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/bundle-components`,
+  );
+
+export const addBundleComponent = (
+  itemId: string,
+  body: { component_item_id: string; quantity: number },
+) =>
+  api.post<BundleComponentOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/bundle-components`,
+    body,
+  );
+
+export const removeBundleComponent = (itemId: string, componentItemId: string) =>
+  api.del<void>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/bundle-components/${encodeURIComponent(componentItemId)}`,
+  );
+
 // ─── Price components (PRD-012) ─────────────────────────────────────────────
 
 export type PriceType =

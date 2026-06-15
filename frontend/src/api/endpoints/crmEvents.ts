@@ -6,10 +6,8 @@
 //   - Models:  app/models.py  (CrmEvent*, CrmInvitee*, CrmRegistration*, CrmCapacity*)
 //   - Flag:    S.crm_events_enabled (env CRM_EVENTS_ENABLED, default OFF -> 404)
 //
-// NOTE: the live backend exposes NO "list events" and NO "get single event"
-// endpoint — only POST / (create) and the per-event sub-resources. To provide an
-// events-list UI we mirror created events into localStorage (see localEvents helpers
-// below). This is reported in `deferred`. All other calls hit the real backend.
+// The live backend now exposes list/get/update for events alongside create and the
+// per-event sub-resources. All calls hit the real backend.
 //
 // Types are defined INLINE here (mirroring app/models.py) — NOT in shared api/types.ts.
 
@@ -35,6 +33,18 @@ export interface CrmEventCreateIn {
   description?: string;
   calendar_event_id?: string | null;
   max_attendance?: number | null;
+}
+
+export interface CrmEventUpdateIn {
+  name?: string;
+  description?: string;
+  calendar_event_id?: string | null;
+  max_attendance?: number | null;
+}
+
+export interface CrmEventListOut {
+  events: CrmEvent[];
+  cursor: string | null;
 }
 
 export type CrmInviteStatus = "pending" | "sent" | "accepted" | "declined" | string;
@@ -101,6 +111,19 @@ export interface CrmCapacity {
 export const createCrmEvent = (body: CrmEventCreateIn) =>
   api.post<CrmEvent>(`${BASE}/`, body);
 
+export const listEvents = (opts?: { limit?: number; cursor?: string }) => {
+  const params: Record<string, string> = {};
+  if (opts?.limit) params["limit"] = String(opts.limit);
+  if (opts?.cursor) params["cursor"] = opts.cursor;
+  return api.get<CrmEventListOut>(`${BASE}`, params);
+};
+
+export const getEvent = (eventId: string) =>
+  api.get<CrmEvent>(`${BASE}/${encodeURIComponent(eventId)}`);
+
+export const updateEvent = (eventId: string, body: CrmEventUpdateIn) =>
+  api.patch<CrmEvent>(`${BASE}/${encodeURIComponent(eventId)}`, body);
+
 export const addInvitee = (eventId: string, inviteeSub: string) =>
   api.post<CrmInvitee>(`${BASE}/${eventId}/invitees`, { invitee_sub: inviteeSub });
 
@@ -165,61 +188,3 @@ export const listRegistrations = (
 
 export const getEventCapacity = (eventId: string) =>
   api.get<CrmCapacity>(`${BASE}/${eventId}/capacity`);
-
-// ─── Client-side event registry (no backend list endpoint) ─────────────────
-// The backend has no list/get-single endpoint, so we mirror created events into
-// localStorage keyed per browser. This is a UI convenience only — capacity and
-// registration data always come fresh from the backend.
-
-const LS_KEY = "crm_events_registry_v1";
-
-export interface LocalEventEntry {
-  event_id: string;
-  name: string;
-  description: string;
-  max_attendance: number | null;
-  calendar_event_id: string | null;
-  created_at: number;
-}
-
-export function readLocalEvents(): LocalEventEntry[] {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as LocalEventEntry[];
-  } catch {
-    return [];
-  }
-}
-
-export function upsertLocalEvent(ev: CrmEvent): void {
-  try {
-    const entries = readLocalEvents().filter((e) => e.event_id !== ev.event_id);
-    entries.unshift({
-      event_id: ev.event_id,
-      name: ev.name,
-      description: ev.description,
-      max_attendance: ev.max_attendance,
-      calendar_event_id: ev.calendar_event_id,
-      created_at: ev.created_at,
-    });
-    localStorage.setItem(LS_KEY, JSON.stringify(entries.slice(0, 200)));
-  } catch {
-    /* localStorage unavailable — ignore */
-  }
-}
-
-export function removeLocalEvent(eventId: string): void {
-  try {
-    const entries = readLocalEvents().filter((e) => e.event_id !== eventId);
-    localStorage.setItem(LS_KEY, JSON.stringify(entries));
-  } catch {
-    /* ignore */
-  }
-}
-
-export function getLocalEvent(eventId: string): LocalEventEntry | undefined {
-  return readLocalEvents().find((e) => e.event_id === eventId);
-}

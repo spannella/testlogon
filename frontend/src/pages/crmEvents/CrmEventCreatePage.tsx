@@ -13,7 +13,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/api/client";
 import {
   createCrmEvent,
-  upsertLocalEvent,
   type CrmEvent,
 } from "@/api/endpoints/crmEvents";
 import { EventsFeatureDisabled } from "./EventsFeatureDisabled";
@@ -35,7 +34,6 @@ export default function CrmEventCreatePage() {
         calendar_event_id: calendarEventId.trim() || null,
       }),
     onSuccess: (ev) => {
-      upsertLocalEvent(ev);
       toast.success("Event created");
       navigate(`/crm/events/${ev.event_id}`);
     },

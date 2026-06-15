@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { useQueries } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { CalendarDays, Plus, Users, Search } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -9,20 +9,35 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ApiError } from "@/api/client";
 import {
   getEventCapacity,
-  readLocalEvents,
-  type LocalEventEntry,
+  listEvents,
+  type CrmEvent,
 } from "@/api/endpoints/crmEvents";
+import { EventsFeatureDisabled } from "./EventsFeatureDisabled";
 
 function fmtDate(ts?: number): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleDateString();
 }
 
+function isDisabled(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 503);
+}
+
 export default function CrmEventsPage() {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState("");
-  const events: LocalEventEntry[] = useMemo(() => readLocalEvents(), []);
+
+  const eventsQuery = useQuery({
+    queryKey: ["crm-events", "list"],
+    queryFn: () => listEvents({ limit: 200 }),
+    retry: (count, err) => !isDisabled(err) && count < 2,
+  });
+
+  const events: CrmEvent[] = eventsQuery.data?.events ?? [];
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -30,12 +45,12 @@ export default function CrmEventsPage() {
     return events.filter(
       (e) =>
         e.name.toLowerCase().includes(q) ||
-        e.description.toLowerCase().includes(q),
+        (e.description || "").toLowerCase().includes(q),
     );
   }, [events, filter]);
 
   // Best-effort live capacity per event. Disabled-feature (404/503) errors are
-  // swallowed silently — the card just shows the local snapshot.
+  // swallowed silently — the card just shows the event summary.
   const capacityQueries = useQueries({
     queries: filtered.map((e) => ({
       queryKey: ["crm-events", "capacity", e.event_id],
@@ -44,6 +59,15 @@ export default function CrmEventsPage() {
       staleTime: 15_000,
     })),
   });
+
+  if (isDisabled(eventsQuery.error)) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Events" description="SuiteCRM Events" />
+        <EventsFeatureDisabled />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -70,7 +94,13 @@ export default function CrmEventsPage() {
         />
       </div>
 
-      {filtered.length === 0 ? (
+      {eventsQuery.isLoading ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full" />
+          <Skeleton className="h-40 w-full" />
+        </div>
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={<CalendarDays className="h-7 w-7" />}
           title={events.length === 0 ? "No events yet" : "No matching events"}
@@ -81,7 +111,7 @@ export default function CrmEventsPage() {
           }
           action={
             events.length === 0
-              ? { label: "Create event", onClick: () => undefined }
+              ? { label: "Create event", onClick: () => navigate("/crm/events/new") }
               : undefined
           }
         />
