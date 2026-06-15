@@ -77,7 +77,7 @@ class TestOfbReturnsRma(unittest.TestCase):
             ],
             attr_types={"created_at": "N"},
         )
-        orders_tbl = _t(ddb, "orders", "order_id")
+        orders_tbl = _t(ddb, "orders", "order_id", "sk")
         order_items_tbl = _t(ddb, "order_items", "order_id", "item_id")
         billing_tbl = _t(
             ddb, "billing", "pk", "sk",
@@ -132,6 +132,7 @@ class TestOfbReturnsRma(unittest.TestCase):
 
         tables_mod.T.orders.put_item(Item={
             "order_id": order_id,
+            "sk": "ORDER",
             "user_id": user,
             "status": "pending_payment",
             "currency": "usd",

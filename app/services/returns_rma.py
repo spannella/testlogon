@@ -104,8 +104,12 @@ def _notify(user_sub: str, title: str, body: str) -> None:
 
 
 def _get_order(order_id: str) -> Optional[Dict[str, Any]]:
-    resp = T.orders.get_item(Key={"order_id": order_id})
-    return resp.get("Item")
+    # The orders table has a composite key (order_id HASH + sk RANGE); the order
+    # header row lives under the canonical ORDER_SK. Reuse the order_store helper
+    # so the key shape stays correct (a bare {"order_id"} GetItem raises a
+    # ValidationException: "number of conditions on the keys is invalid").
+    from app.services.order_store import get_order_header  # lazy: avoid import cycle
+    return get_order_header(order_id)
 
 
 def _get_order_items(order_id: str) -> List[Dict[str, Any]]:

@@ -2939,7 +2939,7 @@ class Settings:
     # Existing inventory, shop, cart, orders, and billing paths are unchanged.
     facility_fulfillment_enabled: bool = os.environ.get(
         "FACILITY_FULFILLMENT_ENABLED", "false"
-    ).lower() == "true"
+    ).lower() in ("1", "true", "yes", "on")
     # Table name settings (default to literal names; override in prod for prefix).
     facilities_table_name: str = os.environ.get("FACILITIES_TABLE_NAME", "facilities")
     transfers_table_name: str = os.environ.get("TRANSFERS_TABLE_NAME", "transfers")
@@ -2949,7 +2949,7 @@ class Settings:
     # Stretch: lot/serial tracking (deferred to FAC-011+, default OFF).
     facility_lot_serial_enabled: bool = os.environ.get(
         "FACILITY_LOT_SERIAL_ENABLED", "false"
-    ).lower() == "true"
+    ).lower() in ("1", "true", "yes", "on")
     lot_serial_table_name: str = os.environ.get("LOT_SERIAL_TABLE_NAME", "lot_serial")
 
     # INFRA-001: Host Inventory Management

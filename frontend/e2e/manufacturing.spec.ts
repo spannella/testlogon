@@ -273,6 +273,17 @@ test.describe("Section 82: Work-order lifecycle (API)", () => {
 
   test("82.1 Create work order", async () => {
     if (!(await mfgEnabled(rootPage))) test.skip();
+    // Releasing a work order issues the BOM components from inventory, so the
+    // warehouse must have stock first (a fresh per-run SKU starts at zero, which
+    // would otherwise make /release abort with 409 insufficient_stock).
+    for (const sku of [`RAW-A-${TS}`, `RAW-B-${TS}`]) {
+      await apiPost(rootPage, "root", "ui/inventory/items/adjust", {
+        sku,
+        delta: 1000,
+        location_id: "warehouse",
+        reason: "e2e_seed",
+      });
+    }
     const resp = await apiPost(rootPage, "root", "ui/manufacturing/work-orders", {
       product_sku: `FG-${TS}`,
       quantity: 5,
@@ -314,8 +325,10 @@ test.describe("Section 82: Work-order lifecycle (API)", () => {
   test("82.5 Cancel a separate work order", async () => {
     if (!(await mfgEnabled(rootPage))) test.skip();
     const createResp = await apiPost(rootPage, "root", "ui/manufacturing/work-orders", {
-      product_sku: `FG-CANCEL-${TS}`,
+      product_sku: `FG-${TS}`,
       quantity: 1,
+      bom_id: sharedBomId || undefined,
+      correlation_id: `cancel-${TS}`,
     });
     const created = (await createResp.json()) as { work_order_id: string };
     const resp = await apiPost(rootPage, "root", `ui/manufacturing/work-orders/${created.work_order_id}/cancel`, {

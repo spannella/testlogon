@@ -71,11 +71,11 @@ pos_router = APIRouter(prefix="/ui/pos", tags=["pos"])
 @pos_router.post("/registers", response_model=RegisterConfig)
 async def create_register_endpoint(
     body: RegisterCreateIn,
-    session: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    actor=Depends(require_admin_or_root_csrf),
 ) -> Dict[str, Any]:
     _require_enabled()
     return create_register(
-        user_sub=session["user_sub"],
+        user_sub=actor.sub,
         label=body.label,
         location_id=body.location_id,
         default_currency=body.default_currency,

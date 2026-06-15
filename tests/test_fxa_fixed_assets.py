@@ -15,6 +15,7 @@ Covers:
 from __future__ import annotations
 
 import hashlib
+import dataclasses
 import sys
 import types
 from decimal import Decimal
@@ -44,8 +45,16 @@ def _fake_post_journal_entry(lines, *, source_type, source_entity_id, memo, gl_d
     return journal_id or "fake_journal_id"
 
 
+@dataclasses.dataclass
+class _FakeJournalLine:
+    account_code: str
+    side: str
+    amount_cents: int
+
+
 _fake_gl_posting = types.ModuleType("app.services.gl_posting")
 _fake_gl_posting.post_journal_entry = _fake_post_journal_entry  # type: ignore[attr-defined]
+_fake_gl_posting.JournalLine = _FakeJournalLine  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -446,8 +455,8 @@ class TestDepreciationPosting:
         assert len(_GL_JOURNAL) == 1
         entry = _GL_JOURNAL[0]
         lines = entry["lines"]
-        total_debit = sum(l["debit"] for l in lines)
-        total_credit = sum(l["credit"] for l in lines)
+        total_debit = sum(l.amount_cents for l in lines if l.side == "debit")
+        total_credit = sum(l.amount_cents for l in lines if l.side == "credit")
         assert total_debit == total_credit, "GL journal must be balanced"
         assert entry["source_type"] == "fixed_asset_depreciation"
         assert entry["source_entity_id"] == asset.asset_id
@@ -528,8 +537,8 @@ class TestDisposal:
         assert len(_GL_JOURNAL) == 1
         entry = _GL_JOURNAL[0]
         lines = entry["lines"]
-        total_debit = sum(l["debit"] for l in lines)
-        total_credit = sum(l["credit"] for l in lines)
+        total_debit = sum(l.amount_cents for l in lines if l.side == "debit")
+        total_credit = sum(l.amount_cents for l in lines if l.side == "credit")
         assert total_debit == total_credit, "Disposal journal must be balanced"
         assert entry["source_type"] == "fixed_asset_disposal"
 
@@ -566,9 +575,9 @@ class TestDisposal:
         entry = _GL_JOURNAL[0]
         lines = entry["lines"]
         # Find the gain line (credit to gain account)
-        gain_lines = [l for l in lines if l["account_id"] == "FA-004" and l["credit"] > 0]
+        gain_lines = [l for l in lines if l.account_code == "FA-004" and l.side == "credit"]
         assert len(gain_lines) == 1
-        assert gain_lines[0]["credit"] == 20_000
+        assert gain_lines[0].amount_cents == 20_000
 
     def test_dispose_loss_on_disposal(self):
         """proceeds < NBV → loss debit."""
@@ -582,9 +591,9 @@ class TestDisposal:
         ), "actor-sub")
         entry = _GL_JOURNAL[0]
         lines = entry["lines"]
-        loss_lines = [l for l in lines if l["account_id"] == "FA-005" and l["debit"] > 0]
+        loss_lines = [l for l in lines if l.account_code == "FA-005" and l.side == "debit"]
         assert len(loss_lines) == 1
-        assert loss_lines[0]["debit"] == 50_000
+        assert loss_lines[0].amount_cents == 50_000
 
 
 # ---------------------------------------------------------------------------

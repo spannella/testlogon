@@ -330,6 +330,12 @@ test.describe("Section 82: POS receipt + X/Z reports (API)", () => {
 
   test("82.4 Z report → report_kind z", async () => {
     test.skip(!enabled || !sessionId, "POS disabled / no session");
+    // A Z report is the end-of-shift report and requires the session to be
+    // closed first (open sessions get the non-resetting X report instead).
+    const close = await apiPost(rootPage, "root", `ui/pos/sessions/${sessionId}/close`, {
+      counted_cash_cents: 200,
+    });
+    expect(close.status()).toBe(200);
     const resp = await apiGet(rootPage, `ui/pos/sessions/${sessionId}/report/z`);
     expect(resp.status()).toBe(200);
     const data = (await resp.json()) as { report_kind: string; tender_breakdown: unknown[] };

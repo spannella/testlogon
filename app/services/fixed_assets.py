@@ -417,12 +417,12 @@ def post_depreciation_period(asset_id: str, period: int) -> DepreciationPeriodOu
     # Post GL journal — LAZY import, guarded by flag
     if getattr(S, "gl_double_entry_enabled", False):
         try:
-            from app.services.gl_posting import post_journal_entry  # type: ignore[import]
+            from app.services.gl_posting import post_journal_entry, JournalLine  # type: ignore[import]
             depr_expense_acct = asset.get("gl_depr_expense_account_id") or ""
             accum_depr_acct = asset.get("gl_accum_depr_account_id") or ""
             lines = [
-                {"account_id": depr_expense_acct, "debit": amount_cents, "credit": 0},
-                {"account_id": accum_depr_acct, "debit": 0, "credit": amount_cents},
+                JournalLine(account_code=depr_expense_acct, side="debit", amount_cents=amount_cents),
+                JournalLine(account_code=accum_depr_acct, side="credit", amount_cents=amount_cents),
             ]
             post_journal_entry(
                 lines,
@@ -512,22 +512,22 @@ def dispose_asset(asset_id: str, body: FixedAssetDisposeIn, actor_sub: str) -> F
     # Post closing GL journal — LAZY import, guarded by flag
     if getattr(S, "gl_double_entry_enabled", False):
         try:
-            from app.services.gl_posting import post_journal_entry  # type: ignore[import]
+            from app.services.gl_posting import post_journal_entry, JournalLine  # type: ignore[import]
             gain = proceeds - nbv
             lines = [
                 # Remove accumulated depreciation (contra-asset, credit-normal → debit to remove)
-                {"account_id": asset.get("gl_accum_depr_account_id") or "", "debit": accum, "credit": 0},
+                JournalLine(account_code=asset.get("gl_accum_depr_account_id") or "", side="debit", amount_cents=accum),
                 # Remove original cost (asset, debit-normal → credit to remove)
-                {"account_id": asset.get("gl_asset_account_id") or "", "debit": 0, "credit": cost},
+                JournalLine(account_code=asset.get("gl_asset_account_id") or "", side="credit", amount_cents=cost),
                 # Cash proceeds (if any) — debit cash/AR (FXA-008: real account)
-                {"account_id": asset.get("gl_cash_account_id") or _FXA_CASH_ACCT, "debit": proceeds, "credit": 0},
+                JournalLine(account_code=asset.get("gl_cash_account_id") or _FXA_CASH_ACCT, side="debit", amount_cents=proceeds),
             ]
             if gain >= 0:
                 # Gain on disposal (credit-normal revenue account)
-                lines.append({"account_id": asset.get("gl_gain_account_id") or "", "debit": 0, "credit": gain})
+                lines.append(JournalLine(account_code=asset.get("gl_gain_account_id") or "", side="credit", amount_cents=gain))
             else:
                 # Loss on disposal (debit-normal expense account)
-                lines.append({"account_id": asset.get("gl_loss_account_id") or "", "debit": -gain, "credit": 0})
+                lines.append(JournalLine(account_code=asset.get("gl_loss_account_id") or "", side="debit", amount_cents=-gain))
             post_journal_entry(
                 lines,
                 source_type="fixed_asset_disposal",

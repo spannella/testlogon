@@ -47,7 +47,7 @@ async def create_supplier_endpoint(
 ) -> Dict[str, Any]:
     from app.services.suppliers import create_supplier  # lazy
     return create_supplier(
-        user.user_sub,
+        user.sub,
         body.name,
         email=body.email,
         phone=body.phone,
@@ -90,7 +90,7 @@ async def update_supplier_endpoint(
     from app.services.suppliers import update_supplier  # lazy
     return update_supplier(
         supplier_id,
-        user.user_sub,
+        user.sub,
         name=body.name,
         email=body.email,
         phone=body.phone,
@@ -107,7 +107,7 @@ async def set_supplier_status_endpoint(
     user: Any = Depends(require_admin_or_root_csrf),
 ) -> Dict[str, Any]:
     from app.services.suppliers import set_supplier_status  # lazy
-    return set_supplier_status(supplier_id, body.status, user.user_sub)
+    return set_supplier_status(supplier_id, body.status, user.sub)
 
 
 # ── Supplier products ──────────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ async def upsert_supplier_product_endpoint(
         min_order_qty=body.min_order_qty,
         supplier_sku=body.supplier_sku,
         preferred=body.preferred,
-        actor=user.user_sub,
+        actor=user.sub,
     )
 
 
@@ -173,7 +173,7 @@ async def create_purchase_order_endpoint(
     from app.services.purchase_orders import create_purchase_order  # lazy
     lines = [l.model_dump() for l in body.lines]
     return create_purchase_order(
-        user.user_sub,
+        user.sub,
         body.supplier_id,
         lines,
         currency=body.currency,
@@ -220,7 +220,7 @@ async def submit_po_endpoint(
 ) -> Dict[str, Any]:
     from app.services.purchase_orders import transition_po  # lazy
     return transition_po(
-        po_id, "submitted", user.user_sub,
+        po_id, "submitted", user.sub,
         reason=body.reason or "",
     )
 
@@ -233,7 +233,7 @@ async def approve_po_endpoint(
 ) -> Dict[str, Any]:
     from app.services.purchase_orders import transition_po  # lazy
     return transition_po(
-        po_id, "approved", user.user_sub,
+        po_id, "approved", user.sub,
         reason=body.reason or "",
     )
 
@@ -246,7 +246,7 @@ async def reject_po_endpoint(
 ) -> Dict[str, Any]:
     from app.services.purchase_orders import transition_po  # lazy
     return transition_po(
-        po_id, "rejected", user.user_sub,
+        po_id, "rejected", user.sub,
         rejected_reason=body.rejected_reason or "",
     )
 
@@ -259,7 +259,7 @@ async def order_po_endpoint(
 ) -> Dict[str, Any]:
     from app.services.purchase_orders import transition_po  # lazy
     return transition_po(
-        po_id, "ordered", user.user_sub,
+        po_id, "ordered", user.sub,
         reason=body.reason or "",
     )
 
@@ -272,7 +272,7 @@ async def cancel_po_endpoint(
 ) -> Dict[str, Any]:
     from app.services.purchase_orders import transition_po  # lazy
     return transition_po(
-        po_id, "cancelled", user.user_sub,
+        po_id, "cancelled", user.sub,
         reason=body.reason or "",
     )
 
@@ -288,7 +288,7 @@ async def receive_po_endpoint(
     return receive_po(
         po_id,
         lines,
-        user.user_sub,
+        user.sub,
         receipt_correlation_id=body.receipt_correlation_id,
     )
 
@@ -317,7 +317,7 @@ async def settle_payment_endpoint(
         po_id,
         body.payment_ref,
         body.provider,
-        user.user_sub,
+        user.sub,
     )
 
 
@@ -341,4 +341,4 @@ async def create_po_from_suggestion_endpoint(
     user: Any = Depends(require_admin_or_root_csrf),
 ) -> Dict[str, Any]:
     from app.services.reorder_suggestions import create_purchase_order_from_suggestion  # lazy
-    return create_purchase_order_from_suggestion(supplier_id, body.skus, user.user_sub)
+    return create_purchase_order_from_suggestion(supplier_id, body.skus, user.sub)

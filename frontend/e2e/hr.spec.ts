@@ -287,7 +287,13 @@ test.describe("Section 93: HR console UI", () => {
     await injectAuth(page, "root");
     await page.goto(`${BASE}/ofbiz/hr`, { waitUntil: "domcontentloaded" });
 
+    // The page is a lazy route chunk — wait for it to settle into either the
+    // tabbed console (HR enabled) or the disabled empty-state before branching.
     const payrollTab = page.getByRole("tab", { name: "Payroll" });
+    await expect(
+      payrollTab.or(page.getByText("HR module is not enabled")).first(),
+    ).toBeVisible({ timeout: 15_000 });
+
     if (await payrollTab.isVisible().catch(() => false)) {
       await payrollTab.click();
       await expect(

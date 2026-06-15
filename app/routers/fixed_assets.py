@@ -36,7 +36,7 @@ async def create_asset_endpoint(
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> FixedAssetOut:
     from app.services.fixed_assets import create_asset
-    return create_asset(user.user_sub, body)
+    return create_asset(user.sub, body)
 
 
 @router.get("", response_model=Dict[str, Any])
@@ -85,7 +85,7 @@ async def transition_work_order_endpoint(
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> AssetMaintenanceOrderOut:
     from app.services.fixed_assets import transition_work_order
-    return transition_work_order(work_order_id, asset_id, body, user.user_sub)
+    return transition_work_order(work_order_id, asset_id, body, user.sub)
 
 
 @router.get("/{asset_id}", response_model=FixedAssetOut)
@@ -104,7 +104,7 @@ async def update_asset_endpoint(
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> FixedAssetOut:
     from app.services.fixed_assets import update_asset
-    return update_asset(asset_id, body, user.user_sub)
+    return update_asset(asset_id, body, user.sub)
 
 
 @router.post("/{asset_id}/dispose", response_model=FixedAssetOut)
@@ -114,7 +114,7 @@ async def dispose_asset_endpoint(
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> FixedAssetOut:
     from app.services.fixed_assets import dispose_asset
-    return dispose_asset(asset_id, body, user.user_sub)
+    return dispose_asset(asset_id, body, user.sub)
 
 
 @router.get("/{asset_id}/schedule", response_model=DepreciationScheduleOut)
@@ -157,7 +157,7 @@ async def create_work_order_endpoint(
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
 ) -> AssetMaintenanceOrderOut:
     from app.services.fixed_assets import create_work_order
-    return create_work_order(asset_id, body, user.user_sub)
+    return create_work_order(asset_id, body, user.sub)
 
 
 @router.get("/{asset_id}/work-orders", response_model=Dict[str, Any])

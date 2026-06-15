@@ -164,7 +164,7 @@ test.describe("Section 91: OrdersPage UI", () => {
     await page.goto(`${BASE}/orders`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Orders", exact: true })).toBeVisible();
     await expect(page.getByLabel("Order ID")).toBeVisible();
-    await expect(page.getByRole("button", { name: /look up/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open", exact: true })).toBeVisible();
   });
 
   test("91.2 Status filter dropdown is present", async ({ page }) => {
@@ -175,7 +175,7 @@ test.describe("Section 91: OrdersPage UI", () => {
   test("91.3 Looking up an unknown order shows a friendly message (no crash)", async ({ page }) => {
     await page.goto(`${BASE}/orders`, { waitUntil: "domcontentloaded" });
     await page.getByLabel("Order ID").fill(`ord_nope_${TS}`);
-    await page.getByRole("button", { name: /look up/i }).click();
+    await page.getByRole("button", { name: "Open", exact: true }).click();
     // Either feature-disabled card or a not-found message — page stays mounted.
     await expect(
       page.getByText(/No order found|not enabled|Unable to load/i).first(),

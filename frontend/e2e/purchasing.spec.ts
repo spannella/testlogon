@@ -192,6 +192,14 @@ test.describe("Section 91: Supplier products (API)", () => {
       name: `Catalog Supplier ${TS}`,
     });
     if (res.ok()) supplierId = (await res.json()).supplier_id;
+    // A supplier-product entry requires the SKU to exist in inventory/catalog
+    // first (the service validates with 422 sku_not_found otherwise). Seed it.
+    await apiPost(rootPage, "root", "ui/inventory/items/adjust", {
+      sku: SKU,
+      delta: 100,
+      location_id: "warehouse",
+      reason: "e2e_seed",
+    });
   });
 
   test("91.1 upsert product", async () => {
@@ -288,7 +296,10 @@ test.describe("Section 92: Purchase order lifecycle (API)", () => {
     });
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(body.po.status).toBe("received");
+    // A fully-received PO advances ordered → received → closed in one call
+    // (the service posts AP and auto-closes), so the final header status is
+    // "closed". Accept either as a valid fully-received terminal state.
+    expect(["received", "closed"]).toContain(body.po.status);
     expect(body.po.lines[0].quantity_received).toBe(5);
   });
 
@@ -299,7 +310,8 @@ test.describe("Section 92: Purchase order lifecycle (API)", () => {
     }
     const res = await apiGet(rootPage, `ui/purchasing/purchase-orders/${poId}`);
     expect(res.ok()).toBeTruthy();
-    expect((await res.json()).status).toBe("received");
+    // Fully-received PO auto-closes (see 92.3): final status is "received" or "closed".
+    expect(["received", "closed"]).toContain((await res.json()).status);
   });
 });
 

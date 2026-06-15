@@ -30,6 +30,15 @@ from app.services.sessions import require_ui_session
 shipping_router = APIRouter(prefix="/ui/shop/shipping", tags=["shipping"])
 
 
+async def _require_admin_csrf_ctx(
+    user: Any = Depends(require_admin_or_root_csrf),
+) -> Dict[str, Any]:
+    """Adapt require_admin_or_root_csrf's AuthenticatedUser into the dict-shaped
+    context (with ``user_sub``) the handlers below expect — mirroring the shape
+    returned by require_ui_session so ``ctx.get("user_sub")`` works uniformly."""
+    return {"user_sub": getattr(user, "sub", ""), "role": getattr(user, "role", None)}
+
+
 def _ensure_enabled() -> None:
     if not getattr(S, "shipping_enabled", False):
         raise HTTPException(status_code=503, detail="Shipping is not enabled")
@@ -42,7 +51,7 @@ def _ensure_enabled() -> None:
 @shipping_router.post("/carriers", response_model=CarrierOut)
 async def create_carrier_endpoint(
     body: CarrierIn,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipping_carriers import create_carrier
@@ -81,7 +90,7 @@ async def get_carrier_endpoint(
 async def update_carrier_endpoint(
     carrier_id: str,
     body: Dict[str, Any],
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipping_carriers import update_carrier
@@ -92,7 +101,7 @@ async def update_carrier_endpoint(
 @shipping_router.post("/carriers/{carrier_id}/disable")
 async def disable_carrier_endpoint(
     carrier_id: str,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipping_carriers import disable_carrier
@@ -108,7 +117,7 @@ async def disable_carrier_endpoint(
 async def add_method_endpoint(
     carrier_id: str,
     body: ShipmentMethodIn,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipping_carriers import add_method
@@ -142,7 +151,7 @@ async def update_method_endpoint(
     carrier_id: str,
     method_code: str,
     body: Dict[str, Any],
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipping_carriers import update_method
@@ -202,7 +211,7 @@ async def estimate_rate_get_endpoint(
 @shipping_router.post("/shipments", response_model=ShipmentOut)
 async def create_shipment_endpoint(
     body: ShipmentIn,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipments import create_shipment
@@ -259,7 +268,7 @@ async def list_order_shipments_endpoint(
 async def update_tracking_endpoint(
     shipment_id: str,
     body: ShipmentTrackingUpdateIn,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipments import update_shipment_tracking
@@ -278,7 +287,7 @@ async def update_tracking_endpoint(
 async def advance_shipment_endpoint(
     shipment_id: str,
     body: ShipmentAdvanceIn,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipments import advance_shipment_status
@@ -297,7 +306,7 @@ async def advance_shipment_endpoint(
 async def cancel_shipment_endpoint(
     shipment_id: str,
     body: ShipmentCancelIn,
-    ctx: Dict[str, Any] = Depends(require_admin_or_root_csrf),
+    ctx: Dict[str, Any] = Depends(_require_admin_csrf_ctx),
 ):
     _ensure_enabled()
     from app.services.shipments import cancel_shipment_with_refund

@@ -393,11 +393,16 @@ def reserve(
         "quantity": int(quantity),
         "status": "active",
         "user_sub": user_sub,
-        "cart_id": cart_id,
         "created_at": created,
         "expires_at": expires_at,
         "gsi_expiry_pk": _ACTIVE_EXPIRY_PARTITION,
     }
+    # cart_id is the hash key of the sparse GSI_CART index (type S). Only write it
+    # when present — a None value is an invalid attribute type for an indexed key
+    # and makes PutItem fail with ValidationException ("Invalid attribute value
+    # type"). Omitting it simply leaves the row out of GSI_CART (sparse index).
+    if cart_id:
+        res_item["cart_id"] = cart_id
     T.reservations.put_item(Item=res_item)
     _audit(
         "inventory.reserve",

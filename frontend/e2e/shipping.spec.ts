@@ -139,11 +139,23 @@ test.describe("Section 80: Shipping carriers + methods (API)", () => {
       expect(resp.status()).toBe(503);
       return;
     }
-    expect(resp.status()).toBe(200);
-    const data = (await resp.json()) as { carrier_id: string; enabled: boolean };
-    expect(typeof data.carrier_id).toBe("string");
-    expect(data.enabled).toBe(true);
-    carrierId = data.carrier_id;
+    // carrier_id is derived deterministically from carrier_code, so against the
+    // persistent dev DynamoDB a prior run may have already created "ups" → 409.
+    // Either path is valid; resolve the canonical carrier_id from the list.
+    expect([200, 409]).toContain(resp.status());
+    if (resp.status() === 200) {
+      const data = (await resp.json()) as { carrier_id: string; enabled: boolean };
+      expect(typeof data.carrier_id).toBe("string");
+      expect(data.enabled).toBe(true);
+      carrierId = data.carrier_id;
+    } else {
+      const list = await apiGet(rootPage, `${PFX}/carriers`, { enabled_only: "false" });
+      expect(list.status()).toBe(200);
+      const carriers = (await list.json()) as Array<{ carrier_id: string; carrier_code: string }>;
+      const ups = carriers.find((c) => c.carrier_code === "ups");
+      expect(ups).toBeTruthy();
+      carrierId = ups!.carrier_id;
+    }
   });
 
   test("80.3 Add method to carrier", async () => {
@@ -158,10 +170,26 @@ test.describe("Section 80: Shipping carriers + methods (API)", () => {
       transit_days_min: 2,
       transit_days_max: 5,
     });
-    expect(resp.status()).toBe(200);
-    const data = (await resp.json()) as { method_code: string; base_rate_cents: number };
-    expect(data.method_code).toBe("ground");
-    expect(data.base_rate_cents).toBe(599);
+    // A method is keyed by (carrier_id, method_code); against the persistent dev
+    // DynamoDB a prior run may already hold "ground" → 409. On conflict, update
+    // the existing method instead so the assertion still verifies the rate.
+    expect([200, 409]).toContain(resp.status());
+    if (resp.status() === 200) {
+      const data = (await resp.json()) as { method_code: string; base_rate_cents: number };
+      expect(data.method_code).toBe("ground");
+      expect(data.base_rate_cents).toBe(599);
+    } else {
+      const patch = await apiPatch(
+        rootPage,
+        "root",
+        `${PFX}/carriers/${carrierId}/methods/ground`,
+        { base_rate_cents: 599 },
+      );
+      expect(patch.status()).toBe(200);
+      const data = (await patch.json()) as { method_code: string; base_rate_cents: number };
+      expect(data.method_code).toBe("ground");
+      expect(data.base_rate_cents).toBe(599);
+    }
   });
 
   test("80.4 List methods for carrier", async () => {
@@ -324,17 +352,32 @@ test.describe("Section 82: Shipment lifecycle (API)", () => {
     expect(data.tracking_number).toContain("1Z");
   });
 
-  test("82.4 Advance status to label_created", async () => {
+  test("82.4 Shipment reaches label_created", async () => {
     if (!shippingEnabled || !shipmentId) {
       test.skip(true, "shipping disabled or shipment not created");
       return;
     }
-    const resp = await apiPost(rootPage, "root", `${PFX}/shipments/${shipmentId}/advance`, {
-      target_status: "label_created",
-    });
-    expect(resp.status()).toBe(200);
-    const data = (await resp.json()) as { status: string };
-    expect(data.status).toBe("label_created");
+    // Setting a tracking number (82.3) auto-advances the shipment from
+    // pending_fulfillment → label_created, so by now it is already there.
+    // Verify the current status and that the transition guard rejects a
+    // redundant re-advance to the same status with a 409 (no silent regress).
+    const cur = await apiGet(rootPage, `${PFX}/shipments/${shipmentId}`);
+    expect(cur.status()).toBe(200);
+    const before = (await cur.json()) as { status: string };
+
+    if (before.status === "pending_fulfillment") {
+      const resp = await apiPost(rootPage, "root", `${PFX}/shipments/${shipmentId}/advance`, {
+        target_status: "label_created",
+      });
+      expect(resp.status()).toBe(200);
+      expect(((await resp.json()) as { status: string }).status).toBe("label_created");
+    } else {
+      expect(before.status).toBe("label_created");
+      const resp = await apiPost(rootPage, "root", `${PFX}/shipments/${shipmentId}/advance`, {
+        target_status: "label_created",
+      });
+      expect(resp.status()).toBe(409);
+    }
   });
 
   test("82.5 Get shipment by id", async () => {
