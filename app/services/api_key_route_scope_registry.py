@@ -170,6 +170,7 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "GET:/ui/shoppingcart/recover/{token}": {"reason": "public one-time cart recovery link, not in initial API-key rollout scope"},
     "GET:/ui/shoppingcart/reminders/preferences": {"reason": "session-auth shopping cart route, not in initial API-key rollout scope"},
     "PUT:/ui/shoppingcart/reminders/preferences": {"reason": "session-auth shopping cart route, not in initial API-key rollout scope"},
+    "GET:/ui/orders": {"reason": "session-auth order-lifecycle route, not in initial API-key rollout scope"},
     "POST:/ui/orders/{order_id}/transition": {"reason": "session-auth order-lifecycle route, not in initial API-key rollout scope"},
     "GET:/ui/orders/{order_id}/lifecycle": {"reason": "session-auth order-lifecycle route, not in initial API-key rollout scope"},
     "GET:/ui/orders/{order_id}/history": {"reason": "session-auth order-lifecycle route, not in initial API-key rollout scope"},

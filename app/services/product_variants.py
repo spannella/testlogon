@@ -345,3 +345,153 @@ def delete_variant(
 
     T.product_depth.delete_item(Key=key)
     _audit("product_variant.deleted", user_sub, parent_item_id=parent_item_id, variant_id=variant_id)
+
+
+# ---------------------------------------------------------------------------
+# Bundle / kit component membership (PRD follow-up)
+# ---------------------------------------------------------------------------
+
+def _bundles_flag_on() -> bool:
+    return (
+        bool(getattr(S, "product_depth_enabled", False))
+        and bool(getattr(S, "product_depth_bundles_enabled", True))
+    )
+
+
+def _require_bundles_enabled() -> None:
+    if not _bundles_flag_on():
+        raise HTTPException(status_code=404, detail="Product bundles are not enabled.")
+
+
+_BUNDLE_PARENT_TYPES = {"bundle", "kit"}
+
+
+def add_bundle_component(
+    parent_item_id: str,
+    component_item_id: str,
+    quantity: int,
+    user_sub: str,
+) -> Dict[str, Any]:
+    """Add a component to a bundle/kit parent item.
+
+    Validations:
+      * flag on (404 otherwise)
+      * parent exists (404) and its product_type is bundle/kit (422 otherwise)
+      * component exists (422 otherwise)
+      * no self-reference (422)
+      * no obvious cycle: the component must not itself be a bundle that already
+        contains the parent (422)
+    Stored as ``SK=BUNDLE#{component_item_id}`` on the parent's partition
+    (last-write-wins, so re-adding updates quantity idempotently).
+    """
+    _require_bundles_enabled()
+
+    if component_item_id == parent_item_id:
+        raise HTTPException(status_code=422, detail="A bundle cannot contain itself.")
+
+    # Parent must exist and be a bundle/kit.
+    _find_catalog_item(parent_item_id)
+    ptype = get_product_type(parent_item_id)
+    if ptype not in _BUNDLE_PARENT_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="Parent item must be of product_type 'bundle' or 'kit'.",
+        )
+
+    # Component must exist in the catalog.
+    _find_catalog_item(component_item_id)
+
+    # Obvious-cycle guard: if the component is itself a bundle that already lists
+    # the parent as a component, adding it back would create a 2-cycle.
+    component_children = {
+        c["component_item_id"] for c in _list_bundle_component_rows(component_item_id)
+    }
+    if parent_item_id in component_children:
+        raise HTTPException(
+            status_code=422,
+            detail="Adding this component would create a bundle cycle.",
+        )
+
+    qty = max(1, int(quantity))
+    ts = now_ts()
+    row: Dict[str, Any] = {
+        "PK": _item_pk(parent_item_id),
+        "SK": f"BUNDLE#{component_item_id}",
+        "entity": "bundle_component",
+        "parent_item_id": parent_item_id,
+        "component_item_id": component_item_id,
+        "quantity": qty,
+        "creator_id": user_sub,
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    T.product_depth.put_item(Item=row)
+    _audit(
+        "product_bundle.component_added",
+        user_sub,
+        parent_item_id=parent_item_id,
+        component_item_id=component_item_id,
+        quantity=qty,
+    )
+    return row
+
+
+def _list_bundle_component_rows(parent_item_id: str) -> List[Dict[str, Any]]:
+    """Raw BUNDLE# rows for a parent (no flag check, no enrichment)."""
+    resp = T.product_depth.query(
+        KeyConditionExpression=(
+            Key("PK").eq(_item_pk(parent_item_id)) & Key("SK").begins_with("BUNDLE#")
+        ),
+    )
+    return resp.get("Items", [])
+
+
+def list_bundle_components(parent_item_id: str) -> List[Dict[str, Any]]:
+    """List a bundle's components enriched with component catalog details.
+
+    Each returned dict matches the BundleComponentOut shape. Never raises for a
+    missing/deleted component — those fields are simply left None.
+    """
+    _require_bundles_enabled()
+    rows = _list_bundle_component_rows(parent_item_id)
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        component_item_id = str(row.get("component_item_id") or "")
+        details: Dict[str, Any] = {}
+        try:
+            details = _find_catalog_item(component_item_id)
+        except HTTPException:
+            details = {}
+        price = details.get("price_cents")
+        out.append(
+            {
+                "parent_item_id": parent_item_id,
+                "component_item_id": component_item_id,
+                "quantity": int(row.get("quantity") or 1),
+                "component_sku": details.get("sku"),
+                "component_name": details.get("name") or details.get("title"),
+                "component_price_cents": int(price) if price is not None else None,
+                "created_at": int(row.get("created_at") or 0),
+            }
+        )
+    return out
+
+
+def remove_bundle_component(
+    parent_item_id: str,
+    component_item_id: str,
+    user_sub: str,
+) -> None:
+    """Remove a component from a bundle. Raises 404 if the row does not exist."""
+    _require_bundles_enabled()
+    key = {"PK": _item_pk(parent_item_id), "SK": f"BUNDLE#{component_item_id}"}
+    resp = T.product_depth.get_item(Key=key)
+    if not resp.get("Item"):
+        raise HTTPException(status_code=404, detail="Bundle component not found.")
+    T.product_depth.delete_item(Key=key)
+    _audit(
+        "product_bundle.component_removed",
+        user_sub,
+        parent_item_id=parent_item_id,
+        component_item_id=component_item_id,
+    )

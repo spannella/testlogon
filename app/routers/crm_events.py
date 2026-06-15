@@ -57,6 +57,47 @@ async def create_crm_event(
     return item
 
 
+@router.get("", response_model=models.CrmEventListOut)
+async def list_crm_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _require_crm_events_enabled()
+    return svc.list_events(ctx["user_sub"], limit=limit, cursor=cursor)
+
+
+@router.get("/{event_id}", response_model=models.CrmEventOut)
+async def get_crm_event_endpoint(
+    event_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _require_crm_events_enabled()
+    meta = _load_event_or_404(event_id)
+    _require_owner_or_admin(meta, ctx)
+    return svc._event_out(meta)
+
+
+@router.patch("/{event_id}", response_model=models.CrmEventOut)
+async def update_crm_event_endpoint(
+    event_id: str,
+    body: models.CrmEventUpdateIn,
+    request: Request,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _require_crm_events_enabled()
+    meta = _load_event_or_404(event_id)
+    _require_owner_or_admin(meta, ctx)
+    updated = svc.update_event(
+        event_id,
+        body.model_dump(exclude_unset=True),
+        actor_sub=ctx["user_sub"],
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return svc._event_out(updated)
+
+
 @router.post("/{event_id}/invitees", response_model=models.CrmInviteeOut, status_code=201)
 async def add_invitee(
     event_id: str,

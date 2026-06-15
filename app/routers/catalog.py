@@ -19,6 +19,9 @@ from pydantic import BaseModel, Field
 from app.core.tables import T
 from app.core.settings import S
 from app.models import (
+    BundleComponentIn,
+    BundleComponentListOut,
+    BundleComponentOut,
     CatalogCategoryCreateIn,
     CatalogCategoryListOut,
     CatalogCategoryOut,
@@ -1188,3 +1191,53 @@ async def get_effective_price_endpoint(item_id: str, price_type: str = "DEFAULT"
     ts = as_of if as_of is not None else int(__import__("time").time())
     result = _svc(item_id, as_of=ts, price_type=price_type)
     return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# PRD follow-up — product-bundle membership API
+# Gated on S.product_depth_enabled + S.product_depth_bundles_enabled via the
+# service's _require_bundles_enabled() (404 when off).
+# ---------------------------------------------------------------------------
+
+@router.post("/items/{item_id}/bundle-components", response_model=BundleComponentOut)
+async def add_bundle_component_endpoint(
+    item_id: str,
+    body: BundleComponentIn,
+    ctx=Depends(require_ui_session),
+):
+    from app.services.product_variants import add_bundle_component as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    row = _svc(
+        parent_item_id=item_id,
+        component_item_id=body.component_item_id,
+        quantity=body.quantity,
+        user_sub=ctx["user_sub"],
+    )
+    return BundleComponentOut(
+        parent_item_id=item_id,
+        component_item_id=row["component_item_id"],
+        quantity=int(row.get("quantity") or 1),
+        created_at=int(row.get("created_at") or 0),
+    )
+
+
+@router.get("/items/{item_id}/bundle-components", response_model=BundleComponentListOut)
+async def list_bundle_components_endpoint(item_id: str, ctx=Depends(require_ui_session)):
+    from app.services.product_variants import list_bundle_components as _svc
+    components = _svc(item_id)
+    return BundleComponentListOut(
+        parent_item_id=item_id,
+        components=[BundleComponentOut(**c) for c in components],
+        count=len(components),
+    )
+
+
+@router.delete("/items/{item_id}/bundle-components/{component_item_id}", status_code=204)
+async def remove_bundle_component_endpoint(
+    item_id: str,
+    component_item_id: str,
+    ctx=Depends(require_ui_session),
+):
+    from app.services.product_variants import remove_bundle_component as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    _svc(item_id, component_item_id, ctx["user_sub"])

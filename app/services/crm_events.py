@@ -150,6 +150,93 @@ def get_crm_event(event_id: str) -> Optional[dict]:
     return resp.get("Item")
 
 
+def _event_out(item: dict) -> dict:
+    """Convert a raw DDB META item to the CrmEventOut shape."""
+    return {
+        "event_id": item.get("event_id", ""),
+        "owner_sub": item.get("owner_sub", ""),
+        "name": item.get("name", ""),
+        "description": item.get("description", ""),
+        "calendar_event_id": item.get("calendar_event_id"),
+        "max_attendance": _int(item.get("max_attendance")),
+        "created_at": _int(item.get("created_at")) or 0,
+        "updated_at": _int(item.get("updated_at")) or 0,
+    }
+
+
+# Public alias mirroring the router's naming (router currently calls get_crm_event).
+def get_event(event_id: str) -> Optional[dict]:
+    """Load the META row. Returns None when not found."""
+    return get_crm_event(event_id)
+
+
+def list_events(owner_sub: str, limit: int = 50, cursor: Optional[str] = None) -> dict:
+    """Paginated list of META events owned by ``owner_sub`` (newest-first).
+
+    Uses the ByOwner GSI (owner_sub / created_at) — never a table scan.
+    """
+    kwargs: dict[str, Any] = {
+        "IndexName": "ByOwner",
+        "KeyConditionExpression": Key("owner_sub").eq(owner_sub),
+        "ScanIndexForward": False,  # newest-first
+        "Limit": min(limit, 200),
+    }
+    lek = decode_cursor(cursor)
+    if lek:
+        kwargs["ExclusiveStartKey"] = lek
+
+    resp = T.crm_events.query(**kwargs)
+    items = resp.get("Items", [])
+    next_cursor = encode_cursor(resp.get("LastEvaluatedKey"))
+    return {
+        "events": [_event_out(i) for i in items],
+        "cursor": next_cursor,
+    }
+
+
+# Mutable fields that PATCH may set on the META row.
+_EVENT_MUTABLE_FIELDS = ("name", "description", "calendar_event_id", "max_attendance")
+
+
+def update_event(event_id: str, updates: dict, actor_sub: str) -> Optional[dict]:
+    """Update mutable META fields. Returns the updated item, or None if absent.
+
+    Only ``name``/``description``/``calendar_event_id``/``max_attendance`` are
+    writable; ``None`` values in ``updates`` are ignored (partial update). Always
+    bumps ``updated_at``.
+    """
+    existing = get_crm_event(event_id)
+    if not existing:
+        return None
+
+    set_parts: list[str] = ["updated_at = :u"]
+    expr_values: dict[str, Any] = {":u": now_ts()}
+    expr_names: dict[str, str] = {}
+
+    for field in _EVENT_MUTABLE_FIELDS:
+        if field in updates and updates[field] is not None:
+            placeholder = f":{field}"
+            name_alias = f"#{field}"
+            expr_names[name_alias] = field
+            set_parts.append(f"{name_alias} = {placeholder}")
+            val = updates[field]
+            expr_values[placeholder] = int(val) if field == "max_attendance" else val
+
+    update_kwargs: dict[str, Any] = {
+        "Key": {"event_id": event_id, "sk": "META"},
+        "UpdateExpression": "SET " + ", ".join(set_parts),
+        "ExpressionAttributeValues": expr_values,
+        "ConditionExpression": "attribute_exists(event_id)",
+        "ReturnValues": "ALL_NEW",
+    }
+    if expr_names:
+        update_kwargs["ExpressionAttributeNames"] = expr_names
+
+    resp = T.crm_events.update_item(**update_kwargs)
+    _audit("crm_event_updated", actor_sub, event_id=event_id)
+    return resp.get("Attributes", existing)
+
+
 def add_invitee(event_id: str, invitee_sub: str, actor_sub: str) -> tuple[dict, bool]:
     """Write an INVITEE row with invite_status='pending'.
 

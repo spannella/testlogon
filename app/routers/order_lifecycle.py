@@ -18,6 +18,8 @@ from app.core.settings import S
 from app.models import (
     OrderCancelIn,
     OrderLifecycleOut,
+    OrderListItem,
+    OrderListOut,
     OrderStatusHistoryEntry,
     OrderTransitionRequest,
     OrderTransitionResult,
@@ -25,6 +27,67 @@ from app.models import (
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui/orders", tags=["order-lifecycle"])
+
+
+def _header_to_list_item(header: Dict[str, Any]) -> OrderListItem:
+    return OrderListItem(
+        order_id=str(header.get("order_id") or ""),
+        user_id=str(header.get("user_id") or ""),
+        status=str(header.get("status") or "pending_payment"),
+        lifecycle_status=(str(header["lifecycle_status"]) if header.get("lifecycle_status") else None),
+        created_at=str(header.get("created_at") or ""),
+        updated_at=str(header.get("updated_at") or ""),
+        source_system=str(header.get("source_system") or ""),
+        correlation_id=str(header.get("correlation_id") or ""),
+        amount_cents=int(header.get("amount_cents") or 0),
+        currency=str(header.get("currency") or "USD"),
+        line_item_count=int(header.get("line_item_count") or 0),
+    )
+
+
+@router.get("", response_model=OrderListOut)
+async def list_orders_endpoint(
+    user_id: str | None = Query(default=None, description="Admin-only cross-user filter"),
+    status: str | None = Query(default=None, description="Legacy status partition filter"),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> OrderListOut:
+    """List orders for the caller. Admins may pass ?user_id= / ?status=."""
+    _require_enabled()
+    from app.services import order_store
+
+    role = normalize_role(ctx.get("role"))
+    is_admin = role in (Role.ADMIN, Role.ROOT)
+
+    # Normal users are always scoped to their own orders; the user_id query
+    # param is admin-only (a non-admin passing someone else's id is ignored).
+    if is_admin:
+        target_user = user_id  # may be None → status-only cross-user listing
+    else:
+        target_user = ctx.get("user_sub")
+
+    if not target_user and not status:
+        # Non-admin with no derivable user (shouldn't happen) or admin asking for
+        # an unscoped listing → require at least one scope.
+        if not is_admin:
+            target_user = ctx.get("user_sub")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "scope_required", "message": "Pass user_id or status"},
+            )
+
+    headers, next_cursor = order_store.list_orders(
+        user_id=target_user,
+        status=status,
+        limit=limit,
+        cursor=cursor,
+    )
+    return OrderListOut(
+        orders=[_header_to_list_item(h) for h in headers],
+        next_cursor=next_cursor,
+    )
 
 
 def _require_enabled() -> None:

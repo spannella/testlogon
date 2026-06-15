@@ -22812,3 +22812,68 @@ class MarketingEmailPreviewOut(BaseModel):
     body_html: Optional[str] = None
     merge_vars_used: Dict[str, str] = Field(default_factory=dict)
     merge_vars_missing: List[str] = Field(default_factory=list)
+
+
+# ===========================================================================
+# Follow-up 1 — ORD: server-side order list (GET /ui/orders)
+# ===========================================================================
+
+class OrderListItem(BaseModel):
+    """Compact order-header projection for the list view."""
+    order_id: str
+    user_id: str
+    status: str  # legacy mirror (also the GSI_STATUS partition)
+    lifecycle_status: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    source_system: str = ""
+    correlation_id: str = ""
+    amount_cents: int = Field(default=0, ge=0)
+    currency: str = "USD"
+    line_item_count: int = Field(default=0, ge=0)
+
+
+class OrderListOut(BaseModel):
+    orders: List[OrderListItem] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# ===========================================================================
+# Follow-up 2 — CRM events: list / get-single / update
+# ===========================================================================
+
+class CrmEventListOut(BaseModel):
+    events: List["CrmEventOut"] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+
+class CrmEventUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    calendar_event_id: Optional[str] = Field(default=None, max_length=200)
+    max_attendance: Optional[int] = Field(default=None, ge=1)
+
+
+# ===========================================================================
+# Follow-up 3 — PRD: product-bundle membership
+# ===========================================================================
+
+class BundleComponentIn(BaseModel):
+    component_item_id: str = Field(min_length=1, max_length=128)
+    quantity: int = Field(default=1, ge=1, le=100000)
+
+
+class BundleComponentOut(BaseModel):
+    parent_item_id: str
+    component_item_id: str
+    quantity: int = Field(default=1, ge=1)
+    component_sku: Optional[str] = None
+    component_name: Optional[str] = None
+    component_price_cents: Optional[int] = None
+    created_at: int = 0
+
+
+class BundleComponentListOut(BaseModel):
+    parent_item_id: str
+    components: List[BundleComponentOut] = Field(default_factory=list)
+    count: int = 0
