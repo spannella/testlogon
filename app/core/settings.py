@@ -323,13 +323,13 @@ class Settings:
     default_monthly_price_cents: int = int(os.environ.get("DEFAULT_MONTHLY_PRICE_CENTS", "999"))
     default_currency_code: int = int(os.environ.get("DEFAULT_CURRENCY_CODE", "840"))
     default_currency: str = os.environ.get("DEFAULT_CURRENCY", "usd")
-    property_dashboard_enabled: bool = os.environ.get("PROPERTY_DASHBOARD_ENABLED", "false").lower() == "true"
+    property_dashboard_enabled: bool = os.environ.get("PROPERTY_DASHBOARD_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     rent_policy_table_name: str = os.environ.get("RENT_POLICY_TABLE_NAME", "rent_policy")
     rent_policy_cache_ttl_seconds: int = int(os.environ.get("RENT_POLICY_CACHE_TTL_SECONDS", "60"))
     property_documents_table_name: str = os.environ.get("PROPERTY_DOCUMENTS_TABLE_NAME", "property_documents")
     portfolio_kpi_max_ledger_scan_pages: int = int(os.environ.get("PORTFOLIO_KPI_MAX_LEDGER_SCAN_PAGES", "50"))
     portfolio_priority_items_default_limit: int = int(os.environ.get("PORTFOLIO_PRIORITY_ITEMS_DEFAULT_LIMIT", "20"))
-    ccbill_webhook_ip_enforce: bool = os.environ.get("CCBILL_WEBHOOK_IP_ENFORCE", "false").lower() == "true"
+    ccbill_webhook_ip_enforce: bool = os.environ.get("CCBILL_WEBHOOK_IP_ENFORCE", "false").lower() in ("1", "true", "yes", "on")
     ccbill_webhook_ip_ranges: str = os.environ.get("CCBILL_WEBHOOK_IP_RANGES", "")
     ccbill_webhook_verify_mode: str = os.environ.get("CCBILL_WEBHOOK_VERIFY_MODE", "")
     ccbill_webhook_signature_secret: str = os.environ.get("CCBILL_WEBHOOK_SIGNATURE_SECRET", "")
@@ -392,11 +392,11 @@ class Settings:
     payment_incidents_webhook_replay_cache_size: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_REPLAY_CACHE_SIZE", "5000"))
     payment_incidents_backfill_apply_enabled: bool = os.environ.get("PAYMENT_INCIDENTS_BACKFILL_APPLY_ENABLED", "0") not in ("0", "false", "False")
     account_state_table_name: str = os.environ.get("ACCOUNT_STATE_TABLE_NAME", "account_state")
-    billing_reconcile_enabled: bool = os.environ.get("BILLING_RECONCILE_ENABLED", "false").lower() == "true"
+    billing_reconcile_enabled: bool = os.environ.get("BILLING_RECONCILE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     billing_reconcile_interval_seconds: int = int(os.environ.get("BILLING_RECONCILE_INTERVAL_SECONDS", "900"))
     billing_reconcile_pending_age_seconds: int = int(os.environ.get("BILLING_RECONCILE_PENDING_AGE_SECONDS", "3600"))
     billing_reconcile_scan_limit: int = int(os.environ.get("BILLING_RECONCILE_SCAN_LIMIT", "200"))
-    billing_dunning_enabled: bool = os.environ.get("BILLING_DUNNING_ENABLED", "false").lower() == "true"
+    billing_dunning_enabled: bool = os.environ.get("BILLING_DUNNING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     billing_dunning_interval_seconds: int = int(os.environ.get("BILLING_DUNNING_INTERVAL_SECONDS", "900"))
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
     billing_dunning_scan_limit: int = int(os.environ.get("BILLING_DUNNING_SCAN_LIMIT", "200"))
@@ -435,7 +435,7 @@ class Settings:
     # TKB: ticket boards (Kanban). Defaults OFF — when false the /boards router
     # is not registered and board columns are not seeded/back-filled, so legacy
     # space/ticket behavior is byte-for-byte unchanged.
-    ticket_boards_enabled: bool = os.environ.get("TICKET_BOARDS_ENABLED", "false").lower() == "true"
+    ticket_boards_enabled: bool = os.environ.get("TICKET_BOARDS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     tickets_jira_workspace_index_name: str = os.environ.get("TICKETS_JIRA_WORKSPACE_INDEX_NAME", "jira_workspace-updated_at-index")
     tickets_jira_issue_index_name: str = os.environ.get("TICKETS_JIRA_ISSUE_INDEX_NAME", "jira_issue-index")
     tickets_jira_sync_state_index_name: str = os.environ.get("TICKETS_JIRA_SYNC_STATE_INDEX_NAME", "jira_sync_state-updated_at-index")
@@ -443,7 +443,7 @@ class Settings:
     # Ticket bounties (TBT-001) — escrow-backed ticket bounties. Additive, default OFF.
     # When off, all bounty endpoints 404 and the ticket + billing systems are unchanged.
     ticket_bounties_enabled: bool = (
-        os.environ.get("TICKET_BOUNTIES_ENABLED", "false").lower() == "true"
+        os.environ.get("TICKET_BOUNTIES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     )
     ticket_bounty_min_cents: int = int(os.environ.get("TICKET_BOUNTY_MIN_CENTS", "100"))
     ticket_bounty_max_cents: int = int(os.environ.get("TICKET_BOUNTY_MAX_CENTS", "10000000"))
@@ -465,11 +465,11 @@ class Settings:
     )
 
     # Jira integration feature flags and guardrails
-    jira_sync_enabled: bool = os.environ.get("JIRA_SYNC_ENABLED", "false").lower() == "true"
-    jira_sync_read_enabled: bool = os.environ.get("JIRA_SYNC_READ_ENABLED", "false").lower() == "true"
-    jira_sync_outbound_enabled: bool = os.environ.get("JIRA_SYNC_OUTBOUND_ENABLED", "false").lower() == "true"
-    jira_sync_inbound_enabled: bool = os.environ.get("JIRA_SYNC_INBOUND_ENABLED", "false").lower() == "true"
-    jira_sync_outbound_kill_switch: bool = os.environ.get("JIRA_SYNC_OUTBOUND_KILL_SWITCH", "false").lower() == "true"
+    jira_sync_enabled: bool = os.environ.get("JIRA_SYNC_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_read_enabled: bool = os.environ.get("JIRA_SYNC_READ_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_outbound_enabled: bool = os.environ.get("JIRA_SYNC_OUTBOUND_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_inbound_enabled: bool = os.environ.get("JIRA_SYNC_INBOUND_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_outbound_kill_switch: bool = os.environ.get("JIRA_SYNC_OUTBOUND_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     jira_sync_workspace_allowlist: str = os.environ.get("JIRA_SYNC_WORKSPACE_ALLOWLIST", "")
     jira_sync_require_workspace_allowlist: bool = os.environ.get("JIRA_SYNC_REQUIRE_WORKSPACE_ALLOWLIST", "true").lower() == "true"
     jira_sync_require_oauth_config: bool = os.environ.get("JIRA_SYNC_REQUIRE_OAUTH_CONFIG", "true").lower() == "true"
@@ -894,14 +894,14 @@ class Settings:
     )
     cart_recovery_link_ttl_days: int = int(os.environ.get("CART_RECOVERY_LINK_TTL_DAYS", "7"))
     # OFBiz Manufacturing/MRP (MFG-001..MFG-014). Master switch defaults OFF.
-    manufacturing_mrp_enabled: bool = os.environ.get("MANUFACTURING_MRP_ENABLED", "false").lower() == "true"
+    manufacturing_mrp_enabled: bool = os.environ.get("MANUFACTURING_MRP_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     mfg_boms_table_name: str = os.environ.get("MFG_BOMS_TABLE_NAME", "mfg_boms")
     mfg_work_centers_table_name: str = os.environ.get("MFG_WORK_CENTERS_TABLE_NAME", "mfg_work_centers")
     mfg_work_orders_table_name: str = os.environ.get("MFG_WORK_ORDERS_TABLE_NAME", "mfg_work_orders")
     mfg_mrp_table_name: str = os.environ.get("MFG_MRP_TABLE_NAME", "mfg_mrp")
     mfg_mrp_default_horizon_days: int = int(os.environ.get("MFG_MRP_DEFAULT_HORIZON_DAYS", "30"))
     mfg_bom_max_explosion_depth: int = int(os.environ.get("MFG_BOM_MAX_EXPLOSION_DEPTH", "5"))
-    manufacturing_cost_posting_enabled: bool = os.environ.get("MANUFACTURING_COST_POSTING_ENABLED", "false").lower() == "true"
+    manufacturing_cost_posting_enabled: bool = os.environ.get("MANUFACTURING_COST_POSTING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
@@ -909,7 +909,7 @@ class Settings:
     # OFBiz Catalog/Product Depth (PRD-001..PRD-016)
     # Master switch defaults OFF. Sub-flags default True so enabling the master
     # activates all depth features; operators can disable individual axes.
-    product_depth_enabled: bool = os.environ.get("PRODUCT_DEPTH_ENABLED", "false").lower() == "true"
+    product_depth_enabled: bool = os.environ.get("PRODUCT_DEPTH_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     product_depth_table_name: str = os.environ.get("PRODUCT_DEPTH_TABLE_NAME", "product_depth")
     product_depth_variants_enabled: bool = os.environ.get("PRODUCT_DEPTH_VARIANTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     product_depth_bundles_enabled: bool = os.environ.get("PRODUCT_DEPTH_BUNDLES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
@@ -921,31 +921,31 @@ class Settings:
     # OFBiz commerce/ERP — Phase 1: inventory & soft reservations (ADR-001, OFB-002/003/004).
     # Master switch defaults OFF: with it off, the catalog/cart/billing decrement-at-purchase
     # path is byte-for-byte unchanged; the inventory service is dormant.
-    inventory_reservations_enabled: bool = os.environ.get("INVENTORY_RESERVATIONS_ENABLED", "false").lower() == "true"
+    inventory_reservations_enabled: bool = os.environ.get("INVENTORY_RESERVATIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     inventory_reservation_ttl_seconds: int = int(os.environ.get("INVENTORY_RESERVATION_TTL_SECONDS", "1800"))
     inventory_table_name: str = os.environ.get("INVENTORY_TABLE_NAME", "inventory")
     reservations_table_name: str = os.environ.get("RESERVATIONS_TABLE_NAME", "reservations")
-    gl_double_entry_enabled: bool = os.environ.get("GL_DOUBLE_ENTRY_ENABLED", "false").lower() == "true"
+    gl_double_entry_enabled: bool = os.environ.get("GL_DOUBLE_ENTRY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     gl_accounts_table_name: str = os.environ.get("GL_ACCOUNTS_TABLE_NAME", "gl_accounts")
     gl_journal_table_name: str = os.environ.get("GL_JOURNAL_TABLE_NAME", "gl_journal")
-    gl_ar_ap_enabled: bool = os.environ.get("GL_AR_AP_ENABLED", "false").lower() == "true"
-    ar_ap_subledgers_enabled: bool = os.environ.get("AR_AP_SUBLEDGERS_ENABLED", "false").lower() == "true"
+    gl_ar_ap_enabled: bool = os.environ.get("GL_AR_AP_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    ar_ap_subledgers_enabled: bool = os.environ.get("AR_AP_SUBLEDGERS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     ar_ap_snapshots_table_name: str = os.environ.get("AR_AP_SNAPSHOTS_TABLE_NAME", "ar_ap_snapshots")
-    pricing_rules_enabled: bool = os.environ.get("PRICING_RULES_ENABLED", "false").lower() == "true"
+    pricing_rules_enabled: bool = os.environ.get("PRICING_RULES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     pricing_rules_table_name: str = os.environ.get("PRICING_RULES_TABLE_NAME", "PricingRules")
     # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
     # Master switch defaults OFF: with it off the returns/RMA endpoints 404 and
     # the module is dormant; existing order/billing behavior is unchanged.
     # Store integration layer (ECM-002 / Phase 8-J). Master switch: when False the entire store-integration layer is dormant and the catalog/cart/checkout paths are byte-for-byte unchanged.
-    store_integration_enabled: bool = os.environ.get("STORE_INTEGRATION_ENABLED", "false").lower() == "true"
+    store_integration_enabled: bool = os.environ.get("STORE_INTEGRATION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     # Per-surface sub-flags — each is AND-ed with the master switch inside _integration_enabled(sub_flag). All default false so production deployments can enable surfaces incrementally without a code change.
-    store_show_live_availability: bool = os.environ.get("STORE_SHOW_LIVE_AVAILABILITY", "false").lower() == "true"
-    store_apply_pricing_rules: bool = os.environ.get("STORE_APPLY_PRICING_RULES", "false").lower() == "true"
-    store_show_fulfillment_status: bool = os.environ.get("STORE_SHOW_FULFILLMENT_STATUS", "false").lower() == "true"
-    store_variant_selection_enabled: bool = os.environ.get("STORE_VARIANT_SELECTION_ENABLED", "false").lower() == "true"
+    store_show_live_availability: bool = os.environ.get("STORE_SHOW_LIVE_AVAILABILITY", "false").lower() in ("1", "true", "yes", "on")
+    store_apply_pricing_rules: bool = os.environ.get("STORE_APPLY_PRICING_RULES", "false").lower() in ("1", "true", "yes", "on")
+    store_show_fulfillment_status: bool = os.environ.get("STORE_SHOW_FULFILLMENT_STATUS", "false").lower() in ("1", "true", "yes", "on")
+    store_variant_selection_enabled: bool = os.environ.get("STORE_VARIANT_SELECTION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     # ECM-008: reserve-on-add-to-cart flag (both this AND inventory_reservations_enabled must be true)
-    store_cart_reservations_enabled: bool = os.environ.get("STORE_CART_RESERVATIONS_ENABLED", "false").lower() == "true"
-    returns_rma_enabled: bool = os.environ.get("RETURNS_RMA_ENABLED", "false").lower() == "true"
+    store_cart_reservations_enabled: bool = os.environ.get("STORE_CART_RESERVATIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    returns_rma_enabled: bool = os.environ.get("RETURNS_RMA_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     returns_table_name: str = os.environ.get("RETURNS_TABLE_NAME", "returns")
 
     # File manager
@@ -993,7 +993,7 @@ class Settings:
     filemgr_mount_unavailable_fail_threshold: int = int(os.environ.get("FILEMGR_MOUNT_UNAVAILABLE_FAIL_THRESHOLD", "6"))
     filemgr_mount_recovery_success_threshold: int = int(os.environ.get("FILEMGR_MOUNT_RECOVERY_SUCCESS_THRESHOLD", "2"))
     filemgr_mount_status_update_sla_seconds: int = int(os.environ.get("FILEMGR_MOUNT_STATUS_UPDATE_SLA_SECONDS", "30"))
-    filemgr_mount_reconcile_enabled: bool = os.environ.get("FILEMGR_MOUNT_RECONCILE_ENABLED", "false").lower() == "true"
+    filemgr_mount_reconcile_enabled: bool = os.environ.get("FILEMGR_MOUNT_RECONCILE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     filemgr_mount_reconcile_interval_seconds: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_INTERVAL_SECONDS", "900"))
     filemgr_mount_reconcile_scan_limit: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_SCAN_LIMIT", "100"))
     filemgr_mount_reconcile_local_page_limit: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_LOCAL_PAGE_LIMIT", "200"))
@@ -1052,7 +1052,7 @@ class Settings:
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
     filemgr_retention_days: int = int(os.environ.get("FILEMGR_RETENTION_DAYS", "30"))
     filemgr_purge_scan_limit: int = int(os.environ.get("FILEMGR_PURGE_SCAN_LIMIT", "200"))
-    filemgr_purge_enabled: bool = os.environ.get("FILEMGR_PURGE_ENABLED", "false").lower() == "true"
+    filemgr_purge_enabled: bool = os.environ.get("FILEMGR_PURGE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     filemgr_purge_interval_seconds: int = int(os.environ.get("FILEMGR_PURGE_INTERVAL_SECONDS", "900"))
     filemgr_admin_content_access_tier: str = os.environ.get("FILEMGR_ADMIN_CONTENT_ACCESS_TIER", "none")
     filemgr_purge_index_name: str = os.environ.get("FILEMGR_PURGE_INDEX_NAME", "GSI_PURGE")
@@ -1073,7 +1073,7 @@ class Settings:
     share_link_s3_prefix: str = os.environ.get("SHARE_LINK_S3_PREFIX", "share-links")
     share_link_base_url: str = os.environ.get("SHARE_LINK_BASE_URL", "http://localhost:3000/share").rstrip("/")
 
-    projects_reconcile_enabled: bool = os.environ.get("PROJECTS_RECONCILE_ENABLED", "false").lower() == "true"
+    projects_reconcile_enabled: bool = os.environ.get("PROJECTS_RECONCILE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     projects_reconcile_interval_seconds: int = int(os.environ.get("PROJECTS_RECONCILE_INTERVAL_SECONDS", "900"))
     projects_reconcile_scan_limit: int = int(os.environ.get("PROJECTS_RECONCILE_SCAN_LIMIT", "200"))
     projects_reconcile_max_attempts: int = int(os.environ.get("PROJECTS_RECONCILE_MAX_ATTEMPTS", "3"))
@@ -1294,8 +1294,8 @@ class Settings:
     video_share_playback_token_ttl_seconds: int = int(os.environ.get("VIDEO_SHARE_PLAYBACK_TOKEN_TTL_SECONDS", "300"))
 
     # Messaging feature flags
-    messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"
-    messaging_encrypted_messages_kill_switch: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH", "false").lower() == "true"
+    messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_encrypted_messages_kill_switch: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     countdown_messages_enabled: bool = os.environ.get("COUNTDOWN_MESSAGES_ENABLED", "true").lower() == "true"
     # GIF & Sticker messages (MSG-008)
     gif_messages_enabled: bool = os.environ.get("GIF_MESSAGES_ENABLED", "true").lower() == "true"
@@ -1327,16 +1327,16 @@ class Settings:
     find_datetime_max_slots_per_user: int = int(os.environ.get("FIND_DATETIME_MAX_SLOTS", "500"))
     # Find-a-DateTime newsfeed posts (FEED-003)
     find_datetime_posts_enabled: bool = os.environ.get("FIND_DATETIME_POSTS_ENABLED", "true").lower() == "true"
-    messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() == "true"
-    messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
+    messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
+    messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     messaging_mass_send_enabled: bool = os.environ.get("MESSAGING_MASS_SEND_ENABLED", "true").lower() == "true"
-    messaging_mass_send_kill_switch: bool = os.environ.get("MESSAGING_MASS_SEND_KILL_SWITCH", "false").lower() == "true"
+    messaging_mass_send_kill_switch: bool = os.environ.get("MESSAGING_MASS_SEND_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     messaging_mass_send_campaigns_per_user_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_USER_PER_HOUR", "20"))
     messaging_mass_send_campaigns_per_tenant_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_TENANT_PER_HOUR", "500"))
     messaging_mass_send_max_destinations_per_campaign: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_DESTINATIONS_PER_CAMPAIGN", "100"))
     messaging_mass_send_max_concurrent_workers: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_CONCURRENT_WORKERS", "8"))
-    messaging_dm_lottery_enabled: bool = os.environ.get("MESSAGING_DM_LOTTERY_ENABLED", "false").lower() == "true"
-    messaging_dm_lottery_kill_switch: bool = os.environ.get("MESSAGING_DM_LOTTERY_KILL_SWITCH", "false").lower() == "true"
+    messaging_dm_lottery_enabled: bool = os.environ.get("MESSAGING_DM_LOTTERY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_dm_lottery_kill_switch: bool = os.environ.get("MESSAGING_DM_LOTTERY_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     # Canonical profile rollout flags (UPR-020)
     profile_lookup_audience_filtering_enabled: bool = os.environ.get("PROFILE_LOOKUP_AUDIENCE_FILTERING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     messaging_webrtc_direct_call_enabled: bool = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_ENABLED", "false").lower() in ("1", "true", "yes", "on")
@@ -3045,7 +3045,7 @@ class Settings:
     # JOB-002: allow closed job orders to be reopened (default True)
     job_order_allow_reopen: bool = os.environ.get("JOB_ORDER_ALLOW_REOPEN", "1") not in ("0", "false", "False")
     # Property management (open-property vertical, PROP-001..PROP-005). Default OFF.
-    property_mgmt_enabled: bool = os.environ.get("PROPERTY_MGMT_ENABLED", "false").lower() == "true"
+    property_mgmt_enabled: bool = os.environ.get("PROPERTY_MGMT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     properties_table_name: str = os.environ.get("PROPERTIES_TABLE_NAME", "properties")
     # QloApps hotel-PMS vertical (HTL) — master flag, default OFF; with it off
     # the hotel routers (HTL-003) are mounted but every handler 404s and the
@@ -3188,8 +3188,8 @@ class Settings:
     )
     # CRM Security Suite, Studio & Admin (STU-001)
     # Both flags default OFF — platform is byte-for-byte unchanged when absent.
-    crm_acl_enabled: bool = os.environ.get("CRM_ACL_ENABLED", "false").lower() == "true"
-    crm_studio_enabled: bool = os.environ.get("CRM_STUDIO_ENABLED", "false").lower() == "true"
+    crm_acl_enabled: bool = os.environ.get("CRM_ACL_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    crm_studio_enabled: bool = os.environ.get("CRM_STUDIO_ENABLED", "false").lower() in ("1", "true", "yes", "on")
 
     # CRM table names (STU-001 scaffold)
     crm_acl_roles_table_name: str = os.environ.get("CRM_ACL_ROLES_TABLE", "crm_acl_roles")
@@ -3390,10 +3390,10 @@ class Settings:
         "CRM_NOTES_S3_BUCKET", "local-uploads"
     )
     # Maintenance Work Orders (WOV-001..WOV-004) — default OFF
-    maintenance_orders_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ENABLED", "false").lower() == "true"
+    maintenance_orders_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     maintenance_orders_table_name: str = os.environ.get("MAINTENANCE_ORDERS_TABLE_NAME", "maintenance_orders")
     maintenance_vendors_table_name: str = os.environ.get("MAINTENANCE_VENDORS_TABLE_NAME", "maintenance_vendors")
-    maintenance_orders_escrow_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ESCROW_ENABLED", "false").lower() == "true"
+    maintenance_orders_escrow_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ESCROW_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     maintenance_escrow_min_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MIN_CENTS", "100"))
     maintenance_escrow_max_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MAX_CENTS", "10000000"))
     maintenance_escrow_fee_bps: int = int(os.environ.get("MAINTENANCE_ESCROW_FEE_BPS", "0"))
@@ -3552,8 +3552,8 @@ class Settings:
     # paths are byte-for-byte unchanged; the fixed-assets service is dormant.
     # FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED is a secondary gate for the
     # background depreciation poster — meaningful only when the master switch is on.
-    fixed_assets_enabled: bool = os.environ.get("FIXED_ASSETS_ENABLED", "false").lower() == "true"
-    fixed_assets_depreciation_posting_enabled: bool = os.environ.get("FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED", "false").lower() == "true"
+    fixed_assets_enabled: bool = os.environ.get("FIXED_ASSETS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    fixed_assets_depreciation_posting_enabled: bool = os.environ.get("FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     fixed_assets_depreciation_poll_interval: int = int(os.environ.get("FIXED_ASSETS_DEPRECIATION_POLL_INTERVAL", "86400"))
     fixed_assets_table_name: str = os.environ.get("FIXED_ASSETS_TABLE_NAME", "fixed_assets")
     fixed_asset_schedule_table_name: str = os.environ.get("FIXED_ASSET_SCHEDULE_TABLE_NAME", "fixed_asset_schedule")
@@ -3561,9 +3561,9 @@ class Settings:
     # OFBiz commerce/ERP — POS (Point of Sale) channel (POS-001..POS-NNN).
     # Master switch defaults OFF. With pos_enabled=False every POS endpoint returns
     # 404 and the module is dormant; existing shop/cart/orders/billing bytes are unchanged.
-    pos_enabled: bool = os.environ.get("POS_ENABLED", "false").lower() == "true"
+    pos_enabled: bool = os.environ.get("POS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     pos_table_name: str = os.environ.get("POS_TABLE_NAME", "pos")
-    pos_cash_drawer_required: bool = os.environ.get("POS_CASH_DRAWER_REQUIRED", "false").lower() == "true"
+    pos_cash_drawer_required: bool = os.environ.get("POS_CASH_DRAWER_REQUIRED", "false").lower() in ("1", "true", "yes", "on")
     pos_default_tax_rate_bps: int = int(os.environ.get("POS_DEFAULT_TAX_RATE_BPS", "0"))
     pos_receipt_store_name: str = os.environ.get("POS_RECEIPT_STORE_NAME", "")
 
