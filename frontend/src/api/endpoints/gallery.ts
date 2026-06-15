@@ -69,8 +69,35 @@ export interface VideoComment {
   comment_id: string;
   video_id: string;
   user_id: string;
-  text: string;
+  text: string | null;
   created_at: number;
+  edited_at?: number | null;
+  parent_comment_id?: string | null;
+  kind?: "text" | "gif" | "sticker";
+  gif_url?: string | null;
+  gif_alt_text?: string | null;
+  gif_width?: number | null;
+  gif_height?: number | null;
+  sticker_id?: string | null;
+  sticker_collection_id?: string | null;
+  sticker_url?: string | null;
+  sticker_alt_text?: string | null;
+  reactions_counts?: Record<string, number>;
+  my_reactions?: string[];
+}
+
+export interface AddVideoCommentReq {
+  parent_comment_id?: string;
+  kind?: "text" | "gif" | "sticker";
+  text?: string;
+  gif_url?: string;
+  gif_alt_text?: string;
+  gif_width?: number;
+  gif_height?: number;
+  sticker_id?: string;
+  sticker_collection_id?: string;
+  sticker_url?: string;
+  sticker_alt_text?: string;
 }
 
 export interface VideoCommentListResponse {
@@ -141,9 +168,42 @@ export const checkLike = (
 
 export const addVideoComment = (
   videoId: string,
+  body: AddVideoCommentReq | string,
+): Promise<VideoComment> =>
+  api.post<VideoComment>(
+    `/ui/videos/${videoId}/comments`,
+    typeof body === "string" ? { kind: "text", text: body } : body,
+  );
+
+export const editVideoComment = (
+  videoId: string,
+  commentId: string,
   text: string,
 ): Promise<VideoComment> =>
-  api.post<VideoComment>(`/ui/videos/${videoId}/comments`, { text });
+  api.patch<VideoComment>(
+    `/ui/videos/${videoId}/comments/${commentId}`,
+    { text },
+  );
+
+export const reactToVideoComment = (
+  videoId: string,
+  commentId: string,
+  emoji: string,
+): Promise<VideoComment> =>
+  api.post<VideoComment>(
+    `/ui/videos/${videoId}/comments/${commentId}/reactions`,
+    { emoji },
+  );
+
+export const unreactFromVideoComment = (
+  videoId: string,
+  commentId: string,
+  emoji: string,
+): Promise<VideoComment> =>
+  api.post<VideoComment>(
+    `/ui/videos/${videoId}/comments/${commentId}/unreact`,
+    { emoji },
+  );
 
 export const listVideoComments = (
   videoId: string,
@@ -163,3 +223,21 @@ export const deleteVideoComment = (
   commentId: string,
 ): Promise<void> =>
   api.del(`/ui/videos/${videoId}/comments/${commentId}`);
+
+export interface ReportVideoCommentReq {
+  videoId: string;
+  commentId: string;
+  topics: string[];
+  reason_text: string;
+}
+
+export const reportVideoComment = (
+  body: ReportVideoCommentReq,
+): Promise<{ ok: boolean; report_id: string }> =>
+  api.post<{ ok: boolean; report_id: string }>("/moderation/reports", {
+    content_type: "video_comment",
+    content_id: body.commentId,
+    video_id: body.videoId,
+    topics: body.topics,
+    reason_text: body.reason_text,
+  });
