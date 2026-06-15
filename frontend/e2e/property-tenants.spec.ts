@@ -721,7 +721,7 @@ test.describe("Section S7: TenantsPage UI", () => {
       });
     });
     await page.goto(`${BASE}/property/tenants`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByText(/not enabled|not available/i)).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(/not enabled|not available/i).first()).toBeVisible({ timeout: 8_000 });
     // Unroute to restore normal behaviour
     await page.unroute("**/ui/property/tenants**");
   });

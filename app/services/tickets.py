@@ -4,6 +4,7 @@ import base64
 import json
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -722,7 +723,14 @@ class TicketStore:
         return ticket_attachments.list_attachments_for_projection(ticket_id)
 
     def _encode_cursor(self, token: dict[str, Any]) -> str:
-        raw = json.dumps(token, separators=(",", ":")).encode("utf-8")
+        # DynamoDB LastEvaluatedKey values come back as Decimal — coerce them
+        # to plain int/float so json.dumps doesn't raise.
+        def _default(o: Any) -> Any:
+            if isinstance(o, Decimal):
+                return int(o) if o == o.to_integral_value() else float(o)
+            raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+        raw = json.dumps(token, separators=(",", ":"), default=_default).encode("utf-8")
         return base64.urlsafe_b64encode(raw).decode("utf-8")
 
     def _decode_cursor(self, cursor: str | None) -> dict[str, Any] | None:

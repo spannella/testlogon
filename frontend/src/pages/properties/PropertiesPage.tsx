@@ -379,14 +379,14 @@ export default function PropertiesPage() {
                     </SelectContent>
                   </Select>
                   <Select
-                    value={typeFilter}
-                    onValueChange={(v) => { setTypeFilter(v as PropertyType | ""); setCursor(undefined); }}
+                    value={typeFilter || "all"}
+                    onValueChange={(v) => { setTypeFilter(v === "all" ? "" : (v as PropertyType)); setCursor(undefined); }}
                   >
                     <SelectTrigger className="w-40" data-testid="type-filter-select">
                       <SelectValue placeholder="All types" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All types</SelectItem>
+                      <SelectItem value="all">All types</SelectItem>
                       {(Object.keys(PROPERTY_TYPE_LABELS) as PropertyType[]).map((t) => (
                         <SelectItem key={t} value={t}>{PROPERTY_TYPE_LABELS[t]}</SelectItem>
                       ))}

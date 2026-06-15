@@ -494,7 +494,7 @@ test.describe("Section 93: PMD-004 Portfolio Dashboard UI", () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
     await injectAuth(rootPage, "root");
-    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "networkidle" });
+    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "domcontentloaded" });
     // Heading
     await expect(rootPage.getByRole("heading", { name: /portfolio dashboard/i })).toBeVisible();
   });
@@ -502,7 +502,7 @@ test.describe("Section 93: PMD-004 Portfolio Dashboard UI", () => {
   test("93.2 KPI cards render (four cards visible)", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
-    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "networkidle" });
+    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "domcontentloaded" });
     await expect(rootPage.getByText(/occupancy rate/i)).toBeVisible();
     await expect(rootPage.getByText(/active leases/i)).toBeVisible();
     await expect(rootPage.getByText(/outstanding rent/i)).toBeVisible();
@@ -512,16 +512,20 @@ test.describe("Section 93: PMD-004 Portfolio Dashboard UI", () => {
   test("93.3 Monthly snapshot card renders with month navigation", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
-    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "networkidle" });
-    await expect(rootPage.getByText(/monthly rent snapshot/i)).toBeVisible();
-    await expect(rootPage.getByText(/charged/i)).toBeVisible();
-    await expect(rootPage.getByText(/collected/i)).toBeVisible();
+    await injectAuth(rootPage, "root");
+    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "domcontentloaded" });
+    await expect(rootPage.getByText(/monthly rent snapshot/i)).toBeVisible({ timeout: 15_000 });
+    // "Charged"/"Collected" appear in both the summary cards and the bar
+    // chart (axis/legend), so scope to the first match (strict-mode safe).
+    await expect(rootPage.getByText(/charged/i).first()).toBeVisible();
+    await expect(rootPage.getByText(/collected/i).first()).toBeVisible();
   });
 
   test("93.4 Rent Policy button visible to root — opens dialog", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
-    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "networkidle" });
+    await injectAuth(rootPage, "root");
+    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "domcontentloaded" });
     const policyBtn = rootPage.getByRole("button", { name: /rent policy/i });
     await expect(policyBtn).toBeVisible();
     await policyBtn.click();
@@ -536,10 +540,11 @@ test.describe("Section 93: PMD-004 Portfolio Dashboard UI", () => {
     // mock the endpoint to return 404 and verify graceful degradation.
     // When featureEnabled=true this just verifies the page can still navigate
     // (mocking is browser-level so won't affect the live backend).
+    await injectAuth(rootPage, "root");
     await rootPage.route("**/ui/portfolio/kpis", (route) =>
       route.fulfill({ status: 404, body: JSON.stringify({ detail: "not enabled" }) })
     );
-    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "networkidle" });
+    await rootPage.goto(`${BASE}/property/dashboard`, { waitUntil: "domcontentloaded" });
     await expect(rootPage.getByText(/not enabled/i).first()).toBeVisible({ timeout: 8000 });
     await rootPage.unroute("**/ui/portfolio/kpis");
   });
@@ -565,24 +570,28 @@ test.describe("Section 94: PMD-004 Rent Policy page UI", () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
     await injectAuth(rootPage, "root");
-    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "networkidle" });
+    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "domcontentloaded" });
     await expect(rootPage.getByRole("heading", { name: /rent policy/i })).toBeVisible();
   });
 
   test("94.2 Current policy card visible with field labels", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
-    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "networkidle" });
-    await expect(rootPage.getByText(/rent due day/i)).toBeVisible();
-    await expect(rootPage.getByText(/grace period/i)).toBeVisible();
-    await expect(rootPage.getByText(/late fee/i)).toBeVisible();
-    await expect(rootPage.getByText(/currency/i)).toBeVisible();
+    await injectAuth(rootPage, "root");
+    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "domcontentloaded" });
+    // These labels also appear as Change-History table column headers, so
+    // scope to the first match to avoid strict-mode violations.
+    await expect(rootPage.getByText(/rent due day/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(rootPage.getByText(/grace period/i).first()).toBeVisible();
+    await expect(rootPage.getByText(/late fee/i).first()).toBeVisible();
+    await expect(rootPage.getByText(/currency/i).first()).toBeVisible();
   });
 
   test("94.3 Admin sees edit button — clicking opens inline form", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
-    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "networkidle" });
+    await injectAuth(rootPage, "root");
+    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "domcontentloaded" });
     const editBtn = rootPage.getByRole("button", { name: /edit policy/i });
     await expect(editBtn).toBeVisible();
     await editBtn.click();
@@ -594,15 +603,16 @@ test.describe("Section 94: PMD-004 Rent Policy page UI", () => {
   test("94.4 Admin sees Change History section (audit log)", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
-    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "networkidle" });
-    await expect(rootPage.getByText(/change history/i)).toBeVisible();
+    await injectAuth(rootPage, "root");
+    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "domcontentloaded" });
+    await expect(rootPage.getByText(/change history/i)).toBeVisible({ timeout: 15_000 });
   });
 
   test("94.5 Alice (user role) does not see Edit Policy button", async () => {
     test.skip(!featureEnabled, "PROPERTY_DASHBOARD_ENABLED flag is off");
 
     await injectAuth(alicePage, "alice");
-    await alicePage.goto(`${BASE}/property/policies`, { waitUntil: "networkidle" });
+    await alicePage.goto(`${BASE}/property/policies`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("button", { name: /edit policy/i })).not.toBeVisible({ timeout: 3000 });
   });
 
@@ -611,7 +621,7 @@ test.describe("Section 94: PMD-004 Rent Policy page UI", () => {
       route.fulfill({ status: 404, body: JSON.stringify({ detail: "not enabled" }) })
     );
     await injectAuth(rootPage, "root");
-    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "networkidle" });
+    await rootPage.goto(`${BASE}/property/policies`, { waitUntil: "domcontentloaded" });
     await expect(rootPage.getByText(/not enabled/i).first()).toBeVisible({ timeout: 8000 });
     await rootPage.unroute("**/ui/rent-policy");
   });

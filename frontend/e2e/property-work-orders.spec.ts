@@ -30,8 +30,10 @@ const ROOT_ID = "root.admin@testdev.local";
 const ALICE_ID = "e2e_alice@test.local";
 const TS = Date.now();
 
-// Stable test property ID (no property_mgmt required when flag is off)
-const TEST_PROPERTY_ID = `test-prop-wov-${TS}`;
+// Test property ID. When property_mgmt is enabled the work-order FK
+// validation requires a real property, so we create one lazily (see
+// ensureTestProperty) and overwrite this with the real property_id.
+let TEST_PROPERTY_ID = `test-prop-wov-${TS}`;
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
@@ -118,8 +120,34 @@ async function apiPatch(page: Page, identity: string, path: string, body?: unkno
 
 let _featureEnabled: boolean | null = null;
 
+// Create a real property once so work-order FK validation (when
+// property_mgmt is enabled) passes. Best-effort: if property_mgmt is off
+// the original synthetic id is used and the WO endpoint accepts it.
+let _propertyEnsured = false;
+async function ensureTestProperty(page: Page): Promise<void> {
+  if (_propertyEnsured) return;
+  _propertyEnsured = true;
+  const resp = await apiPost(page, ROOT_ID, "ui/properties", {
+    name: `WO Test Property ${TS}`,
+    property_type: "single_family",
+    address: {
+      line1: "1 Work Order Way",
+      city: "WO City",
+      region: "CA",
+      postal_code: "90001",
+      country: "US",
+    },
+    color_tags: [],
+  });
+  if (resp.ok()) {
+    const body = await resp.json().catch(() => ({})) as { property_id?: string };
+    if (body.property_id) TEST_PROPERTY_ID = body.property_id;
+  }
+}
+
 async function isFeatureEnabled(page: Page): Promise<boolean> {
   if (_featureEnabled !== null) return _featureEnabled;
+  await ensureTestProperty(page);
   const resp = await apiPost(
     page,
     ROOT_ID,
@@ -260,10 +288,14 @@ test.describe("S1: Work-order CRUD — API", () => {
 test.describe("S2: Work-order lifecycle (assign / schedule / transition) — API", () => {
   let rootPage: Page;
   let workOrderId: string;
-  const PROP = `prop-s2-${TS}`;
+  let PROP = `prop-s2-${TS}`;
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     rootPage = await newIdentityPage(browser, ROOT_ID);
+    // Ensure the feature flag + a real property are resolved (work-order FK
+    // validation requires a real property when property_mgmt is enabled).
+    await isFeatureEnabled(rootPage);
+    PROP = TEST_PROPERTY_ID;
     // Pre-create a work order for lifecycle tests
     if (_featureEnabled !== false) {
       const resp = await apiPost(
@@ -414,10 +446,12 @@ test.describe("S2: Work-order lifecycle (assign / schedule / transition) — API
 
 test.describe("S3: Work-order list filters — API", () => {
   let rootPage: Page;
-  const PROP = `prop-s3-${TS}`;
+  let PROP = `prop-s3-${TS}`;
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     rootPage = await newIdentityPage(browser, ROOT_ID);
+    await isFeatureEnabled(rootPage);
+    PROP = TEST_PROPERTY_ID;
     // Pre-create some WOs for filtering
     if (_featureEnabled !== false) {
       for (const priority of ["urgent", "normal"]) {
@@ -718,7 +752,7 @@ test.describe("S6: WorkOrdersPage UI", () => {
 
   test("S6.1 Page loads and shows Work Orders heading", async () => {
     await rootPage.goto(`${BASE}/property/work-orders`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
     await expect(
       rootPage.getByRole("heading", { name: "Work Orders", exact: true }),
@@ -745,6 +779,8 @@ test.describe("S6: WorkOrdersPage UI", () => {
   });
 
   test("S6.4 Switch to list view shows table or empty state", async () => {
+    await rootPage.goto(`${BASE}/property/work-orders`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("heading", { name: "Work Orders", exact: true }).waitFor({ timeout: 10_000 });
     const listBtn = rootPage.getByTestId("view-list-btn");
     const isVisible = await listBtn.isVisible().catch(() => false);
     if (!isVisible) {
@@ -752,15 +788,16 @@ test.describe("S6: WorkOrdersPage UI", () => {
       return;
     }
     await listBtn.click();
-    // Either a table or empty state must appear
-    const table = rootPage.locator("table");
-    const emptyText = rootPage.getByText(/no work orders/i);
-    const hasTable = await table.isVisible().catch(() => false);
-    const hasEmpty = await emptyText.isVisible().catch(() => false);
-    expect(hasTable || hasEmpty).toBe(true);
+    // Either a table or empty state must appear (the list query loads async).
+    const listState = rootPage
+      .locator("table, :text('no work orders')")
+      .first();
+    await expect(listState).toBeVisible({ timeout: 10_000 });
   });
 
   test("S6.5 Admin sees New Work Order button", async () => {
+    await rootPage.goto(`${BASE}/property/work-orders`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("heading", { name: "Work Orders", exact: true }).waitFor({ timeout: 10_000 });
     const isDisabled = await rootPage
       .getByText(/not enabled/i)
       .isVisible()
@@ -788,25 +825,26 @@ test.describe("S7: VendorsPage UI", () => {
   });
 
   test("S7.1 Page loads and shows Vendors heading", async () => {
-    await rootPage.goto(`${BASE}/property/vendors`, { waitUntil: "networkidle" });
+    await rootPage.goto(`${BASE}/property/vendors`, { waitUntil: "domcontentloaded" });
     await expect(
       rootPage.getByRole("heading", { name: "Vendors", exact: true }),
     ).toBeVisible();
   });
 
   test("S7.2 Feature-disabled or vendor table shown", async () => {
-    const disabled = rootPage.getByText(/not enabled/i);
-    const table = rootPage.locator("table");
-    const emptyBuilding = rootPage.getByText(/no vendors found/i);
-
-    const hasDisabled = await disabled.isVisible().catch(() => false);
-    const hasTable = await table.isVisible().catch(() => false);
-    const hasEmpty = await emptyBuilding.isVisible().catch(() => false);
-
-    expect(hasDisabled || hasTable || hasEmpty).toBe(true);
+    await rootPage.goto(`${BASE}/property/vendors`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("heading", { name: "Vendors", exact: true }).waitFor({ timeout: 10_000 });
+    // Wait for the vendor-list query to settle into one of its terminal
+    // states (disabled banner / table / empty state) before asserting.
+    const anyState = rootPage
+      .locator("table, :text('not enabled'), :text('no vendors found')")
+      .first();
+    await expect(anyState).toBeVisible({ timeout: 10_000 });
   });
 
   test("S7.3 Admin sees Add Vendor button (when feature enabled)", async () => {
+    await rootPage.goto(`${BASE}/property/vendors`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("heading", { name: "Vendors", exact: true }).waitFor({ timeout: 10_000 });
     const isDisabled = await rootPage
       .getByText(/not enabled/i)
       .isVisible()
@@ -821,6 +859,8 @@ test.describe("S7: VendorsPage UI", () => {
   });
 
   test("S7.4 Category filter select is rendered", async () => {
+    await rootPage.goto(`${BASE}/property/vendors`, { waitUntil: "domcontentloaded" });
+    await rootPage.getByRole("heading", { name: "Vendors", exact: true }).waitFor({ timeout: 10_000 });
     const isDisabled = await rootPage
       .getByText(/not enabled/i)
       .isVisible()

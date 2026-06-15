@@ -187,6 +187,24 @@ test.describe("Section 72: Record Payment API", () => {
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     page = await newIdentityPage(browser, "alice");
+    // Create a real active lease so the rent-payment / charges / ledger
+    // endpoints (sections 72–74) are exercised against actual data.
+    if (!leaseId) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const resp = await apiPost(page, "alice", "ui/leases", {
+        tenant_id: `ten_rent_${Date.now()}`,
+        property_id: `prop_rent_${Date.now()}`,
+        unit_id: `unit_rent_${Date.now()}`,
+        start_date: nowSec - 86400,
+        monthly_rent_cents: 120000,
+        rent_due_day: 1,
+        late_fee_type: "none",
+      });
+      if (resp.status() === 201) {
+        const body = await resp.json() as { lease_id: string };
+        leaseId = body.lease_id;
+      }
+    }
   });
 
   test("72.1 POST /ui/rent/leases/:id/payments records a payment", async () => {
@@ -365,7 +383,9 @@ test.describe("Section 75: RentLedgerPage UI", () => {
   test("75.1 Page renders at /property/rent", async () => {
     await page.goto(`${BASE}/property/rent`, { waitUntil: "domcontentloaded" });
     // Either the feature is enabled (shows content) or shows "not enabled"
-    await expect(page.getByText("Rent Ledger")).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByRole("heading", { name: "Rent Ledger", exact: true }),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("75.2 Period selector visible when feature enabled", async () => {
@@ -395,18 +415,39 @@ test.describe("Section 75: RentLedgerPage UI", () => {
 
 test.describe("Section 76: LeaseRentPage UI", () => {
   let page: Page;
-  const TEST_LEASE_ID = leaseId || "test-lease-id";
+  let TEST_LEASE_ID = "test-lease-id";
+  let leaseCreated = false;
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     page = await browser.newPage();
     await injectAuth(page, "alice");
+    // Create a real, active lease so the LeaseRentPage renders the full
+    // payment UI (not the not-found / not-enabled state). start_date in the
+    // past → status "active" → Record Payment / Charge Now buttons appear.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const resp = await apiPost(page, "alice", "ui/leases", {
+      tenant_id: `ten_rentui_${Date.now()}`,
+      property_id: `prop_rentui_${Date.now()}`,
+      unit_id: `unit_rentui_${Date.now()}`,
+      start_date: nowSec - 86400,
+      monthly_rent_cents: 100000,
+      rent_due_day: 1,
+      late_fee_type: "none",
+    });
+    if (resp.status() === 201) {
+      const body = await resp.json() as { lease_id: string };
+      TEST_LEASE_ID = body.lease_id;
+      leaseCreated = true;
+    }
   });
 
   test("76.1 Page renders at /property/rent/leases/:id", async () => {
     await page.goto(`${BASE}/property/rent/leases/${TEST_LEASE_ID}`, {
       waitUntil: "domcontentloaded",
     });
-    await expect(page.getByText("Rent Ledger")).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByRole("heading", { name: /Rent Ledger/i }),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("76.2 Tabs for History and Charges are visible", async () => {

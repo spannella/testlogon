@@ -313,16 +313,17 @@ def list_leases(
     # open-ended leases are correctly returned even when status is specified.
     # The FilterExpression does NOT reduce page size in DynamoDB, so we must
     # loop on LastEvaluatedKey (CLAUDE.md FilterExpression gotcha).
+    # The `sk` begins_with belongs in the KeyConditionExpression — DynamoDB
+    # rejects primary-key attributes (pk/sk) inside a FilterExpression.
     kwargs: Dict[str, Any] = {
-        "KeyConditionExpression": Key("pk").eq(f"USER#{user_sub}"),
-        "FilterExpression": Attr("sk").begins_with("LEASE#"),
+        "KeyConditionExpression": (
+            Key("pk").eq(f"USER#{user_sub}") & Key("sk").begins_with("LEASE#")
+        ),
         "ScanIndexForward": False,
         "Limit": limit,
     }
     if status is not None:
-        kwargs["FilterExpression"] = (
-            Attr("sk").begins_with("LEASE#") & Attr("status").eq(status)
-        )
+        kwargs["FilterExpression"] = Attr("status").eq(status)
     if esk:
         kwargs["ExclusiveStartKey"] = esk
 

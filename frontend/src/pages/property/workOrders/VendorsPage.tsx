@@ -344,14 +344,14 @@ export default function VendorsPage() {
         </Select>
 
         <Select
-          value={categoryFilter}
-          onValueChange={setCategoryFilter}
+          value={categoryFilter || "all"}
+          onValueChange={(v) => setCategoryFilter(v === "all" ? "" : v)}
         >
           <SelectTrigger className="w-44">
             <SelectValue placeholder="All categories" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All categories</SelectItem>
+            <SelectItem value="all">All categories</SelectItem>
             {categories.map((c) => (
               <SelectItem key={c} value={c}>
                 {TRADE_LABEL[c] ?? c}

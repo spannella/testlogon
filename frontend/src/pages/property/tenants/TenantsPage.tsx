@@ -215,14 +215,14 @@ export default function TenantsPage() {
           className="sm:max-w-xs"
         />
         <Select
-          value={filterStatus}
-          onValueChange={(v) => setFilterStatus(v as typeof filterStatus)}
+          value={filterStatus || "all"}
+          onValueChange={(v) => setFilterStatus(v === "all" ? "" : (v as typeof filterStatus))}
         >
           <SelectTrigger className="sm:w-40">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">All</SelectItem>
+            <SelectItem value="all">All</SelectItem>
             <SelectItem value="prospect">Prospect</SelectItem>
             <SelectItem value="active">Active</SelectItem>
             <SelectItem value="past">Past</SelectItem>

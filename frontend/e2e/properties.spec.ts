@@ -408,25 +408,25 @@ test.describe("Section 73: PropertiesPage UI", () => {
   });
 
   test("73.1 Page loads — shows Properties heading", async () => {
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByRole("heading", { name: "Properties", exact: true })).toBeVisible();
   });
 
   test("73.2 Flag off — shows 'not enabled' state", async () => {
     test.skip(!featureOff, "Feature is enabled — skipping not-enabled state test");
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByText(/property management is not currently enabled/i)).toBeVisible();
   });
 
   test("73.3 Add Property button is visible", async () => {
     test.skip(featureOff, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("create-property-btn")).toBeVisible();
   });
 
   test("73.4 Create property via UI dialog", async () => {
     test.skip(featureOff, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await uiPage.getByTestId("create-property-btn").click();
     await uiPage.getByTestId("prop-name-input").fill(`UI Prop ${TS}`);
     // Fill address
@@ -442,19 +442,19 @@ test.describe("Section 73: PropertiesPage UI", () => {
 
   test("73.5 Status filter dropdown exists and is functional", async () => {
     test.skip(featureOff, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("status-filter-select")).toBeVisible();
   });
 
   test("73.6 Type filter dropdown exists", async () => {
     test.skip(featureOff, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("type-filter-select")).toBeVisible();
   });
 
   test("73.7 Refresh button exists and triggers reload", async () => {
     test.skip(featureOff, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("refresh-properties-btn")).toBeVisible();
     await uiPage.getByTestId("refresh-properties-btn").click();
     // Should not throw
@@ -503,26 +503,26 @@ test.describe("Section 74: PropertyDetailPage UI", () => {
 
   test("74.1 Detail page loads — shows property name", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off or no property");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByRole("heading", { name: `Detail UI Prop ${TS}`, exact: true })).toBeVisible();
   });
 
   test("74.2 Back button navigates to properties list", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("back-to-properties-btn")).toBeVisible();
   });
 
   test("74.3 Address section is visible", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByText("Address")).toBeVisible();
     await expect(uiPage.getByText("999 Detail St")).toBeVisible();
   });
 
   test("74.4 Edit property button opens dialog", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("edit-property-btn")).toBeVisible();
     await uiPage.getByTestId("edit-property-btn").click();
     await expect(uiPage.getByRole("heading", { name: "Edit Property", exact: true })).toBeVisible();
@@ -531,13 +531,13 @@ test.describe("Section 74: PropertyDetailPage UI", () => {
 
   test("74.5 Add Unit button is visible", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("add-unit-btn")).toBeVisible();
   });
 
   test("74.6 Create unit via UI dialog", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await uiPage.getByTestId("add-unit-btn").click();
     await uiPage.getByTestId("unit-label-input").fill(`UI Unit ${TS}`);
     await uiPage.getByTestId("unit-rent-input").fill("1200");
@@ -547,20 +547,20 @@ test.describe("Section 74: PropertyDetailPage UI", () => {
 
   test("74.7 Unit appears in the list after creation", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     // Created in 74.6; should appear in the units list
     await expect(uiPage.getByText(`UI Unit ${TS}`)).toBeVisible({ timeout: 5_000 });
   });
 
   test("74.8 Archive button is visible for active property", async () => {
     test.skip(featureOff || !detailPropertyId, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/${detailPropertyId}`, { waitUntil: "domcontentloaded" });
     await expect(uiPage.getByTestId("archive-property-btn")).toBeVisible();
   });
 
   test("74.9 Unknown property ID shows error state", async () => {
     test.skip(featureOff, "Feature flag off");
-    await uiPage.goto(`${BASE}/properties/nonexistent_abc123`, { waitUntil: "networkidle" });
+    await uiPage.goto(`${BASE}/properties/nonexistent_abc123`, { waitUntil: "domcontentloaded" });
     // Should show "not found" or navigate away; at minimum should not crash
     // (either "Property not found" text or redirect to /properties)
     const url = uiPage.url();

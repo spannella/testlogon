@@ -473,14 +473,14 @@ export default function WorkOrdersPage() {
 
         {viewMode === "list" && (
           <Select
-            value={statusFilter}
-            onValueChange={(v) => setStatusFilter(v as WoStatus | "")}
+            value={statusFilter || "all"}
+            onValueChange={(v) => setStatusFilter(v === "all" ? "" : (v as WoStatus))}
           >
             <SelectTrigger className="w-40">
               <SelectValue placeholder="All statuses" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All statuses</SelectItem>
+              <SelectItem value="all">All statuses</SelectItem>
               <SelectItem value="open">Open</SelectItem>
               <SelectItem value="assigned">Assigned</SelectItem>
               <SelectItem value="in_progress">In Progress</SelectItem>
