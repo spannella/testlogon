@@ -3536,7 +3536,7 @@ class Settings:
     # Checked only when hr_payroll_enabled is True.
     hr_payroll_gl_posting_enabled: bool = os.environ.get("HR_PAYROLL_GL_POSTING_ENABLED", "0") not in ("0", "false", "False")
     # DynamoDB table name for all HR single-table rows.
-    hr_table_name: str = os.environ.get("DDB_HR_TABLE", "hr")
+    hr_table_name: str = os.environ.get("DDB_HR_TABLE", "hrm")
     # GL account code for the Salaries & Wages Expense debit side of payroll
     # journal entries (HRM-010). Must match a code in the seeded chart of
     # accounts (OFB-013). Default "6000" = conventional OFBiz expense code.

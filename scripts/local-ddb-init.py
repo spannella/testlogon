@@ -257,7 +257,7 @@ def _table_defs() -> List[TableDef]:
         # GSI_CREATED sort key (an integer Unix timestamp) is queried with
         # integer values (CLAUDE.md "DynamoDB numeric GSI sort keys" gotcha).
         TableDef(
-            _resolve_table_name(S.hr_table_name, "hr"),
+            _resolve_table_name(S.hr_table_name, "hrm"),
             "PK",
             "SK",
             gsi=[
@@ -1070,7 +1070,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_HOTEL_DATE",  "partition_key": "hotel_id",      "sort_key": "date"},
                 {"index_name": "GSI_HOLD_EXPIRY", "partition_key": "gsi_expiry_pk", "sort_key": "expires_at"},
             ],
-            attr_types={"updated_at": "N", "expires_at": "N"},
+            attr_types={"expires_at": "N"},
         ),
         # STU-001: CRM Security Suite, Studio & Admin scaffolding
         TableDef(
@@ -1956,7 +1956,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_BY_STAGE",      "partition_key": "stage",     "sort_key": "close_date"},
                 {"index_name": "GSI_DIRECT",        "partition_key": "opp_id"},
             ],
-            attr_types={"close_date": "N", "created_at": "N"},
+            attr_types={"close_date": "N"},
         ),
         # Sales pipeline — Quotas (OPP-001)
         TableDef(
@@ -2990,7 +2990,7 @@ def _table_defs() -> List[TableDef]:
         TableDef(
             _resolve_table_name(S.message_ai_cache_table_name, "message_ai_cache"),
             "cache_key",
-            attr_types={"created_at": "N", "ttl": "N"},
+            attr_types={},
         ),
         # Delegates (DELEGATE-001 .. DELEGATE-003)
         TableDef(
@@ -3828,7 +3828,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_PUBLIC",       "partition_key": "public_flag",   "sort_key": "created_at"},
                 {"index_name": "GSI_DIRECT",       "partition_key": "job_id"},
             ],
-            attr_types={"created_at": "N", "updated_at": "N"},
+            attr_types={"created_at": "N"},
         ),
         # Property management (open-property vertical, PROP-001..PROP-005).
         # Single table: META header rows + UNIT#{unit_id} child rows.
