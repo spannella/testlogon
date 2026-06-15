@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.core.settings import S
 from app.services.sessions import require_ui_session
@@ -40,7 +40,7 @@ def _require_flag() -> None:
 
 @router.post("/reports", status_code=201)
 async def create_report_endpoint(
-    body: Any,
+    body: Any = Body(...),
     ctx: dict = Depends(require_ui_session),
 ) -> Any:
     _require_flag()
@@ -88,7 +88,7 @@ async def get_report_endpoint(
 @router.patch("/reports/{report_id}")
 async def update_report_endpoint(
     report_id: str,
-    body: Any,
+    body: Any = Body(...),
     ctx: dict = Depends(require_ui_session),
 ) -> Any:
     _require_flag()
@@ -116,7 +116,7 @@ async def delete_report_endpoint(
 @router.post("/reports/{report_id}/schedules", status_code=201)
 async def create_schedule(
     report_id: str,
-    body: Any,
+    body: Any = Body(...),
     ctx: dict = Depends(require_ui_session),
 ) -> Any:
     _require_flag()
@@ -151,7 +151,7 @@ async def list_schedules(
 async def update_schedule(
     report_id: str,
     sid: str,
-    body: Any,
+    body: Any = Body(...),
     ctx: dict = Depends(require_ui_session),
 ) -> Any:
     _require_flag()

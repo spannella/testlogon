@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import (
@@ -110,9 +110,10 @@ async def delete_group(
     group_id: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     sg_svc.delete_group(user.sub, group_id)
+    return Response(status_code=204)
 
 
 @router.post("/{group_id}/members", status_code=204)
@@ -121,9 +122,10 @@ async def add_member(
     request: Request,
     body: CrmSecurityGroupMemberAddIn,
     user: AuthenticatedUser = Depends(require_admin_or_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     sg_svc.add_member(user.sub, group_id, body.user_sub, body.can_edit)
+    return Response(status_code=204)
 
 
 @router.delete("/{group_id}/members/{user_sub}", status_code=204)
@@ -132,9 +134,10 @@ async def remove_member(
     user_sub: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_admin_or_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     sg_svc.remove_member(user.sub, group_id, user_sub)
+    return Response(status_code=204)
 
 
 @router.post("/{group_id}/records", status_code=204)
@@ -143,9 +146,10 @@ async def assign_record(
     request: Request,
     body: CrmSecurityGroupRecordAssignIn,
     user: AuthenticatedUser = Depends(require_admin_or_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     sg_svc.assign_record(user.sub, group_id, body.entity_type, body.record_id)
+    return Response(status_code=204)
 
 
 @router.delete("/{group_id}/records/{entity_type}/{record_id}", status_code=204)
@@ -155,6 +159,7 @@ async def unassign_record(
     record_id: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_admin_or_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     sg_svc.unassign_record(user.sub, group_id, entity_type, record_id)
+    return Response(status_code=204)

@@ -77,6 +77,17 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
       expires: c.expires,
     })),
   );
+  // Seed the auth-store so the React route guard treats the page as
+  // authenticated (cookie-only contexts otherwise redirect to /login).
+  await ctx.addInitScript(
+    ([userId, accessToken]: [string, string]) => {
+      localStorage.setItem(
+        "auth-store",
+        JSON.stringify({ state: { userId, accessToken, isAuthenticated: true }, version: 0 }),
+      );
+    },
+    [s.user_sub, s.access_token] as [string, string],
+  );
   return ctx.newPage();
 }
 

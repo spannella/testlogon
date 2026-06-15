@@ -167,7 +167,7 @@ test.describe("Section 83: CrmAuditLogPage UI", () => {
     });
     await page.goto(`${BASE}/crm/audit-log`, { waitUntil: "domcontentloaded" });
     await expect(page.getByText("Filters", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /Search/ }).click();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     await expect(page.getByText("login_success")).toBeVisible({ timeout: 5000 });
   });
 });

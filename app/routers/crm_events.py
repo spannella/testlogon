@@ -54,7 +54,7 @@ async def create_crm_event(
         calendar_event_id=body.calendar_event_id,
         max_attendance=body.max_attendance,
     )
-    return item
+    return svc._event_out(item)
 
 
 @router.get("", response_model=models.CrmEventListOut)

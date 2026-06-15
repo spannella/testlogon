@@ -390,7 +390,7 @@ test.describe("Section 94: CRM Security / Studio UI", () => {
 
   test("94.1 Security page renders tabs", async ({ page }) => {
     await page.goto(`${BASE}/crm/security`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("CRM Security", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "CRM Security", exact: true })).toBeVisible();
     // Either the tabs render (flag on) or the not-enabled card shows (flag off).
     const tab = page.getByRole("tab", { name: /ACL Roles/i });
     const disabled = page.getByText(/is not enabled/i);

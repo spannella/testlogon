@@ -119,7 +119,7 @@ test.describe("91 — Quote builder UI", () => {
     await expect(page.getByRole("link", { name: title })).toBeVisible({ timeout: 15_000 });
     await page.getByRole("link", { name: title }).click();
 
-    await expect(page.getByRole("heading", { name: "Totals" })).toBeVisible();
+    await expect(page.getByText("Totals", { exact: true })).toBeVisible();
     await expect(page.getByText("Convert to invoice")).toBeVisible();
     await expect(page.getByText("Convert to contract")).toBeVisible();
   });

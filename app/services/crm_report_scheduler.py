@@ -98,11 +98,18 @@ def create_report_schedule(
     # Ownership check on the report
     crm_reports.get_report(report_id, owner_sub)
 
-    # Check existing schedule count for this report
-    existing_scheds = T.crm_reports.query(
-        KeyConditionExpression=Key("report_id").eq(report_id) & Key("sk").begins_with("SCHEDULE#"),
+    # Check existing schedule count for this report (schedules live in their own
+    # SCHEDULE#{id}/META partitions, linked via linked_report_id).
+    existing = T.crm_reports.scan(
+        FilterExpression="owner_sub = :sub AND begins_with(sk, :pfx)",
+        ExpressionAttributeValues={":sub": owner_sub, ":pfx": "META"},
     )
-    if len(existing_scheds.get("Items", [])) >= MAX_SCHEDULES_PER_REPORT:
+    existing_count = sum(
+        1 for i in existing.get("Items", [])
+        if str(i.get("report_id", "")).startswith("SCHEDULE#")
+        and i.get("linked_report_id") == report_id
+    )
+    if existing_count >= MAX_SCHEDULES_PER_REPORT:
         raise HTTPException(status_code=422, detail="Maximum 10 schedules per report")
 
     schedule_id = f"rptsched_{uuid4().hex[:12]}"
@@ -153,10 +160,18 @@ def list_report_schedules(
 ) -> Dict[str, Any]:
     """List schedules for a user, optionally filtered by report_id."""
     if report_id:
-        resp = T.crm_reports.query(
-            KeyConditionExpression=Key("report_id").eq(report_id) & Key("sk").begins_with("SCHEDULE#"),
+        # Schedule rows are stored in their OWN partition (report_id=SCHEDULE#{id},
+        # sk=META) and link back via `linked_report_id`. Scan owner's schedule rows
+        # then filter by the linked report (no GSI on linked_report_id; small numbers).
+        resp = T.crm_reports.scan(
+            FilterExpression="owner_sub = :sub AND begins_with(sk, :pfx)",
+            ExpressionAttributeValues={":sub": owner_sub, ":pfx": "META"},
         )
-        items = [i for i in resp.get("Items", []) if i.get("owner_sub") == owner_sub]
+        items = [
+            i for i in resp.get("Items", [])
+            if str(i.get("report_id", "")).startswith("SCHEDULE#")
+            and i.get("linked_report_id") == report_id
+        ]
         return {"schedules": [_item_to_out(i) for i in items], "cursor": None}
     else:
         # Scan by owner_sub (no owner GSI; small numbers expected)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.policy import (
@@ -126,9 +126,10 @@ async def delete_role(
     role_id: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     crm_acl_svc.delete_acl_role(user.sub, role_id)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +174,10 @@ async def revoke_user(
     user_sub: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     crm_acl_svc.revoke_role_from_user(user.sub, role_id, user_sub)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
@@ -205,9 +207,10 @@ async def revoke_group(
     group_key: str,
     request: Request,
     user: AuthenticatedUser = Depends(require_root),
-) -> None:
+):
     enforce_cookie_csrf(request)
     crm_acl_svc.revoke_role_from_group(user.sub, role_id, group_key)
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.core.settings import S
 from app.services.sessions import require_ui_session
@@ -33,7 +33,7 @@ async def get_dashboard(ctx: dict = Depends(require_ui_session)) -> Any:
 
 
 @router.patch("/dashboard")
-async def patch_dashboard(body: Any, ctx: dict = Depends(require_ui_session)) -> Any:
+async def patch_dashboard(body: Any = Body(...), ctx: dict = Depends(require_ui_session)) -> Any:
     _require_flag()
     from app.models import DashboardUpdateIn
     from app.services.crm_dashboard import update_dashboard
@@ -42,7 +42,7 @@ async def patch_dashboard(body: Any, ctx: dict = Depends(require_ui_session)) ->
 
 
 @router.post("/dashboard/dashlets")
-async def add_dashlet(body: Any, ctx: dict = Depends(require_ui_session)) -> Any:
+async def add_dashlet(body: Any = Body(...), ctx: dict = Depends(require_ui_session)) -> Any:
     _require_flag()
     from app.models import DashletAddIn
     from app.services.crm_dashboard import add_dashlet as _add
@@ -51,7 +51,7 @@ async def add_dashlet(body: Any, ctx: dict = Depends(require_ui_session)) -> Any
 
 
 @router.post("/dashboard/dashlets/reorder")
-async def reorder_dashlets(body: Any, ctx: dict = Depends(require_ui_session)) -> Any:
+async def reorder_dashlets(body: Any = Body(...), ctx: dict = Depends(require_ui_session)) -> Any:
     _require_flag()
     from app.models import DashletReorderIn
     from app.services.crm_dashboard import reorder_dashlets as _reorder

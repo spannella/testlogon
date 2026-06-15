@@ -112,6 +112,10 @@ def create_crm_project(
         Item=item,
         ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
     )
+    # Register the creator as the project owner member so they can manage
+    # members / contact-links (membership-gated operations).
+    from app.services.crm_project_members import bootstrap_owner
+    bootstrap_owner(owner_sub, project_id)
     return _item_to_project(item)
 
 

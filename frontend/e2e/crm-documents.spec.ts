@@ -87,8 +87,22 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 }
 
 /** Upload a small text file as the given identity. */
+async function ensureFolder(page: Page, identity: string, path: string) {
+  const sess = getAdminSessions()[identity];
+  // Idempotent: 200 on create, ~409/400 if it already exists — both fine.
+  return page.request.post(`${API}/v1/fs/folder`, {
+    headers: { "x-csrf-token": sess.csrf_token, "content-type": "application/json" },
+    data: { path },
+  });
+}
+
 async function uploadFile(page: Page, identity: string, path: string, content: string) {
   const sess = getAdminSessions()[identity];
+  // The upload endpoint requires the parent folder to already exist.
+  const parent = path.substring(0, path.lastIndexOf("/")) || "/";
+  if (parent !== "/") {
+    await ensureFolder(page, identity, parent);
+  }
   return page.request.post(`${API}/v1/fs/upload`, {
     params: { path, overwrite: "true" },
     headers: { "x-csrf-token": sess.csrf_token },
@@ -274,12 +288,10 @@ test.describe("Section 3: CrmDocuments UI", () => {
   test("detail page renders for an encoded path", async () => {
     const enc = encodeURIComponent(`/crm-documents/contract_${TS}.txt`);
     await page.goto(`${BASE}/crm/documents/detail/${enc}`, { waitUntil: "domcontentloaded" });
-    // Either file details (exists) or not-found / not-enabled state.
-    const ok = await page
-      .getByText(/File details|Document not found|not enabled/i)
-      .first()
-      .isVisible()
-      .catch(() => false);
-    expect(ok).toBe(true);
+    // Either file details (exists) or not-found / not-enabled state. Poll for a
+    // terminal state — the info query may show a loading skeleton briefly first.
+    await expect(
+      page.getByText(/File details|Document not found|not enabled/i).first(),
+    ).toBeVisible({ timeout: 15_000 });
   });
 });

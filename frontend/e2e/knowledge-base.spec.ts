@@ -389,7 +389,7 @@ test.describe("Section 93: KB search + tags + public portal (API)", () => {
 
   test("93.2 list popular tags", async () => {
     test.skip(!enabled, "KB feature flag is OFF");
-    const resp = await apiGet(bobPage, "kb/tags", { limit: "50" });
+    const resp = await apiGet(bobPage, "public/kb/tags", { limit: "50" });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(Array.isArray(body.tags)).toBe(true);
@@ -397,7 +397,7 @@ test.describe("Section 93: KB search + tags + public portal (API)", () => {
 
   test("93.3 list articles by tag", async () => {
     test.skip(!enabled || !articleId, "KB off or article not created");
-    const resp = await apiGet(bobPage, `kb/tags/${UNIQ}/articles`, { limit: "20" });
+    const resp = await apiGet(bobPage, `public/kb/tags/${UNIQ}/articles`, { limit: "20" });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(Array.isArray(body.items)).toBe(true);
@@ -456,7 +456,7 @@ test.describe("Section 94: Knowledge Base UI", () => {
     test.skip(!enabled, "KB feature flag is OFF");
     await injectAuth(page, "root");
     await page.goto(`${BASE}/crm/knowledge-base`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("link", { name: /New article/i }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /New article/i }).first()).toBeVisible();
   });
 
   test("94.3 public portal page renders Help Center", async ({ page }) => {

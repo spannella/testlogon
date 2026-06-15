@@ -244,7 +244,7 @@ def assign_role_to_user(actor_sub: str, role_id: str, user_sub: str) -> None:
         "assigned_at": ts,
     })
     _invalidate_user_cache(user_sub)
-    audit_event("crm_acl_role.assigned", actor_sub, role_id=role_id, user_sub=user_sub)
+    audit_event("crm_acl_role.assigned", actor_sub, role_id=role_id, target_user_sub=user_sub)
 
 
 def revoke_role_from_user(actor_sub: str, role_id: str, user_sub: str) -> None:
@@ -254,7 +254,7 @@ def revoke_role_from_user(actor_sub: str, role_id: str, user_sub: str) -> None:
 
     table.delete_item(Key={"pk": _role_pk(role_id), "sk": f"ASSIGNMENT#{user_sub}"})
     _invalidate_user_cache(user_sub)
-    audit_event("crm_acl_role.revoked", actor_sub, role_id=role_id, user_sub=user_sub)
+    audit_event("crm_acl_role.revoked", actor_sub, role_id=role_id, target_user_sub=user_sub)
 
 
 def get_roles_for_user(user_sub: str) -> list[dict]:
@@ -287,13 +287,13 @@ def get_roles_for_user(user_sub: str) -> list[dict]:
 
 def list_assignments_for_role(role_id: str) -> list[dict]:
     """List all direct user assignment rows for a role."""
-    from boto3.dynamodb.conditions import Key as DKey, Attr
+    from boto3.dynamodb.conditions import Key as DKey
 
     table = _get_table()
     items = []
     kwargs: dict[str, Any] = {
-        "KeyConditionExpression": DKey("pk").eq(_role_pk(role_id)),
-        "FilterExpression": Attr("sk").begins_with("ASSIGNMENT#"),
+        "KeyConditionExpression": DKey("pk").eq(_role_pk(role_id))
+        & DKey("sk").begins_with("ASSIGNMENT#"),
     }
     while True:
         resp = table.query(**kwargs)
@@ -345,13 +345,13 @@ def revoke_role_from_group(actor_sub: str, role_id: str, group_key: str) -> None
 
 def list_group_assignments_for_role(role_id: str) -> list[dict]:
     """List all group assignment rows for a role."""
-    from boto3.dynamodb.conditions import Key as DKey, Attr
+    from boto3.dynamodb.conditions import Key as DKey
 
     table = _get_table()
     items = []
     kwargs: dict[str, Any] = {
-        "KeyConditionExpression": DKey("pk").eq(_role_pk(role_id)),
-        "FilterExpression": Attr("sk").begins_with("GROUP_ASSIGNMENT#"),
+        "KeyConditionExpression": DKey("pk").eq(_role_pk(role_id))
+        & DKey("sk").begins_with("GROUP_ASSIGNMENT#"),
     }
     while True:
         resp = table.query(**kwargs)
