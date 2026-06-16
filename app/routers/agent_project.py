@@ -35,7 +35,7 @@ from app.models import (
     PmOutputOut,
     ProjectDashboardOut,
     ReportListOut,
-    ReportOut,
+    PmReportOut,
     ReprioritizeOut,
     SprintDetailOut,
     SprintListOut,
@@ -355,10 +355,10 @@ async def list_reports(
 ):
     resolved_space = _resolve_space_id(space_id, type_id)
     reports = svc.list_reports(space_id=resolved_space, limit=limit)
-    return ReportListOut(reports=[ReportOut(**r) for r in reports], count=len(reports))
+    return ReportListOut(reports=[PmReportOut(**r) for r in reports], count=len(reports))
 
 
-@router.get("/reports/{report_id}", response_model=ReportOut)
+@router.get("/reports/{report_id}", response_model=PmReportOut)
 async def get_report(
     report_id: str,
     type_id: Optional[str] = Query(default=None),
@@ -372,7 +372,7 @@ async def get_report(
             status_code=404,
             detail={"code": "REPORT_NOT_FOUND", "message": "Report not found"},
         )
-    return ReportOut(**report)
+    return PmReportOut(**report)
 
 
 # ---------------------------------------------------------------------------

@@ -420,7 +420,7 @@ test.describe("92 — Refund UI", () => {
     );
     await uiAlicePage.goto("http://localhost:3000/billing?tab=ledger");
     await responsePromise;
-    await expect(uiAlicePage.getByText("Ledger")).toBeVisible();
+    await expect(uiAlicePage.getByRole("tab", { name: "Ledger" })).toBeVisible();
   });
 
   test("92.2 My Refund Requests link is visible", async () => {

@@ -29,9 +29,9 @@ from app.models import (
     ReceiveIn,
     ReceiptListOut,
     ReceiptOut,
-    ShipmentIn,
+    FulfillmentShipmentIn,
     ShipmentListOut,
-    ShipmentOut,
+    FulfillmentShipmentOut,
     TransferIn,
     TransferListOut,
     TransferOut,
@@ -370,12 +370,12 @@ async def confirm_pick_endpoint(
 
 # --- Shipments ---
 
-@fulfillment_router.post("/picklists/{picklist_id}/pack", response_model=ShipmentOut, status_code=201)
+@fulfillment_router.post("/picklists/{picklist_id}/pack", response_model=FulfillmentShipmentOut, status_code=201)
 async def pack_picklist_endpoint(
     picklist_id: str,
-    body: ShipmentIn,
+    body: FulfillmentShipmentIn,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
-) -> ShipmentOut:
+) -> FulfillmentShipmentOut:
     _require_enabled()
     from app.services.picking import pack_picklist
     packages = [
@@ -390,26 +390,26 @@ async def pack_picklist_endpoint(
         for p in body.packages
     ]
     result = pack_picklist(picklist_id, packages, packed_by=user.sub)
-    return ShipmentOut(**result)
+    return FulfillmentShipmentOut(**result)
 
 
-@fulfillment_router.get("/shipments/{shipment_id}", response_model=ShipmentOut)
+@fulfillment_router.get("/shipments/{shipment_id}", response_model=FulfillmentShipmentOut)
 async def get_shipment_endpoint(
     shipment_id: str,
     session: Dict[str, Any] = Depends(require_ui_session),
-) -> ShipmentOut:
+) -> FulfillmentShipmentOut:
     _require_enabled()
     from app.services.shipping_fulfillment import get_shipment
     result = get_shipment(shipment_id)
-    return ShipmentOut(**result)
+    return FulfillmentShipmentOut(**result)
 
 
-@fulfillment_router.post("/shipments/{shipment_id}/ship", response_model=ShipmentOut)
+@fulfillment_router.post("/shipments/{shipment_id}/ship", response_model=FulfillmentShipmentOut)
 async def ship_shipment_endpoint(
     shipment_id: str,
-    body: ShipmentIn,
+    body: FulfillmentShipmentIn,
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
-) -> ShipmentOut:
+) -> FulfillmentShipmentOut:
     _require_enabled()
     from app.services.shipping_fulfillment import ship_shipment
     result = ship_shipment(
@@ -420,19 +420,19 @@ async def ship_shipment_endpoint(
         service_level=body.service_level,
         notes=body.notes,
     )
-    return ShipmentOut(**result)
+    return FulfillmentShipmentOut(**result)
 
 
-@fulfillment_router.post("/shipments/{shipment_id}/cancel", response_model=ShipmentOut)
+@fulfillment_router.post("/shipments/{shipment_id}/cancel", response_model=FulfillmentShipmentOut)
 async def cancel_shipment_endpoint(
     shipment_id: str,
     reason: str = Query(""),
     user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
-) -> ShipmentOut:
+) -> FulfillmentShipmentOut:
     _require_enabled()
     from app.services.shipping_fulfillment import cancel_shipment
     result = cancel_shipment(shipment_id, cancelled_by=user.sub, reason=reason)
-    return ShipmentOut(**result)
+    return FulfillmentShipmentOut(**result)
 
 
 @fulfillment_router.get("/shipments", response_model=ShipmentListOut)

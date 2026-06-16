@@ -29,7 +29,7 @@ export default function SigningPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-2">
         <FilePen className="h-6 w-6" />
-        <h1 className="text-xl font-semibold">Signing</h1>
+        <h1 className="text-xl font-semibold">Document Signing</h1>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

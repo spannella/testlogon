@@ -8154,7 +8154,7 @@ class SprintDetailOut(BaseModel):
     burndown: List[SprintBurndownPointOut] = Field(default_factory=list)
 
 
-class ReportOut(BaseModel):
+class PmReportOut(BaseModel):
     report_id: str
     report_type: str = "daily"
     content: str = ""
@@ -8163,7 +8163,7 @@ class ReportOut(BaseModel):
 
 
 class ReportListOut(BaseModel):
-    reports: List[ReportOut] = Field(default_factory=list)
+    reports: List[PmReportOut] = Field(default_factory=list)
     count: int = 0
 
 
@@ -14164,7 +14164,7 @@ class AddressInput(BaseModel):
 class VerifyAddressRequest(BaseModel):
     """Request body for triggering an address verification."""
 
-    address: AddressInput
+    address: OpenDataAddressInput
 
 
 class PostalCodeValidationRequest(BaseModel):
@@ -19021,7 +19021,7 @@ class PackageOut(BaseModel):
         return 0 if v is None else int(v)
 
 
-class ShipmentIn(BaseModel):
+class FulfillmentShipmentIn(BaseModel):
     picklist_id: str = Field(min_length=1, max_length=128)
     carrier: str = Field(min_length=1, max_length=100)
     tracking_number: str = Field(min_length=1, max_length=200)
@@ -19031,7 +19031,7 @@ class ShipmentIn(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, max_length=256)
 
 
-class ShipmentOut(BaseModel):
+class FulfillmentShipmentOut(BaseModel):
     shipment_id: str
     order_id: str
     picklist_id: str
@@ -20925,7 +20925,7 @@ class OpeningHours(BaseModel):
         return self
 
 
-class AddressIn(BaseModel):
+class OpenDataAddressIn(BaseModel):
     line1: str
     line2: Optional[str] = None
     city: str
@@ -20948,7 +20948,7 @@ class LocationIn(BaseModel):
 
 class BranchIn(BaseModel):
     name: str
-    address: AddressIn
+    address: OpenDataAddressIn
     location: LocationIn
     opening_hours: List[OpeningHours] = Field(default_factory=list)
     accessibility: List[str] = Field(default_factory=list)
@@ -20959,7 +20959,7 @@ class BranchIn(BaseModel):
 class BranchOut(BaseModel):
     branch_id: str
     name: str
-    address: AddressIn
+    address: OpenDataAddressIn
     location: LocationIn
     opening_hours: List[OpeningHours]
     accessibility: List[str]
@@ -20971,7 +20971,7 @@ class BranchOut(BaseModel):
 
 class AtmIn(BaseModel):
     name: str
-    address: AddressIn
+    address: OpenDataAddressIn
     location: LocationIn
     is_active: bool = True
     has_deposit: bool = False
@@ -20981,7 +20981,7 @@ class AtmIn(BaseModel):
 class AtmOut(BaseModel):
     atm_id: str
     name: str
-    address: AddressIn
+    address: OpenDataAddressIn
     location: LocationIn
     is_active: bool
     has_deposit: bool

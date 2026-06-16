@@ -441,12 +441,12 @@ test.describe("344 — Advertiser Dashboard UI", () => {
 
   test("344.3 Campaign list shows campaigns", async () => {
     await alicePage.goto(`${BASE}/ads/campaigns?account=${accountId}`);
-    await expect(alicePage.getByText("Campaigns", { exact: true })).toBeVisible();
+    await expect(alicePage.locator("#main-content").getByText("Campaigns", { exact: true })).toBeVisible();
     await expect(alicePage.getByText(`Winter Sale ${TS}`)).toBeVisible({ timeout: 10000 });
   });
 
   test("344.4 Campaign status badge displays correctly", async () => {
     // The campaign should be "active" from section 343 tests
-    await expect(alicePage.getByText("active")).toBeVisible();
+    await expect(alicePage.locator("#main-content").getByText("active").first()).toBeVisible();
   });
 });
