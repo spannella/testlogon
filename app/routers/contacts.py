@@ -108,7 +108,27 @@ def add_contact(inp: AddContactIn, ctx: Dict = Depends(require_ui_session)):
         "added_at": now,
     }
     T.contacts.put_item(Item=item)
+
+    # PTY-009 forward hook — best-effort, flag-gated (lazy import to avoid
+    # pulling the party graph into the import path when the flag is off).
+    from app.core.settings import S as _S
+
+    if _S.party_crm_contacts_migration_enabled:
+        try:
+            from app.services.party_contacts_migration import maybe_project_new_contact
+
+            maybe_project_new_contact(user_sub, inp.user_id, item)
+        except Exception:
+            pass
+
     return _item_to_contact(item)
+    contact_out = _item_to_contact(item)
+    try:
+        from app.services.workflow_hooks import fire_on_save_hook
+        fire_on_save_hook(module="contact", record=item, event="create")
+    except Exception:
+        pass
+    return contact_out
 
 
 @router.delete("/{contact_id}", status_code=204)
@@ -153,4 +173,11 @@ def update_contact(contact_id: str, inp: UpdateContactIn, ctx: Dict = Depends(re
     except T.contacts.meta.client.exceptions.ConditionalCheckFailedException:
         raise HTTPException(404, "Contact not found")
 
-    return _item_to_contact(resp["Attributes"])
+    raw = resp["Attributes"]
+    contact_out = _item_to_contact(raw)
+    try:
+        from app.services.workflow_hooks import fire_on_save_hook
+        fire_on_save_hook(module="contact", record=raw, event="update")
+    except Exception:
+        pass
+    return contact_out

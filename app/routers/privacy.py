@@ -176,6 +176,24 @@ def request_deletion(
     if has_retention_hold(user_sub):
         raise HTTPException(status_code=403, detail="Account has a retention hold")
 
+    # LEX-007: standalone legal hold blocks deletion. Only consulted when the
+    # legal-export feature is enabled (flag DEFAULTS OFF — with it off this is a
+    # no-op and existing behavior is byte-for-byte unchanged).
+    if S.legal_export_enabled:
+        try:
+            from app.services.legal_hold import is_user_on_hold
+
+            if is_user_on_hold(user_sub):
+                logger.warning("privacy.deletion_blocked_legal_hold user=%s", user_sub)
+                raise HTTPException(
+                    status_code=403,
+                    detail="Account is under a legal hold and cannot be deleted",
+                )
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 - hold lookup failure must not block legitimate flows silently here
+            logger.exception("privacy.legal_hold_check_error user=%s", user_sub)
+
     # Check for existing pending deletion
     if has_pending_deletion(user_sub):
         raise HTTPException(status_code=409, detail="Pending deletion request already exists")

@@ -1269,6 +1269,10 @@ ENCRYPTED_EDIT_ERROR_CODE = "encrypted_message_edit_unsupported"
 NO_AGENTS_ONLINE_NOTICE_TEXT = "No helpdesk agents are online right now. Please try again later."
 NO_AGENTS_NOTICE_THROTTLE_SEC = int(os.getenv("NO_AGENTS_NOTICE_THROTTLE_SEC", "600"))
 HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# HMH-003: when on, a new helpdesk chat is auto-routed to an available agent at
+# creation (skipping the queue). Default off — flag-off behavior is identical to
+# the historical alert-only fanout path.
+HELPDESK_AUTO_ROUTE_ENABLED = os.getenv("HELPDESK_AUTO_ROUTE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED = bool(getattr(S, "messaging_hidden_timeline_filter_enabled", True))
 
 HELPDESK_ROUTING_EVENT_SCHEMA_VERSION = 1
@@ -1756,6 +1760,8 @@ class ConversationOut(BaseModel):
     active_agent_user_id: Optional[str] = None
     active_agent_claimed_at: Optional[int] = None
     assignment_version: Optional[int] = None
+    # Identity-free signal for the customer-facing helpdesk banner (HMH-008).
+    agent_connected: Optional[bool] = None
     participants: List["ParticipantOut"] = Field(default_factory=list)
     last_message: Optional["MessageOut"] = None
 
@@ -2435,6 +2441,10 @@ class MessageOut(BaseModel):
     lottery: Optional[Dict[str, Any]] = None
     voice_message: Optional[Dict[str, Any]] = None
     voicemail: Optional[Dict[str, Any]] = None
+    # Per-message translation (MVA-005): populated when the viewer has
+    # auto-translate on and a cached translation exists. Best-effort, never set
+    # for viewers without the preference.
+    translation: Optional[Dict[str, Any]] = None
     # Countdown message fields (MSG-010)
     countdown_title: Optional[str] = None
     target_datetime: Optional[int] = None
@@ -4100,6 +4110,15 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             "duration_seconds": float(merged_item.get("duration_seconds", 0)),
             "waveform_data": [float(v) for v in raw_waveform],
         }
+        # MVA-007: project a persisted transcript (if any) for all participants.
+        if merged_item.get("transcript"):
+            voice_message_out["transcript"] = str(merged_item.get("transcript"))
+            voice_message_out["transcript_lang"] = str(merged_item.get("transcript_lang") or "")
+        # MVA-009: surface TTS provenance/source text.
+        if merged_item.get("is_tts"):
+            voice_message_out["is_tts"] = True
+            if merged_item.get("tts_source_text"):
+                voice_message_out["tts_source_text"] = str(merged_item.get("tts_source_text"))
 
     # Voicemail projection (CALL-014)
     voicemail_out: Optional[Dict[str, Any]] = None
@@ -4589,12 +4608,23 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
         # Always expose routing_mode to all participants so the UI can identify
         # the conversation as a helpdesk chat (e.g. customer "Your Support Chats" view).
         out.routing_mode = raw_routing_mode
-    if _is_helpdesk_agent_viewer(convo, viewer_user_id):
-        out.routing_group_id = str(convo.get("routing_group_id") or "")
-        out.routing_state = str(convo.get("routing_state") or "")
-        out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
-        out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
-        out.assignment_version = int(convo.get("assignment_version", 0) or 0)
+        # Customer-safe status: routing_state carries only the lifecycle stage
+        # ("awaiting_agent" / "assigned" / …) — no agent identity — so the
+        # customer's routing banner can render. `agent_connected` is a derived,
+        # identity-free flag so the customer knows an agent is on without learning
+        # who. (HMH-008)
+        routing_state = str(convo.get("routing_state") or "")
+        out.routing_state = routing_state
+        out.agent_connected = bool(
+            routing_state == "assigned" or convo.get("active_agent_user_id")
+        )
+        # Agent-only fields (incl. the agent's identity) stay gated to helpdesk
+        # agents — never sent to the customer.
+        if _is_helpdesk_agent_viewer(convo, viewer_user_id):
+            out.routing_group_id = str(convo.get("routing_group_id") or "")
+            out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
+            out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
+            out.assignment_version = int(convo.get("assignment_version", 0) or 0)
     return out
 
 
@@ -5190,6 +5220,28 @@ def _resolve_online_helpdesk_members(group_id: str, ts: int) -> list[str]:
         if last_seen and (ts - last_seen) <= ONLINE_WINDOW_SEC and status in {"online", "available"}:
             out.append(uid)
     return out
+
+
+def count_available_agents(group_id: str, ts: int) -> int:
+    """HMH-001: number of helpdesk agents currently online/available for a group."""
+    try:
+        return len(_resolve_online_helpdesk_members(group_id, ts))
+    except Exception:
+        return 0
+
+
+def pick_available_agent(group_id: str, ts: int, *, exclude: Optional[set[str]] = None) -> Optional[str]:
+    """HMH-001: choose an online/available agent for the group, or None.
+
+    Excludes any ids in ``exclude``. Selection is first-available (presence
+    order); least-loaded selection is a future refinement. Never raises.
+    """
+    excl = exclude or set()
+    try:
+        online = [u for u in _resolve_online_helpdesk_members(group_id, ts) if u and u not in excl]
+    except Exception:
+        return None
+    return online[0] if online else None
 
 
 
@@ -6013,9 +6065,46 @@ def start_conversation(
         )
 
     if routing_mode == "helpdesk_bridge":
-        delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
-        if delivered == 0:
-            _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
+        auto_assigned = False
+        # HMH-004: when enabled and an agent is online, assign immediately so the
+        # chat becomes a live messenger DM instead of sitting in the queue.
+        if HELPDESK_AUTO_ROUTE_ENABLED:
+            agent = pick_available_agent(group_id, created_at)
+            if agent:
+                try:
+                    result = _apply_helpdesk_routing_transition(
+                        conversation_id=cid,
+                        cmd=RoutingTransitionInput(
+                            action="assign_agent",
+                            now_ts=created_at,
+                            agent_user_id=agent,
+                            expected_assignment_version=0,
+                        ),
+                        actor_user_id=agent,
+                        metadata={"reason": "auto_route"},
+                    )
+                    updated_routing = result.get("conversation", {}) if isinstance(result, dict) else {}
+                    _attach_agent_participant(
+                        conversation_id=cid,
+                        agent_user_id=agent,
+                        ts=created_at,
+                        routing_event_id=str(result.get("event", {}).get("event_id") or ""),
+                        routing_state=str(updated_routing.get("routing_state") or "assigned"),
+                        assignment_version=int(updated_routing.get("assignment_version") or 1),
+                    )
+                    # Reflect the assignment on the local item used for the response.
+                    convo_item["routing_state"] = str(updated_routing.get("routing_state") or "assigned")
+                    convo_item["active_agent_user_id"] = agent
+                    convo_item["assignment_version"] = int(updated_routing.get("assignment_version") or 1)
+                    record_helpdesk_claim("success")
+                    auto_assigned = True
+                except Exception:
+                    logger.exception("helpdesk auto-route failed; falling back to queue cid=%s", cid)
+                    auto_assigned = False
+        if not auto_assigned:
+            delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
+            if delivered == 0:
+                _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
 
     profile_cache: Dict[str, Any] = {}
     convo = ConversationOut(
@@ -6571,6 +6660,77 @@ def delete_conversation_if_last(conversation_id: str, req: Request = None, user_
     return {"ok": True, "deleted": True}
 
 
+def _attach_agent_participant(
+    *,
+    conversation_id: str,
+    agent_user_id: str,
+    ts: int,
+    routing_event_id: str,
+    routing_state: str,
+    assignment_version: int,
+) -> str:
+    """Add an agent as an active admin participant of a helpdesk conversation.
+
+    Shared by the claim path and the auto-route path (HMH-004) so the
+    participant-join + participant_count increment + membership-archive event
+    stay identical (single source of truth). Returns the membership transition
+    ("helpdesk_agent_joined" / "helpdesk_agent_reactivated" / "none").
+    """
+    existing_part = tbl_parts.get_item(
+        Key={"user_id": agent_user_id, "conversation_id": conversation_id}
+    ).get("Item")
+    membership_transition = "none"
+    if not existing_part:
+        tbl_parts.put_item(Item={
+            "user_id": agent_user_id,
+            "conversation_id": conversation_id,
+            "status": "active",
+            "role": "admin",
+            "muted_until": 0,
+            "last_read_at": 0,
+            "unread_count": 0,
+            "joined_at": ts,
+            "left_at": 0,
+            "GSI1PK": conversation_id,
+            "GSI1SK": agent_user_id,
+        })
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :inc",
+            ExpressionAttributeValues={":inc": 1},
+        )
+        membership_transition = "helpdesk_agent_joined"
+    elif existing_part.get("status") != "active":
+        tbl_parts.update_item(
+            Key={"user_id": agent_user_id, "conversation_id": conversation_id},
+            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
+        )
+        membership_transition = "helpdesk_agent_reactivated"
+
+    if membership_transition != "none":
+        _emit_conversation_membership_archive_event_or_503(
+            event_ts=ts,
+            conversation_id=conversation_id,
+            subject_user_id=agent_user_id,
+            actor_user_id=agent_user_id,
+            event_type="conversation.member_joined",
+            payload={
+                "transition": membership_transition,
+                "subject_user_id": agent_user_id,
+                "status": "active",
+                "role": "admin",
+                "timeline_state": {
+                    "routing_event_id": routing_event_id,
+                    "routing_state": routing_state,
+                    "assignment_version": assignment_version,
+                },
+            },
+        )
+    return membership_transition
+
+
 def _claim_helpdesk_conversation_internal(
     *,
     conversation_id: str,
@@ -6649,58 +6809,16 @@ def _claim_helpdesk_conversation_internal(
 
     updated = result.get("conversation", {}) if isinstance(result, dict) else {}
 
-    # Add the claiming agent as an active participant (admin role) so they can send messages.
-    # Use a conditional put to avoid overwriting an existing participant record.
-    existing_part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": conversation_id}).get("Item")
-    membership_transition = "none"
-    if not existing_part:
-        tbl_parts.put_item(Item={
-            "user_id": user_id,
-            "conversation_id": conversation_id,
-            "status": "active",
-            "role": "admin",
-            "muted_until": 0,
-            "last_read_at": 0,
-            "unread_count": 0,
-            "joined_at": ts,
-            "left_at": 0,
-            "GSI1PK": conversation_id,
-            "GSI1SK": user_id,
-        })
-        tbl_convos.update_item(
-            Key={"conversation_id": conversation_id},
-            UpdateExpression="ADD participant_count :inc",
-            ExpressionAttributeValues={":inc": 1},
-        )
-        membership_transition = "helpdesk_agent_joined"
-    elif existing_part.get("status") != "active":
-        tbl_parts.update_item(
-            Key={"user_id": user_id, "conversation_id": conversation_id},
-            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
-        )
-        membership_transition = "helpdesk_agent_reactivated"
-
-    if membership_transition != "none":
-        _emit_conversation_membership_archive_event_or_503(
-            event_ts=ts,
-            conversation_id=conversation_id,
-            subject_user_id=user_id,
-            actor_user_id=user_id,
-            event_type="conversation.member_joined",
-            payload={
-                "transition": membership_transition,
-                "subject_user_id": user_id,
-                "status": "active",
-                "role": "admin",
-                "timeline_state": {
-                    "routing_event_id": str(result.get("event", {}).get("event_id") or ""),
-                    "routing_state": str(updated.get("routing_state") or "assigned"),
-                    "assignment_version": int(updated.get("assignment_version") or (current_version + 1)),
-                },
-            },
-        )
+    # Add the claiming agent as an active participant (admin role) so they can
+    # send messages. Shared with the auto-route path (HMH-004).
+    _attach_agent_participant(
+        conversation_id=conversation_id,
+        agent_user_id=user_id,
+        ts=ts,
+        routing_event_id=str(result.get("event", {}).get("event_id") or ""),
+        routing_state=str(updated.get("routing_state") or "assigned"),
+        assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
+    )
 
     audit_event(
         "messaging_helpdesk_conversation_claimed",
@@ -6723,6 +6841,21 @@ def _claim_helpdesk_conversation_internal(
         assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
         idempotent=False,
     )
+
+
+@router.get("/helpdesk/availability")
+def get_helpdesk_availability(
+    group_id: str = Query(..., max_length=128),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-002: counts of online/available agents for a group.
+
+    Customer-callable (no helpdesk-group membership required) so the client can
+    show "agents online" before starting a chat. Returns counts only — never any
+    agent identity.
+    """
+    count = count_available_agents(group_id, now_ts())
+    return {"available_agent_count": count, "any_available": count > 0}
 
 
 @router.get("/helpdesk/queue", response_model=List[ConversationOut])
@@ -14730,3 +14863,368 @@ def list_delegated_chat_audit(
         limit=limit,
     )
     return [ChatDelegateAuditEntry(**item) for item in items]
+
+
+# ─── Messenger Voice & Translation AI (MVA-004 / MVA-007 / MVA-009) ──────────
+
+from app.models import (
+    TranslateMessageRequest,
+    TranslateMessageOut,
+    TranscribeMessageOut,
+    TtsVoiceMessageRequest,
+)
+
+
+def _ai_rate_limit_or_429(user_id: str, category: str, max_n: int, win: int) -> None:
+    """DDB-backed fixed-window rate limit on T.message_ai_cache.
+
+    Keyed per (user, category) so each AI feature has an independent bucket,
+    distinct from message-send quotas (MVA-011). Fail-open on store errors so
+    a transient DDB hiccup never blocks the feature.
+    """
+    now = now_ts()
+    bucket_key = f"RL#{category}#{user_id}#{now // win}"
+    try:
+        resp = T.message_ai_cache.update_item(
+            Key={"cache_key": bucket_key},
+            UpdateExpression="ADD #c :one SET #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ttl": "ttl"},
+            ExpressionAttributeValues={":one": 1, ":ttl": now + win + 60},
+            ReturnValues="UPDATED_NEW",
+        )
+        count = int(resp.get("Attributes", {}).get("count", 1))
+    except Exception:
+        return  # fail-open
+    if count > max_n:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "messaging_ai_rate_limited", "message": "Too many AI requests"},
+            headers={"Retry-After": str(win)},
+        )
+
+
+def _ai_cache_get(cache_key: str) -> Optional[Dict[str, Any]]:
+    try:
+        item = T.message_ai_cache.get_item(Key={"cache_key": cache_key}).get("Item")
+    except Exception:
+        return None
+    return item if isinstance(item, dict) else None
+
+
+def _ai_cache_put(cache_key: str, payload: Dict[str, Any], ttl_seconds: int) -> None:
+    now = now_ts()
+    item: Dict[str, Any] = {"cache_key": cache_key, "created_at": now, **payload}
+    if ttl_seconds and ttl_seconds > 0:
+        item["ttl"] = now + ttl_seconds
+    try:
+        T.message_ai_cache.put_item(Item=item)
+    except Exception:
+        logger.warning("message_ai_cache put failed key=%s", cache_key, exc_info=True)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/translate",
+    response_model=TranslateMessageOut,
+)
+def translate_message(
+    conversation_id: str,
+    message_id: str,
+    body: TranslateMessageRequest,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Translate a text message into ``target_lang`` (cached) (MVA-004)."""
+    if not S.messaging_translation_enabled:
+        raise HTTPException(404, "Message translation is not enabled")
+    require_participant_active(user_id, conversation_id)
+    item = _get_message_or_404(conversation_id, message_id)
+
+    # Only plain text content is translatable; reject hidden/locked/view-once.
+    if item.get("kind") != "text":
+        raise HTTPException(400, "Only text messages can be translated")
+    if item.get("view_once") or item.get("is_encrypted"):
+        raise HTTPException(400, "This message cannot be translated")
+    if item.get("lock_price_cents") and item.get("sender_id") != user_id:
+        raise HTTPException(400, "Locked messages cannot be translated")
+    text = str(item.get("text") or "")
+    if not text.strip():
+        raise HTTPException(400, "Message has no translatable text")
+
+    target_lang = body.target_lang.strip()
+    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    cache_key = "TX#" + hashlib.sha256(
+        f"{message_id}|{target_lang}|{text_hash}".encode("utf-8")
+    ).hexdigest()
+
+    cached = _ai_cache_get(cache_key)
+    if cached and cached.get("translated_text") is not None:
+        return TranslateMessageOut(
+            translated_text=str(cached.get("translated_text") or ""),
+            source_lang=str(cached.get("source_lang") or "auto"),
+            target_lang=target_lang,
+            cached=True,
+        )
+
+    # Rate-limit only the provider-call (cache-miss) path.
+    _ai_rate_limit_or_429(
+        user_id,
+        "translate",
+        S.messaging_ai_translate_max_per_window,
+        S.messaging_ai_translate_window_seconds,
+    )
+
+    from app.services import messaging_ai
+
+    try:
+        translated, source_lang = messaging_ai.translate_text(
+            user_id=user_id, text=text, target_lang=target_lang
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    _ai_cache_put(
+        cache_key,
+        {"translated_text": translated, "source_lang": source_lang, "target_lang": target_lang},
+        S.messaging_translation_cache_ttl_seconds,
+    )
+    return TranslateMessageOut(
+        translated_text=translated,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        cached=False,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/transcribe",
+    response_model=TranscribeMessageOut,
+)
+def transcribe_message(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Transcribe a voice message and persist the transcript (MVA-007)."""
+    if not S.messaging_transcription_enabled:
+        raise HTTPException(404, "Message transcription is not enabled")
+    require_participant_active(user_id, conversation_id)
+    item = _get_message_or_404(conversation_id, message_id)
+
+    if item.get("kind") not in ("voice_message", "voicemail"):
+        raise HTTPException(400, "Only voice messages can be transcribed")
+
+    # Idempotent: a stored transcript short-circuits the provider call.
+    existing = item.get("transcript")
+    if existing:
+        return TranscribeMessageOut(
+            transcript=str(existing),
+            transcript_lang=str(item.get("transcript_lang") or ""),
+            cached=True,
+        )
+
+    s3_key = str(item.get("audio_url") or "")
+    if not s3_key:
+        raise HTTPException(400, "Voice message has no audio")
+
+    _ai_rate_limit_or_429(
+        user_id,
+        "transcribe",
+        S.messaging_ai_transcribe_max_per_window,
+        S.messaging_ai_transcribe_window_seconds,
+    )
+
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET_IMAGES, Key=s3_key)
+        audio_bytes = obj["Body"].read()
+    except Exception as exc:
+        logger.warning("transcribe_message s3 get failed key=%s err=%s", s3_key, exc)
+        raise HTTPException(502, "Could not fetch audio for transcription")
+
+    content_type = str(item.get("audio_content_type") or "audio/webm")
+    from app.services import messaging_ai
+
+    try:
+        transcript, lang = messaging_ai.transcribe_audio(
+            user_id=user_id, audio_bytes=audio_bytes, content_type=content_type
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    ts = now_ts()
+    try:
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression="SET transcript = :t, transcript_lang = :l, transcribed_at = :ts",
+            ConditionExpression="attribute_not_exists(transcript)",
+            ExpressionAttributeValues={":t": transcript, ":l": lang, ":ts": ts},
+        )
+    except Exception:
+        # Concurrent write won the race; re-read to return the stored value.
+        fresh = _get_message_or_404(conversation_id, message_id)
+        return TranscribeMessageOut(
+            transcript=str(fresh.get("transcript") or transcript),
+            transcript_lang=str(fresh.get("transcript_lang") or lang),
+            cached=True,
+        )
+
+    return TranscribeMessageOut(transcript=transcript, transcript_lang=lang, cached=False)
+
+
+@router.post("/conversations/{conversation_id}/tts-voice-message", response_model=MessageOut)
+def create_tts_voice_message(
+    conversation_id: str,
+    body: TtsVoiceMessageRequest,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Synthesize text into a stored voice message via TTS (MVA-009)."""
+    if not S.messaging_tts_enabled or not S.voice_message_enabled:
+        raise HTTPException(404, "Text-to-speech voice messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > S.messaging_tts_max_chars:
+        raise HTTPException(400, f"text exceeds {S.messaging_tts_max_chars} characters")
+
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    ts = now_ts()
+    deliver_at: Optional[int] = None
+    is_scheduled = False
+    if body.send_at is not None:
+        if body.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at = body.send_at
+        is_scheduled = True
+
+    _validate_reply_target(conversation_id, body.reply_to_message_id)
+
+    _ai_rate_limit_or_429(
+        user_id,
+        "tts",
+        S.messaging_ai_tts_max_per_window,
+        S.messaging_ai_tts_window_seconds,
+    )
+
+    from app.services import messaging_ai
+
+    try:
+        audio_bytes, content_type = messaging_ai.synthesize_speech(
+            user_id=user_id, text=text, voice_id=body.voice_id, model_id=body.model_id
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    mid = "m_" + uuid.uuid4().hex
+    s3_key = f"voice-messages/{conversation_id}/{mid}.mp3"
+    try:
+        s3.put_object(Bucket=S3_BUCKET_IMAGES, Key=s3_key, Body=audio_bytes, ContentType=content_type)
+    except Exception as exc:
+        logger.warning("create_tts_voice_message s3 put failed key=%s err=%s", s3_key, exc)
+        raise HTTPException(502, "Could not store synthesized audio")
+
+    # Estimate duration from byte length (rough; ~16KB/s) and a flat waveform.
+    duration_seconds = max(1.0, round(len(audio_bytes) / 16000.0, 1))
+    from decimal import Decimal as _DecTTS
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "voice_message",
+        "text": text,  # accessibility: keep the source text
+        "audio_url": s3_key,
+        "audio_content_type": content_type,
+        "audio_size_bytes": len(audio_bytes),
+        "duration_seconds": _DecTTS(str(duration_seconds)),
+        "waveform_data": [_DecTTS("0.5")] * 20,
+        "is_tts": True,
+        "tts_source_text": text,
+        "reactions": {},
+    }
+    if is_scheduled:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=body.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
+
+    tbl_msgs.put_item(Item=item)
+
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled,
+        preview_text="[Voice message]",
+    )
+
+    from urllib.parse import quote as _tts_quote
+    if S.dev_mode:
+        audio_url_out = f"/mock/s3/{S3_BUCKET_IMAGES}/{_tts_quote(s3_key, safe='/')}"
+    else:
+        audio_url_out = s3_key
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind="voice_message",
+        text=text,
+        voice_message={
+            "audio_url": audio_url_out,
+            "audio_content_type": content_type,
+            "audio_size_bytes": len(audio_bytes),
+            "duration_seconds": duration_seconds,
+            "waveform_data": [0.5] * 20,
+            "is_tts": True,
+            "tts_source_text": text,
+        },
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        scheduled=is_scheduled,
+        deliver_at=deliver_at,
+    )
+    if not is_scheduled:
+        message = _apply_message_receipts(message, item, participants)
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="voice_message",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return message

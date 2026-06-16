@@ -25,10 +25,26 @@ logger = logging.getLogger(__name__)
 
 MAX_BATCH_SIZE = 25
 
+
+# CRM Workflow lazy-import wrappers (WFL-006 / WFL-008)
+# Lazy imports avoid circular deps at module load time.
+async def _lazy_crm_executor(user_sub: str, payload: dict) -> None:
+    from app.services.workflow_action_executor import execute_crm_workflow_action
+    await execute_crm_workflow_action(user_sub, payload)
+
+
+async def _lazy_drip_stage_executor(user_sub: str, payload: dict) -> None:
+    from app.services.workflow_action_executor import execute_drip_stage_action
+    await execute_drip_stage_action(user_sub, payload)
+
+
 _EXECUTORS = {
     "post": schedule_executors.execute_scheduled_post,
     "file_share": schedule_executors.execute_scheduled_file_share,
     "catalog_sale": schedule_executors.execute_scheduled_catalog_sale,
+    # CRM Workflow (WFL-006)
+    "crm_workflow": _lazy_crm_executor,
+    "crm_workflow_drip_stage": _lazy_drip_stage_executor,  # WFL-008
 }
 
 
@@ -72,6 +88,14 @@ async def run_unified_scheduler_loop() -> None:
                             _send_reminder(action)
             except Exception:
                 logger.exception("Error processing reminders")
+
+            # 3. OBP PAY — standing orders + direct-debit mandates due ticks.
+            #    Reuses THIS loop (no second asyncio task). Inert when the PAY flag
+            #    (or the umbrella OBP flag) is off. Money-out goes through TXR only.
+            try:
+                _run_payments_due_ticks()
+            except Exception:
+                logger.exception("Error processing OBP PAY due ticks")
 
             _duration_ms = (_time.perf_counter() - _poll_start) * 1000
             report_poll("unified_scheduler", items_processed=_processed,
@@ -180,6 +204,31 @@ def _send_reminder(action: dict) -> None:
         logger.info("Sent reminder for action %s", action.get("action_id", ""))
     except Exception:
         logger.exception("Failed to send reminder for action %s", action.get("action_id", ""))
+
+
+def _run_payments_due_ticks() -> None:
+    """OBP PAY standing-order + mandate due ticks (lazy-imported, flag-gated).
+
+    Gated on the PAY per-series flag AND the umbrella OBP flag (read via getattr — the
+    umbrella flag is owned by ACC and may be absent on a stale base). When either is
+    off this is a no-op, so the scheduler loop is unaffected.
+    """
+    if not getattr(S, "payments_counterparties_enabled", False):
+        return
+    if not getattr(S, "open_bank_project_enabled", False):
+        return
+    try:
+        from app.services import standing_orders as _so
+
+        _so.run_due_tick(limit=MAX_BATCH_SIZE)
+    except Exception:
+        logger.exception("standing_orders due tick failed")
+    try:
+        from app.services import direct_debit_mandates as _dd
+
+        _dd.run_due_tick(limit=MAX_BATCH_SIZE)
+    except Exception:
+        logger.exception("direct_debit_mandates due tick failed")
 
 
 async def start_unified_scheduler_task() -> None:

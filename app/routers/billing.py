@@ -44,6 +44,7 @@ from app.models import (
     VerifyMicrodepositsReq,
     WalletDepositReq,
     WalletWithdrawReq,
+    SetWalletThresholdReq,  # PLT-005
 )
 from app.services.sessions import require_ui_session
 from app.services.alerts import audit_event
@@ -1283,24 +1284,36 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
-@dual_route("POST", "/billing/refund")
-def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
-    ensure_stripe_configured()
-    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+def _do_refund(
+    user_id: str,
+    payment_intent_id: str,
+    amount_cents: int = 0,
+    reason: str = "",
+    req: Optional[Request] = None,
+) -> Dict[str, str]:
+    """Single point of Stripe refund issuance (TXR-004 §4.5).
+
+    Factored out of ``refund_payment`` so both the legacy ``POST /billing/refund``
+    endpoint and the TXR-004 execution engine (``_dispatch_refund``) issue the
+    Stripe refund through exactly one call site — ``stripe.Refund.create`` is
+    invoked exactly once per invocation. No money-path duplication.
+
+    Returns ``{"led_sk": ..., "refund_id": ..., "payment_intent_id": ...}``.
+    """
     pk = user_pk(user_id)
 
-    pay = ddb_get(T.billing, pk, pay_sk(body.payment_intent_id))
+    pay = ddb_get(T.billing, pk, pay_sk(payment_intent_id))
     if not pay:
         raise HTTPException(404, "Payment record not found")
 
-    amount = int(body.amount_cents or pay.get("amount_cents", 0))
+    amount = int(amount_cents or pay.get("amount_cents", 0))
     if amount <= 0:
         raise HTTPException(400, "amount_cents must be greater than zero")
 
     refund = stripe.Refund.create(
-        payment_intent=body.payment_intent_id,
+        payment_intent=payment_intent_id,
         amount=amount,
-        reason=body.reason,
+        reason=reason,
     )
 
     led_sk_value, led_item = new_ledger_entry(
@@ -1308,10 +1321,13 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         key_value=pk,
         entry_type="adjustment",
         amount_cents=amount,
+        # D1 / CROSS_TICKET_AUDIT §A4: a refund is a credit -> positive signed.
+        # amount_cents stays unsigned (positive); signed_amount_cents = +amount.
+        signed_amount_cents=amount,
         state="settled",
         reason="refund",
-        meta={"reason": body.reason},
-        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id"), "provider": "stripe"},
+        meta={"reason": reason},
+        extra={"stripe_payment_intent_id": payment_intent_id, "stripe_refund_id": refund.get("id"), "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1323,11 +1339,25 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
     if pay.get("ledger_sk"):
         settle_or_reverse_ledger(T.billing, "pk", pk, pay["ledger_sk"], "reversed")
 
-    update_payment_status(user_id, body.payment_intent_id, "refunded", charge_id=refund.get("charge"))
+    update_payment_status(user_id, payment_intent_id, "refunded", charge_id=refund.get("charge"))
 
     purchase_txn_id = pay.get("purchase_txn_id")
     if purchase_txn_id:
-        mark_reverted(user_id, purchase_txn_id, body.reason or "refund")
+        mark_reverted(user_id, purchase_txn_id, reason or "refund")
+
+    return {
+        "led_sk": led_sk_value,
+        "refund_id": refund.get("id"),
+        "payment_intent_id": payment_intent_id,
+    }
+
+
+@dual_route("POST", "/billing/refund")
+def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+
+    result = _do_refund(user_id, body.payment_intent_id, int(body.amount_cents or 0), body.reason, req)
 
     audit_event(
         "billing_refund",
@@ -1336,12 +1366,11 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         outcome="success",
         provider="stripe",
         payment_intent_id=body.payment_intent_id,
-        refund_id=refund.get("id"),
-        amount_cents=amount,
+        refund_id=result.get("refund_id"),
         reason=body.reason,
         **admin_tags,
     )
-    return {"ok": True, "refund_id": refund.get("id"), "payment_intent_id": body.payment_intent_id}
+    return {"ok": True, "refund_id": result.get("refund_id"), "payment_intent_id": body.payment_intent_id}
 
 
 @dual_route("POST", "/billing/checkout_session")
@@ -2610,3 +2639,34 @@ def wallet_withdraw(body: WalletWithdrawReq, req: Request = None, ctx=Depends(re
         **admin_tags,
     )
     return {"ok": True, "wallet_balance_cents": wallet_balance_cents}
+
+
+# PLT-005: Balance threshold configuration endpoint
+@dual_route("PUT", "/billing/wallet/threshold")
+def set_wallet_threshold(
+    body: SetWalletThresholdReq,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+) -> Dict[str, Any]:
+    """PLT-005: Set or clear the low-balance alert threshold for the authenticated user."""
+    user_id = ctx["user_sub"]
+    pk = user_pk(user_id)
+    threshold = int(body.threshold_cents)
+    update_expr = "SET balance_threshold_cents = :t"
+    expr_vals: Dict[str, Any] = {":t": threshold}
+    if threshold == 0:
+        # Clear any stale edge state when disabling the threshold
+        update_expr += ", last_threshold_crossed = :f"
+        expr_vals[":f"] = False
+    T.billing.update_item(
+        Key={"pk": pk, "sk": "WALLET"},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_vals,
+    )
+    audit_event(
+        "wallet_threshold_set",
+        user_id,
+        req,
+        threshold_cents=threshold,
+    )
+    return {"ok": True, "threshold_cents": threshold, "currency": "usd"}

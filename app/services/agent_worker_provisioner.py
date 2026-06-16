@@ -222,6 +222,8 @@ def create_worker(
         "llm_key_id": llm_key_id,
         "llm_provider": llm_provider,
         "host_id": "",
+        # AQA-002: ssh key injected during provisioning (empty until key_inject).
+        "ssh_key_id": "",
         "public_ip": "",
         "worker_status": "provisioning",
         "provision_log": [],
@@ -294,6 +296,22 @@ def _provision_worker_dev(
             Key={"pk": f"USER#{user_id}", "sk": f"WORKER#{worker_id}"},
             UpdateExpression="SET compute_instance_id = :cid, public_ip = :ip, host_id = :hid",
             ExpressionAttributeValues={":cid": compute_id, ":ip": public_ip, ":hid": host_id},
+        )
+
+        # Step 1b (AQA-001): install SSH client + paramiko so the worker can run
+        # outbound, non-interactive QA exec (ADR-003). Runs regardless of `tool`.
+        # In dev this completes in-memory (parity with the other dev steps); the
+        # captured version string feeds the `verify` step. The real provisioning
+        # path installs `openssh-client` + a venv with `paramiko`/`cryptography`.
+        _append_provision_step(user_id, worker_id, "ssh_client_install", "running")
+        ssh_client_version = "OpenSSH_9.6p1; paramiko 3.4.0"
+        _append_provision_step(
+            user_id, worker_id, "ssh_client_install", "done", ssh_client_version,
+        )
+        T.agent_workers.update_item(
+            Key={"pk": f"USER#{user_id}", "sk": f"WORKER#{worker_id}"},
+            UpdateExpression="SET ssh_client_version = :v",
+            ExpressionAttributeValues={":v": ssh_client_version},
         )
 
         # Step 2: Install tool
@@ -395,6 +413,7 @@ def stop_worker(user_id: str, worker_id: str) -> Dict[str, Any]:
         UpdateExpression="SET worker_status = :st, stopped_at = :ts",
         ExpressionAttributeValues={":st": "stopped", ":ts": ts},
     )
+    _end_live_sessions_for_worker(user_id, worker_id)
     return get_worker(user_id, worker_id)  # type: ignore
 
 
@@ -441,7 +460,33 @@ def terminate_worker(user_id: str, worker_id: str) -> Dict[str, Any]:
         UpdateExpression="SET worker_status = :st, terminated_at = :ts",
         ExpressionAttributeValues={":st": "terminated", ":ts": ts},
     )
+    _end_live_sessions_for_worker(user_id, worker_id)
     return get_worker(user_id, worker_id)  # type: ignore
+
+
+def _end_live_sessions_for_worker(user_id: str, worker_id: str) -> None:
+    """End any interactive Claude Code sessions (ACS-006) tied to a worker when
+    the worker is stopped/terminated, and close their live PTY bridges.
+
+    Best-effort and lazily imported so this is a no-op unless the agent-session
+    feature is wired in (avoids a hard dependency / import cycle). With the
+    feature flag off these tables/registry are simply empty.
+    """
+    try:
+        from app.services import agent_session_manager as _sm
+
+        # Close live PTY bridges held by the WS router's process-local registry.
+        try:
+            from app.routers.agent_session_terminal import stop_session_bridge
+
+            for sess in _sm.list_sessions_for_worker(user_id, worker_id):
+                if sess.get("state") not in _sm.TERMINAL_STATES:
+                    stop_session_bridge(sess["session_id"])
+        except Exception:
+            pass
+        _sm.end_sessions_for_worker(user_id, worker_id)
+    except Exception:
+        logger.debug("end_live_sessions_for_worker skipped worker_id=%s", worker_id)
 
 
 def get_provision_log(user_id: str, worker_id: str) -> List[Dict[str, Any]]:

@@ -454,6 +454,9 @@ function SettingsCard({
   const [maxDelegates, setMaxDelegates] = useState(settings.max_delegates);
   const [tagEnabled, setTagEnabled] = useState(settings.delegate_tag_enabled);
   const [tagFormat, setTagFormat] = useState(settings.delegate_tag_format);
+  const [hideFromRecipients, setHideFromRecipients] = useState(
+    settings.hide_delegate_from_recipients ?? false,
+  );
 
   return (
     <Card>
@@ -486,6 +489,16 @@ function SettingsCard({
             <Input value={tagFormat} onChange={(e) => setTagFormat(e.target.value)} />
           </div>
         )}
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Label>Hide delegate from recipients</Label>
+            <p className="text-muted-foreground text-xs">
+              Recipients see messages as if you sent them. You and the delegate still
+              see the "via" attribution, and the audit log always records it.
+            </p>
+          </div>
+          <Switch checked={hideFromRecipients} onCheckedChange={setHideFromRecipients} />
+        </div>
         <Button
           onClick={() =>
             onSave({
@@ -493,6 +506,7 @@ function SettingsCard({
               max_delegates: maxDelegates,
               delegate_tag_enabled: tagEnabled,
               delegate_tag_format: tagFormat,
+              hide_delegate_from_recipients: hideFromRecipients,
             })
           }
         >

@@ -259,3 +259,9 @@ async def maybe_enforce_api_key_route_policy(request: Request) -> None:
                 api_key_id=str(principal.get("api_key_id") or ""),
             ),
         )
+
+    # OAU-004: Per-consumer OAuth scope enforcement (no-op for all non-OAuth requests)
+    from app.core.settings import S as _S
+    if getattr(_S, "oauth_provider_scope_enforcement_enabled", False):
+        from app.services.oauth_scope_enforcement import enforce_oauth_scope_for_route
+        enforce_oauth_scope_for_route(request)

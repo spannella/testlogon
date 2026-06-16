@@ -17,3 +17,7 @@ logs/
 .venv/
 .claude/worktrees/
 wt/
+frontend/e2e/demo/
+frontend/public/demo/
+.claire/
+docs/suitecrm/testlogon/

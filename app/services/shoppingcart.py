@@ -308,6 +308,34 @@ def _require_open_cart(cart: Dict[str, Any]) -> None:
         raise HTTPException(status_code=409, detail="Cart is not open")
 
 
+# --- ECM-008: soft inventory reservations on cart mutations. All lazy + best-
+# effort + fully flag-gated inside store_integration (no-op unless both the ECM
+# sub-flag and inventory_reservations_enabled are on) — a reservation hiccup must
+# NEVER block a cart add / delete / purchase. ---
+def _ecm_reserve(user_sub: str, cart_id: str, sku: str, quantity: int) -> None:
+    try:
+        from app.services import store_integration
+        store_integration.reserve_for_cart(user_sub=user_sub, cart_id=cart_id, sku=sku, quantity=int(quantity))
+    except Exception:
+        pass
+
+
+def _ecm_release(user_sub: str, cart_id: str) -> None:
+    try:
+        from app.services import store_integration
+        store_integration.release_cart_reservations(user_sub=user_sub, cart_id=cart_id)
+    except Exception:
+        pass
+
+
+def _ecm_commit(user_sub: str, cart_id: str) -> None:
+    try:
+        from app.services import store_integration
+        store_integration.commit_cart_reservations(user_sub=user_sub, cart_id=cart_id)
+    except Exception:
+        pass
+
+
 def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     cart = get_cart(user_sub, cart_id)
     _require_open_cart(cart)
@@ -334,6 +362,7 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         }
         T.shopping_cart.put_item(Item=updated)
         _touch_cart_activity(user_sub, cart_id)
+        _ecm_reserve(user_sub, cart_id, sku, new_qty)
         return _item_from_item(updated)
 
     item = _validate_commercial_item_payload(
@@ -364,6 +393,7 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         item["creator_user_id"] = payload["creator_user_id"]
     T.shopping_cart.put_item(Item=item)
     _touch_cart_activity(user_sub, cart_id)
+    _ecm_reserve(user_sub, cart_id, sku, int(payload.get("quantity", 1)))
     return _item_from_item(item)
 
 
@@ -456,6 +486,8 @@ def delete_cart(user_sub: str, cart_id: str) -> None:
         for item in resp.get("Items", []):
             batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
         batch.delete_item(Key={"PK": cart["PK"], "SK": cart["SK"]})
+    # ECM-008: release any soft inventory holds the cart was carrying.
+    _ecm_release(user_sub, cart_id)
 
 
 def _resolve_cart_creator(items: List[Dict[str, Any]]) -> Optional[str]:
@@ -718,6 +750,9 @@ def purchase_cart(
         )
     except Exception:
         pass
+
+    # ECM-008: convert this cart's soft reservations into committed stock.
+    _ecm_commit(user_sub, cart_id)
 
     return {
         "cart_id": cart_id,

@@ -6,10 +6,10 @@ Provides browse, filter, detail, update, and soft-delete for videos.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from decimal import Decimal
 
@@ -416,15 +416,97 @@ class LikeCheckOut(BaseModel):
 
 
 class VideoCommentIn(BaseModel):
+    # Reply threading: optional parent comment id (mirrors newsfeed).
+    parent_comment_id: Optional[str] = Field(default=None, max_length=64)
+    # Media comments (mirrors newsfeed CreateCommentRequest). `kind` selects type.
+    kind: Literal["text", "gif", "sticker", "image"] = "text"
+    text: Optional[str] = Field(default=None, max_length=2000)
+    # GIF fields (required when kind=gif)
+    gif_url: Optional[str] = Field(default=None, max_length=2048)
+    gif_alt_text: Optional[str] = Field(default=None, max_length=256)
+    gif_width: Optional[int] = Field(default=None, ge=0, le=4096)
+    gif_height: Optional[int] = Field(default=None, ge=0, le=4096)
+    # Sticker fields (required when kind=sticker)
+    sticker_id: Optional[str] = Field(default=None, max_length=64)
+    sticker_collection_id: Optional[str] = Field(default=None, max_length=64)
+    sticker_url: Optional[str] = Field(default=None, max_length=2048)
+    sticker_alt_text: Optional[str] = Field(default=None, max_length=256)
+    # Image fields (required when kind=image) — user-uploaded images.
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_alt_text: Optional[str] = Field(default=None, max_length=256)
+    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
+    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
+
+    @model_validator(mode="after")
+    def _validate_comment_kind(self):
+        # Reuse the SAME GIF/sticker/image URL validation the newsfeed comments use
+        # (GAP-0182 / GAP-0183) so video and feed enforce identical origins.
+        from app.routers.newsfeed import (
+            _validate_gif_url,
+            _validate_sticker_url,
+            _validate_comment_image_url,
+        )
+
+        if self.kind == "text":
+            if not (self.text or "").strip():
+                raise ValueError("text is required for text comments")
+        elif self.kind == "gif":
+            if not (self.gif_url or "").strip():
+                raise ValueError("gif_url is required for gif comments")
+            self.gif_url = _validate_gif_url(self.gif_url)
+        elif self.kind == "sticker":
+            if not (self.sticker_id or "").strip():
+                raise ValueError("sticker_id is required for sticker comments")
+            if not (self.sticker_url or "").strip():
+                raise ValueError("sticker_url is required for sticker comments")
+            self.sticker_url = _validate_sticker_url(self.sticker_url)
+        elif self.kind == "image":
+            if not (self.image_url or "").strip():
+                raise ValueError("image_url is required for image comments")
+            self.image_url = _validate_comment_image_url(self.image_url)
+        return self
+
+
+class VideoCommentEditIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
+
+
+class VideoCommentReactionIn(BaseModel):
+    emoji: str = Field(..., min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def _validate_emoji(self):
+        from app.services.video_comments import ALLOWED_REACTION_EMOJIS
+
+        if self.emoji not in ALLOWED_REACTION_EMOJIS:
+            raise ValueError("emoji not in allowed reaction set")
+        return self
 
 
 class VideoCommentOut(BaseModel):
     comment_id: str
     video_id: str
     user_id: str
-    text: str
+    text: Optional[str] = None
     created_at: int
+    edited_at: Optional[int] = None
+    parent_comment_id: Optional[str] = None
+    kind: str = "text"
+    gif_url: Optional[str] = None
+    gif_alt_text: Optional[str] = None
+    gif_width: Optional[int] = None
+    gif_height: Optional[int] = None
+    sticker_id: Optional[str] = None
+    sticker_collection_id: Optional[str] = None
+    sticker_url: Optional[str] = None
+    sticker_alt_text: Optional[str] = None
+    # Image comment fields (kind="image")
+    image_url: Optional[str] = None
+    image_alt_text: Optional[str] = None
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
+    reactions_counts: dict = Field(default_factory=dict)
+    my_reactions: List[str] = Field(default_factory=list)
 
 
 class VideoCommentListOut(BaseModel):
@@ -615,7 +697,25 @@ def add_comment_endpoint(
     from app.services.video_comments import add_comment
 
     user_sub = user["user_sub"]
-    result = add_comment(video_id=video_id, user_id=user_sub, text=body.text)
+    result = add_comment(
+        video_id=video_id,
+        user_id=user_sub,
+        text=body.text,
+        parent_comment_id=body.parent_comment_id,
+        kind=body.kind,
+        gif_url=body.gif_url,
+        gif_alt_text=body.gif_alt_text,
+        gif_width=body.gif_width,
+        gif_height=body.gif_height,
+        sticker_id=body.sticker_id,
+        sticker_collection_id=body.sticker_collection_id,
+        sticker_url=body.sticker_url,
+        sticker_alt_text=body.sticker_alt_text,
+        image_url=body.image_url,
+        image_alt_text=body.image_alt_text,
+        image_width=body.image_width,
+        image_height=body.image_height,
+    )
     return VideoCommentOut(**result)
 
 
@@ -632,11 +732,73 @@ def list_comments_endpoint(
 
     from app.services.video_comments import list_comments
 
-    result = list_comments(video_id=video_id, cursor=cursor, limit=limit)
+    result = list_comments(
+        video_id=video_id, cursor=cursor, limit=limit, viewer_id=user["user_sub"]
+    )
     return VideoCommentListOut(
         comments=[VideoCommentOut(**c) for c in result["comments"]],
         cursor=result.get("cursor"),
     )
+
+
+@router.patch("/{video_id}/comments/{comment_id}", response_model=VideoCommentOut)
+def edit_comment_endpoint(
+    video_id: str,
+    comment_id: str,
+    body: VideoCommentEditIn,
+    user=Depends(require_ui_session),
+):
+    """Edit a comment's text (author only)."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import edit_comment
+
+    user_sub = user["user_sub"]
+    result = edit_comment(
+        video_id=video_id, comment_id=comment_id, user_id=user_sub, text=body.text
+    )
+    return VideoCommentOut(**result)
+
+
+@router.post("/{video_id}/comments/{comment_id}/reactions", response_model=VideoCommentOut)
+def add_comment_reaction_endpoint(
+    video_id: str,
+    comment_id: str,
+    body: VideoCommentReactionIn,
+    user=Depends(require_ui_session),
+):
+    """Add an emoji reaction to a comment."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import add_reaction
+
+    user_sub = user["user_sub"]
+    result = add_reaction(
+        video_id=video_id, comment_id=comment_id, user_id=user_sub, emoji=body.emoji
+    )
+    return VideoCommentOut(**result)
+
+
+@router.post("/{video_id}/comments/{comment_id}/unreact", response_model=VideoCommentOut)
+def remove_comment_reaction_endpoint(
+    video_id: str,
+    comment_id: str,
+    body: VideoCommentReactionIn,
+    user=Depends(require_ui_session),
+):
+    """Remove an emoji reaction from a comment."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import remove_reaction
+
+    user_sub = user["user_sub"]
+    result = remove_reaction(
+        video_id=video_id, comment_id=comment_id, user_id=user_sub, emoji=body.emoji
+    )
+    return VideoCommentOut(**result)
 
 
 @router.delete("/{video_id}/comments/{comment_id}", status_code=204)

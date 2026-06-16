@@ -20,7 +20,6 @@
   "common.status": "Estado",
   "common.yes": "Sí",
   "common.no": "No",
-
   "nav.dashboard": "Inicio",
   "nav.messages": "Mensajes",
   "nav.contacts": "Contactos",
@@ -28,6 +27,7 @@
   "nav.feed": "Noticias",
   "nav.discover": "Descubrir",
   "nav.shop": "Tienda",
+  "nav.inventory": "Inventario",
   "nav.cart": "Carrito",
   "nav.billing": "Facturación",
   "nav.orders": "Pedidos",
@@ -40,15 +40,20 @@
   "nav.calendar": "Calendario",
   "nav.scheduled": "Programado",
   "nav.signing": "Firma",
+  "nav.signingInbox": "Bandeja de firmas",
   "nav.gallery": "Galería",
   "nav.videos": "Videos",
   "nav.broadcast": "Transmisión",
   "nav.profile": "Perfil",
   "nav.security": "Seguridad",
+  "nav.securityDashboard": "Panel de seguridad",
+  "nav.legalHolds": "Retenciones legales",
   "nav.alerts": "Alertas",
   "nav.tickets": "Tickets",
   "nav.ticketSpaces": "Espacios de Tickets",
+  "nav.boards": "Tableros",
   "nav.remoteDesktop": "Escritorio Remoto",
+  "nav.browserSsh": "Terminal SSH",
   "nav.settings": "Configuración",
   "nav.privacy": "Privacidad",
   "nav.webhooks": "Webhooks",
@@ -65,7 +70,6 @@
   "nav.productivity": "Productividad",
   "nav.media": "Medios",
   "nav.account": "Cuenta",
-
   "auth.login": "Iniciar Sesión",
   "auth.register": "Crear Cuenta",
   "auth.logout": "Cerrar Sesión",
@@ -79,7 +83,6 @@
   "auth.hasAccount": "¿Ya tienes cuenta?",
   "auth.welcomeBack": "Bienvenido de nuevo",
   "auth.signInDescription": "Ingresa tus credenciales para acceder a tu cuenta",
-
   "messages.compose": "Escribe un mensaje...",
   "messages.send": "Enviar",
   "messages.noConversations": "Aún no hay conversaciones",
@@ -91,7 +94,6 @@
   "messages.scheduled": "Programado para {{date}}",
   "messages.newMessage": "Nuevo Mensaje",
   "messages.searchMessages": "Buscar mensajes...",
-
   "settings.title": "Configuración",
   "settings.description": "Administra el estado y preferencias de tu cuenta",
   "settings.appearance": "Apariencia",
@@ -100,37 +102,31 @@
   "settings.profile": "Perfil",
   "settings.security": "Seguridad",
   "settings.account": "Cuenta",
-
   "billing.balance": "Saldo",
   "billing.deposit": "Depósito",
   "billing.history": "Historial de Facturación",
   "billing.paymentMethods": "Métodos de Pago",
-
   "feed.createPost": "Crear Publicación",
   "feed.comments_one": "{{count}} comentario",
   "feed.comments_other": "{{count}} comentarios",
   "feed.noPostsYet": "Aún no hay publicaciones",
-
   "errors.notFound": "Página no encontrada",
   "errors.unauthorized": "Inicia sesión para continuar",
   "errors.rateLimited": "Demasiadas solicitudes. Intenta de nuevo en {{seconds}} segundos.",
   "errors.serverError": "Error del servidor. Intenta de nuevo más tarde.",
   "errors.networkError": "Error de red. Verifica tu conexión.",
-
   "profile.editProfile": "Editar Perfil",
   "profile.displayName": "Nombre para Mostrar",
   "profile.description": "Descripción",
   "profile.location": "Ubicación",
-
   "calendar.title": "Calendario",
   "calendar.newEvent": "Nuevo Evento",
   "calendar.noEvents": "No hay eventos programados",
-
   "files.title": "Archivos",
   "files.upload": "Subir",
   "files.noFiles": "Aún no hay archivos",
-
   "contacts.title": "Contactos",
   "contacts.addContact": "Agregar Contacto",
-  "contacts.noContacts": "Aún no hay contactos"
+  "contacts.noContacts": "Aún no hay contactos",
+  "nav.qaActions": "Acciones de control de calidad"
 }

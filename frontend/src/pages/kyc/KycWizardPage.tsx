@@ -48,6 +48,11 @@ import type {
   KycSelfServiceFileType,
 } from "@/api/types";
 
+// KYD-010: mirrors the server default (settings.kyc_retry_max_attempts). The
+// FE has no config endpoint for this; the banner is informational only and the
+// authoritative limit is enforced server-side (kyc_retry_limit_reached -> 409).
+const KYC_RETRY_MAX_ATTEMPTS = 3;
+
 const STEPS = [
   { id: "personal", label: "Personal Information" },
   { id: "id_upload", label: "Identity Document" },
@@ -167,6 +172,25 @@ export default function KycWizardPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {kycCase?.review?.attempt_count && kycCase.review.attempt_count > 0 ? (
+        <div
+          className="mb-6 rounded border border-amber-300 bg-amber-50 p-3 text-sm"
+          data-testid="kyc-reopened-banner"
+        >
+          <p className="font-medium text-amber-900">Editing a previous attempt</p>
+          <p className="text-xs text-amber-800">
+            Your previously uploaded documents are still attached — review and update what you need,
+            then resubmit.
+            {(() => {
+              const remaining = KYC_RETRY_MAX_ATTEMPTS - kycCase.review.attempt_count;
+              return remaining > 0
+                ? ` ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`
+                : "";
+            })()}
+          </p>
+        </div>
+      ) : null}
 
       <Progress value={((currentStep + 1) / STEPS.length) * 100} className="mb-6" />
 

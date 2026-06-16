@@ -439,6 +439,28 @@ NEWSFEED_FEED_BUDGET_HITS = Counter(
     "Newsfeed feed query budget guardrail hits by mode/reason",
     ["mode", "reason"],
 )
+NEWSFEED_RECSYS_REQUESTS = Counter(
+    "newsfeed_recsys_requests_total",
+    "Newsfeed For-You request outcomes by mode/source",
+    ["mode", "source"],
+)
+NEWSFEED_RECSYS_LATENCY = Histogram(
+    "newsfeed_recsys_latency_seconds",
+    "Newsfeed For-You request latency by source",
+    ["source"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+NEWSFEED_RECSYS_CANDIDATE_COUNTS = Histogram(
+    "newsfeed_recsys_candidate_counts",
+    "Newsfeed For-You candidate pool size by source",
+    ["source"],
+    buckets=(0, 1, 5, 10, 25, 50, 100, 200, 500),
+)
+NEWSFEED_RECSYS_REFRESH = Counter(
+    "newsfeed_recsys_refresh_total",
+    "Newsfeed For-You background refresh outcomes",
+    ["outcome"],
+)
 CURSOR_DECODE_RESULTS = Counter(
     "cursor_decode_results_total",
     "Cursor decode outcomes by format and key source",
@@ -1807,6 +1829,27 @@ def record_newsfeed_feed_budget_hit(*, mode: str, reason: str) -> None:
         mode=(mode or "unknown").lower(),
         reason=(reason or "unknown").lower(),
     ).inc()
+
+
+def record_newsfeed_recsys_request(*, mode: str, source: str) -> None:
+    NEWSFEED_RECSYS_REQUESTS.labels(
+        mode=(mode or "unknown").lower(),
+        source=(source or "unknown").lower(),
+    ).inc()
+
+
+def record_newsfeed_recsys_latency(*, source: str, elapsed_seconds: float) -> None:
+    NEWSFEED_RECSYS_LATENCY.labels(source=(source or "unknown").lower()).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_newsfeed_recsys_candidate_counts(*, followed: int, popular: int, affinity: int) -> None:
+    NEWSFEED_RECSYS_CANDIDATE_COUNTS.labels(source="followed").observe(max(0.0, float(followed)))
+    NEWSFEED_RECSYS_CANDIDATE_COUNTS.labels(source="popular").observe(max(0.0, float(popular)))
+    NEWSFEED_RECSYS_CANDIDATE_COUNTS.labels(source="affinity").observe(max(0.0, float(affinity)))
+
+
+def record_newsfeed_recsys_refresh(*, outcome: str) -> None:
+    NEWSFEED_RECSYS_REFRESH.labels(outcome=(outcome or "unknown").lower()).inc()
 
 
 def record_cursor_decode_result(*, format_name: str, outcome: str, key_source: str = "none") -> None:

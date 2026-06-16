@@ -2,14 +2,16 @@ import * as React from "react";
 import { PhoneMissed, PhoneCall } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WaveformPlayer } from "./WaveformPlayer";
+import { TranscriptControl } from "./TranscriptControl";
 import type { Message } from "@/api/types";
 
 interface VoicemailBubbleProps {
   message: Message;
+  conversationId?: string;
   onCallBack?: () => void;
 }
 
-export function VoicemailBubble({ message, onCallBack }: VoicemailBubbleProps) {
+export function VoicemailBubble({ message, conversationId, onCallBack }: VoicemailBubbleProps) {
   const vm = message.voicemail;
   if (!vm) return null;
 
@@ -45,6 +47,16 @@ export function VoicemailBubble({ message, onCallBack }: VoicemailBubbleProps) {
           preload="metadata"
           className="rounded-md max-w-xs w-full"
           data-testid="voicemail-video"
+        />
+      )}
+
+      {/* MVA-008: transcript for audio voicemails */}
+      {vm.mode === "audio" && vm.audio_url && conversationId && (
+        <TranscriptControl
+          conversationId={conversationId}
+          messageId={message.message_id}
+          existingTranscript={vm.transcript}
+          existingLang={vm.transcript_lang}
         />
       )}
 

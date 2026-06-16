@@ -20,7 +20,6 @@
   "common.status": "Status",
   "common.yes": "Yes",
   "common.no": "No",
-
   "nav.dashboard": "Dashboard",
   "nav.messages": "Messages",
   "nav.contacts": "Contacts",
@@ -28,6 +27,7 @@
   "nav.feed": "Feed",
   "nav.discover": "Discover",
   "nav.shop": "Shop",
+  "nav.inventory": "Inventory",
   "nav.cart": "Cart",
   "nav.billing": "Billing",
   "nav.orders": "Orders",
@@ -40,15 +40,20 @@
   "nav.calendar": "Calendar",
   "nav.scheduled": "Scheduled",
   "nav.signing": "Signing",
+  "nav.signingInbox": "Signing Inbox",
   "nav.gallery": "Gallery",
   "nav.videos": "Videos",
   "nav.broadcast": "Broadcast",
   "nav.profile": "Profile",
   "nav.security": "Security",
+  "nav.securityDashboard": "Security Dashboard",
+  "nav.legalHolds": "Legal Holds",
   "nav.alerts": "Alerts",
   "nav.tickets": "Tickets",
   "nav.ticketSpaces": "Ticket Spaces",
+  "nav.boards": "Boards",
   "nav.remoteDesktop": "Remote Desktop",
+  "nav.browserSsh": "SSH Terminal",
   "nav.settings": "Settings",
   "nav.privacy": "Privacy",
   "nav.webhooks": "Webhooks",
@@ -65,7 +70,6 @@
   "nav.productivity": "Productivity",
   "nav.media": "Media",
   "nav.account": "Account",
-
   "auth.login": "Log In",
   "auth.register": "Create Account",
   "auth.logout": "Log Out",
@@ -79,7 +83,6 @@
   "auth.hasAccount": "Already have an account?",
   "auth.welcomeBack": "Welcome back",
   "auth.signInDescription": "Enter your credentials to access your account",
-
   "messages.compose": "Type a message...",
   "messages.send": "Send",
   "messages.noConversations": "No conversations yet",
@@ -91,7 +94,6 @@
   "messages.scheduled": "Scheduled for {{date}}",
   "messages.newMessage": "New Message",
   "messages.searchMessages": "Search messages...",
-
   "settings.title": "Settings",
   "settings.description": "Manage your account status and preferences",
   "settings.appearance": "Appearance",
@@ -100,37 +102,31 @@
   "settings.profile": "Profile",
   "settings.security": "Security",
   "settings.account": "Account",
-
   "billing.balance": "Balance",
   "billing.deposit": "Deposit",
   "billing.history": "Billing History",
   "billing.paymentMethods": "Payment Methods",
-
   "feed.createPost": "Create Post",
   "feed.comments_one": "{{count}} comment",
   "feed.comments_other": "{{count}} comments",
   "feed.noPostsYet": "No posts yet",
-
   "errors.notFound": "Page not found",
   "errors.unauthorized": "Please log in to continue",
   "errors.rateLimited": "Too many requests. Please try again in {{seconds}} seconds.",
   "errors.serverError": "Server error. Please try again later.",
   "errors.networkError": "Network error. Check your connection.",
-
   "profile.editProfile": "Edit Profile",
   "profile.displayName": "Display Name",
   "profile.description": "Description",
   "profile.location": "Location",
-
   "calendar.title": "Calendar",
   "calendar.newEvent": "New Event",
   "calendar.noEvents": "No events scheduled",
-
   "files.title": "Files",
   "files.upload": "Upload",
   "files.noFiles": "No files yet",
-
   "contacts.title": "Contacts",
   "contacts.addContact": "Add Contact",
-  "contacts.noContacts": "No contacts yet"
+  "contacts.noContacts": "No contacts yet",
+  "nav.qaActions": "QA Actions"
 }

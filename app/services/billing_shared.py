@@ -1,10 +1,84 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.time import now_ts
+
+logger = logging.getLogger(__name__)
+
+
+# D1 / CROSS_TICKET_AUDIT §A4: canonical entry_type -> sign map for the billing
+# ledger. ``amount_cents`` is ALWAYS stored unsigned (for display); direction is
+# carried by ``signed_amount_cents`` = sign * amount. Credits move the platform
+# balance positively (+1); charges/debits negatively (-1). Refunds / adjustments
+# / void-reversals are credits (+1) — they return money to the user.
+#
+# This is the single source of truth for sign derivation. Readers prefer the
+# persisted ``signed_amount_cents`` and fall back to this map only for legacy /
+# unstamped rows. Unknown entry_types default to +1 (safe credit) and are logged.
+LEDGER_ENTRY_SIGN: Dict[str, int] = {
+    # --- credits (+1): money returned to / accruing for the user ---
+    "credit": 1,
+    "refund": 1,
+    "refund_credit": 1,
+    "shipping_refund": 1,
+    "adjustment": 1,
+    "invoice_void_reversal": 1,
+    "refund_reversal": 1,
+    "sponsorship_escrow_refund": 1,
+    "ad_revenue_credit": 1,
+    "vod_rental_credit": 1,
+    "vod_purchase_credit": 1,
+    "license_revenue_credit": 1,
+    "license_fixed_fee_credit": 1,
+    "affiliate_withdrawal_credit": 1,
+    "sponsorship_payout": 1,
+    # --- charges / debits (-1): money owed by / charged to the user ---
+    "debit": -1,
+    "charge": -1,
+    "purchase": -1,
+    "refund_debit": -1,
+    "vod_rental_debit": -1,
+    "vod_purchase_debit": -1,
+    "license_revenue_debit": -1,
+    "license_fixed_fee_debit": -1,
+    "impression_charge": -1,
+    "conversion_charge": -1,
+    "click_charge": -1,
+    "sponsorship_escrow_hold": -1,
+    "sponsorship_commission": -1,
+}
+
+# Default sign for entry_types not in the map. Positive (credit) is the safe
+# default per ACC-002: a missing/unknown type should never silently invent a
+# debit against the user.
+LEDGER_ENTRY_SIGN_DEFAULT = 1
+
+
+def sign_for_entry_type(entry_type: str) -> int:
+    """Return +1 (credit) or -1 (charge/debit) for an entry_type using the
+    canonical :data:`LEDGER_ENTRY_SIGN` map. Unknown types fall back to
+    :data:`LEDGER_ENTRY_SIGN_DEFAULT` (+1) and are logged at WARNING."""
+    if entry_type in LEDGER_ENTRY_SIGN:
+        return LEDGER_ENTRY_SIGN[entry_type]
+    logger.warning(
+        "ledger entry_type %r not in LEDGER_ENTRY_SIGN; defaulting sign to %+d",
+        entry_type,
+        LEDGER_ENTRY_SIGN_DEFAULT,
+    )
+    return LEDGER_ENTRY_SIGN_DEFAULT
+
+
+def derive_signed_amount_cents(entry_type: str, amount_cents: int) -> int:
+    """Derive ``signed_amount_cents`` = sign(entry_type) * abs(amount_cents).
+
+    ``amount_cents`` is treated as a magnitude (its absolute value is used) so a
+    caller that already passed a negative amount still yields the correct sign
+    from the type map."""
+    return sign_for_entry_type(entry_type) * abs(int(amount_cents))
 
 
 def ledger_date_for_ts(ts: int) -> str:
@@ -175,11 +249,16 @@ WALLET_SK = "WALLET"
 
 def get_wallet_balance(table: Any, pk: str) -> Dict[str, Any]:
     row = ddb_get(table, pk, WALLET_SK) or {}
-    return {
+    result: Dict[str, Any] = {
         "wallet_balance_cents": int(row.get("wallet_balance_cents", 0)),
         "currency": row.get("currency", "usd"),
         "updated_at": row.get("updated_at"),
     }
+    # PLT-005: include threshold fields when present
+    if "balance_threshold_cents" in row:
+        result["threshold_cents"] = int(row["balance_threshold_cents"] or 0)
+        result["threshold_active"] = bool(row.get("last_threshold_crossed", False))
+    return result
 
 
 def apply_wallet_delta(table: Any, pk: str, delta_cents: int, *, currency: str = "usd") -> int:
@@ -210,7 +289,93 @@ def apply_wallet_delta(table: Any, pk: str, delta_cents: int, *, currency: str =
             ExpressionAttributeValues={":d": delta_cents, ":t": now_ts(), ":needed": needed},
             ReturnValues="ALL_NEW",
         )
-    return int(result["Attributes"].get("wallet_balance_cents", 0))
+    attrs = result["Attributes"]
+    new_balance = int(attrs.get("wallet_balance_cents", 0))
+    # PLT-005: edge-trigger balance threshold check (best-effort, never raises)
+    _check_balance_threshold(table, pk, new_balance, attrs, currency)
+    return new_balance
+
+
+def _check_balance_threshold(
+    table: Any,
+    pk: str,
+    new_balance: int,
+    attrs: Dict[str, Any],
+    currency: str,
+) -> None:
+    """PLT-005: Edge-trigger threshold check. Must never raise."""
+    try:
+        from app.core.settings import S
+        if not (getattr(S, "account_ledger_webhooks_enabled", False) and getattr(S, "webhooks_enabled", False)):
+            return
+        threshold = int(attrs.get("balance_threshold_cents") or 0)
+        if threshold <= 0:
+            return
+        last_crossed = bool(attrs.get("last_threshold_crossed", False))
+        if new_balance < threshold and not last_crossed:
+            # Downward crossing: set flag and fire events
+            try:
+                table.update_item(
+                    Key={"pk": pk, "sk": WALLET_SK},
+                    UpdateExpression="SET last_threshold_crossed = :t",
+                    ExpressionAttributeValues={":t": True},
+                )
+            except Exception:
+                pass
+            data = {
+                "balance_cents": new_balance,
+                "threshold_cents": threshold,
+                "currency": currency,
+                "direction": "below",
+            }
+            # Extract user_sub from pk (format USER#{user_sub})
+            user_sub = str(pk).removeprefix("USER#")
+            try:
+                from app.services.webhook_service import dispatch_webhook_event
+                dispatch_webhook_event("balance.threshold", user_sub, data)
+                dispatch_webhook_event("account.balance_low", user_sub, data)
+            except Exception:
+                pass
+        elif new_balance >= threshold and last_crossed:
+            # Recovery: reset flag, no event
+            try:
+                table.update_item(
+                    Key={"pk": pk, "sk": WALLET_SK},
+                    UpdateExpression="SET last_threshold_crossed = :f",
+                    ExpressionAttributeValues={":f": False},
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def emit_ledger_webhook(user_sub: str, item: Dict[str, Any]) -> None:
+    """PLT-005: Fire a best-effort transaction.created webhook after a ledger persist.
+
+    Must be called with the item dict returned by new_ledger_entry, after
+    the table.put_item call has succeeded. Never raises.
+    """
+    try:
+        from app.core.settings import S
+        if not (getattr(S, "account_ledger_webhooks_enabled", False) and getattr(S, "webhooks_enabled", False)):
+            return
+        payload = {
+            "transaction_id": str(item.get("entry_id") or ""),
+            "type": str(item.get("type") or ""),
+            "amount_cents": int(item.get("amount_cents") or 0),
+            "currency": str(item.get("currency") or "usd"),
+            "reason": str(item.get("reason") or ""),
+            "state": str(item.get("state") or ""),
+            "ledger_date": str(item.get("ledger_date") or ""),
+        }
+        if item.get("provider"):
+            payload["provider"] = str(item["provider"])
+        from app.services.webhook_service import dispatch_webhook_event
+        dispatch_webhook_event("transaction.created", user_sub, payload)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("emit_ledger_webhook failed", exc_info=True)
 
 
 def ulidish() -> str:
@@ -231,6 +396,7 @@ def new_ledger_entry(
     reason: str,
     meta: Optional[Dict[str, Any]] = None,
     extra: Optional[Dict[str, Any]] = None,
+    signed_amount_cents: Optional[int] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     # GAP-0203 / FIN-013: provider-originating transactions MUST pass
     # ``extra={"provider": "stripe"|"paypal"|"ccbill"}`` so the platform
@@ -239,6 +405,14 @@ def new_ledger_entry(
     ts = now_ts()
     entry_id = ulidish()
     sk = ledger_sk(ts, entry_id)
+    # D1 / CROSS_TICKET_AUDIT §A4: persist a signed_amount_cents at write time.
+    # ``amount_cents`` STAYS UNSIGNED (display). When the caller passes an
+    # explicit signed value we persist it verbatim; otherwise we derive it from
+    # the canonical entry_type -> sign map.
+    if signed_amount_cents is None:
+        signed_value = derive_signed_amount_cents(entry_type, amount_cents)
+    else:
+        signed_value = int(signed_amount_cents)
     item = {
         key_name: key_value,
         "sk": sk,
@@ -246,6 +420,7 @@ def new_ledger_entry(
         "ts": ts,
         "type": entry_type,
         "amount_cents": int(amount_cents),
+        "signed_amount_cents": signed_value,
         "state": state,
         "reason": reason,
         # FIN-013: denormalized UTC date for platform financial dashboard

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, SmilePlus, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic, Clock, AlertCircle, RotateCcw } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, SmilePlus, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic, Clock, AlertCircle, RotateCcw, Languages } from "lucide-react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
+import { isMessagingEncryptionEnabled, isMessagingTranslationEnabled, messagingTranslationDefaultLang } from "@/lib/featureFlags";
+import { translateMessage } from "@/api/endpoints/messagingAi";
 import { isEmojiOnly } from "@/utils/emoji";
 import { MessageText } from "@/components/shared/MessageText";
 import { ReactionEmoji } from "@/components/shared/ReactionEmoji";
@@ -66,6 +67,7 @@ import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { WaveformPlayer } from "./WaveformPlayer";
 import { VoicemailBubble } from "./VoicemailBubble";
+import { TranscriptControl } from "./TranscriptControl";
 import { CountdownCard } from "./CountdownCard";
 import { FindDateTimeCard } from "./FindDateTimeCard";
 import { VideoShareCard } from "./VideoShareCard";
@@ -454,6 +456,15 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [lotteryRevealError, setLotteryRevealError] = useState<string | null>(null);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const revealTimerRef = useRef<number | null>(null);
+  // MVA-006: per-message translation. `translatedText` holds the fetched
+  // translation; `showOriginal` toggles between original and translation.
+  const [translatedText, setTranslatedText] = useState<string | null>(
+    message.translation?.translated_text ?? null,
+  );
+  const [translationLang, setTranslationLang] = useState<string | null>(
+    message.translation?.target_lang ?? null,
+  );
+  const [showOriginal, setShowOriginal] = useState(false);
 
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
 
@@ -490,6 +501,15 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     }
   }, [expiryCountdown, queryClient, conversationId]);
 
+  // MVA-005/006: when the server projects a translation (auto-translate on),
+  // adopt it as the displayed translation without an extra fetch.
+  useEffect(() => {
+    if (message.translation?.translated_text) {
+      setTranslatedText(message.translation.translated_text);
+      setTranslationLang(message.translation.target_lang ?? null);
+    }
+  }, [message.translation?.translated_text, message.translation?.target_lang]);
+
   const deleteMut = useMutation({
     mutationFn: () => deleteMessage(conversationId, message.message_id),
     onSuccess: () => {
@@ -508,6 +528,28 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       setIsEditing(false);
     },
     onError: () => toast.error("Failed to edit message"),
+  });
+
+  // MVA-006: translate this message into the viewer's target language.
+  const translateMut = useMutation({
+    mutationFn: (targetLang: string) =>
+      translateMessage(conversationId, message.message_id, targetLang),
+    onSuccess: (resp) => {
+      setTranslatedText(resp.translated_text);
+      setTranslationLang(resp.target_lang);
+      setShowOriginal(false);
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 404) {
+        toast.error("Translation is not enabled on this server");
+      } else if (err instanceof ApiError && err.status === 429) {
+        toast.error("Too many translation requests — try again shortly");
+      } else if (err instanceof ApiError && err.status === 400) {
+        toast.error("This message cannot be translated");
+      } else {
+        toast.error("Failed to translate message");
+      }
+    },
   });
 
   const reactMut = useMutation({
@@ -840,6 +882,17 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const showUnsupportedEncryptedState = message.is_encrypted && (!encryptedSupported || !hasDecryptableEnvelope);
   const onceMediaLabel = onceLabel(message);
   const canForward = !message.consumption_policy;
+  // MVA-006: a message is translatable if the feature is enabled, it is a text
+  // message with visible text, and it is not encrypted / view-once / a locked
+  // message the viewer cannot read.
+  const canTranslate =
+    isMessagingTranslationEnabled() &&
+    message.kind === "text" &&
+    !message.is_encrypted &&
+    !message.view_once &&
+    !(message.lock_price_cents && !isOwn && !message.is_unlocked) &&
+    typeof message.text === "string" &&
+    message.text.trim().length > 0;
 
   return (
     <>
@@ -946,6 +999,19 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 {onReply && (
                   <DropdownMenuItem onClick={() => onReply(message)}>
                     <Reply className="mr-2 h-4 w-4" /> Reply
+                  </DropdownMenuItem>
+                )}
+                {canTranslate && (
+                  <DropdownMenuItem
+                    onClick={() => translateMut.mutate(messagingTranslationDefaultLang)}
+                    disabled={translateMut.isPending}
+                  >
+                    {translateMut.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Languages className="mr-2 h-4 w-4" />
+                    )}{" "}
+                    Translate
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem onClick={() => hideMut.mutate()} disabled={hideMut.isPending}>
@@ -1353,6 +1419,33 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <MessageText text={message.text} />
           ) : null}
 
+          {/* MVA-006: inline translation with a Show original toggle. */}
+          {translatedText && message.kind === "text" && !showOriginal && (
+            <div className="mt-1.5 rounded-md border-l-2 border-primary/40 bg-muted/30 px-2 py-1.5">
+              <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <Languages className="h-3 w-3" />
+                <span>Translated{translationLang ? ` · ${translationLang}` : ""}</span>
+              </div>
+              <p className="whitespace-pre-wrap break-words text-sm">{translatedText}</p>
+              <button
+                type="button"
+                className="mt-1 text-xs font-medium text-primary hover:underline"
+                onClick={() => setShowOriginal(true)}
+              >
+                Show original
+              </button>
+            </div>
+          )}
+          {translatedText && message.kind === "text" && showOriginal && (
+            <button
+              type="button"
+              className="mt-1 block text-xs font-medium text-primary hover:underline"
+              onClick={() => setShowOriginal(false)}
+            >
+              Show translation
+            </button>
+          )}
+
           {message.preview?.url && (
             <a
               href={message.preview.url}
@@ -1690,12 +1783,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 durationSeconds={message.voice_message.duration_seconds}
                 consumed={message.consumption_state === "consumed"}
               />
+              <TranscriptControl
+                conversationId={conversationId}
+                messageId={message.message_id}
+                existingTranscript={message.voice_message.transcript}
+                existingLang={message.voice_message.transcript_lang}
+              />
             </div>
           )}
 
           {/* ── Voicemail (CALL-014) ── */}
           {message.kind === "voicemail" && message.voicemail && (
-            <VoicemailBubble message={message} />
+            <VoicemailBubble message={message} conversationId={conversationId} />
           )}
 
           {/* ── Calendar share card ── */}

@@ -393,10 +393,13 @@ test.describe("Section 72: Signing UI", () => {
   });
 
   test("72.2 Create signature form section visible", async () => {
+    // SUX-009: the packet composer moved to the dedicated /signing/new page.
+    await alicePage.goto(`${BASE}/signing/new`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByText("Create signature form")).toBeVisible();
   });
 
   test("72.3 source path input is visible and editable", async () => {
+    await alicePage.goto(`${BASE}/signing/new`, { waitUntil: "domcontentloaded" });
     const input = alicePage.getByPlaceholder(/source pdf path/i);
     await expect(input).toBeVisible();
     await input.fill("/test/editable.pdf");
@@ -406,7 +409,7 @@ test.describe("Section 72: Signing UI", () => {
   });
 
   test("72.4 sidebar Signing link is visible with correct href", async () => {
-    const link = alicePage.getByRole("link", { name: "Signing" });
+    const link = alicePage.getByRole("link", { name: "Signing", exact: true });
     await expect(link).toBeVisible();
     const href = await link.getAttribute("href");
     expect(href).toBe("/signing");
@@ -444,8 +447,9 @@ test.describe("Section 72: Signing UI", () => {
     const uiPdfPath = `/e2e/ui_sign_${TS}.pdf`;
     injectPdfNode(aliceSub, uiPdfPath);
 
-    await alicePage.goto(`${BASE}/signing`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText("Document Signing")).toBeVisible({ timeout: 8_000 });
+    // SUX-009: packet creation lives on the dedicated /signing/new composer page.
+    await alicePage.goto(`${BASE}/signing/new`, { waitUntil: "domcontentloaded" });
+    await expect(alicePage.getByText("Create signature form")).toBeVisible({ timeout: 8_000 });
 
     const input = alicePage.getByPlaceholder(/source pdf path/i);
     await input.fill(uiPdfPath);

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from app.core.aws import ddb
 from app.core.time import now_ts
 from app.services.delegates import (
+    get_creator_settings,
     get_delegate,
     require_delegate_permission,
     _write_audit,
@@ -216,9 +217,18 @@ def send_message_as_creator(
         )
         delegate_tag = fmt.replace("{delegate_name}", delegate_display_name)
 
-    # Append tag to message text if configured
+    # When the creator opts to hide the delegate from recipients, the "via @…"
+    # attribution must NOT be baked into the shared message text (which the
+    # recipient and the sidebar preview both read) — it stays only in the
+    # structured fields + audit log, which only the creator/delegate can see.
+    # (DLP-003) Read live so toggling the setting affects existing delegates.
+    hide_from_recipients = bool(
+        get_creator_settings(creator_id).get("hide_delegate_from_recipients")
+    )
+
+    # Append tag to message text only when attribution is visible to everyone.
     final_text = text
-    if delegate_tag:
+    if delegate_tag and not hide_from_recipients:
         final_text = f"{text} {delegate_tag}"
 
     ts = now_ts()

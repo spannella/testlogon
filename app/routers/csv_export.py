@@ -18,6 +18,8 @@ from app.services.sessions import require_ui_session
 router = APIRouter(prefix="/ui", tags=["export"])
 
 VALID_SOURCES = {"billing_ledger", "contacts", "questionnaire_responses"}
+# RPT-009: additional CRM sources (only accessible when crm_reports_enabled=True)
+_CRM_SOURCES = {"tickets", "subscriptions", "orders", "contacts_crm"}
 
 # Rate limit: 5 exports per 60 seconds per user (PLATFORM-009 §9.5, SEC-007).
 _CSV_EXPORT_MAX = 5
@@ -29,7 +31,7 @@ async def export_csv(
     source: str = Query(
         ...,
         description="Data source to export",
-        pattern=r"^(billing_ledger|contacts|questionnaire_responses)$",
+        pattern=r"^(billing_ledger|contacts|questionnaire_responses|tickets|subscriptions|orders|contacts_crm)$",
     ),
     from_date: Optional[int] = Query(
         None,
@@ -59,6 +61,12 @@ async def export_csv(
     per RFC 4180.
     """
     user_sub = ctx["user_sub"]
+
+    # RPT-009: CRM sources are only available when the feature flag is on
+    if source in _CRM_SOURCES:
+        from app.core.settings import S as _S
+        if not getattr(_S, "crm_reports_enabled", False):
+            raise HTTPException(status_code=404, detail="Not found")
 
     # Rate limit before any data access to prevent bulk exfiltration / DDB
     # read storms (PLATFORM-009 §9.5, SEC-007). Uses the shared DDB-backed

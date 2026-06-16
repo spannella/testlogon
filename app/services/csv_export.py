@@ -34,6 +34,23 @@ BILLING_COLUMNS = ["Date", "Type", "Amount", "Currency", "Status", "Reason", "Tr
 CONTACTS_COLUMNS = ["Name", "Email", "Phone", "Company", "Tags", "Is Favorite", "Is Blocked", "Created At"]
 QUESTIONNAIRE_COLUMNS = ["Respondent ID", "Started At", "Submitted At", "Status", "Duration (s)", "Version", "Answers"]
 
+# RPT-009: additional CRM export column definitions
+TICKETS_COLUMNS = [
+    "Ticket ID", "Subject", "Status", "Priority",
+    "Owner", "Assigned Agent", "Created At", "Updated At", "Space",
+]
+SUBSCRIPTIONS_COLUMNS = [
+    "Subscription ID", "Plan ID", "Status", "Interval",
+    "Price Cents", "Period Start", "Period End", "Created At", "Cancelled At",
+]
+ORDERS_COLUMNS = [
+    "Order ID", "Status", "Source", "User ID", "Created At",
+]
+CONTACTS_CRM_COLUMNS = [
+    "Name", "Email", "Phone", "Company",
+    "Tags", "Notes", "Source", "Is Favorite", "Is Blocked", "Created At",
+]
+
 
 # --- CSV Injection Sanitization ---
 
@@ -189,6 +206,67 @@ def _format_questionnaire_row(item: Dict[str, Any]) -> List[str]:
     ]
 
 
+# --- RPT-009: CRM Source Formatters ---
+
+def _format_tickets_row(item: Dict[str, Any]) -> List[str]:
+    return [
+        _sanitize_csv_field(str(item.get("ticket_id", ""))),
+        _sanitize_csv_field(str(item.get("subject", ""))),
+        str(item.get("status", "")),
+        str(item.get("priority", "")),
+        _sanitize_csv_field(str(item.get("owner_sub", ""))),
+        _sanitize_csv_field(str(item.get("assigned_admin_sub", "") or item.get("assigned_to_sub", ""))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("created_at", 0) or 0))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("updated_at", 0) or 0))),
+        _sanitize_csv_field(str(item.get("space_id", ""))),
+    ]
+
+
+def _format_subscriptions_row(item: Dict[str, Any]) -> List[str]:
+    from decimal import Decimal
+    return [
+        _sanitize_csv_field(str(item.get("subscription_id", ""))),
+        _sanitize_csv_field(str(item.get("plan_id", ""))),
+        str(item.get("status", "")),
+        str(item.get("interval", "")),
+        str(int(item.get("price_cents", 0) or 0)),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("current_period_start", 0) or 0))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("current_period_end", 0) or 0))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("created_at", 0) or 0))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("cancelled_at", 0) or 0))),
+    ]
+
+
+def _format_orders_row(item: Dict[str, Any]) -> List[str]:
+    return [
+        _sanitize_csv_field(str(item.get("order_id", ""))),
+        str(item.get("status", "")),
+        _sanitize_csv_field(str(item.get("source_system", ""))),
+        _sanitize_csv_field(str(item.get("user_id", ""))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("created_at", 0) or 0))),
+    ]
+
+
+def _format_contacts_crm_row(item: Dict[str, Any]) -> List[str]:
+    tags = item.get("tags", [])
+    if isinstance(tags, (list, set)):
+        tags_str = ",".join(str(t) for t in tags)
+    else:
+        tags_str = str(tags)
+    return [
+        _sanitize_csv_field(str(item.get("name", "") or item.get("display_name", ""))),
+        _sanitize_csv_field(str(item.get("email", ""))),
+        _sanitize_csv_field(str(item.get("phone", ""))),
+        _sanitize_csv_field(str(item.get("company", ""))),
+        _sanitize_csv_field(tags_str),
+        _sanitize_csv_field(str(item.get("notes", ""))),
+        _sanitize_csv_field(str(item.get("source", ""))),
+        str(bool(item.get("is_favorite", False))),
+        str(bool(item.get("is_blocked", False))),
+        _sanitize_csv_field(_ts_to_iso(int(item.get("created_at", 0) or 0))),
+    ]
+
+
 # --- Main Generator ---
 
 def generate_csv_rows(
@@ -225,6 +303,26 @@ def generate_csv_rows(
         columns = QUESTIONNAIRE_COLUMNS
         iterator = _iter_questionnaire_responses(questionnaire_id)
         formatter = _format_questionnaire_row
+    # RPT-009: additional CRM export sources
+    elif source == "tickets":
+        from app.services.crm_reports import _iter_tickets
+        columns = TICKETS_COLUMNS
+        iterator = _iter_tickets(user_sub)
+        formatter = _format_tickets_row
+    elif source == "subscriptions":
+        from app.services.crm_reports import _iter_subscriptions
+        columns = SUBSCRIPTIONS_COLUMNS
+        iterator = _iter_subscriptions(user_sub)
+        formatter = _format_subscriptions_row
+    elif source == "orders":
+        from app.services.crm_reports import _iter_orders
+        columns = ORDERS_COLUMNS
+        iterator = _iter_orders(user_sub)
+        formatter = _format_orders_row
+    elif source == "contacts_crm":
+        columns = CONTACTS_CRM_COLUMNS
+        iterator = _iter_contacts(user_sub)
+        formatter = _format_contacts_crm_row
     else:
         raise ValueError(f"Unknown source: {source}")
 

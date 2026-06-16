@@ -9,9 +9,18 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from fastapi import Request
+
 from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.policy import require_admin_or_root
-from app.models import InvoiceEmailOut, InvoiceListOut, InvoiceOut
+from app.models import (
+    InvoiceEmailOut,
+    InvoiceListOut,
+    InvoiceOut,
+    ManualInvoiceCreateIn,
+    ManualPayInvoiceIn,
+    RecordExternalPaymentIn,
+)
 from app.services import invoices as invoice_service
 from app.services.sessions import require_ui_session
 
@@ -48,6 +57,57 @@ def list_invoices(
         invoices=[InvoiceOut(**inv) for inv in result["invoices"]],
         next_cursor=result.get("next_cursor"),
     )
+
+
+# --------------------------------------------------------------------------
+# QUO-005: standalone invoice lifecycle endpoints.
+# NOTE: declared BEFORE the dynamic /{invoice_number} GET so the literal
+# action segments are not captured as a path param.
+# --------------------------------------------------------------------------
+
+@invoices_router.post("/{invoice_number}/void", response_model=InvoiceOut)
+def void_invoice(
+    invoice_number: str,
+    request: Request,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> InvoiceOut:
+    invoice_service._require_standalone_enabled()
+    result = invoice_service.update_invoice_status(
+        ctx["user_sub"], invoice_number, "void", admin=False, request=request,
+    )
+    return InvoiceOut(**result)
+
+
+@invoices_router.post("/{invoice_number}/send", response_model=InvoiceOut)
+def send_invoice(
+    invoice_number: str,
+    request: Request,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> InvoiceOut:
+    invoice_service._require_standalone_enabled()
+    result = invoice_service.update_invoice_status(
+        ctx["user_sub"], invoice_number, "sent", request=request,
+    )
+    try:
+        invoice_service.email_invoice(ctx["user_sub"], invoice_number)
+    except Exception:  # best-effort; do not block the transition
+        pass
+    return InvoiceOut(**result)
+
+
+@invoices_router.post("/{invoice_number}/pay", response_model=InvoiceOut)
+def pay_invoice(
+    invoice_number: str,
+    request: Request,
+    body: ManualPayInvoiceIn = ManualPayInvoiceIn(),
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> InvoiceOut:
+    invoice_service._require_standalone_enabled()
+    result = invoice_service.update_invoice_status(
+        ctx["user_sub"], invoice_number, "paid",
+        payment_ref=body.payment_ref, request=request,
+    )
+    return InvoiceOut(**result)
 
 
 @invoices_router.get("/{invoice_number}", response_model=InvoiceOut)
@@ -114,3 +174,62 @@ def admin_list_invoices(
         invoices=[InvoiceOut(**inv) for inv in result["invoices"]],
         next_cursor=result.get("next_cursor"),
     )
+
+
+# --------------------------------------------------------------------------
+# QUO-005 admin endpoints: manual B2B create, admin void, record-payment (D5).
+# --------------------------------------------------------------------------
+
+@invoices_admin_router.post("/manual", response_model=InvoiceOut, status_code=201)
+def create_manual_invoice(
+    body: ManualInvoiceCreateIn,
+    actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> InvoiceOut:
+    invoice_service._require_standalone_enabled()
+    result = invoice_service.create_manual_invoice(
+        admin_user_sub=actor.sub,
+        buyer_user_sub=body.buyer_user_sub,
+        buyer_name=body.buyer_name,
+        buyer_email=body.buyer_email,
+        billing_address=body.billing_address.model_dump(),
+        line_items=[li.model_dump() for li in body.line_items],
+        currency=body.currency,
+        payment_terms_days=body.payment_terms_days,
+        notes=body.notes,
+    )
+    return InvoiceOut(**result)
+
+
+@invoices_admin_router.post("/{invoice_number}/void", response_model=InvoiceOut)
+def admin_void_invoice(
+    invoice_number: str,
+    request: Request,
+    user_sub: str = Query(...),
+    actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> InvoiceOut:
+    invoice_service._require_standalone_enabled()
+    result = invoice_service.update_invoice_status(
+        user_sub, invoice_number, "void", admin=True, request=request,
+    )
+    return InvoiceOut(**result)
+
+
+@invoices_admin_router.post("/{invoice_number}/record-payment", response_model=InvoiceOut)
+def admin_record_payment(
+    invoice_number: str,
+    body: RecordExternalPaymentIn,
+    request: Request,
+    actor: AuthenticatedUser = Depends(require_admin_or_root),
+) -> InvoiceOut:
+    """D5: record an offline/external payment (no Stripe / provider charge)."""
+    invoice_service._require_standalone_enabled()
+    result = invoice_service.record_external_payment(
+        admin_user_sub=actor.sub,
+        owner_user_sub=body.user_sub,
+        invoice_number=invoice_number,
+        amount_cents=body.amount_cents,
+        reference=body.reference,
+        reason=body.reason,
+        request=request,
+    )
+    return InvoiceOut(**result)

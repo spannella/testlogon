@@ -65,6 +65,18 @@ export default defineConfig({
     proxy: {
       "/saml": "http://localhost:8000",
       "/ui": "http://localhost:8000",
+      // SuiteCRM Knowledge Base router is mounted at /kb (auth) + /public/kb (public),
+      // not under /ui or /api — proxy them so the KB frontend reaches the backend in dev.
+      "/public/kb": "http://localhost:8000",
+      "/kb": "http://localhost:8000",
+      // OpenCATS public career portal router (mounted at /public/careers, outside /ui).
+      "/public/careers": "http://localhost:8000",
+      // OBP OAuth2/OIDC discovery + authorize/token/jwks (mounted at root, outside /ui).
+      "/oauth": "http://localhost:8000",
+      "/.well-known": "http://localhost:8000",
+      // Browser SSH terminal WebSocket — needs ws:true for the upgrade to proxy.
+      // Must precede the generic "/api" entry so the WS path matches here first.
+      "/api/browser-ssh": { target: "http://localhost:8000", ws: true, changeOrigin: true },
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
       "/messaging": "http://localhost:8000",
@@ -131,6 +143,18 @@ export default defineConfig({
         },
       },
       "/ticket-spaces": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
+      // TKB-004: /boards mirrors the /tickets bypass — SPA route + API share the
+      // prefix, so browser navigations get index.html and XHR/JSON proxy to backend.
+      "/boards": {
         target: "http://localhost:8000",
         bypass: (req) => {
           const accept = req.headers["accept"] ?? "";

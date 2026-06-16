@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { Loader2, Newspaper, Repeat2, UserCheck } from "lucide-react";
+import { Loader2, Newspaper, Repeat2, Sparkles, UserCheck } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreatePost } from "./CreatePost";
 import { PostCard } from "./PostCard";
 import { SponsoredPostCard } from "./SponsoredPostCard";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { useFeedTimelineQuery } from "@/hooks/useFeedTimelineQuery";
+import { useForYouFeedQuery } from "@/hooks/useForYouFeedQuery";
 import { mergeFeedPages } from "@/lib/feedPagination";
 import { useOfflineStore } from "@/stores/offlineStore";
 import { useAuthStore } from "@/stores/authStore";
@@ -22,6 +23,8 @@ interface FeedTimelineProps {
   showComposer?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
+  /** NRS-011: when true, render the ranked "For You" feed (GET /feed/for-you). */
+  forYou?: boolean;
 }
 
 export function FeedTimeline({
@@ -35,8 +38,12 @@ export function FeedTimeline({
   showComposer = false,
   emptyTitle = "No posts yet",
   emptyDescription = "Be the first to share something with the community.",
+  forYou = false,
 }: FeedTimelineProps) {
-  const feedQuery = useFeedTimelineQuery({ authorId, q, from, to, hasMedia, cursor });
+  const timelineQuery = useFeedTimelineQuery({ authorId, q, from, to, hasMedia, cursor });
+  const forYouQuery = useForYouFeedQuery();
+  const feedQuery = forYou ? forYouQuery : timelineQuery;
+  const forYouSource = forYou ? forYouQuery.data?.pages?.[0]?.source : undefined;
   const userId = useAuthStore((s) => s.userId);
   const offlineQueue = useOfflineStore((s) => s.queue);
 
@@ -126,6 +133,20 @@ export function FeedTimeline({
   return (
     <div className="space-y-4">
       {showComposer ? <CreatePost /> : null}
+
+      {forYou && forYouSource && forYouSource !== "for_you" ? (
+        <div
+          className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground"
+          data-testid="for-you-source-hint"
+        >
+          <Sparkles className="h-4 w-4 shrink-0" />
+          <span>
+            {forYouSource === "cold_start"
+              ? "Showing popular posts — engage with posts to personalize your feed."
+              : "Showing the latest posts. Personalized recommendations will appear as you engage."}
+          </span>
+        </div>
+      ) : null}
 
       {allPosts.length === 0 ? (
         <EmptyState

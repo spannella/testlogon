@@ -795,13 +795,16 @@ export interface Conversation {
   muted_until: number;
   last_read_at: number;
   unread_count: number;
-  // Helpdesk routing fields (populated for helpdesk agents only)
+  // Helpdesk routing fields. routing_mode/routing_state/agent_connected are
+  // customer-safe; routing_group_id/active_agent_user_id/claimed_at/version are
+  // populated for helpdesk agents only (HMH-008).
   routing_mode?: string;
   routing_group_id?: string;
   routing_state?: string;
   active_agent_user_id?: string;
   active_agent_claimed_at?: number;
   assignment_version?: number;
+  agent_connected?: boolean;
   // Latest active pin projection
   latest_pinned_message_id?: string;
   latest_pinned_by_user_id?: string;
@@ -1101,6 +1104,39 @@ export interface FindDateTimePostPoll {
   best_windows: FindDateTimeBestWindow[] | null;
 }
 
+// --- Messenger Voice & AI (MVA) ---
+export interface MessageTranslation {
+  translated_text: string;
+  source_lang?: string;
+  target_lang: string;
+  cached?: boolean;
+}
+
+export interface TranslateMessageReq {
+  target_lang: string;
+}
+
+export interface TranslateMessageResp {
+  translated_text: string;
+  source_lang: string;
+  target_lang: string;
+  cached: boolean;
+}
+
+export interface TranscribeMessageResp {
+  transcript: string;
+  transcript_lang: string;
+  cached: boolean;
+}
+
+export interface TtsVoiceMessageReq {
+  text: string;
+  voice_id?: string;
+  model_id?: string;
+  reply_to_message_id?: string;
+  send_at?: number;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
@@ -1145,6 +1181,12 @@ export interface Message {
     audio_size_bytes: number;
     duration_seconds: number;
     waveform_data: number[];
+    // MVA-009/010: TTS-synthesized voice messages
+    is_tts?: boolean;
+    tts_source_text?: string;
+    // MVA-007/008: persisted transcript
+    transcript?: string;
+    transcript_lang?: string;
   };
   voicemail?: {
     call_id: string;
@@ -1158,7 +1200,12 @@ export interface Message {
     call_state: string;
     caller_user_id: string;
     callee_user_id: string;
+    // MVA-007/008: persisted transcript
+    transcript?: string;
+    transcript_lang?: string;
   };
+  // MVA-005/006: per-viewer auto-translate projection (best-effort)
+  translation?: MessageTranslation | null;
   // Countdown message fields (MSG-010)
   countdown_title?: string | null;
   target_datetime?: number | null;
@@ -2112,6 +2159,37 @@ export interface StockAdjustment {
   stock_updated_at?: string;
 }
 
+// ─── Inventory (ADR-001 OFB-003/004 / OFB-INV-UI) ─────────────────
+export interface InventoryRecord {
+  sku: string;
+  location_id: string;
+  on_hand: number;
+  reserved: number;
+  available: number;
+  reorder_point: number;
+  status: "in_stock" | "low_stock" | "out_of_stock" | string;
+  updated_at: number;
+}
+
+export interface InventoryLowStockResp {
+  items: InventoryRecord[];
+}
+
+export interface InventorySetOnHandIn {
+  sku: string;
+  on_hand: number;
+  location_id?: string;
+  reorder_point?: number | null;
+  reason?: string;
+}
+
+export interface InventoryAdjustIn {
+  sku: string;
+  delta: number;
+  location_id?: string;
+  reason?: string;
+}
+
 export interface CatalogReviewIn {
   rating: number;
   title?: string;
@@ -2267,6 +2345,8 @@ export interface FeedPost {
   interesting_count?: number;
   /** FEED-007: whether the current viewer marked this post interesting */
   is_interesting?: boolean;
+  /** Feed candidate source attribution (e.g. "following", "for_you", "popular") */
+  source?: string;
   /** SOCIAL-002: present when a feed item is a repost — who reposted it */
   reposted_by?: { user_id: string; display_name: string };
   /** SOCIAL-002: quote text from a quote repost */
@@ -2446,8 +2526,11 @@ export interface FeedComment {
   deleted?: boolean;
   version?: number;
   tip_total_cents?: number;
-  // FEED-004: emoji/GIF/sticker comments
-  kind?: "text" | "gif" | "sticker";
+  // Emoji reactions on comments (mirrors post reactions)
+  reactions_counts?: Record<string, number>;
+  my_reactions?: string[];
+  // FEED-004: emoji/GIF/sticker/image comments
+  kind?: "text" | "gif" | "sticker" | "image";
   gif_url?: string | null;
   gif_alt_text?: string | null;
   gif_width?: number | null;
@@ -2456,6 +2539,11 @@ export interface FeedComment {
   sticker_collection_id?: string | null;
   sticker_url?: string | null;
   sticker_alt_text?: string | null;
+  // Image comment fields (kind="image")
+  image_url?: string | null;
+  image_alt_text?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
 }
 
 export interface FeedCapabilities {
@@ -2520,8 +2608,8 @@ export interface CreateCommentReq {
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
   parent_comment_id?: string | null;
-  // FEED-004: emoji/GIF/sticker comments
-  kind?: "text" | "gif" | "sticker";
+  // FEED-004: emoji/GIF/sticker/image comments
+  kind?: "text" | "gif" | "sticker" | "image";
   gif_url?: string | null;
   gif_alt_text?: string | null;
   gif_width?: number | null;
@@ -2530,6 +2618,11 @@ export interface CreateCommentReq {
   sticker_collection_id?: string | null;
   sticker_url?: string | null;
   sticker_alt_text?: string | null;
+  // Image comment fields (kind="image")
+  image_url?: string | null;
+  image_alt_text?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
 }
 
 export interface EditPostReq {
@@ -3634,6 +3727,64 @@ export interface DataRequestAuditEntry {
   actor: string;
   created_at: number;
   details?: Record<string, unknown>;
+}
+
+// ─── Legal holds + law-enforcement export (LEX-008 / LEX-012) ───
+
+export interface LegalHold {
+  hold_id: string;
+  user_sub: string;
+  case_id: string;
+  matter_ref: string;
+  reason: string;
+  status: string; // "active" | "released"
+  created_by: string;
+  created_at: number;
+  released_by?: string | null;
+  released_at?: number | null;
+  expires_at?: number | null;
+}
+
+export interface PlaceHoldBody {
+  user_sub: string;
+  reason: string;
+  case_id?: string;
+  matter_ref?: string;
+  expires_at?: number;
+}
+
+export interface LegalExport {
+  legal_export_id: string;
+  matter_ref: string;
+  requesting_authority: string;
+  requested_by: string;
+  legal_basis: string;
+  reason?: string;
+  target_user_subs: string[];
+  data_types: string[];
+  from_ts?: number;
+  to_ts?: number;
+  status: string; // "intake" | "completed" | "failed"
+  created_at: number;
+  completed_at?: number;
+  s3_key?: string;
+  s3_bucket?: string;
+  package_sha256?: string;
+  size_bytes?: number;
+  expires_at?: number;
+  sealed?: boolean;
+  error_message?: string;
+}
+
+export interface LegalExportIntakeBody {
+  matter_ref: string;
+  requesting_authority: string;
+  legal_basis: string;
+  target_user_subs: string[];
+  data_types?: string[];
+  from_ts?: number;
+  to_ts?: number;
+  reason?: string;
 }
 
 // ─── Stories / Ephemeral Content (FEED-002) ─────────────────────
@@ -5133,6 +5284,7 @@ export interface DelegateSettingsReq {
   default_preset?: string;
   delegate_tag_enabled?: boolean;
   delegate_tag_format?: string;
+  hide_delegate_from_recipients?: boolean;
 }
 
 export interface DelegateOut {
@@ -5164,6 +5316,7 @@ export interface DelegateSettingsOut {
   default_preset?: string;
   delegate_tag_enabled: boolean;
   delegate_tag_format: string;
+  hide_delegate_from_recipients?: boolean;
 }
 
 export interface DelegateAuditOut {
@@ -5725,6 +5878,90 @@ export interface Worker {
 export interface WorkerList {
   workers: Worker[];
   count: number;
+}
+
+// ─── Agent SSH QA actions (ADR-003 / AQA) ────────────────────────
+// SECURITY: the submit body carries ONLY identifiers (host_id / ssh_key_id /
+// path_id) — never a key, PEM, or password. Credentials are resolved
+// server-side from the owner's KMS-encrypted store.
+
+export type AgentActionType = "run_command" | "run_test_suite";
+
+export type AgentActionStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "denied";
+
+export interface RunAgentActionIn {
+  action_type: AgentActionType;
+  command: string;
+  host_id?: string;
+  ssh_key_id?: string;
+  path_id?: string;
+  timeout_seconds?: number;
+}
+
+export interface AgentActionOut {
+  action_id: string;
+  worker_id: string;
+  action_type: AgentActionType;
+  host_id: string;
+  command: string;
+  status: AgentActionStatus;
+  exit_code: number | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  error_code: string;
+  error_message: string;
+  created_at: number;
+  started_at: number;
+  finished_at: number;
+  timeout_seconds: number;
+}
+
+export interface AgentActionListOut {
+  actions: AgentActionOut[];
+  count: number;
+}
+
+// ─── Interactive Claude Code sessions (ACS-009/010) ──────────────
+
+export type AgentSessionState =
+  | "starting"
+  | "ready"
+  | "awaiting_input"
+  | "running"
+  | "ended"
+  | "error";
+
+export interface AgentSession {
+  session_id: string;
+  worker_id: string;
+  user_id: string;
+  state: AgentSessionState;
+  created_at: number;
+  started_at: number;
+  ended_at: number;
+  last_activity_at: number;
+  cols: number;
+  rows: number;
+  claude_pid: number;
+  error_message: string;
+  ws_path: string;
+}
+
+export interface AgentSessionList {
+  sessions: AgentSession[];
+  count: number;
+}
+
+export interface CreateAgentSessionIn {
+  cols?: number;
+  rows?: number;
 }
 
 export interface ToolInfo {
@@ -11482,6 +11719,96 @@ export interface FraudStatsOut {
   avg_resolution_hours: number;
 }
 
+// ── HNY: Security tooling & honeypots (defensive-only) ───────────────────────
+
+/** Honeytoken kind discriminator (matches backend pattern). */
+export type HoneytokenKind = "api_key" | "credential_record" | "canary_row";
+
+/** Request to mint a decoy honeytoken (HNY-004/HNY-007). */
+export interface HoneytokenMintIn {
+  kind: HoneytokenKind;
+  label: string;
+  placement?: string | null;
+}
+
+/** Honeytoken metadata — NEVER includes the stored secret/hash. */
+export interface HoneytokenOut {
+  token_id: string;
+  kind: string;
+  label: string;
+  created_by: string;
+  created_at: number;
+  retired: boolean;
+  placement: string;
+  key_id: string;
+  decoy_username: string;
+  canary_id: string;
+}
+
+/** Mint response — returns the plaintext secret ONCE (api_key/credential). */
+export interface HoneytokenMintOut {
+  token_id: string;
+  kind: string;
+  label: string;
+  created_at: number;
+  placement: string;
+  api_key?: string | null;
+  key_id?: string | null;
+  username?: string | null;
+  password?: string | null;
+  canary_id?: string | null;
+}
+
+/** A unified security-event row (IDS / honeypot / honeytoken signal). */
+export interface SecurityEventOut {
+  event_id: string;
+  kind: string;
+  severity: "info" | "low" | "medium" | "high" | "critical";
+  source_ip: string;
+  user_agent: string;
+  user_sub: string;
+  ts: number;
+  event_date: string;
+  details?: Record<string, unknown> | null;
+}
+
+/** Response of GET /{token_id}/hits — events referencing a honeytoken. */
+export interface HoneytokenHitsOut {
+  token_id: string;
+  count: number;
+  events: SecurityEventOut[];
+}
+
+/** Retire (DELETE) response. */
+export interface HoneytokenRetireOut {
+  ok: boolean;
+  token_id: string;
+  retired: boolean;
+}
+
+/**
+ * Aggregated dashboard overview (HNY-013/014). The backend dashboard
+ * aggregation endpoints may not yet be mounted in every environment; the page
+ * tolerates an absent endpoint and renders zeroed sections.
+ */
+export interface SecurityOverviewOut {
+  window?: string;
+  active_threats?: SecurityEventOut[];
+  honeypot_hits?: SecurityEventOut[];
+  honeytoken_trips?: SecurityEventOut[];
+  ids_signals?: SecurityEventOut[];
+  rate_limit_offenders?: Array<{ ip?: string; key?: string; count?: number }>;
+  risk_distribution?: Record<string, number>;
+  counts?: Record<string, number>;
+}
+
+/** Paginated security-events list (HNY-014 GET /events). */
+export interface SecurityEventListOut {
+  events: SecurityEventOut[];
+  cursor?: string | null;
+  next_cursor?: string | null;
+}
+
 // ── KYC-013: User Self-Service Portal ────────────────────────────────────
 export type KycCaseStatus =
   | "draft"
@@ -11490,7 +11817,8 @@ export type KycCaseStatus =
   | "needs_more_info"
   | "approved"
   | "rejected"
-  | "expired";
+  | "expired"
+  | "disputed";
 
 export type KycSelfServiceFileType = "id_front" | "id_back" | "selfie" | "proof_of_address";
 
@@ -11515,6 +11843,29 @@ export interface KycCaseReviewRef {
   decision?: string | null;
   decided_at?: number | null;
   reason_codes?: string[];
+  // KYD-008/009/010: dispute & reopen-and-resubmit lifecycle metadata (additive, optional).
+  attempt_count?: number | null;
+  dispute?: KycCaseDisputeRef | null;
+  dispute_resolution?: Record<string, unknown> | null;
+}
+
+export interface KycCaseDisputeRef {
+  reason?: string | null;
+  note?: string | null;
+  disputed_at?: number | null;
+  disputed_by?: string | null;
+  dispute_hash?: string | null;
+  dispute_count?: number | null;
+}
+
+export interface KycDisputeRequest {
+  expected_version: number;
+  reason: string;
+  note?: string;
+}
+
+export interface KycReopenRequest {
+  expected_version: number;
 }
 
 export interface KycSelfServiceFile {

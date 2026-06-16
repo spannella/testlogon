@@ -27,6 +27,7 @@ ACTIVITY_TYPES = [
     "mention",
     "share",
     "tip",
+    "quote_converted",
 ]
 
 _TTL_DAYS = 30

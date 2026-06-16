@@ -254,4 +254,16 @@ for key, user_sub, role, admin_profile in IDENTITIES:
         file=sys.stderr,
     )
 
+# Email/sub aliases so specs that key sessions by the user's email (e.g.
+# "e2e_alice@test.local") resolve the same session as the short keys above.
+_ALIASES = {
+    "e2e_alice@test.local": "alice",
+    "e2e_bob@test.local": "bob",
+    "e2e_charlie@test.local": "charlie_admin",
+    ROOT_USER_SUB: "root",
+}
+for _alias, _src in _ALIASES.items():
+    if _alias not in results and _src in results:
+        results[_alias] = results[_src]
+
 print(json.dumps(results))

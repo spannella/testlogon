@@ -289,6 +289,7 @@ def set_api_key_self_limits(
     monthly_calls_cap: int,
     monthly_spend_cap_micros: int,
     route_caps: Dict[str, Dict[str, Any]] | None,
+    rate_limit_overrides: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     calls_cap = _coerce_non_negative_int(monthly_calls_cap)
     spend_cap = _coerce_non_negative_int(monthly_spend_cap_micros)
@@ -299,18 +300,45 @@ def set_api_key_self_limits(
         route_caps=normalized_route_caps,
     )
 
+    # PLT-001: validate rate_limit_overrides
+    normalized_rlo: Dict[str, Any] = {}
+    _VALID_WINDOWS = {"minute", "hour", "day", "week", "month"}
+    _WINDOW_SETTINGS = {
+        "minute": "api_consumer_rate_limit_minute",
+        "hour": "api_consumer_rate_limit_hour",
+        "day": "api_consumer_rate_limit_day",
+        "week": "api_consumer_rate_limit_week",
+        "month": "api_consumer_rate_limit_month",
+    }
+    if rate_limit_overrides:
+        for win_name, val in (rate_limit_overrides or {}).items():
+            if win_name not in _VALID_WINDOWS:
+                continue
+            if val is None:
+                normalized_rlo[win_name] = None
+                continue
+            int_val = int(val)
+            if int_val < 0:
+                raise HTTPException(400, f"rate_limit_override for {win_name} must be non-negative")
+            # Guardrail: override cannot exceed account-level ceiling
+            ceiling = int(getattr(S, _WINDOW_SETTINGS[win_name], 0) or 0)
+            if ceiling > 0 and int_val > ceiling:
+                raise HTTPException(400, f"rate_limit_override exceeds account ceiling for window: {win_name}")
+            normalized_rlo[win_name] = int_val
+
     try:
         T.api_keys.update_item(
             Key={"key_id": key_id},
             UpdateExpression=(
                 "SET monthly_calls_cap = :mc, monthly_spend_cap_micros = :ms, "
-                "route_caps = :rc, updated_at = :now"
+                "route_caps = :rc, rate_limit_overrides = :rlo, updated_at = :now"
             ),
             ConditionExpression="user_sub = :u",
             ExpressionAttributeValues={
                 ":mc": calls_cap,
                 ":ms": spend_cap,
                 ":rc": normalized_route_caps,
+                ":rlo": normalized_rlo,
                 ":u": user_sub,
                 ":now": now_ts(),
             },
@@ -323,6 +351,7 @@ def set_api_key_self_limits(
         "monthly_calls_cap": calls_cap,
         "monthly_spend_cap_micros": spend_cap,
         "route_caps": normalized_route_caps,
+        "rate_limit_overrides": normalized_rlo,
     }
 
 
@@ -383,9 +412,41 @@ def enforce_api_key_ip_rules(client_ip: str, key_item: Dict[str, Any]) -> None:
     if deny and ip_in_any_cidr(client_ip, deny):
         raise HTTPException(403, "API key denied from this IP")
 
+def _check_honeytoken_tripwire(api_key_id: str, api_key_secret: str, client_ip: str) -> None:
+    """HNY-005: detect a decoy API key at the auth chokepoint.
+
+    Gated on ``S.honeytoken_enabled`` (default off → no-op, no DDB reads).
+    On a honeytoken match, records a CRITICAL security event but does NOT
+    change the response — the caller still raises the SAME 401 a bogus key
+    raises, so there is no oracle for the attacker. Never raises itself.
+    """
+    if not S.honeytoken_enabled:
+        return
+    try:
+        from app.services import honeytokens
+
+        ht = honeytokens.match_api_key(api_key_id, api_key_secret)
+        if not ht:
+            return
+        from app.services import security_events
+
+        security_events.safe_record(
+            kind="honeytoken_api_key_used",
+            severity="critical",
+            source_ip=client_ip,
+            token_id=ht.get("token_id", ""),
+            label=ht.get("label", ""),
+            key_id=api_key_id,
+        )
+    except Exception:
+        # Trip-wire must never interfere with the auth path.
+        pass
+
+
 def check_api_key_allowed(api_key_id: str, api_key_secret: str, client_ip: str) -> Dict[str, Any]:
     it = T.api_keys.get_item(Key={"key_id": api_key_id}).get("Item")
     if not it or it.get("revoked", False):
+        _check_honeytoken_tripwire(api_key_id, api_key_secret, client_ip)
         raise HTTPException(401, "Invalid API key")
     expires_at = int(it.get("expires_at") or 0)
     if expires_at and now_ts() > expires_at:

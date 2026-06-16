@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, TypedDict
 
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key  # PLT-002 adds Attr for FilterExpression scans
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, Request
 
@@ -530,6 +530,86 @@ def _apply_breakdown_query(
         "count": len(page),
         "total": len(rows),
     }
+
+
+def aggregate_leaderboard(
+    table: Any,
+    *,
+    period_id: str,
+    dimension: str,
+    metric: str,
+    top_n: int,
+    user_sub: str | None = None,
+) -> dict[str, Any]:
+    """PLT-002: Platform-wide or per-user leaderboard of top API consumers/endpoints.
+
+    Args:
+        table: DynamoDB Table handle for api_usage_events.
+        period_id: YYYY-MM string for the billing period.
+        dimension: "consumers" (per api_key_id) or "endpoints" (per route_id).
+        metric: sort metric — "calls_total", "cost_subtotal_micros", or "request_units_total".
+        top_n: max items to return (already clamped by caller).
+        user_sub: if set, scope to this user only; if None, platform-wide scan.
+    """
+    if table is None:
+        return {"items": [], "next_cursor": None, "count": 0, "total": 0, "total_rows_scanned": 0}
+
+    if user_sub is not None:
+        # Per-user query — use existing helpers, fast path
+        if dimension == "consumers":
+            rows = query_api_key_period_totals(table, user_sub=user_sub, period_id=period_id)
+        else:
+            rows = query_api_route_period_totals(table, user_sub=user_sub, period_id=period_id)
+        result = _apply_breakdown_query(rows, search=None, sort_by=metric, order="desc", limit=top_n, cursor=None)
+        result["total_rows_scanned"] = len(rows)
+        return result
+
+    # Platform-wide scan — merge across all user partitions
+    if dimension == "consumers":
+        target_entity_type = "api_key_usage_period_totals"
+        group_key = "api_key_id"
+    else:
+        target_entity_type = "api_route_usage_period_totals"
+        group_key = "route_id"
+
+    merged: dict[str, dict[str, Any]] = {}
+    rows_scanned = 0
+    scan_kwargs: dict[str, Any] = {
+        "FilterExpression": Attr("entity_type").eq(target_entity_type),
+    }
+    while True:
+        resp = table.scan(**scan_kwargs)
+        for item in resp.get("Items", []):
+            rows_scanned += 1
+            if str(item.get("period_id")) != str(period_id):
+                continue
+            key_val = str(item.get(group_key) or "")
+            if key_val not in merged:
+                merged[key_val] = {
+                    group_key: key_val,
+                    "user_sub": "",  # cross-user sum
+                    "calls_total": 0,
+                    "billable_calls_total": 0,
+                    "request_units_total": 0,
+                    "cost_subtotal_micros": 0,
+                    "unit_price_micros": 0,
+                }
+            merged[key_val]["calls_total"] += int(item.get("calls_total") or 0)
+            merged[key_val]["billable_calls_total"] += int(item.get("billable_calls_total") or 0)
+            merged[key_val]["request_units_total"] += int(item.get("request_units_total") or 0)
+            merged[key_val]["cost_subtotal_micros"] += int(item.get("cost_subtotal_micros") or 0)
+            if dimension == "endpoints":
+                # unit_price_micros is route-level; take last-seen value
+                merged[key_val]["unit_price_micros"] = int(item.get("unit_price_micros") or 0)
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        scan_kwargs["ExclusiveStartKey"] = lek
+
+    flat_rows = list(merged.values())
+    result = _apply_breakdown_query(flat_rows, search=None, sort_by=metric, order="desc", limit=top_n, cursor=None)
+    result["total_rows_scanned"] = rows_scanned
+    return result
 
 
 def list_api_usage_key_breakdown(

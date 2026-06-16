@@ -26,7 +26,7 @@ from app.metrics import (
 )
 from app.services import terminal_monitor
 from app.services.alerts import audit_event
-from app.services.host_inventory import _should_record, record_connection
+from app.services.host_inventory import _should_record, record_connection, get_host
 from app.services.sessions import require_ui_session
 from app.services.ssh_key_manager import get_decrypted_private_key, get_key_metadata
 
@@ -743,6 +743,42 @@ def _validate_connect_payload(payload: Any) -> tuple[bool, dict[str, Any] | None
     }, None
 
 
+def _resolve_host_id_into_payload(payload: dict[str, Any], user_sub: str) -> None:
+    """CTI-001 — resolve a registered ``host_id`` to authoritative connection
+    params from the host inventory, in place, before validation.
+
+    When the client supplies a ``host_id`` (e.g. the "Open terminal" deep-link
+    from a compute instance or host inventory), the server resolves the real
+    hostname/port/username from the owner-scoped inventory record:
+
+    - ``host`` is OVERRIDDEN with the inventory hostname so a ``host_id`` can
+      never be pointed at an arbitrary host by the client.
+    - ``port`` / ``username`` are FILLED from the record when the client didn't
+      supply a valid value (the client may still override them).
+
+    Never raises and is a no-op when ``host_id`` is absent or doesn't resolve to
+    an owned host — the normal explicit host/port/username path is unaffected.
+    """
+    if not isinstance(payload, dict):
+        return
+    host_id = str(payload.get("host_id") or "").strip()
+    if not host_id:
+        return
+    try:
+        host = get_host(user_sub, host_id)
+    except Exception:
+        host = None
+    if not host or not host.get("hostname"):
+        return
+    payload["host"] = host["hostname"]
+    port = payload.get("port")
+    if not (isinstance(port, int) and 1 <= port <= 65535):
+        payload["port"] = int(host.get("port") or 22)
+    username = payload.get("username")
+    if not (isinstance(username, str) and username.strip()):
+        payload["username"] = str(host.get("username") or "")
+
+
 async def _dispatch_terminal_signal(
     *,
     signal: dict[str, Any],
@@ -949,6 +985,10 @@ async def browser_ssh_terminal_ws(websocket: WebSocket) -> None:
                 continue
 
             if msg_type == "connect":
+                # CTI-001: resolve a registered host_id → authoritative
+                # host/port/username from the owner's inventory before validation.
+                if isinstance(payload, dict):
+                    _resolve_host_id_into_payload(payload, str(session_user_sub or ""))
                 valid, normalized, err = _validate_connect_payload(payload)
                 if not valid:
                     await websocket.send_json({"type": "error", "payload": err})

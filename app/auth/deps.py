@@ -196,6 +196,66 @@ def _verify_local_password(username: str, password: str) -> Optional[str]:
         return None
 
 
+def _try_oauth_bearer(request: Request):
+    """OAU-002: Try to authenticate via an OAuth2 HS256 Bearer token.
+
+    Returns AuthenticatedUser if the token is a valid OAU-002 access token,
+    raises HTTPException for expired/disabled tokens, or returns None to fall
+    through to the next auth path.
+    """
+    if not (getattr(S, "oauth_provider_enabled", False) and getattr(S, "open_bank_project_enabled", False)):
+        return None
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return None
+    candidate = auth_header.split(" ", 1)[1].strip()
+    access_secret = getattr(S, "ui_access_token_secret", "")
+    if not access_secret:
+        return None
+    oau_payload = None
+    try:
+        oau_payload = jwt.decode(
+            candidate,
+            access_secret,
+            algorithms=["HS256"],
+            options={"verify_exp": True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "oauth_token_expired")
+    except jwt.PyJWTError:
+        return None
+    if not isinstance(oau_payload, dict):
+        return None
+    if oau_payload.get("token_type") != "access" or not oau_payload.get("client_id"):
+        return None
+    owner_sub = str(oau_payload.get("sub") or "").strip()
+    client_id = str(oau_payload.get("client_id") or "").strip()
+    if not owner_sub or not client_id:
+        raise HTTPException(401, "invalid_oauth_token")
+    # Re-check consumer enabled (OAU-005: disable kills existing tokens instantly)
+    try:
+        from app.services.oauth_consumers import get_consumer as _gc
+        _consumer = _gc(client_id)
+        if not _consumer or not _consumer.get("enabled"):
+            raise HTTPException(401, "oauth_consumer_disabled")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    role = Role.USER
+    try:
+        _u_item = T.users.get_item(Key={"user_sub": owner_sub}).get("Item") or {}
+        role = normalize_role(_u_item.get("role"))
+    except Exception:
+        role = Role.USER
+    role = enforce_root_role_invariant(user_sub=owner_sub, role=role)
+    _enforce_not_banned(user_sub=owner_sub, role=role)
+    request.state.oauth_scope = str(oau_payload.get("scope") or "")
+    request.state.oauth_client_id = client_id
+    request.state.oauth_user_sub = owner_sub
+    return AuthenticatedUser(sub=owner_sub, role=role, tenant_id=_request_tenant_id(request))
+
+
 async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     """Resolve the authenticated user from the incoming request.
 
@@ -222,6 +282,12 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
             role = enforce_root_role_invariant(user_sub=user_sub, role=role)
             _enforce_not_banned(user_sub=user_sub, role=role)
             return AuthenticatedUser(sub=user_sub, role=role, tenant_id=_request_tenant_id(request))
+
+    # OAU-002: OAuth2 Bearer token branch (HS256 access tokens issued by /oauth/token)
+    # Inserted AFTER api_key_principal check and BEFORE cookie/Cognito paths.
+    _oau_result = _try_oauth_bearer(request)
+    if _oau_result is not None:
+        return _oau_result
 
     # 1. Cookie-based path (browser flow)
     access_cookie_name = getattr(S, "ui_access_token_cookie_name", "")

@@ -5,7 +5,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
+from app.core.settings import S
 from app.core.tables import T
+from app.core.time import now_ts
 from app.services.alerts import audit_event
 from app.services.commercial_line_items import CommercialLineItem, validate_commercial_line_item
 
@@ -35,6 +37,29 @@ class CommerceOrderService:
         if ref.get("price_cents") is not None:
             return max(0, int(ref.get("price_cents") or 0)) * qty
         return 0
+
+    @staticmethod
+    def _seed_lifecycle_created(order_id: str, user_id: str, ts: int) -> None:
+        """ORD-007: append the initial `created` HIST row (best-effort).
+
+        Lazy import keeps create_order independent of the lifecycle module at
+        import time and never lets an audit-trail failure break order creation.
+        """
+        try:
+            from app.services.order_lifecycle import _append_history_row, _derive_event_id
+
+            event_id = _derive_event_id(order_id, None, "created", None)
+            _append_history_row(
+                order_id,
+                from_status=None,
+                to_status="created",
+                actor=user_id or "system",
+                reason="order_created",
+                event_id=event_id,
+                ts=ts,
+            )
+        except Exception:
+            pass
 
     def create_order(
         self,
@@ -71,6 +96,9 @@ class CommerceOrderService:
 
         order_record = {
             "order_id": order_id,
+            # ORD-003: orders table now has an `sk` sort key; the header row is
+            # always written under sk="ORDER" (table-level constraint, flag-agnostic).
+            "sk": "ORDER",
             "user_id": user_id,
             "status": "pending_payment",
             "created_at": now,
@@ -82,7 +110,18 @@ class CommerceOrderService:
             "line_item_count": len(parsed),
             "metadata": dict(metadata or {}),
         }
+
+        # ORD-007: stamp the initial lifecycle state when the flag is on.
+        lifecycle_initialised = False
+        if S.order_lifecycle_enabled:
+            order_record["lifecycle_status"] = "created"
+            order_record["updated_ts"] = now_ts()
+            lifecycle_initialised = True
+
         self.orders.put_item(Item=order_record)
+
+        if lifecycle_initialised:
+            self._seed_lifecycle_created(order_id, user_id, order_record["updated_ts"])
 
         serialized_items: List[Dict[str, Any]] = []
         for idx, item in enumerate(parsed, start=1):

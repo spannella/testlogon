@@ -104,6 +104,7 @@ describe("ComposeBar draft integration", () => {
 
     await userEvent.type(screen.getByPlaceholderText(/Type a message/i), "new draft text");
     expect(screen.getByText("Unsaved draft")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /More compose options/i }));
     await userEvent.click(screen.getByRole("button", { name: /Save draft/i }));
 
     expect(hookSpy.saveDraft).toHaveBeenCalledWith("new draft text");
@@ -119,6 +120,7 @@ describe("ComposeBar draft integration", () => {
       expect(screen.getByPlaceholderText(/Type a message/i)).toHaveValue("draft from A");
     });
     await userEvent.type(screen.getByPlaceholderText(/Type a message/i), " updated");
+    await userEvent.click(screen.getByRole("button", { name: /More compose options/i }));
     await userEvent.click(screen.getByRole("button", { name: /Save draft/i }));
 
     expect(hookSpy.saveExistingDraft).toHaveBeenCalledWith("d-a1", "draft from A updated");
@@ -128,6 +130,7 @@ describe("ComposeBar draft integration", () => {
     hookSpy.saveDraft.mockReturnValueOnce(false);
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={vi.fn()} />);
 
+    await userEvent.click(screen.getByRole("button", { name: /More compose options/i }));
     await userEvent.click(screen.getByRole("button", { name: /Save draft/i }));
 
     expect(hookSpy.saveDraft).toHaveBeenCalledWith("");

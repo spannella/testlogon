@@ -677,6 +677,26 @@ def process_deletion(user_sub: str, request_id: str) -> Dict[str, Any]:
     summary: Dict[str, Any] = {}
     ts = now_ts()
 
+    # LEX-007: hard guard — never erase a user under an active legal hold, even
+    # via a stale request that was created before the hold was placed. Gated on
+    # the legal-export flag (DEFAULT OFF → no-op, byte-for-byte unchanged).
+    if S.legal_export_enabled:
+        try:
+            from app.services.legal_hold import is_user_on_hold
+
+            if is_user_on_hold(user_sub):
+                logger.warning("gdpr.process_deletion_blocked_legal_hold user=%s", user_sub)
+                T.data_requests.update_item(
+                    Key={"pk": _user_pk(user_sub), "sk": _req_sk(request_id)},
+                    UpdateExpression="SET #s = :s, updated_at = :t",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":s": "blocked_legal_hold", ":t": ts},
+                )
+                _write_audit(request_id, user_sub, "blocked_legal_hold", {"reason": "legal_hold"})
+                return {"blocked": True, "reason": "legal_hold"}
+        except Exception:
+            logger.exception("gdpr.process_deletion legal_hold check failed user=%s", user_sub)
+
     # Capture the Cognito username (email) BEFORE any deletion step removes the
     # profile row (Step 3). Cognito uses the email as the Username (see
     # app/routers/register.py: username = body.email). Needed for GAP-0341.

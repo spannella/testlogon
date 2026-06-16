@@ -189,7 +189,7 @@ test.describe("30. Contacts page — navigation and empty state", () => {
 
   test("sidebar shows 'Contacts' nav item linking to /contacts", async () => {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
-    const link = page.getByRole("link", { name: "Contacts" });
+    const link = page.getByRole("link", { name: "Contacts", exact: true });
     await expect(link).toBeVisible({ timeout: 8000 });
     await expect(link).toHaveAttribute("href", "/contacts");
   });
@@ -205,7 +205,7 @@ test.describe("30. Contacts page — navigation and empty state", () => {
 
   test("clicking the sidebar Contacts link navigates to /contacts", async () => {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
-    await page.getByRole("link", { name: "Contacts" }).click();
+    await page.getByRole("link", { name: "Contacts", exact: true }).click();
     await expect(page).toHaveURL(/\/contacts/, { timeout: 8000 });
     await expect(page.getByRole("heading", { name: "Contacts" })).toBeVisible();
   });
