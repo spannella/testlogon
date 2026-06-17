@@ -408,7 +408,7 @@ export function SignaturePacketComposer() {
       <div>
         <h3 className="text-base font-semibold">Create signature form</h3>
         <p className="text-sm text-muted-foreground">
-          Sender composer + signer fill workflow for signature packets.
+          Send a PDF for signature in three steps: choose the document, place signer fields, then send.
         </p>
       </div>
 
@@ -448,28 +448,34 @@ export function SignaturePacketComposer() {
         </p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
-        <Input
-          placeholder="Packet ID"
-          value={packetId}
-          onChange={(e) => setPacketId(e.target.value)}
-        />
-        <Button variant="outline" onClick={() => void loadPacket(packetId)} disabled={busy}>Load</Button>
-        <Button onClick={() => void sendPacket()} disabled={busy || !packet || !packet.capabilities?.can_send}>Send packet</Button>
-      </div>
+      <details className="rounded-md border bg-muted/10 px-3 py-2">
+        <summary className="cursor-pointer select-none text-sm text-muted-foreground">
+          Resume an existing draft
+        </summary>
+        <div className="mt-2 grid gap-3 md:grid-cols-[1fr_auto]">
+          <Input
+            placeholder="Packet ID"
+            value={packetId}
+            onChange={(e) => setPacketId(e.target.value)}
+          />
+          <Button variant="outline" onClick={() => void loadPacket(packetId)} disabled={busy}>Load</Button>
+        </div>
+      </details>
 
       <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground" data-testid="signature-status">
-        {statusMsg || "Load a packet to compose or fill assigned fields."}
+        {statusMsg || "Choose a PDF and create a draft to get started."}
       </div>
 
-      <div className="rounded-md border p-3" data-testid="packet-timeline">
-        <div className="text-sm font-medium mb-2">Packet timeline</div>
-        <ul className="space-y-1 text-xs text-muted-foreground">
-          <li>Draft created: {formatTs(packet?.created_at)}</li>
-          <li>Sent: {formatTs(packet?.sent_at)}</li>
-          <li>Completed: {formatTs(packet?.completed_at)}</li>
-        </ul>
-      </div>
+      {packet && (
+        <div className="rounded-md border p-3" data-testid="packet-timeline">
+          <div className="text-sm font-medium mb-2">Progress</div>
+          <ul className="space-y-1 text-xs text-muted-foreground">
+            <li>Draft created: {formatTs(packet?.created_at)}</li>
+            <li>Sent: {formatTs(packet?.sent_at)}</li>
+            <li>Completed: {formatTs(packet?.completed_at)}</li>
+          </ul>
+        </div>
+      )}
 
       {signerCanFill && (
         <div className="rounded-md border p-3 space-y-2" data-testid="signer-fill-panel">
@@ -519,6 +525,16 @@ export function SignaturePacketComposer() {
         </div>
       )}
 
+      {packet && (
+      <div className="space-y-3">
+        {packet.role !== "signer" && (
+          <div className="space-y-1">
+            <Label className="text-sm font-medium">Step 2 · Place signature fields</Label>
+            <p className="text-xs text-muted-foreground">
+              Pick a field type and signer, then click on the document to drop the field.
+            </p>
+          </div>
+        )}
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         <div className="space-y-3">
           <div className="space-y-2">
@@ -646,8 +662,8 @@ export function SignaturePacketComposer() {
 
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>PDF editor canvas</span>
-            <span>status: {packet?.status ?? "none"}</span>
+            <span>Document preview — click to place a field</span>
+            <span>Status: {packet?.status ?? "draft"}</span>
           </div>
           <div
             ref={canvasRef}
@@ -732,6 +748,20 @@ export function SignaturePacketComposer() {
           </div>
         </div>
       </div>
+
+      {packet.role !== "signer" && packet.capabilities?.can_send && (
+        <div className="space-y-1 border-t pt-3">
+          <Label className="text-sm font-medium">Step 3 · Send for signature</Label>
+          <p className="text-xs text-muted-foreground">
+            When your fields are placed, send the document to the signers.
+          </p>
+          <Button onClick={() => void sendPacket()} disabled={busy || !packet.capabilities?.can_send}>
+            Send packet
+          </Button>
+        </div>
+      )}
+      </div>
+      )}
 
       <FilePickerDialog
         open={pickerOpen}
