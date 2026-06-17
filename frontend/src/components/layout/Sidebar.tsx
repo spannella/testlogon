@@ -490,7 +490,7 @@ export default function Sidebar() {
             {gi > 0 && <Separator className="my-2" />}
             {!collapsed && (
               <span className="mb-1 block px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {group.i18nKey ? t(group.i18nKey) : group.title}
+                {group.i18nKey ? t(group.i18nKey, { defaultValue: group.title }) : group.title}
               </span>
             )}
             <ul className="space-y-0.5">
@@ -518,7 +518,7 @@ export default function Sidebar() {
                       )}
                     </span>
                     {!collapsed && (
-                      <span className="truncate">{item.i18nKey ? t(item.i18nKey) : item.label}</span>
+                      <span className="truncate">{item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label}</span>
                     )}
                     {!collapsed && badge > 0 && (
                       <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
@@ -534,7 +534,7 @@ export default function Sidebar() {
                       <Tooltip>
                         <TooltipTrigger asChild>{link}</TooltipTrigger>
                         <TooltipContent side="right" sideOffset={8}>
-                          {item.i18nKey ? t(item.i18nKey) : item.label}
+                          {item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label}
                         </TooltipContent>
                       </Tooltip>
                     </li>
