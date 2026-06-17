@@ -74,8 +74,9 @@ jobs:
             sleep 2
           done
           if [ "$ok" -ne 1 ]; then
-            echo "::error::stack did not come up"; just status || true
-            tail -n 100 .logs/*.log 2>/dev/null || true
+            echo "::error::stack did not come up"; scripts/dev.sh status || true
+            echo "----- backend.log -----"; tail -n 150 .logs/dev/backend.log 2>/dev/null || true
+            echo "----- infra logs -----"; tail -n 40 .logs/*.log 2>/dev/null || true
             exit 1
           fi
           echo "stack is up"
@@ -91,6 +92,7 @@ jobs:
           name: fullstack-e2e-debug
           path: |
             .logs/
+            .logs/dev/
             frontend/test-results/
             frontend/playwright-report/
           if-no-files-found: ignore
