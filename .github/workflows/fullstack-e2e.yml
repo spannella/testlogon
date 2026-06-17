@@ -30,7 +30,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Bootstrap dev host (Java, Node, just, venv+deps, moto, Playwright, .env.local)
+      - name: Install just (avoids setup_ubuntu's just.systems curl, which 403s in CI)
+        uses: extractions/setup-just@v2
+
+      - name: Bootstrap dev host (Java, Node, venv+deps, moto, Playwright, .env.local)
         run: bash scripts/setup_ubuntu.sh
 
       - name: Put project venv on PATH
