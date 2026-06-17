@@ -12,8 +12,10 @@
 
 import { test, expect } from "@playwright/test";
 import { readFileSync, existsSync } from "fs";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const ROOT = "/home/ubuntu/testlogon/frontend";
+const ROOT = REPO_ROOT + "/frontend";
 
 function read(rel: string): string {
   return readFileSync(`${ROOT}/${rel}`, "utf-8");

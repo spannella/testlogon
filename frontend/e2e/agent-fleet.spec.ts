@@ -16,6 +16,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,8 +48,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
     // admin setup keys by short name (alice/bob); alias by user_sub so email-id lookups resolve
@@ -96,7 +98,7 @@ function ddbPython(code: string): string {
   const prelude = `
 import boto3, os, sys
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -112,7 +114,7 @@ ddb = boto3.resource(
 )
 `;
   return execSync(
-    `cd /home/ubuntu/testlogon && .venv/bin/python3 -c "${prelude}\n${code}"`,
+    `cd ${REPO_ROOT} && .venv/bin/python3 -c "${prelude}\n${code}"`,
     { timeout: 15_000 },
   ).toString().trim();
 }
@@ -120,7 +122,7 @@ ddb = boto3.resource(
 function createLlmKey(userId: string, provider: string, label: string): string {
   const code = `
 import uuid, time, json
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.crypto import kms_encrypt
 key_id = uuid.uuid4().hex
 ts = int(time.time())

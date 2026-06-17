@@ -20,6 +20,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -45,8 +47,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 }
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 }
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -59,8 +61,8 @@ let _authUser: AuthUserData | null = null;
 function getAuthUser(): AuthUserData {
   if (!_authUser) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_auth_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 60_000 }
+      "python3 " + REPO_ROOT + "/e2e_auth_setup.py",
+      { cwd: REPO_ROOT, timeout: 60_000 }
     ).toString();
     _authUser = JSON.parse(raw);
   }
@@ -443,8 +445,8 @@ async function runMfaSetup(args: string, browser: import("@playwright/test").Bro
   await tmpPage.close();
 
   const raw = execSync(
-    `python3 /home/ubuntu/testlogon/e2e_register_mfa_setup.py ${args}`,
-    { cwd: "/home/ubuntu/testlogon", env: { ...process.env, E2E_PLAYWRIGHT_UA: ua }, timeout: 30_000 },
+    `python3 ${REPO_ROOT}/e2e_register_mfa_setup.py ${args}`,
+    { cwd: REPO_ROOT, env: { ...process.env, E2E_PLAYWRIGHT_UA: ua }, timeout: 30_000 },
   ).toString();
   return JSON.parse(raw) as MfaSetupData;
 }
@@ -612,10 +614,10 @@ test.describe("11. SMS MFA at registration", () => {
  */
 function clearTotpRateLimitBucket(): void {
   execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python3 -c "
+    `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os
 from pathlib import Path
-for line in Path('/home/ubuntu/testlogon/.env.local').read_text().splitlines():
+for line in Path('${REPO_ROOT}/.env.local').read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, v = line.split('=', 1)
@@ -648,8 +650,8 @@ interface MfaMultiSetup {
 
 function runMfaMultiSetup(): MfaMultiSetup {
   const raw = execSync(
-    "python3 /home/ubuntu/testlogon/e2e_mfa_multidevice_setup.py",
-    { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+    "python3 " + REPO_ROOT + "/e2e_mfa_multidevice_setup.py",
+    { cwd: REPO_ROOT, timeout: 30_000 },
   ).toString();
   return JSON.parse(raw) as MfaMultiSetup;
 }
@@ -657,7 +659,7 @@ function runMfaMultiSetup(): MfaMultiSetup {
 /** Generate a current TOTP code for the given base32 secret. */
 function totpNow(secret: string): string {
   return execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python3 -c "import pyotp; print(pyotp.TOTP('${secret}').now())"`,
+    `${REPO_ROOT}/.venv/bin/python3 -c "import pyotp; print(pyotp.TOTP('${secret}').now())"`,
     { timeout: 5_000 },
   ).toString().trim();
 }
@@ -668,7 +670,7 @@ function totpNow(secret: string): string {
  */
 function totpTwoCodes(secret: string): [string, string] {
   const raw = execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python3 -c ` +
+    `${REPO_ROOT}/.venv/bin/python3 -c ` +
     `"import pyotp,time,json; t=pyotp.TOTP('${secret}'); ` +
     `now=int(time.time()); c1=t.at(now); c2=t.at(now-30); ` +
     `c2=(t.at(now-60) if c1==c2 else c2); print(json.dumps([c1,c2]))"`,

@@ -14,6 +14,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -43,8 +45,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -78,7 +80,7 @@ async function apiGet(page: Page, path: string) {
 const DDB_PRELUDE = `
 import boto3, os
 from pathlib import Path
-for ln in Path('/home/ubuntu/testlogon/.env.local').read_text().splitlines():
+for ln in Path('${REPO_ROOT}/.env.local').read_text().splitlines():
     ln = ln.strip()
     if ln and not ln.startswith('#') and '=' in ln:
         k, v = ln.split('=', 1); os.environ.setdefault(k.strip(), v.strip())

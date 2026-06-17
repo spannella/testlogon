@@ -14,6 +14,7 @@ import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -45,8 +46,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -92,14 +93,14 @@ function ddbPutItem(tableName: string, item: Record<string, unknown>) {
   writeFileSync(tmpFile, JSON.stringify(item));
   try {
     execSync(
-      `/home/ubuntu/testlogon/.venv/bin/python3 -c "
+      `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, json, sys
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 table = ddb.Table('${tableName}')
 with open('${tmpFile}') as f:
     table.put_item(Item=json.load(f))
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } finally {
     try { unlinkSync(tmpFile); } catch { /* ignore */ }

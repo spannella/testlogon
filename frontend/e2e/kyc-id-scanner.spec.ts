@@ -15,6 +15,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 
@@ -36,8 +38,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -81,7 +83,7 @@ function seedCaseIdentity(caseId: string, firstName: string, lastName: string, d
     `t.update_item(Key={'pk':'KYC#${caseId}','sk':'META'}, UpdateExpression='SET #idn = :i', ExpressionAttributeNames={'#idn':'identity'}, ExpressionAttributeValues={':i': {'first_name':'${firstName}','last_name':'${lastName}','date_of_birth':'${dob}','nationality':'${nat}'}})`,
   ].join("\n");
   execSync(`python3 -c "${py.replace(/"/g, '\\"')}"`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     env: { ...process.env, DDB_ENDPOINT_URL: "http://localhost:8001", AWS_DEFAULT_REGION: "us-east-1" },
     timeout: 30_000,
   });

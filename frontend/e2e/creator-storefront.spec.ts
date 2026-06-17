@@ -10,10 +10,12 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // --- Constants ----------------------------------------------------------------
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const API = "http://localhost:8000";
 const ALICE_SUB = "e2e_alice@test.local";
 const BOB_SUB = "e2e_bob@test.local";
@@ -44,8 +46,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -97,7 +99,7 @@ function ensureUsersAndProfiles(): void {
 import boto3, os, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -132,7 +134,7 @@ for sub, name, desc, loc in [
 
 print('done')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -142,7 +144,7 @@ function seedAlicePosts(count: number): string[] {
 import boto3, os, uuid, time, json
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -193,7 +195,7 @@ prof_tbl.put_item(Item={
 
 print(json.dumps(post_ids))
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
   return JSON.parse(raw.toString().trim());
 }
@@ -204,7 +206,7 @@ function seedSubscriptionPlan(): string {
 import boto3, os, uuid, time, json
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -235,7 +237,7 @@ tbl.put_item(Item={
 
 print(plan_id)
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
   return raw.toString().trim();
 }
@@ -246,7 +248,7 @@ function cleanupFollow(): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -279,7 +281,7 @@ except Exception:
 
 print('cleaned')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -289,7 +291,7 @@ function setFollowerCount(userSub: string, count: number): void {
 import boto3, os, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -308,7 +310,7 @@ prof_tbl.put_item(Item={
 })
 print('done')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -455,7 +457,7 @@ test.describe("119 - Content Loading", () => {
         `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -468,7 +470,7 @@ with tbl.batch_writer() as batch:
     for item in resp.get('Items', []):
         batch.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
 "`,
-        { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+        { cwd: REPO_ROOT, timeout: 15_000 },
       );
     } catch { /* ignore */ }
 

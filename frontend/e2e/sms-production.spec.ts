@@ -1,5 +1,7 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // PLATFORM-007 — SMS Production send pipeline.
 //
@@ -32,8 +34,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon", timeout: 30_000,
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT, timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
   }
@@ -90,7 +92,7 @@ function ddbPy(snippet: string): string {
     `client = boto3.client('dynamodb', endpoint_url='${DDB}')`,
     snippet,
   ].join("\n");
-  return execSync(`/home/ubuntu/testlogon/.venv/bin/python -c "${code.replace(/"/g, '\\"')}"`, {
+  return execSync(`${REPO_ROOT}/.venv/bin/python -c "${code.replace(/"/g, '\\"')}"`, {
     timeout: 30_000,
   }).toString().trim();
 }

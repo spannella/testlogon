@@ -24,6 +24,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -56,8 +58,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -114,7 +116,7 @@ function resetBobToUser(): void {
     `python3 -c "
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -125,7 +127,7 @@ tbl = ddb.Table(os.environ.get('USERS_TABLE_NAME','users'))
 tbl.update_item(Key={'user_sub':'${BOB_ID}'}, UpdateExpression='SET #r=:r REMOVE admin_profile', ExpressionAttributeNames={'#r':'role'}, ExpressionAttributeValues={':r':'user'})
 print('reset bob to user')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 

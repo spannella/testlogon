@@ -11,6 +11,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,8 +44,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -92,7 +94,7 @@ async function apiDelete(page: Page, userId: string, path: string) {
 const DDB_PRELUDE = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -126,7 +128,7 @@ tbl.put_item(Item={
     'GSI1SK': 'ITEM#${itemId}',
 })
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
@@ -137,7 +139,7 @@ function cleanupCatalogItem(itemId: string): void {
 tbl = ddb.Table('shopping_catalog')
 tbl.delete_item(Key={'PK': 'ITEM#${itemId}', 'SK': 'ITEM#${itemId}'})
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch { /* ignore */ }
 }

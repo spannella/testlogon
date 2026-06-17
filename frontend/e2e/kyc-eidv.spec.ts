@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -37,8 +39,8 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -76,7 +78,7 @@ async function apiGet(page: Page, path: string, options?: { maxRedirects?: numbe
 const DDB_PRELUDE = `
 import boto3, os, json, sys
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -88,7 +90,7 @@ ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL',
 function py(code: string, arg?: string): string {
   const a = arg ? ` '${arg.replace(/'/g, "'\\''")}'` : "";
   return execSync(`python3 -c "${DDB_PRELUDE}\n${code}"${a}`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 15_000,
   }).toString();
 }

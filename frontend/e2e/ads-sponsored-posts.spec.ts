@@ -35,9 +35,11 @@ interface SessionData {
 // dead session ids => 401). e2e_admin_session_setup.py prints JSON keyed by
 // short name (alice/bob/root) to stdout.
 import { execSync as _execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const sessions = JSON.parse(
-  _execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-    cwd: "/home/ubuntu/testlogon",
+  _execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+    cwd: REPO_ROOT,
     timeout: 30_000,
   }).toString(),
 ) as Record<string, SessionData>;
@@ -97,7 +99,7 @@ function ddbDeleteOwnerAccounts(ownerSubs: string[]): void {
   const script = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -122,7 +124,7 @@ for owner in owners:
 print('ok')
 `;
   _execSync("python3 -", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 20_000,
     input: script,
     env: { ...process.env, OWNER_SUBS: ownerSubs.join(",") },

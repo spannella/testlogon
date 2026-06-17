@@ -21,7 +21,7 @@ import { execSync } from "child_process";
 const BASE = "http://localhost:3000";
 const BACKEND = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
-const REPO_ROOT = "/home/ubuntu/testlogon";
+const REPO_ROOT = REPO_ROOT;
 
 /** The integration router prefix (no /ui — registered at app level). */
 const APPLE_PREFIX = "/calendar/integrations/apple";

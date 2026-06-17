@@ -6,6 +6,8 @@
  */
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const TS = Date.now();
@@ -24,8 +26,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -50,14 +52,14 @@ async function apiPost(page: Page, id: string, path: string, body?: unknown) {
 function seedFeedPost(userSub: string, postId: string): void {
   execSync(
     `.venv/bin/python3 -c "import boto3; ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test'); tbl = ddb.Table('app_single_table'); tbl.put_item(Item={'pk': 'POST#${postId}', 'sk': 'META', 'post_id': '${postId}', 'author_id': '${userSub}', 'text': 'Test post', 'image_urls': ['https://example.com/img1.jpg'], 'created_at': 1700000000, 'status': 'published'})"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
 function seedMessage(conversationId: string, messageId: string): void {
   execSync(
     `.venv/bin/python3 -c "import boto3; ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test'); tbl = ddb.Table('Messages'); tbl.put_item(Item={'conversation_id': '${conversationId}', 'message_id': '${messageId}', 'text': 'Test message', 'sender_id': 'someone', 'created_at': 1700000000})"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
@@ -66,7 +68,7 @@ function seedTopicRows(): void {
   const items = topics.map(t => `{'report_id': 'TOPIC#${t}', 'entity_type': 'topic_seed'}`).join(", ");
   execSync(
     `.venv/bin/python3 -c "import boto3; ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test'); from app.core.settings import S; tbl = ddb.Table(S.content_reports_table_name); [tbl.put_item(Item=i) for i in [${items}]]"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 

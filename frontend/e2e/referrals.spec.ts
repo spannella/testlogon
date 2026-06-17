@@ -13,6 +13,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -96,7 +98,7 @@ ddb = boto3.resource('dynamodb', endpoint_url=os.getenv('DDB_ENDPOINT_URL','http
 tbl = ddb.Table(os.getenv('APP_TABLE','app_single_table'))
 tbl.put_item(Item=json.loads(sys.stdin.read()))
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000, input: json },
+    { cwd: REPO_ROOT, timeout: 10_000, input: json },
   );
 }
 
@@ -111,7 +113,7 @@ tbl = ddb.Table(os.getenv('APP_TABLE','app_single_table'))
 d = json.loads(sys.stdin.read())
 tbl.delete_item(Key={'pk': d['pk'], 'sk': d['sk']})
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000, input },
+    { cwd: REPO_ROOT, timeout: 10_000, input },
   );
 }
 
@@ -127,7 +129,7 @@ resp = tbl.query(KeyConditionExpression=boto3.dynamodb.conditions.Key('pk').eq(p
 for item in resp.get('Items', []):
     tbl.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000, input: pk },
+    { cwd: REPO_ROOT, timeout: 10_000, input: pk },
   );
 }
 
@@ -145,7 +147,7 @@ resp = tbl.query(IndexName='GSI1', KeyConditionExpression=boto3.dynamodb.conditi
 for item in resp.get('Items', []):
     tbl.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000, input: gsi1pk },
+    { cwd: REPO_ROOT, timeout: 10_000, input: gsi1pk },
   );
 }
 

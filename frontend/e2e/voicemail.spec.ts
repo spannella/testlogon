@@ -13,6 +13,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -45,8 +47,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -79,7 +81,7 @@ function apiGet(page: Page, path: string, params?: Record<string, string>) {
 
 // ─── DynamoDB helpers ─────────────────────────────────────────────────────────
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 function ddbPut(table: string, item: Record<string, unknown>): void {
   const script = `
@@ -101,7 +103,7 @@ item = json.loads(sys.argv[1])
 table.put_item(Item=to_ddb(item))
 `;
   execSync(`${PYTHON} -c '${script}' '${JSON.stringify(item)}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     env: { ...process.env, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test" },
     timeout: 10_000,
   });
@@ -127,7 +129,7 @@ item = resp.get("Item")
 print(json.dumps(item, cls=DecEncoder) if item else "null")
 `;
   const raw = execSync(`${PYTHON} -c '${script}' '${JSON.stringify(key)}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     env: { ...process.env, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test" },
     timeout: 10_000,
   }).toString().trim();
