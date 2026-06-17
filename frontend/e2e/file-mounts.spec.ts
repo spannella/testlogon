@@ -19,7 +19,8 @@ import { execSync } from "child_process";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const REPO_ROOT = REPO_ROOT;
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const ALICE_ID = "e2e_alice@test.local";
 const TS = Date.now();
 
