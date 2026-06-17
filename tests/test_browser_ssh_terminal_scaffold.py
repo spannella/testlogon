@@ -91,7 +91,8 @@ def test_browser_ssh_protocol_endpoint_documents_message_contract() -> None:
     assert body["version"] == "v1"
     assert set(body["client_messages"].keys()) == {"connect", "input", "resize"}
     assert set(body["server_messages"].keys()) == {"status", "output", "error"}
-    assert body["client_messages"]["connect"]["authType"] == ["password", "private_key"]
+    # GAP-0220 added stored-key auth (server resolves a KMS-encrypted key by keyId).
+    assert body["client_messages"]["connect"]["authType"] == ["password", "private_key", "stored_key"]
 
 
 def test_browser_ssh_frontend_route_guarded_by_feature_flag(monkeypatch) -> None:
