@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FilePen } from "lucide-react";
+import { FilePen, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SignatureDrawCanvas } from "@/components/SignatureDrawCanvas";
+import { FilePickerDialog } from "@/pages/messages/FilePickerDialog";
 import {
   Select,
   SelectContent,
@@ -135,6 +136,7 @@ function formatTs(ts?: string): string {
 
 export function SignaturePacketComposer() {
   const [sourcePath, setSourcePath] = React.useState("");
+  const [pickerOpen, setPickerOpen] = React.useState(false);
   const [originChannel, setOriginChannel] = React.useState<SignatureOriginChannel>("share");
   const [packetId, setPacketId] = React.useState("");
   const [packet, setPacket] = React.useState<SignaturePacketDetail | null>(null);
@@ -421,20 +423,29 @@ export function SignaturePacketComposer() {
         )}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
-        <Input
-          placeholder="Source PDF path (e.g. /contracts/nda.pdf)"
-          value={sourcePath}
-          onChange={(e) => setSourcePath(e.target.value)}
-        />
-        <Select value={originChannel} onValueChange={(v) => setOriginChannel(v as SignatureOriginChannel)}>
-          <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="share">share</SelectItem>
-            <SelectItem value="message">message</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button onClick={createDraft} disabled={busy}>Create draft</Button>
+      <div className="space-y-1">
+        <Label className="text-sm font-medium">Step 1 · Choose the PDF to sign</Label>
+        <div className="grid gap-3 md:grid-cols-[auto_1fr_auto_auto]">
+          <Button type="button" variant="outline" onClick={() => setPickerOpen(true)} className="gap-2">
+            <FolderOpen className="h-4 w-4" /> Choose PDF
+          </Button>
+          <Input
+            placeholder="Source PDF path — or click Choose PDF"
+            value={sourcePath}
+            onChange={(e) => setSourcePath(e.target.value)}
+          />
+          <Select value={originChannel} onValueChange={(v) => setOriginChannel(v as SignatureOriginChannel)}>
+            <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="share">Share link</SelectItem>
+              <SelectItem value="message">In a message</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={createDraft} disabled={busy || !sourcePath.trim()}>Create draft</Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Pick a PDF from your files, then “Create draft” to add signer fields and send.
+        </p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
@@ -721,6 +732,16 @@ export function SignaturePacketComposer() {
           </div>
         </div>
       </div>
+
+      <FilePickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        showPermission={false}
+        onSelect={(entry) => {
+          setSourcePath(entry.path);
+          setPickerOpen(false);
+        }}
+      />
       </CardContent>
     </Card>
   );
