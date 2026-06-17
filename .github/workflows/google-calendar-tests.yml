@@ -34,19 +34,6 @@ jobs:
         run: |
           pytest -q tests/test_google_calendar_*.py tests/test_calendar_routes.py tests/test_google_calendar_integration_flows.py tests/test_google_calendar_e2e_journey.py
 
-  frontend-google-calendar-e2e:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install frontend deps
-        run: npm ci
-      - name: Install Playwright
-        run: npx playwright install --with-deps chromium
-      - name: Run calendar e2e
-        run: npx playwright test e2e/calendar-messaging.spec.ts
+  # The calendar-messaging Playwright spec moved to the full-stack harness
+  # (.github/workflows/fullstack-e2e.yml): it targets the Vite SPA + backend +
+  # DDB + seeded sessions, which the old serverless job never started.

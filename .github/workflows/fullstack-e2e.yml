@@ -1,0 +1,98 @@
+name: Full-Stack E2E
+
+# Stands up the entire local dev stack (DynamoDB Local + moto + backend + Vite
+# frontend + seeded sessions) and runs the Playwright specs that need it — the
+# specs the old serverless browser-ssh / google-calendar jobs could never run.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "frontend/e2e/browser-ssh.spec.ts"
+      - "frontend/e2e/calendar-messaging.spec.ts"
+      - "frontend/src/pages/remote/**"
+      - "frontend/src/pages/calendar/**"
+      - "app/routers/browser_ssh_terminal.py"
+      - "app/routers/calendar.py"
+      - "app/services/host_inventory.py"
+      - ".github/workflows/fullstack-e2e.yml"
+  push:
+    branches: [ main, master ]
+    paths:
+      - "frontend/e2e/browser-ssh.spec.ts"
+      - "frontend/e2e/calendar-messaging.spec.ts"
+      - ".github/workflows/fullstack-e2e.yml"
+
+jobs:
+  fullstack-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20 (repo targets 20; runner default 22 breaks native deps)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps (deterministic + visible errors; setup_ubuntu's
+              `npm install --silent` otherwise hides failures)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install just (avoids setup_ubuntu's just.systems curl, which 403s in CI)
+        uses: extractions/setup-just@v2
+
+      - name: Bootstrap dev host (Java, venv+deps, moto, Playwright, .env.local)
+        run: bash scripts/setup_ubuntu.sh
+
+      - name: Put project venv on PATH
+        # dev.sh / local-stack-up.sh / the session seeders invoke bare `python3`;
+        # a fresh runner's system python lacks the deps, so resolve python3 to the venv.
+        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Enable E2E feature flags (before stack start — backend + Vite read env at boot)
+        run: |
+          cat scripts/ci-e2e-feature-flags.env >> .env.local
+          {
+            echo "VITE_CALL_RECORDING_ENABLED=true"
+            echo "VITE_CANONICAL_PROFILE_NAVIGATION_ENABLED=true"
+            echo "VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true"
+          } >> frontend/.env.local
+
+      - name: Start dev stack + seed E2E sessions
+        run: just up
+
+      - name: Wait for backend + frontend to be ready
+        run: |
+          ok=0
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8000/health >/dev/null \
+               && curl -sf http://localhost:3000/ >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::stack did not come up"; scripts/dev.sh status || true
+            echo "----- backend.log -----"; tail -n 150 .logs/dev/backend.log 2>/dev/null || true
+            echo "----- infra logs -----"; tail -n 40 .logs/*.log 2>/dev/null || true
+            exit 1
+          fi
+          echo "stack is up"
+
+      - name: Run full-stack Playwright specs
+        working-directory: frontend
+        run: npx playwright test e2e/browser-ssh.spec.ts e2e/calendar-messaging.spec.ts
+
+      - name: Upload logs + traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullstack-e2e-debug
+          path: |
+            .logs/
+            .logs/dev/
+            frontend/test-results/
+            frontend/playwright-report/
+          if-no-files-found: ignore
