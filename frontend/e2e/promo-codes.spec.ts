@@ -13,6 +13,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -53,8 +55,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -117,7 +119,7 @@ tbl = ddb.Table("${tableName}")
 tbl.put_item(Item=json.loads('${item.replace(/'/g, "\\'")}'))
 `;
   execSync(`python3 -c '${script.replace(/'/g, "'\\''")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   });
 }
@@ -164,7 +166,7 @@ print(f"Deleted {len(items)} items")
   try {
     const tmpFile = `/tmp/promo_cleanup_${Date.now()}.py`;
     fs.writeFileSync(tmpFile, script);
-    execSync(`python3 ${tmpFile}`, { cwd: "/home/ubuntu/testlogon", timeout: 30_000 });
+    execSync(`python3 ${tmpFile}`, { cwd: REPO_ROOT, timeout: 30_000 });
   } catch (e) {
     console.warn("Promo cleanup warning:", e);
   }
@@ -426,7 +428,7 @@ print("OK")
     const tmpPath = `/tmp/promo_seed_${TS}.py`;
     fs.writeFileSync(tmpPath, pyScript);
     execSync(`python3 ${tmpPath}`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
 
@@ -648,7 +650,7 @@ print("OK")
 `;
     const tmpSeed = `/tmp/promo_ui_seed_${TS}.py`;
     fs.writeFileSync(tmpSeed, seedScript);
-    execSync(`python3 ${tmpSeed}`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+    execSync(`python3 ${tmpSeed}`, { cwd: REPO_ROOT, timeout: 10_000 });
 
     const aliceCtx = await browser.newContext();
     aliceP = await aliceCtx.newPage();

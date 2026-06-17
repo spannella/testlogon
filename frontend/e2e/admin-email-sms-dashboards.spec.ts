@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const ROOT_SUB = "root.admin@testdev.local";
@@ -33,8 +35,8 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _adminSessions = JSON.parse(raw);
@@ -94,7 +96,7 @@ function seedDeliveryData(): void {
     `python3 -c "
 import boto3, os, time
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -116,7 +118,7 @@ tt.put_item(Item={'pk':'TEMPLATE#email_welcome','sk':'META','template_id':'email
 tt.put_item(Item={'pk':'TEMPLATE#sms_verification','sk':'META','template_id':'sms_verification','channel':'sms','subject':None,'name':'SMS Verification','body':'Code {{code}}','variables':['code'],'active':True,'updated_at':now})
 print('seeded')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+    { cwd: REPO_ROOT, timeout: 30_000 },
   );
 }
 

@@ -15,6 +15,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local"; // advertiser / brand
@@ -43,8 +45,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -81,7 +83,7 @@ function pyEnvPreamble(): string {
   return `
 import boto3, json, os, decimal
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -102,7 +104,7 @@ ddb.Table(os.environ['DDB_TABLE']).put_item(Item=item)
 print('ok')
 `;
   execSync("python3 -", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     input: script,
     env: { ...process.env, DDB_ITEM: JSON.stringify(item), DDB_TABLE: tableName },
@@ -122,7 +124,7 @@ item = resp.get('Item')
 print(json.dumps(item, cls=Enc) if item else 'null')
 `;
   const raw = execSync("python3 -", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     input: script,
     env: { ...process.env, DDB_KEY: JSON.stringify(key), DDB_TABLE: tableName },
@@ -153,7 +155,7 @@ resp = ddb.Table('billing').query(
 print(json.dumps(resp.get('Items', []), cls=Enc))
 `;
   const raw = execSync(`python3 -c "${script}"`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   }).toString().trim();
   return JSON.parse(raw);

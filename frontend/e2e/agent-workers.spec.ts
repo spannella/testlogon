@@ -16,6 +16,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,8 +48,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
     // admin setup keys by short name (alice/bob); alias by user_sub so email-id lookups resolve
@@ -95,7 +97,7 @@ async function apiDelete(page: Page, path: string) {
 const DDB_PRELUDE = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -114,7 +116,7 @@ ddb = boto3.resource(
 function ddbExec(code: string): string {
   return execSync(
     `python3 -c "${DDB_PRELUDE}\n${code}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString().trim();
 }
 
@@ -153,7 +155,7 @@ tbl.put_item(Item=item)
 print(key_id)
 `;
   return execSync(
-    `cd /home/ubuntu/testlogon && .venv/bin/python3 -c "${DDB_PRELUDE}\n${code}"`,
+    `cd ${REPO_ROOT} && .venv/bin/python3 -c "${DDB_PRELUDE}\n${code}"`,
     { timeout: 15_000 },
   ).toString().trim();
 }

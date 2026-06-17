@@ -11,6 +11,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -47,8 +49,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -93,7 +95,7 @@ function seedCallSession(opts: {
   const startTs = opts.startTs ?? Math.floor(Date.now() / 1000);
   const py = `
 import json, sys, boto3, time
-sys.path.insert(0, "/home/ubuntu/testlogon")
+sys.path.insert(0, "${REPO_ROOT}")
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
                      region_name="us-east-1",
                      aws_access_key_id="test",
@@ -115,7 +117,7 @@ table.put_item(Item={
 print("ok")
 `;
   execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
@@ -134,7 +136,7 @@ print("ok")
 `;
   try {
     execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     });
@@ -166,7 +168,7 @@ else:
 `;
   try {
     const raw = execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     }).toString().trim();
@@ -320,7 +322,7 @@ calls.put_item(Item={
 print("ok")
 `;
     execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     });
@@ -368,7 +370,7 @@ print("ok")
     // Trigger the background expire function directly via a Python helper using the venv
     const py = `
 import sys, asyncio
-sys.path.insert(0, "/home/ubuntu/testlogon")
+sys.path.insert(0, "${REPO_ROOT}")
 
 # Need to initialize settings/env before importing routers
 import os
@@ -384,8 +386,8 @@ from app.routers.messaging import _expire_stale_invites
 asyncio.get_event_loop().run_until_complete(_expire_stale_invites())
 print("ok")
 `;
-    execSync(`/home/ubuntu/testlogon/.venv/bin/python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+    execSync(`${REPO_ROOT}/.venv/bin/python3 -c '${py.replace(/'/g, "'\\''")}'`, {
+      cwd: REPO_ROOT,
       timeout: 15_000,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     });

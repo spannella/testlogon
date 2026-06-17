@@ -23,6 +23,8 @@
 
 import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // A connected paid call requires getUserMedia() to succeed (the caller acquires a
 // local MediaStream before sending the invite, and the callee acquires one before
@@ -35,7 +37,7 @@ const FAKE_MEDIA_ARGS = [
 ];
 
 const BASE = "http://localhost:3000";
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
@@ -60,8 +62,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(`${PYTHON} /home/ubuntu/testlogon/e2e_session_setup.py`, {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync(`${PYTHON} ${REPO_ROOT}/e2e_session_setup.py`, {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -150,7 +152,7 @@ resp = table.scan(
 items = sorted(resp.get("Items", []), key=lambda i: i.get("start_ts", 0))
 print(items[-1]["call_id"] if items else "")
 `;
-  return execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 })
+  return execSync(`${PYTHON} -c '${script}'`, { cwd: REPO_ROOT, timeout: 10_000 })
     .toString()
     .trim();
 }
@@ -173,7 +175,7 @@ table.update_item(
 )
 print("ok")
 `;
-  execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync(`${PYTHON} -c '${script}'`, { cwd: REPO_ROOT, timeout: 10_000 });
 }
 
 /** Force-terminate any non-terminal call sessions for a conversation in DDB so a
@@ -200,7 +202,7 @@ for it in resp.get("Items", []):
         )
 print("ok")
 `;
-  execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync(`${PYTHON} -c '${script}'`, { cwd: REPO_ROOT, timeout: 10_000 });
 }
 
 /**
@@ -353,7 +355,7 @@ ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_na
 ddb.Table("billing").put_item(Item={"pk": "USER#${ALICE_ID}", "sk": "WALLET",
                                      "wallet_balance_cents": 5000, "currency": "usd"})
 `;
-    execSync(`${PYTHON} -c '${script}'`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+    execSync(`${PYTHON} -c '${script}'`, { cwd: REPO_ROOT, timeout: 10_000 });
   });
 
   // Fresh browser contexts per test so React Query / call-state machine never

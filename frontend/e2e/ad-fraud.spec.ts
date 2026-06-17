@@ -21,6 +21,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "alice";
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -95,7 +97,7 @@ function seedFraudCounters(userSub: string, creativeId: string, ip: string): voi
     `python3 -c "
 import time, boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -110,7 +112,7 @@ tbl.put_item(Item={'pk':'VEL#${userSub}','sk':'CR#${creativeId}#'+str(minute),'e
 tbl.put_item(Item={'pk':'IP#${ip}','sk':'BUCKET#'+str(five),'event_count':99,'ttl':ts+600})
 print('seeded')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -121,7 +123,7 @@ function countCreatorCredits(userSub: string): number {
 import boto3, os
 from pathlib import Path
 from boto3.dynamodb.conditions import Key
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -133,7 +135,7 @@ resp = tbl.query(KeyConditionExpression=Key('pk').eq('USER#${userSub}'))
 n = sum(1 for it in resp.get('Items', []) if it.get('entry_type')=='ad_revenue_credit')
 print(n)
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString();
   return parseInt(out.trim(), 10) || 0;
 }

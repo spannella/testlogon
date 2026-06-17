@@ -11,6 +11,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -35,8 +37,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -108,7 +110,7 @@ ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_na
 table = ddb.Table('profiles')
 table.update_item(Key={'user_sub': 'e2e_alice@test.local'}, UpdateExpression='REMOVE ui_preferences')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 5_000 },
+      { cwd: REPO_ROOT, timeout: 5_000 },
     );
   } catch {
     // Ignore errors — best-effort cleanup
@@ -149,7 +151,7 @@ for _ in range(20):
         break
     time.sleep(0.05)
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 8_000 },
+    { cwd: REPO_ROOT, timeout: 8_000 },
   );
 }
 

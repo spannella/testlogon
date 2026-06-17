@@ -11,6 +11,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -19,7 +21,7 @@ const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 
 const DDB_ENDPOINT = "http://localhost:8001";
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      `${PYTHON} /home/ubuntu/testlogon/e2e_session_setup.py`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      `${PYTHON} ${REPO_ROOT}/e2e_session_setup.py`,
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -110,7 +112,7 @@ table.put_item(Item=convert(item))
 print("OK")
 `;
   execSync(`${PYTHON} -c '${script}' '${JSON.stringify(item)}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   });
 }
@@ -125,7 +127,7 @@ print("OK")
 `;
   try {
     execSync(`${PYTHON} -c '${script}' '${JSON.stringify(key)}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
   } catch {

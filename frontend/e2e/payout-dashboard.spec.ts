@@ -13,10 +13,12 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 const ALICE_SUB = "e2e_alice@test.local";
@@ -47,8 +49,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -102,7 +104,7 @@ function seedOldCredits(userSub: string, count: number, amountEach: number, reas
 import boto3, os, uuid, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -131,7 +133,7 @@ for i in range(${count}):
     })
 print('seeded')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
   return count * amountEach;
 }
@@ -142,7 +144,7 @@ function cleanupActivePayouts(userSub: string): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -185,7 +187,7 @@ for pid in active:
 tbl.delete_item(Key={'payout_id': 'PAYOUT_STATE#${userSub}'})
 print('cleaned')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -195,7 +197,7 @@ function ensurePayoutsTable(): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -240,7 +242,7 @@ except Exception:
     time.sleep(2)
     print('created')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

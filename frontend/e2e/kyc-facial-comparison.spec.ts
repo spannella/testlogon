@@ -20,6 +20,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const ROOT_SUB = "root.admin@testdev.local";
@@ -40,8 +42,8 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -91,7 +93,7 @@ function seedKycCase(
     `python3 -c "
 import boto3, os, json, sys
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -107,7 +109,7 @@ for f in data['files']:
 tbl.put_item(Item={'pk': 'KYC#'+cid, 'sk':'META', 'entity_type':'kyc_case', 'kyc_case_id': cid, 'user_sub': data['user_sub'], 'status':'draft', 'files': files, 'version': 1, 'created_at': 1700000000, 'updated_at': 1700000000})
 print('seeded '+cid)
 " '${payload.replace(/'/g, "'\\''")}'`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

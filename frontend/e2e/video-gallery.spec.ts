@@ -15,6 +15,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -47,8 +49,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -93,7 +95,7 @@ item = json.loads(base64.b64decode('${itemB64}'))
 tbl.put_item(Item=item)
 print('ok')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
@@ -109,7 +111,7 @@ key = json.loads(base64.b64decode('${keyB64}'))
 tbl.delete_item(Key=key)
 print('ok')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch { /* ignore */ }
 }

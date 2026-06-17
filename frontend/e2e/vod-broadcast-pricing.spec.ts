@@ -7,10 +7,12 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const API = "http://localhost:8000";
 const ALICE_SUB = "e2e_alice@test.local";
 const BOB_SUB = "e2e_bob@test.local";
@@ -42,8 +44,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -117,7 +119,7 @@ const DDB_BOOTSTRAP = `
 import boto3, os, time, uuid
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -130,7 +132,7 @@ ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL',
 function runPy(script: string): string {
   return execSync(
     `${PYTHON} -c "${DDB_BOOTSTRAP}\n${script}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString().trim();
 }
 

@@ -19,6 +19,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -51,8 +53,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -99,7 +101,7 @@ const DDB_PRELUDE = `
 import boto3, os, time, json, uuid
 from decimal import Decimal
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -181,7 +183,7 @@ table.put_item(Item=item)
 print(case_id)
   `;
   const out = execSync(`${PYTHON} -c '${script.replace(/'/g, "'\"'\"'")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 15_000,
   }).toString().trim();
   return out;
@@ -195,7 +197,7 @@ print("deleted")
   `;
   try {
     execSync(`${PYTHON} -c '${script.replace(/'/g, "'\"'\"'")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
   } catch {

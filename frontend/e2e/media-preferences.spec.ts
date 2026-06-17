@@ -14,6 +14,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -89,7 +91,7 @@ async function apiPut(page: Page, path: string, body: object, userId = ALICE_ID)
 const DDB_PRELUDE = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 for line in env_file.read_text().splitlines():
     if '=' in line and not line.strip().startswith('#'):
         k, v = line.split('=', 1)
@@ -110,7 +112,7 @@ except Exception as e:
 `;
   try {
     execSync(`python3 -c "${script.replace(/"/g, '\\"')}"`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
   } catch {
@@ -133,14 +135,14 @@ test.describe("100 — Media Preferences API", () => {
     // Ensure table exists
     try {
       execSync(
-        "/home/ubuntu/testlogon/.venv/bin/python3 scripts/local-ddb-init.py",
+        REPO_ROOT + "/.venv/bin/python3 scripts/local-ddb-init.py",
         {
-          cwd: "/home/ubuntu/testlogon",
+          cwd: REPO_ROOT,
           timeout: 60_000,
           // local-ddb-init.py imports `app.*`; running it as a script puts
           // scripts/ (not the repo root) on sys.path[0], so `app` is not
           // importable without PYTHONPATH pointing at the repo root.
-          env: { ...process.env, PYTHONPATH: "/home/ubuntu/testlogon" },
+          env: { ...process.env, PYTHONPATH: REPO_ROOT },
         },
       );
     } catch {

@@ -14,6 +14,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -46,8 +48,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -80,7 +82,7 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 const DDB_PRELUDE = `
 import boto3, os, time, json
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -94,7 +96,7 @@ function runPy(body: string, extraEnv: Record<string, string> = {}): string {
   // Pass the program via stdin (not -c) so embedded JSON/quotes can't collide
   // with shell quoting; large payloads come in via env vars.
   return execSync(`python3 -`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 20_000,
     input: `${DDB_PRELUDE}${body}`,
     env: { ...process.env, ...extraEnv },
@@ -429,7 +431,7 @@ test.describe("240. KYC-024 Pre-computation & edge cases", () => {
     const dateIso = new Date((NOW - 2 * 86400) * 1000).toISOString().slice(0, 10);
     const out = runPy(`
 import sys
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.kyc_analytics import ANALYTICS_SERVICE
 ANALYTICS_SERVICE.precompute_daily_snapshot(date_iso='${dateIso}')
 snap = ANALYTICS_SERVICE.get_daily_snapshot(date_iso='${dateIso}')

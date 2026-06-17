@@ -13,6 +13,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -103,7 +105,7 @@ function seedPendingVideos(count: number, ownerOverride?: string): string[] {
 import boto3, os, json, uuid, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -136,7 +138,7 @@ for i in range(${count}):
 
 print(json.dumps(ids))
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString();
   return JSON.parse(raw.trim());
 }
@@ -153,7 +155,7 @@ function cleanupVideos(videoIds: string[]): void {
 import boto3, os, json, base64
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -170,7 +172,7 @@ for vid in ids:
     except Exception:
         pass
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+      { cwd: REPO_ROOT, timeout: 15_000 },
     );
   } catch {
     // ignore cleanup errors
@@ -183,7 +185,7 @@ function setVideoStatus(videoId: string, status: string): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -199,7 +201,7 @@ tbl.update_item(
     ExpressionAttributeValues={':s': '${status}'},
 )
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 

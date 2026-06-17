@@ -11,10 +11,12 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const API = "http://localhost:8000";
 const ALICE_SUB = "e2e_alice@test.local";
 // Session keys used in e2e_admin_session_setup.py
@@ -45,8 +47,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -96,7 +98,7 @@ function clearUnreadAlerts(userSub: string): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -122,7 +124,7 @@ for item in resp.get('Items', []):
 tbl.put_item(Item={'user_sub': '${userSub}', 'alert_id': 'UNREAD_COUNT', 'count': 0, 'updated_at': 0})
 print('cleared')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -136,7 +138,7 @@ function seedUnreadAlerts(userSub: string, count: number, prefix: string): strin
 import boto3, os, uuid, time, json
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -170,7 +172,7 @@ tbl.update_item(
 )
 print(json.dumps(ids))
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString().trim();
   return JSON.parse(result);
 }
@@ -189,7 +191,7 @@ function seedBatchAlert(
 import boto3, os, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -225,7 +227,7 @@ tbl.update_item(
 )
 print('seeded')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -238,7 +240,7 @@ function deleteAlert(userSub: string, alertId: string): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -250,7 +252,7 @@ tbl = ddb.Table('alerts')
 tbl.delete_item(Key={'user_sub': '${userSub}', 'alert_id': '${alertId}'})
 print('deleted')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -264,7 +266,7 @@ import boto3, os, json
 from decimal import Decimal
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -286,7 +288,7 @@ if item:
 else:
     print('null')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString().trim();
   if (result === "null") return null;
   return JSON.parse(result);
@@ -301,7 +303,7 @@ function resetTypePreferences(userSub: string): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -319,7 +321,7 @@ except Exception:
     pass
 print('reset')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -528,7 +530,7 @@ test.describe("112 · Social Alert Emission", () => {
 import boto3, os, uuid, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -552,7 +554,7 @@ tbl.put_item(Item={
 })
 print(alert_id)
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+      { cwd: REPO_ROOT, timeout: 15_000 },
     );
 
     // Verify it appears in the alerts list
@@ -597,10 +599,10 @@ print(alert_id)
     const result = execSync(
       `${PYTHON} -c "
 import sys, os
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -620,7 +622,7 @@ result = emit_social_alert(
 )
 print('None' if result is None else 'emitted')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+      { cwd: REPO_ROOT, timeout: 15_000 },
     ).toString().trim();
     expect(result).toBe("None");
   });

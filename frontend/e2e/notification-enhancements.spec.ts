@@ -16,13 +16,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { readFileSync, existsSync } from "fs";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
 const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
-const EMAIL_LOG = "/home/ubuntu/testlogon/.logs/dev/emails.log";
+const EMAIL_LOG = REPO_ROOT + "/.logs/dev/emails.log";
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
@@ -47,8 +49,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      `${PYTHON} /home/ubuntu/testlogon/e2e_session_setup.py`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      `${PYTHON} ${REPO_ROOT}/e2e_session_setup.py`,
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -91,12 +93,12 @@ async function apiGet(page: Page, path: string) {
 
 // ─── DDB helpers ──────────────────────────────────────────────────────────────
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 function runPython(code: string): string {
   return execSync(
     `${PYTHON} -c "${code.replace(/"/g, '\\"')}"`,
-    { timeout: 15_000, cwd: "/home/ubuntu/testlogon" },
+    { timeout: 15_000, cwd: REPO_ROOT },
   ).toString().trim();
 }
 
@@ -108,13 +110,13 @@ function resetAliceAlerts(): void {
     `${PYTHON} << 'PYEOF'
 import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 # Reset unread count sentinel
 try:
@@ -145,13 +147,13 @@ function writeTestAlert(opts: {
     `${PYTHON} << 'PYEOF'
 import sys, os, json
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.alerts import write_alert
 result = write_alert(
     "e2e_alice@test.local",
@@ -183,13 +185,13 @@ function injectAlertPrefs(opts: {
     `${PYTHON} << 'PYEOF'
 import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 from app.core.time import now_ts
 T.alert_prefs.put_item(Item={
@@ -422,13 +424,13 @@ test.describe("207 -- Email templates for common events", () => {
       `${PYTHON} << 'PYEOF'
 import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 try:
     T.sessions.delete_item(Key={"user_sub": "e2e_alice@test.local", "session_id": "rl#alert_email"})
@@ -449,13 +451,13 @@ PYEOF`,
       `${PYTHON} << 'PYEOF'
 import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 from app.core.time import now_ts
 # Reset email rate limit
@@ -495,17 +497,17 @@ PYEOF`,
       `${PYTHON} << 'PYEOF'
 import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.alerts import audit_event
 audit_event("ui_session_finalize", "e2e_alice@test.local", None, outcome="failure")
 PYEOF`,
-      { timeout: 15_000, cwd: "/home/ubuntu/testlogon" },
+      { timeout: 15_000, cwd: REPO_ROOT },
     );
 
     // Check email log for HTML template content
@@ -528,13 +530,13 @@ PYEOF`,
     const output = runPython(
       `import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.alert_email_templates import render_alert_email_template
 result = render_alert_email_template('new_message', {'from': 'Bob', 'text_preview': 'Hello there!'})
 if result:
@@ -556,13 +558,13 @@ else:
     const output = runPython(
       `import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.alert_email_templates import render_alert_email_template
 result = render_alert_email_template('subscription_started', {'actor_display_name': 'Charlie'})
 if result:
@@ -581,13 +583,13 @@ else:
     const output = runPython(
       `import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.alert_email_templates import render_alert_email_template
 result = render_alert_email_template('completely_unknown_type', {})
 print('NONE' if result is None else 'FOUND')`,
@@ -599,13 +601,13 @@ print('NONE' if result is None else 'FOUND')`,
     const output = runPython(
       `import sys, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.services.alert_email_templates import render_alert_email_template
 result = render_alert_email_template('post_tip', {'actor_display_name': 'Alice', 'amount_cents': 500})
 if result:

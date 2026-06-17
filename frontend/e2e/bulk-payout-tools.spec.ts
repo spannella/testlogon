@@ -43,8 +43,8 @@ interface SessionRec {
 let SESSIONS: Record<string, SessionRec> = {};
 try {
   const raw = JSON.parse(
-    execFileSync("python3", ["/home/ubuntu/testlogon/e2e_admin_session_setup.py"], {
-      cwd: "/home/ubuntu/testlogon",
+    execFileSync("python3", [REPO_ROOT + "/e2e_admin_session_setup.py"], {
+      cwd: REPO_ROOT,
       timeout: 30_000,
       encoding: "utf-8",
     }),

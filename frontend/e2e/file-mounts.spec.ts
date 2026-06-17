@@ -19,7 +19,7 @@ import { execSync } from "child_process";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const REPO_ROOT = "/home/ubuntu/testlogon";
+const REPO_ROOT = REPO_ROOT;
 const ALICE_ID = "e2e_alice@test.local";
 const TS = Date.now();
 

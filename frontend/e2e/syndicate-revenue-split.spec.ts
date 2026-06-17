@@ -15,6 +15,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -43,8 +45,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -94,7 +96,7 @@ function cleanupSyndicates(): void {
 import boto3, os
 from boto3.dynamodb.conditions import Key
 from pathlib import Path
-for line in Path('/home/ubuntu/testlogon/.env.local').read_text().splitlines():
+for line in Path('${REPO_ROOT}/.env.local').read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, v = line.split('=', 1); os.environ.setdefault(k.strip(), v.strip())
@@ -108,7 +110,7 @@ for sub in os.environ['SUBS'].split(','):
 print('cleaned')
 `;
   execSync("python3 -", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 15_000,
     input: script,
     env: { ...process.env, SUBS: `${ALICE_ID},${BOB_ID}` },

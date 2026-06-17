@@ -18,6 +18,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -53,8 +55,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -112,7 +114,7 @@ async function apiPatch(page: Page, identity: string, path: string, body: object
 const DDB_PRELUDE = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -527,11 +529,11 @@ test.describe("462 — Dissolution Pro-Rata API", () => {
     // Dissolve the treasury directly via the service function
     // (dissolution is normally triggered by dissolve_group in user_groups)
     execSync(
-      `/home/ubuntu/testlogon/.venv/bin/python3 -c "
+      `${REPO_ROOT}/.venv/bin/python3 -c "
 import sys, os
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()

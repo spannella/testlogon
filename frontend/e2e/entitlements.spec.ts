@@ -7,6 +7,8 @@
  */
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const TS = Date.now();
@@ -25,8 +27,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -83,14 +85,14 @@ ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_na
 from app.core.settings import S
 ddb.Table(S.entitlements_table_name).put_item(Item={${pairs}})
 '`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
 function deleteEntitlement(userId: string, entitlementId: string): void {
   execSync(
     `.venv/bin/python3 -c 'import boto3; ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test"); from app.core.settings import S; ddb.Table(S.entitlements_table_name).delete_item(Key={"user_id": "${userId}", "entitlement_id": "${entitlementId}"})'`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 

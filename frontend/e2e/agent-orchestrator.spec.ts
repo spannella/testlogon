@@ -12,6 +12,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -169,7 +171,7 @@ table.update_item(
 )
 print('OK')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch {
     // If boto3 is not available, skip the DDB write
@@ -331,7 +333,7 @@ print(json.dumps({
     'agent_claimed_at': int(item.get('agent_claimed_at', 0)),
 }))
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     ).toString();
     const ticket = JSON.parse(raw);
     expect(ticket.agent_worker_id).toBe(WORKER_ID);
@@ -431,7 +433,7 @@ table.update_item(
 )
 print('OK')
 "`,
-        { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+        { cwd: REPO_ROOT, timeout: 10_000 },
       );
     } catch {
       // If boto3 is not available, skip

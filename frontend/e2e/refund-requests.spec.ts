@@ -15,6 +15,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,8 +48,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -146,7 +148,7 @@ try:
 except ddb_client.exceptions.ResourceInUseException:
     print('RefundRequests table already exists')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -174,7 +176,7 @@ tbl.put_item(Item={
 })
 print(json.dumps({'sk': sk, 'entry_id': entry_id}))
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
@@ -206,7 +208,7 @@ for item in items:
     deleted += 1
 print(f'Deleted {deleted} old refund requests for Alice')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

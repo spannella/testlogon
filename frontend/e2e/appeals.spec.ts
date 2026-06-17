@@ -15,8 +15,10 @@
 
 import { test, expect } from "@playwright/test";
 import { readFileSync, existsSync } from "fs";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const SRC = "/home/ubuntu/testlogon/frontend/src";
+const SRC = REPO_ROOT + "/frontend/src";
 
 function read(rel: string): string {
   const p = `${SRC}/${rel}`;

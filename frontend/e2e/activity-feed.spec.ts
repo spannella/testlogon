@@ -17,7 +17,7 @@ import { execSync } from "child_process";
 
 const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
-const REPO_ROOT = "/home/ubuntu/testlogon";
+const REPO_ROOT = REPO_ROOT;
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 
@@ -131,7 +131,7 @@ function seedAlertsSimple(spec: Array<Record<string, unknown>>): Array<{ alert_i
   const specJson = JSON.stringify(spec);
   const pyCode = `
 import json, sys, uuid, time, os
-sys.path.insert(0, "/home/ubuntu/testlogon")
+sys.path.insert(0, "${REPO_ROOT}")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "test")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
