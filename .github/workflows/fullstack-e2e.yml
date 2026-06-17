@@ -53,6 +53,15 @@ jobs:
         # a fresh runner's system python lacks the deps, so resolve python3 to the venv.
         run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
+      - name: Enable E2E feature flags (before stack start — backend + Vite read env at boot)
+        run: |
+          cat scripts/ci-e2e-feature-flags.env >> .env.local
+          {
+            echo "VITE_CALL_RECORDING_ENABLED=true"
+            echo "VITE_CANONICAL_PROFILE_NAVIGATION_ENABLED=true"
+            echo "VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true"
+          } >> frontend/.env.local
+
       - name: Start dev stack + seed E2E sessions
         run: just up
 
