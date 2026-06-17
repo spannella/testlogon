@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, FilePen, Inbox, Send, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, FilePen, Inbox, Send, CheckCircle2, FileEdit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import {
   listAwaitingSignature,
   listSentPackets,
   listCompletedForMe,
+  listDraftPackets,
   type SigningInboxItem,
 } from "@/api/endpoints/signaturePackets";
 
@@ -87,10 +88,21 @@ export default function SigningInboxPage() {
     queryKey: ["signing", "completed-for-me"],
     queryFn: () => listCompletedForMe(),
   });
+  const drafts = useQuery({
+    queryKey: ["signing", "drafts"],
+    queryFn: () => listDraftPackets(),
+  });
 
   const openToSign = React.useCallback(
     (item: SigningInboxItem) => {
       navigate(`/signing/inbox/${encodeURIComponent(item.packet_id)}`);
+    },
+    [navigate],
+  );
+
+  const resumeDraft = React.useCallback(
+    (item: SigningInboxItem) => {
+      navigate(`/signing/new?packet=${encodeURIComponent(item.packet_id)}`);
     },
     [navigate],
   );
@@ -145,6 +157,14 @@ export default function SigningInboxPage() {
           <TabsTrigger value="completed" data-testid="tab-completed">
             <CheckCircle2 className="mr-1 h-4 w-4" /> Completed
           </TabsTrigger>
+          <TabsTrigger value="drafts" data-testid="tab-drafts">
+            <FileEdit className="mr-1 h-4 w-4" /> Drafts
+            {(drafts.data?.count ?? 0) > 0 && (
+              <Badge className="ml-2" variant="secondary">
+                {drafts.data?.count}
+              </Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="awaiting" className="space-y-2 pt-3" data-testid="panel-awaiting">
@@ -183,6 +203,18 @@ export default function SigningInboxPage() {
           )}
           {completed.data?.items.map((item) => (
             <InboxRow key={item.packet_id} item={item} />
+          ))}
+        </TabsContent>
+
+        <TabsContent value="drafts" className="space-y-2 pt-3" data-testid="panel-drafts">
+          {drafts.isLoading && <div className="text-sm text-muted-foreground">Loading…</div>}
+          {!drafts.isLoading && (drafts.data?.items.length ?? 0) === 0 && (
+            <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+              No drafts yet. Start a new signature request to create one.
+            </div>
+          )}
+          {drafts.data?.items.map((item) => (
+            <InboxRow key={item.packet_id} item={item} actionLabel="Resume" onAction={resumeDraft} />
           ))}
         </TabsContent>
       </Tabs>

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Copy, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,8 @@ import { createSignerSigningLink } from "@/api/endpoints/signaturePackets";
  * affordance (SUX-005) with copy-to-clipboard.
  */
 export default function CreateSignatureRequestPage() {
+  const [searchParams] = useSearchParams();
+  const resumePacketId = searchParams.get("packet") ?? undefined;
   const [linkPacketId, setLinkPacketId] = React.useState("");
   const [linkSignerId, setLinkSignerId] = React.useState("");
   const [generatedUrl, setGeneratedUrl] = React.useState("");
@@ -71,7 +73,7 @@ export default function CreateSignatureRequestPage() {
         Pick a source PDF, add signer fields, then send. After sending you can mint a per-signer public link below.
       </p>
 
-      <SignaturePacketComposer />
+      <SignaturePacketComposer initialPacketId={resumePacketId} />
 
       <Card>
         <CardHeader>

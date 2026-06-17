@@ -134,7 +134,7 @@ function formatTs(ts?: string): string {
   return d.toLocaleString();
 }
 
-export function SignaturePacketComposer() {
+export function SignaturePacketComposer({ initialPacketId }: { initialPacketId?: string } = {}) {
   const [sourcePath, setSourcePath] = React.useState("");
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const [originChannel, setOriginChannel] = React.useState<SignatureOriginChannel>("share");
@@ -205,6 +205,14 @@ export function SignaturePacketComposer() {
       setBusy(false);
     }
   }, [defaultCaptureMode]);
+
+  // Resume a draft passed in via ?packet= (from the Drafts tab in the signing inbox).
+  React.useEffect(() => {
+    if (initialPacketId) {
+      void loadPacket(initialPacketId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPacketId]);
 
   const createDraft = React.useCallback(async () => {
     if (!sourcePath.trim()) {
