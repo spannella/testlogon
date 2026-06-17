@@ -14164,7 +14164,7 @@ class AddressInput(BaseModel):
 class VerifyAddressRequest(BaseModel):
     """Request body for triggering an address verification."""
 
-    address: OpenDataAddressInput
+    address: AddressInput
 
 
 class PostalCodeValidationRequest(BaseModel):

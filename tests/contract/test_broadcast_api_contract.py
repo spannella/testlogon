@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 import json
 from pathlib import Path
@@ -55,8 +56,10 @@ def test_profile_session_lifecycle_contract_snapshot() -> None:
             "updated_at": "2026-04-01T00:00:00+00:00",
         },
     )
-    session = SimpleNamespace(id="s1", stream_key_ref=None, model_dump=lambda: _session_payload("draft"))
-    live_session = SimpleNamespace(id="s1", stream_key_ref=None, model_dump=lambda: _session_payload("live"))
+    # created_by must match the overridden require_ui_session user_sub ("u1") so the
+    # SEC-025 ownership gate in _get_owned_session permits the lifecycle operations.
+    session = SimpleNamespace(id="s1", created_by="u1", stream_key_ref=None, model_dump=lambda: _session_payload("draft"))
+    live_session = SimpleNamespace(id="s1", created_by="u1", stream_key_ref=None, model_dump=lambda: _session_payload("live"))
     output = SimpleNamespace(
         mediapackage_endpoint="https://pkg.example/s1/master.m3u8",
         cloudfront_playback_url="https://d111.cloudfront.net/s1/master.m3u8?cf_token=t&cf_expires=1",
@@ -90,5 +93,10 @@ def test_profile_session_lifecycle_contract_snapshot() -> None:
         "session_started": r3.json(),
         "session_get": r4.json(),
     }
-    expected = json.loads(Path("tests/fixtures/broadcast_api_contract_snapshot.json").read_text(encoding="utf-8"))
+    fixture = Path("tests/fixtures/broadcast_api_contract_snapshot.json")
+    # Regenerate the contract snapshot fixture with UPDATE_BROADCAST_SNAPSHOT=1 when
+    # the broadcast response contract intentionally changes (e.g. new additive fields).
+    if os.environ.get("UPDATE_BROADCAST_SNAPSHOT") == "1":
+        fixture.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    expected = json.loads(fixture.read_text(encoding="utf-8"))
     assert snapshot == expected

@@ -12,6 +12,13 @@ from app.cli import rootctl
 @pytest.fixture
 def root_config(monkeypatch):
     monkeypatch.setattr(rootctl, "validate_root_user_sub_config", lambda: "root")
+    # Break-glass auth gates every mutating CLI command (added after these tests
+    # were first written). Configure a matching secret/token so the policy-matrix
+    # tests exercise the actual allow/deny logic rather than failing earlier with
+    # break_glass_unconfigured. The tests here are about the policy matrix, not
+    # break-glass gating (which has its own dedicated coverage).
+    monkeypatch.setenv("ROOTCTL_BREAK_GLASS_SECRET", "test-break-glass-secret")
+    monkeypatch.setenv("ROOTCTL_BREAK_GLASS_TOKEN", "test-break-glass-secret")
 
 
 def test_root_recovery_allow_path_emits_audit(capsys, monkeypatch, root_config) -> None:
