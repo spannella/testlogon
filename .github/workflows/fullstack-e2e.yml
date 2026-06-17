@@ -30,10 +30,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node 20 (repo targets 20; runner default 22 breaks native deps)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps (deterministic + visible errors; setup_ubuntu's
+              `npm install --silent` otherwise hides failures)
+        working-directory: frontend
+        run: npm ci
+
       - name: Install just (avoids setup_ubuntu's just.systems curl, which 403s in CI)
         uses: extractions/setup-just@v2
 
-      - name: Bootstrap dev host (Java, Node, venv+deps, moto, Playwright, .env.local)
+      - name: Bootstrap dev host (Java, venv+deps, moto, Playwright, .env.local)
         run: bash scripts/setup_ubuntu.sh
 
       - name: Put project venv on PATH
