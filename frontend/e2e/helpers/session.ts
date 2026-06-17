@@ -8,7 +8,13 @@
  * canonical pattern used inline by the rest of the suite.
  */
 import { execSync } from "child_process";
+import * as path from "path";
 import type { Page } from "@playwright/test";
+
+// Repo root, derived from the Playwright run cwd (always frontend/) so the
+// session seeders resolve in CI (/home/runner/...) and any host, not just the
+// dev box. Override with E2E_REPO_ROOT if invoked from elsewhere.
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 export interface SessionData {
   user_sub: string;
@@ -31,8 +37,8 @@ let _sessions: Record<string, SessionData> | null = null;
 
 export function loadSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync(`python3 ${REPO_ROOT}/e2e_admin_session_setup.py`, {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     // The script prints human-readable "Created session ..." lines before the JSON.
