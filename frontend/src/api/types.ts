@@ -13248,3 +13248,92 @@ export interface MediaPreferencesOut {
   video_resolution: string;
   updated_at: number;
 }
+
+// ─── ORD-013: Order Lifecycle types ──────────────────────────────────────────
+// Mirrors app/models.py order lifecycle Pydantic models and
+// app/routers/order_lifecycle.py response shapes.
+
+export type OrderLifecycleStatus =
+  | "created"
+  | "approved"
+  | "allocated"
+  | "picking"
+  | "packed"
+  | "shipped"
+  | "completed"
+  | "held"
+  | "backorder"
+  | "cancelled"
+  | "returned";
+
+export interface OrderLifecycleOut {
+  order_id: string;
+  lifecycle_status: OrderLifecycleStatus;
+  status: string; // legacy mirror
+  created_at: string;
+  updated_at?: string;
+  customer_id: string;
+  amount_cents: number;
+  currency: string;
+  items?: OrderLineItemOut[];
+  [key: string]: unknown;
+}
+
+export interface OrderLineItemOut {
+  item_id: string;
+  name: string;
+  quantity: number;
+  unit_price_cents: number;
+  [key: string]: unknown;
+}
+
+export interface OrderHistoryEntry {
+  event_id: string;
+  order_id: string;
+  from_status: string | null;
+  to_status: string;
+  actor: string;
+  ts: string;
+  notes?: string;
+}
+
+export interface OrderHistoryOut {
+  order_id: string;
+  history: OrderHistoryEntry[];
+}
+
+export interface OrderAdjustmentOut {
+  adjustment_id: string;
+  order_id: string;
+  adj_type: "discount" | "surcharge" | "tax" | "shipping";
+  description: string;
+  amount_cents: number;
+  percentage?: number | null;
+  created_at: number;
+  created_by: string;
+}
+
+export interface OrderAdjustmentListOut {
+  order_id: string;
+  adjustments: OrderAdjustmentOut[];
+  total_adjustments_cents: number;
+}
+
+export interface ShipGroupOut {
+  ship_group_id: string;
+  order_id: string;
+  ship_to: Record<string, unknown>;
+  carrier?: string | null;
+  tracking_number?: string | null;
+  ship_method: string;
+  estimated_ship_date?: string | null;
+  item_ids: string[];
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ShipGroupListOut {
+  order_id: string;
+  ship_groups: ShipGroupOut[];
+}

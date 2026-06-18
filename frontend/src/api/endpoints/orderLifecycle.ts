@@ -219,6 +219,119 @@ export const cancelOrder = (orderId: string, body: OrderCancelRequest = {}) =>
     body,
   );
 
+// ─── Adjustments ─────────────────────────────────────────────────────────────
+
+export interface AdjustmentListResponse {
+  order_id: string;
+  adjustments: OrderAdjustment[];
+  total_adjustments_cents: number;
+}
+
+export interface AddAdjustmentRequest {
+  adj_type: OrderAdjustmentType;
+  amount_cents: number;
+  currency?: string;
+  label: string;
+  taxable?: boolean;
+}
+
+/**
+ * GET /ui/orders/{order_id}/adjustments
+ * List price adjustments on an order. Owner-or-admin gated.
+ */
+export const listOrderAdjustments = (orderId: string) =>
+  api.get<AdjustmentListResponse>(
+    `/ui/orders/${encodeURIComponent(orderId)}/adjustments`,
+  );
+
+/**
+ * POST /ui/orders/{order_id}/adjustments
+ * Add a price adjustment. ADMIN/ROOT only.
+ */
+export const addOrderAdjustment = (
+  orderId: string,
+  body: AddAdjustmentRequest,
+) =>
+  api.post<OrderAdjustment>(
+    `/ui/orders/${encodeURIComponent(orderId)}/adjustments`,
+    body,
+  );
+
+/**
+ * DELETE /ui/orders/{order_id}/adjustments/{adj_id}
+ * Remove a price adjustment. ADMIN/ROOT only.
+ */
+export const removeOrderAdjustment = (orderId: string, adjId: string) =>
+  api.del<{ ok: boolean }>(
+    `/ui/orders/${encodeURIComponent(orderId)}/adjustments/${encodeURIComponent(adjId)}`,
+  );
+
+// ─── Ship groups ──────────────────────────────────────────────────────────────
+
+export interface ShipGroupListResponse {
+  order_id: string;
+  ship_groups: ShipGroup[];
+}
+
+export interface CreateShipGroupRequest {
+  ship_method: string;
+  address_id?: string | null;
+  item_ids?: string[];
+}
+
+export interface UpdateShipGroupRequest {
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  ship_status?: OrderLifecycleStatus;
+  ship_date_bucket?: string | null;
+  ship_ts?: number | null;
+}
+
+/**
+ * GET /ui/orders/{order_id}/ship-groups
+ * List ship groups for an order. Owner-or-admin gated.
+ */
+export const listShipGroups = (orderId: string) =>
+  api.get<ShipGroupListResponse>(
+    `/ui/orders/${encodeURIComponent(orderId)}/ship-groups`,
+  );
+
+/**
+ * POST /ui/orders/{order_id}/ship-groups
+ * Create a new ship group. ADMIN/ROOT only.
+ */
+export const createShipGroup = (
+  orderId: string,
+  body: CreateShipGroupRequest,
+) =>
+  api.post<ShipGroup>(
+    `/ui/orders/${encodeURIComponent(orderId)}/ship-groups`,
+    body,
+  );
+
+/**
+ * PATCH /ui/orders/{order_id}/ship-groups/{sg_id}
+ * Update tracking / status of a ship group. ADMIN/ROOT only.
+ */
+export const updateShipGroup = (
+  orderId: string,
+  sgId: string,
+  body: UpdateShipGroupRequest,
+) =>
+  api.patch<ShipGroup>(
+    `/ui/orders/${encodeURIComponent(orderId)}/ship-groups/${encodeURIComponent(sgId)}`,
+    body,
+  );
+
+/**
+ * DELETE /ui/orders/{order_id}/ship-groups/{sg_id}
+ * Remove a ship group. ADMIN/ROOT only.
+ */
+export const deleteShipGroup = (orderId: string, sgId: string) =>
+  api.del<{ ok: boolean }>(
+    `/ui/orders/${encodeURIComponent(orderId)}/ship-groups/${encodeURIComponent(sgId)}`,
+  );
+
 // ─── Display helpers ─────────────────────────────────────────────────────────
 
 /** All 11 lifecycle statuses (for filter dropdowns). */

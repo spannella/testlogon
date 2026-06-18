@@ -17687,6 +17687,68 @@ OrderLifecycleOut.model_rebuild()
 OrderTransitionResult.model_rebuild()
 
 
+# ── ORD-008: order adjustments response models ────────────────────────────────
+
+class OrderAdjustmentOut(BaseModel):
+    adjustment_id: str
+    order_id: str
+    adj_type: str  # discount|surcharge|tax|shipping
+    description: str
+    amount_cents: int
+    percentage: Optional[float] = None
+    created_at: int
+    created_by: str
+
+
+class OrderAdjustmentListOut(BaseModel):
+    order_id: str
+    adjustments: List[OrderAdjustmentOut]
+    total_adjustments_cents: int
+    base_amount_cents: int
+    total_cents: int
+
+
+class OrderAdjustmentAddIn(BaseModel):
+    adj_type: str
+    description: str = Field(..., min_length=1, max_length=500)
+    amount_cents: int
+    percentage: Optional[float] = None
+
+
+# ── ORD-009: ship group response models ───────────────────────────────────────
+
+class ShipGroupCreateBodyIn(BaseModel):
+    ship_to: Dict[str, Any] = Field(..., min_length=1)
+    carrier: Optional[str] = Field(default=None, max_length=128)
+    ship_method: str = Field(default="standard", max_length=64)
+    item_ids: List[str] = Field(default_factory=list)
+    estimated_ship_date: Optional[str] = Field(default=None, max_length=10)
+
+
+class ShipGroupUpdateIn(BaseModel):
+    tracking_number: Optional[str] = Field(default=None, max_length=256)
+    status: Optional[str] = Field(default=None, max_length=64)
+    carrier: Optional[str] = Field(default=None, max_length=128)
+    estimated_ship_date: Optional[str] = Field(default=None, max_length=10)
+
+
+class ShipGroupFullOut(BaseModel):
+    ship_group_id: str
+    order_id: str
+    ship_to: Dict[str, Any]
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    ship_method: str
+    estimated_ship_date: Optional[str] = None
+    item_ids: List[str]
+    status: str
+    created_at: int
+    updated_at: int
+
+
+class ShipGroupListOut(BaseModel):
+    order_id: str
+    ship_groups: List[ShipGroupFullOut]
 
 
 # ---------------------------------------------------------------------------
