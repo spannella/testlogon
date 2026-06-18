@@ -1453,3 +1453,82 @@ async def delete_item_feature_category_endpoint(
     _require_item_owner(item_id, ctx["user_sub"])
     _svc(item_id=item_id, feature_category_id=feature_category_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# PRD-011 — Bundle expand + product association endpoints
+# All gated on S.product_depth_enabled (501 when off).
+# Expand is public read; association CRUD requires ownership.
+# ---------------------------------------------------------------------------
+
+@router.get("/items/{item_id}/expand")
+async def expand_bundle_endpoint(
+    item_id: str,
+    qty: int = Query(default=1, ge=1, le=100),
+):
+    """Flatten a bundle/kit into component lines for cart/checkout use (PRD-011).
+
+    Public read — no auth required.
+    Returns 501 when product_depth_enabled is False.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_variants import expand_bundle as _svc
+    return _svc(item_id, qty)
+
+
+class _AssociationIn(BaseModel):
+    assoc_type: str
+    to_item_id: str
+
+
+@router.post("/items/{item_id}/associations")
+async def add_association_endpoint(
+    item_id: str,
+    body: _AssociationIn,
+    ctx=Depends(require_ui_session),
+):
+    """Add a product association (PRD-011).
+
+    Caller must own the source item.  Idempotent on the same triple.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_associations import add_association
+    return add_association(item_id, body.assoc_type, body.to_item_id)
+
+
+@router.get("/items/{item_id}/associations")
+async def list_associations_endpoint(
+    item_id: str,
+    assoc_type: Optional[str] = None,
+):
+    """List product associations for an item (public read, PRD-011).
+
+    Optional ``assoc_type`` query param filters by type.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_associations import list_associations
+    rows = list_associations(item_id, assoc_type)
+    return {"item_id": item_id, "associations": rows, "count": len(rows)}
+
+
+@router.delete("/items/{item_id}/associations/{to_item_id}", status_code=200)
+async def remove_association_endpoint(
+    item_id: str,
+    to_item_id: str,
+    assoc_type: str = Query(...),
+    ctx=Depends(require_ui_session),
+):
+    """Remove a product association (PRD-011).
+
+    Caller must own the source item.  No-op if the association does not exist.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_associations import remove_association
+    remove_association(item_id, assoc_type, to_item_id)
+    return {"ok": True}
