@@ -12,7 +12,7 @@ def test_process_reminders_sends_for_due_pending_signer() -> None:
     with (
         patch.object(reminders, "require_signature_pdf_enabled", return_value=None),
         patch.object(reminders, "_now", return_value=now),
-        patch.object(reminders.T.signature_packet_signers, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending", "reminder_last_step": 0}]}),
+        patch.object(reminders.T.signature_packet_signers._t, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending", "reminder_last_step": 0}]}),
         patch.object(reminders, "get_packet", return_value={"packet_id": "sp_1", "status": "sent", "sent_at": sent_at, "owner_user_id": "owner-1", "source_name": "nda.pdf"}),
         patch.object(reminders, "_claim_reminder_step", return_value=True) as claim_mock,
         patch.object(reminders, "get_profile_identity", side_effect=[{"display_name": "Signer", "email": "s@example.com"}, {"display_name": "Owner", "email": "o@example.com"}]),
@@ -34,7 +34,7 @@ def test_process_reminders_skips_non_actionable_status() -> None:
     with (
         patch.object(reminders, "require_signature_pdf_enabled", return_value=None),
         patch.object(reminders, "_now", return_value=now),
-        patch.object(reminders.T.signature_packet_signers, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending"}]}),
+        patch.object(reminders.T.signature_packet_signers._t, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending"}]}),
         patch.object(reminders, "get_packet", return_value={"packet_id": "sp_1", "status": "completed", "sent_at": (now - timedelta(days=2)).isoformat()}),
         patch.object(reminders, "send_alert_email") as email_mock,
     ):
@@ -50,7 +50,7 @@ def test_process_reminders_skips_when_signer_missing_email() -> None:
     with (
         patch.object(reminders, "require_signature_pdf_enabled", return_value=None),
         patch.object(reminders, "_now", return_value=now),
-        patch.object(reminders.T.signature_packet_signers, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending"}]}),
+        patch.object(reminders.T.signature_packet_signers._t, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending"}]}),
         patch.object(reminders, "get_packet", return_value={"packet_id": "sp_1", "status": "sent", "sent_at": (now - timedelta(days=4)).isoformat(), "owner_user_id": "owner-1"}),
         patch.object(reminders, "_claim_reminder_step", return_value=True),
         patch.object(reminders, "get_profile_identity", side_effect=[{"display_name": "Signer", "email": None}, {"display_name": "Owner", "email": "o@example.com"}]),
@@ -72,7 +72,7 @@ def test_process_reminders_idempotent_when_step_already_claimed() -> None:
     with (
         patch.object(reminders, "require_signature_pdf_enabled", return_value=None),
         patch.object(reminders, "_now", return_value=now),
-        patch.object(reminders.T.signature_packet_signers, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending", "reminder_last_step": 0}]}),
+        patch.object(reminders.T.signature_packet_signers._t, "scan", return_value={"Items": [{"packet_id": "sp_1", "signer_id": "user-2", "status": "pending", "reminder_last_step": 0}]}),
         patch.object(reminders, "get_packet", return_value={"packet_id": "sp_1", "status": "sent", "sent_at": (now - timedelta(days=4)).isoformat(), "owner_user_id": "owner-1"}),
         patch.object(reminders, "_claim_reminder_step", return_value=False),
         patch.object(reminders, "send_alert_email") as email_mock,
