@@ -40,7 +40,7 @@ def _flag_on() -> bool:
 
 def _require_enabled() -> None:
     if not _flag_on():
-        raise HTTPException(status_code=404, detail="Product variants are not enabled.")
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +164,15 @@ def get_product_type(item_id: str) -> Optional[str]:
     if item:
         return str(item.get("product_type", "standalone"))
     return None
+
+
+def mark_item_as_virtual(item_id: str, user_sub: str) -> Dict[str, Any]:
+    """Promote an existing catalog item to product_type='virtual'.
+
+    Convenience wrapper around set_product_type — idempotent.
+    Raises 501 when the feature flag is off, 404 when the item does not exist.
+    """
+    return set_product_type(item_id, "virtual", user_sub)
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +354,19 @@ def delete_variant(
 
     T.product_depth.delete_item(Key=key)
     _audit("product_variant.deleted", user_sub, parent_item_id=parent_item_id, variant_id=variant_id)
+
+
+def get_variant(
+    parent_item_id: str,
+    variant_id: str,
+) -> Dict[str, Any]:
+    """Fetch a single variant row.  Raises HTTP 404 if not found."""
+    key = {"PK": _item_pk(parent_item_id), "SK": f"VAR#{variant_id}"}
+    resp = T.product_depth.get_item(Key=key)
+    item = resp.get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Variant not found.")
+    return item
 
 
 # ---------------------------------------------------------------------------

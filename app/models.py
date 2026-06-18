@@ -17502,6 +17502,12 @@ class VariantOut(BaseModel):
     created_at: int
 
 
+class VariantListOut(BaseModel):
+    item_id: str
+    variants: List["VariantOut"]
+    count: int
+
+
 # --- Price components ---
 
 class ProductPriceComponentIn(BaseModel):

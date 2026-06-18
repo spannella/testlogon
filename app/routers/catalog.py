@@ -1115,6 +1115,22 @@ async def get_product_type_endpoint(item_id: str, ctx=Depends(require_ui_session
     return {"item_id": item_id, "product_type": pt or "standalone"}
 
 
+@router.post("/items/{item_id}/mark-virtual")
+async def mark_item_virtual_endpoint(item_id: str, ctx=Depends(require_ui_session)):
+    """PRD-007: promote a catalog item to product_type='virtual'.
+
+    Gated by S.product_depth_enabled (501 when off).
+    The caller must own the item (403 otherwise).
+    Idempotent — re-marking an already-virtual item is a no-op.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_variants import mark_item_as_virtual as _svc
+    row = _svc(item_id, ctx["user_sub"])
+    return {"item_id": item_id, "product_type": row.get("product_type", "virtual")}
+
+
 @router.post("/items/{item_id}/feature-categories")
 async def attach_feature_category_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
     from app.services.product_features import attach_feature_category_to_product as _svc
@@ -1149,7 +1165,13 @@ async def create_variant_endpoint(item_id: str, body: Dict[str, Any], ctx=Depend
 
 
 @router.get("/items/{item_id}/variants")
-async def list_variants_endpoint(item_id: str, limit: int = 100, ctx=Depends(require_ui_session)):
+async def list_variants_endpoint(item_id: str, limit: int = 100):
+    """PRD-008: public read — no auth required.
+
+    Gated by S.product_depth_enabled (501 when off).
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
     from app.services.product_variants import list_variants as _svc
     items, _ = _svc(item_id, limit=limit)
     return {"item_id": item_id, "variants": items, "count": len(items)}
