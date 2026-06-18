@@ -144,22 +144,40 @@ def reset_rate_limits():
     broadcast_chat_store.reset_rate_limits()
 
 
+class _FakeModerationTable:
+    """Minimal stub for T.broadcast_moderation (ban checks)."""
+
+    def __init__(self):
+        self.bans: dict = {}
+
+    def get_item(self, *, Key, **kwargs):
+        key = (Key.get("pk", ""), Key.get("sk", ""))
+        item = self.bans.get(key)
+        return {"Item": item} if item else {}
+
+
 @pytest.fixture
 def mock_tables():
     chat_table = _FakeChatTable()
     mutes_table = _FakeMutesTable()
     profile_table = _FakeProfileTable()
+    moderation_table = _FakeModerationTable()
 
     mock_T = SimpleNamespace(
         broadcast_chat_messages=chat_table,
         broadcast_chat_mutes=mutes_table,
         profile=profile_table,
+        broadcast_moderation=moderation_table,
     )
-    with patch.object(broadcast_chat_store, "T", mock_T):
+    with (
+        patch.object(broadcast_chat_store, "T", mock_T),
+        patch("app.services.delegate_broadcast.is_viewer_banned", return_value=False),
+    ):
         yield {
             "chat": chat_table,
             "mutes": mutes_table,
             "profile": profile_table,
+            "moderation": moderation_table,
         }
 
 
