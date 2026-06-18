@@ -39,6 +39,7 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded" });
 }
 
 async function apiPost(

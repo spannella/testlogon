@@ -80,6 +80,7 @@ async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for identity: ${identity}`);
   await page.context().addCookies(session.cookies);
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
