@@ -84,6 +84,7 @@ async function injectAuth(page: Page, identity = "alice") {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
 }
 
 // ─── API helpers (via Vite proxy so session cookies are forwarded) ─────────────
