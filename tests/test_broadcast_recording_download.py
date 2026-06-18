@@ -149,7 +149,8 @@ class TestGenerateMp4:
         with patch.object(broadcast_recording_worker, "_should_mock", return_value=False):
             with patch("subprocess.run", return_value=fake_result) as mock_run:
                 with patch("os.path.getsize", return_value=2048):
-                    result = broadcast_recording_worker.generate_mp4(rec, str(ts_file))
+                    with patch.object(broadcast_recording_worker, "_upload_to_s3"):
+                        result = broadcast_recording_worker.generate_mp4(rec, str(ts_file))
 
         assert result["mp4_s3_key"] == "sess-mp4-real/recording/full.mp4"
         assert result["mp4_size_bytes"] == 2048

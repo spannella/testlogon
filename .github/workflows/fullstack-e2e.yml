@@ -9,23 +9,31 @@ on:
     paths:
       - "frontend/e2e/browser-ssh.spec.ts"
       - "frontend/e2e/calendar-messaging.spec.ts"
+      - "frontend/e2e/signing.spec.ts"
+      - "frontend/e2e/signing-inbox.spec.ts"
       - "frontend/src/pages/remote/**"
       - "frontend/src/pages/calendar/**"
+      - "frontend/src/pages/signing/**"
+      - "frontend/src/pages/files/SignaturePacketComposer.tsx"
       - "app/routers/browser_ssh_terminal.py"
       - "app/routers/calendar.py"
+      - "app/routers/signature_packets.py"
       - "app/services/host_inventory.py"
+      - "app/services/signature_packet_store.py"
       - ".github/workflows/fullstack-e2e.yml"
   push:
     branches: [ main, master ]
     paths:
       - "frontend/e2e/browser-ssh.spec.ts"
       - "frontend/e2e/calendar-messaging.spec.ts"
+      - "frontend/e2e/signing.spec.ts"
+      - "frontend/e2e/signing-inbox.spec.ts"
       - ".github/workflows/fullstack-e2e.yml"
 
 jobs:
   fullstack-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,7 +91,7 @@ jobs:
 
       - name: Run full-stack Playwright specs
         working-directory: frontend
-        run: npx playwright test e2e/browser-ssh.spec.ts e2e/calendar-messaging.spec.ts
+        run: npx playwright test e2e/browser-ssh.spec.ts e2e/calendar-messaging.spec.ts e2e/signing.spec.ts e2e/signing-inbox.spec.ts
 
       - name: Upload logs + traces on failure
         if: failure()

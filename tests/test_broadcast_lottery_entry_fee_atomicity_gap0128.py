@@ -56,11 +56,14 @@ class TestLotteryEntryFeeAtomicityGap0128(unittest.TestCase):
         self.stack.enter_context(mock_aws())
         self.ddb = boto3.resource("dynamodb", region_name="us-east-1")
         self.table = _create_billing_table(self.ddb)
-        # Under mock_aws(), the fresh boto3 resource that _charge_entry_fee
-        # imports (app.core.aws.ddb) is auto-intercepted by moto and shares
-        # this in-memory store. The function reads S.billing_table_name;
-        # assert the default matches the moto table so the test is
-        # config-independent.
+        # app.core.aws.ddb is created at import time (before mock_aws).
+        # Patch it with a fresh resource created inside the mock context so
+        # moto intercepts all calls made by _charge_entry_fee.
+        import app.core.aws as _aws_mod
+        self._orig_ddb = _aws_mod.ddb
+        _aws_mod.ddb = self.ddb
+        self.stack.callback(setattr, _aws_mod, "ddb", self._orig_ddb)
+
         from app.core.settings import S
 
         assert S.billing_table_name == _BILLING_TABLE, (

@@ -106,6 +106,7 @@ class _FakeTable:
 @pytest.fixture(autouse=True)
 def _patch_tables():
     """Patch T.broadcast_private_sessions, T.broadcast_chat_messages, and T.billing."""
+    import uuid as _uuid
     private_table = _FakeTable()
     chat_table = _FakeTable()
     billing_table = _FakeTable()
@@ -116,7 +117,32 @@ def _patch_tables():
         billing=billing_table,
         broadcast_sessions=_FakeTable(),
     )
-    with patch.object(broadcast_private_chat, "T", fake_t):
+
+    def _fake_write_billing(
+        viewer_id, creator_id, total_cents, creator_earnings_cents,
+        chat_id, session_id, tier, duration_minutes, payment_method_id,
+    ):
+        """Write billing entries to the fake table instead of via transact_write_items."""
+        from app.core.time import now_ts
+        ts = now_ts()
+        debit_id = _uuid.uuid4().hex
+        credit_id = _uuid.uuid4().hex
+        billing_table.put_item(Item={
+            "pk": f"USER#{viewer_id}", "sk": f"LEDGER#{ts}#{debit_id}",
+            "entry_id": debit_id, "ts": ts, "type": "debit",
+            "amount_cents": total_cents, "currency": "USD", "state": "settled",
+        })
+        billing_table.put_item(Item={
+            "pk": f"USER#{creator_id}", "sk": f"LEDGER#{ts}#{credit_id}",
+            "entry_id": credit_id, "ts": ts, "type": "credit",
+            "amount_cents": creator_earnings_cents, "currency": "USD", "state": "settled",
+        })
+        return debit_id, credit_id
+
+    with (
+        patch.object(broadcast_private_chat, "T", fake_t),
+        patch.object(broadcast_private_chat, "_write_private_chat_billing", _fake_write_billing),
+    ):
         yield {
             "private": private_table,
             "chat": chat_table,

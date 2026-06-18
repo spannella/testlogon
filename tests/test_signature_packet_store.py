@@ -168,6 +168,9 @@ def test_fill_packet_field_updates_value_and_timestamp(monkeypatch) -> None:
     captured = {}
 
     class _FieldsTable:
+        def get_item(self, **kwargs):
+            return {"Item": None}
+
         def update_item(self, **kwargs):
             captured.update(kwargs)
             return {
