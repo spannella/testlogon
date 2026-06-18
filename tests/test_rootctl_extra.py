@@ -29,6 +29,15 @@ import pytest
 
 from app.cli import rootctl
 
+_BREAK_GLASS_SECRET = "test-break-glass-secret"
+
+
+@pytest.fixture(autouse=True)
+def _set_break_glass(monkeypatch):
+    """Set ROOTCTL_BREAK_GLASS_SECRET + TOKEN so mutation commands pass the gate."""
+    monkeypatch.setenv("ROOTCTL_BREAK_GLASS_SECRET", _BREAK_GLASS_SECRET)
+    monkeypatch.setenv("ROOTCTL_BREAK_GLASS_TOKEN", _BREAK_GLASS_SECRET)
+
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -48,8 +57,15 @@ def _plain_user_mock(sub: str) -> Mock:
 
 
 def test_rootctl_rotate_secrets_placeholder_succeeds(capsys, monkeypatch) -> None:
-    """rotate-secrets is a placeholder; returns the scaffold shape without errors."""
+    """rotate-secrets command routes correctly and succeeds (dry-run to avoid real DDB)."""
+    from app.services import secret_rotation as _sr
     monkeypatch.setattr(rootctl, "validate_root_user_sub_config", lambda: "root")
+    monkeypatch.setattr(_sr, "generate_new_secrets", lambda scope: {})
+    monkeypatch.setattr(_sr, "persist_secrets", lambda new_values: {"backend": "mock"})
+    monkeypatch.setattr(_sr, "rotate_kms_break_glass_key", lambda: {"rotated": False})
+    monkeypatch.setattr(rootctl, "audit_event", lambda *a, **kw: None)
+    monkeypatch.setattr(rootctl, "revoke_all_sessions", lambda sub: None)
+    monkeypatch.setattr(rootctl, "revoke_all_api_keys", lambda sub: None)
 
     rc = rootctl.main(
         [
@@ -68,7 +84,6 @@ def test_rootctl_rotate_secrets_placeholder_succeeds(capsys, monkeypatch) -> Non
     assert out["ok"] is True
     assert out["group"] == "root"
     assert out["command"] == "rotate-secrets"
-    assert "policy-guarded" in out["message"]
     assert out["request_id"] == "req-xyz"
     assert out["correlation_id"] == "corr-xyz"
 

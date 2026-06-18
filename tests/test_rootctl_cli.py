@@ -4,7 +4,18 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from app.cli import rootctl
+
+_BREAK_GLASS_SECRET = "test-break-glass-secret"
+
+
+@pytest.fixture(autouse=True)
+def _set_break_glass(monkeypatch):
+    """Set ROOTCTL_BREAK_GLASS_SECRET + TOKEN so mutation commands pass the gate."""
+    monkeypatch.setenv("ROOTCTL_BREAK_GLASS_SECRET", _BREAK_GLASS_SECRET)
+    monkeypatch.setenv("ROOTCTL_BREAK_GLASS_TOKEN", _BREAK_GLASS_SECRET)
 
 
 def test_rootctl_top_level_help_exits_zero(capsys) -> None:
