@@ -35,6 +35,11 @@ from app.models import (
     CatalogReviewOut,
     CatalogStockAdjustIn,
     CatalogStockOut,
+    ProductFeatureCategoryCreateIn,
+    ProductFeatureCategoryOut,
+    ProductFeatureValueCreateIn,
+    ProductFeatureValueOut,
+    ProductFeaturesOut,
 )
 from app.services.filemanager import download_file, upload_catalog_image
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
@@ -1352,3 +1357,77 @@ async def get_category_breadcrumb(category_id: str):
     from app.services.product_categories import get_breadcrumb as _svc
     crumbs = _svc(category_id)
     return {"breadcrumb": crumbs}
+
+
+# ---------------------------------------------------------------------------
+# PRD-006 — Per-item feature categories & values
+# Routes use /product-features prefix to avoid collisions with the existing
+# attach/detach /feature-categories routes (which operate on global FC objects).
+# All gated on S.product_depth_enabled via _require_product_depth_enabled().
+# ---------------------------------------------------------------------------
+
+@router.post("/items/{item_id}/product-features", response_model=ProductFeatureCategoryOut)
+async def create_item_feature_category_endpoint(
+    item_id: str,
+    body: ProductFeatureCategoryCreateIn,
+    ctx=Depends(require_ui_session),
+):
+    """Create a feature category directly attached to a catalog item (PRD-006)."""
+    from app.services.product_features import create_item_feature_category as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    row = _svc(item_id=item_id, name=body.name, position=body.position)
+    return ProductFeatureCategoryOut(**{k: row[k] for k in ProductFeatureCategoryOut.model_fields})
+
+
+@router.post(
+    "/items/{item_id}/product-features/{feature_category_id}/values",
+    response_model=ProductFeatureValueOut,
+)
+async def add_item_feature_value_endpoint(
+    item_id: str,
+    feature_category_id: str,
+    body: ProductFeatureValueCreateIn,
+    ctx=Depends(require_ui_session),
+):
+    """Add a value to a per-item feature category (PRD-006)."""
+    from app.services.product_features import add_item_feature_value as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    row = _svc(
+        item_id=item_id,
+        feature_category_id=feature_category_id,
+        value=body.value,
+        price_delta_cents=body.price_delta_cents,
+        position=body.position,
+    )
+    return ProductFeatureValueOut(**{k: row[k] for k in ProductFeatureValueOut.model_fields})
+
+
+@router.get("/items/{item_id}/product-features", response_model=ProductFeaturesOut)
+async def list_item_product_features_endpoint(item_id: str):
+    """List all feature categories and values for a catalog item (public read, PRD-006)."""
+    from app.services.product_features import list_item_product_features as _svc
+    data = _svc(item_id)
+    return ProductFeaturesOut(
+        item_id=data["item_id"],
+        feature_categories=[
+            ProductFeatureCategoryOut(**{k: fc[k] for k in ProductFeatureCategoryOut.model_fields})
+            for fc in data["feature_categories"]
+        ],
+        values=[
+            ProductFeatureValueOut(**{k: fv[k] for k in ProductFeatureValueOut.model_fields})
+            for fv in data["values"]
+        ],
+    )
+
+
+@router.delete("/items/{item_id}/product-features/{feature_category_id}", status_code=200)
+async def delete_item_feature_category_endpoint(
+    item_id: str,
+    feature_category_id: str,
+    ctx=Depends(require_ui_session),
+):
+    """Delete a per-item feature category (blocked if values exist, PRD-006)."""
+    from app.services.product_features import delete_item_feature_category as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    _svc(item_id=item_id, feature_category_id=feature_category_id)
+    return {"ok": True}

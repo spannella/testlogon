@@ -392,3 +392,211 @@ def list_product_features(item_id: str) -> List[Dict[str, Any]]:
         fc["values"] = _list_values_for_category(fc_id)
         result.append(fc)
     return result
+
+
+# ---------------------------------------------------------------------------
+# PRD-006: Per-item feature categories & values
+#
+# Schema (stored on T.product_depth):
+#   Feature category row: PK=ITEM#{item_id}, SK=FC#{feature_category_id}
+#     entity="feature_category", feature_category_id, name, position, item_id, created_at
+#   Feature value row:    PK=ITEM#{item_id}, SK=FV#{feature_category_id}#{feature_value_id}
+#     entity="feature_value", feature_value_id, feature_category_id, value,
+#     price_delta_cents, position, created_at
+#
+# IDs are deterministic sha256-based so repeated calls are idempotent.
+# ---------------------------------------------------------------------------
+
+def _item_fc_id(item_id: str, name: str) -> str:
+    """Deterministic feature_category_id: sha256(item_id:name_lower)[:16]."""
+    import hashlib
+    raw = f"{item_id}:{name.strip().lower()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _item_fv_id(feature_category_id: str, value: str) -> str:
+    """Deterministic feature_value_id: sha256(feature_category_id:value_lower)[:16]."""
+    import hashlib
+    raw = f"{feature_category_id}:{value.strip().lower()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _require_product_depth_enabled() -> None:
+    """Raise HTTP 501 if product_depth_enabled is False."""
+    if not bool(getattr(S, "product_depth_enabled", False)):
+        raise HTTPException(status_code=501, detail="Product depth features are not enabled.")
+
+
+def create_item_feature_category(
+    item_id: str,
+    name: str,
+    position: int = 0,
+) -> Dict[str, Any]:
+    """Create a feature category attached to a specific catalog item.
+
+    Idempotent: same (item_id, name) → same feature_category_id.  Returns
+    the existing row if already present.
+    """
+    _require_product_depth_enabled()
+
+    fc_id = _item_fc_id(item_id, name)
+    ts = now_ts()
+    item: Dict[str, Any] = {
+        "PK": _item_pk(item_id),
+        "SK": f"FC#{fc_id}",
+        "entity": "feature_category",
+        "feature_category_id": fc_id,
+        "name": name.strip(),
+        "position": position,
+        "item_id": item_id,
+        "created_at": ts,
+    }
+    try:
+        T.product_depth.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            # Already exists — return existing row (idempotent)
+            existing = T.product_depth.get_item(
+                Key={"PK": _item_pk(item_id), "SK": f"FC#{fc_id}"}
+            ).get("Item")
+            if existing:
+                return existing
+            # Race: lost the conditional but cannot find it — re-raise
+        raise
+
+    return item
+
+
+def add_item_feature_value(
+    item_id: str,
+    feature_category_id: str,
+    value: str,
+    price_delta_cents: int = 0,
+    position: int = 0,
+) -> Dict[str, Any]:
+    """Add a value (e.g. 'Red') to a per-item feature category.
+
+    Validates that the feature category exists for this item.
+    Idempotent by value: same (feature_category_id, value) → same row.
+    """
+    _require_product_depth_enabled()
+
+    # Validate category belongs to this item
+    fc_row = T.product_depth.get_item(
+        Key={"PK": _item_pk(item_id), "SK": f"FC#{feature_category_id}"}
+    ).get("Item")
+    if fc_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Feature category not found for this item.",
+        )
+
+    fv_id = _item_fv_id(feature_category_id, value)
+    ts = now_ts()
+    fv_sk = f"FV#{feature_category_id}#{fv_id}"
+    item: Dict[str, Any] = {
+        "PK": _item_pk(item_id),
+        "SK": fv_sk,
+        "entity": "feature_value",
+        "feature_value_id": fv_id,
+        "feature_category_id": feature_category_id,
+        "value": value.strip(),
+        "price_delta_cents": price_delta_cents,
+        "position": position,
+        "created_at": ts,
+    }
+    try:
+        T.product_depth.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            # Already exists — return existing row (idempotent)
+            existing = T.product_depth.get_item(
+                Key={"PK": _item_pk(item_id), "SK": fv_sk}
+            ).get("Item")
+            if existing:
+                return existing
+        raise
+
+    return item
+
+
+def list_item_feature_categories(item_id: str) -> List[Dict[str, Any]]:
+    """Query T.product_depth for all FC# rows of an item, sorted by position."""
+    _require_product_depth_enabled()
+
+    resp = T.product_depth.query(
+        KeyConditionExpression=(
+            Key("PK").eq(_item_pk(item_id)) & Key("SK").begins_with("FC#")
+        ),
+    )
+    rows = resp.get("Items", [])
+    return sorted(rows, key=lambda r: (int(r.get("position", 0)), r.get("name", "")))
+
+
+def list_item_feature_values(item_id: str, feature_category_id: str) -> List[Dict[str, Any]]:
+    """Query T.product_depth for all FV#{feature_category_id}# rows, sorted by position."""
+    _require_product_depth_enabled()
+
+    resp = T.product_depth.query(
+        KeyConditionExpression=(
+            Key("PK").eq(_item_pk(item_id))
+            & Key("SK").begins_with(f"FV#{feature_category_id}#")
+        ),
+    )
+    rows = resp.get("Items", [])
+    return sorted(rows, key=lambda r: (int(r.get("position", 0)), r.get("value", "")))
+
+
+def list_item_product_features(item_id: str) -> Dict[str, Any]:
+    """Return ProductFeaturesOut-compatible dict with all feature categories and values."""
+    _require_product_depth_enabled()
+
+    categories = list_item_feature_categories(item_id)
+    all_values: List[Dict[str, Any]] = []
+    for fc in categories:
+        fc_id = fc["feature_category_id"]
+        all_values.extend(list_item_feature_values(item_id, fc_id))
+
+    return {
+        "item_id": item_id,
+        "feature_categories": categories,
+        "values": all_values,
+    }
+
+
+def delete_item_feature_category(item_id: str, feature_category_id: str) -> None:
+    """Delete a per-item feature category.
+
+    Raises HTTP 409 if any FV rows exist for this category (values still attached).
+    Raises HTTP 404 if the category does not exist for this item.
+    """
+    _require_product_depth_enabled()
+
+    # Verify category exists
+    fc_row = T.product_depth.get_item(
+        Key={"PK": _item_pk(item_id), "SK": f"FC#{feature_category_id}"}
+    ).get("Item")
+    if fc_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Feature category not found for this item.",
+        )
+
+    # Check if any values exist — if yes, block deletion
+    values = list_item_feature_values(item_id, feature_category_id)
+    if values:
+        raise HTTPException(
+            status_code=409,
+            detail="feature_category_in_use: remove all values before deleting the category.",
+        )
+
+    # Delete the FC row
+    T.product_depth.delete_item(
+        Key={"PK": _item_pk(item_id), "SK": f"FC#{feature_category_id}"}
+    )
