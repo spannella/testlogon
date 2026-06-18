@@ -577,27 +577,44 @@ def list_awaiting_my_signature(limit: int = 100, user_sub: str = Depends(_curren
     return {"items": items, "count": len(items)}
 
 
+def _sender_inbox_item(packet: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "packet_id": str(packet.get("packet_id") or ""),
+        "owner_user_id": packet.get("owner_user_id"),
+        "source_name": packet.get("source_name"),
+        "status": str(packet.get("status") or ""),
+        "status_chip": None,
+        "status_text": None,
+        "role": "sender",
+        "created_at": packet.get("created_at"),
+        "sent_at": packet.get("sent_at"),
+        "completed_at": packet.get("completed_at"),
+    }
+
+
 @router.get("/sent", response_model=SigningInboxListOut)
 def list_sent_by_me(limit: int = 100, user_sub: str = Depends(_current_user)) -> Dict[str, Any]:
-    """Packets the caller owns/sent, newest first (OWNER_CREATED_INDEX GSI)."""
+    """Packets the caller has SENT (excludes unsent drafts), newest first."""
     limit = max(1, min(int(limit), 200))
     packets = list_packets_by_sender(user_sub, limit=limit)
-    items: list[Dict[str, Any]] = []
-    for packet in packets:
-        items.append(
-            {
-                "packet_id": str(packet.get("packet_id") or ""),
-                "owner_user_id": packet.get("owner_user_id"),
-                "source_name": packet.get("source_name"),
-                "status": str(packet.get("status") or ""),
-                "status_chip": None,
-                "status_text": None,
-                "role": "sender",
-                "created_at": packet.get("created_at"),
-                "sent_at": packet.get("sent_at"),
-                "completed_at": packet.get("completed_at"),
-            }
-        )
+    items = [
+        _sender_inbox_item(p)
+        for p in packets
+        if str(p.get("status") or "") != SignaturePacketStatus.DRAFT.value
+    ]
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/drafts", response_model=SigningInboxListOut)
+def list_my_drafts(limit: int = 100, user_sub: str = Depends(_current_user)) -> Dict[str, Any]:
+    """Unsent draft packets the caller owns, newest first — resumable in the composer."""
+    limit = max(1, min(int(limit), 200))
+    packets = list_packets_by_sender(user_sub, limit=limit)
+    items = [
+        _sender_inbox_item(p)
+        for p in packets
+        if str(p.get("status") or "") == SignaturePacketStatus.DRAFT.value
+    ]
     return {"items": items, "count": len(items)}
 
 

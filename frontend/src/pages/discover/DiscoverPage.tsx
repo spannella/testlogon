@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { FollowButton } from "@/components/shared/FollowButton";
+import { EmptyState } from "@/components/shared/EmptyState";
 import { Compass, Hash, Search, TrendingUp, Users } from "lucide-react";
 import {
   searchDiscoverUsers,
@@ -179,7 +180,12 @@ export default function DiscoverPage() {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">No suggestions yet</p>
+                <EmptyState
+                  icon={<Users className="h-7 w-7" />}
+                  title="No suggestions yet"
+                  description="Follow creators and engage with posts to get personalized suggestions."
+                  className="py-10"
+                />
               )}
             </CardContent>
           </Card>
@@ -199,7 +205,12 @@ export default function DiscoverPage() {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">No trending creators yet</p>
+                <EmptyState
+                  icon={<TrendingUp className="h-7 w-7" />}
+                  title="No trending creators yet"
+                  description="Trending creators appear here as the community grows — check back soon."
+                  className="py-10"
+                />
               )}
             </CardContent>
           </Card>

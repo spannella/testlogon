@@ -154,6 +154,9 @@ export const listSentPackets = (limit = 100) =>
 export const listCompletedForMe = (limit = 100) =>
   api.get<SigningInboxList>("/v1/signature-packets/completed-for-me", { limit: String(limit) });
 
+export const listDraftPackets = (limit = 100) =>
+  api.get<SigningInboxList>("/v1/signature-packets/drafts", { limit: String(limit) });
+
 // ─── SUX-005: owner mint/revoke per-signer public signing link ───────────────
 
 export interface CreateSigningLinkResp {

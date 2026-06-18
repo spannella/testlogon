@@ -1,4 +1,6 @@
+import { BarChart3 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/shared/EmptyState";
 import type { DashboardTopContentItem } from "@/api/types";
 
 interface TopContentListProps {
@@ -13,7 +15,12 @@ export default function TopContentList({ items }: TopContentListProps) {
       </CardHeader>
       <CardContent>
         {items.length === 0 && (
-          <p className="text-sm text-muted-foreground">No content data yet</p>
+          <EmptyState
+            icon={<BarChart3 className="h-7 w-7" />}
+            title="No content data yet"
+            description="Your top-performing posts and videos will appear here once they start getting views."
+            className="py-8"
+          />
         )}
         <ul className="space-y-2">
           {items.slice(0, 5).map((item, idx) => (

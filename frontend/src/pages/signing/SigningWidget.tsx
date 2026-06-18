@@ -70,7 +70,7 @@ function validateFieldInput(
       return null;
     }
     const strokes = parseDrawnStrokes(drawnRaw);
-    if (strokes.length < 2) return "Drawn mode needs JSON points, e.g. [[0.1,0.2],[0.2,0.3]]";
+    if (strokes.length < 2) return "Please draw your signature in the box above.";
     if (strokes.length > 20) return "Max points is 20";
     for (const point of strokes) {
       if (!Array.isArray(point) || point.length !== 2) return "Each point must be [x,y]";
@@ -314,7 +314,7 @@ export function SigningWidget({
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>Document preview</span>
-          <span>status: {packet.status}</span>
+          <span>Status: {packet.status}</span>
         </div>
         <div
           data-testid="signing-canvas"
@@ -416,7 +416,7 @@ export function SigningWidget({
               </span>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <span>Default signature input:</span>
+              <span>Signature style:</span>
               <Select
                 value={defaultCaptureMode}
                 onValueChange={(v) => {
@@ -429,8 +429,8 @@ export function SigningWidget({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="typed">typed</SelectItem>
-                  <SelectItem value="drawn">drawn</SelectItem>
+                  <SelectItem value="typed">Type</SelectItem>
+                  <SelectItem value="drawn">Draw</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -464,8 +464,8 @@ export function SigningWidget({
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="typed">typed</SelectItem>
-                              <SelectItem value="drawn">drawn</SelectItem>
+                              <SelectItem value="typed">Type</SelectItem>
+                              <SelectItem value="drawn">Draw</SelectItem>
                             </SelectContent>
                           </Select>
                         )}
