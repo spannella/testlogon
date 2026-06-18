@@ -35,6 +35,11 @@ from app.models import (
     CatalogReviewOut,
     CatalogStockAdjustIn,
     CatalogStockOut,
+    ProductFeatureCategoryCreateIn,
+    ProductFeatureCategoryOut,
+    ProductFeatureValueCreateIn,
+    ProductFeatureValueOut,
+    ProductFeaturesOut,
 )
 from app.services.filemanager import download_file, upload_catalog_image
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
@@ -1110,6 +1115,22 @@ async def get_product_type_endpoint(item_id: str, ctx=Depends(require_ui_session
     return {"item_id": item_id, "product_type": pt or "standalone"}
 
 
+@router.post("/items/{item_id}/mark-virtual")
+async def mark_item_virtual_endpoint(item_id: str, ctx=Depends(require_ui_session)):
+    """PRD-007: promote a catalog item to product_type='virtual'.
+
+    Gated by S.product_depth_enabled (501 when off).
+    The caller must own the item (403 otherwise).
+    Idempotent — re-marking an already-virtual item is a no-op.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_variants import mark_item_as_virtual as _svc
+    row = _svc(item_id, ctx["user_sub"])
+    return {"item_id": item_id, "product_type": row.get("product_type", "virtual")}
+
+
 @router.post("/items/{item_id}/feature-categories")
 async def attach_feature_category_endpoint(item_id: str, body: Dict[str, Any], ctx=Depends(require_ui_session)):
     from app.services.product_features import attach_feature_category_to_product as _svc
@@ -1144,7 +1165,13 @@ async def create_variant_endpoint(item_id: str, body: Dict[str, Any], ctx=Depend
 
 
 @router.get("/items/{item_id}/variants")
-async def list_variants_endpoint(item_id: str, limit: int = 100, ctx=Depends(require_ui_session)):
+async def list_variants_endpoint(item_id: str, limit: int = 100):
+    """PRD-008: public read — no auth required.
+
+    Gated by S.product_depth_enabled (501 when off).
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
     from app.services.product_variants import list_variants as _svc
     items, _ = _svc(item_id, limit=limit)
     return {"item_id": item_id, "variants": items, "count": len(items)}
@@ -1241,3 +1268,267 @@ async def remove_bundle_component_endpoint(
     from app.services.product_variants import remove_bundle_component as _svc
     _require_item_owner(item_id, ctx["user_sub"])
     _svc(item_id, component_item_id, ctx["user_sub"])
+
+
+# ---------------------------------------------------------------------------
+# PRD-004 / PRD-005 — Category tree endpoints
+# Gated on S.product_depth_enabled (501 when off, raised by the service).
+# ---------------------------------------------------------------------------
+
+class _AddChildBody(BaseModel):
+    child_category_id: str
+    position: int = Field(default=0, ge=0)
+
+
+class _MoveCategoryBody(BaseModel):
+    new_parent_id: str
+
+
+def _build_tree_node(category_id: str, depth: int, max_depth: int) -> Dict[str, Any]:
+    """Recursively build a tree node dict (depth-limited)."""
+    from app.services.product_categories import _list_children_raw, _get_tree_row
+    row = _get_tree_row(category_id) or {}
+    node: Dict[str, Any] = {
+        "category_id": category_id,
+        "name": row.get("name", category_id),
+        "children": [],
+    }
+    if depth < max_depth:
+        children, _ = _list_children_raw(category_id, limit=200)
+        node["children"] = [
+            _build_tree_node(child["category_id"], depth + 1, max_depth)
+            for child in children
+        ]
+    return node
+
+
+@router.post("/categories/{category_id}/children")
+async def add_category_child(
+    category_id: str,
+    body: _AddChildBody,
+    ctx=Depends(require_ui_session),
+):
+    """Link an existing flat category as a child of category_id in the tree."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_categories import add_child as _svc
+    # Resolve child's name from T.catalog (best-effort; fallback to id)
+    child_meta = _get_category_meta(body.child_category_id)
+    child_name = child_meta.get("name", body.child_category_id)
+    try:
+        row = _svc(
+            parent_category_id=category_id,
+            category_id=body.child_category_id,
+            owner_sub=ctx["user_sub"],
+            name=child_name,
+            position=body.position,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "category_id": row["category_id"],
+        "parent_category_id": row["parent_category_id"],
+        "path": row["path"],
+        "position": int(row.get("position") or 0),
+        "name": row["name"],
+    }
+
+
+@router.patch("/categories/{category_id}/move")
+async def move_category_endpoint(
+    category_id: str,
+    body: _MoveCategoryBody,
+    ctx=Depends(require_ui_session),
+):
+    """Re-parent category_id to a new parent in the tree."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_categories import move_category as _svc
+    try:
+        row = _svc(
+            category_id=category_id,
+            new_parent_id=body.new_parent_id,
+            owner_sub=ctx["user_sub"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "category_id": row.get("category_id", category_id),
+        "parent_category_id": row.get("parent_category_id"),
+        "path": row.get("path"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.get("/categories/{category_id}/tree")
+async def get_category_tree(
+    category_id: str,
+    max_depth: int = Query(default=5, ge=1, le=10),
+):
+    """Return the category tree rooted at category_id (public, no auth required)."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    return _build_tree_node(category_id, depth=0, max_depth=max_depth)
+
+
+@router.get("/categories/{category_id}/breadcrumb")
+async def get_category_breadcrumb(category_id: str):
+    """Return breadcrumb trail [{category_id, name}] from root to category_id (public)."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_categories import get_breadcrumb as _svc
+    crumbs = _svc(category_id)
+    return {"breadcrumb": crumbs}
+
+
+# ---------------------------------------------------------------------------
+# PRD-006 — Per-item feature categories & values
+# Routes use /product-features prefix to avoid collisions with the existing
+# attach/detach /feature-categories routes (which operate on global FC objects).
+# All gated on S.product_depth_enabled via _require_product_depth_enabled().
+# ---------------------------------------------------------------------------
+
+@router.post("/items/{item_id}/product-features", response_model=ProductFeatureCategoryOut)
+async def create_item_feature_category_endpoint(
+    item_id: str,
+    body: ProductFeatureCategoryCreateIn,
+    ctx=Depends(require_ui_session),
+):
+    """Create a feature category directly attached to a catalog item (PRD-006)."""
+    from app.services.product_features import create_item_feature_category as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    row = _svc(item_id=item_id, name=body.name, position=body.position)
+    return ProductFeatureCategoryOut(**{k: row[k] for k in ProductFeatureCategoryOut.model_fields})
+
+
+@router.post(
+    "/items/{item_id}/product-features/{feature_category_id}/values",
+    response_model=ProductFeatureValueOut,
+)
+async def add_item_feature_value_endpoint(
+    item_id: str,
+    feature_category_id: str,
+    body: ProductFeatureValueCreateIn,
+    ctx=Depends(require_ui_session),
+):
+    """Add a value to a per-item feature category (PRD-006)."""
+    from app.services.product_features import add_item_feature_value as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    row = _svc(
+        item_id=item_id,
+        feature_category_id=feature_category_id,
+        value=body.value,
+        price_delta_cents=body.price_delta_cents,
+        position=body.position,
+    )
+    return ProductFeatureValueOut(**{k: row[k] for k in ProductFeatureValueOut.model_fields})
+
+
+@router.get("/items/{item_id}/product-features", response_model=ProductFeaturesOut)
+async def list_item_product_features_endpoint(item_id: str):
+    """List all feature categories and values for a catalog item (public read, PRD-006)."""
+    from app.services.product_features import list_item_product_features as _svc
+    data = _svc(item_id)
+    return ProductFeaturesOut(
+        item_id=data["item_id"],
+        feature_categories=[
+            ProductFeatureCategoryOut(**{k: fc[k] for k in ProductFeatureCategoryOut.model_fields})
+            for fc in data["feature_categories"]
+        ],
+        values=[
+            ProductFeatureValueOut(**{k: fv[k] for k in ProductFeatureValueOut.model_fields})
+            for fv in data["values"]
+        ],
+    )
+
+
+@router.delete("/items/{item_id}/product-features/{feature_category_id}", status_code=200)
+async def delete_item_feature_category_endpoint(
+    item_id: str,
+    feature_category_id: str,
+    ctx=Depends(require_ui_session),
+):
+    """Delete a per-item feature category (blocked if values exist, PRD-006)."""
+    from app.services.product_features import delete_item_feature_category as _svc
+    _require_item_owner(item_id, ctx["user_sub"])
+    _svc(item_id=item_id, feature_category_id=feature_category_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# PRD-011 — Bundle expand + product association endpoints
+# All gated on S.product_depth_enabled (501 when off).
+# Expand is public read; association CRUD requires ownership.
+# ---------------------------------------------------------------------------
+
+@router.get("/items/{item_id}/expand")
+async def expand_bundle_endpoint(
+    item_id: str,
+    qty: int = Query(default=1, ge=1, le=100),
+):
+    """Flatten a bundle/kit into component lines for cart/checkout use (PRD-011).
+
+    Public read — no auth required.
+    Returns 501 when product_depth_enabled is False.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_variants import expand_bundle as _svc
+    return _svc(item_id, qty)
+
+
+class _AssociationIn(BaseModel):
+    assoc_type: str
+    to_item_id: str
+
+
+@router.post("/items/{item_id}/associations")
+async def add_association_endpoint(
+    item_id: str,
+    body: _AssociationIn,
+    ctx=Depends(require_ui_session),
+):
+    """Add a product association (PRD-011).
+
+    Caller must own the source item.  Idempotent on the same triple.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_associations import add_association
+    return add_association(item_id, body.assoc_type, body.to_item_id)
+
+
+@router.get("/items/{item_id}/associations")
+async def list_associations_endpoint(
+    item_id: str,
+    assoc_type: Optional[str] = None,
+):
+    """List product associations for an item (public read, PRD-011).
+
+    Optional ``assoc_type`` query param filters by type.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_associations import list_associations
+    rows = list_associations(item_id, assoc_type)
+    return {"item_id": item_id, "associations": rows, "count": len(rows)}
+
+
+@router.delete("/items/{item_id}/associations/{to_item_id}", status_code=200)
+async def remove_association_endpoint(
+    item_id: str,
+    to_item_id: str,
+    assoc_type: str = Query(...),
+    ctx=Depends(require_ui_session),
+):
+    """Remove a product association (PRD-011).
+
+    Caller must own the source item.  No-op if the association does not exist.
+    """
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    _require_item_owner(item_id, ctx["user_sub"])
+    from app.services.product_associations import remove_association
+    remove_association(item_id, assoc_type, to_item_id)
+    return {"ok": True}

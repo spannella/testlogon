@@ -1,4 +1,15 @@
 import { api } from "@/api/client";
+import type {
+  CategoryTreeNode,
+  CategoryBreadcrumb,
+  ProductFeaturesOut,
+  ProductFeatureCategoryOut,
+  ProductFeatureValueOut,
+  VariantListOut,
+  VariantOut,
+  BundleExpandOut,
+  ProductAssoc,
+} from "@/api/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OFBiz CATALOG-DEPTH (PRD-006 / PRD-007 / PRD-012) — admin product depth API.
@@ -393,3 +404,139 @@ export function formatDeltaCents(cents: number, currency = "USD"): string {
   const sign = cents > 0 ? "+" : cents < 0 ? "-" : "";
   return `${sign}${formatCents(Math.abs(cents), currency)}`;
 }
+
+// ─── PRD-014: Category tree / hierarchy ─────────────────────────────────────
+//
+// These wrappers target the new category-hierarchy endpoints added for catalog
+// depth (PRD-003 / PRD-014). All under /ui/catalog/categories/{id}/...
+// Feature-gated on the backend; 501 when product_depth_enabled is off.
+
+export const addCategoryChild = (
+  categoryId: string,
+  childCategoryId: string,
+  position = 0,
+) =>
+  api.post<Record<string, unknown>>(
+    `/ui/catalog/categories/${encodeURIComponent(categoryId)}/children`,
+    { child_category_id: childCategoryId, position },
+  );
+
+export const moveCategory = (categoryId: string, newParentId: string) =>
+  api.patch<Record<string, unknown>>(
+    `/ui/catalog/categories/${encodeURIComponent(categoryId)}/move`,
+    { new_parent_id: newParentId },
+  );
+
+export const getCategoryTree = (categoryId: string, maxDepth = 5) =>
+  api.get<CategoryTreeNode>(
+    `/ui/catalog/categories/${encodeURIComponent(categoryId)}/tree`,
+    { max_depth: String(maxDepth) },
+  );
+
+export const getCategoryBreadcrumb = (categoryId: string) =>
+  api.get<CategoryBreadcrumb>(
+    `/ui/catalog/categories/${encodeURIComponent(categoryId)}/breadcrumb`,
+  );
+
+// ─── PRD-014: Per-item product features ────────────────────────────────────
+//
+// These endpoints manage feature categories and values **owned by a single
+// item** (as opposed to the global feature-category library above).
+// Routes: /ui/catalog/items/{id}/product-features/...
+
+export const createItemFeatureCategory = (
+  itemId: string,
+  name: string,
+  position = 0,
+) =>
+  api.post<ProductFeatureCategoryOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/product-features`,
+    { name, position },
+  );
+
+export const addItemFeatureValue = (
+  itemId: string,
+  fcId: string,
+  value: string,
+  priceDeltaCents = 0,
+  position = 0,
+) =>
+  api.post<ProductFeatureValueOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/product-features/${encodeURIComponent(fcId)}/values`,
+    { value, price_delta_cents: priceDeltaCents, position },
+  );
+
+export const getItemProductFeatures = (itemId: string) =>
+  api.get<ProductFeaturesOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/product-features`,
+  );
+
+export const deleteItemFeatureCategory = (itemId: string, fcId: string) =>
+  api.del<{ ok: boolean }>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/product-features/${encodeURIComponent(fcId)}`,
+  );
+
+// ─── PRD-014: Mark-virtual + variant endpoints (per-item routes) ────────────
+
+export const markItemVirtual = (itemId: string) =>
+  api.post<Record<string, unknown>>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/mark-virtual`,
+    {},
+  );
+
+export const createItemVariant = (
+  itemId: string,
+  featureValues: Record<string, string>,
+  skuOverride?: string,
+) =>
+  api.post<VariantOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/variants`,
+    { feature_values: featureValues, sku_override: skuOverride },
+  );
+
+export const listItemVariants = (itemId: string, limit = 100) =>
+  api.get<VariantListOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/variants`,
+    { limit: String(limit) },
+  );
+
+export const deleteItemVariant = (itemId: string, variantId: string) =>
+  api.del<{ ok: boolean }>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/variants/${encodeURIComponent(variantId)}`,
+  );
+
+// ─── PRD-014: Bundle expand ────────────────────────────────────────────────
+
+export const expandBundle = (itemId: string, qty = 1) =>
+  api.get<BundleExpandOut>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/expand`,
+    { qty: String(qty) },
+  );
+
+// ─── PRD-014: Product associations ────────────────────────────────────────
+
+export const addAssociation = (
+  itemId: string,
+  assocType: string,
+  toItemId: string,
+) =>
+  api.post<ProductAssoc>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/associations`,
+    { assoc_type: assocType, to_item_id: toItemId },
+  );
+
+export const listAssociations = (itemId: string, assocType?: string) =>
+  api.get<{ item_id: string; associations: ProductAssoc[]; count: number }>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/associations`,
+    assocType ? { assoc_type: assocType } : undefined,
+  );
+
+export const removeAssociation = (
+  itemId: string,
+  toItemId: string,
+  assocType: string,
+) =>
+  api.del<{ ok: boolean }>(
+    `/ui/catalog/items/${encodeURIComponent(itemId)}/associations/${encodeURIComponent(toItemId)}`,
+    { assoc_type: assocType },
+  );

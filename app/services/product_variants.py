@@ -40,7 +40,7 @@ def _flag_on() -> bool:
 
 def _require_enabled() -> None:
     if not _flag_on():
-        raise HTTPException(status_code=404, detail="Product variants are not enabled.")
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +164,15 @@ def get_product_type(item_id: str) -> Optional[str]:
     if item:
         return str(item.get("product_type", "standalone"))
     return None
+
+
+def mark_item_as_virtual(item_id: str, user_sub: str) -> Dict[str, Any]:
+    """Promote an existing catalog item to product_type='virtual'.
+
+    Convenience wrapper around set_product_type — idempotent.
+    Raises 501 when the feature flag is off, 404 when the item does not exist.
+    """
+    return set_product_type(item_id, "virtual", user_sub)
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +356,19 @@ def delete_variant(
     _audit("product_variant.deleted", user_sub, parent_item_id=parent_item_id, variant_id=variant_id)
 
 
+def get_variant(
+    parent_item_id: str,
+    variant_id: str,
+) -> Dict[str, Any]:
+    """Fetch a single variant row.  Raises HTTP 404 if not found."""
+    key = {"PK": _item_pk(parent_item_id), "SK": f"VAR#{variant_id}"}
+    resp = T.product_depth.get_item(Key=key)
+    item = resp.get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Variant not found.")
+    return item
+
+
 # ---------------------------------------------------------------------------
 # Bundle / kit component membership (PRD follow-up)
 # ---------------------------------------------------------------------------
@@ -495,3 +517,156 @@ def remove_bundle_component(
         parent_item_id=parent_item_id,
         component_item_id=component_item_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# PRD-009 — Bundle expand + kit price computation
+# ---------------------------------------------------------------------------
+
+_MAX_EXPAND_DEPTH = 5
+
+
+def _require_product_depth_enabled() -> None:
+    """Raise 501 when product_depth feature flag is off."""
+    if not bool(getattr(S, "product_depth_enabled", False)):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+
+
+def compute_bundle_price(parent_item_id: str) -> int:
+    """Compute bundle/kit price.
+
+    - kit (product_type=kit): Σ (component_price_cents * quantity)
+    - bundle (product_type=bundle): uses the parent item's fixed price_cents
+
+    Returns effective price in cents (0 on any lookup failure).
+    """
+    _require_product_depth_enabled()
+
+    # Read product_type from the TYPE marker row on T.product_depth.
+    resp = T.product_depth.get_item(Key={"PK": _item_pk(parent_item_id), "SK": "TYPE"})
+    type_row = resp.get("Item") or {}
+    product_type = str(type_row.get("product_type", "standalone"))
+
+    if product_type == "kit":
+        # Sum component_price_cents * quantity for each component.
+        rows = _list_bundle_component_rows(parent_item_id)
+        total = 0
+        for row in rows:
+            comp_id = str(row.get("component_item_id") or "")
+            qty = int(row.get("quantity") or 1)
+            price = 0
+            try:
+                details = _find_catalog_item(comp_id)
+                price = int(details.get("price_cents") or 0)
+            except HTTPException:
+                price = 0
+            total += price * qty
+        return total
+    else:
+        # bundle or any other type: use parent's fixed price from T.catalog.
+        try:
+            parent = _find_catalog_item(parent_item_id)
+            return int(parent.get("price_cents") or 0)
+        except HTTPException:
+            return 0
+
+
+def expand_bundle(
+    parent_item_id: str,
+    qty: int = 1,
+    *,
+    _depth: int = 0,
+    _visited: Optional[set] = None,
+) -> Dict[str, Any]:
+    """Flatten a bundle/kit into component lines for cart/checkout use.
+
+    Returns::
+
+        {
+            "item_id": parent_item_id,
+            "qty": qty,
+            "bundle_price_cents": computed_price * qty,
+            "lines": [
+                {
+                    "item_id": component_item_id,
+                    "name": str,
+                    "price_cents": int,
+                    "qty": component_qty * qty,
+                    "line_total_cents": int,
+                },
+                ...
+            ]
+        }
+
+    Raises:
+        ValueError("circular_bundle") if the same item appears more than once.
+        HTTPException(422) if max depth (5) is exceeded.
+    """
+    _require_product_depth_enabled()
+
+    if _depth > _MAX_EXPAND_DEPTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Bundle nesting exceeds maximum depth of {_MAX_EXPAND_DEPTH}.",
+        )
+
+    if _visited is None:
+        _visited = set()
+
+    if parent_item_id in _visited:
+        raise ValueError("circular_bundle")
+
+    _visited = _visited | {parent_item_id}  # immutable copy per branch
+
+    bundle_price = compute_bundle_price(parent_item_id)
+    rows = _list_bundle_component_rows(parent_item_id)
+
+    lines: List[Dict[str, Any]] = []
+    for row in rows:
+        comp_id = str(row.get("component_item_id") or "")
+        comp_qty = int(row.get("quantity") or 1) * qty
+
+        # Fetch component catalog details (best-effort).
+        comp_name: Optional[str] = None
+        comp_price = 0
+        try:
+            details = _find_catalog_item(comp_id)
+            comp_name = details.get("name") or details.get("title") or comp_id
+            comp_price = int(details.get("price_cents") or 0)
+        except HTTPException:
+            comp_name = comp_id
+            comp_price = 0
+
+        # If the component is itself a bundle/kit, recurse.
+        comp_type_resp = T.product_depth.get_item(
+            Key={"PK": _item_pk(comp_id), "SK": "TYPE"}
+        )
+        comp_type_row = comp_type_resp.get("Item") or {}
+        comp_type = str(comp_type_row.get("product_type", "standalone"))
+
+        if comp_type in _BUNDLE_PARENT_TYPES:
+            # Recurse — pass qty=comp_qty here so nested components are multiplied correctly.
+            nested = expand_bundle(
+                comp_id,
+                qty=comp_qty,
+                _depth=_depth + 1,
+                _visited=_visited,
+            )
+            lines.extend(nested["lines"])
+        else:
+            lines.append(
+                {
+                    "item_id": comp_id,
+                    "name": comp_name,
+                    "price_cents": comp_price,
+                    "qty": comp_qty,
+                    "line_total_cents": comp_price * comp_qty,
+                }
+            )
+
+    return {
+        "item_id": parent_item_id,
+        "qty": qty,
+        "bundle_price_cents": bundle_price * qty,
+        "lines": lines,
+    }

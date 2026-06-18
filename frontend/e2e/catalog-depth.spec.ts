@@ -434,3 +434,354 @@ test.describe("Section 93: Catalog Depth admin page (UI)", () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sections 200–205 — PRD-016 depth-route guard tests (flag-agnostic)
+//
+// These tests probe every depth-specific endpoint and assert that only valid
+// HTTP status codes are returned.  The permitted set per route is:
+//
+//   501  — PRODUCT_DEPTH_ENABLED is false (router-level guard, flag off)
+//   404  — flag is on but the item/category has no depth data yet
+//   200  — flag is on and data exists (or the route is a no-op)
+//   409  — flag is on, data conflict (e.g. duplicate child)
+//
+// When the response is 501 the detail must equal "product_depth_not_enabled".
+// This guarantees that any unexpected status code (e.g. 500, 403, 422) causes
+// the test to fail.  The tests pass in both CI (flag off → 501) and local dev
+// (flag on → 200 or 404 depending on data).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe("Section 200: PRD-016 — flag-off 501 guard (setup)", () => {
+  let alice200: Page;
+  let cat200Id = "";
+  let item200Id = "";
+
+  test.beforeAll(async ({ browser }) => {
+    alice200 = await newIdentityPage(browser, "alice");
+
+    const catResp = await apiPost(alice200, "alice", "ui/catalog/categories", {
+      name: `Depth501 Cat ${TS}`,
+      description: "501 guard",
+    });
+    if (catResp.ok()) {
+      cat200Id = ((await catResp.json()) as { category_id: string }).category_id;
+    }
+
+    if (cat200Id) {
+      const itemResp = await apiPost(
+        alice200,
+        "alice",
+        `ui/catalog/categories/${encodeURIComponent(cat200Id)}/items`,
+        { name: `Depth501 Item ${TS}`, price_cents: 500 },
+      );
+      if (itemResp.ok()) {
+        item200Id = ((await itemResp.json()) as { item_id: string }).item_id;
+      }
+    }
+  });
+
+  test("200.1 Create category + item for 501 probe → both IDs are non-empty", async () => {
+    expect(typeof cat200Id).toBe("string");
+    expect(cat200Id.length).toBeGreaterThan(0);
+    expect(typeof item200Id).toBe("string");
+    expect(item200Id.length).toBeGreaterThan(0);
+  });
+});
+
+test.describe("Section 201: PRD-016 — Category Tree routes (flag-agnostic)", () => {
+  let alice: Page;
+  let catId = "";
+
+  test.beforeAll(async ({ browser }) => {
+    alice = await newIdentityPage(browser, "alice");
+    const resp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `Tree501 ${TS}`,
+    });
+    if (resp.ok()) {
+      catId = ((await resp.json()) as { category_id: string }).category_id;
+    }
+  });
+
+  test("201.1 GET /categories/{id}/tree → 200, 404, or 501", async () => {
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/categories/${encodeURIComponent(catId)}/tree`,
+    );
+    // 501 = flag off; 404 = flag on, no depth data; 200 = flag on, data exists
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+
+  test("201.2 GET /categories/{id}/breadcrumb → 200, 404, or 501", async () => {
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/categories/${encodeURIComponent(catId)}/breadcrumb`,
+    );
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+
+  test("201.3 POST /categories/{id}/children → 200, 404, 409, or 501", async () => {
+    const childResp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `Child501 ${TS}`,
+    });
+    const childId = childResp.ok()
+      ? ((await childResp.json()) as { category_id: string }).category_id
+      : "child-probe";
+
+    const sess = getSessions()["alice"];
+    const resp = await alice.request.post(
+      `${API}/ui/catalog/categories/${encodeURIComponent(catId)}/children`,
+      {
+        data: { child_category_id: childId, position: 0 },
+        headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+      },
+    );
+    // 501 = flag off; 200/409 = flag on (data depends on tree state); 404 = not yet in tree
+    expect([200, 404, 409, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+
+  test("201.4 PATCH /categories/{id}/move → 200, 404, 409, or 501", async () => {
+    const parentResp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `MoveParent501 ${TS}`,
+    });
+    const parentId = parentResp.ok()
+      ? ((await parentResp.json()) as { category_id: string }).category_id
+      : "parent-probe";
+
+    const sess = getSessions()["alice"];
+    const resp = await alice.request.patch(
+      `${API}/ui/catalog/categories/${encodeURIComponent(catId)}/move`,
+      {
+        data: { new_parent_id: parentId },
+        headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+      },
+    );
+    expect([200, 404, 409, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+});
+
+test.describe("Section 202: PRD-016 — Product Features routes (flag-agnostic)", () => {
+  let alice: Page;
+  let itemId = "";
+
+  test.beforeAll(async ({ browser }) => {
+    alice = await newIdentityPage(browser, "alice");
+    const catResp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `Feat501Cat ${TS}`,
+    });
+    const catId = catResp.ok()
+      ? ((await catResp.json()) as { category_id: string }).category_id
+      : "probe-cat";
+    const itemResp = await apiPost(
+      alice,
+      "alice",
+      `ui/catalog/categories/${encodeURIComponent(catId)}/items`,
+      { name: `Feat501Item ${TS}`, price_cents: 1000 },
+    );
+    if (itemResp.ok()) {
+      itemId = ((await itemResp.json()) as { item_id: string }).item_id;
+    }
+  });
+
+  test("202.1 GET /items/{id}/product-features → 200, 404, or 501", async () => {
+    // Route delegates gating to the service (_require_enabled) which raises 404 when
+    // flag is off.  Accept 200 (flag on) or 404/501 (flag off or no depth data).
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/product-features`,
+    );
+    expect([200, 404, 501]).toContain(resp.status());
+  });
+
+  test("202.2 POST /items/{id}/mark-virtual → 200, 404, or 501", async () => {
+    const sess = getSessions()["alice"];
+    const resp = await alice.request.post(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/mark-virtual`,
+      {
+        data: {},
+        headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+      },
+    );
+    // 501 = flag off; 404 = flag on but item not in depth table; 200 = success
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+});
+
+test.describe("Section 203: PRD-016 — Variants routes (flag-agnostic)", () => {
+  let alice: Page;
+  let itemId = "";
+
+  test.beforeAll(async ({ browser }) => {
+    alice = await newIdentityPage(browser, "alice");
+    const catResp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `Var501Cat ${TS}`,
+    });
+    const catId = catResp.ok()
+      ? ((await catResp.json()) as { category_id: string }).category_id
+      : "probe-cat";
+    const itemResp = await apiPost(
+      alice,
+      "alice",
+      `ui/catalog/categories/${encodeURIComponent(catId)}/items`,
+      { name: `Var501Item ${TS}`, price_cents: 2000 },
+    );
+    if (itemResp.ok()) {
+      itemId = ((await itemResp.json()) as { item_id: string }).item_id;
+    }
+  });
+
+  test("203.1 GET /items/{id}/variants → 200, 404, or 501", async () => {
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/variants`,
+    );
+    // 501 = flag off; 404 = flag on, item has no variants; 200 = flag on, variants exist
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+
+  test("203.2 GET /items/{id}/product-type → 200 or 404 (not depth-gated)", async () => {
+    // get_product_type_endpoint does NOT gate on product_depth_enabled directly —
+    // the service returns "standalone" for any item.  Accept 200 or 404.
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/product-type`,
+    );
+    expect([200, 404]).toContain(resp.status());
+  });
+});
+
+test.describe("Section 204: PRD-016 — Bundle Expand route (flag-agnostic)", () => {
+  let alice: Page;
+  let itemId = "";
+
+  test.beforeAll(async ({ browser }) => {
+    alice = await newIdentityPage(browser, "alice");
+    const catResp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `Bundle501Cat ${TS}`,
+    });
+    const catId = catResp.ok()
+      ? ((await catResp.json()) as { category_id: string }).category_id
+      : "probe-cat";
+    const itemResp = await apiPost(
+      alice,
+      "alice",
+      `ui/catalog/categories/${encodeURIComponent(catId)}/items`,
+      { name: `Bundle501Item ${TS}`, price_cents: 3000 },
+    );
+    if (itemResp.ok()) {
+      itemId = ((await itemResp.json()) as { item_id: string }).item_id;
+    }
+  });
+
+  test("204.1 GET /items/{id}/expand → 200, 404, or 501", async () => {
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/expand`,
+    );
+    // 501 = flag off; 404 = flag on, item is not a bundle; 200 = flag on, bundle
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+});
+
+test.describe("Section 205: PRD-016 — Associations routes (flag-agnostic)", () => {
+  let alice: Page;
+  let itemId = "";
+  let item2Id = "";
+
+  test.beforeAll(async ({ browser }) => {
+    alice = await newIdentityPage(browser, "alice");
+    const catResp = await apiPost(alice, "alice", "ui/catalog/categories", {
+      name: `Assoc501Cat ${TS}`,
+    });
+    const catId = catResp.ok()
+      ? ((await catResp.json()) as { category_id: string }).category_id
+      : "probe-cat";
+
+    const item1Resp = await apiPost(
+      alice,
+      "alice",
+      `ui/catalog/categories/${encodeURIComponent(catId)}/items`,
+      { name: `Assoc501ItemA ${TS}`, price_cents: 1500 },
+    );
+    if (item1Resp.ok()) {
+      itemId = ((await item1Resp.json()) as { item_id: string }).item_id;
+    }
+
+    const item2Resp = await apiPost(
+      alice,
+      "alice",
+      `ui/catalog/categories/${encodeURIComponent(catId)}/items`,
+      { name: `Assoc501ItemB ${TS}`, price_cents: 2500 },
+    );
+    if (item2Resp.ok()) {
+      item2Id = ((await item2Resp.json()) as { item_id: string }).item_id;
+    }
+  });
+
+  test("205.1 GET /items/{id}/associations → 200, 404, or 501", async () => {
+    const resp = await alice.request.get(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/associations`,
+    );
+    // 501 = flag off; 404 = flag on, item has no associations; 200 = flag on with data
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+
+  test("205.2 POST /items/{id}/associations → 200, 404, or 501", async () => {
+    const sess = getSessions()["alice"];
+    const resp = await alice.request.post(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/associations`,
+      {
+        data: { assoc_type: "CROSS_SELL", to_item_id: item2Id },
+        headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+      },
+    );
+    // 501 = flag off; 200 = flag on (idempotent create); 404 = item not found in depth table
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+
+  test("205.3 DELETE /items/{id}/associations/{to} → 200, 404, or 501", async () => {
+    const sess = getSessions()["alice"];
+    const resp = await alice.request.delete(
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/associations/${encodeURIComponent(item2Id)}?assoc_type=CROSS_SELL`,
+      {
+        headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+      },
+    );
+    // 501 = flag off; 200 = flag on (no-op delete is still 200); 404 = item not found
+    expect([200, 404, 501]).toContain(resp.status());
+    if (resp.status() === 501) {
+      const body = (await resp.json()) as { detail: string };
+      expect(body.detail).toBe("product_depth_not_enabled");
+    }
+  });
+});

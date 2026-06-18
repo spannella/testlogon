@@ -17448,6 +17448,42 @@ class AttachFeatureCategoryIn(BaseModel):
     feature_category_id: str
 
 
+# --- PRD-006: Per-item feature categories & values (OFBiz Catalog Depth) ---
+
+class ProductFeatureCategoryCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)  # e.g. "Color", "Size"
+    position: int = Field(default=0, ge=0)
+
+
+class ProductFeatureCategoryOut(BaseModel):
+    feature_category_id: str
+    name: str
+    position: int
+    item_id: str  # the product it's attached to
+    created_at: int
+
+
+class ProductFeatureValueCreateIn(BaseModel):
+    value: str = Field(..., min_length=1, max_length=100)  # e.g. "Red", "XL"
+    price_delta_cents: int = Field(default=0)
+    position: int = Field(default=0, ge=0)
+
+
+class ProductFeatureValueOut(BaseModel):
+    feature_value_id: str
+    feature_category_id: str
+    value: str
+    price_delta_cents: int
+    position: int
+    created_at: int
+
+
+class ProductFeaturesOut(BaseModel):
+    item_id: str
+    feature_categories: List[ProductFeatureCategoryOut]
+    values: List[ProductFeatureValueOut]
+
+
 # --- Variants ---
 
 class VariantCreateIn(BaseModel):
@@ -17464,6 +17500,12 @@ class VariantOut(BaseModel):
     effective_price_cents: int
     creator_id: str
     created_at: int
+
+
+class VariantListOut(BaseModel):
+    item_id: str
+    variants: List["VariantOut"]
+    count: int
 
 
 # --- Price components ---

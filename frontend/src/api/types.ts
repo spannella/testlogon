@@ -2206,6 +2206,83 @@ export interface CatalogReview {
   created_at: string;
 }
 
+// ─── PRD-003/014: Catalog Depth types ────────────────────────────
+
+export type ProductDepthType = "standalone" | "virtual" | "bundle" | "kit" | "digital";
+
+export interface ProductFeatureCategoryOut {
+  feature_category_id: string;
+  name: string;
+  position: number;
+  item_id: string;
+  created_at: number;
+}
+
+export interface ProductFeatureValueOut {
+  feature_value_id: string;
+  feature_category_id: string;
+  value: string;
+  price_delta_cents: number;
+  position: number;
+  created_at: number;
+}
+
+export interface ProductFeaturesOut {
+  item_id: string;
+  feature_categories: ProductFeatureCategoryOut[];
+  values: ProductFeatureValueOut[];
+}
+
+export interface VariantOut {
+  variant_id: string;
+  parent_item_id: string;
+  sku: string;
+  feature_values: Record<string, string>;
+  price_delta_cents: number;
+  effective_price_cents: number;
+  creator_id: string;
+  created_at: number;
+}
+
+export interface VariantListOut {
+  item_id: string;
+  variants: VariantOut[];
+  count: number;
+}
+
+export interface BundleExpandLine {
+  item_id: string;
+  name: string;
+  price_cents: number;
+  qty: number;
+  line_total_cents: number;
+}
+
+export interface BundleExpandOut {
+  item_id: string;
+  qty: number;
+  bundle_price_cents: number;
+  lines: BundleExpandLine[];
+}
+
+export interface ProductAssoc {
+  assoc_id: string;
+  from_item_id: string;
+  to_item_id: string;
+  assoc_type: "substitute" | "complement" | "upgrade" | "manufacture_source";
+  created_at: number;
+}
+
+export interface CategoryTreeNode {
+  category_id: string;
+  name: string;
+  children: CategoryTreeNode[];
+}
+
+export interface CategoryBreadcrumb {
+  breadcrumb: Array<{ category_id: string; name: string }>;
+}
+
 export interface PaginatedList<T> {
   items: T[];
   next_token?: string;
