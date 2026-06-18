@@ -11,6 +11,11 @@ on:
       - "frontend/e2e/calendar-messaging.spec.ts"
       - "frontend/e2e/signing.spec.ts"
       - "frontend/e2e/signing-inbox.spec.ts"
+      - "frontend/e2e/webrtc-calls.spec.ts"
+      - "frontend/e2e/google-calendar-mock.spec.ts"
+      - "frontend/e2e/google-drive-mock.spec.ts"
+      - "frontend/e2e/apple-caldav-mock.spec.ts"
+      - "frontend/e2e/jira-mock.spec.ts"
       - "frontend/src/pages/remote/**"
       - "frontend/src/pages/calendar/**"
       - "frontend/src/pages/signing/**"
@@ -18,8 +23,14 @@ on:
       - "app/routers/browser_ssh_terminal.py"
       - "app/routers/calendar.py"
       - "app/routers/signature_packets.py"
+      - "app/routers/messaging.py"
+      - "app/routers/google_calendar_mock.py"
+      - "app/routers/google_drive_mock.py"
+      - "app/routers/apple_caldav_mock.py"
+      - "app/routers/jira_mock.py"
       - "app/services/host_inventory.py"
       - "app/services/signature_packet_store.py"
+      - "app/services/messaging_call_lifecycle.py"
       - ".github/workflows/fullstack-e2e.yml"
   push:
     branches: [ main, master ]
@@ -28,12 +39,17 @@ on:
       - "frontend/e2e/calendar-messaging.spec.ts"
       - "frontend/e2e/signing.spec.ts"
       - "frontend/e2e/signing-inbox.spec.ts"
+      - "frontend/e2e/webrtc-calls.spec.ts"
+      - "frontend/e2e/google-calendar-mock.spec.ts"
+      - "frontend/e2e/google-drive-mock.spec.ts"
+      - "frontend/e2e/apple-caldav-mock.spec.ts"
+      - "frontend/e2e/jira-mock.spec.ts"
       - ".github/workflows/fullstack-e2e.yml"
 
 jobs:
   fullstack-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,7 +107,17 @@ jobs:
 
       - name: Run full-stack Playwright specs
         working-directory: frontend
-        run: npx playwright test e2e/browser-ssh.spec.ts e2e/calendar-messaging.spec.ts e2e/signing.spec.ts e2e/signing-inbox.spec.ts
+        run: >
+          npx playwright test
+          e2e/browser-ssh.spec.ts
+          e2e/calendar-messaging.spec.ts
+          e2e/signing.spec.ts
+          e2e/signing-inbox.spec.ts
+          e2e/webrtc-calls.spec.ts
+          e2e/google-calendar-mock.spec.ts
+          e2e/google-drive-mock.spec.ts
+          e2e/apple-caldav-mock.spec.ts
+          e2e/jira-mock.spec.ts
 
       - name: Upload logs + traces on failure
         if: failure()
