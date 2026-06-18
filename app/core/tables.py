@@ -33,10 +33,8 @@ class _FloatSafeTable:
     delete_item, meta, ...) to the wrapped table unchanged.
     """
 
-    __slots__ = ("_t",)
-
     def __init__(self, table: Any) -> None:
-        object.__setattr__(self, "_t", table)
+        self._t = table
 
     def put_item(self, **kwargs: Any) -> Any:
         if "Item" in kwargs:
