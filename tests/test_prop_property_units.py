@@ -94,12 +94,15 @@ def _run(coro):
 
 @pytest.fixture(autouse=True)
 def setup(monkeypatch):
+    from app.core import tables as T_mod
+    from app.services import property_mgmt as svc
+
+    orig_properties = T_mod.T.properties
+    orig_flag = svc.S.property_mgmt_enabled
+    orig_table_name = svc.S.properties_table_name
     with mock_aws():
         ddb = boto3.resource("dynamodb", region_name="us-east-1")
         table = _make_table(ddb)
-
-        from app.core import tables as T_mod
-        from app.services import property_mgmt as svc
 
         object.__setattr__(T_mod.T, "properties", table)
         object.__setattr__(svc.S, "property_mgmt_enabled", True)
@@ -107,6 +110,12 @@ def setup(monkeypatch):
 
         with patch("app.services.alerts.audit_event", return_value=None):
             yield table, svc
+
+    # Restore all patched state so subsequent test modules don't inherit
+    # stale moto-backed references or leaked settings.
+    object.__setattr__(T_mod.T, "properties", orig_properties)
+    object.__setattr__(svc.S, "property_mgmt_enabled", orig_flag)
+    object.__setattr__(svc.S, "properties_table_name", orig_table_name)
 
 
 # ===========================================================================
