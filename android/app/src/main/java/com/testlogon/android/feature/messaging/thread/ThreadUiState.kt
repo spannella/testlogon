@@ -58,6 +58,8 @@ data class ThreadUiState(
     val receipts: Map<String, com.testlogon.android.data.messaging.realtime.MessageReceipt> = emptyMap(),
     /** Viewer-roster bottom sheet state (non-null messageId = open). */
     val viewerRoster: ViewerRosterUiState = ViewerRosterUiState(),
+    /** Whether the send-options (view-once / locked / scheduled) bottom sheet is open. */
+    val messageOptionsVisible: Boolean = false,
 )
 
 /**
@@ -277,6 +279,10 @@ data class ThreadMessageUi(
     val seenCount: Int = 0,
     /** Server id of the message this one replies to (null when not a reply). */
     val replyToMessageId: String? = null,
+    /** Self-destruct expiry epoch SECONDS (null = never). */
+    val expiresAtEpochSeconds: Long? = null,
+    /** Server-confirmed expiry flag. */
+    val serverExpired: Boolean = false,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
@@ -284,8 +290,12 @@ data class ThreadMessageUi(
     val isRevoked: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.REVOKED
     /** AND-140 — a deleted-for-me message renders a tombstone bubble. */
     val isDeleted: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.DELETED
-    /** AND-140 — a tombstone (deleted or revoked) is rendered specially and offers no further actions. */
-    val isTombstone: Boolean get() = isRevoked || isDeleted
+    /** An expiring message whose lifetime has passed: content is redacted. */
+    val isExpired: Boolean
+        get() = serverExpired ||
+            (expiresAtEpochSeconds != null && expiresAtEpochSeconds <= System.currentTimeMillis() / 1000L)
+    /** AND-140 — a tombstone (deleted/revoked) or an expired message is rendered specially. */
+    val isTombstone: Boolean get() = isRevoked || isDeleted || isExpired
     val isImage: Boolean get() = media is MessageMedia.Image
     val isVideo: Boolean get() = media is MessageMedia.VideoShare
     val isFile: Boolean get() = media is MessageMedia.File
@@ -312,6 +322,8 @@ data class ComposerState(
     val charCount: Int = 0,
     val overLimit: Boolean = false,
     val replyingTo: ReplyDraft? = null,
+    /** Optional send-time message options (view-once / locked / scheduled). */
+    val options: MessageOptions = MessageOptions(),
 ) {
     val isSendEnabled: Boolean get() = draft.isNotBlank() && !overLimit
 
@@ -319,3 +331,50 @@ data class ComposerState(
         const val MAX_LENGTH = 4000
     }
 }
+
+/**
+ * Send-time message options the composer can attach to the next text message. All default to off,
+ * giving a plain send. Mutually-sensible combos are allowed (e.g. a scheduled view-once message).
+ */
+data class MessageOptions(
+    /** Self-destruct after first view. */
+    val viewOnce: Boolean = false,
+    /** Pay-to-unlock price in integer cents; null = not locked. */
+    val lockPriceCents: Long? = null,
+    val lockDescription: String? = null,
+    /** Deliver-at epoch SECONDS in the future; null = send now. */
+    val scheduledAtEpochSeconds: Long? = null,
+    /** Self-destruct lifetime in seconds after delivery; null = never expires. */
+    val expiresInSeconds: Long? = null,
+) {
+    val isActive: Boolean
+        get() = viewOnce || lockPriceCents != null || scheduledAtEpochSeconds != null || expiresInSeconds != null
+
+    /** Short summary chip text, or null when no option is set. */
+    val summary: String?
+        get() {
+            val parts = buildList {
+                if (viewOnce) add("View once")
+                lockPriceCents?.let { add("Locked $" + "%.2f".format(it / 100.0)) }
+                if (scheduledAtEpochSeconds != null) add("Scheduled")
+                expiresInSeconds?.let { add("Expires in " + expiryLabel(it)) }
+            }
+            return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+        }
+}
+
+/** Human label for a self-destruct lifetime in seconds (e.g. "1h", "1d"). */
+fun expiryLabel(seconds: Long): String = when {
+    seconds >= 86_400 -> "${seconds / 86_400}d"
+    seconds >= 3_600 -> "${seconds / 3_600}h"
+    seconds >= 60 -> "${seconds / 60}m"
+    else -> "${seconds}s"
+}
+
+/** Draft state for the message-options bottom sheet (non-null = open). */
+data class MessageOptionsSheetState(
+    val visible: Boolean = false,
+    val viewOnce: Boolean = false,
+    val lockPriceInput: String = "",
+    val scheduledAtEpochSeconds: Long? = null,
+)

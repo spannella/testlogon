@@ -8,6 +8,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
+import com.testlogon.android.navigation.AdsBillingDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,8 +39,9 @@ class AdsBillingViewModel @Inject constructor(
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
-    val accountId: String =
+    var accountId: String =
         checkNotNull(savedState[ARG_ACCOUNT_ID]) { "missing $ARG_ACCOUNT_ID nav arg" }
+        private set
 
     private val _uiState = MutableStateFlow<AdsBillingUiState>(AdsBillingUiState.Loading)
     val uiState: StateFlow<AdsBillingUiState> = _uiState.asStateFlow()
@@ -70,6 +72,12 @@ class AdsBillingViewModel @Inject constructor(
             _uiState.value = AdsBillingUiState.Loading
         }
         viewModelScope.launch {
+            // The More-hub stub opens a placeholder sample id; resolve it to the caller's first real
+            // ad account so the entry shows real balance/ledger/deposit instead of "Account not found".
+            if (accountId == AdsBillingDest.SAMPLE_ACCOUNT_ID) {
+                (repository.listAccounts() as? ApiResult.Success)?.data
+                    ?.firstOrNull()?.accountId?.let { accountId = it }
+            }
             when (val accountResult = repository.getAccount(accountId)) {
                 is ApiResult.Success -> {
                     val ledger = (repository.getBillingHistory(accountId) as? ApiResult.Success)?.data

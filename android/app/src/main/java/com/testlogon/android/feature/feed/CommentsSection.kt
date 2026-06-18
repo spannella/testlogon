@@ -1,26 +1,42 @@
 package com.testlogon.android.feature.feed
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,7 +45,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
@@ -42,6 +60,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
+import coil.compose.AsyncImage
 import com.testlogon.android.R
 import com.testlogon.android.data.feed.Comment
 
@@ -57,6 +76,11 @@ object CommentsTestTags {
     const val DISCARD = "comment_discard"
     const val DELETE = "comment_delete"
     const val REPLY = "comment_reply"
+    const val TIP = "comment_tip"
+    const val GIF_BUTTON = "comments_gif_button"
+    const val PICKER = "comments_media_picker"
+    const val GIF_SEARCH = "comments_gif_search"
+    const val TIP_SHEET = "comment_tip_sheet"
     fun row(localKey: String) = "comment_$localKey"
 }
 
@@ -78,6 +102,8 @@ fun CommentsSection(
     val composer by viewModel.composer.collectAsStateWithLifecycle()
     val authorNames by viewModel.authorNames.collectAsStateWithLifecycle()
     val refreshSignal by viewModel.refreshSignal.collectAsStateWithLifecycle()
+    val picker by viewModel.picker.collectAsStateWithLifecycle()
+    val tip by viewModel.tip.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Comment?>(null) }
 
@@ -111,6 +137,7 @@ fun CommentsSection(
                 draft = c.body
                 viewModel.startEdit(c)
             },
+            onTip = viewModel::openTip,
             authorNames = authorNames,
             onEnsureAuthorName = viewModel::resolveAuthor,
         )
@@ -127,11 +154,30 @@ fun CommentsSection(
                 viewModel.send()
                 draft = ""
             },
+            onOpenMediaPicker = viewModel::openMediaPicker,
             onCancelReply = viewModel::cancelReply,
             onCancelEdit = {
                 draft = ""
                 viewModel.cancelEdit()
             },
+        )
+    }
+
+    if (picker.visible) {
+        CommentMediaPickerSheet(
+            state = picker,
+            onDismiss = viewModel::closeMediaPicker,
+            onTab = viewModel::setPickerTab,
+            onGifQuery = viewModel::onGifQueryChange,
+            onPickGif = viewModel::pickGif,
+            onPickSticker = viewModel::pickSticker,
+        )
+    }
+    tip.target?.let {
+        CommentTipSheet(
+            state = tip,
+            onConfirm = viewModel::confirmTip,
+            onDismiss = viewModel::dismissTip,
         )
     }
 
@@ -164,6 +210,7 @@ private fun CommentsList(
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
+    onTip: (Comment) -> Unit,
     authorNames: Map<String, String>,
     onEnsureAuthorName: (authorId: String) -> Unit,
 ) {
@@ -202,6 +249,7 @@ private fun CommentsList(
                     onRetry = onRetry,
                     onDiscard = onDiscard,
                     onDelete = onDelete,
+                    onTip = onTip,
                     modifier = Modifier.testTag(CommentsTestTags.row(comment.localKey)),
                 )
             }
@@ -233,6 +281,7 @@ private fun CommentRow(
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
+    onTip: (Comment) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     androidx.compose.runtime.LaunchedEffect(comment.authorId) {
@@ -249,10 +298,12 @@ private fun CommentRow(
     }
     val pendingDesc = stringResource(R.string.comments_pending)
     val failedDesc = stringResource(R.string.comments_failed)
+    // Threaded replies are indented under their parent (backend parent_comment_id).
+    val startPad = if (comment.parentId != null) 40.dp else 16.dp
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(start = startPad, end = 16.dp, top = 8.dp, bottom = 8.dp)
             .graphicsLayer { alpha = if (comment.pending) 0.5f else 1f }
             .semantics {
                 if (comment.pending) stateDescription = pendingDesc
@@ -267,12 +318,31 @@ private fun CommentRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        val bodyText = if (comment.updatedAtEpochSeconds != null) {
-            comment.body + " " + stringResource(R.string.comments_edited)
+        val mediaUrl = comment.gifUrl ?: comment.stickerUrl
+        if (mediaUrl != null) {
+            AsyncImage(
+                model = mediaUrl,
+                contentDescription = if (comment.gifUrl != null) "GIF comment" else "Sticker comment",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .heightIn(max = 140.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+            )
         } else {
-            comment.body
+            val bodyText = if (comment.updatedAtEpochSeconds != null) {
+                comment.body + " " + stringResource(R.string.comments_edited)
+            } else {
+                comment.body
+            }
+            Text(text = bodyText, style = MaterialTheme.typography.bodyMedium)
         }
-        Text(text = bodyText, style = MaterialTheme.typography.bodyMedium)
+        if (comment.tipTotalCents > 0) {
+            Text(
+                text = "Tipped $" + "%.2f".format(comment.tipTotalCents / 100.0),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (comment.failed) {
@@ -286,6 +356,18 @@ private fun CommentRow(
             if (repliesSupported && !comment.pending && !comment.failed) {
                 TextButton(onClick = { onReply(comment) }, modifier = Modifier.testTag(CommentsTestTags.REPLY)) {
                     Text(stringResource(R.string.comments_reply_action))
+                }
+            }
+            // Tip another member's comment (creator monetization).
+            if (!comment.canDelete && !comment.pending && !comment.failed) {
+                TextButton(onClick = { onTip(comment) }, modifier = Modifier.testTag(CommentsTestTags.TIP)) {
+                    Icon(
+                        Icons.Filled.AttachMoney,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Text("Tip")
                 }
             }
             if (comment.canEdit && !comment.pending && !comment.failed) {
@@ -322,6 +404,7 @@ private fun CommentComposer(
     draft: String,
     onBodyChange: (String) -> Unit,
     onSend: () -> Unit,
+    onOpenMediaPicker: () -> Unit,
     onCancelReply: () -> Unit,
     onCancelEdit: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -354,6 +437,19 @@ private fun CommentComposer(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // GIF / sticker picker (kept out of edit mode, where only the body is editable).
+            if (!state.isEditing) {
+                IconButton(
+                    onClick = onOpenMediaPicker,
+                    modifier = Modifier.size(48.dp).testTag(CommentsTestTags.GIF_BUTTON),
+                ) {
+                    Icon(
+                        Icons.Filled.Gif,
+                        contentDescription = "Add a GIF or sticker",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             OutlinedTextField(
                 value = draft,
                 onValueChange = onBodyChange,
@@ -386,6 +482,124 @@ private fun FooterError(message: String, onRetry: () -> Unit) {
         Text(message, style = MaterialTheme.typography.bodyMedium)
         TextButton(onClick = onRetry, modifier = Modifier.testTag(CommentsTestTags.APPEND_RETRY)) {
             Text(stringResource(R.string.comments_retry))
+        }
+    }
+}
+
+/** AND-174 (rich comments) — GIF / sticker picker bottom sheet. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CommentMediaPickerSheet(
+    state: CommentMediaPickerState,
+    onDismiss: () -> Unit,
+    onTab: (Int) -> Unit,
+    onGifQuery: (String) -> Unit,
+    onPickGif: (com.testlogon.android.data.messaging.GifResult) -> Unit,
+    onPickSticker: (com.testlogon.android.data.messaging.StickerUi) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag(CommentsTestTags.PICKER),
+        ) {
+            TabRow(selectedTabIndex = state.tab) {
+                Tab(selected = state.tab == 0, onClick = { onTab(0) }, text = { Text("GIFs") })
+                Tab(selected = state.tab == 1, onClick = { onTab(1) }, text = { Text("Stickers") })
+            }
+            if (state.tab == 0) {
+                OutlinedTextField(
+                    value = state.gifQuery,
+                    onValueChange = onGifQuery,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag(CommentsTestTags.GIF_SEARCH),
+                    placeholder = { Text("Search GIFs") },
+                    singleLine = true,
+                )
+                MediaGrid(loading = state.gifLoading, error = state.error, count = state.gifResults.size) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        modifier = Modifier.height(300.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(state.gifResults, key = { it.id }) { gif ->
+                            AsyncImage(
+                                model = gif.url,
+                                contentDescription = gif.altText ?: "GIF",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(96.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onPickGif(gif) },
+                            )
+                        }
+                    }
+                }
+            } else {
+                MediaGrid(loading = state.stickersLoading, error = state.error, count = state.stickers.size) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        modifier = Modifier.height(300.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(state.stickers, key = { it.stickerId }) { st ->
+                            AsyncImage(
+                                model = st.url,
+                                contentDescription = st.altText ?: "Sticker",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.size(72.dp).clickable { onPickSticker(st) },
+                            )
+                        }
+                    }
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun MediaGrid(loading: Boolean, error: String?, count: Int, content: @Composable () -> Unit) {
+    when {
+        loading && count == 0 -> Box(
+            Modifier.fillMaxWidth().height(160.dp),
+            contentAlignment = Alignment.Center,
+        ) { CircularProgressIndicator(modifier = Modifier.size(28.dp)) }
+        error != null && count == 0 ->
+            Text(error, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
+        count == 0 ->
+            Text(
+                "Nothing here yet",
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        else -> content()
+    }
+}
+
+/** AND-174 (comment tipping) — preset-amount tip bottom sheet. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CommentTipSheet(
+    state: CommentTipState,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp).testTag(CommentsTestTags.TIP_SHEET),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Send a tip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.presetsCents.forEach { cents ->
+                    OutlinedButton(onClick = { onConfirm(cents) }, enabled = !state.submitting) {
+                        Text("$" + "%.2f".format(cents / 100.0))
+                    }
+                }
+            }
+            if (state.submitting) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            Box(Modifier.fillMaxWidth().height(16.dp))
         }
     }
 }

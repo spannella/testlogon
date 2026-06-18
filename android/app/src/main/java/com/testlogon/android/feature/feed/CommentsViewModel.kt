@@ -11,6 +11,9 @@ import androidx.paging.insertHeaderItem
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.Comment
 import com.testlogon.android.data.feed.CommentsRepository
+import com.testlogon.android.data.messaging.GifResult
+import com.testlogon.android.data.messaging.MessagingRepository
+import com.testlogon.android.data.messaging.StickerUi
 import com.testlogon.android.navigation.PostDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -54,9 +57,30 @@ sealed interface CommentsEffect {
  * entity lands; on failure the entry flips to failed with Retry / Discard. Replies are gated behind
  * [repliesSupported] (false by default — no backend replies endpoint).
  */
+/** AND-174 (rich comments) — GIF/sticker picker sheet state. */
+data class CommentMediaPickerState(
+    val visible: Boolean = false,
+    /** 0 = GIF, 1 = Stickers. */
+    val tab: Int = 0,
+    val gifQuery: String = "",
+    val gifLoading: Boolean = false,
+    val gifResults: List<GifResult> = emptyList(),
+    val stickersLoading: Boolean = false,
+    val stickers: List<StickerUi> = emptyList(),
+    val error: String? = null,
+)
+
+/** AND-174 (comment tipping) — tip sheet state; non-null [target] = open. */
+data class CommentTipState(
+    val target: Comment? = null,
+    val submitting: Boolean = false,
+    val presetsCents: List<Int> = listOf(100, 500, 1000),
+)
+
 @HiltViewModel
 class CommentsViewModel @Inject constructor(
     private val repository: CommentsRepository,
+    private val stickerCatalog: MessagingRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
@@ -113,6 +137,148 @@ class CommentsViewModel @Inject constructor(
 
     fun cancelReply() {
         _composer.update { it.copy(replyTo = null) }
+    }
+
+    // ---- Rich comments: GIF / sticker picker ----
+
+    private val _picker = MutableStateFlow(CommentMediaPickerState())
+    val picker: StateFlow<CommentMediaPickerState> = _picker.asStateFlow()
+
+    private val _tip = MutableStateFlow(CommentTipState())
+    val tip: StateFlow<CommentTipState> = _tip.asStateFlow()
+
+    fun openMediaPicker() {
+        _picker.update { it.copy(visible = true, error = null) }
+        if (_picker.value.gifResults.isEmpty()) searchGifs("")
+        if (_picker.value.stickers.isEmpty()) loadStickers()
+    }
+
+    fun closeMediaPicker() {
+        _picker.update { it.copy(visible = false) }
+    }
+
+    fun setPickerTab(tab: Int) {
+        _picker.update { it.copy(tab = tab) }
+        if (tab == 1 && _picker.value.stickers.isEmpty() && !_picker.value.stickersLoading) loadStickers()
+    }
+
+    fun onGifQueryChange(query: String) {
+        _picker.update { it.copy(gifQuery = query) }
+        searchGifs(query)
+    }
+
+    private fun searchGifs(query: String) {
+        viewModelScope.launch {
+            _picker.update { it.copy(gifLoading = true, error = null) }
+            when (val r = stickerCatalog.searchGifs(query.trim(), limit = 24)) {
+                is ApiResult.Success -> _picker.update { it.copy(gifLoading = false, gifResults = r.data) }
+                is ApiResult.Failure -> _picker.update { it.copy(gifLoading = false, error = r.error.message) }
+                is ApiResult.NetworkError -> _picker.update { it.copy(gifLoading = false, error = OFFLINE_MESSAGE) }
+            }
+        }
+    }
+
+    private fun loadStickers() {
+        viewModelScope.launch {
+            _picker.update { it.copy(stickersLoading = true) }
+            when (val r = stickerCatalog.stickerCollections()) {
+                is ApiResult.Success ->
+                    _picker.update { it.copy(stickersLoading = false, stickers = r.data.flatMap { c -> c.stickers }) }
+                is ApiResult.Failure -> _picker.update { it.copy(stickersLoading = false, error = r.error.message) }
+                is ApiResult.NetworkError -> _picker.update { it.copy(stickersLoading = false, error = OFFLINE_MESSAGE) }
+            }
+        }
+    }
+
+    fun pickGif(gif: GifResult) {
+        _picker.update { it.copy(visible = false) }
+        val parentId = _composer.value.replyTo?.id?.takeIf { repliesSupported }
+        _composer.update { it.copy(replyTo = null) }
+        val localKey = UUID.randomUUID().toString()
+        pending.update {
+            listOf(richOptimistic(localKey, parentId, gifUrl = gif.url)) + it
+        }
+        viewModelScope.launch {
+            handleSendResult(localKey, parentId, repository.addGifComment(postId, gif.url, gif.altText, parentId))
+        }
+    }
+
+    fun pickSticker(sticker: StickerUi) {
+        _picker.update { it.copy(visible = false) }
+        val parentId = _composer.value.replyTo?.id?.takeIf { repliesSupported }
+        _composer.update { it.copy(replyTo = null) }
+        val localKey = UUID.randomUUID().toString()
+        pending.update {
+            listOf(richOptimistic(localKey, parentId, stickerUrl = sticker.url)) + it
+        }
+        viewModelScope.launch {
+            handleSendResult(
+                localKey,
+                parentId,
+                repository.addStickerComment(postId, sticker.stickerId, sticker.collectionId, sticker.url, sticker.altText, parentId),
+            )
+        }
+    }
+
+    private fun richOptimistic(localKey: String, parentId: String?, gifUrl: String? = null, stickerUrl: String? = null) =
+        Comment(
+            id = localKey,
+            postId = postId,
+            parentId = parentId,
+            authorId = "",
+            body = "",
+            createdAtEpochSeconds = System.currentTimeMillis() / 1000L,
+            updatedAtEpochSeconds = null,
+            gifUrl = gifUrl,
+            stickerUrl = stickerUrl,
+            canDelete = true,
+            pending = true,
+            localKey = localKey,
+        )
+
+    private fun handleSendResult(localKey: String, parentId: String?, result: ApiResult<Comment>) {
+        when (result) {
+            is ApiResult.Success -> {
+                pending.update { list -> list.filterNot { it.localKey == localKey } }
+                if (parentId == null) _effects.trySend(CommentsEffect.CommentCountChanged(+1))
+                _refreshSignal.value = _refreshSignal.value + 1L
+            }
+            is ApiResult.Failure -> markFailed(localKey, result.error.message)
+            is ApiResult.NetworkError -> markFailed(localKey, OFFLINE_MESSAGE)
+        }
+    }
+
+    // ---- Comment tipping ----
+
+    fun openTip(comment: Comment) {
+        if (comment.pending || comment.failed) return
+        _tip.update { it.copy(target = comment) }
+    }
+
+    fun dismissTip() {
+        _tip.update { CommentTipState() }
+    }
+
+    fun confirmTip(amountCents: Int) {
+        val target = _tip.value.target ?: return
+        if (_tip.value.submitting) return
+        _tip.update { it.copy(submitting = true) }
+        viewModelScope.launch {
+            when (val r = repository.tipComment(postId, target.id, amountCents)) {
+                is ApiResult.Success -> {
+                    _tip.update { CommentTipState() }
+                    _refreshSignal.value = _refreshSignal.value + 1L
+                }
+                is ApiResult.Failure -> {
+                    _tip.update { it.copy(submitting = false) }
+                    _effects.trySend(CommentsEffect.ShowError(r.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    _tip.update { it.copy(submitting = false) }
+                    _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
+                }
+            }
+        }
     }
 
     /** Enter edit mode for an own comment: prefill the composer with its body. */

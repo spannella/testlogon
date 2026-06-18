@@ -75,6 +75,11 @@ interface MessagingRepository {
         clientId: String,
         text: String,
         replyToMessageId: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        lockDescription: String? = null,
+        sendAtEpochSeconds: Long? = null,
+        expiresInSeconds: Long? = null,
     ): ApiResult<Message>
 
     /** Apply an inbound realtime new-message event to the caches. */
@@ -623,8 +628,21 @@ class MessagingRepositoryImpl @Inject constructor(
         clientId: String,
         text: String,
         replyToMessageId: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        lockDescription: String?,
+        sendAtEpochSeconds: Long?,
+        expiresInSeconds: Long?,
     ): ApiResult<Message> = withContext(io) {
-        val req = SendTextMessageReq(text = text, replyToMessageId = replyToMessageId)
+        val req = SendTextMessageReq(
+            text = text,
+            replyToMessageId = replyToMessageId,
+            viewOnce = viewOnce.takeIf { it },
+            lockPriceCents = lockPriceCents,
+            lockDescription = lockDescription,
+            sendAt = sendAtEpochSeconds,
+            expiresInSeconds = expiresInSeconds,
+        )
         when (val result = apiCall { api.sendMessage(conversationId, req) }) {
             is ApiResult.Success -> {
                 // Reconcile: persist the server message (stamped with our clientId for cleanup),
@@ -2078,6 +2096,10 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         senderId = senderId,
         text = text,
         replyToMessageId = replyToMessageId,
+        deliveredToCount = deliveredToCount,
+        readByCount = readByCount,
+        expiresAtEpochSeconds = expiresAtEpochSeconds,
+        serverExpired = expired,
         createdAtEpochSeconds = createdAtEpochSeconds,
         clientId = clientId,
         kind = kind,
@@ -2196,6 +2218,10 @@ internal fun MessageEntity.toDomain(): Message = Message(
     senderId = senderId,
     text = text,
     replyToMessageId = replyToMessageId,
+    deliveredToCount = deliveredToCount,
+    readByCount = readByCount,
+    expiresAtEpochSeconds = expiresAtEpochSeconds,
+    expired = serverExpired,
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = SendStatus.SENT,
     kind = kind,

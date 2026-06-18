@@ -172,6 +172,49 @@ class FakeCommentsRepository(
         return deleteResult
     }
 
+    val gifCalls = mutableListOf<Pair<String, String>>()
+    val stickerCalls = mutableListOf<Pair<String, String>>()
+    val tipCalls = mutableListOf<Triple<String, String, Int>>()
+    val editCalls = mutableListOf<Triple<String, String, String>>()
+
+    override suspend fun addGifComment(
+        postId: String,
+        gifUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> {
+        gifCalls += postId to gifUrl
+        return addResult ?: ApiResult.Success(
+            comment(id = "srv_gif_${gifCalls.size}", postId = postId, body = gifUrl, parentId = parentId),
+        )
+    }
+
+    override suspend fun addStickerComment(
+        postId: String,
+        stickerId: String,
+        collectionId: String,
+        stickerUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> {
+        stickerCalls += postId to stickerId
+        return addResult ?: ApiResult.Success(
+            comment(id = "srv_sticker_${stickerCalls.size}", postId = postId, body = stickerUrl, parentId = parentId),
+        )
+    }
+
+    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit> {
+        tipCalls += Triple(postId, commentId, amountCents)
+        return ApiResult.Success(Unit)
+    }
+
+    override suspend fun editComment(postId: String, commentId: String, body: String): ApiResult<Comment> {
+        editCalls += Triple(postId, commentId, body)
+        return addResult ?: ApiResult.Success(
+            comment(id = commentId, postId = postId, body = body),
+        )
+    }
+
     companion object {
         fun comment(
             id: String,
@@ -196,3 +239,33 @@ class FakeCommentsRepository(
         fun network() = ApiResult.NetworkError(IOException("offline"))
     }
 }
+
+/**
+ * Minimal [com.testlogon.android.data.profile.ProfileRepository] fake for tests that only need a
+ * [com.testlogon.android.data.profile.DisplayNameResolver] instance (whose `names` StateFlow must be
+ * real, not a Mockito mock). Public-profile lookups resolve to NotFound, so `names` stays empty.
+ */
+class FakeProfileRepository : com.testlogon.android.data.profile.ProfileRepository {
+    override suspend fun getOwnProfile(forceRefresh: Boolean) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+
+    override fun cachedOwnProfile(): com.testlogon.android.core.model.profile.Profile? = null
+
+    override suspend fun getPublicProfile(identifier: String) =
+        com.testlogon.android.data.profile.ProfileResult.NotFound
+
+    override suspend fun updateProfile(patch: com.testlogon.android.core.model.profile.ProfilePatch) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+
+    override suspend fun uploadPhoto(
+        kind: com.testlogon.android.data.profile.MediaKind,
+        upload: com.testlogon.android.data.profile.ProfileMediaUploader.PreparedUpload,
+    ) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+}
+
+/**
+ * Real [com.testlogon.android.data.profile.DisplayNameResolver] over a stub repository, so the Feed /
+ * comment ViewModels' `displayNames.names` StateFlow is valid (empty). Use in VM tests.
+ */
+fun fakeDisplayNameResolver() =
+    com.testlogon.android.data.profile.DisplayNameResolver(FakeProfileRepository())

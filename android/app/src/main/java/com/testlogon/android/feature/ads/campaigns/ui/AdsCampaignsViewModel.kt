@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
+import com.testlogon.android.navigation.AdsCampaignsDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,11 @@ import javax.inject.Inject
  * visible (with the refreshing affordance) and, on failure, retains it as stale rather than dropping to a
  * fatal Error (in-memory ONLY - there is no Room cache this wave).
  *
+ * STUB ENTRY: the More-hub opens a placeholder sample account id (no ads-accounts list yet), so the load
+ * resolves [AdsCampaignsDest.SAMPLE_ACCOUNT_ID] to the caller's first real ad account via
+ * [AdsBillingRepository.listAccounts] (mirrors the AND-367 AdsBillingViewModel) before reading campaigns;
+ * downstream this destination is reached from an ads-accounts list with a real id and the resolve is a no-op.
+ *
  * Dispatcher seam: [ioDispatcher] defaults to [Dispatchers.IO] (Hilt cannot inject a bare CoroutineDispatcher
  * / honor a ctor default) and is read INSIDE the load coroutine (NOT synchronously in init) so a test can swap
  * it via apply after construction. READ-ONLY: no mutations, no polling loop.
@@ -35,8 +41,9 @@ class AdsCampaignsViewModel @Inject constructor(
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
-    val accountId: String =
+    var accountId: String =
         checkNotNull(savedState[ARG_ACCOUNT_ID]) { "missing $ARG_ACCOUNT_ID nav arg" }
+        private set
 
     /** Dispatcher seam: defaults to IO; a test sets a test dispatcher via apply after construction. */
     var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -62,6 +69,12 @@ class AdsCampaignsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            // The More-hub stub opens a placeholder sample id; resolve it to the caller's first real ad
+            // account so the entry shows real campaigns instead of a "not found" error (cf. AdsBilling).
+            if (accountId == AdsCampaignsDest.SAMPLE_ACCOUNT_ID) {
+                (withContext(ioDispatcher) { repository.listAccounts() } as? ApiResult.Success)?.data
+                    ?.firstOrNull()?.accountId?.let { accountId = it }
+            }
             when (val result = withContext(ioDispatcher) { repository.getCampaigns(accountId) }) {
                 is ApiResult.Success ->
                     _uiState.value = if (result.data.isEmpty()) {

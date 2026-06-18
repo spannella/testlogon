@@ -3,7 +3,7 @@ package com.testlogon.android
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -42,7 +42,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     // Hoisted so onNewIntent can deliver warm/foreground deep links (AND-061, singleTask launchMode).
     // NavHostController so AND-108 push-tap routing can reuse the notification target extension.

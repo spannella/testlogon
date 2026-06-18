@@ -51,6 +51,10 @@ object GroupDetailTestTags {
     const val SCREEN = "group_detail_screen"
     const val LEAVE = "group_leave"
     const val MEMBERS = "group_detail_members"
+    const val TREASURY = "group_detail_treasury"
+    const val FUNDRAISING = "group_detail_fundraising"
+    const val ADS = "group_detail_ads"
+    const val SETTINGS = "group_detail_settings"
 }
 
 /** AND-355 - route-level group detail entry. Observes the one-shot LeftGroup effect to pop back. */
@@ -59,6 +63,10 @@ fun GroupDetailRoute(
     onBack: () -> Unit,
     onLeft: (String) -> Unit,
     onOpenMembers: (String) -> Unit,
+    onOpenTreasury: (String) -> Unit,
+    onOpenFundraising: (String) -> Unit,
+    onOpenAds: (String) -> Unit,
+    onOpenSettings: (String) -> Unit,
     viewModel: GroupDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -75,6 +83,10 @@ fun GroupDetailRoute(
         onRetry = viewModel::onRetry,
         onLeave = viewModel::leave,
         onOpenMembers = { onOpenMembers(viewModel.groupId) },
+        onOpenTreasury = { onOpenTreasury(viewModel.groupId) },
+        onOpenFundraising = { onOpenFundraising(viewModel.groupId) },
+        onOpenAds = { onOpenAds(viewModel.groupId) },
+        onOpenSettings = { onOpenSettings(viewModel.groupId) },
     )
 }
 
@@ -86,6 +98,10 @@ fun GroupDetailScreen(
     onRetry: () -> Unit,
     onLeave: () -> Unit,
     onOpenMembers: () -> Unit,
+    onOpenTreasury: () -> Unit,
+    onOpenFundraising: () -> Unit,
+    onOpenAds: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -120,6 +136,10 @@ fun GroupDetailScreen(
                     state = state,
                     onLeave = onLeave,
                     onOpenMembers = onOpenMembers,
+                    onOpenTreasury = onOpenTreasury,
+                    onOpenFundraising = onOpenFundraising,
+                    onOpenAds = onOpenAds,
+                    onOpenSettings = onOpenSettings,
                     modifier = Modifier.padding(padding),
                 )
         }
@@ -131,6 +151,10 @@ private fun GroupDetailContent(
     state: GroupDetailUiState.Content,
     onLeave: () -> Unit,
     onOpenMembers: () -> Unit,
+    onOpenTreasury: () -> Unit,
+    onOpenFundraising: () -> Unit,
+    onOpenAds: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val group = state.group
@@ -172,6 +196,38 @@ private fun GroupDetailContent(
                 text = stringResource(R.string.groups_view_members),
                 modifier = Modifier.padding(start = 8.dp),
             )
+        }
+        OutlinedButton(
+            onClick = onOpenTreasury,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(GroupDetailTestTags.TREASURY),
+        ) {
+            Text(text = stringResource(R.string.group_treasury_open))
+        }
+        OutlinedButton(
+            onClick = onOpenFundraising,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(GroupDetailTestTags.FUNDRAISING),
+        ) {
+            Text(text = stringResource(R.string.group_fundraising_open))
+        }
+        OutlinedButton(
+            onClick = onOpenAds,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(GroupDetailTestTags.ADS),
+        ) {
+            Text(text = stringResource(R.string.group_ads_open))
+        }
+        OutlinedButton(
+            onClick = onOpenSettings,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(GroupDetailTestTags.SETTINGS),
+        ) {
+            Text(text = stringResource(R.string.group_settings_open))
         }
         if (state.canLeave) {
             Button(

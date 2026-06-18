@@ -422,6 +422,7 @@ class ThreadViewModel @Inject constructor(
         if (body.isEmpty() || composer.overLimit) return
         val clientId = UUID.randomUUID().toString()
         val replyToId = composer.replyingTo?.messageId
+        val opts = composer.options
         // AND-146 — sending the message ends the typing signal.
         typingController.onInput(TypingInput.Sent)
         // Clear the composer + the persisted draft immediately (AND-141 FR-4).
@@ -432,10 +433,63 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             repository.enqueueOptimistic(conversationId, clientId, body, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            val result = repository.sendOutbox(conversationId, clientId, body, replyToId)
+            val result = repository.sendOutbox(
+                conversationId, clientId, body, replyToId,
+                viewOnce = opts.viewOnce,
+                lockPriceCents = opts.lockPriceCents,
+                lockDescription = opts.lockDescription,
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+                expiresInSeconds = opts.expiresInSeconds,
+            )
             // AND-141 — clear the draft on a successful send.
             if (result is ApiResult.Success) draftRepository.clearDraft(conversationId)
         }
+    }
+
+    // ---- Send-options (view-once / locked / scheduled) ----
+
+    fun openMessageOptions() {
+        _state.update { it.copy(messageOptionsVisible = true) }
+    }
+
+    fun closeMessageOptions() {
+        _state.update { it.copy(messageOptionsVisible = false) }
+    }
+
+    fun setViewOnce(enabled: Boolean) {
+        _state.update {
+            it.copy(composer = it.composer.copy(options = it.composer.options.copy(viewOnce = enabled)))
+        }
+    }
+
+    fun setLockPrice(dollars: String) {
+        val cents = parseDollarsToCents(dollars)
+        _state.update {
+            it.copy(
+                composer = it.composer.copy(
+                    options = it.composer.options.copy(
+                        lockPriceCents = cents,
+                        lockDescription = if (cents != null) "Unlock to view" else null,
+                    ),
+                ),
+            )
+        }
+    }
+
+    fun setScheduledAt(epochSeconds: Long?) {
+        _state.update {
+            it.copy(composer = it.composer.copy(options = it.composer.options.copy(scheduledAtEpochSeconds = epochSeconds)))
+        }
+    }
+
+    fun setExpiresIn(seconds: Long?) {
+        _state.update {
+            it.copy(composer = it.composer.copy(options = it.composer.options.copy(expiresInSeconds = seconds)))
+        }
+    }
+
+    fun clearMessageOptions() {
+        _state.update { it.copy(composer = it.composer.copy(options = MessageOptions()), messageOptionsVisible = false) }
     }
 
     private fun startReply(messageId: String) {
@@ -1536,4 +1590,6 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     deliveredCount = deliveredToCount,
     seenCount = readByCount,
     replyToMessageId = replyToMessageId,
+    expiresAtEpochSeconds = expiresAtEpochSeconds,
+    serverExpired = expired,
 )

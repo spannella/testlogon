@@ -11,6 +11,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -63,6 +67,8 @@ object FeedTestTags {
 @Composable
 fun FeedRoute(
     onPostClick: (postId: String) -> Unit,
+    onComposePost: () -> Unit = {},
+    onOpenDiscover: () -> Unit = {},
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
@@ -154,6 +160,8 @@ fun FeedRoute(
 
     FeedScreen(
         items = items,
+        onComposePost = onComposePost,
+        onOpenDiscover = onOpenDiscover,
         snackbarHostState = snackbarHostState,
         savedIds = savedIds,
         pollStates = pollStates,
@@ -198,6 +206,8 @@ fun FeedRoute(
 fun FeedScreen(
     items: LazyPagingItems<FeedPost>,
     onRefresh: () -> Unit,
+    onComposePost: () -> Unit = {},
+    onOpenDiscover: () -> Unit = {},
     onPostClick: (FeedPost) -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
@@ -227,6 +237,11 @@ fun FeedScreen(
     Scaffold(
         modifier = modifier.testTag(FeedTestTags.SCREEN),
         topBar = { TopAppBar(title = { Text("Feed") }) },
+        floatingActionButton = {
+            FloatingActionButton(onClick = onComposePost, modifier = Modifier.testTag("feed_compose_fab")) {
+                Icon(Icons.Filled.Edit, contentDescription = "New post")
+            }
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         val refreshState = items.loadState.refresh
@@ -260,6 +275,8 @@ fun FeedScreen(
                         EmptyState(
                             title = "Your feed is empty",
                             body = "New posts will show up here.",
+                            actionLabel = stringResource(R.string.feed_empty_cta),
+                            onAction = onOpenDiscover,
                             modifier = Modifier.testTag(FeedTestTags.EMPTY),
                         )
 

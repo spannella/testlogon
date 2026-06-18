@@ -41,11 +41,32 @@ interface CommentsRepository {
         parentId: String? = null,
     ): ApiResult<Comment>
 
+    /** Post a GIF comment (kind="gif"). */
+    suspend fun addGifComment(
+        postId: String,
+        gifUrl: String,
+        altText: String? = null,
+        parentId: String? = null,
+    ): ApiResult<Comment>
+
+    /** Post a sticker comment (kind="sticker"). */
+    suspend fun addStickerComment(
+        postId: String,
+        stickerId: String,
+        collectionId: String,
+        stickerUrl: String,
+        altText: String? = null,
+        parentId: String? = null,
+    ): ApiResult<Comment>
+
+    /** Tip a comment (amount in integer cents). 2xx ack. */
+    suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit>
+
     suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit>
 
     suspend fun editComment(postId: String, commentId: String, body: String): ApiResult<Comment>
 
-    /** Capability flag; false by default (no replies endpoint / flat web rendering). */
+    /** Capability flag for threaded replies (backend accepts parent_comment_id). */
     val repliesSupported: Boolean
 }
 
@@ -58,7 +79,7 @@ class CommentsRepositoryImpl @Inject constructor(
 
     private val io: CoroutineDispatcher = Dispatchers.IO
 
-    override val repliesSupported: Boolean = false
+    override val repliesSupported: Boolean = true
 
     override suspend fun getComments(
         postId: String,
@@ -80,6 +101,49 @@ class CommentsRepositoryImpl @Inject constructor(
             api.addComment(postId, CreateCommentRequest(body = body, parentCommentId = parentId))
         }.map { it.toDomain(me) }
     }
+
+    override suspend fun addGifComment(
+        postId: String,
+        gifUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall {
+            api.addComment(
+                postId,
+                CreateCommentRequest(body = "", parentCommentId = parentId, kind = "gif", gifUrl = gifUrl, gifAltText = altText),
+            )
+        }.map { it.toDomain(me) }
+    }
+
+    override suspend fun addStickerComment(
+        postId: String,
+        stickerId: String,
+        collectionId: String,
+        stickerUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall {
+            api.addComment(
+                postId,
+                CreateCommentRequest(
+                    body = "",
+                    parentCommentId = parentId,
+                    kind = "sticker",
+                    stickerId = stickerId,
+                    stickerCollectionId = collectionId,
+                    stickerUrl = stickerUrl,
+                    stickerAltText = altText,
+                ),
+            )
+        }.map { it.toDomain(me) }
+    }
+
+    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit> =
+        withContext(io) { ackCall { api.tipComment(postId, commentId, TipRequest(amountCents = amountCents)) } }
 
     override suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit> =
         withContext(io) { ackCall { api.deleteComment(postId, commentId) } }

@@ -79,7 +79,8 @@ class SyndicateOverviewViewModel @Inject constructor(
         viewModelScope.launch {
             val overviewResult = repository.getOverview(syndicateId)
 
-            // FR-7: a 403 OR is_member == false -> NotMember empty-state.
+            // FR-7: a 403/404 OR is_member == false -> NotMember empty-state (404 = no/unknown syndicate,
+            // e.g. the SAMPLE_SYNDICATE_ID stub when the user has no syndicate -> friendly empty, not Error).
             when (overviewResult) {
                 is ApiResult.Success ->
                     if (!overviewResult.data.isMember) {
@@ -87,7 +88,8 @@ class SyndicateOverviewViewModel @Inject constructor(
                         return@launch
                     }
                 is ApiResult.Failure ->
-                    if (overviewResult.error.status == STATUS_FORBIDDEN) {
+                    if (overviewResult.error.status == STATUS_FORBIDDEN ||
+                        overviewResult.error.status == STATUS_NOT_FOUND) {
                         _uiState.value = SyndicateOverviewUiState.NotMember
                         return@launch
                     }
@@ -133,6 +135,7 @@ class SyndicateOverviewViewModel @Inject constructor(
         const val ARG_SYNDICATE_ID = "syndicateId"
 
         private const val STATUS_FORBIDDEN = 403
+        private const val STATUS_NOT_FOUND = 404
         private const val OFFLINE_FALLBACK = "Couldn't reach the server. Pull down to retry."
     }
 }

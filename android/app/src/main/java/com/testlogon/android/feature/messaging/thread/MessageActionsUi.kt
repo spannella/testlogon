@@ -481,5 +481,6 @@ private fun CenterLoader() {
 fun tombstoneLabel(message: ThreadMessageUi): String = when {
     message.isRevoked -> stringResource(R.string.msg_tombstone_revoked)
     message.isDeleted -> stringResource(R.string.msg_tombstone_deleted)
+    message.isExpired -> "This message has expired"
     else -> ""
 }

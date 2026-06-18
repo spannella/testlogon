@@ -28,6 +28,7 @@ class MoreAvailabilityResolver @Inject constructor(
 ) {
     fun resolve(entry: MoreEntry): EntryAvailability = when {
         !routeRegistry.isRegistered(entry.route) -> EntryAvailability.Hidden
+        entry.operatorOnly -> EntryAvailability.Hidden
         entry.comingSoon -> EntryAvailability.Disabled(R.string.more_unavailable_coming_soon)
         else -> EntryAvailability.Available
     }

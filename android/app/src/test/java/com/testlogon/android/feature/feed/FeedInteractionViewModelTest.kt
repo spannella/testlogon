@@ -45,7 +45,7 @@ class FeedInteractionViewModelTest {
         feed: FakeFeedRepository,
         bookmarks: FakeFeedBookmarkRepository = FakeFeedBookmarkRepository(),
         polls: FakePollRepository = FakePollRepository(),
-    ) = FeedViewModel(feed, FakeEngagementRepository(), FakePostActionsRepository(), bookmarks, polls)
+    ) = FeedViewModel(feed, FakeEngagementRepository(), FakePostActionsRepository(), bookmarks, polls, fakeDisplayNameResolver())
 
     // ---- AND-176 bookmark ----
 

@@ -6,9 +6,18 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.groups.Group
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
+import com.testlogon.android.core.model.groups.Contributor
+import com.testlogon.android.core.model.groups.GroupCampaign
+import com.testlogon.android.core.model.groups.GroupCampaignStats
+import com.testlogon.android.core.model.groups.GroupFundraiser
+import com.testlogon.android.core.model.groups.TreasuryBalance
+import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.groups.GroupInviteIn
 import com.testlogon.android.core.network.groups.GroupUpdateRoleIn
+import com.testlogon.android.core.network.groups.GroupCreateCampaignIn
+import com.testlogon.android.core.network.groups.GroupCreateFundraiserIn
+import com.testlogon.android.core.network.groups.GroupUpdateIn
 import com.testlogon.android.core.network.groups.GroupsApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +62,52 @@ interface GroupsRepository {
 
     /** POST leave (no body). 200 -> Success(Unit). */
     suspend fun leave(groupId: String): ApiResult<Unit>
+
+    // ---- Sub-pages (AND-355): treasury / fundraising / campaigns / settings ----
+
+    /** GET the treasury balance (membership-gated read). */
+    suspend fun getTreasuryBalance(groupId: String): ApiResult<TreasuryBalance>
+
+    /** GET the treasury ledger entries (membership-gated read). */
+    suspend fun getTreasuryLedger(groupId: String): ApiResult<List<TreasuryLedgerEntry>>
+
+    /** GET the treasury contributors (membership-gated read). */
+    suspend fun getTreasuryContributors(groupId: String): ApiResult<List<Contributor>>
+
+    /** GET the group fundraisers (membership-gated read). */
+    suspend fun listFundraisers(groupId: String): ApiResult<List<GroupFundraiser>>
+
+    /** POST a new fundraiser (admin-gated -> 403 for non-admins). */
+    suspend fun createFundraiser(
+        groupId: String,
+        title: String,
+        description: String?,
+        goalCents: Long?,
+    ): ApiResult<GroupFundraiser>
+
+    /** GET the group advertising campaigns (membership-gated read). */
+    suspend fun listCampaigns(groupId: String): ApiResult<List<GroupCampaign>>
+
+    /** GET per-campaign stats (membership-gated read). */
+    suspend fun getCampaignStats(groupId: String, campaignId: String): ApiResult<GroupCampaignStats>
+
+    /** POST a new campaign (admin-gated -> 403 for non-admins). */
+    suspend fun createCampaign(
+        groupId: String,
+        name: String,
+        dailyBudgetCents: Long,
+        lifetimeBudgetCents: Long,
+        creativeText: String?,
+    ): ApiResult<GroupCampaign>
+
+    /** PATCH the group settings (admin-gated -> 403 for non-admins). */
+    suspend fun updateGroup(
+        groupId: String,
+        name: String?,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group>
 }
 
 @Singleton
@@ -98,6 +153,96 @@ class GroupsRepositoryImpl @Inject constructor(
 
     override suspend fun leave(groupId: String): ApiResult<Unit> = withContext(Dispatchers.IO) {
         call { groupsApi.leave(groupId).requireSuccess() }
+    }
+
+    override suspend fun getTreasuryBalance(groupId: String): ApiResult<TreasuryBalance> =
+        withContext(Dispatchers.IO) {
+            call { groupsApi.getTreasuryBalance(groupId).toDomain() }
+        }
+
+    override suspend fun getTreasuryLedger(groupId: String): ApiResult<List<TreasuryLedgerEntry>> =
+        withContext(Dispatchers.IO) {
+            call { groupsApi.getTreasuryLedger(groupId).entries.map { it.toDomain() } }
+        }
+
+    override suspend fun getTreasuryContributors(groupId: String): ApiResult<List<Contributor>> =
+        withContext(Dispatchers.IO) {
+            call { groupsApi.getTreasuryContributors(groupId).contributors.map { it.toDomain() } }
+        }
+
+    override suspend fun listFundraisers(groupId: String): ApiResult<List<GroupFundraiser>> =
+        withContext(Dispatchers.IO) {
+            call { groupsApi.listFundraisers(groupId).fundraisers.map { it.toDomain() } }
+        }
+
+    override suspend fun createFundraiser(
+        groupId: String,
+        title: String,
+        description: String?,
+        goalCents: Long?,
+    ): ApiResult<GroupFundraiser> = withContext(Dispatchers.IO) {
+        call {
+            groupsApi.createFundraiser(
+                groupId,
+                GroupCreateFundraiserIn(
+                    title = title,
+                    description = description?.takeIf { it.isNotBlank() },
+                    goalCents = goalCents,
+                ),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun listCampaigns(groupId: String): ApiResult<List<GroupCampaign>> =
+        withContext(Dispatchers.IO) {
+            call { groupsApi.listCampaigns(groupId).campaigns.map { it.toDomain() } }
+        }
+
+    override suspend fun getCampaignStats(
+        groupId: String,
+        campaignId: String,
+    ): ApiResult<GroupCampaignStats> = withContext(Dispatchers.IO) {
+        call { groupsApi.getCampaignStats(groupId, campaignId).toDomain() }
+    }
+
+    override suspend fun createCampaign(
+        groupId: String,
+        name: String,
+        dailyBudgetCents: Long,
+        lifetimeBudgetCents: Long,
+        creativeText: String?,
+    ): ApiResult<GroupCampaign> = withContext(Dispatchers.IO) {
+        call {
+            groupsApi.createCampaign(
+                groupId,
+                GroupCreateCampaignIn(
+                    name = name,
+                    dailyBudgetCents = dailyBudgetCents,
+                    lifetimeBudgetCents = lifetimeBudgetCents,
+                    creativeText = creativeText?.takeIf { it.isNotBlank() },
+                ),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun updateGroup(
+        groupId: String,
+        name: String?,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group> = withContext(Dispatchers.IO) {
+        call {
+            groupsApi.updateGroup(
+                groupId,
+                GroupUpdateIn(
+                    name = name,
+                    description = description,
+                    visibility = visibility,
+                    topic = topic,
+                ),
+            ).toDomain()
+        }
     }
 
     /**

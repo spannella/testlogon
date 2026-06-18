@@ -21,7 +21,12 @@ class CommentsViewModelTest {
     val mainRule = MainDispatcherRule()
 
     private fun vm(repo: FakeCommentsRepository) =
-        CommentsViewModel(repo, SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to "post_1")))
+        CommentsViewModel(
+            repo,
+            com.testlogon.android.feature.messaging.FakeMessagingRepository(),
+            fakeDisplayNameResolver(),
+            SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to "post_1")),
+        )
 
     @Test
     fun send_insertsPendingHeader_clearsComposer() = runTest {

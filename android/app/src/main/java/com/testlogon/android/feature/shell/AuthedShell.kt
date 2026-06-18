@@ -6,11 +6,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
@@ -38,11 +40,14 @@ enum class AuthedTab(
     @StringRes val labelRes: Int,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector,
+    /** Whether this tab is rendered in the bottom [NavigationBar]; some tabs are inner-only. */
+    val inNavBar: Boolean = true,
 ) {
     HOME("authed/home", R.string.tab_home, Icons.Filled.Home, Icons.Outlined.Home),
     FEED("authed/feed", R.string.tab_feed, Icons.Filled.DynamicFeed, Icons.Outlined.DynamicFeed),
     DISCOVER("authed/discover", R.string.tab_discover, Icons.Filled.Explore, Icons.Outlined.Explore),
-    ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person),
+    INBOX("authed/inbox", R.string.tab_inbox, Icons.Filled.Forum, Icons.Outlined.Forum),
+    ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person, inNavBar = false),
     MORE("authed/more", R.string.tab_more, Icons.Filled.Apps, Icons.Outlined.Apps);
 
     companion object {
@@ -73,7 +78,7 @@ fun AuthedShellScreen(
         modifier = modifier,
         bottomBar = {
             NavigationBar {
-                AuthedTab.entries.forEach { tab ->
+                AuthedTab.entries.filter { it.inNavBar }.forEach { tab ->
                     val selected = tab == current
                     NavigationBarItem(
                         selected = selected,
@@ -93,6 +98,20 @@ fun AuthedShellScreen(
     ) { padding ->
         // AND-107: request POST_NOTIFICATIONS once now that the user is authenticated (no-op < API 33).
         com.testlogon.android.notifications.NotificationPermissionGate()
+        // One-time biometric-enrollment offer after a fresh login/registration (AND biometric).
+        BiometricEnrollGate()
+        // AND-067: shared "More" item routing — used by both the More tab's hub tiles' detail screen
+        // and (historically) the flat grid. A few routes are in-shell tab jumps / dedicated callbacks;
+        // everything else opens as an outer-graph destination (onOpenRoute guards unregistered routes).
+        val onMoreNavigate: (String) -> Unit = onMoreNavigate@{ route ->
+            when (route) {
+                com.testlogon.android.navigation.MoreRoutes.PROFILE ->
+                    tabNav.navigateToTab(AuthedTab.ME)
+                com.testlogon.android.navigation.MoreRoutes.SESSIONS -> onOpenSessions()
+                com.testlogon.android.navigation.MoreRoutes.MFA_DEVICES -> onOpenMfaDevices()
+                else -> onOpenRoute(route)
+            }
+        }
         NavHost(
             navController = tabNav,
             startDestination = AuthedTab.START.route,
@@ -106,10 +125,14 @@ fun AuthedShellScreen(
                         onOpenRoute(com.testlogon.android.navigation.MainDest.Settings.route)
                     },
                     onOpenMore = { tabNav.navigateToTab(AuthedTab.MORE) },
+                    onOpenRoute = onOpenRoute,
+                    onOpenInbox = { tabNav.navigateToTab(AuthedTab.INBOX) },
                 )
             }
             composable(AuthedTab.FEED.route) {
                 com.testlogon.android.feature.feed.FeedRoute(
+                    onComposePost = { onOpenRoute(com.testlogon.android.navigation.ComposePostDest.ROUTE) },
+                    onOpenDiscover = { tabNav.navigateToTab(AuthedTab.DISCOVER) },
                     onPostClick = { postId ->
                         onOpenRoute(com.testlogon.android.navigation.PostDetailDest.build(postId))
                     },
@@ -141,6 +164,22 @@ fun AuthedShellScreen(
                     },
                 )
             }
+            // Inbox — the conversation list, promoted to a first-class bottom-nav tab. Its row/search/
+            // group-create taps open the same outer-graph messaging destinations the More hub uses.
+            composable(AuthedTab.INBOX.route) {
+                com.testlogon.android.feature.messaging.list.ConversationListRoute(
+                    onOpenConversation = { id ->
+                        onOpenRoute(com.testlogon.android.feature.messaging.nav.MessagingRoutes.thread(id))
+                    },
+                    onOpenSearch = {
+                        onOpenRoute(com.testlogon.android.feature.messaging.nav.MessagingRoutes.SEARCH)
+                    },
+                    onNewGroup = {
+                        onOpenRoute(com.testlogon.android.feature.messaging.nav.MessagingRoutes.GROUP_CREATE)
+                    },
+                    onBack = {},
+                )
+            }
             composable(AuthedTab.ME.route) {
                 com.testlogon.android.feature.profile.own.OwnProfileRoute(
                     onEditProfile = onEditProfile,
@@ -153,35 +192,29 @@ fun AuthedShellScreen(
             }
             composable(AuthedTab.MORE.route) {
                 com.testlogon.android.feature.more.MoreRoute(
-                    onNavigate = { route ->
-                        when (route) {
-                            com.testlogon.android.navigation.MoreRoutes.PROFILE ->
-                                tabNav.navigateToTab(AuthedTab.ME)
-                            com.testlogon.android.navigation.MoreRoutes.SESSIONS -> onOpenSessions()
-                            com.testlogon.android.navigation.MoreRoutes.MFA_DEVICES -> onOpenMfaDevices()
-                            // AND-077/080: Settings hub + notification prefs are outer-graph routes.
-                            // AND-091/092/093: activity / saved / achievements are outer-graph routes.
-                            com.testlogon.android.navigation.MoreRoutes.SETTINGS,
-                            com.testlogon.android.navigation.MoreRoutes.NOTIFICATIONS,
-                            com.testlogon.android.navigation.MoreRoutes.MESSAGES,
-                            com.testlogon.android.navigation.MoreRoutes.ACTIVITY,
-                            com.testlogon.android.navigation.MoreRoutes.SAVED,
-                            com.testlogon.android.navigation.MoreRoutes.ACHIEVEMENTS,
-                            // AND-189 / AND-191: videos library + VOD catalog are outer-graph routes.
-                            com.testlogon.android.navigation.MoreRoutes.VIDEOS,
-                            com.testlogon.android.navigation.MoreRoutes.VOD_CATALOG,
-                            // AND-201: the published video gallery browse grid (outer-graph route).
-                            com.testlogon.android.navigation.MoreRoutes.GALLERY,
-                            // AND-235: subscription tiers browse (outer-graph route; self-browse).
-                            com.testlogon.android.navigation.MoreRoutes.SUBSCRIPTION_TIERS,
-                            // Commerce: shop catalog + cart (outer-graph routes).
-                            com.testlogon.android.navigation.MoreRoutes.CATALOG,
-                            com.testlogon.android.navigation.MoreRoutes.CART ->
-                                onOpenRoute(route)
-                            else -> Unit // coming-soon entries are non-interactive
-                        }
+                    // AND-067 IA: the More tab now shows hub tiles; a tap drills into the hub-detail
+                    // screen registered below (in this tab's own back stack).
+                    onOpenHub = { hub ->
+                        tabNav.navigate(com.testlogon.android.navigation.MoreHubDest.build(hub))
                     },
+                    onNavigate = { route -> onMoreNavigate(route) },
                 )
+            }
+            // AND-067 IA: the hub-detail screen. Reads the hubId nav arg and reuses the shared
+            // [onMoreNavigate] so every item destination keeps routing exactly as before.
+            composable(com.testlogon.android.navigation.MoreHubDest.ROUTE) { backStackEntry ->
+                val hubId = backStackEntry.arguments
+                    ?.getString(com.testlogon.android.navigation.MoreHubDest.ARG_HUB_ID)
+                val hub = com.testlogon.android.navigation.MoreHubDest.hubFromArg(hubId)
+                if (hub == null) {
+                    tabNav.popBackStack()
+                } else {
+                    com.testlogon.android.feature.more.MoreHubRoute(
+                        hub = hub,
+                        onBack = { tabNav.popBackStack() },
+                        onNavigate = { route -> onMoreNavigate(route) },
+                    )
+                }
             }
         }
     }

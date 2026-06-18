@@ -23,6 +23,14 @@ class CommentsPagingSourceTest {
             ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
         override suspend fun deleteComment(postId: String, commentId: String) =
             ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
+        override suspend fun addGifComment(postId: String, gifUrl: String, altText: String?, parentId: String?) =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
+        override suspend fun addStickerComment(postId: String, stickerId: String, collectionId: String, stickerUrl: String, altText: String?, parentId: String?) =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
+        override suspend fun tipComment(postId: String, commentId: String, amountCents: Int) =
+            ApiResult.Success(Unit)
+        override suspend fun editComment(postId: String, commentId: String, body: String) =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
     }
 
     private fun comment(id: String) = Comment(

@@ -49,7 +49,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                     navController.navigate(MainDest.EditProfile.route) { launchSingleTop = true }
                 },
                 onOpenRoute = { route ->
-                    navController.navigate(route) { launchSingleTop = true }
+                    // Guard: a few hub routes may not be registered as destinations yet; ignore those
+                    // (no-op) rather than crashing the app on a missing navigation target.
+                    runCatching { navController.navigate(route) { launchSingleTop = true } }
                 },
             )
         }
@@ -122,6 +124,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // selectable date range). Route reachable via navigateToAdAnalytics(accountId); the More-hub uses a
         // sample account id (no ads-accounts list yet).
         adAnalyticsDestination(navController)
+        // AND-369: READ-ONLY ads-campaigns list (ads-campaigns/{accountId}) - the account's campaigns
+        // (name/status/budget/spend). Route reachable via navigateToAdsCampaigns(accountId); the More-hub
+        // uses a sample account id (no ads-accounts list yet).
+        adsCampaignsDestination(navController)
         // AND-400: READ-ONLY public SEO metadata inspector (seo/{resourceType}/{id}). Diagnostic preview
         // of the title / og / twitter / json-ld a crawler sees. Route reachable via navigateToSeo(type, id);
         // the More-hub uses a sample profile resource (no per-resource detail wiring this wave).
@@ -143,6 +149,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         storyViewerDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
+        // Newsfeed post compose (create a post).
+        composePostDestination(navController)
+        // VOD upload (publish a video).
+        videoUploadDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
         filesDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
@@ -218,6 +228,14 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         payoutsDestinations(navController)
         // AND-264: referrals dashboard (code/link + stats + share/copy + create-code CTA).
         referralsDestination(navController)
+        // Alerts (system notifications) inbox.
+        alertsDestination(navController)
+        // Account-action appeals.
+        appealsDestination(navController)
+        ideasDestination(navController)
+        licensesDestination(navController)
+        watchPartiesDestinations(navController)
+        botsDestinations(navController)
         // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + links list).
         affiliatesDestination(navController)
         // AND-266: promo codes (list + create via plain CRUD; deactivate; usage/expiry/discount).

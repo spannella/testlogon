@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.model.LogoutReason
@@ -83,6 +84,9 @@ fun LoginRoute(
         onMagicLink = onMagicLink,
         onStartSso = { context.findActivity()?.let { viewModel.startSso(it) } },
         onPasskeySignIn = { activity -> viewModel.signInWithPasskey(activity) },
+        onBiometricSignIn = {
+            (context.findActivity() as? FragmentActivity)?.let(viewModel::unlockWithBiometrics)
+        },
         modifier = modifier,
     )
 }
@@ -104,6 +108,7 @@ fun LoginScreen(
     onMagicLink: () -> Unit,
     onStartSso: () -> Unit = {},
     onPasskeySignIn: (android.app.Activity) -> Unit = {},
+    onBiometricSignIn: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier.testTag("login_screen")) { padding ->
@@ -204,6 +209,18 @@ fun LoginScreen(
                 supported = state.passkeySupported,
                 onSignIn = onPasskeySignIn,
             )
+
+            // Biometric sign-in — shown only once a credential has been enrolled on this device.
+            if (state.biometricAvailable && state.biometricEnrolled) {
+                TlButton(
+                    text = "Sign in with biometrics",
+                    onClick = onBiometricSignIn,
+                    variant = TlButtonVariant.Secondary,
+                    enabled = !state.isSubmitting && !state.biometricBusy,
+                    loading = state.biometricBusy,
+                    modifier = Modifier.fillMaxWidth().testTag("login_biometric"),
+                )
+            }
 
             TlButton(
                 text = "Sign in with a magic link",

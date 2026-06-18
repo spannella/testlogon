@@ -7,6 +7,8 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
+import coil.map.Mapper
+import coil.request.Options
 import com.google.firebase.FirebaseApp
 import com.testlogon.android.data.push.FcmTokenRegistrar
 import com.testlogon.android.notifications.NotificationChannelInitializer
@@ -53,6 +55,9 @@ class TestLogonApp : Application(), ImageLoaderFactory {
      */
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
         .components {
+            // Resolve server-relative media urls (e.g. "/mock/s3/..." or "/media/...") against the API
+            // base url so Coil can fetch them; absolute (http/https) urls and content/file uris pass through.
+            add(RelativeUrlMapper(BuildConfig.API_BASE_URL))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 add(ImageDecoderDecoder.Factory())
             } else {
@@ -60,6 +65,12 @@ class TestLogonApp : Application(), ImageLoaderFactory {
             }
         }
         .build()
+
+    /** Maps a server-relative url ("/path") to an absolute one under [base]; returns null (no-op) otherwise. */
+    private class RelativeUrlMapper(private val base: String) : Mapper<String, String> {
+        override fun map(data: String, options: Options): String? =
+            if (data.startsWith("/")) base.trimEnd('/') + data else null
+    }
 
     override fun onCreate() {
         super.onCreate()

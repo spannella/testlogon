@@ -34,6 +34,11 @@ data class Comment(
     /** deleted => render a "Comment deleted" tombstone. */
     val deleted: Boolean = false,
     val tipTotalCents: Int = 0,
+    // ---- rich-comment payloads (null on plain text comments) ----
+    /** Remote GIF url when this is a GIF comment (kind == "gif"). */
+    val gifUrl: String? = null,
+    /** Remote sticker image url when this is a sticker comment (kind == "sticker"). */
+    val stickerUrl: String? = null,
     // ---- client-only optimistic flags ----
     /** DERIVED: authorId == current user id (no server field). */
     val canDelete: Boolean = false,
@@ -72,6 +77,8 @@ internal fun CommentDto.toDomain(currentUserId: String?): Comment = Comment(
     updatedAtEpochSeconds = updatedAt?.let { parseIsoToEpochSeconds(it) }?.takeIf { it > 0L },
     deleted = deleted,
     tipTotalCents = tipTotalCents,
+    gifUrl = gifUrl,
+    stickerUrl = stickerUrl,
     canDelete = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     canEdit = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     localKey = commentId,

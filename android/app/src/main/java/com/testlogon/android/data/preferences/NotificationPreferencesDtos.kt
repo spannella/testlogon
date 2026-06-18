@@ -7,10 +7,11 @@ import com.testlogon.android.core.model.NotificationTypePreference
 /**
  * AND-080 — Moshi DTOs for `/ui/alerts/type-preferences`.
  *
- * The POST body is the verified `AlertTypePreferenceUpdate` (one alert type per call; flat,
- * nullable channel booleans). The GET response is untyped server-side (`200: {}`); the Android port
- * tolerantly decodes a list of the same shape under a `type_preferences` key (falling back to an
- * empty list), and reconciles authoritative state by re-reading after each POST.
+ * The POST body is the verified `AlertTypePreferenceUpdate` (one alert type per call; flat, nullable
+ * channel booleans). The GET response carries `type_preferences` as an OBJECT keyed by alert_type
+ * (each value = the channel flags), e.g. `{"login_success":{"enabled":true,"email":true,...}}`. We
+ * decode that map (and tolerate a legacy `preferences` list of the flat shape), flattening to the flat
+ * [AlertTypePreferenceDto] the repository maps to domain. Authoritative state is re-read after each POST.
  */
 @JsonClass(generateAdapter = true)
 data class AlertTypePreferenceDto(
@@ -22,13 +23,41 @@ data class AlertTypePreferenceDto(
     @Json(name = "in_app") val inApp: Boolean? = null,
 )
 
-/** Tolerant GET envelope: accepts `{"type_preferences":[...]}` or `{"preferences":[...]}`. */
+/** The per-alert-type channel flags carried as the VALUE of the `type_preferences` map. */
+@JsonClass(generateAdapter = true)
+data class AlertTypeChannelsDto(
+    @Json(name = "enabled") val enabled: Boolean? = null,
+    @Json(name = "push") val push: Boolean? = null,
+    @Json(name = "email") val email: Boolean? = null,
+    @Json(name = "sms") val sms: Boolean? = null,
+    @Json(name = "in_app") val inApp: Boolean? = null,
+)
+
+/**
+ * GET envelope. `type_preferences` is an OBJECT keyed by alert_type (the real server shape); a legacy
+ * `preferences` list of flat rows is tolerated as a fallback.
+ */
 @JsonClass(generateAdapter = true)
 data class AlertTypePreferencesEnvelopeDto(
-    @Json(name = "type_preferences") val typePreferences: List<AlertTypePreferenceDto>? = null,
+    @Json(name = "type_preferences") val typePreferences: Map<String, AlertTypeChannelsDto>? = null,
     @Json(name = "preferences") val preferences: List<AlertTypePreferenceDto>? = null,
 ) {
-    fun entries(): List<AlertTypePreferenceDto> = typePreferences ?: preferences ?: emptyList()
+    /** Flatten to the flat row shape (injecting the map key as alert_type). */
+    fun entries(): List<AlertTypePreferenceDto> {
+        typePreferences?.let { map ->
+            return map.map { (type, ch) ->
+                AlertTypePreferenceDto(
+                    alertType = type,
+                    enabled = ch.enabled,
+                    push = ch.push,
+                    email = ch.email,
+                    sms = ch.sms,
+                    inApp = ch.inApp,
+                )
+            }
+        }
+        return preferences ?: emptyList()
+    }
 }
 
 /** POST body — `AlertTypePreferenceUpdate`. `alert_type` is required; channels are nullable. */

@@ -24,6 +24,9 @@ fun UserGroupDto.toDomain(): Group = Group(
     myRole = GroupRole.from(myRole),
     adminUserId = adminUserId,
     coverImageUrl = coverImageUrl,
+    topic = topic,
+    visibility = visibility,
+    status = status,
 )
 
 /**

@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 8,
+    version = 10,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -234,6 +234,22 @@ abstract class MessagingDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE messages ADD COLUMN replyToMessageId TEXT")
             }
         }
+
+        /** AND-147 — persist delivery/read receipt counts so the Sent/Delivered/Read indicator survives a reload. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN deliveredToCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN readByCount INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** Persist self-destruct expiry so expired messages render redacted after a reload. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN expiresAtEpochSeconds INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN serverExpired INTEGER NOT NULL DEFAULT 0")
+            }
+        }
     }
 }
 
@@ -257,6 +273,8 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_5_6,
             MessagingDatabase.MIGRATION_6_7,
             MessagingDatabase.MIGRATION_7_8,
+            MessagingDatabase.MIGRATION_8_9,
+            MessagingDatabase.MIGRATION_9_10,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

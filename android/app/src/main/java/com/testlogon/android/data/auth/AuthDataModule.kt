@@ -112,4 +112,17 @@ abstract class AuthDataBindsModule {
     @Binds
     @Singleton
     abstract fun bindMfaDeviceRepository(impl: MfaDeviceRepositoryImpl): MfaDeviceRepository
+
+    // Biometric sign-in (local credential store + prompt wrapper)
+    @Binds
+    @Singleton
+    abstract fun bindBiometricCredentialStore(
+        impl: EncryptedBiometricCredentialStore,
+    ): BiometricCredentialStore
+
+    @Binds
+    @Singleton
+    abstract fun bindBiometricAuthenticator(
+        impl: AndroidBiometricAuthenticator,
+    ): BiometricAuthenticator
 }

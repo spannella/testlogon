@@ -8,7 +8,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.Row
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,7 +33,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PushPin
@@ -40,10 +45,15 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -295,6 +305,8 @@ fun ThreadRoute(
         onCountdownTitleChange = viewModel::onCountdownTitleChange,
         onCountdownTargetChange = viewModel::onCountdownTargetChange,
         onSendCountdown = viewModel::onSendCountdown,
+        onOpenMessageOptions = viewModel::openMessageOptions,
+        onClearMessageOptions = viewModel::clearMessageOptions,
         nowSeconds = System.currentTimeMillis() / 1000L,
         onUnlock = viewModel::onUnlockClick,
         onTip = viewModel::onTipOpen,
@@ -354,6 +366,107 @@ fun ThreadRoute(
             }
         }
     }
+
+    // Send-options sheet: view-once / locked / scheduled for the next message.
+    if (state.messageOptionsVisible) {
+        MessageOptionsSheet(
+            options = state.composer.options,
+            nowSeconds = System.currentTimeMillis() / 1000L,
+            onViewOnceChange = viewModel::setViewOnce,
+            onLockPriceChange = viewModel::setLockPrice,
+            onScheduleChange = viewModel::setScheduledAt,
+            onExpiresChange = viewModel::setExpiresIn,
+            onDismiss = viewModel::closeMessageOptions,
+        )
+    }
+}
+
+/** Bottom sheet to set send-time options (view-once / locked / scheduled / expiring) on the next message. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MessageOptionsSheet(
+    options: MessageOptions,
+    nowSeconds: Long,
+    onViewOnceChange: (Boolean) -> Unit,
+    onLockPriceChange: (String) -> Unit,
+    onScheduleChange: (Long?) -> Unit,
+    onExpiresChange: (Long?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var lockInput by remember {
+        mutableStateOf(options.lockPriceCents?.let { "%.2f".format(it / 100.0) } ?: "")
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("thread_options_sheet")) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        ) {
+            Text("Message options", style = MaterialTheme.typography.titleMedium)
+            // View once
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("View once", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Disappears after it's opened once",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = options.viewOnce,
+                    onCheckedChange = onViewOnceChange,
+                    modifier = Modifier.testTag("thread_option_view_once"),
+                )
+            }
+            // Locked (pay to unlock)
+            Text("Lock behind a price", style = MaterialTheme.typography.bodyLarge)
+            OutlinedTextField(
+                value = lockInput,
+                onValueChange = { lockInput = it; onLockPriceChange(it) },
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("thread_option_lock_price"),
+                label = { Text("Unlock price (USD)") },
+                placeholder = { Text("e.g. 4.99") },
+                singleLine = true,
+            )
+            // Scheduled send — arbitrary date + time
+            Text("Schedule send", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                com.testlogon.android.feature.common.DateTimePickerField(
+                    selectedEpochSeconds = options.scheduledAtEpochSeconds,
+                    onPicked = onScheduleChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = "Send now (tap to schedule)",
+                    testTag = "thread_option_schedule",
+                )
+                if (options.scheduledAtEpochSeconds != null) {
+                    TextButton(onClick = { onScheduleChange(null) }) { Text("Clear") }
+                }
+            }
+            // Expiring (self-destruct after delivery)
+            Text("Expires after", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
+            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(300L to "5 min", 3_600L to "1 hour", 86_400L to "1 day").forEach { (secs, label) ->
+                    FilterChip(
+                        selected = options.expiresInSeconds == secs,
+                        onClick = { onExpiresChange(if (options.expiresInSeconds == secs) null else secs) },
+                        label = { Text(label) },
+                        modifier = Modifier.testTag("thread_option_expire_$secs"),
+                    )
+                }
+            }
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp).testTag("thread_options_done"),
+            ) { Text("Done") }
+            Box(Modifier.fillMaxWidth().height(16.dp))
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -402,6 +515,8 @@ fun ThreadScreen(
     onCountdownTitleChange: (String) -> Unit,
     onCountdownTargetChange: (Long?) -> Unit,
     onSendCountdown: () -> Unit,
+    onOpenMessageOptions: () -> Unit = {},
+    onClearMessageOptions: () -> Unit = {},
     nowSeconds: Long,
     onUnlock: (String) -> Unit,
     onTip: (String) -> Unit,
@@ -527,6 +642,8 @@ fun ThreadScreen(
                         onAttachMedia = onOpenMediaPicker,
                         onAttachPoll = onOpenPollComposer,
                         onAttachCountdown = onAttachCountdown,
+                        onOpenMessageOptions = onOpenMessageOptions,
+                        onClearMessageOptions = onClearMessageOptions,
                         onCancelReply = { onAction(ThreadAction.CancelReply) },
                     )
                 }
@@ -686,12 +803,20 @@ private fun ThreadList(
             reverseLayout = true,
             modifier = Modifier.fillMaxSize().testTag(ThreadTestTags.LIST),
         ) {
-            items(reversed, key = { it.key }) { message ->
+            itemsIndexed(reversed, key = { _, m -> m.key }) { index, message ->
                 val repliedTo = message.replyToMessageId?.let { rid -> reversed.firstOrNull { it.key == rid } }
+                // Day divider above the first (oldest) message of each calendar day. In the reversed
+                // list, the chronologically-older neighbour sits at index+1.
+                val older = reversed.getOrNull(index + 1)
+                if (older == null ||
+                    !sameLocalDay(message.createdAtEpochSeconds, older.createdAtEpochSeconds)
+                ) {
+                    DateDivider(message.createdAtEpochSeconds)
+                }
                 MessageBubble(
                     message = message,
                     repliedToPreview = repliedTo?.let {
-                        (if (it.isOwn) "You" else "them") + ": " + it.text.ifBlank { "message" }
+                        (if (it.isOwn) "You" else "Them") + ": " + it.text.ifBlank { "message" }
                     },
                     download = state.downloads[message.key] ?: FileDownloadUi.NotDownloaded,
                     voicePlayback = voicePlayback,
@@ -897,7 +1022,13 @@ private fun MessageBubble(
             }
             MessageMedia.None -> Surface(
                 color = bubbleColor,
-                shape = MaterialTheme.shapes.medium,
+                contentColor = if (message.isOwn) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                shape = bubbleShape(message.isOwn),
+                tonalElevation = 1.dp,
                 modifier = Modifier
                     .widthIn(max = 280.dp)
                     .testTag(tag)
@@ -906,7 +1037,7 @@ private fun MessageBubble(
                 Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                 )
             }
         }
@@ -938,22 +1069,12 @@ private fun MessageBubble(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // Delivery/read receipt on the user's own, acked messages (AND-147 counts).
+            // Delivery/read receipt on the user's own, acked messages (AND-147 counts), shown as
+            // check glyphs: ✓ sent, ✓✓ delivered, ✓✓ (primary tint) read.
             if (message.isOwn && !message.isSending && !message.isFailed) {
-                val readLabel = when {
-                    message.seenCount > 0 -> "Read"
-                    message.deliveredCount > 0 -> "Delivered"
-                    else -> "Sent"
-                }
-                Text(
-                    text = "  · $readLabel",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (message.seenCount > 0) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.testTag("thread_receipt"),
+                ReceiptIndicator(
+                    deliveredCount = message.deliveredCount,
+                    seenCount = message.seenCount,
                 )
             }
             // AND-140 — "edited" marker; tapping opens the edit-history sheet.
@@ -973,6 +1094,78 @@ private fun MessageBubble(
             onToggle = onToggleReaction,
             onSeeWhoReacted = onSeeWhoReacted,
         )
+    }
+}
+
+/** Asymmetric chat-bubble shape: rounded on three corners with a small "tail" corner toward the sender's side. */
+private fun bubbleShape(isOwn: Boolean): RoundedCornerShape =
+    if (isOwn) {
+        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = 4.dp, bottomStart = 18.dp)
+    } else {
+        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = 18.dp, bottomStart = 4.dp)
+    }
+
+/**
+ * AND-147 — own-message delivery state as check glyphs (matches mainstream chat clients):
+ * ✓ sent, ✓✓ delivered, ✓✓ in the primary tint once read.
+ */
+@Composable
+private fun ReceiptIndicator(deliveredCount: Int, seenCount: Int) {
+    val read = seenCount > 0
+    val delivered = deliveredCount > 0
+    val label = when {
+        read -> "Read"
+        delivered -> "Delivered"
+        else -> "Sent"
+    }
+    Icon(
+        imageVector = if (delivered || read) Icons.Filled.DoneAll else Icons.Filled.Check,
+        contentDescription = label,
+        tint = if (read) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .padding(start = 4.dp)
+            .size(15.dp)
+            .testTag("thread_receipt"),
+    )
+}
+
+/** A centered pill day-divider ("Today" / "Yesterday" / "MMM d, yyyy") between calendar days. */
+@Composable
+private fun DateDivider(epochSeconds: Long) {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text(
+                text = dayLabel(epochSeconds),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** True when two epoch-second timestamps fall on the same local calendar day. minSdk24-safe (no java.time). */
+private fun sameLocalDay(a: Long, b: Long): Boolean {
+    val ca = java.util.Calendar.getInstance().apply { timeInMillis = a * 1000L }
+    val cb = java.util.Calendar.getInstance().apply { timeInMillis = b * 1000L }
+    return ca.get(java.util.Calendar.YEAR) == cb.get(java.util.Calendar.YEAR) &&
+        ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR)
+}
+
+/** Human day label for a divider. minSdk24-safe (Calendar + SimpleDateFormat, no java.time). */
+private fun dayLabel(epochSeconds: Long): String {
+    val nowSec = System.currentTimeMillis() / 1000L
+    return when {
+        sameLocalDay(epochSeconds, nowSec) -> "Today"
+        sameLocalDay(epochSeconds, nowSec - 86_400L) -> "Yesterday"
+        else -> java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault())
+            .format(java.util.Date(epochSeconds * 1000L))
     }
 }
 
@@ -1135,6 +1328,8 @@ private fun MessageComposer(
     onAttachMedia: () -> Unit,
     onAttachPoll: () -> Unit,
     onAttachCountdown: () -> Unit,
+    onOpenMessageOptions: () -> Unit = {},
+    onClearMessageOptions: () -> Unit = {},
     onCancelReply: () -> Unit = {},
 ) {
     Surface(tonalElevation = 2.dp) {
@@ -1224,6 +1419,30 @@ private fun MessageComposer(
                         modifier = Modifier.size(44.dp).testTag(PaidMessageTestTags.COUNTDOWN_BUBBLE + "_attach"),
                     ) {
                         Icon(Icons.Filled.Timer, contentDescription = stringResource(R.string.composer_add_countdown), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onOpenMessageOptions() },
+                        modifier = Modifier.size(44.dp).testTag("thread_msg_options"),
+                    ) {
+                        Icon(Icons.Filled.Tune, contentDescription = "Message options (view once, locked, schedule)", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            // Active send-options chip (view-once / locked / scheduled), with a quick clear.
+            composer.options.summary?.let { summary ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp).testTag("thread_options_chip"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Tune, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f).padding(start = 4.dp),
+                    )
+                    IconButton(onClick = onClearMessageOptions, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Filled.Close, contentDescription = "Clear options", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

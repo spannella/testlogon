@@ -125,6 +125,7 @@ class RegisterConfirmViewModel @Inject constructor(
                 if (outcome.handoff.isRequired) {
                     _effects.tryEmit(RegisterConfirmEffect.GoToMfaSetup(outcome.handoff))
                 } else {
+                    // Enrollment is offered by the authenticated shell from the buffer (post-swap).
                     _effects.tryEmit(RegisterConfirmEffect.GoToApp)
                 }
                 Unit

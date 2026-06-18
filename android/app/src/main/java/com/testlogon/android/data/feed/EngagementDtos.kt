@@ -39,13 +39,34 @@ data class CommentDto(
     @Json(name = "updated_at") val updatedAt: String? = null,
     @Json(name = "deleted") val deleted: Boolean = false,
     @Json(name = "tip_total_cents") val tipTotalCents: Int = 0,
+    // Rich-comment payloads (kind "gif" / "sticker"); absent on plain text comments.
+    @Json(name = "kind") val kind: String? = null,
+    @Json(name = "gif_url") val gifUrl: String? = null,
+    @Json(name = "sticker_url") val stickerUrl: String? = null,
 )
 
-/** POST /posts/{post_id}/comments request. Plain comment: { body, parent_comment_id }. */
+/**
+ * POST /posts/{post_id}/comments request. Plain text comment: { body, parent_comment_id }. A GIF comment
+ * sets kind="gif" + gif_url; a sticker comment sets kind="sticker" + sticker_id + sticker_collection_id.
+ */
 @JsonClass(generateAdapter = true)
 data class CreateCommentRequest(
     @Json(name = "body") val body: String,
     @Json(name = "parent_comment_id") val parentCommentId: String? = null,
+    @Json(name = "kind") val kind: String? = null,
+    @Json(name = "gif_url") val gifUrl: String? = null,
+    @Json(name = "gif_alt_text") val gifAltText: String? = null,
+    @Json(name = "sticker_id") val stickerId: String? = null,
+    @Json(name = "sticker_collection_id") val stickerCollectionId: String? = null,
+    @Json(name = "sticker_url") val stickerUrl: String? = null,
+    @Json(name = "sticker_alt_text") val stickerAltText: String? = null,
+)
+
+/** POST /posts/{post_id}/comments/{comment_id}/tip request — amount in integer cents. */
+@JsonClass(generateAdapter = true)
+data class TipRequest(
+    @Json(name = "amount_cents") val amountCents: Int,
+    @Json(name = "currency") val currency: String = "USD",
 )
 
 /** PATCH /posts/{post_id}/comments/{comment_id} request — edit an own comment's body. */

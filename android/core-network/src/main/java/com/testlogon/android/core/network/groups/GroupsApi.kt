@@ -8,6 +8,7 @@ import retrofit2.http.Headers
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * AND-355 - Retrofit interface for the SOCIAL GROUPS surface. Transport only; the repository
@@ -75,4 +76,60 @@ interface GroupsApi {
     suspend fun leave(
         @Path("groupId") groupId: String,
     ): Response<Unit>
+    // ---- Sub-pages: treasury / fundraising / campaigns / settings (AND-355 sub-pages) ----
+
+    /** GET the group treasury balance (membership-gated read). */
+    @GET("ui/groups/{groupId}/treasury")
+    suspend fun getTreasuryBalance(@Path("groupId") groupId: String): TreasuryBalanceDto
+
+    /** GET the treasury ledger (ENVELOPE {entries, cursor?, has_more}). Membership-gated read. */
+    @GET("ui/groups/{groupId}/treasury/ledger")
+    suspend fun getTreasuryLedger(
+        @Path("groupId") groupId: String,
+        @Query("limit") limit: Int? = null,
+        @Query("cursor") cursor: String? = null,
+    ): TreasuryLedgerResponse
+
+    /** GET the treasury contributors (ENVELOPE {contributors, count}). Membership-gated read. */
+    @GET("ui/groups/{groupId}/treasury/contributors")
+    suspend fun getTreasuryContributors(@Path("groupId") groupId: String): ContributorListResponse
+
+    /** GET the group fundraisers (ENVELOPE {fundraisers}). Membership-gated read. */
+    @GET("ui/groups/fundraising/{groupId}/fundraisers")
+    suspend fun listFundraisers(@Path("groupId") groupId: String): GroupFundraiserListResponse
+
+    /** POST a new fundraiser (admin-gated at the service layer -> 403 for non-admins). */
+    @Headers("Content-Type: application/json")
+    @POST("ui/groups/fundraising/{groupId}/fundraisers")
+    suspend fun createFundraiser(
+        @Path("groupId") groupId: String,
+        @Body body: GroupCreateFundraiserIn,
+    ): GroupFundraiserDto
+
+    /** GET the group advertising campaigns (ENVELOPE {campaigns}). Membership-gated read. */
+    @GET("ui/groups/fundraising/{groupId}/campaigns")
+    suspend fun listCampaigns(@Path("groupId") groupId: String): GroupCampaignListResponse
+
+    /** GET per-campaign stats. Membership-gated read. */
+    @GET("ui/groups/fundraising/{groupId}/campaigns/{campaignId}/stats")
+    suspend fun getCampaignStats(
+        @Path("groupId") groupId: String,
+        @Path("campaignId") campaignId: String,
+    ): GroupCampaignStatsDto
+
+    /** POST a new campaign (admin-gated at the service layer -> 403 for non-admins). */
+    @Headers("Content-Type: application/json")
+    @POST("ui/groups/fundraising/{groupId}/campaigns")
+    suspend fun createCampaign(
+        @Path("groupId") groupId: String,
+        @Body body: GroupCreateCampaignIn,
+    ): GroupCampaignDto
+
+    /** PATCH the group settings (admin-gated at the service layer -> 403 for non-admins). */
+    @Headers("Content-Type: application/json")
+    @PATCH("ui/groups/{groupId}")
+    suspend fun updateGroup(
+        @Path("groupId") groupId: String,
+        @Body body: GroupUpdateIn,
+    ): UserGroupDto
 }

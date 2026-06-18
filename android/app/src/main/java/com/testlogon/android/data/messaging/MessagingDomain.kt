@@ -277,6 +277,9 @@ data class Message(
     val readByCount: Int = 0,
     /** Reader user ids (read_by_user_ids), for self-exclusion + roster seeding. */
     val readByUserIds: List<String> = emptyList(),
+    /** Self-destruct expiry epoch seconds (null = never); [expired] = server-confirmed. */
+    val expiresAtEpochSeconds: Long? = null,
+    val expired: Boolean = false,
 )
 
 /** A conversation summary for the inbox list. */
@@ -339,6 +342,8 @@ internal fun MessageDto.toDomain(
         deliveredToCount = deliveredToCount ?: 0,
         readByCount = readByCount ?: 0,
         readByUserIds = readByUserIds ?: emptyList(),
+        expiresAtEpochSeconds = expiresAt,
+        expired = expired ?: false,
     )
 }
 

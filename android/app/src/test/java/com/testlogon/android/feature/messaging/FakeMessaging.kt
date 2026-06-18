@@ -105,6 +105,12 @@ class FakeMessagingRepository : MessagingRepository {
         conversationId: String,
         clientId: String,
         text: String,
+        replyToMessageId: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        lockDescription: String?,
+        sendAtEpochSeconds: Long?,
+        expiresInSeconds: Long?,
     ): ApiResult<Message> {
         return when (val result = sendResult) {
             is ApiResult.Success -> {

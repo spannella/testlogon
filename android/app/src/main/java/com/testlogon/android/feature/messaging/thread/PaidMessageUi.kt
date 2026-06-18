@@ -107,26 +107,18 @@ fun CountdownBubble(
             .testTag(PaidMessageTestTags.COUNTDOWN_BUBBLE)
             .semantics { contentDescription = cd },
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(media.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+            Text(media.title, style = MaterialTheme.typography.bodyLarge)
+            // Compact, timestamp-style remaining-time line (small + muted) rather than a large timer.
             Text(
-                targetLabel,
-                style = MaterialTheme.typography.labelMedium,
+                text = if (done) {
+                    stringResource(R.string.countdown_done)
+                } else {
+                    stringResource(R.string.countdown_remaining_inline, remainingText)
+                },
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (done) {
-                Text(
-                    stringResource(R.string.countdown_done),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-            } else {
-                Text(
-                    remainingText,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
         }
     }
 }

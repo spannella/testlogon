@@ -65,6 +65,14 @@ interface EngagementApi {
         @Path("comment_id") commentId: String,
     )
 
+    /** Tip a comment (creator monetization). 2xx ack; amount is integer cents. */
+    @POST("posts/{post_id}/comments/{comment_id}/tip")
+    suspend fun tipComment(
+        @Path("post_id") postId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: TipRequest,
+    )
+
     // ---- Hide / not-interested (AND-175) ----
 
     @POST("feed/hide")

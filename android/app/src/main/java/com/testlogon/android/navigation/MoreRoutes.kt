@@ -82,6 +82,9 @@ object MoreRoutes {
     // AND-211: the shopping cart.
     val CART: String get() = CartDest.ROUTE
 
+    // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
+    const val FILES = FilesDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -134,6 +137,18 @@ object MoreRoutes {
     // AND-264: referrals dashboard (referral code/link + stats + share/copy + create-code).
     const val REFERRALS = ReferralsDest.ROUTE
 
+    // Alerts (system notifications) inbox — mirrors web /alerts.
+    const val ALERTS = AlertsDest.ROUTE
+
+    // Account-action appeals - mirrors web /appeals.
+    const val APPEALS = AppealsDest.ROUTE
+
+    // Web-route parity batch.
+    const val IDEAS = IdeasDest.ROUTE
+    const val LICENSES = LicensesDest.ROUTE
+    const val WATCH_PARTIES = WatchPartiesDest.LIST
+    const val BOTS = BotsDest.LIST
+
     // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + affiliate links).
     const val AFFILIATES = AffiliatesDest.ROUTE
 
@@ -181,6 +196,11 @@ object MoreRoutes {
     // selectable date range). No ads-accounts list yet, so the hub opens a known sample account id (plain
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
     const val AD_ANALYTICS = AdAnalyticsDest.STUB_ROUTE
+
+    // AND-369: READ-ONLY ads-campaigns list (per-account campaigns: name/status/budget/spend). No
+    // ads-accounts list yet, so the hub opens a known sample account id (plain constant, no Uri.encode,
+    // so the JVM MoreCatalog integrity test stays Android-free).
+    const val ADS_CAMPAIGNS = AdsCampaignsDest.STUB_ROUTE
 
     // AND-400: READ-ONLY public SEO metadata inspector (title / og / twitter / json-ld a crawler sees).
     // No per-resource detail surface wires it this wave, so the hub opens a known sample profile resource
@@ -253,6 +273,7 @@ object MoreRoutes {
             GALLERY,
             CATALOG,
             CART,
+            FILES,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             EARNINGS,
@@ -260,6 +281,12 @@ object MoreRoutes {
             ENGAGEMENT,
             ANALYTICS_DASHBOARD,
             REFERRALS,
+            ALERTS,
+            APPEALS,
+            IDEAS,
+            LICENSES,
+            WATCH_PARTIES,
+            BOTS,
             AFFILIATES,
             PROMO_CODES,
             DISCOUNTS,
@@ -282,6 +309,7 @@ object MoreRoutes {
             SPONSORSHIPS,
             ADS_BILLING,
             AD_ANALYTICS,
+            ADS_CAMPAIGNS,
             SEO,
             TICKETS,
             WEBHOOKS,

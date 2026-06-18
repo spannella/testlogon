@@ -75,6 +75,9 @@ data class MessageDto(
     @Json(name = "read_by_user_ids") val readByUserIds: List<String>? = null,
     @Json(name = "delivered_to_count") val deliveredToCount: Int? = null,
     @Json(name = "delivered_to_user_ids") val deliveredToUserIds: List<String>? = null,
+    // Self-destruct expiry: epoch-seconds deadline + server-confirmed expired flag.
+    @Json(name = "expires_at") val expiresAt: Long? = null,
+    @Json(name = "expired") val expired: Boolean? = null,
     // AND-140 — reaction summary on the message itself: emoji -> count, plus the emojis I reacted with.
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
@@ -187,11 +190,21 @@ data class ConversationDto(
     @Json(name = "assignment_version") val assignmentVersion: Int? = null,
 )
 
-/** POST messages body = SendTextMessageIn. Field is `text` (1..4000); NO client_id on the wire. */
+/**
+ * POST messages body = SendTextMessageIn. Field is `text` (1..4000); NO client_id on the wire.
+ * Optional message-option fields (all default null/absent for a plain send): self-destruct
+ * ([viewOnce]), pay-to-unlock ([lockPriceCents]/[lockDescription]), and schedule ([sendAt], epoch
+ * seconds) — all accepted server-side on the same endpoint.
+ */
 @JsonClass(generateAdapter = true)
 data class SendTextMessageReq(
     val text: String,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    @Json(name = "view_once") val viewOnce: Boolean? = null,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
 )
 
 /** POST read body = app__routers__messaging__MarkReadIn (both fields optional). */

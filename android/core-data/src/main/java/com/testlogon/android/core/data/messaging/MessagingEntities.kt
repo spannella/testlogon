@@ -48,6 +48,13 @@ data class MessageEntity(
     val senderId: String,
     val text: String,
     val replyToMessageId: String? = null,
+    // AND-147 — delivery/read receipt counts (DB schema v9). Persisted so the Sent/Delivered/Read
+    // indicator survives the Room render path (counts arrive on the wire but were previously transient).
+    val deliveredToCount: Int = 0,
+    val readByCount: Int = 0,
+    // Self-destruct expiry (DB schema v10): epoch-seconds deadline + server-confirmed flag.
+    val expiresAtEpochSeconds: Long? = null,
+    val serverExpired: Boolean = false,
     val createdAtEpochSeconds: Long,
     /** Locally-attached client correlation id (for outbox cleanup); the server never returns it. */
     val clientId: String?,

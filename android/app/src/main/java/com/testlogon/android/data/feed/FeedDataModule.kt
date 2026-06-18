@@ -18,6 +18,12 @@ object FeedApiModule {
     fun provideFeedApi(retrofit: Retrofit): FeedApi =
         retrofit.create(FeedApi::class.java)
 
+    /** Post-compose (create a newsfeed post) API on the shared Retrofit. */
+    @Provides
+    @Singleton
+    fun providePostComposeApi(retrofit: Retrofit): PostComposeApi =
+        retrofit.create(PostComposeApi::class.java)
+
     /** AND-173 / AND-174 / AND-175 — feed content-engagement API on the shared Retrofit. */
     @Provides
     @Singleton

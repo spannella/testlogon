@@ -58,6 +58,9 @@ data class Group(
     val myRole: GroupRole = GroupRole.UNKNOWN,
     val adminUserId: String? = null,
     val coverImageUrl: String? = null,
+    val topic: String? = null,
+    val visibility: String? = null,
+    val status: String? = null,
 ) {
     /** True when the caller may manage membership (admin only). */
     val canManage: Boolean get() = myRole.canManage

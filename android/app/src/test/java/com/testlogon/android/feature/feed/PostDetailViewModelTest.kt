@@ -25,6 +25,7 @@ class PostDetailViewModelTest {
     ) = PostDetailViewModel(
         repo,
         engagement,
+        fakeDisplayNameResolver(),
         SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to postId)),
     )
 
