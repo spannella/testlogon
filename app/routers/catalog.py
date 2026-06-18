@@ -1241,3 +1241,114 @@ async def remove_bundle_component_endpoint(
     from app.services.product_variants import remove_bundle_component as _svc
     _require_item_owner(item_id, ctx["user_sub"])
     _svc(item_id, component_item_id, ctx["user_sub"])
+
+
+# ---------------------------------------------------------------------------
+# PRD-004 / PRD-005 — Category tree endpoints
+# Gated on S.product_depth_enabled (501 when off, raised by the service).
+# ---------------------------------------------------------------------------
+
+class _AddChildBody(BaseModel):
+    child_category_id: str
+    position: int = Field(default=0, ge=0)
+
+
+class _MoveCategoryBody(BaseModel):
+    new_parent_id: str
+
+
+def _build_tree_node(category_id: str, depth: int, max_depth: int) -> Dict[str, Any]:
+    """Recursively build a tree node dict (depth-limited)."""
+    from app.services.product_categories import _list_children_raw, _get_tree_row
+    row = _get_tree_row(category_id) or {}
+    node: Dict[str, Any] = {
+        "category_id": category_id,
+        "name": row.get("name", category_id),
+        "children": [],
+    }
+    if depth < max_depth:
+        children, _ = _list_children_raw(category_id, limit=200)
+        node["children"] = [
+            _build_tree_node(child["category_id"], depth + 1, max_depth)
+            for child in children
+        ]
+    return node
+
+
+@router.post("/categories/{category_id}/children")
+async def add_category_child(
+    category_id: str,
+    body: _AddChildBody,
+    ctx=Depends(require_ui_session),
+):
+    """Link an existing flat category as a child of category_id in the tree."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_categories import add_child as _svc
+    # Resolve child's name from T.catalog (best-effort; fallback to id)
+    child_meta = _get_category_meta(body.child_category_id)
+    child_name = child_meta.get("name", body.child_category_id)
+    try:
+        row = _svc(
+            parent_category_id=category_id,
+            category_id=body.child_category_id,
+            owner_sub=ctx["user_sub"],
+            name=child_name,
+            position=body.position,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "category_id": row["category_id"],
+        "parent_category_id": row["parent_category_id"],
+        "path": row["path"],
+        "position": int(row.get("position") or 0),
+        "name": row["name"],
+    }
+
+
+@router.patch("/categories/{category_id}/move")
+async def move_category_endpoint(
+    category_id: str,
+    body: _MoveCategoryBody,
+    ctx=Depends(require_ui_session),
+):
+    """Re-parent category_id to a new parent in the tree."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_categories import move_category as _svc
+    try:
+        row = _svc(
+            category_id=category_id,
+            new_parent_id=body.new_parent_id,
+            owner_sub=ctx["user_sub"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "category_id": row.get("category_id", category_id),
+        "parent_category_id": row.get("parent_category_id"),
+        "path": row.get("path"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.get("/categories/{category_id}/tree")
+async def get_category_tree(
+    category_id: str,
+    max_depth: int = Query(default=5, ge=1, le=10),
+):
+    """Return the category tree rooted at category_id (public, no auth required)."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    return _build_tree_node(category_id, depth=0, max_depth=max_depth)
+
+
+@router.get("/categories/{category_id}/breadcrumb")
+async def get_category_breadcrumb(category_id: str):
+    """Return breadcrumb trail [{category_id, name}] from root to category_id (public)."""
+    if not getattr(S, "product_depth_enabled", False):
+        raise HTTPException(status_code=501, detail="product_depth_not_enabled")
+    from app.services.product_categories import get_breadcrumb as _svc
+    crumbs = _svc(category_id)
+    return {"breadcrumb": crumbs}
