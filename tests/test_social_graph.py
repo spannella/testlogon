@@ -99,7 +99,8 @@ def social_tables():
 
         # Patch the social module's table references to use moto tables
         with patch("app.services.social.tbl", app_table), \
-             patch("app.services.social.T") as mock_T:
+             patch("app.services.social.T") as mock_T, \
+             patch("app.services.blocking.tbl", app_table):
             mock_T.profile = profile_table
             yield {
                 "app_table": app_table,
