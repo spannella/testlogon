@@ -39,7 +39,7 @@ dependencies {
 
     // Networking
     implementation(libs.okhttp)
-    implementation(libs.okhttp.logging)
+    api(libs.okhttp.logging)
     implementation(libs.retrofit)
     implementation(libs.retrofit.moshi)
     implementation(libs.moshi)

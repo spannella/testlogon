@@ -184,11 +184,6 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 }
 
-
-// The JVM unit tests build ViewModels with plain fakes and never use the Hilt graph, so Hilts
-// per-variant aggregating compile is unnecessary for them -- and it fails on a clean build (it
-// validates @HiltAndroidApp on the unit-test variant and mis-detects Hilt_TestLogonApp). Disable it
-// for unit-test variants so :app:testDebugUnitTest builds cleanly. Instrumented androidTest still
-// gets full Hilt via kspAndroidTest + HiltTestRunner.
-tasks.matching { it.name.startsWith("hiltJavaCompile") && it.name.contains("UnitTest") }
-    .configureEach { enabled = false }
+hilt {
+    enableAggregatingTask = false
+}
