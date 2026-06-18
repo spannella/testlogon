@@ -45,6 +45,7 @@ const Checkout = lazy(() => import("@/pages/shop/Checkout"));
 const InventoryAdmin = lazy(() => import("@/pages/shop/admin/InventoryAdmin"));
 const ShopCatalogDepthPage = lazy(() => import("@/pages/shop/admin/CatalogDepthPage"));
 const ShopOrderLifecyclePage = lazy(() => import("@/pages/shop/admin/OrderLifecyclePage"));
+const ShopShippingAdminPage = lazy(() => import("@/pages/shop/admin/ShippingAdminPage"));
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
 const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
@@ -703,6 +704,7 @@ export default function App() {
           <Route path="shop/:categoryId/:itemId" element={<ProductDetail />} />
           <Route path="shop/admin/catalog/depth/:itemId" element={<ShopCatalogDepthPage />} />
           <Route path="shop/admin/orders/:orderId/lifecycle" element={<ShopOrderLifecyclePage />} />
+          <Route path="shop/admin/shipping" element={<ShopShippingAdminPage />} />
           <Route path="cart" element={<CartPage />} />
           <Route path="cart/checkout" element={<Checkout />} />
           <Route path="feed" element={<FeedPage />} />
