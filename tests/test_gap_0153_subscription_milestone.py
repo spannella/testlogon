@@ -67,7 +67,7 @@ def test_subscribe_calls_check_milestone_for_subscribers(monkeypatch):
     calls = _stub_subscribe_io(monkeypatch, active_count=10)
 
     body = ss.SubscribeIn(interval="month", trial_days=7)  # trialing: skips invoice/billing block
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         ss.subscribe(
             plan_id="plan_1",
             body=body,

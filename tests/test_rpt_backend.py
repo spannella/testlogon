@@ -1082,7 +1082,7 @@ class TestRPT009CsvExport:
                 return await export_csv(source="tickets", from_date=None, to_date=None, questionnaire_id=None, ctx=mock_ctx)
 
             with pytest.raises(HTTPException) as exc_info:
-                asyncio.get_event_loop().run_until_complete(run())
+                asyncio.run(run())
             assert exc_info.value.status_code == 404
         finally:
             object.__setattr__(settings_mod.S, "crm_reports_enabled", orig)

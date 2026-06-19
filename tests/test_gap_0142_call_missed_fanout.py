@@ -105,7 +105,7 @@ def test_timeout_endpoint_fans_out_call_missed(monkeypatch):
 
     # Invoke the endpoint coroutine directly (offline; avoids TestClient/httpx
     # version coupling). This still exercises the exact fanout code path.
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         msg_module.timeout_call_endpoint(
             call_id="c1",
             body=msg_module.CallTimeoutIn(reason="no_answer"),
@@ -137,7 +137,7 @@ def test_expire_stale_invites_fans_out_call_missed(monkeypatch):
 
     fanout_calls = _record_fanout(monkeypatch)
 
-    asyncio.get_event_loop().run_until_complete(msg_module._expire_stale_invites())
+    asyncio.run(msg_module._expire_stale_invites())
 
     # Transition still happened.
     updated = sessions.get_call_session("stale")

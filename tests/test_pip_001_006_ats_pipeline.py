@@ -464,7 +464,7 @@ class TestAdminStatusConfigEndpoint:
         ])
         ctx = {"user_sub": "u1", "role": "user"}
         with pytest.raises(HTTPException) as exc:
-            asyncio.get_event_loop().run_until_complete(update_pipeline_statuses(body, ctx))
+            asyncio.run(update_pipeline_statuses(body, ctx))
         assert exc.value.status_code == 403
 
     def test_admin_role_accepted(self, pipeline_table):
@@ -474,7 +474,7 @@ class TestAdminStatusConfigEndpoint:
             PipelineStatusItemIn(status_key="x", label="X", rank=100, is_placed=True),
         ])
         ctx = {"user_sub": "admin1", "role": "admin"}
-        result = asyncio.get_event_loop().run_until_complete(update_pipeline_statuses(body, ctx))
+        result = asyncio.run(update_pipeline_statuses(body, ctx))
         assert result is not None
 
     def test_root_role_accepted(self, pipeline_table):
@@ -484,7 +484,7 @@ class TestAdminStatusConfigEndpoint:
             PipelineStatusItemIn(status_key="z", label="Z", rank=900, is_placed=True),
         ])
         ctx = {"user_sub": "root1", "role": "root"}
-        result = asyncio.get_event_loop().run_until_complete(update_pipeline_statuses(body, ctx))
+        result = asyncio.run(update_pipeline_statuses(body, ctx))
         assert result is not None
 
 
@@ -493,13 +493,13 @@ class TestFeatureStatusEndpoint:
         from app.core.settings import S
         from app.routers.ats_pipeline import pipeline_feature_status
         object.__setattr__(S, "ats_pipeline_enabled", False)
-        result = asyncio.get_event_loop().run_until_complete(pipeline_feature_status())
+        result = asyncio.run(pipeline_feature_status())
         assert result == {"enabled": False}
         object.__setattr__(S, "ats_pipeline_enabled", True)
 
     def test_flag_on_returns_true(self, pipeline_table):
         from app.routers.ats_pipeline import pipeline_feature_status
-        result = asyncio.get_event_loop().run_until_complete(pipeline_feature_status())
+        result = asyncio.run(pipeline_feature_status())
         assert result == {"enabled": True}
 
 

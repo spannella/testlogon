@@ -97,7 +97,7 @@ def test_trigger_run_now_rejects_unsafe(svc):
     import asyncio
 
     with pytest.raises(svc.RunNowNotAllowed):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             svc.trigger_run_now("billing_dunning", triggered_by="manual:x")
         )
 
@@ -106,6 +106,6 @@ def test_trigger_run_now_rejects_unknown(svc):
     import asyncio
 
     with pytest.raises(svc.RunNowNotAllowed):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             svc.trigger_run_now("nope", triggered_by="manual:x")
         )

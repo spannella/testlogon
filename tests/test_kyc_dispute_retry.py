@@ -422,7 +422,7 @@ class _Req:
 def _call(coro_or_fn, **kw):
     res = coro_or_fn(**kw)
     if asyncio.iscoroutine(res):
-        return asyncio.get_event_loop().run_until_complete(res)
+        return asyncio.run(res)
     return res
 
 

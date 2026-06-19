@@ -46,7 +46,7 @@ def _invoke(monkeypatch, *, ui_cookie_secure: bool):
         client = _FakeClient()
         headers: dict[str, str] = {}
 
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         mod.affiliate_redirect(tracking_code="TESTCODE", request=_FakeRequest())
     )
 
