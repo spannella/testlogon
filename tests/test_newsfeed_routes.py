@@ -13,6 +13,21 @@ from app.routers import newsfeed
 
 
 class TestNewsfeedRoutes(unittest.TestCase):
+    def setUp(self):
+        # Patch services that view_feed calls via lazy imports (added after these
+        # tests were first written); prevents real DynamoDB calls in unit tests.
+        self._p_blocked = patch("app.services.blocking.get_blocked_set", return_value=set())
+        self._p_blocked_by = patch("app.services.blocking.get_blocked_by_set", return_value=set())
+        self._p_snoozed = patch("app.services.social.get_snoozed_following_ids", return_value=set())
+        self._p_ad_hidden = patch("app.services.ad_feedback.get_hidden_ad_ids", return_value=set())
+        self._p_elevate = patch("app.services.content_boost.elevate_feed_items", side_effect=lambda items, **kw: items)
+        for p in (self._p_blocked, self._p_blocked_by, self._p_snoozed, self._p_ad_hidden, self._p_elevate):
+            p.start()
+
+    def tearDown(self):
+        for p in (self._p_blocked, self._p_blocked_by, self._p_snoozed, self._p_ad_hidden, self._p_elevate):
+            p.stop()
+
     def test_can_view_post_public_visibility_allows_non_follower_when_access_ok(self):
         post = {"user_id": "author_1", "visibility": "public"}
         with (
@@ -201,10 +216,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
-            ddb.batch_get_item.side_effect = [
-                {"Responses": {newsfeed.APP_TABLE: []}},
-                {"Responses": {newsfeed.APP_TABLE: []}},
-            ]
+            _empty_resp = {"Responses": {newsfeed.APP_TABLE: []}}
+            ddb.batch_get_item.side_effect = [_empty_resp] * 10  # buffer for any new batch calls
 
             out = newsfeed.view_feed(limit=2, cursor=None, author_id="target_author", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
