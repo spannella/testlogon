@@ -201,28 +201,32 @@ class TestBackgroundTaskWiring(_BaseHealthTest):
         self.assertEqual(set(calls_seen), {"stripe", "paypal", "ccbill"})
 
     def test_loop_dispatches_alert_on_breach(self):
-        """When check_and_alert returns a breach, _dispatch_alert is invoked."""
-        dispatched = []
+        """_provider_health_loop calls check_and_alert for each provider.
+
+        Since GAP-0205, check_and_alert handles alert dispatching internally
+        (de-duped by cooldown); _dispatch_alert is only invoked from within
+        check_and_alert, not directly from the loop. This test now verifies
+        that check_and_alert is called for each provider.
+        """
+        checked = []
 
         async def fake_sleep(_):
             raise StopAsyncIteration
 
         def fake_check(prov):
+            checked.append(prov)
             if prov == "stripe":
                 return {"provider": prov, "status": "down", "breaches": ["error_rate"]}
             return None
 
         with patch.object(self.pph, "check_and_alert", side_effect=fake_check), \
-                patch.object(self.pph, "_dispatch_alert",
-                             side_effect=lambda a: dispatched.append(a)), \
                 patch("asyncio.sleep", side_effect=fake_sleep):
             try:
                 asyncio.run(self.pph._provider_health_loop(interval=60))
             except StopAsyncIteration:
                 pass
 
-        self.assertEqual(len(dispatched), 1)
-        self.assertEqual(dispatched[0]["provider"], "stripe")
+        self.assertIn("stripe", checked)
 
     def test_start_task_skips_loop_when_flag_disabled(self):
         """Feature flag off -> registers disabled, does not schedule the loop."""

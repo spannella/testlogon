@@ -268,25 +268,17 @@ class GdprPrivacyGapTests(unittest.TestCase):
         ran = {"done": False}
 
         def _slow(u, rid, cats):
-            time.sleep(0.2)
+            time.sleep(0.05)
             ran["done"] = True
 
         async def _drive():
+            # Since GAP-0338, exports run via _run_export_safe (FastAPI
+            # BackgroundTasks). Test the helper directly by awaiting it.
             with patch.object(privacy, "process_export", side_effect=_slow):
-                t0 = time.monotonic()
-                privacy._schedule_export(user, request_id, {"include_profile": True})
-                elapsed = time.monotonic() - t0
-                # Scheduling returns immediately, well under the 0.2s work time.
-                self.assertLess(elapsed, 0.1)
-                self.assertFalse(ran["done"])
-                # Let the background task complete.
-                for _ in range(50):
-                    if ran["done"]:
-                        break
-                    await asyncio.sleep(0.02)
-                self.assertTrue(ran["done"])
+                await privacy._run_export_safe(user, request_id, {"include_profile": True})
+            self.assertTrue(ran["done"])
 
-        asyncio.new_event_loop().run_until_complete(_drive())
+        asyncio.run(_drive())
 
 
 if __name__ == "__main__":

@@ -189,12 +189,10 @@ class TestShopPromoCheckoutGap0343(unittest.TestCase):
         )
 
     def _seed_shop_promo(self, code: str, discount_cents: int) -> str:
-        # NOTE: list_items() strips per-item creator info, so purchase_cart's
-        # _resolve_cart_creator() returns None and falls back to the buyer's own
-        # id as the creator scope. Mirror that real behavior: the promo must be
-        # owned by the resolved creator (the buyer) to pass the creator-scope check.
+        # The cart item has creator_user_id=CREATOR; _resolve_cart_creator returns
+        # CREATOR. The promo must belong to CREATOR to pass the creator-scope check.
         item, err = self.promo_svc.create_promo_code(
-            creator_id=self.USER,
+            creator_id=self.CREATOR,
             code=code,
             discount_type="fixed_amount",
             discount_value=discount_cents,
