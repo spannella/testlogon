@@ -92,6 +92,14 @@ def test_marketplace_refund_debits_seller(monkeypatch):
     # Side-effect helpers touch other tables; stub them out.
     monkeypatch.setattr(rr_svc, "write_alert", lambda *a, **k: None)
     monkeypatch.setattr(rr_svc, "audit_event", lambda *a, **k: None)
+    # write_tip_ledger calls split_fee (billing_config DDB) and maybe_split_content_revenue
+    # (collaboration_agreements DDB) — both added after this test; patch to no-ops.
+    from app.services import tip_ledger as _tl
+    monkeypatch.setattr(_tl, "split_fee", lambda entry_type, amount_cents: (0, amount_cents, 0))
+    import sys, types
+    _collab = types.ModuleType("app.services.collaboration_revenue")
+    _collab.maybe_split_content_revenue = lambda **kw: None
+    monkeypatch.setitem(sys.modules, "app.services.collaboration_revenue", _collab)
     try:
         buyer_id = "buyer_001"
         seller_id = "seller_001"
