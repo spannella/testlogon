@@ -54,11 +54,31 @@ class FakeTable:
 
 
 @pytest.fixture(autouse=True)
-def _patch_billing_table():
-    """Replace T.billing with a FakeTable for every test."""
+def _patch_billing_table(monkeypatch):
+    """Replace T.billing with a FakeTable for every test.
+
+    Also stub out services added after this test was written that access DynamoDB
+    tables not set up here:
+    - collaboration_revenue.maybe_split_content_revenue → return None (no split)
+    - billing_config.split_fee → return (0, amount, 0) so tip_ledger math still runs
+    """
     fake = FakeTable()
     original = T.billing
     object.__setattr__(T, "billing", fake)
+
+    # Patch split_fee to avoid billing_config DDB access
+    import app.services.tip_ledger as _tl_mod
+    monkeypatch.setattr(
+        _tl_mod,
+        "split_fee",
+        lambda entry_type, amount_cents: (0, amount_cents, 0),
+    )
+
+    # Patch the lazy-imported collaboration module
+    import sys, types
+    _fake_collab = types.ModuleType("app.services.collaboration_revenue")
+    _fake_collab.maybe_split_content_revenue = lambda **kw: None
+    monkeypatch.setitem(sys.modules, "app.services.collaboration_revenue", _fake_collab)
     yield fake
     object.__setattr__(T, "billing", original)
 

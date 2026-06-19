@@ -679,7 +679,8 @@ class TestKbRouter:
         self._table = _create_kb_table(ddb)
 
         from app.core import tables as tables_mod, settings as settings_mod
-        self._T_orig = tables_mod.T
+        # Save the ATTRIBUTE VALUES (not the T object reference) so teardown can restore them
+        self._orig_kb_articles = getattr(tables_mod.T, "kb_articles", None)
         self._S_orig = settings_mod.S
         object.__setattr__(tables_mod.T, "kb_articles", self._table)
 
@@ -696,7 +697,9 @@ class TestKbRouter:
 
     def teardown_method(self):
         from app.core import tables as tables_mod, settings as settings_mod
-        tables_mod.T = self._T_orig
+        # Restore the T.kb_articles attribute to its original value
+        if self._orig_kb_articles is not None:
+            object.__setattr__(tables_mod.T, "kb_articles", self._orig_kb_articles)
         settings_mod.S = self._S_orig
         self._audit_patcher.stop()
         self._mock.stop()
