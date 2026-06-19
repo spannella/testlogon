@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
 from app.core.settings import S
 from app.models import (
@@ -103,17 +104,18 @@ async def list_adjustments_endpoint(
     )
 
 
-@router.delete("/{order_id}/adjustments/{adj_id}", status_code=204)
+@router.delete("/{order_id}/adjustments/{adj_id}", status_code=204, response_class=Response)
 async def remove_adjustment_endpoint(
     order_id: str,
     adj_id: str,
     ctx: Dict[str, Any] = Depends(require_ui_session),
-) -> None:
+):
     """Remove an adjustment row.  No-op if it no longer exists."""
     _require_enabled()
     from app.services import order_adjustments
 
     order_adjustments.remove_adjustment(order_id, adj_id)
+    return Response(status_code=204)
 
 
 # ── ORD-009: ship groups ──────────────────────────────────────────────────────
@@ -193,14 +195,15 @@ async def update_ship_group_endpoint(
     return _sg_row_to_out(row, order_id)
 
 
-@router.delete("/{order_id}/ship-groups/{sg_id}", status_code=204)
+@router.delete("/{order_id}/ship-groups/{sg_id}", status_code=204, response_class=Response)
 async def delete_ship_group_endpoint(
     order_id: str,
     sg_id: str,
     ctx: Dict[str, Any] = Depends(require_ui_session),
-) -> None:
+):
     """Delete a ship group row.  No-op if it no longer exists."""
     _require_enabled()
     from app.services import order_ship_groups
 
     order_ship_groups.delete_ship_group(order_id, sg_id)
+    return Response(status_code=204)

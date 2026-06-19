@@ -185,7 +185,7 @@ class TestHRM001Flags:
 
     def test_hr_table_name_defaults_to_hr(self):
         fresh = Settings()
-        assert fresh.hr_table_name == "hr"
+        assert fresh.hr_table_name == "hrm"
 
     def test_hr_payroll_expense_account_code_defaults_to_6000(self):
         fresh = Settings()

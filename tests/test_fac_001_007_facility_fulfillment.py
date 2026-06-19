@@ -233,8 +233,13 @@ class TestFacModels(unittest.TestCase):
         out = ShipmentOut(
             shipment_id="s",
             order_id="o",
-            picklist_id="p",
+            user_id="u",
             status="draft",
+            carrier_code="ups",
+            method_code="ground",
+            ship_to_address={"name": "Test"},
+            created_at=1000000,
+            updated_at=1000000,
             shipped_at=None,
         )
         self.assertIsNone(out.shipped_at)
