@@ -339,10 +339,13 @@ class TestProfileRoutes(unittest.TestCase):
     def test_patch_profile_updates(self):
         ctx = build_ctx()
         req = build_request()
-        with patch.object(profile, "apply_profile_update", return_value={"display_name": "Ada"}) as apply_mock:
-            with patch.object(profile, "audit_event") as audit_mock:
-                body = ProfilePatchReq(display_name="Ada")
-                resp = run_async(profile.ui_patch_profile(req, body, ctx=ctx))
+        with patch.object(profile, "get_profile", return_value={}), \
+             patch.object(profile, "apply_profile_update", return_value={"display_name": "Ada"}) as apply_mock, \
+             patch.object(profile, "audit_event") as audit_mock, \
+             patch.object(profile, "_maybe_rescreen_after_profile_update"), \
+             patch.object(profile, "_maybe_fire_profile_kyc_triggers"):
+            body = ProfilePatchReq(display_name="Ada")
+            resp = run_async(profile.ui_patch_profile(req, body, ctx=ctx))
         apply_mock.assert_called_once_with("user", {"display_name": "Ada"}, replace=False)
         audit_mock.assert_called_once()
         self.assertEqual(resp["profile"]["display_name"], "Ada")
@@ -350,10 +353,13 @@ class TestProfileRoutes(unittest.TestCase):
     def test_put_profile_replaces(self):
         ctx = build_ctx()
         req = build_request()
-        with patch.object(profile, "apply_profile_update", return_value={"display_name": "Grace"}) as apply_mock:
-            with patch.object(profile, "audit_event") as audit_mock:
-                body = ProfilePutReq(display_name="Grace")
-                resp = run_async(profile.ui_put_profile(req, body, ctx=ctx))
+        with patch.object(profile, "get_profile", return_value={}), \
+             patch.object(profile, "apply_profile_update", return_value={"display_name": "Grace"}) as apply_mock, \
+             patch.object(profile, "audit_event") as audit_mock, \
+             patch.object(profile, "_maybe_rescreen_after_profile_update"), \
+             patch.object(profile, "_maybe_fire_profile_kyc_triggers"):
+            body = ProfilePutReq(display_name="Grace")
+            resp = run_async(profile.ui_put_profile(req, body, ctx=ctx))
         apply_mock.assert_called_once()
         _, payload = apply_mock.call_args.args[:2]
         self.assertEqual(apply_mock.call_args.kwargs.get("replace"), True)
