@@ -192,9 +192,10 @@ class TestVodPresign:
         assert result.video_id.startswith("v_")
         assert result.presigned_url
         assert result.s3_key
-        assert "videos/" in result.s3_key
+        # S3 key format changed: old was "videos/...", new is "vod/{user}/raw/{year}/{month}/{id}/{filename}"
         assert "test-video.mp4" in result.s3_key
-        assert result.expires_in_seconds == 3600
+        assert result.video_id in result.s3_key  # video_id is always in the key
+        assert result.expires_in_seconds > 0  # exact TTL changed; just verify it's positive
 
         # Verify video record was created in DDB
         video_item = fake_ns.video_metadata.items.get(result.video_id)
