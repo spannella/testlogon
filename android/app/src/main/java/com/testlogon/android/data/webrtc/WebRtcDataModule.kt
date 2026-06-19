@@ -45,8 +45,9 @@ object WebRtcApiModule {
      */
     @Provides
     @Singleton
-    fun provideVideoRenderer(): com.testlogon.android.core.webrtc.ui.VideoRenderer =
-        com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
+    fun provideVideoRenderer(
+        impl: com.testlogon.android.core.webrtc.ui.RealVideoRenderer,
+    ): com.testlogon.android.core.webrtc.ui.VideoRenderer = impl
 }
 
 @Module
@@ -76,7 +77,7 @@ abstract class WebRtcDataModule {
      */
     @Binds
     @Singleton
-    abstract fun bindMediaDeviceProvider(impl: StubMediaDeviceProvider): MediaDeviceProvider
+    abstract fun bindMediaDeviceProvider(impl: RealMediaDeviceProvider): MediaDeviceProvider
 
     // ── FLAGGED engine seams (native WebRTC SDK not configured; never start capture/peer/media) ──
 
@@ -92,7 +93,7 @@ abstract class WebRtcDataModule {
     /** AND-289 — PeerConnection wrapper. Defaults to the no-op [StubPeerConnectionController]. */
     @Binds
     @Singleton
-    abstract fun bindPeerConnectionController(impl: StubPeerConnectionController): PeerConnectionController
+    abstract fun bindPeerConnectionController(impl: RealPeerConnectionController): PeerConnectionController
 
     /** AND-290 — signaling transport. Defaults to the never-connect [StubSignalingTransport]. */
     @Binds

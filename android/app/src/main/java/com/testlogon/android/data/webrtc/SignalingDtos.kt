@@ -71,3 +71,33 @@ data class CallSignalingOutDto(
     @Json(name = "delivered_to") val deliveredTo: String,
     @Json(name = "status") val status: String,
 )
+
+
+/** Typed signaling payload (offer/answer SDP, ICE candidate fields, call mode) for the events poll. */
+@JsonClass(generateAdapter = true)
+data class SignalPayloadDto(
+    @Json(name = "sdp") val sdp: String? = null,
+    @Json(name = "sdp_type") val sdpType: String? = null,
+    @Json(name = "candidate") val candidate: String? = null,
+    @Json(name = "sdp_mid") val sdpMid: String? = null,
+    @Json(name = "sdp_mline_index") val sdpMlineIndex: Int? = null,
+    @Json(name = "mode") val mode: String? = null,
+    @Json(name = "accepted_mode") val acceptedMode: String? = null,
+)
+
+/** One event from GET messaging/events/poll. */
+@JsonClass(generateAdapter = true)
+data class PollEventDto(
+    @Json(name = "event_id") val eventId: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @Json(name = "call_id") val callId: String? = null,
+    @Json(name = "conversation_id") val conversationId: String? = null,
+    @Json(name = "sender_id") val senderId: String? = null,
+    @Json(name = "payload") val payload: SignalPayloadDto? = null,
+)
+
+/** Envelope for GET messaging/events/poll. */
+@JsonClass(generateAdapter = true)
+data class PollEventsResponseDto(
+    @Json(name = "events") val events: List<PollEventDto> = emptyList(),
+)

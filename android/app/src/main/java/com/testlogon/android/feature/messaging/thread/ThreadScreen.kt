@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -137,6 +138,7 @@ object ThreadTestTags {
 @Composable
 fun ThreadRoute(
     onBack: () -> Unit,
+    onPlaceCall: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
@@ -259,6 +261,7 @@ fun ThreadRoute(
         voicePlayback = voicePlayback,
         typingUsers = typingUsers,
         onBack = onBack,
+        onPlaceCall = onPlaceCall,
         onOpenGroupDetails = onOpenGroupDetails,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
@@ -532,6 +535,7 @@ fun ThreadScreen(
     // AND-151 — in-conversation search: when [searchActive] the search bar replaces the app bar.
     searchActive: Boolean = false,
     onOpenSearch: () -> Unit = {},
+    onPlaceCall: (String) -> Unit = {},
     searchBar: @Composable () -> Unit = {},
     snackbarHostState: androidx.compose.material3.SnackbarHostState =
         remember { androidx.compose.material3.SnackbarHostState() },
@@ -572,6 +576,24 @@ fun ThreadScreen(
                             Icons.Filled.Search,
                             contentDescription = stringResource(R.string.search_in_conversation),
                         )
+                    }
+                    // 1:1 video call — enabled once the DM peer is resolved.
+                    state.peerUserSub?.let { callee ->
+                        IconButton(
+                            onClick = {
+                                onPlaceCall(
+                                    com.testlogon.android.feature.call.nav.CallRoutes.outgoing(
+                                        conversationId = state.conversationId,
+                                        calleeUserId = callee,
+                                        mode = com.testlogon.android.data.call.CallMode.VIDEO.wire,
+                                        peerName = state.title.takeIf { it.isNotBlank() },
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.testTag("thread_call_video"),
+                        ) {
+                            Icon(Icons.Filled.Call, contentDescription = "Video call")
+                        }
                     }
                     // AND-158/159 — open group details (participants / settings).
                     IconButton(

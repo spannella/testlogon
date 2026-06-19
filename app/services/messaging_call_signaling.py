@@ -187,6 +187,28 @@ def _is_conditional_write_conflict(exc: Exception) -> bool:
     return "conditionalcheckfailed" in text or "conditional check failed" in text
 
 
+def deliver_call_event_to_user(*, recipient_user_id, sender_user_id, call_id, conversation_id, event_type, payload=None):
+    # Write a call lifecycle event onto a user's SSE Events queue so GET /events/stream delivers it
+    # (the FCM push path is unavailable here). Mirrors route_signaling_event's event_item shape.
+    import time as _t, uuid as _u
+    ts = int(_t.time())
+    item = {
+        'user_id': recipient_user_id,
+        'event_id': str(_u.uuid4()),
+        'type': event_type,
+        'call_id': call_id,
+        'conversation_id': conversation_id,
+        'sender_id': sender_user_id,
+        'payload': payload or {},
+        'created_at': ts,
+        'read': False,
+        'ttl': ts + 7 * 24 * 3600,
+    }
+    try:
+        _events_table().put_item(Item=item, ConditionExpression='attribute_not_exists(event_id)')
+    except Exception:
+        pass
+
 def route_signaling_event(
     *,
     envelope: Mapping[str, Any],

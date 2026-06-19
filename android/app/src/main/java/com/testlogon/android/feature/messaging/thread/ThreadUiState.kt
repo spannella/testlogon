@@ -16,6 +16,7 @@ import com.testlogon.android.data.messaging.StickerCollectionUi
  */
 data class ThreadUiState(
     val conversationId: String,
+    val peerUserSub: String? = null,
     val title: String = "",
     val messages: List<ThreadMessageUi> = emptyList(),
     val isLoadingInitial: Boolean = true,

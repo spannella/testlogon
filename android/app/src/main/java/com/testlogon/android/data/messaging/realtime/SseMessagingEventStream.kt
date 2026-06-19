@@ -36,7 +36,13 @@ class SseMessagingEventStream @Inject constructor(
     private val settingsStore: SettingsStore,
     private val parser: SseEnvelopeParser,
     private val foregroundState: ForegroundState,
+    moshi: com.squareup.moshi.Moshi,
 ) : MessagingEventStream {
+
+    // For the poll backstop below: parse the raw events/poll JSON the same way as an SSE frame.
+    private val mapAdapter = moshi.adapter<Map<String, Any?>>(
+        com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java),
+    )
 
     // A dedicated client view with no read timeout so the long-lived stream is not killed at 20s.
     private val streamClient: OkHttpClient by lazy {
@@ -117,9 +123,51 @@ class SseMessagingEventStream @Inject constructor(
         worker.isDaemon = true
         worker.start()
 
+        // RELIABLE POLL BACKSTOP. The long-lived SSE connection is auth-flaky on this backend and
+        // churns (reconnect storms), so live messages are missed. A short authenticated GET of
+        // events/poll over the SAME client (cookies + interceptors) re-delivers any not-yet-seen
+        // event, parsed identically to an SSE frame, so the thread updates in realtime regardless.
+        val pollWorker = Thread {
+            val seenPoll = HashSet<String>()
+            while (running) {
+                if (foregroundState.isForeground.value) {
+                    try {
+                        val req = Request.Builder()
+                            .url(settingsStore.baseUrl.trimEnd('/') + "/" + POLL_PATH)
+                            .build()
+                        baseClient.newCall(req).execute().use { resp ->
+                            if (resp.isSuccessful) {
+                                val bodyStr = resp.body?.string().orEmpty()
+                                val root = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
+                                @Suppress("UNCHECKED_CAST")
+                                val events = root?.get("events") as? List<Map<String, Any?>> ?: emptyList()
+                                for (ev in events) {
+                                    val eid = ev["event_id"] as? String ?: continue
+                                    if (!seenPoll.add(eid)) continue
+                                    val type = ev["type"] as? String ?: continue
+                                    parser.parse(type, mapAdapter.toJson(ev))?.let {
+                                        trySend(MessagingStreamEvent.Event(it))
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {
+                    }
+                }
+                try {
+                    Thread.sleep(POLL_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }
+        pollWorker.isDaemon = true
+        pollWorker.start()
+
         awaitClose {
             running = false
             worker.interrupt()
+            pollWorker.interrupt()
         }
     }
 
@@ -141,6 +189,8 @@ class SseMessagingEventStream @Inject constructor(
 
     private companion object {
         const val STREAM_PATH = "messaging/events/stream"
+        const val POLL_PATH = "messaging/events/poll?limit=100"
+        const val POLL_INTERVAL_MS = 1500L
 
         /** AND-149 — poll cadence while parked in the background (cheap; the thread is otherwise idle). */
         const val FOREGROUND_POLL_MS = 250L

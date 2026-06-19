@@ -1,47 +1,53 @@
 package com.testlogon.android.data.webrtc
 
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * AND-289 — PeerConnection wrapper lifecycle seam (SCAFFOLD ONLY — FLAGGED, native WebRTC not configured).
+ * AND-289 — PeerConnection wrapper lifecycle seam.
  *
- * STOP-AND-FLAG (the native WebRTC SDK is a HUMAN-DECISION vendor SDK): a real implementation would wrap
- * `org.webrtc.PeerConnection` (from the `io.getstream:stream-webrtc-android` artifact) and own the
- * offer/answer/ICE negotiation + native teardown. That Gradle dependency is deliberately NOT added and NO
- * real `PeerConnection`/`PeerConnectionFactory`/`EglBase` is created here. This mirrors the existing
- * [com.testlogon.android.data.billing.CardTokenizer] / [com.testlogon.android.data.payouts.KycVerifier]
- * stub-seam pattern: the seam stops at "would need the native WebRTC SDK".
- *
- * [PeerConnectionController] is the contract the real wrapper (a future ticket) will satisfy. Until then
- * [StubPeerConnectionController] is bound and is a pure no-op: every lifecycle method returns
- * [PeerResult.NotConfigured] and the controller NEVER creates a peer, NEVER opens media, and NEVER leaves
- * [PeerLifecycle.Idle] (after [close] it reports [PeerLifecycle.Closed]).
+ * The real implementation ([RealPeerConnectionController]) wraps `org.webrtc.PeerConnection` (from the
+ * `io.getstream:stream-webrtc-android` artifact) and owns the offer/answer/ICE negotiation, local
+ * audio+video capture, remote track delivery, and native teardown. [StubPeerConnectionController] is kept
+ * for JVM unit tests (no SDK on the test classpath) and returns [PeerResult.NotConfigured] from every op.
  *
  * The lifecycle model ([PeerLifecycle]) and the result type ([PeerResult]) are pure sealed types so the
- * state machine and the seam contract are fully unit-testable without the SDK.
+ * state machine and the seam contract are unit-testable without the SDK. SDP/ICE bodies are carried as the
+ * pure [SdpDescription]/[IceCandidate] value types (no org.webrtc types cross this interface).
  */
 interface PeerConnectionController {
 
     /** The merged peer-connection lifecycle. Hot; starts at [PeerLifecycle.Idle]. */
     val lifecycle: StateFlow<PeerLifecycle>
 
-    /** Initialize the peer with [config]. The stub never creates a peer; returns NotConfigured. */
+    /**
+     * Locally-gathered (trickled) ICE candidates to forward to the peer over signaling. Hot; the real impl
+     * emits one per `onIceCandidate`. The stub never emits.
+     */
+    val localIceCandidates: SharedFlow<IceCandidate>
+
+    /** Initialize the peer with [config] (creates the PeerConnection + local media tracks). */
     suspend fun init(config: PeerConfig): PeerResult<Unit>
 
-    /** Offerer role: produce a local SDP offer. The stub returns NotConfigured (no SDP generated). */
+    /** Offerer role: produce a local SDP offer (and set it as the local description). */
     suspend fun createOffer(): PeerResult<SdpDescription>
 
-    /** Apply a remote SDP description (offer or answer). The stub returns NotConfigured. */
+    /** Answerer role: produce a local SDP answer (after the remote offer was applied). */
+    suspend fun createAnswer(): PeerResult<SdpDescription>
+
+    /** Apply a remote SDP description (offer or answer) as the remote description. */
     suspend fun setRemoteDescription(sdp: SdpDescription): PeerResult<Unit>
 
-    /** Accept a remote ICE candidate (buffered until remote SDP in a real impl). Stub: NotConfigured. */
+    /** Accept a remote ICE candidate. */
     suspend fun addIceCandidate(candidate: IceCandidate): PeerResult<Unit>
 
-    /** Idempotent teardown. Disposes native refs in a real impl; the stub only sets [PeerLifecycle.Closed]. */
+    /** Idempotent teardown. Disposes native refs + stops capture. */
     fun close()
 }
 
@@ -51,6 +57,9 @@ data class PeerConfig(
     val role: PeerRole = PeerRole.OFFERER,
     val enableAudio: Boolean = true,
     val enableVideo: Boolean = true,
+    // Force ICE to use only TURN relay candidates (skip host/srflx). Used to guarantee connectivity on
+    // restrictive networks where the direct path is unreliable; default false keeps production ALL.
+    val relayOnly: Boolean = false,
 )
 
 enum class PeerRole { OFFERER, ANSWERER }
@@ -76,24 +85,16 @@ sealed interface PeerLifecycle {
     data object Closed : PeerLifecycle
 }
 
-/** Result of a controller lifecycle op. [NotConfigured] is what the FLAGGED stub always returns. */
+/** Result of a controller lifecycle op. [NotConfigured] is what the stub returns (no SDK in unit tests). */
 sealed interface PeerResult<out T> {
     data class Ok<out T>(val value: T) : PeerResult<T>
     data class Failed(val reason: String) : PeerResult<Nothing>
-
-    /**
-     * No real PeerConnection wrapper is wired (native WebRTC SDK FLAGGED, not integrated). The go-live
-     * flow MUST surface a "broadcasting unavailable / not configured" state and MUST NOT start a peer or
-     * media. [StubPeerConnectionController] always returns this.
-     */
     data object NotConfigured : PeerResult<Nothing>
 }
 
 /**
- * AND-289 — default (FLAGGED) controller. NEVER creates a peer, NEVER opens camera/mic/media, NEVER
- * leaves [PeerLifecycle.Idle] (until [close] -> [PeerLifecycle.Closed]). Every op returns
- * [PeerResult.NotConfigured]. The real native-WebRTC-backed binding replaces this @Binds when the SDK
- * decision is made.
+ * Stub controller for JVM unit tests (no org.webrtc on the test classpath). NEVER creates a peer or opens
+ * media; every op returns [PeerResult.NotConfigured]; [localIceCandidates] never emits.
  */
 @Singleton
 class StubPeerConnectionController @Inject constructor() : PeerConnectionController {
@@ -101,15 +102,14 @@ class StubPeerConnectionController @Inject constructor() : PeerConnectionControl
     private val _lifecycle = MutableStateFlow<PeerLifecycle>(PeerLifecycle.Idle)
     override val lifecycle: StateFlow<PeerLifecycle> = _lifecycle.asStateFlow()
 
+    private val _ice = MutableSharedFlow<IceCandidate>()
+    override val localIceCandidates: SharedFlow<IceCandidate> = _ice.asSharedFlow()
+
     override suspend fun init(config: PeerConfig): PeerResult<Unit> = PeerResult.NotConfigured
-
     override suspend fun createOffer(): PeerResult<SdpDescription> = PeerResult.NotConfigured
-
-    override suspend fun setRemoteDescription(sdp: SdpDescription): PeerResult<Unit> =
-        PeerResult.NotConfigured
-
-    override suspend fun addIceCandidate(candidate: IceCandidate): PeerResult<Unit> =
-        PeerResult.NotConfigured
+    override suspend fun createAnswer(): PeerResult<SdpDescription> = PeerResult.NotConfigured
+    override suspend fun setRemoteDescription(sdp: SdpDescription): PeerResult<Unit> = PeerResult.NotConfigured
+    override suspend fun addIceCandidate(candidate: IceCandidate): PeerResult<Unit> = PeerResult.NotConfigured
 
     override fun close() {
         _lifecycle.value = PeerLifecycle.Closed

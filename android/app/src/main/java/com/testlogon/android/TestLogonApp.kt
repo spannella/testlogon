@@ -39,6 +39,9 @@ class TestLogonApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var tokenRegistrar: FcmTokenRegistrar
 
+    @Inject
+    lateinit var callSignalingHub: com.testlogon.android.data.webrtc.CallSignalingHub
+
     /** AND-145 — presence heartbeat + SSE presence collector wiring. */
     @Inject
     lateinit var presenceBootstrap: com.testlogon.android.data.messaging.presence.PresenceLifecycleBootstrap
@@ -84,6 +87,7 @@ class TestLogonApp : Application(), ImageLoaderFactory {
 
         // AND-145: start the foreground-bound presence heartbeat + SSE presence collector.
         runCatching { presenceBootstrap.start() }
+        runCatching { callSignalingHub.start() }
 
         // AND-216: register the cart-abandonment tracker against the process lifecycle.
         runCatching { cartAbandonmentTracker.start() }

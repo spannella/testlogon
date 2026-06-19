@@ -10,6 +10,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.rememberNavController
 import com.testlogon.android.core.ui.navigation.TLTransitions
+import com.testlogon.android.feature.call.domain.CallPhase
+import com.testlogon.android.feature.call.nav.CallRoutes
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
@@ -32,6 +34,7 @@ fun AppNavHost(
     // magic-link deep links. Defaulted to a no-op so previews / tests don't need to supply it.
     onNavControllerReady: (NavHostController) -> Unit = {},
     viewModel: AuthRoutingViewModel = hiltViewModel(),
+    callRoutingViewModel: CallRoutingViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(navController) { onNavControllerReady(navController) }
 
@@ -58,6 +61,29 @@ fun AppNavHost(
         viewModel.isAuthenticated.collect { authed ->
             if (authed) viewModel.resumeDeepLinkAfterAuth(navController)
         }
+    }
+
+    // Route to the in-call (video) screen the moment a 1:1 call reaches Connecting/Connected. The
+    // caller is otherwise stranded on the text-only outgoing screen and the callee returns to home
+    // after IncomingCallActivity finishes; this surfaces the connected media view for both sides.
+    LaunchedEffect(navController) {
+        callRoutingViewModel.callState
+            .map { st ->
+                st.call?.callId?.takeIf {
+                    st.phase is CallPhase.Connecting || st.phase is CallPhase.Connected
+                }
+            }
+            .distinctUntilChanged()
+            .collect { callId ->
+                if (callId == null) return@collect
+                val onIncall = navController.currentDestination?.route
+                    ?.startsWith("call/incall/") == true
+                if (!onIncall) {
+                    runCatching {
+                        navController.navigate(CallRoutes.incall(callId)) { launchSingleTop = true }
+                    }
+                }
+            }
     }
 
     NavHost(

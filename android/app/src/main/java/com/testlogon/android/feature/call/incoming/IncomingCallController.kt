@@ -2,7 +2,9 @@ package com.testlogon.android.feature.call.incoming
 
 import com.testlogon.android.core.data.cache.Clock
 import com.testlogon.android.core.model.ApiResult
+import android.util.Log
 import com.testlogon.android.data.call.CallEvent
+import com.testlogon.android.data.webrtc.PeerRole
 import com.testlogon.android.data.call.CallRepository
 import com.testlogon.android.data.call.IdempotencyKey
 import com.testlogon.android.feature.call.domain.ActiveCall
@@ -59,6 +61,7 @@ class IncomingCallController @Inject constructor(
 
     @Synchronized
     fun onInvite(invite: CallEvent.Invite) {
+        Log.d("TLHUB", "onInvite call=${invite.callId} state=${_state.value::class.simpleName}")
         // De-dup: same call_id rings exactly once.
         if (seen.put(invite.callId, true) != null) return
 
@@ -112,6 +115,7 @@ class IncomingCallController @Inject constructor(
                                 peerUserId = invite.callerUserId,
                                 mode = invite.mode,
                                 idempotencyKey = idempotencyKeyFor(invite.callId),
+                                role = PeerRole.ANSWERER,
                             ),
                             peerName = invite.callerName,
                         )

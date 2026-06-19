@@ -1,7 +1,9 @@
 package com.testlogon.android.data.webrtc
 
 import retrofit2.http.Body
+import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.Query
 import retrofit2.http.Path
 
 /**
@@ -13,6 +15,10 @@ import retrofit2.http.Path
  * messaging.ts + openapi.index.txt (lines 192 and 405).
  */
 interface SignalingApi {
+
+    /** Reliable JSON poll of the per-user event queue (call.* + webrtc.* signals). */
+    @GET("messaging/events/poll")
+    suspend fun pollEvents(@Query("limit") limit: Int = 100): PollEventsResponseDto
 
     /**
      * HOST publish SDP exchange — the native go-live path posts its local SDP offer and receives the

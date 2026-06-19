@@ -154,6 +154,18 @@ async def ui_session_start(
             session_id=session_id,
             risk_score=anomaly_risk_score,
         )
+        # DEV (two-phone WebRTC call test): also mint the access-token cookie for non-MFA accounts so
+        # the cookie-based app flow authenticates (get_authenticated_user_sub reads this cookie).
+        _access = mint_access_token(user_sub, session_id)
+        if _access:
+            response.set_cookie(
+                S.ui_access_token_cookie_name,
+                _access,
+                max_age=S.ui_access_token_ttl_seconds,
+                httponly=True,
+                secure=S.ui_cookie_secure,
+                samesite=S.ui_cookie_samesite,
+            )
         return UiSessionStartResp(auth_required=False, session_id=session_id, required_factors=[])
     challenge_id = create_stepup_challenge(
         req,

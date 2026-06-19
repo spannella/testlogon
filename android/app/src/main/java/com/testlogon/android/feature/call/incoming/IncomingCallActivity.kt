@@ -7,6 +7,12 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import com.testlogon.android.core.ui.theme.TestLogonTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -33,12 +39,15 @@ class IncomingCallActivity : ComponentActivity() {
         handleAction(intent)
         setContent {
             TestLogonTheme {
-                IncomingCallScreen(
-                    controller = controller,
-                    onAccept = controller::accept,
-                    onDecline = { controller.decline() },
-                    onFinished = { finish() },
-                )
+                @OptIn(ExperimentalComposeUiApi::class)
+                Box(modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
+                    IncomingCallScreen(
+                        controller = controller,
+                        onAccept = controller::accept,
+                        onDecline = { controller.decline() },
+                        onFinished = { finish() },
+                    )
+                }
             }
         }
     }

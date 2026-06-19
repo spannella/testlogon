@@ -58,6 +58,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
 import com.testlogon.android.core.webrtc.ui.RemoteVideoView
+import com.testlogon.android.core.webrtc.ui.VideoRenderer
+import com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
 import com.testlogon.android.feature.call.billing.FinalCostSummary
 import com.testlogon.android.feature.call.billing.RunningCostOverlay
 import com.testlogon.android.feature.call.recording.RecordingConsentDialog
@@ -96,6 +98,7 @@ fun InCallRoute(
     InCallScreen(
         state = state,
         onAction = viewModel::onAction,
+        videoRenderer = viewModel.videoRenderer,
         recording = recording,
         onRecord = {
             val granted = ContextCompat.checkSelfPermission(
@@ -115,6 +118,7 @@ fun InCallRoute(
 fun InCallScreen(
     state: InCallUiState,
     onAction: (InCallAction) -> Unit,
+    videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
     recording: RecordingUiState = RecordingUiState(),
     onRecord: () -> Unit = {},
     onRecordConsent: () -> Unit = {},
@@ -146,6 +150,7 @@ fun InCallScreen(
             RemoteVideoView(
                 modifier = Modifier.fillMaxSize(),
                 hasTrack = state.hasRemoteVideo,
+                renderer = videoRenderer,
             )
         } else {
             RemotePlaceholder(state = state)
@@ -160,6 +165,7 @@ fun InCallScreen(
                     .align(state.localTileCorner.alignment)
                     .testTag("incall_local_pip"),
                 hasTrack = state.hasLocalVideo,
+                renderer = videoRenderer,
             )
         }
 

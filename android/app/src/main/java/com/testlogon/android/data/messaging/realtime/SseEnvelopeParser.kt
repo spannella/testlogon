@@ -71,7 +71,18 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
                 updatedAtEpochSeconds = (data["updated_at"] as? Number)?.toLong() ?: 0L,
             )
             "" -> null
-            else -> MessagingEvent.Other(type, conversationId)
+            else -> if (type.startsWith("webrtc.") || type.startsWith("call.")) {
+                @Suppress("UNCHECKED_CAST")
+                MessagingEvent.CallSignal(
+                    type = type,
+                    callId = data["call_id"] as? String ?: return null,
+                    conversationId = (data["conversation_id"] as? String) ?: conversationId ?: "",
+                    senderId = data["sender_id"] as? String,
+                    payload = (data["payload"] as? Map<String, Any?>) ?: emptyMap(),
+                )
+            } else {
+                MessagingEvent.Other(type, conversationId)
+            }
         }
     }
 }

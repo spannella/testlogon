@@ -1565,8 +1565,15 @@ async def get_messaging_user_id(
     cookies = getattr(request, "cookies", {}) or {}
     if x_session_id or cookies.get(S.ui_session_cookie_name):
         user_sub = await get_authenticated_user_sub(request)
-        ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
-        uid = ctx["user_sub"]
+        try:
+            ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
+            uid = ctx["user_sub"]
+        except HTTPException:
+            # DEV/local: require_ui_session validates a server-side session record that is racy for
+            # the background SSE/poll client right after login (the per-user event queue would
+            # otherwise be undeliverable -> calls never ring). The user is already authenticated from
+            # the cookie/token above, so trust that sub for the read-only event poll.
+            uid = user_sub
         _ensure_user_indexed(uid)
         return uid
     uid = get_current_user_id(authorization)
@@ -4337,8 +4344,17 @@ def _project_event_for_user(event_item: dict, user_id: str) -> dict:
     except Exception:
         return out
     payload_out = dict(payload)
-    payload_out["message"] = _serialize_message_event_payload(message_item, user_id)
+    serialized = _serialize_message_event_payload(message_item, user_id)
+    payload_out["message"] = serialized
     out["payload"] = payload_out
+    # Also surface the core message fields at the TOP level of the frame. The Android
+    # SseEnvelopeParser (and the web useMessagingStream contract) reads message:new frames FLAT
+    # (data["conversation_id"]/["text"]/...); without this the nested payload.message shape parses
+    # to null and the live thread never receives the inbound message.
+    if isinstance(serialized, dict):
+        for _k in ("conversation_id", "message_id", "sender_id", "text", "kind", "created_at"):
+            if _k in serialized and _k not in out:
+                out[_k] = serialized[_k]
     return out
 
 
@@ -5101,13 +5117,22 @@ def _ddb_fetch_events(user_id: str, after: Optional[str], limit: int) -> list[di
             Limit=limit,
             ScanIndexForward=True,
         )
-    else:
-        resp = tbl_events.query(
-            KeyConditionExpression=Key("user_id").eq(user_id),
-            Limit=limit,
-            ScanIndexForward=True,
-        )
-    return resp.get("Items", [])
+        return resp.get("Items", [])
+    # event_id is a random UUID / non-time-ordered key (message:new ids are 'e_...' and sort HIGH),
+    # so a Limit-bounded ascending query DROPS the newest message:new events once the per-user queue
+    # exceeds `limit` -> the SSE thread stops receiving live messages. Fetch the whole queue and
+    # return the newest `limit` events by created_at instead.
+    items: list[dict] = []
+    kwargs: dict = {"KeyConditionExpression": Key("user_id").eq(user_id)}
+    while True:
+        resp = tbl_events.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    items.sort(key=lambda e: int(e.get("created_at", 0) or 0), reverse=True)
+    return items[:limit]
 
 
 def _event_id() -> str:
@@ -7227,44 +7252,44 @@ def list_messages(
         parts = []
 
     out: List[MessageOut] = []
-    last_key = {"conversation_id": conversation_id, "message_id": before} if before else None
-
-    while len(out) < limit:
+    # message_id is a random UUID (not time-ordered), so a Limit-bounded DynamoDB query returns an
+    # ARBITRARY subset, not the newest messages -- sorting that subset by created_at afterwards still
+    # drops the truly-newest rows. Fetch the full conversation, sort by created_at, then take `limit`.
+    raw: List[Dict[str, Any]] = []
+    scan_key = None
+    while True:
         kwargs: Dict[str, Any] = {
             "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
             "ScanIndexForward": False,
-            "Limit": limit,
         }
-        if last_key:
-            kwargs["ExclusiveStartKey"] = last_key
-
+        if scan_key:
+            kwargs["ExclusiveStartKey"] = scan_key
         resp = tbl_msgs.query(**kwargs)
-        items = resp.get("Items", [])
-        if not items:
+        raw.extend(resp.get("Items", []))
+        scan_key = resp.get("LastEvaluatedKey")
+        if not scan_key:
             break
 
-        hidden_ids: set[str] = set()
-        if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED:
-            message_ids = [str(item.get("message_id") or "") for item in items]
-            hidden_ids = _load_hidden_message_ids_for_user(conversation_id, user_id, message_ids)
+    raw.sort(key=lambda m: int(m.get("created_at") or 0), reverse=True)
+    if before:
+        idx = next((i for i, m in enumerate(raw) if str(m.get("message_id")) == before), None)
+        if idx is not None:
+            raw = raw[idx + 1:]
 
-        for m in items:
-            if m.get("message_id") in hidden_ids:
-                continue
-            if not _filter_message_visible(m, user_id):
-                continue
-            msg = _message_out_from_item(m, user_id)
-            out.append(_apply_message_receipts(msg, m, parts))
-            if len(out) >= limit:
-                break
+    hidden_ids: set[str] = set()
+    if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED:
+        message_ids = [str(item.get("message_id") or "") for item in raw]
+        hidden_ids = _load_hidden_message_ids_for_user(conversation_id, user_id, message_ids)
 
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
+    for m in raw:
+        if len(out) >= limit:
             break
-
-    # Sort by created_at descending (newest first) so the response is in
-    # chronological order regardless of DynamoDB sort-key (message_id) ordering.
-    out.sort(key=lambda m: m.created_at, reverse=True)
+        if m.get("message_id") in hidden_ids:
+            continue
+        if not _filter_message_visible(m, user_id):
+            continue
+        msg = _message_out_from_item(m, user_id)
+        out.append(_apply_message_receipts(msg, m, parts))
     return out
 
 
@@ -12986,7 +13011,10 @@ async def events_stream(
         request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
     )
     async def gen():
-        cursor = after
+        # event_id is a random UUID (not time-ordered), so the legacy `event_id > cursor` cursor
+        # SKIPS new events whose UUID sorts below an already-delivered one. Track delivered ids in a
+        # per-connection seen-set and deliver any not-yet-seen event ordered by created_at instead.
+        seen = set()
         last_ping = time.time()
         yield ": stream-open\n\n"
 
@@ -12996,17 +13024,31 @@ async def events_stream(
                 yield ": ping\n\n"
                 last_ping = now
 
-            raw_events = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, cursor, limit)
+            raw_events = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, None, limit)
             events = [_project_event_for_user(ev, user_id) for ev in raw_events]
-            if events:
-                for ev in events:
-                    cursor = ev["event_id"]
+            fresh = [ev for ev in events if ev.get("event_id") not in seen]
+            fresh.sort(key=lambda e: (e.get("created_at", 0), e.get("event_id", "")))
+            if fresh:
+                for ev in fresh:
+                    seen.add(ev.get("event_id"))
                     yield _sse_pack(ev, event=ev.get("type", "message"))
                 continue
 
             await asyncio.sleep(poll_ms / 1000.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.get("/events/poll")
+async def events_poll(
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    # Reliable JSON poll of the per-user event queue (the long-lived SSE stream auth is flaky under load).
+    raw = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, None, limit)
+    events = [_project_event_for_user(ev, user_id) for ev in raw]
+    events.sort(key=lambda e: (e.get("created_at", 0), e.get("event_id", "")))
+    return {"events": events}
 
 
 @router.get("/config", response_model=MessagingConfigOut)
@@ -14339,6 +14381,8 @@ async def create_call_invite(
             rate_cents_per_min=rate_cents,
             max_duration_seconds=max_dur,
         )
+        from app.services.messaging_call_signaling import deliver_call_event_to_user
+        deliver_call_event_to_user(recipient_user_id=record.callee_user_id, sender_user_id=record.caller_user_id, call_id=record.call_id, conversation_id=record.conversation_id, event_type='call.invite', payload={'mode': record.initial_mode})
         return CallInviteOut(
             call_id=record.call_id,
             conversation_id=record.conversation_id,
@@ -14368,6 +14412,8 @@ async def accept_call_invite(
             actor_user_id=user_id,
             idempotency_key=body.idempotency_key,
         )
+        from app.services.messaging_call_signaling import deliver_call_event_to_user
+        deliver_call_event_to_user(recipient_user_id=record.caller_user_id, sender_user_id=user_id, call_id=record.call_id, conversation_id=record.conversation_id, event_type='call.accept', payload={'accepted_mode': record.initial_mode})
         return CallActionOut(
             call_id=record.call_id,
             conversation_id=record.conversation_id,

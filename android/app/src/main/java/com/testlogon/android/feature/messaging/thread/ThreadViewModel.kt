@@ -226,6 +226,8 @@ class ThreadViewModel @Inject constructor(
                     prior.copy(
                         messages = visible.map { it.toUi(self) },
                         receipts = computeReceipts(visible, self),
+                        peerUserSub = prior.peerUserSub
+                            ?: visible.firstOrNull { it.senderId.isNotEmpty() && it.senderId != self && it.senderId != "system" }?.senderId,
                     )
                 }
                 // AND-152 — once the deep-link target message is loaded, scroll to it (once).

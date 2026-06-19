@@ -1,6 +1,7 @@
 package com.testlogon.android.feature.call.domain
 
 import com.testlogon.android.data.call.CallMode
+import com.testlogon.android.data.webrtc.PeerRole
 
 /**
  * AND-296 — the single source of truth for the outgoing/active call phase.
@@ -43,6 +44,7 @@ data class ActiveCall(
     val peerUserId: String,
     val mode: CallMode,
     val idempotencyKey: String,
+    val role: PeerRole = PeerRole.OFFERER,
 )
 
 /** Hot, app-scoped snapshot of the current call the screens render. */

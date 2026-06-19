@@ -31,6 +31,9 @@ android {
         // "e2e-helpdesk"). Required `group_id` query param for the helpdesk queue. See AND-161 OQ-5;
         // swap to remote/per-env config when the production group-id scheme is finalized.
         buildConfigField("String", "HELPDESK_GROUP_ID", "\"e2e-helpdesk\"")
+        // Diagnostic: when true, forces ICE to use ONLY TURN relay candidates (skips host/srflx).
+        // Defaults false (normal ICE — direct path with TURN as fallback); useful on restrictive networks.
+        buildConfigField("boolean", "WEBRTC_FORCE_RELAY", "false")
     }
 
     buildTypes {
@@ -153,6 +156,7 @@ dependencies {
 
     // Hilt
     implementation(libs.hilt.android)
+    implementation(libs.stream.webrtc.android) // WebRTC media engine (org.webrtc)
     ksp(libs.hilt.compiler)
 
     // Test
