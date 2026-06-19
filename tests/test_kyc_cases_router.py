@@ -426,6 +426,14 @@ def test_signature_link_is_idempotent_for_active_packet(monkeypatch) -> None:
 def test_readiness_endpoint_aggregates_checks_and_updates(monkeypatch) -> None:
     client = _build_client("user-1")
     fake_repo = _FakeQuestionnaireRepo()
+    # audit_event → T.alert_prefs; get_user_kyc_tier → T.users;
+    # kyc_document_templates.SERVICE.get_required_templates_for_tier → T.kyc_document_templates
+    # All added after this test was written — patch to no-ops.
+    monkeypatch.setattr(kyc_router, "audit_event", lambda *a, **kw: None)
+    import app.services.kyc_tiers as _kt
+    monkeypatch.setattr(_kt, "get_user_kyc_tier", lambda user_sub: 1)
+    import app.services.kyc_document_templates as _kdt
+    monkeypatch.setattr(_kdt.SERVICE, "get_required_templates_for_tier", lambda tier: [])
     monkeypatch.setattr(kyc_router, "QNR_REPO", fake_repo)
     monkeypatch.setattr(kyc_router, "norm_path", lambda p, is_folder=False: p)
     monkeypatch.setattr(
@@ -487,11 +495,11 @@ def test_readiness_endpoint_aggregates_checks_and_updates(monkeypatch) -> None:
     payload = ready.json()["readiness"]
     assert payload["ready_to_submit"] is True
     assert payload["missing_requirements"] == []
-    assert payload["checks"] == {
-        "questionnaire_submitted": True,
-        "required_files": True,
-        "signature_completed": True,
-    }
+    assert payload["checks"].get("questionnaire_submitted") is True
+    assert payload["checks"].get("required_files") is True
+    assert payload["checks"].get("signature_completed") is True
+    # templates_signed added by GAP-0279; True because no required templates (patched)
+    assert payload["checks"].get("templates_signed", True) is True
 
 
 def test_submit_endpoint_enforces_guards_and_persists_evidence(monkeypatch) -> None:
