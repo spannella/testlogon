@@ -36,7 +36,7 @@ def test_ui_create_api_package_sku_calls_service(monkeypatch) -> None:
 def test_unified_checkout_session_route_calls_service(monkeypatch) -> None:
     captured = {}
 
-    def _fake_checkout(user_sub, body):
+    def _fake_checkout(user_sub, body, afl_ref=None):
         captured["user_sub"] = user_sub
         captured["source"] = body.source
         return {
@@ -60,7 +60,7 @@ def test_unified_checkout_session_route_calls_service(monkeypatch) -> None:
 def test_file_bundle_wrapper_routes_to_unified_checkout(monkeypatch) -> None:
     captured = {}
 
-    def _fake_wrapper(user_sub, body):
+    def _fake_wrapper(user_sub, body, afl_ref=None):
         captured["user_sub"] = user_sub
         captured["sku"] = body.sku
         return {

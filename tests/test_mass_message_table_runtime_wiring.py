@@ -70,8 +70,10 @@ def test_table_registry_exposes_mass_message_handles() -> None:
         tables_mod = importlib.import_module("app.core.tables")
         assert hasattr(tables_mod.T, "mass_message_campaigns")
         assert hasattr(tables_mod.T, "mass_message_campaign_destinations")
-        assert tables_mod.T.mass_message_campaigns == "table::mass_message_campaigns_table_name"
-        assert tables_mod.T.mass_message_campaign_destinations == "table::mass_message_campaign_destinations_table_name"
+        # _safe_table wraps the result in _FloatSafeTable; unwrap via ._t to check the raw handle
+        _unwrap = lambda h: h._t if hasattr(h, "_t") else h
+        assert _unwrap(tables_mod.T.mass_message_campaigns) == "table::mass_message_campaigns_table_name"
+        assert _unwrap(tables_mod.T.mass_message_campaign_destinations) == "table::mass_message_campaign_destinations_table_name"
     if original_tables_mod is not None:
         sys.modules["app.core.tables"] = original_tables_mod
         importlib.reload(original_tables_mod)

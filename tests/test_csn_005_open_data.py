@@ -51,10 +51,10 @@ def _make_open_data_table(ddb):
 
 
 def _make_branch_in(**kwargs):
-    from app.models import AddressIn, BranchIn, LocationIn
+    from app.models import BranchIn, LocationIn, OpenDataAddressIn
     defaults = dict(
         name="Test Branch",
-        address=AddressIn(line1="1 Main St", city="Springfield", country="US", postcode="12345"),
+        address=OpenDataAddressIn(line1="1 Main St", city="Springfield", country="US", postcode="12345"),
         location=LocationIn(lat=40.0, lng=-74.0),
         is_active=True,
     )
@@ -63,10 +63,10 @@ def _make_branch_in(**kwargs):
 
 
 def _make_atm_in(**kwargs):
-    from app.models import AddressIn, AtmIn, LocationIn
+    from app.models import AtmIn, LocationIn, OpenDataAddressIn
     defaults = dict(
         name="Test ATM",
-        address=AddressIn(line1="2 Bank St", city="Springfield", country="US", postcode="12345"),
+        address=OpenDataAddressIn(line1="2 Bank St", city="Springfield", country="US", postcode="12345"),
         location=LocationIn(lat=40.1, lng=-74.1),
         is_active=True,
         has_deposit=False,
@@ -164,9 +164,9 @@ class TestOpenData(unittest.TestCase):
         delete_resource("BRANCH", result["branch_id"], "root")
 
     def test_09_invalid_country_raises_422(self):
-        from app.models import AddressIn
+        from app.models import OpenDataAddressIn
         with self.assertRaises(Exception):
-            AddressIn(line1="x", city="y", country="USA", postcode="z")
+            OpenDataAddressIn(line1="x", city="y", country="USA", postcode="z")
 
     def test_10_invalid_lat_raises_422(self):
         from app.models import LocationIn
