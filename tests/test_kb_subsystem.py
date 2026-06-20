@@ -750,13 +750,9 @@ class TestKbRouter:
         from app.routers.kb_articles import publish_article
         from app.core import settings as settings_mod
 
-        # Disable flag
-        new_s = object.__new__(settings_mod.Settings)
-        for field in settings_mod.Settings.__dataclass_fields__:
-            object.__setattr__(new_s, field, getattr(settings_mod.S, field))
-        object.__setattr__(new_s, "knowledge_base_enabled", False)
-        settings_mod.S = new_s
-
+        # Temporarily disable flag by mutating the frozen singleton directly.
+        # Do NOT replace settings_mod.S (would leave other modules with stale binding).
+        object.__setattr__(settings_mod.S, "knowledge_base_enabled", False)
         try:
             user = self._make_admin_user()
             session = {"user_sub": user.sub}
@@ -764,7 +760,9 @@ class TestKbRouter:
                 self._run(publish_article("any-id", user=user, _session=session))
             assert exc_info.value.status_code == 404
         finally:
-            pass  # S will be reset in teardown_method
+            # Restore to True — setup_method already set it to True; teardown will
+            # restore to the pre-setup value (self._orig_kb_enabled).
+            object.__setattr__(settings_mod.S, "knowledge_base_enabled", True)
 
     def test_expire_article_admin(self):
         from app.routers.kb_articles import expire_article
