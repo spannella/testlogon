@@ -186,20 +186,17 @@ class TestKbArticleService:
         self._table = _create_kb_table(ddb)
 
         from app.core import tables as tables_mod
-        self._T_orig = tables_mod.T
+        self._orig_kb_articles = getattr(tables_mod.T, "kb_articles", None)
         # Patch T.kb_articles onto the frozen singleton
         object.__setattr__(tables_mod.T, "kb_articles", self._table)
 
-        # Enable the KB flag
+        # Enable the KB flag — mutate the frozen S singleton directly so all
+        # module-level `S` bindings (from app.core.settings import S) see the change.
         from app.core import settings as settings_mod
-        self._S_orig = settings_mod.S
-        new_s = object.__new__(settings_mod.Settings)
-        # Copy all attrs from original S
-        for field in settings_mod.Settings.__dataclass_fields__:
-            object.__setattr__(new_s, field, getattr(settings_mod.S, field))
-        object.__setattr__(new_s, "knowledge_base_enabled", True)
-        object.__setattr__(new_s, "dev_mode", True)
-        settings_mod.S = new_s
+        self._orig_kb_enabled = settings_mod.S.knowledge_base_enabled
+        self._orig_dev_mode = settings_mod.S.dev_mode
+        object.__setattr__(settings_mod.S, "knowledge_base_enabled", True)
+        object.__setattr__(settings_mod.S, "dev_mode", True)
 
         # Patch audit_event to no-op
         import app.services.kb_articles as svc_mod
@@ -208,8 +205,11 @@ class TestKbArticleService:
 
     def teardown_method(self):
         from app.core import tables as tables_mod, settings as settings_mod
-        tables_mod.T = self._T_orig
-        settings_mod.S = self._S_orig
+        # Restore T.kb_articles on the frozen singleton
+        object.__setattr__(tables_mod.T, "kb_articles", self._orig_kb_articles)
+        # Restore S fields we mutated
+        object.__setattr__(settings_mod.S, "knowledge_base_enabled", self._orig_kb_enabled)
+        object.__setattr__(settings_mod.S, "dev_mode", self._orig_dev_mode)
         self._audit_patcher.stop()
         self._mock.stop()
         self._loop.close()
@@ -681,15 +681,13 @@ class TestKbRouter:
         from app.core import tables as tables_mod, settings as settings_mod
         # Save the ATTRIBUTE VALUES (not the T object reference) so teardown can restore them
         self._orig_kb_articles = getattr(tables_mod.T, "kb_articles", None)
-        self._S_orig = settings_mod.S
+        # Mutate the frozen S singleton directly so all module-level bindings
+        # (e.g. `from app.core.settings import S` in kb_articles.py) see the change.
+        self._orig_kb_enabled = settings_mod.S.knowledge_base_enabled
+        self._orig_dev_mode = settings_mod.S.dev_mode
+        object.__setattr__(settings_mod.S, "knowledge_base_enabled", True)
+        object.__setattr__(settings_mod.S, "dev_mode", True)
         object.__setattr__(tables_mod.T, "kb_articles", self._table)
-
-        new_s = object.__new__(settings_mod.Settings)
-        for field in settings_mod.Settings.__dataclass_fields__:
-            object.__setattr__(new_s, field, getattr(settings_mod.S, field))
-        object.__setattr__(new_s, "knowledge_base_enabled", True)
-        object.__setattr__(new_s, "dev_mode", True)
-        settings_mod.S = new_s
 
         import app.services.kb_articles as svc_mod
         self._audit_patcher = patch.object(svc_mod, "_audit", lambda *a, **kw: None)
@@ -700,7 +698,9 @@ class TestKbRouter:
         # Restore the T.kb_articles attribute to its original value
         if self._orig_kb_articles is not None:
             object.__setattr__(tables_mod.T, "kb_articles", self._orig_kb_articles)
-        settings_mod.S = self._S_orig
+        # Restore S fields we mutated
+        object.__setattr__(settings_mod.S, "knowledge_base_enabled", self._orig_kb_enabled)
+        object.__setattr__(settings_mod.S, "dev_mode", self._orig_dev_mode)
         self._audit_patcher.stop()
         self._mock.stop()
         self._loop.close()
