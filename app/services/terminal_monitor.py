@@ -309,7 +309,7 @@ def create_feedback_request(
             "Agent %s transitioned to awaiting_feedback for request %s",
             worker_id, request_id,
         )
-    except (ValueError, LookupError) as exc:
+    except Exception as exc:
         logger.warning(
             "Could not transition worker %s to awaiting_feedback for "
             "request %s: %s",
