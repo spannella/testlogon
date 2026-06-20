@@ -151,9 +151,12 @@ class TestCas002CaseNumber(unittest.TestCase):
         from app.core.tables import T, _FloatSafeTable
         from app.services import tickets as tix_mod
         self.T = T
+        self._orig_counters = T.crm_cases_counters
+        self._orig_tickets = T.tickets
         object.__setattr__(T, "crm_cases_counters", _FloatSafeTable(self.counter_table))
         object.__setattr__(T, "tickets", _FloatSafeTable(self.ticket_table))
         from app.services.tickets import STORE
+        self._orig_store_table = STORE._table
         object.__setattr__(STORE, "_table", _FloatSafeTable(self.ticket_table))
         self.STORE = STORE
         self.tix_mod = tix_mod
@@ -164,7 +167,11 @@ class TestCas002CaseNumber(unittest.TestCase):
 
     def tearDown(self):
         from app.core.settings import S
+        from app.services.tickets import STORE
         object.__setattr__(S, "crm_cases_enabled", False)
+        object.__setattr__(self.T, "crm_cases_counters", self._orig_counters)
+        object.__setattr__(self.T, "tickets", self._orig_tickets)
+        object.__setattr__(STORE, "_table", self._orig_store_table)
         self.stack.close()
 
     def test_first_case_number_is_case_0001(self):
@@ -286,20 +293,29 @@ class TestCas003Priority(unittest.TestCase):
         )
         from app.core.tables import T, _FloatSafeTable
         self.T = T
+        self._orig_counters = T.crm_cases_counters
+        self._orig_tickets = T.tickets
         object.__setattr__(T, "crm_cases_counters", _FloatSafeTable(self.counter_table))
         object.__setattr__(T, "tickets", _FloatSafeTable(self.ticket_table))
         from app.services.tickets import STORE
+        self._orig_store_table = STORE._table
         object.__setattr__(STORE, "_table", _FloatSafeTable(self.ticket_table))
         self.STORE = STORE
 
         from app.core.settings import S
         self.S = S
+        self._orig_priority_idx = getattr(S, "tickets_priority_index_name", "")
         object.__setattr__(S, "crm_cases_enabled", True)
         object.__setattr__(S, "tickets_priority_index_name", "crm_cases_priority_index")
 
     def tearDown(self):
         from app.core.settings import S
+        from app.services.tickets import STORE
         object.__setattr__(S, "crm_cases_enabled", False)
+        object.__setattr__(S, "tickets_priority_index_name", self._orig_priority_idx)
+        object.__setattr__(self.T, "crm_cases_counters", self._orig_counters)
+        object.__setattr__(self.T, "tickets", self._orig_tickets)
+        object.__setattr__(STORE, "_table", self._orig_store_table)
         self.stack.close()
 
     def test_create_with_explicit_priority(self):
@@ -413,21 +429,32 @@ class TestCas005ContactAccount(unittest.TestCase):
         )
         from app.core.tables import T, _FloatSafeTable
         self.T = T
+        self._orig_counters = T.crm_cases_counters
+        self._orig_tickets = T.tickets
         object.__setattr__(T, "crm_cases_counters", _FloatSafeTable(self.counter_table))
         object.__setattr__(T, "tickets", _FloatSafeTable(self.ticket_table))
         from app.services.tickets import STORE
+        self._orig_store_table = STORE._table
         object.__setattr__(STORE, "_table", _FloatSafeTable(self.ticket_table))
         self.STORE = STORE
 
         from app.core.settings import S
         self.S = S
+        self._orig_contact_idx = getattr(S, "tickets_contact_index_name", "")
+        self._orig_account_idx = getattr(S, "tickets_account_index_name", "")
         object.__setattr__(S, "crm_cases_enabled", True)
         object.__setattr__(S, "tickets_contact_index_name", "crm_cases_contact_index")
         object.__setattr__(S, "tickets_account_index_name", "crm_cases_account_index")
 
     def tearDown(self):
         from app.core.settings import S
+        from app.services.tickets import STORE
         object.__setattr__(S, "crm_cases_enabled", False)
+        object.__setattr__(S, "tickets_contact_index_name", self._orig_contact_idx)
+        object.__setattr__(S, "tickets_account_index_name", self._orig_account_idx)
+        object.__setattr__(self.T, "crm_cases_counters", self._orig_counters)
+        object.__setattr__(self.T, "tickets", self._orig_tickets)
+        object.__setattr__(STORE, "_table", self._orig_store_table)
         self.stack.close()
 
     def test_create_ticket_with_contact_id(self):
@@ -494,13 +521,18 @@ class TestCas007Watchers(unittest.TestCase):
         )
         from app.core.tables import T, _FloatSafeTable
         self.T = T
+        self._orig_watchers = T.crm_cases_watchers
         object.__setattr__(T, "crm_cases_watchers", _FloatSafeTable(self.watcher_table))
         from app.services.ticket_watchers import WATCHER_STORE, TicketWatcherStore
         # Re-bind the singleton to use the fresh table
+        self._orig_watcher_store_table = WATCHER_STORE._table
         object.__setattr__(WATCHER_STORE, "_table", _FloatSafeTable(self.watcher_table))
         self.STORE = WATCHER_STORE
 
     def tearDown(self):
+        from app.services.ticket_watchers import WATCHER_STORE
+        object.__setattr__(self.T, "crm_cases_watchers", self._orig_watchers)
+        object.__setattr__(WATCHER_STORE, "_table", self._orig_watcher_store_table)
         self.stack.close()
 
     def test_add_watcher(self):
@@ -571,12 +603,18 @@ class TestCas011Links(unittest.TestCase):
             attr_types={"created_at": "N"},
         )
         from app.core.tables import T, _FloatSafeTable
+        self._T = T
+        self._orig_links = T.crm_cases_links
         object.__setattr__(T, "crm_cases_links", _FloatSafeTable(self.links_table))
         from app.services.ticket_links import LINK_STORE
+        self._orig_link_store_table = LINK_STORE._table
         object.__setattr__(LINK_STORE, "_table", _FloatSafeTable(self.links_table))
         self.STORE = LINK_STORE
 
     def tearDown(self):
+        from app.services.ticket_links import LINK_STORE
+        object.__setattr__(self._T, "crm_cases_links", self._orig_links)
+        object.__setattr__(LINK_STORE, "_table", self._orig_link_store_table)
         self.stack.close()
 
     def test_create_link_duplicate(self):
