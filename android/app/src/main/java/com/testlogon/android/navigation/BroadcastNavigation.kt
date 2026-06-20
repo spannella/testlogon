@@ -185,6 +185,11 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         arguments = listOf(
             navArgument(IngestViewModel.ARG_SESSION_ID) { type = NavType.StringType },
         ),
+        deepLinks = listOf(
+            navDeepLink {
+                uriPattern = "testlogon://broadcast/ingest/{${IngestViewModel.ARG_SESSION_ID}}"
+            },
+        ),
     ) { entry ->
         val sessionId = entry.arguments?.getString(IngestViewModel.ARG_SESSION_ID).orEmpty()
         IngestRoute(
@@ -329,6 +334,11 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         route = BroadcastViewerDest.ROUTE,
         arguments = listOf(
             navArgument(ViewerViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+        deepLinks = listOf(
+            navDeepLink {
+                uriPattern = "testlogon://broadcast/viewer/{${ViewerViewModel.ARG_SESSION_ID}}"
+            },
         ),
     ) {
         ViewerScreen(

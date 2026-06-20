@@ -1564,7 +1564,14 @@ async def get_messaging_user_id(
 
     cookies = getattr(request, "cookies", {}) or {}
     if x_session_id or cookies.get(S.ui_session_cookie_name):
-        user_sub = await get_authenticated_user_sub(request)
+        try:
+            user_sub = await get_authenticated_user_sub(request)
+        except HTTPException:
+            # The realtime poll/SSE must never 401 (it surfaces app-wide as a spurious "session expired").
+            # Fall back to the bearer token the client also sends.
+            user_sub = extract_bearer_token(authorization) or ""
+            if not user_sub:
+                raise
         try:
             ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
             uid = ctx["user_sub"]

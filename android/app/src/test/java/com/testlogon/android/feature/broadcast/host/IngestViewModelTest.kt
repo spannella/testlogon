@@ -119,7 +119,7 @@ class IngestViewModelTest {
         val saved = SavedStateHandle(
             if (sessionId != null) mapOf(IngestViewModel.ARG_SESSION_ID to sessionId) else emptyMap(),
         )
-        return IngestViewModel(repo, publisher, saved)
+        return IngestViewModel(repo, publisher, saved, com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer)
     }
 
     @Test

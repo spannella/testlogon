@@ -32,6 +32,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
+import com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
+import com.testlogon.android.core.webrtc.ui.VideoRenderer
 
 /** AND-308 — stable testTags for the host ingest (camera/mic publish) screen. */
 object IngestTestTags {
@@ -71,6 +73,7 @@ fun IngestRoute(
 
     IngestScreen(
         state = state,
+        videoRenderer = viewModel.videoRenderer,
         onStart = {
             permissionLauncher.launch(
                 arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
@@ -90,6 +93,7 @@ fun IngestRoute(
 @Composable
 fun IngestScreen(
     state: IngestUiState,
+    videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
@@ -125,6 +129,7 @@ fun IngestScreen(
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
                     .testTag(IngestTestTags.PREVIEW),
+                renderer = videoRenderer,
             )
 
             if (state.mediaUnavailable) {

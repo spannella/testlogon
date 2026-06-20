@@ -88,7 +88,7 @@ abstract class WebRtcDataModule {
      */
     @Binds
     @Singleton
-    abstract fun bindBroadcastPublisher(impl: StubBroadcastPublisher): BroadcastPublisher
+    abstract fun bindBroadcastPublisher(impl: RealBroadcastPublisher): BroadcastPublisher
 
     /** AND-289 — PeerConnection wrapper. Defaults to the no-op [StubPeerConnectionController]. */
     @Binds
