@@ -84,8 +84,8 @@ async function injectAuth(page: Page, userId: string) {
 
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
-const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
+import { join, resolve } from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 function ddbPut(tableName: string, item: Record<string, unknown>) {
   const itemJson = JSON.stringify(item);

@@ -1567,18 +1567,23 @@ export function ComposeBar({
                 </Button>
                 <TooltipProvider delayDuration={0}>
                   <Tooltip>
+                    {/* Span trigger: a disabled <button> suppresses pointer events in
+                        Chromium, so the tooltip would never open. Wrapping in a span
+                        keeps the hover target alive even when the button is disabled. */}
                     <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant={tipEnabled ? "secondary" : "ghost"}
-                        className={cn("h-9 justify-start gap-2 px-2", !hasPaymentMethods && "opacity-50 cursor-not-allowed")}
-                        onClick={() => { if (!hasPaymentMethods) return; setTipEnabled((v) => { if (!v) setLockEnabled(false); return !v; }); setMoreOpen(false); }}
-                        disabled={disabled || sending || encrypting || !hasPaymentMethods}
-                        aria-label="Toggle attach tip"
-                        data-testid="compose-toggle-tip"
-                      >
-                        <DollarSign className="h-4 w-4" /> Attach tip
-                      </Button>
+                      <span className="block w-full">
+                        <Button
+                          type="button"
+                          variant={tipEnabled ? "secondary" : "ghost"}
+                          className={cn("h-9 w-full justify-start gap-2 px-2", !hasPaymentMethods && "opacity-50 cursor-not-allowed")}
+                          onClick={() => { if (!hasPaymentMethods) return; setTipEnabled((v) => { if (!v) setLockEnabled(false); return !v; }); setMoreOpen(false); }}
+                          disabled={disabled || sending || encrypting || !hasPaymentMethods}
+                          aria-label="Toggle attach tip"
+                          data-testid="compose-toggle-tip"
+                        >
+                          <DollarSign className="h-4 w-4" /> Attach tip
+                        </Button>
+                      </span>
                     </TooltipTrigger>
                     {!hasPaymentMethods && (
                       <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>

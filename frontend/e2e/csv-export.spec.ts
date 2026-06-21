@@ -13,8 +13,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
-const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
+import { join, resolve } from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

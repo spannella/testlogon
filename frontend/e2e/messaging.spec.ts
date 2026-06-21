@@ -292,8 +292,12 @@ test.describe("3. Compose bar features", () => {
     // Open the pre-created DM directly by id (suite-accumulation-safe).
     await openConv(page, getTestConvId());
 
-    // ComposeBar always renders "Attach tip" checkbox when a conversation is open
-    await expect(page.locator("text=Attach tip")).toBeVisible({ timeout: 5000 });
+    // MCM-2: the "Attach tip" toggle now lives in the "+" popover rather than
+    // an always-visible inline checkbox. Open the popover, then assert it exists.
+    await page.getByTestId("compose-more").click();
+    await expect(
+      page.getByRole("button", { name: /toggle attach tip/i }),
+    ).toBeVisible({ timeout: 5000 });
     await page.close();
   });
 
