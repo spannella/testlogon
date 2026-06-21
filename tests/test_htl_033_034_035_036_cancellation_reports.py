@@ -626,14 +626,17 @@ class TestCancellationPolicyCRUD:
 
     def test_upsert_in_place_preserves_created_at(self, _hotel_tables):
         from app.services.hotel_cancellation import upsert_cancellation_policy, get_cancellation_policy
-        # First write
+        hotels = _hotel_tables["hotels"]
+        # Ensure the row doesn't exist so the first upsert creates it fresh
+        hotels.delete_item(Key={"hotel_id": "h1", "sk": "CANCELPOLICY#default"})
+        # First write — row is new, so DDB created_at = now_ts() at this call
         r1 = upsert_cancellation_policy(
             "h1", scope="default", penalty_pct=20, user_sub="admin-u1"
         )
         created_at_1 = r1["created_at"]
         import time
         time.sleep(0.01)
-        # Second write
+        # Second write — row already exists, created_at must be preserved
         r2 = upsert_cancellation_policy(
             "h1", scope="default", penalty_pct=80, user_sub="admin-u1"
         )
