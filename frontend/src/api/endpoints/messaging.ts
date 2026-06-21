@@ -33,6 +33,7 @@ import type {
   SendFindDateTimeReq,
   FindDateTimeFull,
   HelpdeskClaimOut,
+  HelpdeskTransferOut,
   RoutingEventOut,
   MessageControlActionResp,
   HiddenMessagesResp,
@@ -1010,6 +1011,15 @@ export async function startHelpdeskConversation(groupId: string): Promise<Conver
 
 export async function claimHelpdeskConversation(conversationId: string): Promise<HelpdeskClaimOut> {
   return api.post<HelpdeskClaimOut>(`/messaging/helpdesk/conversations/${conversationId}/claim`, {});
+}
+
+export async function transferHelpdeskConversation(
+  conversationId: string,
+  targetAgentUserId: string,
+): Promise<HelpdeskTransferOut> {
+  return api.post<HelpdeskTransferOut>(`/messaging/helpdesk/conversations/${conversationId}/transfer`, {
+    target_agent_user_id: targetAgentUserId,
+  });
 }
 
 export async function getHelpdeskQueue(groupId: string, state?: string): Promise<Conversation[]> {

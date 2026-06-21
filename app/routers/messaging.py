@@ -1273,6 +1273,9 @@ HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_E
 # creation (skipping the queue). Default off — flag-off behavior is identical to
 # the historical alert-only fanout path.
 HELPDESK_AUTO_ROUTE_ENABLED = os.getenv("HELPDESK_AUTO_ROUTE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# HMH-006: when on, a going-offline agent's assigned conversation is auto-reassigned
+# to another available group member instead of dropping back to awaiting_agent.
+HELPDESK_AUTO_REASSIGN_ENABLED = os.getenv("HELPDESK_AUTO_REASSIGN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED = bool(getattr(S, "messaging_hidden_timeline_filter_enabled", True))
 
 HELPDESK_ROUTING_EVENT_SCHEMA_VERSION = 1
@@ -1281,6 +1284,7 @@ HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES = {
     "helpdesk.conversation.assigned",
     "helpdesk.conversation.released",
     "helpdesk.conversation.no_agents_online",
+    "helpdesk.conversation.transferred",
 }
 CONSUMPTION_POLICY_NONE = "none"
 CONSUMPTION_STATE_PENDING = "pending"
@@ -1787,6 +1791,19 @@ class HelpdeskClaimOut(BaseModel):
     assigned_agent_user_id: str
     assignment_version: int
     idempotent: bool = False
+
+
+class TransferHelpdeskIn(BaseModel):
+    target_agent_user_id: str = Field(min_length=1, max_length=256)
+
+
+class HelpdeskTransferOut(BaseModel):
+    ok: bool
+    conversation_id: str
+    state: str
+    assigned_agent_user_id: str
+    assignment_version: int
+    previous_agent_user_id: str
 
 
 class LinkPreviewIn(BaseModel):
@@ -5361,7 +5378,37 @@ def _handle_helpdesk_presence_event(*, user_id: str, status: str, ts: int) -> di
                 transitioned += 1
                 released_convo = release_result.get("conversation", {}) if isinstance(release_result, dict) else {}
                 group_id = str(released_convo.get("routing_group_id") or convo.get("routing_group_id") or "")
-                if group_id:
+                released_version = int(released_convo.get("assignment_version") or 0)
+                reassigned = False
+                if group_id and HELPDESK_AUTO_REASSIGN_ENABLED:
+                    replacement = pick_available_agent(group_id, ts, exclude={user_id})
+                    if replacement:
+                        try:
+                            reassign_result = _apply_helpdesk_routing_transition(
+                                conversation_id=cid,
+                                cmd=RoutingTransitionInput(
+                                    action="assign_agent",
+                                    now_ts=ts,
+                                    agent_user_id=replacement,
+                                    expected_assignment_version=released_version,
+                                ),
+                                actor_user_id=user_id,
+                                metadata={"reason": "auto_reassign_on_disconnect", "previous_agent": user_id},
+                            )
+                            reassigned_event = reassign_result.get("event", {}) if isinstance(reassign_result, dict) else {}
+                            reassigned_convo = reassign_result.get("conversation", {}) if isinstance(reassign_result, dict) else {}
+                            _attach_agent_participant(
+                                conversation_id=cid,
+                                agent_user_id=replacement,
+                                ts=ts,
+                                routing_event_id=str(reassigned_event.get("event_id") or ""),
+                                routing_state="assigned",
+                                assignment_version=int(reassigned_convo.get("assignment_version") or 0),
+                            )
+                            reassigned = True
+                        except Exception:
+                            logger.exception("helpdesk auto-reassign failed", extra={"conversation_id": cid, "replacement": replacement})
+                if not reassigned and group_id:
                     delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
                     if delivered > 0:
                         _apply_helpdesk_routing_transition(
@@ -5369,7 +5416,7 @@ def _handle_helpdesk_presence_event(*, user_id: str, status: str, ts: int) -> di
                             cmd=RoutingTransitionInput(
                                 action="alert_awaiting",
                                 now_ts=ts,
-                                expected_assignment_version=int(released_convo.get("assignment_version") or 0),
+                                expected_assignment_version=released_version,
                             ),
                             actor_user_id=user_id,
                             metadata={"reason": "presence_realert", "status": status, "delivered": delivered},
@@ -6904,6 +6951,74 @@ def claim_helpdesk_conversation(
     user_id: str = Depends(get_messaging_user_id),
 ):
     return _claim_helpdesk_conversation_internal(conversation_id=conversation_id, user_id=user_id, req=req)
+
+
+@router.post("/helpdesk/conversations/{conversation_id}/transfer", response_model=HelpdeskTransferOut)
+def transfer_helpdesk_conversation(
+    conversation_id: str,
+    body: TransferHelpdeskIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-007: manually transfer an assigned helpdesk conversation to another agent."""
+    convo = _get_conversation_or_404(conversation_id)
+    if str(convo.get("routing_mode") or "") != "helpdesk_bridge":
+        raise HTTPException(400, detail={"code": "helpdesk_transfer_invalid_mode", "message": "conversation is not helpdesk-routed"})
+
+    group_id = str(convo.get("routing_group_id") or "")
+    if not _is_helpdesk_group_member(group_id, user_id):
+        raise HTTPException(403, detail={"code": "helpdesk_transfer_not_group_member", "message": "caller is not a helpdesk group member"})
+
+    current_state = str(convo.get("routing_state") or "none")
+    if current_state != "assigned":
+        raise HTTPException(409, detail={"code": "helpdesk_transfer_invalid_state", "message": f"conversation must be assigned; current state: {current_state}"})
+
+    current_agent = str(convo.get("active_agent_user_id") or "")
+    if current_agent and current_agent != user_id:
+        if not _is_helpdesk_group_member(group_id, user_id):
+            raise HTTPException(403, detail={"code": "helpdesk_transfer_not_assignee", "message": "only the assigned agent or a group member may transfer"})
+
+    target = str(body.target_agent_user_id).strip()
+    if not _is_helpdesk_group_member(group_id, target):
+        raise HTTPException(400, detail={"code": "helpdesk_transfer_target_not_member", "message": "target agent is not a member of this helpdesk group"})
+
+    if target == current_agent:
+        raise HTTPException(400, detail={"code": "helpdesk_transfer_same_agent", "message": "target agent is already assigned to this conversation"})
+
+    ts = now_ts()
+    version = int(convo.get("assignment_version") or 0)
+    try:
+        transfer_result = _apply_helpdesk_routing_transition(
+            conversation_id=conversation_id,
+            cmd=RoutingTransitionInput(
+                action="transfer_agent",
+                now_ts=ts,
+                agent_user_id=target,
+                expected_assignment_version=version,
+            ),
+            actor_user_id=user_id,
+            metadata={"reason": "manual_transfer", "previous_agent": current_agent},
+        )
+    except RoutingTransitionError as exc:
+        raise HTTPException(409, detail={"code": exc.code, "message": exc.message})
+
+    transferred_event = transfer_result.get("event", {}) if isinstance(transfer_result, dict) else {}
+    transferred_convo = transfer_result.get("conversation", {}) if isinstance(transfer_result, dict) else {}
+    _attach_agent_participant(
+        conversation_id=conversation_id,
+        agent_user_id=target,
+        ts=ts,
+        routing_event_id=str(transferred_event.get("event_id") or ""),
+        routing_state="assigned",
+        assignment_version=int(transferred_convo.get("assignment_version") or 0),
+    )
+    return HelpdeskTransferOut(
+        ok=True,
+        conversation_id=conversation_id,
+        state="assigned",
+        assigned_agent_user_id=target,
+        assignment_version=int(transferred_convo.get("assignment_version") or 0),
+        previous_agent_user_id=current_agent,
+    )
 
 
 def _enforce_helpdesk_send_constraints(*, conversation_id: str, convo: dict, user_id: str, req: Optional[Request] = None) -> None:

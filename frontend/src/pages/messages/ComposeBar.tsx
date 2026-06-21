@@ -745,34 +745,10 @@ export function ComposeBar({
     setPendingFile({ file, previewUrl, kind });
   };
 
+  const _anyToggleActive = encryptEnabled || viewOnceText || lockEnabled || tipEnabled || expiresEnabled;
+
   return (
     <div className="border-t border-border bg-card px-4 py-3">
-      <div className="mb-2 flex items-center justify-between">
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={encryptEnabled}
-                  onChange={(e) => {
-                    setEncryptEnabled(e.target.checked);
-                    setEncryptError(null);
-                  }}
-                  disabled={disabled || sending || encrypting || !featureEnabled}
-                />
-                <Lock className="h-3.5 w-3.5" />
-                Encrypt message
-              </label>
-            </TooltipTrigger>
-          </Tooltip>
-        </TooltipProvider>
-        {encryptEnabled && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-            Encrypted send enabled
-          </span>
-        )}
-      </div>
 
       {encryptEnabled && (
         <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
@@ -837,67 +813,44 @@ export function ComposeBar({
         </div>
       )}
 
-      {/* View-once text + Lock + Tip + Expiry controls row */}
-      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {!pendingFile && (
-          <label className="inline-flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={viewOnceText}
-              onChange={(e) => setViewOnceText(e.target.checked)}
-              disabled={disabled || sending || encrypting}
-            />
-            <Eye className="h-3.5 w-3.5" />
-            View once
-          </label>
-        )}
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={lockEnabled}
-            onChange={(e) => {
-              setLockEnabled(e.target.checked);
-              if (e.target.checked) setTipEnabled(false);
-            }}
-            disabled={disabled || sending || encrypting}
-          />
-          <Lock className="h-3.5 w-3.5" />
-          Require tip to unlock
-        </label>
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <label className={cn("inline-flex items-center gap-1.5", !hasPaymentMethods && "cursor-not-allowed opacity-50")}>
-                <input
-                  type="checkbox"
-                  checked={tipEnabled}
-                  onChange={(e) => {
-                    if (!hasPaymentMethods) return;
-                    setTipEnabled(e.target.checked);
-                    if (e.target.checked) setLockEnabled(false);
-                  }}
-                  disabled={disabled || sending || encrypting || !hasPaymentMethods}
-                  className={cn(!hasPaymentMethods && "pointer-events-none")}
-                />
-                <DollarSign className="h-3.5 w-3.5" />
-                Attach tip
-              </label>
-            </TooltipTrigger>
-            {!hasPaymentMethods && (
-              <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={expiresEnabled}
-            onChange={(e) => setExpiresEnabled(e.target.checked)}
-            disabled={disabled || sending || encrypting}
-          />
-          Message expires
-        </label>
-        {expiresEnabled && (
+      {/* Active-toggle indicator strip — only shown when options are on */}
+      {_anyToggleActive && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+          {encryptEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-700">
+              <Lock className="h-3 w-3" /> Encrypted
+              <button type="button" onClick={() => { setEncryptEnabled(false); setEncryptError(null); }} className="ml-0.5 hover:text-amber-900" aria-label="Disable encryption">×</button>
+            </span>
+          )}
+          {viewOnceText && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-700">
+              <Eye className="h-3 w-3" /> View once
+              <button type="button" onClick={() => setViewOnceText(false)} className="ml-0.5 hover:text-blue-900" aria-label="Disable view once">×</button>
+            </span>
+          )}
+          {lockEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 font-medium text-purple-700">
+              <Lock className="h-3 w-3" /> Locked
+              <button type="button" onClick={() => { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }} className="ml-0.5 hover:text-purple-900" aria-label="Disable lock">×</button>
+            </span>
+          )}
+          {tipEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">
+              <DollarSign className="h-3 w-3" /> Tip attached
+              <button type="button" onClick={() => { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }} className="ml-0.5 hover:text-green-900" aria-label="Disable tip">×</button>
+            </span>
+          )}
+          {expiresEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 font-medium text-orange-700">
+              Expires
+              <button type="button" onClick={() => { setExpiresEnabled(false); setExpiresDuration("3600"); }} className="ml-0.5 hover:text-orange-900" aria-label="Disable expiry">×</button>
+            </span>
+          )}
+        </div>
+      )}
+      {expiresEnabled && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Expires in:</span>
           <select
             value={expiresDuration}
             onChange={(e) => setExpiresDuration(e.target.value)}
@@ -910,8 +863,8 @@ export function ComposeBar({
             <option value="86400">1 day</option>
             <option value="604800">7 days</option>
           </select>
-        )}
-      </div>
+        </div>
+      )}
       {lockEnabled && (
         <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
           <div className="flex items-center gap-2">
@@ -1561,16 +1514,89 @@ export function ComposeBar({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 shrink-0"
+                className="relative h-9 w-9 shrink-0"
                 aria-label="More compose options"
                 data-testid="compose-more"
                 disabled={disabled || sending || encrypting}
               >
                 <Plus className="h-4 w-4" />
+                {_anyToggleActive && (
+                  <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary" aria-hidden="true" />
+                )}
               </Button>
             </PopoverTrigger>
-            <PopoverContent side="top" align="start" className="w-56 p-1">
+            <PopoverContent side="top" align="start" className="w-64 p-1">
               <div className="grid">
+                {/* Message option toggles */}
+                {featureEnabled && (
+                  <Button
+                    type="button"
+                    variant={encryptEnabled ? "secondary" : "ghost"}
+                    className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setEncryptEnabled((v) => { if (v) setEncryptError(null); return !v; }); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Toggle message encryption"
+                    data-testid="compose-toggle-encrypt"
+                  >
+                    <Lock className="h-4 w-4" /> Encrypt message
+                  </Button>
+                )}
+                {!pendingFile && (
+                  <Button
+                    type="button"
+                    variant={viewOnceText ? "secondary" : "ghost"}
+                    className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setViewOnceText((v) => !v); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Toggle view once"
+                    data-testid="compose-toggle-view-once"
+                  >
+                    <Eye className="h-4 w-4" /> View once
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant={lockEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setLockEnabled((v) => { if (!v) setTipEnabled(false); return !v; }); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle message lock"
+                  data-testid="compose-toggle-lock"
+                >
+                  <Lock className="h-4 w-4" /> Require tip to unlock
+                </Button>
+                <TooltipProvider delayDuration={0}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant={tipEnabled ? "secondary" : "ghost"}
+                        className={cn("h-9 justify-start gap-2 px-2", !hasPaymentMethods && "opacity-50 cursor-not-allowed")}
+                        onClick={() => { if (!hasPaymentMethods) return; setTipEnabled((v) => { if (!v) setLockEnabled(false); return !v; }); setMoreOpen(false); }}
+                        disabled={disabled || sending || encrypting || !hasPaymentMethods}
+                        aria-label="Toggle attach tip"
+                        data-testid="compose-toggle-tip"
+                      >
+                        <DollarSign className="h-4 w-4" /> Attach tip
+                      </Button>
+                    </TooltipTrigger>
+                    {!hasPaymentMethods && (
+                      <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+                <Button
+                  type="button"
+                  variant={expiresEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setExpiresEnabled((v) => !v); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle message expiry"
+                  data-testid="compose-toggle-expires"
+                >
+                  <Clock className="h-4 w-4" /> Message expires
+                </Button>
+                <div className="my-1 border-t border-border" />
                 {onSendVoiceMessage && !voiceRecording && (
                   <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
                     onClick={() => { setVoiceRecording(true); setMoreOpen(false); }}

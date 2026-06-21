@@ -837,6 +837,15 @@ export interface HelpdeskClaimOut {
   idempotent: boolean;
 }
 
+export interface HelpdeskTransferOut {
+  ok: boolean;
+  conversation_id: string;
+  state: string;
+  assigned_agent_user_id: string;
+  assignment_version: number;
+  previous_agent_user_id: string;
+}
+
 export interface Participant {
   user_id: string;
   status?: string;

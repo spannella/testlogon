@@ -23,6 +23,7 @@ import {
   sendVoiceMessage,
   markRead,
   claimHelpdeskConversation,
+  transferHelpdeskConversation,
   createCallInvite,
   acceptCallInvite,
   declineCallInvite,
@@ -684,6 +685,20 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to claim conversation"),
   });
 
+  const [transferTarget, setTransferTarget] = React.useState("");
+  const [transferDialogOpen, setTransferDialogOpen] = React.useState(false);
+  const transferMutation = useMutation({
+    mutationFn: (targetId: string) => transferHelpdeskConversation(convoId, targetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
+      setTransferDialogOpen(false);
+      setTransferTarget("");
+      toast.success("Conversation transferred");
+    },
+    onError: () => toast.error("Failed to transfer conversation"),
+  });
+
   // ── Conversation title / header ────────────────────────────────
 
   const title = conversation.title
@@ -1234,12 +1249,44 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
       {/* Helpdesk routing banner */}
       {conversation.routing_mode === "helpdesk_bridge" && conversation.routing_state && (
-        <HelpdeskRoutingBanner
-          conversation={conversation}
-          currentUserId={userId ?? ""}
-          onClaim={() => claimMutation.mutate()}
-          isClaiming={claimMutation.isPending}
-        />
+        <>
+          <HelpdeskRoutingBanner
+            conversation={conversation}
+            currentUserId={userId ?? ""}
+            onClaim={() => claimMutation.mutate()}
+            isClaiming={claimMutation.isPending}
+            onTransfer={() => setTransferDialogOpen(true)}
+          />
+          {transferDialogOpen && (
+            <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs">
+              <input
+                type="text"
+                placeholder="Target agent user ID"
+                value={transferTarget}
+                onChange={(e) => setTransferTarget(e.target.value)}
+                className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+                aria-label="Transfer to agent ID"
+              />
+              <Button
+                size="sm"
+                variant="default"
+                className="h-7 shrink-0"
+                onClick={() => transferMutation.mutate(transferTarget.trim())}
+                disabled={!transferTarget.trim() || transferMutation.isPending}
+              >
+                {transferMutation.isPending ? "Transferring…" : "Transfer"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0"
+                onClick={() => { setTransferDialogOpen(false); setTransferTarget(""); }}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Messages */}
@@ -1608,9 +1655,10 @@ interface HelpdeskRoutingBannerProps {
   currentUserId: string;
   onClaim: () => void;
   isClaiming: boolean;
+  onTransfer?: () => void;
 }
 
-function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming }: HelpdeskRoutingBannerProps) {
+function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming, onTransfer }: HelpdeskRoutingBannerProps) {
   const state = conversation.routing_state ?? "";
   const assignedAgent = conversation.active_agent_user_id ?? "";
   // Agent-only fields (routing_group_id / active_agent_user_id) are present in
@@ -1621,6 +1669,7 @@ function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaimin
   let bgClass = "bg-muted";
   let text = "";
   let showClaim = false;
+  let showTransfer = false;
 
   if (!isAgent) {
     // Customer-facing status — never a Claim action, never an agent identity.
@@ -1646,6 +1695,7 @@ function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaimin
   } else if (state === "assigned" && assignedAgent === currentUserId) {
     bgClass = "bg-green-50 border-green-200 text-green-800";
     text = "You are handling this conversation";
+    showTransfer = true;
   } else if (state === "assigned") {
     bgClass = "bg-yellow-50 border-yellow-200 text-yellow-800";
     text = "Assigned to another agent";
@@ -1672,6 +1722,17 @@ function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaimin
           aria-label="Claim this helpdesk conversation"
         >
           {isClaiming ? "Claiming…" : "Claim"}
+        </Button>
+      )}
+      {showTransfer && onTransfer && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0"
+          onClick={onTransfer}
+          aria-label="Transfer this helpdesk conversation"
+        >
+          Transfer
         </Button>
       )}
     </div>
