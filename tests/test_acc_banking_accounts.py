@@ -659,6 +659,7 @@ def test_resolve_access_viewer_via_vew():
         return {"view_id": view_id, "grants": {"can_see_balance": True}}
 
     fake.resolve_active_grant = _resolve_active_grant
+    _orig_av = sys.modules.get("app.services.account_views")
     sys.modules["app.services.account_views"] = fake
     try:
         access = svc.resolve_account_access(BOB, acc["account_id"], view_id="auditor")
@@ -669,7 +670,10 @@ def test_resolve_access_viewer_via_vew():
         access2 = svc.resolve_account_access(BOB, acc["account_id"], view_id="auditor")
         assert access2["role"] is None
     finally:
-        sys.modules.pop("app.services.account_views", None)
+        if _orig_av is not None:
+            sys.modules["app.services.account_views"] = _orig_av
+        else:
+            sys.modules.pop("app.services.account_views", None)
         object.__setattr__(S, "banking_account_views_enabled", False)
 
 
