@@ -377,16 +377,18 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
     await page?.close();
   });
 
-  test("'Attach tip' checkbox is enabled when a payment method exists", async () => {
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel).toBeVisible({ timeout: 5000 });
-    const checkbox = tipLabel.locator("input[type='checkbox']");
-    await expect(checkbox).toBeEnabled({ timeout: 3000 });
+  test("'Attach tip' toggle is enabled in '+' popover when a payment method exists", async () => {
+    // MCM-2: tip toggle lives in "+" popover.
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeVisible({ timeout: 5000 });
+    await expect(tipBtn).toBeEnabled({ timeout: 3000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("Checking 'Attach tip' shows the tip panel with 'Pay with:' section", async () => {
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await tipLabel.locator("input[type='checkbox']").check();
+  test("Clicking 'Attach tip' in '+' popover shows the tip panel with 'Pay with:' section", async () => {
+    await page.getByTestId("compose-more").click();
+    await page.getByRole("button", { name: /toggle attach tip/i }).click();
 
     // The tip panel should be visible.
     await expect(page.getByText("Attach a tip to this message")).toBeVisible({ timeout: 3000 });
@@ -395,11 +397,10 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
   });
 
   test("Injected Visa payment method button is visible in the tip panel", async () => {
-    // Re-check tip checkbox in case state reset between tests (e.g. on retry).
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    const tipCb = tipLabel.locator("input[type='checkbox']");
-    if (!(await tipCb.isChecked().catch(() => false))) {
-      await tipLabel.locator("input[type='checkbox']").check();
+    // Re-enable tip if state reset between tests.
+    if (!(await page.getByRole("button", { name: /disable tip/i }).isVisible().catch(() => false))) {
+      await page.getByTestId("compose-more").click();
+      await page.getByRole("button", { name: /toggle attach tip/i }).click();
     }
     // Use .first() in case previous test runs left multiple PMs with same brand/last4.
     await expect(page.getByRole("button", { name: /visa.*4242/i }).first()).toBeVisible({ timeout: 5000 });
@@ -412,11 +413,10 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
   });
 
   test("Send button enabled after entering tip amount and selecting PM", async () => {
-    // Re-check tip checkbox in case state reset between tests.
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    const tipCb = tipLabel.locator("input[type='checkbox']");
-    if (!(await tipCb.isChecked().catch(() => false))) {
-      await tipLabel.locator("input[type='checkbox']").check();
+    // Re-enable tip if state reset between tests.
+    if (!(await page.getByRole("button", { name: /disable tip/i }).isVisible().catch(() => false))) {
+      await page.getByTestId("compose-more").click();
+      await page.getByRole("button", { name: /toggle attach tip/i }).click();
     }
     // Fill in tip amount.
     const amountInput = page.locator("input[type='number'][placeholder='e.g. 5.00']");
@@ -602,10 +602,13 @@ test.describe("19. Tip checkbox — unblocked after PM add + billing nav (no pag
     await page?.close();
   });
 
-  test("'Attach tip' checkbox is disabled when no payment method exists", async () => {
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel).toBeVisible({ timeout: 5000 });
-    await expect(tipLabel.locator("input[type='checkbox']")).toBeDisabled({ timeout: 3000 });
+  test("'Attach tip' toggle is disabled in '+' popover when no payment method exists", async () => {
+    // MCM-2: tip toggle lives in "+" popover.
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeVisible({ timeout: 5000 });
+    await expect(tipBtn).toBeDisabled({ timeout: 3000 });
+    await page.keyboard.press("Escape");
   });
 
   test("After injecting a PM and navigating billing → messages, tip checkbox is enabled", async () => {
@@ -633,9 +636,11 @@ test.describe("19. Tip checkbox — unblocked after PM add + billing nav (no pag
     await row.click();
     await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
 
-    // The tip checkbox must now be enabled — no page refresh needed.
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel.locator("input[type='checkbox']")).toBeEnabled({ timeout: 5000 });
+    // The tip toggle in "+" popover must now be enabled — no page refresh needed.
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeEnabled({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 });
 
@@ -724,17 +729,22 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage?.close();
   });
 
-  test("Encrypt checkbox is NOT disabled when a file is pending", async () => {
+  test("Encrypt toggle is NOT disabled when a file is pending", async () => {
+    // MCM-2: encrypt toggle lives in "+" popover.
     await openDmWithBob(alicePage);
-    const checkbox = alicePage.locator("label").filter({ hasText: "Encrypt" }).locator("input[type='checkbox']");
-    await expect(checkbox).not.toBeDisabled({ timeout: 3000 });
+    await alicePage.getByTestId("compose-more").click();
+    const encBtn = alicePage.getByRole("button", { name: /toggle message encryption/i });
+    await expect(encBtn).not.toBeDisabled({ timeout: 3000 });
+    await alicePage.keyboard.press("Escape");
 
-    // Attach file — checkbox should STILL be enabled
+    // Attach file — toggle should STILL be enabled in popover
     await alicePage.locator("input[type='file']").setInputFiles({
       name: `check-enc-${TS}.png`, mimeType: "image/png", buffer: TEST_PNG,
     });
     await expect(alicePage.getByText("ready to send")).toBeVisible({ timeout: 5000 });
-    await expect(checkbox).not.toBeDisabled({ timeout: 3000 });
+    await alicePage.getByTestId("compose-more").click();
+    await expect(alicePage.getByRole("button", { name: /toggle message encryption/i })).not.toBeDisabled({ timeout: 3000 });
+    await alicePage.keyboard.press("Escape");
 
     // Clear the file using the aria-labeled button
     await alicePage.getByRole("button", { name: "Remove attachment" }).click();
@@ -840,14 +850,16 @@ test.describe("21. View-once text label — hidden when a file is staged in comp
 
   test.afterAll(async () => page?.close());
 
-  test("The outer 'View once' text label is visible before a file is attached", async () => {
-    // The text-message view-once label lives outside the file preview block.
-    // It should be visible when no file is pending.
-    const voLabel = page.locator("label").filter({ hasText: "View once" });
-    await expect(voLabel.first()).toBeVisible({ timeout: 5000 });
+  test("'View once' toggle is accessible in '+' popover before a file is attached", async () => {
+    // MCM-2: toggles moved into "+" popover. Button present when no file is pending.
+    await page.getByTestId("compose-more").click();
+    await expect(
+      page.getByRole("button", { name: /toggle view once/i })
+    ).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("Outer 'View once' text label disappears when a file is staged", async () => {
+  test("'View once' toggle is removed from '+' popover when a file is staged", async () => {
     const fileInput = page.locator("input[type='file']");
     await fileInput.setInputFiles({
       name:     "test-e2e2.png",
@@ -858,32 +870,13 @@ test.describe("21. View-once text label — hidden when a file is staged in comp
     // File preview should be visible.
     await expect(page.getByText("ready to send")).toBeVisible({ timeout: 5000 });
 
-    // The outer text-message "View once" label (rendered only when !pendingFile)
-    // must be gone.  The view-once option inside the file preview block may
-    // still be present (it's image-specific), but the standalone text checkbox
-    // must not be visible.
-    //
-    // The outer label contains an input[type=checkbox] for view_once text; the
-    // file-preview label contains a different input.  We check the label
-    // element that was previously visible is now detached/hidden.
-    const outerVoLabel = page.locator("label").filter({ hasText: "View once" }).filter({
-      // The outer label has an EyeOff icon wrapped in it; find the one that is
-      // rendered at the controls row level (not inside the file preview div).
-      hasNOT: page.locator('[data-pending-file-preview]'),
-    });
-
-    // The simplest check: at most one "View once" label should remain (the one
-    // inside the file preview), so the outer standalone label must have
-    // disappeared.  We verify this by confirming the controls-row label is gone.
-    // Because Tailwind's `{!pendingFile && ...}` removes it from the DOM:
-    const allVoLabels = page.locator("label").filter({ hasText: "View once" });
-    // Before: multiple could exist (outer + possibly inner).
-    // After: only the inner file-preview one remains (if feature flags enabled).
-    // Regardless, the outer one (which had the Eye icon next to the checkbox)
-    // is hidden — so the total count is ≤ 1 (just the file-preview label).
-    const count = await allVoLabels.count();
-    // If view-once feature flag is off, count = 0.  If flag is on, count = 1 (inner only).
-    expect(count).toBeLessThanOrEqual(1);
+    // MCM-2: the "Toggle view once" button is gated on !pendingFile — it should
+    // be removed from the popover when a file is staged.
+    await page.getByTestId("compose-more").click();
+    await expect(
+      page.getByRole("button", { name: /toggle view once/i })
+    ).not.toBeVisible({ timeout: 3000 });
+    await page.keyboard.press("Escape");
   });
 });
 

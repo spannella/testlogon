@@ -306,6 +306,17 @@ async function openDmWithBob(page: Page) {
   await openDmDirect(page, convoId);
 }
 
+/** MCM-2: toggle options live inside the "+" popover. Open popover then click. */
+async function openComposeToggle(page: Page, ariaLabel: RegExp | string) {
+  await page.getByTestId("compose-more").click();
+  await page.getByRole("button", { name: ariaLabel }).click();
+}
+
+/** MCM-2: deactivate a toggle (same as activate — it's a toggle button). */
+async function deactivateComposeToggle(page: Page, ariaLabel: RegExp | string) {
+  await openComposeToggle(page, ariaLabel);
+}
+
 // ─── 1. Messaging page structure ──────────────────────────────────────────────
 
 test.describe("1. Messaging page structure", () => {
@@ -356,22 +367,24 @@ test.describe("2. ComposeBar — view-once text toggle", () => {
 
   test.afterAll(async () => page?.close());
 
-  test("'View once' checkbox is visible in compose bar", async () => {
-    await expect(page.getByLabel(/view once/i)).toBeVisible({ timeout: 5000 });
+  test("'View once' toggle is accessible via '+' popover", async () => {
+    await page.getByTestId("compose-more").click();
+    await expect(page.getByRole("button", { name: /toggle view once/i })).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("'View once' checkbox is unchecked by default", async () => {
-    await expect(page.getByLabel(/view once/i)).not.toBeChecked();
+  test("'View once' is inactive by default (no pill badge)", async () => {
+    await expect(page.getByText("View once").locator("..").filter({ has: page.locator("button[aria-label='Disable view once']") })).not.toBeVisible();
   });
 
-  test("Checking 'View once' marks it as checked", async () => {
-    await page.getByLabel(/view once/i).check();
-    await expect(page.getByLabel(/view once/i)).toBeChecked();
+  test("Enabling 'View once' shows active pill badge", async () => {
+    await openComposeToggle(page, /toggle view once/i);
+    await expect(page.getByRole("button", { name: /disable view once/i })).toBeVisible({ timeout: 3000 });
   });
 
-  test("Unchecking 'View once' reverts to unchecked", async () => {
-    await page.getByLabel(/view once/i).uncheck();
-    await expect(page.getByLabel(/view once/i)).not.toBeChecked();
+  test("Disabling 'View once' hides the pill badge", async () => {
+    await page.getByRole("button", { name: /disable view once/i }).click();
+    await expect(page.getByRole("button", { name: /disable view once/i })).not.toBeVisible({ timeout: 2000 });
   });
 });
 
@@ -387,22 +400,24 @@ test.describe("3. ComposeBar — encrypt message toggle", () => {
 
   test.afterAll(async () => page?.close());
 
-  test("'Encrypt message' checkbox is visible", async () => {
-    await expect(page.getByLabel(/encrypt message/i)).toBeVisible({ timeout: 5000 });
+  test("'Encrypt message' toggle is accessible via '+' popover", async () => {
+    await page.getByTestId("compose-more").click();
+    await expect(page.getByRole("button", { name: /toggle message encryption/i })).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("'Encrypt message' is unchecked by default", async () => {
-    await expect(page.getByLabel(/encrypt message/i)).not.toBeChecked();
+  test("'Encrypt message' is inactive by default", async () => {
+    await expect(page.getByRole("button", { name: /disable encryption/i })).not.toBeVisible();
   });
 
   test("Enabling encryption shows password input fields", async () => {
-    await page.getByLabel(/encrypt message/i).check();
+    await openComposeToggle(page, /toggle message encryption/i);
     await expect(page.getByPlaceholder("Encryption password")).toBeVisible({ timeout: 3000 });
     await expect(page.getByPlaceholder("Confirm password")).toBeVisible({ timeout: 3000 });
   });
 
-  test("'Encrypted send enabled' badge appears when encrypt is on", async () => {
-    await expect(page.getByText("Encrypted send enabled")).toBeVisible({ timeout: 3000 });
+  test("Active encrypt pill badge appears when encrypt is on", async () => {
+    await expect(page.getByRole("button", { name: /disable encryption/i })).toBeVisible({ timeout: 3000 });
   });
 
   test("Mismatched passwords shows 'Passwords do not match'", async () => {
@@ -417,7 +432,7 @@ test.describe("3. ComposeBar — encrypt message toggle", () => {
   });
 
   test("Disabling encryption hides password fields", async () => {
-    await page.getByLabel(/encrypt message/i).uncheck();
+    await page.getByRole("button", { name: /disable encryption/i }).click();
     await expect(page.getByPlaceholder("Encryption password")).not.toBeVisible({ timeout: 2000 });
     await expect(page.getByPlaceholder("Confirm password")).not.toBeVisible({ timeout: 2000 });
   });
@@ -545,8 +560,8 @@ test.describe("6. Encrypted message — compose and send via UI", () => {
     page = await browser.newPage();
     await openDmWithBob(page);
 
-    // Enable encryption, enter matching passwords, type and send
-    await page.getByLabel(/encrypt message/i).check();
+    // Enable encryption via "+" popover toggle
+    await openComposeToggle(page, /toggle message encryption/i);
     await page.getByPlaceholder("Encryption password").fill(ENCRYPT_PASSWORD);
     await page.getByPlaceholder("Confirm password").fill(ENCRYPT_PASSWORD);
     await expect(page.getByText("Passwords match")).toBeVisible({ timeout: 3000 });
@@ -625,7 +640,7 @@ test.describe("7. Decrypt message — dialog, wrong password, correct password",
     const existingCount = await page.getByRole("button", { name: "Decrypt message" }).count();
 
     // Send a fresh encrypted message to decrypt in this section
-    await page.getByLabel(/encrypt message/i).check();
+    await openComposeToggle(page, /toggle message encryption/i);
     await page.getByPlaceholder("Encryption password").fill(ENCRYPT_PASSWORD);
     await page.getByPlaceholder("Confirm password").fill(ENCRYPT_PASSWORD);
     await expect(page.getByText("Passwords match")).toBeVisible({ timeout: 3000 });
@@ -1482,54 +1497,44 @@ test.describe("11. Tips and locked messages", () => {
 
   // ── UI: compose-bar lock panel ─────────────────────────────────────────────
 
-  test("UI: 'Require tip to unlock' checkbox reveals lock price input", async () => {
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    await expect(lockCheck).toBeVisible({ timeout: 5000 });
-    await lockCheck.check();
+  test("UI: 'Require tip to unlock' toggle reveals lock price input", async () => {
+    // MCM-2: toggle lives in "+" popover.
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle message lock/i }).click();
     // Lock price input appears with placeholder "e.g. 1.00"
     await expect(alicePage.locator("input[placeholder='e.g. 1.00']")).toBeVisible({
       timeout: 3000,
     });
   });
 
-  test("UI: 'Attach tip' checkbox reveals tip amount input", async () => {
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    const tipCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /attach tip/i })
-      .locator("input[type='checkbox']");
-    // Uncheck lock if still checked
-    if (await lockCheck.isChecked()) await lockCheck.uncheck();
-    await tipCheck.check();
+  test("UI: 'Attach tip' toggle reveals tip amount input", async () => {
+    // Disable lock if still active (lock pill × button visible)
+    if (await alicePage.getByRole("button", { name: /disable lock/i }).isVisible().catch(() => false)) {
+      await alicePage.getByRole("button", { name: /disable lock/i }).click();
+    }
+    // Enable tip via "+" popover
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle attach tip/i }).click();
     // Tip amount input appears with placeholder "e.g. 5.00"
     await expect(alicePage.locator("input[placeholder='e.g. 5.00']")).toBeVisible({
       timeout: 3000,
     });
   });
 
-  test("UI: lock and tip checkboxes are mutually exclusive", async () => {
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    const tipCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /attach tip/i })
-      .locator("input[type='checkbox']");
-    // Tip is currently checked (from previous test); checking lock should uncheck tip
-    if (!(await tipCheck.isChecked())) await tipCheck.check();
-    await lockCheck.check();
-    await expect(tipCheck).not.toBeChecked({ timeout: 3000 });
-    // Vice versa: checking tip should uncheck lock
-    await tipCheck.check();
-    await expect(lockCheck).not.toBeChecked({ timeout: 3000 });
-    // Leave tip checked, lock unchecked for next test
+  test("UI: lock and tip toggles are mutually exclusive", async () => {
+    // Tip is currently active (from previous test); enabling lock should disable tip
+    if (!(await alicePage.getByRole("button", { name: /disable tip/i }).isVisible().catch(() => false))) {
+      await alicePage.getByTestId("compose-more").click();
+      await alicePage.getByRole("button", { name: /toggle attach tip/i }).click();
+    }
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle message lock/i }).click();
+    await expect(alicePage.getByRole("button", { name: /disable tip/i })).not.toBeVisible({ timeout: 3000 });
+    // Vice versa: enabling tip should disable lock
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle attach tip/i }).click();
+    await expect(alicePage.getByRole("button", { name: /disable lock/i })).not.toBeVisible({ timeout: 3000 });
+    // Leave tip active, lock inactive for next test
   });
 
   test("UI: Alice sends a locked message and sees the 'Locked ·' badge", async () => {
@@ -1538,19 +1543,16 @@ test.describe("11. Tips and locked messages", () => {
     // in-flight. Wait until the textarea is enabled before interacting.
     await expect(alicePage.locator("textarea").last()).not.toBeDisabled({ timeout: 20_000 });
 
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    const tipCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /attach tip/i })
-      .locator("input[type='checkbox']");
-    // After mutual-exclusion test, lock is unchecked — check it.
-    // Checking lock should uncheck tip (mutual exclusion) — wait for that to settle
-    // before filling the compose bar, otherwise the tip PM requirement keeps Send disabled.
-    if (!(await lockCheck.isChecked())) await lockCheck.check();
-    await expect(tipCheck).not.toBeChecked({ timeout: 5000 });
+    // Disable tip if active, then enable lock
+    if (await alicePage.getByRole("button", { name: /disable tip/i }).isVisible().catch(() => false)) {
+      await alicePage.getByRole("button", { name: /disable tip/i }).click();
+    }
+    if (!(await alicePage.getByRole("button", { name: /disable lock/i }).isVisible().catch(() => false))) {
+      await alicePage.getByTestId("compose-more").click();
+      await alicePage.getByRole("button", { name: /toggle message lock/i }).click();
+    }
+    // Tip should now be inactive (mutual exclusion)
+    await expect(alicePage.getByRole("button", { name: /disable tip/i })).not.toBeVisible({ timeout: 5000 });
     // Wait for the lock price input to appear after state update
     await expect(alicePage.locator("input[placeholder='e.g. 1.00']")).toBeVisible({ timeout: 3000 });
     await alicePage.locator("input[placeholder='e.g. 1.00']").fill("1");
@@ -1890,13 +1892,10 @@ test.describe("12. Message expiry", () => {
 
   // ── UI: compose-bar expiry controls ───────────────────────────────────────
 
-  test("UI: 'Message expires' checkbox reveals the duration select", async () => {
-    const expiresCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /message expires/i })
-      .locator("input[type='checkbox']");
-    await expect(expiresCheck).toBeVisible({ timeout: 5000 });
-    await expiresCheck.check();
+  test("UI: 'Message expires' toggle reveals the duration select", async () => {
+    // MCM-2: toggle lives in "+" popover.
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle message expiry/i }).click();
     // The duration <select> should appear
     await expect(alicePage.locator("select")).toBeVisible({ timeout: 3000 });
   });
@@ -1911,12 +1910,11 @@ test.describe("12. Message expiry", () => {
   });
 
   test("UI: sending with 1-minute expiry shows the 'expires' badge on the bubble", async () => {
-    // Ensure the "Message expires" checkbox is checked (it should be from prev test).
-    const expiresCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /message expires/i })
-      .locator("input[type='checkbox']");
-    if (!(await expiresCheck.isChecked())) await expiresCheck.check();
+    // Ensure the "Message expires" toggle is active (pill visible from prev test).
+    if (!(await alicePage.getByRole("button", { name: /disable expiry/i }).isVisible().catch(() => false))) {
+      await alicePage.getByTestId("compose-more").click();
+      await alicePage.getByRole("button", { name: /toggle message expiry/i }).click();
+    }
 
     // Select "1 minute" (value="60").
     const select = alicePage.locator("select");

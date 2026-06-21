@@ -669,26 +669,24 @@ test.describe("5. Compose bar — Attach tip disabled when no payment method", (
 
   test.afterAll(async () => page?.close());
 
-  test("'Attach tip' checkbox is disabled when Alice has no payment methods", async () => {
-    // The tip label/checkbox is always rendered in the compose area.
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel).toBeVisible({ timeout: 5000 });
-
-    // The checkbox inside the label must be disabled.
-    const checkbox = tipLabel.locator("input[type='checkbox']");
-    await expect(checkbox).toBeDisabled({ timeout: 3000 });
+  test("'Attach tip' toggle is disabled in '+' popover when Alice has no payment methods", async () => {
+    // MCM-2: tip toggle lives in "+" popover.
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeVisible({ timeout: 5000 });
+    await expect(tipBtn).toBeDisabled({ timeout: 3000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("Hovering 'Attach tip' shows a tooltip about missing payment method", async () => {
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel).toBeVisible({ timeout: 3000 });
-    // Hover over the text portion specifically — the label's left side has a
-    // disabled <input> which can absorb pointer events before they reach the
-    // Radix TooltipTrigger. Force-hover ensures the trigger fires.
-    await tipLabel.hover({ force: true });
+  test("Hovering 'Attach tip' in '+' popover shows a tooltip about missing payment method", async () => {
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeVisible({ timeout: 3000 });
+    await tipBtn.hover({ force: true });
     await expect(
       page.getByText(/add a payment method in billing/i),
     ).toBeVisible({ timeout: 4000 });
+    await page.keyboard.press("Escape");
   });
 });
 

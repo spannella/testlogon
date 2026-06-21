@@ -1096,12 +1096,16 @@ test.describe("11. UI — group conversation", () => {
     ).toBeVisible({ timeout: 5000 });
   });
 
-  test("view-once checkbox is visible in group ComposeBar", async () => {
-    await expect(page.getByLabel(/view once/i)).toBeVisible({ timeout: 5000 });
+  test("view-once toggle is accessible in group ComposeBar via '+' popover", async () => {
+    await page.getByTestId("compose-more").click();
+    await expect(page.getByRole("button", { name: /toggle view once/i })).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("encrypt message checkbox is visible in group ComposeBar", async () => {
-    await expect(page.getByLabel(/encrypt message/i)).toBeVisible({ timeout: 5000 });
+  test("encrypt message toggle is accessible in group ComposeBar via '+' popover", async () => {
+    await page.getByTestId("compose-more").click();
+    await expect(page.getByRole("button", { name: /toggle message encryption/i })).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
   test("Alice can send a UI text message to the group", async () => {
