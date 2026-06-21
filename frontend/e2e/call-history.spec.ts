@@ -322,7 +322,7 @@ test.describe("call-history — CALL-004", () => {
   test("206.1 — Call History page loads and shows records", async () => {
     await alicePage.goto(`${BASE}/calls/history`, { waitUntil: "domcontentloaded" });
     // Wait for the page heading
-    await expect(alicePage.getByText("Call History")).toBeVisible({ timeout: 10_000 });
+    await expect(alicePage.getByRole("heading", { name: "Call History" })).toBeVisible({ timeout: 10_000 });
     // Wait for data to load
     await expect(alicePage.getByText("Recent Calls")).toBeVisible({ timeout: 10_000 });
     // Should show at least one call row

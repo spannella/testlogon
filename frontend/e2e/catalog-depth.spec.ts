@@ -757,7 +757,7 @@ test.describe("Section 205: PRD-016 — Associations routes (flag-agnostic)", ()
     const resp = await alice.request.post(
       `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/associations`,
       {
-        data: { assoc_type: "CROSS_SELL", to_item_id: item2Id },
+        data: { assoc_type: "substitute", to_item_id: item2Id },
         headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
       },
     );
@@ -772,7 +772,7 @@ test.describe("Section 205: PRD-016 — Associations routes (flag-agnostic)", ()
   test("205.3 DELETE /items/{id}/associations/{to} → 200, 404, or 501", async () => {
     const sess = getSessions()["alice"];
     const resp = await alice.request.delete(
-      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/associations/${encodeURIComponent(item2Id)}?assoc_type=CROSS_SELL`,
+      `${API}/ui/catalog/items/${encodeURIComponent(itemId)}/associations/${encodeURIComponent(item2Id)}?assoc_type=substitute`,
       {
         headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
       },

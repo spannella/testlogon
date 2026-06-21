@@ -284,7 +284,7 @@ test.describe("83 — Mobile page usability", () => {
   test("83.2 Settings page shows Appearance card on mobile", async () => {
     await goTo(page, "/settings");
     await expect(page.getByText("Appearance")).toBeVisible({ timeout: 8_000 });
-    await expect(page.getByText("Theme", { exact: true })).toBeVisible();
+    await expect(page.locator("#main-content").getByText("Theme", { exact: true })).toBeVisible();
   });
 
   // ── 83.3  Appearance theme picker cards are all visible ──────────────────
@@ -292,7 +292,7 @@ test.describe("83 — Mobile page usability", () => {
   test("83.3 all three theme option cards fit in viewport without overflow", async () => {
     await goTo(page, "/settings");
     // Wait for Appearance section to render
-    await expect(page.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
+    await expect(page.locator("#main-content").getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     // Each theme button should be visible
     await expect(page.getByRole("button", { name: /system/i }).first()).toBeVisible();
@@ -307,7 +307,7 @@ test.describe("83 — Mobile page usability", () => {
 
   test("83.4 clicking Dark in Settings Appearance card applies and remembers theme", async () => {
     await goTo(page, "/settings");
-    await expect(page.getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
+    await expect(page.locator("#main-content").getByText("Theme", { exact: true })).toBeVisible({ timeout: 8_000 });
 
     // Click the "Dark" card button
     await page.getByRole("button", { name: /dark/i }).first().click();

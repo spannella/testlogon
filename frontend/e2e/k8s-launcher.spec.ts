@@ -397,7 +397,7 @@ test.describe("256 — Containers UI", () => {
 
   test("256.1 K8sLauncherPage renders pod table", async () => {
     await alicePage.goto(`${BASE}/remote/k8s`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText("Containers", { exact: true })).toBeVisible();
+    await expect(alicePage.locator("#main-content").getByText("Containers", { exact: true })).toBeVisible();
     await expect(alicePage.getByTestId("launch-btn")).toBeVisible();
   });
 

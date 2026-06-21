@@ -466,6 +466,6 @@ test.describe("92 — Refund UI", () => {
     );
     await uiRootPage.goto("http://localhost:3000/admin/refunds");
     await responsePromise;
-    await expect(uiRootPage.getByText("Refund Queue")).toBeVisible();
+    await expect(uiRootPage.getByRole("heading", { name: "Refund Queue" })).toBeVisible();
   });
 });

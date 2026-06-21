@@ -699,7 +699,7 @@ test.describe("208 -- Notification Bell UI", () => {
     await page.waitForTimeout(1000);
 
     // The popover should have "Notifications" heading
-    await expect(page.getByText("Notifications", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog").getByText("Notifications", { exact: true })).toBeVisible();
 
     // There should be at least one notification item in the dropdown
     await expect(page.getByText("View all notifications")).toBeVisible();

@@ -166,7 +166,7 @@ test.describe("Section 1: Plan CRUD", () => {
 
   test("1.6 UI: Tier Manager page loads with plan list", async () => {
     await alicePage.goto(`${BASE}/subscriptions/manage`);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
     // The plan we created should be visible
     await expect(alicePage.getByText(PLAN_NAME_EDITED)).toBeVisible();
   });
@@ -174,7 +174,7 @@ test.describe("Section 1: Plan CRUD", () => {
   test("1.7 UI: Create plan dialog works", async () => {
     const uiPlanName = `UI Plan ${TS}`;
     await alicePage.goto(`${BASE}/subscriptions/manage`);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
 
     // Click Create Plan
     await alicePage.getByRole("button", { name: /Create Plan/i }).click();
@@ -193,7 +193,7 @@ test.describe("Section 1: Plan CRUD", () => {
 
   test("1.8 UI: Edit plan dialog opens with pre-filled data", async () => {
     await alicePage.goto(`${BASE}/subscriptions/manage`);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
 
     // Find the plan card and click Edit
     const planCard = alicePage.locator(".grid > div").filter({ hasText: PLAN_NAME_EDITED }).first();
@@ -207,7 +207,7 @@ test.describe("Section 1: Plan CRUD", () => {
 
   test("1.9 UI: Archive plan via UI shows archived badge", async () => {
     await alicePage.goto(`${BASE}/subscriptions/manage`);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
 
     // Find a plan with an Archive button and click it
     const planCard = alicePage.locator(".grid > div").filter({ hasText: PLAN_NAME_EDITED }).first();
@@ -222,7 +222,7 @@ test.describe("Section 1: Plan CRUD", () => {
 
   test("1.10 UI: Reactivate archived plan via UI", async () => {
     await alicePage.goto(`${BASE}/subscriptions/manage`);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
 
     // Find the archived plan and reactivate
     const planCard = alicePage.locator(".grid > div").filter({ hasText: PLAN_NAME_EDITED }).first();
@@ -328,7 +328,7 @@ test.describe("Section 2: Discount Code Management", () => {
 
   test("2.6 UI: Discount Codes tab shows codes table", async () => {
     await alicePage.goto(`${BASE}/subscriptions/manage`);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
 
     // Click Discount Codes tab
     await alicePage.getByRole("tab", { name: "Discount Codes" }).click();
@@ -403,6 +403,6 @@ test.describe("Section 3: Preview + Navigation", () => {
     const sidebarLink = alicePage.locator("a[href='/subscriptions/manage']").first();
     await sidebarLink.click();
     await expect(alicePage).toHaveURL(/\/subscriptions\/manage/);
-    await expect(alicePage.getByText("Subscription Tiers")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Subscription Tiers" })).toBeVisible();
   });
 });

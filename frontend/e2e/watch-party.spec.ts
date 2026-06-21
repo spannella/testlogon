@@ -562,7 +562,7 @@ test.describe("97 . Watch Party UI", () => {
 
   test("97.1 Party list page loads", async () => {
     await alicePage.goto(`${BASE}/watch-parties`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText("Watch Parties")).toBeVisible();
+    await expect(alicePage.getByRole("heading", { name: "Watch Parties" })).toBeVisible();
   });
 
   test("97.2 Create party dialog works", async () => {
