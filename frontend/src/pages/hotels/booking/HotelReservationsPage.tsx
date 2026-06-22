@@ -8,7 +8,7 @@
  * Feature-gated: HOTEL_PMS_ENABLED (default OFF).
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -172,6 +172,12 @@ export default function HotelReservationsPage() {
       (hotelsQuery.error as ApiError).status === 503);
 
   const hotels: HotelOut[] = hotelsQuery.data?.items ?? [];
+
+  // Auto-select the first hotel so reservations show without a manual pick.
+  useEffect(() => {
+    const first = hotels[0];
+    if (!selectedHotelId && first) setSelectedHotelId(first.hotel_id);
+  }, [hotels, selectedHotelId]);
 
   // Reservations list
   const listQuery = useQuery({

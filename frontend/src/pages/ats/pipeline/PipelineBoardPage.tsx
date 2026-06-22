@@ -12,7 +12,7 @@
  *   - Remove a candidate from the pipeline
  *   - Navigate to the pipeline detail view for a specific candidate
  */
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -369,6 +369,12 @@ export default function PipelineBoardPage() {
 
   const jobs: JobOrder[] = jobsQuery.data?.items ?? [];
   const selectedJob = jobs.find((j) => j.job_id === selectedJobId);
+
+  // Auto-select the first job order so the board isn't empty on landing.
+  useEffect(() => {
+    const first = jobs[0];
+    if (!selectedJobId && first) setSelectedJobId(first.job_id);
+  }, [jobs, selectedJobId]);
 
   return (
     <div className="p-6 space-y-4">

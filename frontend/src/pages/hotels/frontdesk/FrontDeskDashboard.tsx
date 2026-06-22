@@ -12,7 +12,7 @@
  * rendered based on the user's role.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -36,6 +36,7 @@ import {
   type FrontDeskRow,
   type OccupancySnapshotOut,
 } from "@/api/endpoints/hotelFrontDesk";
+import { listHotels } from "@/api/endpoints/hotelSetup";
 
 import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -248,17 +249,12 @@ function NotEnabled() {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-/** Hardcoded placeholder hotel list. In a real deployment the hotel picker
- *  would load from /ui/hotels; we keep this simple since the front-desk agent
- *  only owns the front-desk cluster. */
-const DEMO_HOTELS = [{ hotel_id: "hotel_demo", name: "Demo Hotel" }];
-
 export default function FrontDeskDashboard() {
   const token = useAuthStore((s) => s.accessToken);
   const role = getRoleFromAccessToken(token);
   const isAdmin = role === "admin" || role === "root";
 
-  const [hotelId, setHotelId] = useState<string>(DEMO_HOTELS[0]?.hotel_id ?? "hotel_demo");
+  const [hotelId, setHotelId] = useState<string>("");
   const [tab, setTab] = useState<"arrivals" | "departures" | "inhouse">(
     "arrivals",
   );
@@ -266,31 +262,46 @@ export default function FrontDeskDashboard() {
 
   const qc = useQueryClient();
 
+  // Real hotel list for the picker (replaces the old hardcoded DEMO_HOTELS).
+  const hotelsQ = useQuery({
+    queryKey: ["hotels-for-frontdesk"],
+    queryFn: () => listHotels({ status: "active", limit: 100 }),
+    retry: false,
+  });
+  const hotels = hotelsQ.data?.items ?? [];
+
+  // Auto-select the first hotel so the board isn't empty on landing.
+  useEffect(() => {
+    const first = hotels[0];
+    if (!hotelId && first) setHotelId(first.hotel_id);
+  }, [hotels, hotelId]);
+
   const occupancyQ = useQuery({
     queryKey: ["hotel-frontdesk", "occupancy", hotelId, today],
     queryFn: () => getFrontDeskOccupancy(hotelId, { date: today }),
     retry: false,
+    enabled: !!hotelId,
   });
 
   const arrivalsQ = useQuery({
     queryKey: ["hotel-frontdesk", "arrivals", hotelId, today],
     queryFn: () => getFrontDeskArrivals(hotelId, { date: today, limit: 50 }),
     retry: false,
-    enabled: tab === "arrivals",
+    enabled: !!hotelId && tab === "arrivals",
   });
 
   const departuresQ = useQuery({
     queryKey: ["hotel-frontdesk", "departures", hotelId, today],
     queryFn: () => getFrontDeskDepartures(hotelId, { date: today, limit: 50 }),
     retry: false,
-    enabled: tab === "departures",
+    enabled: !!hotelId && tab === "departures",
   });
 
   const inHouseQ = useQuery({
     queryKey: ["hotel-frontdesk", "in-house", hotelId],
     queryFn: () => getFrontDeskInHouse(hotelId, { limit: 50 }),
     retry: false,
-    enabled: tab === "inhouse",
+    enabled: !!hotelId && tab === "inhouse",
   });
 
   // Detect 404 = feature disabled
@@ -331,7 +342,7 @@ export default function FrontDeskDashboard() {
               <SelectValue placeholder="Select hotel" />
             </SelectTrigger>
             <SelectContent>
-              {DEMO_HOTELS.map((h) => (
+              {hotels.map((h) => (
                 <SelectItem key={h.hotel_id} value={h.hotel_id}>
                   {h.name}
                 </SelectItem>

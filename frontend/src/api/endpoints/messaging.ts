@@ -453,6 +453,26 @@ export const sendImageMessage = async (
   return adaptMessage(res);
 };
 
+/**
+ * Upload an image/video into a conversation's media bucket WITHOUT creating a
+ * message, and return the S3 key. Used for lottery outcome media: the key is in
+ * the `{conversation_id}/{sender}/…` form the lottery endpoint accepts as a
+ * `media_asset_id`. (Same presign + PUT steps as sendImageMessage, minus the
+ * message-create step.)
+ */
+export const uploadConversationMedia = async (
+  conversationId: string,
+  file: File,
+): Promise<{ key: string; bucket: string; content_type: string }> => {
+  const contentType = file.type || "application/octet-stream";
+  const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
+    `/messaging/conversations/${conversationId}/images/presign`,
+    { content_type: contentType, filename: file.name || "upload" },
+  );
+  await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+  return { key: presign.key, bucket: presign.bucket, content_type: presign.content_type || contentType };
+};
+
 export const editMessage = async (conversationId: string, messageId: string, body: { text: string }) => {
   const res = await api.patch<Message>(
     `/messaging/conversations/${conversationId}/messages/${messageId}`,

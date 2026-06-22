@@ -709,6 +709,20 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
   const participantCount = conversation.participants.length;
 
+  // Resolve a sender id to a friendly display name for message/reply labels
+  // (falls back to the raw id when a participant isn't found).
+  const senderNameById = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of conversation.participants) {
+      if (p.display_name) m.set(p.user_id, p.display_name);
+    }
+    return m;
+  }, [conversation.participants]);
+  const resolveSenderName = React.useCallback(
+    (id: string) => (id === userId ? "You" : senderNameById.get(id) ?? id),
+    [senderNameById, userId],
+  );
+
   // DM partner for presence dot
   const dmPartner = !isGroup
     ? conversation.participants.find((p) => p.user_id !== userId)
@@ -1337,6 +1351,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
                 replyToMessage={msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined}
                 viewedOnceIds={viewedOnceIds}
                 onViewOnce={handleViewOnce}
+                resolveSenderName={resolveSenderName}
               />
             </div>
           ))

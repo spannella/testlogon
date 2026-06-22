@@ -109,6 +109,8 @@ interface MessageBubbleProps {
   replyToMessage?: Message;
   viewedOnceIds?: Set<string>;
   onViewOnce?: (messageId: string) => void;
+  /** Resolve a sender id (sub/email) to a friendly display name. */
+  resolveSenderName?: (id: string) => string;
 }
 
 type LotteryRevealPhase = "idle" | "unlocking" | "revealing" | "revealed";
@@ -417,7 +419,8 @@ function OfflineStatusBadge({ offline, onRetry, onDiscard }: OfflineStatusBadgeP
   return null;
 }
 
-export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, onViewThread, replyToMessage, viewedOnceIds, onViewOnce }: MessageBubbleProps) {
+export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, onViewThread, replyToMessage, viewedOnceIds, onViewOnce, resolveSenderName }: MessageBubbleProps) {
+  const senderLabel = (id: string) => resolveSenderName?.(id) ?? id;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
@@ -1073,14 +1076,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 ? "border-primary-foreground/40 bg-primary-foreground/10"
                 : "border-primary/40 bg-muted",
             )}>
-              <p className="font-semibold opacity-70 mb-0.5">{replyToMessage.sender_id}</p>
+              <p className="font-semibold opacity-70 mb-0.5">{senderLabel(replyToMessage.sender_id)}</p>
               <p className="line-clamp-2 opacity-60">{replyPreviewText(replyToMessage)}</p>
             </div>
           )}
 
           {showSender && !isOwn && (
             <p className="mb-0.5 text-xs font-semibold text-primary">
-              {message.sender_type === "bot" ? (message.bot_name ?? message.sender_id) : message.sender_id}
+              {message.sender_type === "bot" ? (message.bot_name ?? message.sender_id) : senderLabel(message.sender_id)}
               {message.sender_type === "bot" && (
                 <span className="ml-1 inline-flex items-center rounded border px-1 py-0 text-[10px] font-medium text-muted-foreground align-middle">Bot</span>
               )}
@@ -1324,7 +1327,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   ) : (
                     <div className="space-y-1">
                       <p className="text-xs text-muted-foreground">
-                        To change content, delete and resend this encrypted message.
+                        {isOwn
+                          ? "To change content, delete and resend this encrypted message."
+                          : "End-to-end encrypted — decrypt to read."}
                       </p>
                       <Button
                         type="button"

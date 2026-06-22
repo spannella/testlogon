@@ -1,12 +1,12 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GifPicker } from "@/components/shared/GifPicker";
 import { StickerPicker } from "@/components/shared/StickerPicker";
 import { EmojiPicker } from "@/components/shared/EmojiPicker";
 import { replaceShortcodes } from "@/utils/emoji";
-import { sendGifMessage, sendStickerMessage } from "@/api/endpoints/messaging";
+import { sendGifMessage, sendStickerMessage, uploadConversationMedia } from "@/api/endpoints/messaging";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -182,6 +182,8 @@ export function ComposeBar({
     payload_type: "text" | "image" | "video";
     text_content: string;
     media_asset_id: string;
+    media_name?: string;
+    uploading?: boolean;
     weight_bps: number;
     percent_input: string;
   }>>([
@@ -301,6 +303,7 @@ export function ComposeBar({
   const lotteryOutcomesValid = React.useMemo(() => {
     if (lotteryOutcomes.length < 2 || lotteryOutcomes.length > 10) return false;
     if (lotteryTotalBps !== 10_000) return false;
+    if (lotteryOutcomes.some((o) => o.uploading)) return false;
     return lotteryOutcomes.every((o) =>
       o.weight_bps > 0 &&
       o.payload_type === "text"
@@ -317,10 +320,32 @@ export function ComposeBar({
         : undefined;
       const payloadError = o.payload_type === "text"
         ? (o.text_content.trim() ? undefined : "Text outcome cannot be empty.")
-        : (o.media_asset_id.trim() ? undefined : "Media asset id is required.");
+        : (o.uploading ? "Uploading…" : o.media_asset_id.trim() ? undefined : `Upload ${o.payload_type === "video" ? "a video" : "an image"} for this outcome.`);
       return { weightError, payloadError };
     });
   }, [lotteryOutcomes]);
+
+  // Upload an image/video for a lottery outcome → store the returned S3 key as
+  // the outcome's media_asset_id (the form the lottery API accepts).
+  const handleLotteryMediaUpload = React.useCallback(
+    async (outcomeId: string, file: File) => {
+      setLotteryOutcomes((prev) =>
+        prev.map((o) => (o.id === outcomeId ? { ...o, uploading: true, media_name: file.name } : o)),
+      );
+      try {
+        const { key } = await uploadConversationMedia(conversationId, file);
+        setLotteryOutcomes((prev) =>
+          prev.map((o) => (o.id === outcomeId ? { ...o, uploading: false, media_asset_id: key } : o)),
+        );
+      } catch {
+        toast.error("Failed to upload outcome media");
+        setLotteryOutcomes((prev) =>
+          prev.map((o) => (o.id === outcomeId ? { ...o, uploading: false, media_name: undefined } : o)),
+        );
+      }
+    },
+    [conversationId],
+  );
 
   const resetTextArea = () => {
     if (textareaRef.current) {
@@ -1233,14 +1258,29 @@ export function ComposeBar({
                   className="w-full rounded border border-input px-2 py-1 text-xs"
                 />
               ) : (
-                <input
-                  value={row.media_asset_id}
-                  onChange={(e) =>
-                    setLotteryOutcomes((prev) => prev.map((o) => o.id === row.id ? { ...o, media_asset_id: e.target.value } : o))
-                  }
-                  placeholder="Media asset id (from upload pipeline)"
-                  className="w-full rounded border border-input px-2 py-1 text-xs"
-                />
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent">
+                    {row.payload_type === "video" ? <Video className="h-3.5 w-3.5" /> : <ImageIcon className="h-3.5 w-3.5" />}
+                    {row.uploading ? "Uploading…" : row.media_asset_id ? "Replace" : `Upload ${row.payload_type === "video" ? "video" : "image"}`}
+                    <input
+                      type="file"
+                      accept={row.payload_type === "video" ? "video/*" : "image/*"}
+                      className="hidden"
+                      disabled={row.uploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleLotteryMediaUpload(row.id, file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {row.media_asset_id && !row.uploading && (
+                    <span className="inline-flex items-center gap-1 truncate text-[10px] text-muted-foreground">
+                      <Check className="h-3 w-3 text-green-600" />
+                      {row.media_name ?? "Uploaded"}
+                    </span>
+                  )}
+                </div>
               )}
               {lotteryFieldErrors[idx]?.payloadError && (
                 <p className="text-[10px] text-red-600">{lotteryFieldErrors[idx]?.payloadError}</p>
@@ -1257,7 +1297,7 @@ export function ComposeBar({
                 onClick={() =>
                   setLotteryOutcomes((prev) => [
                     ...prev,
-                    { id: `lo-${Date.now()}`, label: `Outcome ${prev.length + 1}`, payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 1000, percent_input: "10.00" },
+                    { id: `lo-${Date.now()}`, label: `Outcome ${prev.length + 1}`, payload_type: "text" as const, text_content: "", media_asset_id: "", weight_bps: 1000, percent_input: "10.00" },
                   ].slice(0, 10))
                 }
                 disabled={lotteryOutcomes.length >= 10}
