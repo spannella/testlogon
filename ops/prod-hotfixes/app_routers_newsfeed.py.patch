@@ -1,0 +1,38 @@
+--- app/routers/newsfeed.py.bak_social_1782303162	2026-06-24 12:12:42.561145380 +0000
++++ app/routers/newsfeed.py	2026-06-24 12:16:23.124436505 +0000
+@@ -4760,6 +4760,11 @@
+             logger.debug("analytics hook: like_post engagement", exc_info=True)
+         # NRS-003: For-You engagement signal (no-op unless flag on).
+         _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="like")
++        try:
++            from app.services.activity_feed import record_social_interaction
++            record_social_interaction(recipient_id=post.get("user_id") or "", actor_id=user_id, kind="like", target_type="post", target_id=post_id)
++        except Exception:
++            logger.debug("social hook: like_post", exc_info=True)
+     except ClientError as exc:
+         if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
+             raise HTTPException(
+@@ -4852,6 +4857,11 @@
+             payment_method_id=req.payment_method_id,
+             extra_meta={"post_id": post_id},
+         ))
++        try:
++            from app.services.activity_feed import record_social_interaction
++            record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="tip", target_type="post", target_id=post_id, extra={"amount_cents": req.amount_cents, "currency": req.currency})
++        except Exception:
++            logger.debug("social hook: tip_post", exc_info=True)
+ 
+     # GAP-0026: Best-effort license revenue split for tipped post.
+     # Wrapped in try/except so a split failure never breaks the tip transaction.
+@@ -6041,6 +6051,11 @@
+             notif_type="comment_on_post",
+             payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
+         )
++        try:
++            from app.services.activity_feed import record_social_interaction
++            record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="comment", target_type="post", target_id=post_id, extra={"comment_id": comment_id})
++        except Exception:
++            logger.debug("social hook: create_comment", exc_info=True)
+         # GAP-0355: also emit a social alert (alerts table + bell badge).
+         # Best-effort: never break comment creation.
+         try:

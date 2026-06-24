@@ -1,0 +1,217 @@
+--- app/routers/messaging.py.bak_b2b3_1782197824	2026-06-23 06:57:04.160143190 +0000
++++ app/routers/messaging.py	2026-06-23 15:51:46.980376566 +0000
+@@ -2293,6 +2293,12 @@
+     preview: Optional[LinkPreviewIn] = None
+     consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
+     signature_packet_id: Optional[str] = Field(default=None, max_length=128)
++    # Gating options (parity with image messages): disappearing / view-once / locked PPV / scheduled send.
++    view_once: bool = False
++    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)
++    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
++    lock_description: Optional[str] = Field(default=None, max_length=200)
++    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+ 
+     @model_validator(mode="after")
+     def _validate_consumption_policy(self):
+@@ -2322,10 +2328,28 @@
+     outcomes: List[LotteryOutcomeIn] = Field(default_factory=list)
+ 
+ 
++class LotteryMessageImageIn(BaseModel):
++    bucket: Optional[str] = Field(default=None, max_length=200)
++    key: str = Field(min_length=1, max_length=500)
++    content_type: Optional[str] = Field(default=None, max_length=100)
++    width: Optional[int] = None
++    height: Optional[int] = None
++
++
++class LotteryMessageImageOut(BaseModel):
++    bucket: str
++    key: str
++    content_type: Optional[str] = None
++    width: Optional[int] = None
++    height: Optional[int] = None
++
++
+ class CreateLotteryMessageIn(BaseModel):
+     message_type: Literal["lottery_dm"] = "lottery_dm"
+     conversation_id: str = Field(min_length=1, max_length=128)
+     lottery_config: LotteryConfigIn
++    # Optional cover/header image for the lottery message (bucket/key like image messages).
++    image: Optional[LotteryMessageImageIn] = None
+ 
+ 
+ class LotteryOutcomeOut(BaseModel):
+@@ -2358,6 +2382,7 @@
+     lock_state: Literal["locked", "unlocked"]
+     lottery_config: LotteryConfigOut
+     selected_outcome: Optional[LotterySelectedOutcomeOut] = None
++    image: Optional[LotteryMessageImageOut] = None
+     idempotent: bool = False
+     created_at: int
+ 
+@@ -3225,8 +3250,9 @@
+     sender_id: str,
+     created_at: int,
+     persisted_cfg: Mapping[str, Any],
++    image: Optional[Mapping[str, Any]] = None,
+ ) -> dict[str, Any]:
+-    return {
++    item: dict[str, Any] = {
+         "conversation_id": conversation_id,
+         "message_id": message_id,
+         "sender_id": sender_id,
+@@ -3241,6 +3267,9 @@
+         },
+         "reactions": {},
+     }
++    if image and image.get("key"):
++        item["image"] = {k: v for k, v in dict(image).items() if v is not None}
++    return item
+ 
+ 
+ def _encode_gallery_index_cursor(sort_key: str) -> str:
+@@ -4261,7 +4290,13 @@
+         reactions_counts=counts if counts else None,
+         my_reactions=mine if mine else None,
+         is_encrypted=bool(merged_item.get("is_encrypted")),
+-        encryption=merged_item.get("encryption"),
++        # BK-A: gate the encryption envelope behind the same content_hidden
++        # rule as text/image/file. A locked+encrypted message must NOT leak its
++        # ciphertext/envelope (salt/iv/ciphertext_b64) until the recipient unlocks
++        # (pays); is_encrypted/locked/lock_price_cents still surface so the client
++        # knows what it is looking at. After unlock the (still-encrypted) envelope
++        # is returned and the client decrypts with the passphrase.
++        encryption=(None if content_hidden else merged_item.get("encryption")),
+         consumption_policy=policy,
+         media_kind=media_kind,
+         consumption_state=consumption_state,
+@@ -10848,6 +10883,15 @@
+     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
+     _validate_reply_target(conversation_id, inp.reply_to_message_id)
+ 
++    # Scheduled send (parity with image messages)
++    deliver_at_file: Optional[int] = None
++    is_scheduled_file = False
++    if inp.send_at is not None:
++        if inp.send_at <= now_ts() + 5:
++            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
++        deliver_at_file = inp.send_at
++        is_scheduled_file = True
++
+     path = norm_path(inp.path, is_folder=False)
+     node = get_node(user_id, path)
+     if node.get("type") != "file":
+@@ -10884,6 +10928,22 @@
+     }
+     if preview:
+         item["preview"] = preview
++    # Gating options (parity with image messages)
++    file_expires_at = None
++    if inp.expires_in_seconds:
++        _file_expiry_base = deliver_at_file if is_scheduled_file else ts
++        file_expires_at = _file_expiry_base + inp.expires_in_seconds
++        item["expires_at"] = file_expires_at
++    if inp.view_once:
++        item["view_once"] = True
++    if inp.lock_price_cents:
++        item["lock_price_cents"] = inp.lock_price_cents
++        item["unlocked_by"] = {}
++        if inp.lock_description:
++            item["lock_description"] = inp.lock_description
++    if is_scheduled_file:
++        item["status"] = "scheduled"
++        item["deliver_at"] = deliver_at_file
+     ttl = _message_retention_ttl(convo, ts)
+     if ttl:
+         item["ttl"] = ttl
+@@ -10941,6 +11001,14 @@
+         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+         media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+         consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
++        expires_at=file_expires_at,
++        view_once=inp.view_once,
++        locked=bool(inp.lock_price_cents),
++        lock_price_cents=inp.lock_price_cents,
++        lock_description=inp.lock_description,
++        is_unlocked=True,
++        scheduled=is_scheduled_file,
++        deliver_at=deliver_at_file,
+     )
+     message = _apply_message_receipts(message, item, resp.get("Items", []))
+     audit_event(
+@@ -13361,6 +13429,17 @@
+         )
+ 
+     ts = now_ts()
++    # Optional message-level cover image (bucket/key like image messages).
++    lottery_image: Optional[Dict[str, Any]] = None
++    if payload.image is not None:
++        _img_bucket = (payload.image.bucket or S3_BUCKET_IMAGES)
++        lottery_image = {
++            "bucket": _img_bucket,
++            "key": payload.image.key,
++            "content_type": payload.image.content_type,
++            "width": payload.image.width,
++            "height": payload.image.height,
++        }
+     normalized_idempotency_key = (idempotency_key or "").strip()
+     if len(normalized_idempotency_key) > 128:
+         record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
+@@ -13537,6 +13616,7 @@
+         sender_id=user_id,
+         created_at=ts,
+         persisted_cfg=persisted_cfg,
++        image=lottery_image,
+     )
+     try:
+         tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
+@@ -13586,6 +13666,17 @@
+             ],
+         ),
+         selected_outcome=None,
++        image=(
++            LotteryMessageImageOut(
++                bucket=str(lottery_image.get("bucket") or ""),
++                key=str(lottery_image.get("key") or ""),
++                content_type=lottery_image.get("content_type"),
++                width=lottery_image.get("width"),
++                height=lottery_image.get("height"),
++            )
++            if lottery_image
++            else None
++        ),
+         idempotent=False,
+         created_at=ts,
+     )
+@@ -14065,6 +14156,30 @@
+             )
+             for item in resp.get("Items", []):
+                 try:
++                    # BK-B: a LOCKED message that the recipient has UNLOCKED (paid)
++                    # must NOT expire -- they bought permanent access. Clear its
++                    # expires_at so the sweep never re-triggers. A locked message
++                    # that was NEVER unlocked still expires normally below.
++                    if item.get("lock_price_cents") and (item.get("unlocked_by") or {}):
++                        try:
++                            tbl_msgs.update_item(
++                                Key={
++                                    "conversation_id": item["conversation_id"],
++                                    "message_id": item["message_id"],
++                                },
++                                UpdateExpression="REMOVE expires_at",
++                            )
++                            logger.info(
++                                "Skipped expiry for unlocked locked message %s in conversation %s",
++                                item.get("message_id"), item.get("conversation_id"),
++                            )
++                        except Exception as exc:
++                            logger.error(
++                                "Failed to clear expiry on unlocked locked message %s: %s",
++                                item.get("message_id"), exc,
++                            )
++                        _processed += 1
++                        continue
+                     tbl_msgs.update_item(
+                         Key={
+                             "conversation_id": item["conversation_id"],
