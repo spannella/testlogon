@@ -208,6 +208,25 @@ class FakeBillingRepository : BillingRepository {
         return removeResult
     }
 
+    var addCardResult: ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
+    var addBankResult: ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
+    var addCardCalls = 0
+    var addBankCalls = 0
+
+    override suspend fun addCard(
+        req: com.testlogon.android.data.billing.AddCardReqDto,
+    ): ApiResult<List<PaymentMethod>> {
+        addCardCalls++
+        return addCardResult
+    }
+
+    override suspend fun addBank(
+        req: com.testlogon.android.data.billing.AddBankReqDto,
+    ): ApiResult<List<PaymentMethod>> {
+        addBankCalls++
+        return addBankResult
+    }
+
     override suspend fun getConfig(): ApiResult<BillingConfig> =
         ApiResult.Success(BillingConfig(publishableKey = null, currency = "USD"))
 

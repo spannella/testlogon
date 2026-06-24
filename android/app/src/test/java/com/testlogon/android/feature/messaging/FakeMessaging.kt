@@ -351,6 +351,9 @@ class FakeMessagingRepository : MessagingRepository {
     var imageSendResult: ApiResult<Message> =
         ApiResult.NetworkError(IOException("default"), isTimeout = false)
 
+    /** C5 — caption passed to the most recent sendImageOutbox(). */
+    var lastImageCaption: String? = null
+
     /** Recorded video-share sends: (conversationId, videoId, caption). */
     var videoShareCalls = mutableListOf<Triple<String, String, String?>>()
     var videoShareResult: ApiResult<Message> =
@@ -387,8 +390,15 @@ class FakeMessagingRepository : MessagingRepository {
         conversationId: String,
         clientId: String,
         localUri: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+        encryptionPassphrase: String?,
     ): ApiResult<Message> {
         imageSendCalls += Triple(conversationId, clientId, localUri)
+        lastImageCaption = caption
         return when (val result = imageSendResult) {
             is ApiResult.Success -> {
                 thread.value = thread.value.map {
@@ -403,6 +413,67 @@ class FakeMessagingRepository : MessagingRepository {
                 result
             }
         }
+    }
+
+    // C6 - gallery (multi-image) recorders.
+    var galleryEnqueueCalls = mutableListOf<Triple<String, String, Int>>()
+    var gallerySendCalls = mutableListOf<Pair<String, List<String>>>()
+    var lastGalleryCaption: String? = null
+    var gallerySendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    override suspend fun enqueueOptimisticGallery(
+        conversationId: String,
+        clientId: String,
+        firstLocalUri: String,
+        imageCount: Int,
+        nowSeconds: Long,
+    ) {
+        galleryEnqueueCalls += Triple(conversationId, clientId, imageCount)
+    }
+
+    override suspend fun sendGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        localUris: List<String>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> {
+        gallerySendCalls += conversationId to localUris
+        lastGalleryCaption = caption
+        return gallerySendResult
+    }
+
+    // C7 - short-video recorders.
+    var videoClipEnqueueCalls = mutableListOf<Pair<String, String>>()
+    var videoClipSendCalls = mutableListOf<Triple<String, String, String>>()
+    var lastVideoClipCaption: String? = null
+    var videoClipSendResult: ApiResult<Message> =
+        ApiResult.NetworkError(IOException("default"), isTimeout = false)
+
+    override suspend fun enqueueOptimisticVideoClip(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    ) {
+        videoClipEnqueueCalls += conversationId to clientId
+    }
+
+    override suspend fun sendVideoClipOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> {
+        videoClipSendCalls += Triple(conversationId, clientId, localUri)
+        lastVideoClipCaption = caption
+        return videoClipSendResult
     }
 
     override suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>> = shareableVideosResult
@@ -476,8 +547,14 @@ class FakeMessagingRepository : MessagingRepository {
         localUri: String,
         fileName: String,
         mimeType: String,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        lockDescription: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> {
         fileSendCalls += Triple(conversationId, clientId, localUri)
+        lastFileViewOnce = viewOnce
         return when (val result = fileSendResult) {
             is ApiResult.Success -> {
                 thread.value = thread.value.map {
@@ -825,6 +902,95 @@ class FakeMessagingRepository : MessagingRepository {
         tipCalls += TipCall(conversationId, messageId, amountCents, currency, note, paymentMethodId)
         return tipResult
     }
+
+    // ---- MSG: new in-app composers (fakes) ----
+    /** C9 — view-once flag passed to the most recent sendFileOutbox(). */
+    var lastFileViewOnce: Boolean = false
+    var lotteryCalls = mutableListOf<Pair<String, List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>>>()
+    var lotteryResult: ApiResult<Message> = ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    /** C10 — image ref passed to the most recent sendLottery(). */
+    var lastLotteryImage: com.testlogon.android.data.messaging.LotteryImageRef? = null
+    /** C10 — result the next uploadLotteryImage() returns. */
+    var uploadLotteryImageResult: com.testlogon.android.data.messaging.LotteryImageRef? = null
+    var uploadLotteryImageCalls = mutableListOf<Pair<String, String>>()
+    override suspend fun uploadLotteryImage(
+        conversationId: String,
+        localUri: String,
+    ): com.testlogon.android.data.messaging.LotteryImageRef? {
+        uploadLotteryImageCalls += conversationId to localUri
+        return uploadLotteryImageResult
+    }
+    override suspend fun sendLottery(
+        conversationId: String,
+        outcomes: List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>,
+        image: com.testlogon.android.data.messaging.LotteryImageRef?,
+    ): ApiResult<Message> {
+        lotteryCalls += conversationId to outcomes
+        lastLotteryImage = image
+        return lotteryResult
+    }
+
+    var findDateTimeCalls = mutableListOf<Pair<String, com.testlogon.android.data.messaging.FindDateTimeDraft>>()
+    var findDateTimeResult: ApiResult<Message> = ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    override suspend fun createFindDateTime(
+        conversationId: String,
+        draft: com.testlogon.android.data.messaging.FindDateTimeDraft,
+    ): ApiResult<Message> {
+        findDateTimeCalls += conversationId to draft
+        return findDateTimeResult
+    }
+
+    var calendarEventCalls = mutableListOf<Triple<String, String, String>>()
+    var calendarEventResult: ApiResult<Message> = ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    override suspend fun shareCalendarEvent(
+        conversationId: String,
+        calendarId: String,
+        eventId: String,
+        text: String?,
+    ): ApiResult<Message> {
+        calendarEventCalls += Triple(conversationId, calendarId, eventId)
+        return calendarEventResult
+    }
+
+    var calendarShareCalls = mutableListOf<Triple<String, String, String>>()
+    var calendarShareResult: ApiResult<Message> = ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    override suspend fun shareCalendar(
+        conversationId: String,
+        calendarId: String,
+        permission: String,
+        includeBookingLink: Boolean,
+        text: String?,
+    ): ApiResult<Message> {
+        calendarShareCalls += Triple(conversationId, calendarId, permission)
+        return calendarShareResult
+    }
+
+    var encryptedCalls = mutableListOf<String>()
+    var encryptedResult: ApiResult<Message> = ApiResult.NetworkError(IOException("default"), isTimeout = false)
+    override suspend fun sendEncryptedText(
+        conversationId: String,
+        clientId: String,
+        envelope: com.testlogon.android.data.messaging.MessageEncryptionEnvelopeDto,
+        replyToMessageId: String?,
+    ): ApiResult<Message> {
+        encryptedCalls += clientId
+        return reconcile(clientId, encryptedResult)
+    }
+
+    var calendarsResult: ApiResult<List<com.testlogon.android.data.messaging.CalendarAccessUi>> =
+        ApiResult.Success(emptyList())
+    override suspend fun listCalendars(): ApiResult<List<com.testlogon.android.data.messaging.CalendarAccessUi>> =
+        calendarsResult
+
+    var calendarEventsResult: ApiResult<List<com.testlogon.android.data.messaging.CalendarEventUi>> =
+        ApiResult.Success(emptyList())
+    override suspend fun listCalendarEvents(calendarId: String): ApiResult<List<com.testlogon.android.data.messaging.CalendarEventUi>> =
+        calendarEventsResult
+
+    var filesResult: ApiResult<List<com.testlogon.android.data.messaging.FileEntryUi>> =
+        ApiResult.Success(emptyList())
+    override suspend fun listFiles(path: String): ApiResult<List<com.testlogon.android.data.messaging.FileEntryUi>> =
+        filesResult
 
     private fun reconcile(clientId: String, result: ApiResult<Message>): ApiResult<Message> =
         when (result) {

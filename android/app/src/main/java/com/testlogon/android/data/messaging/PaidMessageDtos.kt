@@ -118,6 +118,96 @@ data class TipOutDto(
     @Json(name = "currency") val currency: String = "USD",
 )
 
+// ─── MSG: new composers (lottery create / find-datetime / calendar-event / calendar-share) ───
+
+/** LotteryOutcomeIn — one possible draw outcome. weight_bps 1..10000 (sum to 10000 across outcomes). */
+@JsonClass(generateAdapter = true)
+data class LotteryOutcomeReq(
+    @Json(name = "display_label") val displayLabel: String? = null,
+    @Json(name = "weight_bps") val weightBps: Int,
+    @Json(name = "payload_type") val payloadType: String = "text",
+    @Json(name = "text_content") val textContent: String? = null,
+)
+
+/** LotteryConfigIn — {version, outcomes[]}. */
+@JsonClass(generateAdapter = true)
+data class LotteryConfigReq(
+    val version: String = "v1",
+    val outcomes: List<LotteryOutcomeReq>,
+)
+
+/**
+ * CreateLotteryMessageIn. NOTE: conversation_id is in the BODY (not the path) for this endpoint.
+ * message_type is the literal "lottery_dm".
+ */
+@JsonClass(generateAdapter = true)
+data class CreateLotteryReq(
+    @Json(name = "message_type") val messageType: String = "lottery_dm",
+    @Json(name = "conversation_id") val conversationId: String,
+    @Json(name = "lottery_config") val lotteryConfig: LotteryConfigReq,
+    // C10 — optional cover/header image on the lottery message (Backend B3).
+    @Json(name = "image") val image: LotteryMessageImageReq? = null,
+)
+
+/** C10 — LotteryMessageImageIn (Backend B3): message-level cover image ref. `key` required. */
+@JsonClass(generateAdapter = true)
+data class LotteryMessageImageReq(
+    @Json(name = "bucket") val bucket: String? = null,
+    @Json(name = "key") val key: String,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "width") val width: Int? = null,
+    @Json(name = "height") val height: Int? = null,
+)
+
+/**
+ * CreateFindDateTimeMessageIn (the "custom poll"). end_hour > start_hour;
+ * slot_duration_minutes ∈ {15,30,60}; deadline_hours 1..336.
+ */
+@JsonClass(generateAdapter = true)
+data class CreateFindDateTimeReq(
+    val title: String,
+    @Json(name = "from_date") val fromDate: String,
+    @Json(name = "to_date") val toDate: String,
+    @Json(name = "start_hour") val startHour: Int,
+    @Json(name = "end_hour") val endHour: Int,
+    @Json(name = "slot_duration_minutes") val slotDurationMinutes: Int = 30,
+    @Json(name = "deadline_hours") val deadlineHours: Int = 48,
+    val text: String? = null,
+)
+
+/** MessageOut.find_datetime (nested render attachment for a kind="find_datetime" message). */
+@JsonClass(generateAdapter = true)
+data class FindDateTimeAttachmentDto(
+    @Json(name = "poll_id") val pollId: String = "",
+    @Json(name = "creator_id") val creatorId: String = "",
+    val title: String = "",
+    @Json(name = "from_date") val fromDate: String? = null,
+    @Json(name = "to_date") val toDate: String? = null,
+    @Json(name = "start_hour") val startHour: Int? = null,
+    @Json(name = "end_hour") val endHour: Int? = null,
+    @Json(name = "slot_duration_minutes") val slotDurationMinutes: Int? = null,
+    val status: String? = null,
+)
+
+/** CreateCalendarEventMessageIn. */
+@JsonClass(generateAdapter = true)
+data class CreateCalendarEventReq(
+    @Json(name = "calendar_id") val calendarId: String,
+    @Json(name = "event_id") val eventId: String,
+    val text: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+)
+
+/** CreateCalendarShareMessageIn. */
+@JsonClass(generateAdapter = true)
+data class CreateCalendarShareReq(
+    @Json(name = "calendar_id") val calendarId: String,
+    val permission: String = "read",
+    @Json(name = "include_booking_link") val includeBookingLink: Boolean = false,
+    val text: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+)
+
 // ─── AND-139: lottery (separate lottery_dm message type) ───
 
 /** LotterySelectedOutcome — the revealed payload after a draw (text or media reference). */

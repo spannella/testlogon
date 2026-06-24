@@ -9,7 +9,7 @@ import com.testlogon.android.notifications.PushPayload
  * Pure/framework-free model (no android.* deps) so the mapping + parser logic is JVM-unit-testable.
  */
 sealed interface NotificationDeepLink {
-    data class Message(val threadId: String) : NotificationDeepLink
+    data class Message(val threadId: String, val messageId: String? = null) : NotificationDeepLink
     data class Broadcast(val broadcastId: String) : NotificationDeepLink
     data class Alert(val alertId: String) : NotificationDeepLink
 
@@ -26,6 +26,7 @@ object DeepLinkContract {
     const val EXTRA_ID = "tl.deeplink.id"
     const val EXTRA_DEEP_LINK = "tl.deeplink.uri"
     const val EXTRA_CONSUMED = "tl.deeplink.consumed"
+    const val EXTRA_MESSAGE_ID = "tl.deeplink.message_id"
 
     const val TYPE_MESSAGE = "message"
     const val TYPE_BROADCAST = "broadcast"
@@ -34,7 +35,7 @@ object DeepLinkContract {
 
     /** Maps a parsed AND-107 [PushPayload] to the canonical deep-link target. Total over the kind. */
     fun fromPayload(payload: PushPayload): NotificationDeepLink = when (payload.kind) {
-        NotificationKind.MESSAGE -> NotificationDeepLink.Message(payload.entityId)
+        NotificationKind.MESSAGE -> NotificationDeepLink.Message(payload.entityId, payload.messageId)
         NotificationKind.BROADCAST -> NotificationDeepLink.Broadcast(payload.entityId)
         NotificationKind.ALERT -> NotificationDeepLink.Alert(payload.entityId)
         NotificationKind.UNKNOWN -> NotificationDeepLink.Generic(payload.entityId)
@@ -55,10 +56,10 @@ object DeepLinkContract {
     }
 
     /** Reconstructs a [NotificationDeepLink] from a (type, id) pair, or null if unmappable. */
-    fun fromTypeAndId(type: String?, id: String?): NotificationDeepLink? {
+    fun fromTypeAndId(type: String?, id: String?, messageId: String? = null): NotificationDeepLink? {
         val nonBlankId = id?.takeIf { it.isNotBlank() } ?: return null
         return when (type) {
-            TYPE_MESSAGE -> NotificationDeepLink.Message(nonBlankId)
+            TYPE_MESSAGE -> NotificationDeepLink.Message(nonBlankId, messageId?.takeIf { it.isNotBlank() })
             TYPE_BROADCAST -> NotificationDeepLink.Broadcast(nonBlankId)
             TYPE_ALERT -> NotificationDeepLink.Alert(nonBlankId)
             TYPE_GENERIC -> NotificationDeepLink.Generic(nonBlankId)

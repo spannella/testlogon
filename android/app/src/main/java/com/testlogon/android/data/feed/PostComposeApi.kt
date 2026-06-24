@@ -16,9 +16,12 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.Multipart
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Part
+import retrofit2.http.Path
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.text.SimpleDateFormat
@@ -52,6 +55,17 @@ data class CreatePostResp(
     @Json(name = "post_id") val postId: String? = null,
 )
 
+/**
+ * FD1 — edit an existing post (PATCH /posts/{post_id}, EditPostRequest). Only the fields a creator
+ * commonly changes are sent: the text body and (optionally) the attached image urls. All fields are
+ * optional server-side; we send body via the legacy `body` key (the backend accepts it).
+ */
+@JsonClass(generateAdapter = true)
+data class EditPostReq(
+    val body: String,
+    @Json(name = "image_urls") val imageUrls: List<String>? = null,
+)
+
 @JsonClass(generateAdapter = true)
 data class UploadImageResp(
     val url: String? = null,
@@ -68,6 +82,14 @@ interface PostComposeApi {
     @Multipart
     @POST("uploads/image")
     suspend fun uploadImage(@Part file: MultipartBody.Part): UploadImageResp
+
+    /** FD1 — edit an owned post's text/media. 403 if not the owner, 404 if missing. */
+    @PATCH("posts/{post_id}")
+    suspend fun editPost(@Path("post_id") postId: String, @Body body: EditPostReq)
+
+    /** FD1 — delete an owned post. 403 if not the owner, 404 if missing. */
+    @DELETE("posts/{post_id}")
+    suspend fun deletePost(@Path("post_id") postId: String)
 }
 
 /** Visibility options exposed in the compose screen (wire values per the backend). */
@@ -110,6 +132,18 @@ class PostComposeRepository @Inject constructor(
                 videoId = videoId,
             ),
         )
+        Unit
+    }
+
+    /** FD1 — edit an owned post's text body. */
+    suspend fun editPost(postId: String, body: String): ApiResult<Unit> = call {
+        api.editPost(postId, EditPostReq(body = body.trim()))
+        Unit
+    }
+
+    /** FD1 — delete an owned post. */
+    suspend fun deletePost(postId: String): ApiResult<Unit> = call {
+        api.deletePost(postId)
         Unit
     }
 

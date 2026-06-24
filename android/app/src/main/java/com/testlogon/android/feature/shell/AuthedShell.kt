@@ -177,7 +177,8 @@ fun AuthedShellScreen(
                     onNewGroup = {
                         onOpenRoute(com.testlogon.android.feature.messaging.nav.MessagingRoutes.GROUP_CREATE)
                     },
-                    onBack = {},
+                    // Inbox is a top-level tab; its back arrow returns to Home (was a no-op {}).
+                    onBack = { tabNav.navigateToTab(AuthedTab.HOME) },
                 )
             }
             composable(AuthedTab.ME.route) {
@@ -187,6 +188,10 @@ fun AuthedShellScreen(
                     onOpenMfaDevices = onOpenMfaDevices,
                     onOpenSettings = {
                         onOpenRoute(com.testlogon.android.navigation.MainDest.Settings.route)
+                    },
+                    // FD1 -- "Your posts" management surface.
+                    onOpenMyPosts = {
+                        onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE)
                     },
                 )
             }

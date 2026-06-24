@@ -86,6 +86,8 @@ data class MessageDto(
     @Json(name = "revoked_by") val revokedBy: String? = null,
     /** AND-130 — present on kind="image". The display url is `url` else `bucket`/`key`-derived. */
     val image: MessageImageDto? = null,
+    /** C6 — present on kind="gallery". Sender always sees all free_images; recipient sees free + unlocked. */
+    @Json(name = "free_images") val freeImages: List<GalleryImageDto>? = null,
     /** AND-131 — present on kind="video_share". Carries the HLS manifest + short-lived token. */
     @Json(name = "video_share") val videoShare: VideoShareDto? = null,
     /** AND-132 — present on kind="file"/"audio"/"video" (generic file attachment). */
@@ -117,6 +119,7 @@ data class MessageDto(
     /** AND-138 — present on kind="calendar_event"/"calendar_share" (nested attachment objects). */
     @Json(name = "calendar_event") val calendarEvent: CalendarEventAttachmentDto? = null,
     @Json(name = "calendar_share") val calendarShare: CalendarShareAttachmentDto? = null,
+    @Json(name = "find_datetime") val findDatetime: FindDateTimeAttachmentDto? = null,
     /** AND-139 — FLAT fixed-price paid-message fields (gated content is NEVER shipped while locked). */
     @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
     @Json(name = "lock_description") val lockDescription: String? = null,
@@ -128,6 +131,12 @@ data class MessageDto(
     val lottery: LotteryAttachmentDto? = null,
     /** AND-132/133 — "none" | "view_once" | "listen_once"; gates once-media cache reuse. */
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
+    @Json(name = "view_once") val viewOnce: Boolean? = null,
+    /** "unconsumed" | "consumed" | null — server view-once consumption state for the current user. */
+    @Json(name = "consumption_state") val consumptionState: String? = null,
+    @Json(name = "is_encrypted") val isEncrypted: Boolean? = null,
+    /** MSG — client-side encryption envelope echoed back by the server on an encrypted message. */
+    val encryption: MessageEncryptionEnvelopeDto? = null,
 )
 
 /** MessageOut.image (MessageImage). All inner fields are optional per the free-form schema. */
@@ -198,13 +207,31 @@ data class ConversationDto(
  */
 @JsonClass(generateAdapter = true)
 data class SendTextMessageReq(
-    val text: String,
+    // Server requires EXACTLY one of text / encryption (text absent when an encryption envelope is set).
+    val text: String? = null,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
     @Json(name = "view_once") val viewOnce: Boolean? = null,
     @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
     @Json(name = "lock_description") val lockDescription: String? = null,
     @Json(name = "send_at") val sendAt: Long? = null,
     @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
+    val encryption: MessageEncryptionEnvelopeDto? = null,
+)
+
+/**
+ * MessageEncryptionEnvelope — client-side encryption envelope (AES-256-GCM / PBKDF2-SHA256).
+ * salt_b64 must decode to exactly 16 bytes; iv_b64 to exactly 12 bytes; ciphertext_b64 must be
+ * >16 bytes (ciphertext + GCM tag). iterations 100000..2000000.
+ */
+@JsonClass(generateAdapter = true)
+data class MessageEncryptionEnvelopeDto(
+    val version: Int = 1,
+    val alg: String = "AES-256-GCM",
+    val kdf: String = "PBKDF2-SHA256",
+    val iterations: Int = 100000,
+    @Json(name = "salt_b64") val saltB64: String,
+    @Json(name = "iv_b64") val ivB64: String,
+    @Json(name = "ciphertext_b64") val ciphertextB64: String? = null,
 )
 
 /** POST read body = app__routers__messaging__MarkReadIn (both fields optional). */

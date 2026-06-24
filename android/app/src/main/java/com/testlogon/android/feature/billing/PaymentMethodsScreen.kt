@@ -33,6 +33,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,6 +82,13 @@ fun PaymentMethodsRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Re-fetch when returning to this screen (e.g. after adding a method) so the list stays fresh.
+    // Skip the very first resume — the ViewModel's init already performs the initial load.
+    val firstResume = remember { mutableStateOf(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (firstResume.value) firstResume.value = false else viewModel.refresh()
+    }
 
     val removedMsg = stringResource(R.string.payment_methods_removed)
     val defaultMsg = stringResource(R.string.payment_methods_default_set)

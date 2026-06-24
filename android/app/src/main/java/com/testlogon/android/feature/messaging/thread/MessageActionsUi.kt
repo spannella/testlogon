@@ -1,4 +1,5 @@
 @file:OptIn(
+    androidx.compose.ui.ExperimentalComposeUiApi::class,
     androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
     androidx.compose.material3.ExperimentalMaterial3Api::class,
 )
@@ -6,6 +7,7 @@
 package com.testlogon.android.feature.messaging.thread
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -83,7 +85,7 @@ fun MessageActionsSheet(
 ) {
     // AND-164 — destructive/mutating actions are suppressed entirely when the message is on legal hold.
     val allowed = message.allowedActions()
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.ACTIONS_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.ACTIONS_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
             // Quick-reaction emoji row (always available unless the message is a tombstone).
             if (!message.isTombstone) {
@@ -263,7 +265,7 @@ fun ReactionDetailsSheet(
     state: Async<List<Reactor>>,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.REACTION_DETAILS_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.REACTION_DETAILS_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(stringResource(R.string.msg_action_who_reacted))
             when (state) {
@@ -292,7 +294,7 @@ fun PinnedMessagesSheet(
     onJumpTo: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.PINS_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.PINS_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(stringResource(R.string.msg_pins_title))
             when (state) {
@@ -324,7 +326,7 @@ fun EditHistorySheet(
     state: Async<List<MessageEdit>>,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.EDIT_HISTORY_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.EDIT_HISTORY_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(stringResource(R.string.msg_edit_history_title))
             when (state) {

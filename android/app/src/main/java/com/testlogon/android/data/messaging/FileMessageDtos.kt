@@ -31,6 +31,12 @@ data class CreateFileMessageReq(
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
     @Json(name = "duration_seconds") val durationSeconds: Int? = null,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    // C9 — gating options (parity with image/text; Backend B2 accepts these on file messages).
+    @Json(name = "view_once") val viewOnce: Boolean = false,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
 )
 
 /** CreateFileShareMessageIn. Required: `file_path` (1..1000). */

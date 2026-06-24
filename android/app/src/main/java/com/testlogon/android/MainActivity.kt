@@ -37,6 +37,7 @@ import com.testlogon.android.navigation.applink.DeepLinkRouter
 import com.testlogon.android.navigation.deeplink.DeepLinkParser
 import com.testlogon.android.navigation.deeplink.NotificationDeepLink
 import com.testlogon.android.navigation.deeplink.PushTapRouting
+import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 import com.testlogon.android.navigation.navigateToNotificationTarget
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -247,7 +248,18 @@ class MainActivity : FragmentActivity() {
         // AND-108: reuse the notification feature's target routing (NotificationTargetResolver ->
         // navigateToNotificationTarget) so push taps land on the same destinations as in-app taps.
         runCatching {
-            controller.navigateToNotificationTarget(PushTapRouting.targetFor(link))
+            when (link) {
+                is NotificationDeepLink.Message ->
+                    controller.navigate(MessagingRoutes.thread(link.threadId, link.messageId)) {
+                        // Force a fresh thread instance so it reloads history (picking up a message
+                        // that arrived while backgrounded) and applies the new focus message, even if
+                        // this conversation was already open underneath.
+                        popUpTo(MessagingRoutes.THREAD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                else ->
+                    controller.navigateToNotificationTarget(PushTapRouting.targetFor(link))
+            }
         }
     }
 }

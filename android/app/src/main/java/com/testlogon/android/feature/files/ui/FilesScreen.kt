@@ -1,10 +1,12 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.testlogon.android.feature.files.ui
 
 import android.text.format.DateUtils
 import android.text.format.Formatter
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,12 +15,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -35,6 +40,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -52,21 +58,35 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
@@ -83,6 +103,7 @@ import com.testlogon.android.feature.files.data.FileSortBy
 import com.testlogon.android.feature.files.data.FileSortDir
 import com.testlogon.android.feature.files.data.SearchMode
 import com.testlogon.android.feature.files.presentation.Breadcrumb
+import com.testlogon.android.feature.files.presentation.FilePath
 import com.testlogon.android.feature.files.presentation.FilesUiState
 import com.testlogon.android.feature.files.presentation.FilesViewModel
 import java.time.Instant
@@ -99,6 +120,9 @@ object FilesTestTags {
     const val ERROR = "files_error"
     const val APPEND_FOOTER = "files_append_footer"
     const val APPEND_RETRY = "files_append_retry"
+
+    /** FM1 - the floating chip shown while a row is being dragged to a folder. */
+    const val DRAG_CHIP = "files_drag_chip"
 
     /** AND-336 - the import-from-Google-Drive top-bar affordance. */
     const val DRIVE_IMPORT = "files_drive_import"
@@ -118,6 +142,47 @@ object FilesTestTags {
  * UI state + the cached browse PagingData, wires one-shot events (NavigateUp -> [onBack];
  * OpenFile -> [onOpenFile], which carries the file path - preview is a later ticket).
  */
+/**
+ * FM1 - shared state for drag-and-drop MOVE. A row is "picked up" on long-press-drag; while
+ * [draggedNode] is non-null the finger position is tracked in ROOT coordinates ([pointer]) and
+ * hit-tested against the registered destination bounds ([dropTargets] = path -> bounds-in-root for
+ * every visible FOLDER row plus the breadcrumb "up" parent). [hoverPath] is the folder under the
+ * finger (highlighted). On release the screen reads [finish] = (node, destinationFolderPath).
+ */
+private class DragMoveState {
+    var draggedNode by mutableStateOf<FileNode?>(null)
+        private set
+    var pointer by mutableStateOf(Offset.Zero)
+        private set
+    val dropTargets = mutableStateMapOf<String, Rect>()
+
+    val hoverPath by derivedStateOf {
+        val node = draggedNode ?: return@derivedStateOf null
+        dropTargets.entries
+            .filter { it.key != node.path && it.value.contains(pointer) }
+            .minByOrNull { it.value.width * it.value.height } // smallest (topmost) target wins
+            ?.key
+    }
+
+    val isDragging: Boolean get() = draggedNode != null
+
+    fun begin(node: FileNode, anchor: Offset) { draggedNode = node; pointer = anchor }
+    fun update(delta: Offset) { pointer += delta }
+    fun cancel() { draggedNode = null }
+
+    /** Returns (node, destFolderPath) to move, or null if dropped on empty space / self / origin. */
+    fun finish(): Pair<FileNode, String>? {
+        val node = draggedNode
+        val dest = hoverPath
+        draggedNode = null
+        if (node == null || dest == null) return null
+        return node to dest
+    }
+
+    fun registerTarget(path: String, bounds: Rect) { dropTargets[path] = bounds }
+    fun unregisterTarget(path: String) { dropTargets.remove(path) }
+}
+
 @Composable
 fun FilesRoute(
     onBack: () -> Unit,
@@ -144,6 +209,10 @@ fun FilesRoute(
     var downloadSheetVisible by remember { mutableStateOf(false) }
     var pendingDownloadNode by remember { mutableStateOf<FileNode?>(null) }
     val openLauncher = remember { com.testlogon.android.data.files.download.OpenWithLauncher() }
+
+    // F14 - when an image row is tapped we show the full-screen viewer in-place instead of the
+    // no-op file handoff. Holds the derived (server-relative) image url; null = viewer closed.
+    var previewImageUrl by remember { mutableStateOf<String?>(null) }
 
     androidx.compose.runtime.LaunchedEffect(Unit) {
         downloadViewModel.events.collect { event -> openLauncher.open(context, event.cached) }
@@ -176,7 +245,14 @@ fun FilesRoute(
         onUp = viewModel::onUp,
         onBreadcrumb = viewModel::onBreadcrumb,
         onOpenFolder = viewModel::onOpenFolder,
-        onOpenFile = viewModel::onOpenFile,
+        onOpenFile = { node ->
+            // F14 - image files open the in-place preview; everything else keeps the old handoff.
+            if (isImageNode(node)) {
+                previewImageUrl = imageViewUrl(node)
+            } else {
+                viewModel.onOpenFile(node)
+            }
+        },
         onSearchChanged = viewModel::onSearchChanged,
         onToggleSearchMode = viewModel::onToggleSearchMode,
         onSortChanged = viewModel::onSortChanged,
@@ -187,7 +263,20 @@ fun FilesRoute(
         onShareFile = { node -> onShareFile(node.path) },
         // AND-336 - the Drive-import action carries the folder on screen as the import target.
         onImportFromDrive = { onImportFromDrive(state.currentPath) },
+        // F13 - long-press CRUD context-menu actions wired to the existing FilesViewModel ops.
+        onRename = { node, newName -> viewModel.rename(node.path, newName, node.type == FileNodeType.FOLDER) },
+        onDelete = { node -> viewModel.delete(node.path, node.type == FileNodeType.FOLDER) },
+        onMove = { node, dst -> viewModel.move(node.path, dst) },
+        onCreateFolder = { name -> viewModel.createFolder(name) },
     )
+
+    // F14 - the in-place full-screen image viewer (Coil resolves the server-relative url).
+    previewImageUrl?.let { url ->
+        com.testlogon.android.feature.messaging.media.FullScreenImageViewer(
+            url = url,
+            onClose = { previewImageUrl = null },
+        )
+    }
 
     if (uploadSheetVisible) {
         com.testlogon.android.feature.files.upload.UploadSheet(
@@ -219,8 +308,22 @@ fun FilesScreen(
     // AND-336 - "Import from Google Drive" action (null -> the affordance is hidden, so existing AND-332
     // FilesScreen callers / tests are unaffected).
     onImportFromDrive: (() -> Unit)? = null,
+    // F13 - long-press context-menu CRUD actions (defaulted no-op so existing callers / tests are
+    // unaffected). Rename/Delete/New-folder are fully wired; Move targets a destination folder path.
+    onRename: (FileNode, String) -> Unit = { _, _ -> },
+    onDelete: (FileNode) -> Unit = {},
+    onMove: (FileNode, String) -> Unit = { _, _ -> },
+    onCreateFolder: (String) -> Unit = {},
 ) {
     var sortSheetVisible by remember { mutableStateOf(false) }
+    // F13 - which row's context menu / dialog is active (null = none). Shared across browse + search.
+    var contextNode by remember { mutableStateOf<FileNode?>(null) }
+    var renameNode by remember { mutableStateOf<FileNode?>(null) }
+    var deleteNode by remember { mutableStateOf<FileNode?>(null) }
+    var moveNode by remember { mutableStateOf<FileNode?>(null) }
+    var newFolderVisible by remember { mutableStateOf(false) }
+    // FM1 - drag-and-drop MOVE state, shared by the browse list, breadcrumb + the drag chip.
+    val dragState = remember { DragMoveState() }
 
     Scaffold(
         modifier = modifier.testTag(FilesTestTags.SCREEN),
@@ -275,7 +378,11 @@ fun FilesScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            BreadcrumbRow(breadcrumbs = state.breadcrumbs, onBreadcrumb = onBreadcrumb)
+            BreadcrumbRow(
+                breadcrumbs = state.breadcrumbs,
+                onBreadcrumb = onBreadcrumb,
+                dragState = dragState,
+            )
             SearchField(
                 query = state.searchQuery,
                 mode = state.searchMode,
@@ -291,6 +398,7 @@ fun FilesScreen(
                         onOpenFolder = onOpenFolder,
                         onOpenFile = onOpenFile,
                         onShareFile = onShareFile,
+                        onLongPress = { contextNode = it },
                     )
                 } else {
                     BrowseContent(
@@ -299,8 +407,53 @@ fun FilesScreen(
                         onOpenFolder = onOpenFolder,
                         onOpenFile = onOpenFile,
                         onShareFile = onShareFile,
+                        onLongPress = { contextNode = it },
+                        dragState = dragState,
+                        onDrop = { node, destFolder ->
+                            // dst is the FULL new path of the moved node (the backend splits its
+                            // parent), so place the node INSIDE the destination folder under its name.
+                            onMove(node, FilePath.child(destFolder, node.name))
+                        },
                     )
                 }
+            }
+        }
+    }
+
+    // FM1 - the floating "lifted" chip that follows the finger while dragging a row.
+    dragState.draggedNode?.let { node ->
+        val density = LocalDensity.current
+        Popup(properties = PopupProperties(focusable = false)) {
+            val p = dragState.pointer
+            Row(
+                modifier = Modifier
+                    .zIndex(1f)
+                    .offset {
+                        IntOffset(
+                            x = (p.x - with(density) { 24.dp.toPx() }).toInt(),
+                            y = (p.y - with(density) { 24.dp.toPx() }).toInt(),
+                        )
+                    }
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag(FilesTestTags.DRAG_CHIP),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = iconFor(node),
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    text = node.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
         }
     }
@@ -312,14 +465,81 @@ fun FilesScreen(
             onDismiss = { sortSheetVisible = false },
         )
     }
+
+    // F13 - the long-press context menu for the active row.
+    contextNode?.let { node ->
+        FileContextSheet(
+            node = node,
+            onRename = { contextNode = null; renameNode = node },
+            onDelete = { contextNode = null; deleteNode = node },
+            onMove = { contextNode = null; moveNode = node },
+            onNewFolder = { contextNode = null; newFolderVisible = true },
+            onDismiss = { contextNode = null },
+        )
+    }
+
+    renameNode?.let { node ->
+        TextEntryDialog(
+            title = stringResource(R.string.files_rename_title),
+            label = stringResource(R.string.files_rename_label),
+            confirmLabel = stringResource(R.string.files_rename_confirm),
+            initial = node.name,
+            onConfirm = { value -> onRename(node, value); renameNode = null },
+            onDismiss = { renameNode = null },
+        )
+    }
+
+    deleteNode?.let { node ->
+        AlertDialog(
+            onDismissRequest = { deleteNode = null },
+            title = { Text(stringResource(R.string.files_delete_title)) },
+            text = { Text(stringResource(R.string.files_delete_message, node.name)) },
+            confirmButton = {
+                TextButton(onClick = { onDelete(node); deleteNode = null }) {
+                    Text(stringResource(R.string.files_delete_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteNode = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+
+    moveNode?.let { node ->
+        TextEntryDialog(
+            title = stringResource(R.string.files_move_title),
+            label = stringResource(R.string.files_move_label),
+            confirmLabel = stringResource(R.string.files_move_confirm),
+            initial = state.currentPath,
+            onConfirm = { dst -> onMove(node, dst); moveNode = null },
+            onDismiss = { moveNode = null },
+        )
+    }
+
+    if (newFolderVisible) {
+        TextEntryDialog(
+            title = stringResource(R.string.files_new_folder_title),
+            label = stringResource(R.string.files_new_folder_label),
+            confirmLabel = stringResource(R.string.files_new_folder_confirm),
+            initial = "",
+            onConfirm = { name -> onCreateFolder(name); newFolderVisible = false },
+            onDismiss = { newFolderVisible = false },
+        )
+    }
 }
 
 @Composable
 private fun BreadcrumbRow(
     breadcrumbs: List<Breadcrumb>,
     onBreadcrumb: (Int) -> Unit,
+    dragState: DragMoveState? = null,
 ) {
     val goToFmt = stringResource(R.string.files_breadcrumb_cd)
+    // FM1 - the PARENT crumb (second-to-last) doubles as a "move up one level" drop target while
+    // dragging. Registered under its folder path so a row dropped on it moves into the parent folder.
+    val parentIndex = breadcrumbs.size - 2
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -337,12 +557,24 @@ private fun BreadcrumbRow(
                 )
             }
             val cd = goToFmt.format(crumb.name)
+            val isDropTarget = dragState != null && dragState.isDragging && index == parentIndex
+            val isHovered = isDropTarget && dragState?.hoverPath == crumb.path
+            var crumbMod = Modifier
+                .heightIn(min = 48.dp)
+                .testTag(FilesTestTags.breadcrumb(index))
+            if (dragState != null && index == parentIndex) {
+                crumbMod = crumbMod.onGloballyPositioned {
+                    dragState.registerTarget(crumb.path, it.boundsInRoot())
+                }
+            }
+            if (isHovered) {
+                crumbMod = crumbMod
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+            }
             TextButton(
                 onClick = { onBreadcrumb(index) },
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .testTag(FilesTestTags.breadcrumb(index))
-                    .clearAndSetSemantics { contentDescription = cd },
+                modifier = crumbMod.clearAndSetSemantics { contentDescription = cd },
             ) {
                 Text(
                     text = crumb.name,
@@ -405,6 +637,9 @@ private fun BrowseContent(
     onOpenFolder: (FileNode) -> Unit,
     onOpenFile: (FileNode) -> Unit,
     onShareFile: (FileNode) -> Unit = {},
+    onLongPress: (FileNode) -> Unit = {},
+    dragState: DragMoveState? = null,
+    onDrop: (FileNode, String) -> Unit = { _, _ -> },
 ) {
     val listState = rememberLazyListState()
     val refresh = items.loadState.refresh
@@ -437,14 +672,19 @@ private fun BrowseContent(
                 ) {
                     items(
                         count = items.itemCount,
-                        key = { index -> items.peek(index)?.path ?: index },
+                        // Unique key: path can legitimately collide (dup nodes) and a duplicate
+                        // LazyColumn key crashes the whole list, so include the index.
+                        key = { index -> "${items.peek(index)?.path.orEmpty()}#$index" },
                     ) { index ->
                         val node = items[index]
                         if (node != null) {
                             FileRow(
                                 node = node,
                                 onClick = { if (node.type == FileNodeType.FOLDER) onOpenFolder(node) else onOpenFile(node) },
+                                onLongClick = { onLongPress(node) },
                                 onShare = if (node.type == FileNodeType.FOLDER) null else ({ onShareFile(node) }),
+                                dragState = dragState,
+                                onDrop = onDrop,
                             )
                         }
                     }
@@ -486,6 +726,7 @@ private fun SearchContent(
     onOpenFolder: (FileNode) -> Unit,
     onOpenFile: (FileNode) -> Unit,
     onShareFile: (FileNode) -> Unit = {},
+    onLongPress: (FileNode) -> Unit = {},
 ) {
     when {
         state.searchLoading -> LoadingState()
@@ -508,6 +749,7 @@ private fun SearchContent(
                 FileRow(
                     node = node,
                     onClick = { if (node.type == FileNodeType.FOLDER) onOpenFolder(node) else onOpenFile(node) },
+                    onLongClick = { onLongPress(node) },
                     onShare = if (node.type == FileNodeType.FOLDER) null else ({ onShareFile(node) }),
                 )
             }
@@ -520,7 +762,12 @@ private fun SearchContent(
 private fun FileRow(
     node: FileNode,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    // FM1 - when provided, the row is draggable (long-press to pick up) and FOLDER rows register as
+    // drop targets. A drop on a folder calls [onDrop](draggedNode, destFolderPath).
+    dragState: DragMoveState? = null,
+    onDrop: (FileNode, String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val isFolder = node.type == FileNodeType.FOLDER
@@ -542,17 +789,59 @@ private fun FileRow(
     }
     val shareCd = stringResource(R.string.share_action_share)
 
+    // FM1 - drop-target highlight + dragged-row dim.
+    val isDragged = dragState?.draggedNode?.path == node.path
+    val isDropHovered = dragState != null && isFolder &&
+        dragState.isDragging && dragState.hoverPath == node.path && !isDragged
+
+    var rowMod = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 48.dp)
+        .testTag(FilesTestTags.row(node))
+    if (dragState != null) {
+        if (isFolder) {
+            // FOLDER rows register their root bounds so a dropped node can be hit-tested onto them.
+            rowMod = rowMod.onGloballyPositioned {
+                dragState.registerTarget(node.path, it.boundsInRoot())
+            }
+        }
+        if (isDropHovered) {
+            rowMod = rowMod
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer)
+        }
+        if (isDragged) rowMod = rowMod.alpha(0.4f)
+    }
+
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .testTag(FilesTestTags.row(node)),
+        modifier = rowMod,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+      // FM1 - drag pickup lives on a dedicated handle modifier so combinedClickable still owns the
+      // tap + the quick long-press (context menu fallback). The drag gesture only fires once the
+      // finger MOVES after the long-press threshold, so a stationary long-press opens the menu.
+      val dragMod = if (dragState != null) {
+          Modifier.pointerInput(node.path) {
+              detectDragGesturesAfterLongPress(
+                  onDragStart = { offset -> dragState.begin(node, offset) },
+                  onDrag = { change, delta ->
+                      change.consume()
+                      dragState.update(delta)
+                  },
+                  onDragEnd = {
+                      dragState.finish()?.let { (n, dst) -> onDrop(n, dst) }
+                  },
+                  onDragCancel = { dragState.cancel() },
+              )
+          }
+      } else {
+          Modifier
+      }
       Row(
         modifier = Modifier
             .weight(1f)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .then(dragMod)
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .clearAndSetSemantics { contentDescription = cd },
         verticalAlignment = Alignment.CenterVertically,
@@ -687,4 +976,127 @@ private fun relativeTime(instant: Instant?): String {
         System.currentTimeMillis(),
         DateUtils.MINUTE_IN_MILLIS,
     ).toString()
+}
+
+
+/**
+ * F13 - the long-press context menu for a file / folder row. Rename / Delete / New folder are fully
+ * wired through the FilesViewModel CRUD ops; Move re-uses the repository move endpoint (a destination
+ * folder path is entered in a dialog). Copy is shown but disabled with a note - the FilesRepository /
+ * backend expose NO copy op (only move), so a real copy is a documented stub for a later ticket.
+ */
+@Composable
+private fun FileContextSheet(
+    node: FileNode,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onMove: () -> Unit,
+    onNewFolder: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val context = LocalContext.current
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Text(
+                text = node.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            HorizontalDivider()
+            MenuRow(stringResource(R.string.files_menu_rename), onClick = onRename)
+            MenuRow(stringResource(R.string.files_menu_delete), onClick = onDelete)
+            MenuRow(stringResource(R.string.files_menu_move), onClick = onMove)
+            // Copy: no backend / repository copy op exists (only move) -> documented stub.
+            MenuRow(
+                label = stringResource(R.string.files_menu_copy),
+                enabled = false,
+                onClick = {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.files_copy_unavailable),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                },
+            )
+            HorizontalDivider()
+            MenuRow(stringResource(R.string.files_menu_new_folder), onClick = onNewFolder)
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = {
+            Text(
+                label,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(enabled = true, onClick = onClick),
+    )
+}
+
+/** F13 - a single-field text-entry dialog used for Rename / New-folder / Move. */
+@Composable
+private fun TextEntryDialog(
+    title: String,
+    label: String,
+    confirmLabel: String,
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var value by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                label = { Text(label) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(value.trim()) },
+                enabled = value.isNotBlank(),
+            ) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+/** F14 - true when [node] is an image file, by preview-kind / content-type / filename extension. */
+private fun isImageNode(node: FileNode): Boolean {
+    if (node.type == FileNodeType.FOLDER) return false
+    val family = (node.previewKind ?: node.contentType.orEmpty()).lowercase()
+    if (family.startsWith("image")) return true
+    val name = node.name.lowercase()
+    return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") ||
+        name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".bmp") ||
+        name.endsWith(".heic") || name.endsWith(".heif")
+}
+
+/**
+ * F14 - the viewable url for an image [node]. Prefers a server-supplied poster/preview url when present;
+ * otherwise the authenticated download endpoint (server-RELATIVE so Coil's RelativeUrlMapper resolves it
+ * against API_BASE_URL, the same way the on-screen file download fetches the bytes).
+ */
+private fun imageViewUrl(node: FileNode): String {
+    node.posterUrl?.takeIf { it.isNotBlank() }?.let { return it }
+    val encoded = java.net.URLEncoder.encode(node.path, "UTF-8")
+    return "/v1/fs/download?path=$encoded"
 }

@@ -251,7 +251,16 @@ data class MeetingPollAttachmentDto(
     @Json(name = "poll_id") val pollId: String,
     @Json(name = "creator_id") val creatorId: String = "",
     val title: String = "",
-    @Json(name = "duration_minutes") val durationMinutes: Int = 30,
+    // MSG — robustness: the single-table store echoes duration_minutes back as a STRING (e.g. "30") on
+    // the live wire, but contract tests send it as a number. A bare Int field made Moshi throw and fail
+    // the ENTIRE message-list parse, silently dropping rich messages on the receiver. Accept either by
+    // taking the raw value as Any? and coercing in [durationMinutes].
+    @Json(name = "duration_minutes") val durationMinutesRaw: Any? = null,
     val status: String = "open",
     @Json(name = "confirmed_slot_id") val confirmedSlotId: String? = null,
-)
+) {
+    val durationMinutes: Int
+        get() = (durationMinutesRaw as? Number)?.toInt()
+            ?: (durationMinutesRaw as? String)?.let { it.toIntOrNull() ?: it.toDoubleOrNull()?.toInt() }
+            ?: 30
+}

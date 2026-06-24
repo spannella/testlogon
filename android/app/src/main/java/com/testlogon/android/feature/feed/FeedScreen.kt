@@ -1,5 +1,7 @@
 package com.testlogon.android.feature.feed
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +15,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
@@ -252,6 +256,9 @@ fun FeedScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
             androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+                // FD1 — always-visible inline composer entry: tapping anywhere opens the full composer,
+                // so making a post is one tap from the top of the feed (not hidden behind the FAB only).
+                InlineComposerBar(onClick = onComposePost)
                 // AND-199 — stories tray above the feed (collapses to 0 height when empty).
                 com.testlogon.android.feature.stories.StoriesTray(
                     state = storyTray,
@@ -305,6 +312,54 @@ fun FeedScreen(
                     )
                 }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * FD1 — a prominent "What's on your mind?" entry pinned to the top of the feed. Always visible (even
+ * when the feed has content), giving a one-tap path into the full compose screen.
+ */
+@Composable
+private fun InlineComposerBar(onClick: () -> Unit) {
+    Surface(
+        tonalElevation = 1.dp,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .clickable(onClick = onClick)
+                .testTag("feed_inline_composer"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "What’s on your mind?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                )
             }
         }
     }

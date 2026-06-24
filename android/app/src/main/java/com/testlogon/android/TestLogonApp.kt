@@ -7,6 +7,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
+import coil.decode.VideoFrameDecoder
 import coil.map.Mapper
 import coil.request.Options
 import com.google.firebase.FirebaseApp
@@ -66,6 +67,8 @@ class TestLogonApp : Application(), ImageLoaderFactory {
             } else {
                 add(GifDecoder.Factory())
             }
+            // MV2 — decode a poster frame from an uploaded video-clip url (kind="video" bubble).
+            add(VideoFrameDecoder.Factory())
         }
         .build()
 

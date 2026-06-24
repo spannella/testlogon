@@ -189,6 +189,12 @@ class ThreadViewModel @Inject constructor(
     private val viewersByMessage = mutableMapOf<String, List<MessageViewer>>()
 
     /** AND-147 — server message ids already reported viewed this VM lifetime (once-guard, FR-1/AC-2). */
+        // MSG — receiver-side decrypted plaintext for encrypted messages, keyed by message UI key
+    // (transient; never persisted). Set after a correct passphrase.
+    private val decryptedMessages = mutableMapOf<String, String>()
+    // MSG — view-once messages consumed locally this session (hidden immediately on close, even before
+    // the server reflects the consumption). Keyed by message UI key.
+    private val locallyConsumed = mutableSetOf<String>()
     private val reportedViews = mutableSetOf<String>()
 
     // AND-141: drafts. Declared BEFORE init{} so observeDraftSaver()'s Main.immediate launch (which
@@ -216,7 +222,12 @@ class ThreadViewModel @Inject constructor(
             repository.observeThread(conversationId).collect { messages ->
                 val self = authStateStore.userSub.value ?: currentUser
                 // AND-140 — hidden-for-me messages are dropped from the rendered thread.
-                val visible = messages.filterNot { it.isHiddenLocal }
+                // MSG — a consumed view-once message is permanently hidden for the recipient (not the sender).
+                val visible = messages.filterNot { m ->
+                    m.isHiddenLocal ||
+                        ((m.id ?: m.clientId) in locallyConsumed) ||
+                        (m.consumed && m.senderId.isNotEmpty() && m.senderId != self)
+                }
                 // Track the newest CONFIRMED (server id present) message as the read marker (AND-125).
                 visible.lastOrNull { it.id != null }?.let {
                     newestMessageId = it.id
@@ -224,7 +235,10 @@ class ThreadViewModel @Inject constructor(
                 }
                 _state.update { prior ->
                     prior.copy(
-                        messages = visible.map { it.toUi(self) },
+                        messages = visible.map { msg ->
+                            val ui = msg.toUi(self)
+                            ui.copy(decryptedText = decryptedMessages[ui.key])
+                        },
                         receipts = computeReceipts(visible, self),
                         peerUserSub = prior.peerUserSub
                             ?: visible.firstOrNull { it.senderId.isNotEmpty() && it.senderId != self && it.senderId != "system" }?.senderId,
@@ -421,6 +435,25 @@ class ThreadViewModel @Inject constructor(
     fun onSend() {
         val composer = _state.value.composer
         val body = composer.draft.trim()
+        // C5/C6/C7 — staged media takes priority. Multiple images -> ONE gallery message; a single
+        // image -> an image message; a video -> an inline video message. Text is the caption.
+        val stagedImages = composer.stagedImageUris
+        val stagedVideo = composer.stagedVideoUri
+        if (stagedImages.isNotEmpty() || stagedVideo != null) {
+            if (composer.overLimit) return
+            val opts = composer.options
+            val caption = body.ifBlank { null }
+            typingController.onInput(TypingInput.Sent)
+            _state.update { it.copy(composer = ComposerState(), hasDraft = false, draftSyncState = DraftSyncState.Idle) }
+            draftSaver.tryEmit("")
+            when {
+                stagedVideo != null -> sendStagedVideo(stagedVideo, caption, opts)
+                stagedImages.size == 1 -> sendStagedImage(stagedImages.first(), caption, opts)
+                else -> sendStagedGallery(stagedImages, caption, opts)
+            }
+            viewModelScope.launch { draftRepository.clearDraft(conversationId) }
+            return
+        }
         if (body.isEmpty() || composer.overLimit) return
         val clientId = UUID.randomUUID().toString()
         val replyToId = composer.replyingTo?.messageId
@@ -435,14 +468,24 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             repository.enqueueOptimistic(conversationId, clientId, body, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            val result = repository.sendOutbox(
-                conversationId, clientId, body, replyToId,
-                viewOnce = opts.viewOnce,
-                lockPriceCents = opts.lockPriceCents,
-                lockDescription = opts.lockDescription,
-                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
-                expiresInSeconds = opts.expiresInSeconds,
-            )
+            val result = if (opts.encrypted) {
+                // MSG — encrypted text: derive a real AES-256-GCM envelope from the passphrase; no plaintext
+                // (and no passphrase) ever leaves the device. The receiver decrypts with the same passphrase.
+                repository.sendEncryptedText(
+                    conversationId, clientId,
+                    envelope = com.testlogon.android.data.messaging.MessageCrypto.encrypt(body, opts.encryptionPassphrase),
+                    replyToMessageId = replyToId,
+                )
+            } else {
+                repository.sendOutbox(
+                    conversationId, clientId, body, replyToId,
+                    viewOnce = opts.viewOnce,
+                    lockPriceCents = opts.lockPriceCents,
+                    lockDescription = opts.lockDescription,
+                    sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+                    expiresInSeconds = opts.expiresInSeconds,
+                )
+            }
             // AND-141 — clear the draft on a successful send.
             if (result is ApiResult.Success) draftRepository.clearDraft(conversationId)
         }
@@ -461,6 +504,20 @@ class ThreadViewModel @Inject constructor(
     fun setViewOnce(enabled: Boolean) {
         _state.update {
             it.copy(composer = it.composer.copy(options = it.composer.options.copy(viewOnce = enabled)))
+        }
+    }
+
+    /** MSG — toggle client-side encryption for the next text message. */
+    fun setEncrypted(enabled: Boolean) {
+        _state.update {
+            it.copy(composer = it.composer.copy(options = it.composer.options.copy(encrypted = enabled)))
+        }
+    }
+
+    /** MSG — set the passphrase used to encrypt the next message (kept client-side only). */
+    fun setEncryptionPassphrase(passphrase: String) {
+        _state.update {
+            it.copy(composer = it.composer.copy(options = it.composer.options.copy(encryptionPassphrase = passphrase)))
         }
     }
 
@@ -520,18 +577,57 @@ class ThreadViewModel @Inject constructor(
             // Re-enqueue as SENDING (same clientId) then re-fire. No server idempotency key exists,
             // so a retry after an uncertain failure may duplicate — retry stays manual.
             when {
+                // C6/C7 — a gallery or video draft is matched by clientId first (both reuse the
+                // image/file optimistic kind, so check the draft maps before isImage/isFile).
+                galleryDrafts.containsKey(clientId) -> {
+                    val draft = galleryDrafts[clientId] ?: return@launch
+                    repository.enqueueOptimisticGallery(conversationId, clientId, draft.uris.first(), draft.uris.size, clock())
+                    repository.sendGalleryOutbox(
+                        conversationId, clientId, draft.uris,
+                        caption = draft.caption,
+                        expiresInSeconds = draft.options.expiresInSeconds,
+                        sendAtEpochSeconds = draft.options.scheduledAtEpochSeconds,
+                    )
+                }
+                videoDrafts.containsKey(clientId) -> {
+                    val draft = videoDrafts[clientId] ?: return@launch
+                    repository.enqueueOptimisticVideoClip(conversationId, clientId, draft.uri, clock())
+                    repository.sendVideoClipOutbox(
+                        conversationId, clientId, draft.uri,
+                        caption = draft.caption,
+                        viewOnce = draft.options.viewOnce,
+                        lockPriceCents = draft.options.lockPriceCents,
+                        expiresInSeconds = draft.options.expiresInSeconds,
+                        sendAtEpochSeconds = draft.options.scheduledAtEpochSeconds,
+                    )
+                }
                 failed.isImage -> {
-                    val uri = imageDrafts[clientId] ?: return@launch
-                    repository.enqueueOptimisticImage(conversationId, clientId, uri, clock())
-                    repository.sendImageOutbox(conversationId, clientId, uri)
+                    val draft = imageDrafts[clientId] ?: return@launch
+                    repository.enqueueOptimisticImage(conversationId, clientId, draft.uri, clock())
+                    repository.sendImageOutbox(
+                        conversationId, clientId, draft.uri,
+                        caption = draft.caption,
+                        viewOnce = draft.options.viewOnce,
+                        lockPriceCents = draft.options.lockPriceCents,
+                        expiresInSeconds = draft.options.expiresInSeconds,
+                        sendAtEpochSeconds = draft.options.scheduledAtEpochSeconds,
+                        encryptionPassphrase = if (draft.options.encrypted) draft.options.encryptionPassphrase else null,
+                    )
                 }
                 failed.isFile -> {
-                    val (uri, name, mime) = fileDrafts[clientId] ?: return@launch
+                    val draft = fileDrafts[clientId] ?: return@launch
                     val file = failed.media as? MessageMedia.File
                     repository.enqueueOptimisticFile(
-                        conversationId, clientId, uri, name, file?.sizeBytes ?: 0L, mime, clock(),
+                        conversationId, clientId, draft.uri, draft.name, file?.sizeBytes ?: 0L, draft.mime, clock(),
                     )
-                    repository.sendFileOutbox(conversationId, clientId, uri, name, mime)
+                    repository.sendFileOutbox(
+                        conversationId, clientId, draft.uri, draft.name, draft.mime,
+                        viewOnce = draft.options.viewOnce,
+                        lockPriceCents = draft.options.lockPriceCents,
+                        lockDescription = draft.options.lockDescription,
+                        expiresInSeconds = draft.options.expiresInSeconds,
+                        sendAtEpochSeconds = draft.options.scheduledAtEpochSeconds,
+                    )
                 }
                 else -> {
                     repository.enqueueOptimistic(conversationId, clientId, failed.text, clock())
@@ -543,19 +639,136 @@ class ThreadViewModel @Inject constructor(
 
     // ---- AND-130: image messages ----
 
-    /** Tracks picked image uris by local clientId so a retry can re-run without re-picking. */
-    private val imageDrafts = mutableMapOf<String, String>()
+    /** C5 — a picked image + its caption/options, retained by clientId for retry. */
+    private data class ImageDraft(
+        val uri: String,
+        val caption: String?,
+        val options: MessageOptions,
+    )
 
-    fun onImagePicked(uri: Uri) {
+    /** Tracks staged/sent image drafts by local clientId so a retry can re-run without re-picking. */
+    private val imageDrafts = mutableMapOf<String, ImageDraft>()
+
+    /** C6 — a staged gallery (multi-image) draft, retained by clientId for retry. */
+    private data class GalleryDraft(
+        val uris: List<String>,
+        val caption: String?,
+        val options: MessageOptions,
+    )
+    private val galleryDrafts = mutableMapOf<String, GalleryDraft>()
+
+    /** C7 — max allowed short-video size; larger picks are rejected with a hint (no transcode). */
+    private val maxVideoBytes = 50L * 1024L * 1024L
+
+    /**
+     * C5/C6 — STAGE the picked image(s) in the composer instead of sending immediately. The user can
+     * then type a caption (the text field) and toggle send-options before tapping Send. One image
+     * sends as an image message; several send as ONE gallery message. Picking image(s) clears any
+     * staged video (one media kind at a time).
+     */
+    fun onImagePicked(uri: Uri) = onImagesPicked(listOf(uri))
+
+    fun onImagesPicked(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        // Server caps free_images at 20; cap the pick to keep one message valid.
+        val capped = uris.take(20).map { it.toString() }
+        _state.update {
+            it.copy(composer = it.composer.copy(stagedImageUris = capped, stagedVideoUri = null))
+        }
+        _events.trySend(ThreadEvent.ScrollToBottom)
+    }
+
+    /**
+     * C7 — STAGE a picked SHORT video. Guarded by [maxVideoBytes]; an oversized clip is rejected with
+     * an action error instead of staging. Staging a video clears any staged images.
+     */
+    fun onVideoPicked(uri: Uri, sizeBytes: Long) {
+        if (sizeBytes in 1..maxVideoBytes || sizeBytes == 0L) {
+            // sizeBytes==0 means the picker didn't report a size; allow and let the upload guard catch it.
+            _state.update {
+                it.copy(composer = it.composer.copy(stagedVideoUri = uri.toString(), stagedImageUris = emptyList()))
+            }
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        } else {
+            _state.update { it.copy(transientMessage = "That video is too large. Pick a clip under 50 MB.") }
+        }
+    }
+
+    /** C5/C6 — remove one staged image by index, or all when index < 0 (the x on a preview thumbnail). */
+    fun onRemoveStagedImage(index: Int = -1) {
+        _state.update {
+            val current = it.composer.stagedImageUris
+            val next = if (index < 0) emptyList() else current.filterIndexed { i, _ -> i != index }
+            it.copy(composer = it.composer.copy(stagedImageUris = next))
+        }
+    }
+
+    /** C7 — remove the staged video. */
+    fun onRemoveStagedVideo() {
+        _state.update { it.copy(composer = it.composer.copy(stagedVideoUri = null)) }
+    }
+
+    /** C5 — actually send a single staged image with the current caption + armed options. */
+    private fun sendStagedImage(localUri: String, caption: String?, opts: MessageOptions) {
         val clientId = UUID.randomUUID().toString()
-        val localUri = uri.toString()
-        imageDrafts[clientId] = localUri
+        imageDrafts[clientId] = ImageDraft(localUri, caption, opts)
         viewModelScope.launch {
             repository.enqueueOptimisticImage(conversationId, clientId, localUri, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            repository.sendImageOutbox(conversationId, clientId, localUri)
+            repository.sendImageOutbox(
+                conversationId, clientId, localUri,
+                caption = caption,
+                viewOnce = opts.viewOnce,
+                lockPriceCents = opts.lockPriceCents,
+                expiresInSeconds = opts.expiresInSeconds,
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+                encryptionPassphrase = if (opts.encrypted) opts.encryptionPassphrase else null,
+            )
         }
     }
+
+    /** C6 — send multiple staged images as ONE gallery message. */
+    private fun sendStagedGallery(localUris: List<String>, caption: String?, opts: MessageOptions) {
+        val clientId = UUID.randomUUID().toString()
+        galleryDrafts[clientId] = GalleryDraft(localUris, caption, opts)
+        viewModelScope.launch {
+            repository.enqueueOptimisticGallery(conversationId, clientId, localUris.first(), localUris.size, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendGalleryOutbox(
+                conversationId, clientId, localUris,
+                caption = caption,
+                // Gallery create only supports expiry + schedule (no view-once/lock on the free path).
+                expiresInSeconds = opts.expiresInSeconds,
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+            )
+        }
+    }
+
+    /** C7 — send a staged short video inline (kind=video), reusing the image outbox transport. */
+    private fun sendStagedVideo(localUri: String, caption: String?, opts: MessageOptions) {
+        val clientId = UUID.randomUUID().toString()
+        videoDrafts[clientId] = VideoDraft(localUri, caption, opts)
+        viewModelScope.launch {
+            repository.enqueueOptimisticVideoClip(conversationId, clientId, localUri, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendVideoClipOutbox(
+                conversationId, clientId, localUri,
+                caption = caption,
+                viewOnce = opts.viewOnce,
+                lockPriceCents = opts.lockPriceCents,
+                expiresInSeconds = opts.expiresInSeconds,
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+            )
+        }
+    }
+
+    /** C7 — a staged short-video draft, retained by clientId for retry. */
+    private data class VideoDraft(
+        val uri: String,
+        val caption: String?,
+        val options: MessageOptions,
+    )
+    private val videoDrafts = mutableMapOf<String, VideoDraft>()
 
     fun onOpenImage(url: String) {
         _events.trySend(ThreadEvent.OpenImageViewer(url))
@@ -601,19 +814,40 @@ class ThreadViewModel @Inject constructor(
 
     // ---- AND-132: file messages ----
 
-    /** Tracks picked file uris by clientId so a retry can re-run without re-picking. */
-    private val fileDrafts = mutableMapOf<String, Triple<String, String, String>>() // uri, name, mime
+    /** C9 — a picked file + its gating options, retained by clientId for retry. */
+    private data class FileDraft(
+        val uri: String,
+        val name: String,
+        val mime: String,
+        val options: MessageOptions,
+    )
+
+    /** Tracks picked files by clientId so a retry can re-run without re-picking. */
+    private val fileDrafts = mutableMapOf<String, FileDraft>()
 
     fun onFilePicked(uri: android.net.Uri, fileName: String, sizeBytes: Long, mimeType: String) {
         val clientId = UUID.randomUUID().toString()
         val localUri = uri.toString()
-        fileDrafts[clientId] = Triple(localUri, fileName, mimeType)
+        // C9 — apply any armed send-options (view-once / locked / expiring / scheduled) to this file,
+        // then clear them so they don't leak onto the next message (mirrors the text/image path).
+        val opts = _state.value.composer.options
+        fileDrafts[clientId] = FileDraft(localUri, fileName, mimeType, opts)
+        _state.update {
+            it.copy(composer = it.composer.copy(options = MessageOptions()), messageOptionsVisible = false)
+        }
         viewModelScope.launch {
             repository.enqueueOptimisticFile(
                 conversationId, clientId, localUri, fileName, sizeBytes, mimeType, clock(),
             )
             _events.trySend(ThreadEvent.ScrollToBottom)
-            repository.sendFileOutbox(conversationId, clientId, localUri, fileName, mimeType)
+            repository.sendFileOutbox(
+                conversationId, clientId, localUri, fileName, mimeType,
+                viewOnce = opts.viewOnce,
+                lockPriceCents = opts.lockPriceCents,
+                lockDescription = opts.lockDescription,
+                expiresInSeconds = opts.expiresInSeconds,
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+            )
         }
     }
 
@@ -733,11 +967,19 @@ class ThreadViewModel @Inject constructor(
         // Downsample to the wire waveform (10..200 floats 0..1), clamped to the min the API accepts.
         val wire = Waveform.normalize(currentClipRawAmplitudes, Waveform.DEFAULT_BUCKETS)
         val clientId = UUID.randomUUID().toString()
-        _state.update { it.copy(voice = VoiceComposerUiState.Sending(0f)) }
+        // Apply armed send-options (the once-toggle maps to listen-once for audio) + clear them.
+        val opts = _state.value.composer.options
+        _state.update {
+            it.copy(voice = VoiceComposerUiState.Sending(0f), composer = it.composer.copy(options = MessageOptions()))
+        }
         viewModelScope.launch {
             repository.enqueueOptimisticVoice(conversationId, clientId, path, durationSeconds, wire, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            val result = repository.sendVoiceOutbox(conversationId, clientId, path, durationSeconds, wire)
+            val result = repository.sendVoiceOutbox(
+                conversationId, clientId, path, durationSeconds, wire,
+                consumptionPolicy = if (opts.viewOnce) "listen_once" else "none",
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+            )
             _state.update {
                 it.copy(
                     voice = if (result is ApiResult.Success) {
@@ -755,7 +997,37 @@ class ThreadViewModel @Inject constructor(
 
     /** AND-133 — toggle playback of a received/sent voice bubble (one clip at a time). */
     fun onToggleVoice(messageId: String, audioUrl: String?) {
-        val url = audioUrl ?: return
+        val msg = _state.value.messages.firstOrNull { it.key == messageId }
+        val voice = msg?.media as? MessageMedia.Voice
+        // Listen-once audio: must be consumed so it can't be replayed. Pull the bytes via the
+        // grant -> GET -> consume flow, play the local clip once, then hide the bubble.
+        if (voice?.consumptionPolicy == "listen_once" && msg?.isOwn != true && messageId !in locallyConsumed) {
+            locallyConsumed.add(messageId)
+            // Listen-once audio: the url is exposed, so play it directly (resolved), record the
+            // consumption server-side, then hide the bubble so it can't be replayed.
+            audioUrl?.let { raw ->
+                val u = if (raw.startsWith("/")) {
+                    com.testlogon.android.BuildConfig.API_BASE_URL.trimEnd('/') + raw
+                } else {
+                    raw
+                }
+                voicePlayer.toggle(messageId, u)
+            }
+            viewModelScope.launch {
+                repository.consumeOnceMedia(conversationId, messageId, "play")
+                _state.update { it.copy(messages = it.messages.filterNot { m -> m.key == messageId }) }
+            }
+            return
+        }
+        val raw = audioUrl ?: return
+        // The backend serves audio at a server-RELATIVE /mock url; ExoPlayer needs an absolute URL,
+        // so resolve it against the configured API origin (same idea as Coil's RelativeUrlMapper for
+        // images). Without this, every received voice clip fails to play.
+        val url = if (raw.startsWith("/")) {
+            com.testlogon.android.BuildConfig.API_BASE_URL.trimEnd('/') + raw
+        } else {
+            raw
+        }
         voicePlayer.toggle(messageId, url)
     }
 
@@ -1048,6 +1320,132 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    // ---- MSG: new in-app composers ----
+
+    fun onAttachLottery() { _state.update { it.copy(lotteryComposerVisible = true) } }
+    fun onDismissLotteryComposer() { _state.update { it.copy(lotteryComposerVisible = false) } }
+
+    /**
+     * [outcomes] are (label, revealedText) pairs from the composer (2..4). [imageUri] is an optional
+     * cover image (C10) uploaded before the lottery is created.
+     */
+    fun onSendLottery(
+        outcomes: List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>,
+        imageUri: String? = null,
+    ) {
+        if (outcomes.size < 2) return
+        _state.update { it.copy(lotteryComposerVisible = false) }
+        viewModelScope.launch {
+            val imageRef = imageUri?.let { repository.uploadLotteryImage(conversationId, it) }
+            repository.sendLottery(conversationId, outcomes, image = imageRef)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    fun onAttachFindDateTime() { _state.update { it.copy(findDateTimeComposerVisible = true) } }
+    fun onDismissFindDateTimeComposer() { _state.update { it.copy(findDateTimeComposerVisible = false) } }
+
+    fun onSendFindDateTime(draft: com.testlogon.android.data.messaging.FindDateTimeDraft) {
+        _state.update { it.copy(findDateTimeComposerVisible = false) }
+        viewModelScope.launch {
+            repository.createFindDateTime(conversationId, draft)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    // ---- calendar-event share ----
+    fun onAttachCalendarEvent() {
+        _state.update { it.copy(calendarEventComposer = CalendarPickerState(visible = true, loading = true)) }
+        loadCalendars(forEvent = true)
+    }
+    fun onDismissCalendarEventComposer() { _state.update { it.copy(calendarEventComposer = CalendarPickerState()) } }
+
+    fun onSelectCalendarForEvent(calendarId: String) {
+        _state.update {
+            it.copy(calendarEventComposer = it.calendarEventComposer.copy(selectedCalendarId = calendarId, eventsLoading = true, events = emptyList()))
+        }
+        viewModelScope.launch {
+            when (val r = repository.listCalendarEvents(calendarId)) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(calendarEventComposer = it.calendarEventComposer.copy(eventsLoading = false, events = r.data))
+                }
+                else -> _state.update {
+                    it.copy(calendarEventComposer = it.calendarEventComposer.copy(eventsLoading = false, error = "Couldn't load events"))
+                }
+            }
+        }
+    }
+
+    fun onSendCalendarEvent(calendarId: String, eventId: String) {
+        _state.update { it.copy(calendarEventComposer = CalendarPickerState()) }
+        viewModelScope.launch {
+            repository.shareCalendarEvent(conversationId, calendarId, eventId, text = null)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    // ---- calendar share ----
+    fun onAttachCalendarShare() {
+        _state.update { it.copy(calendarShareComposer = CalendarPickerState(visible = true, loading = true)) }
+        loadCalendars(forEvent = false)
+    }
+    fun onDismissCalendarShareComposer() { _state.update { it.copy(calendarShareComposer = CalendarPickerState()) } }
+
+    fun onSelectCalendarForShare(calendarId: String) {
+        _state.update { it.copy(calendarShareComposer = it.calendarShareComposer.copy(selectedCalendarId = calendarId)) }
+    }
+
+    fun onSendCalendarShare(calendarId: String, permission: String, includeBookingLink: Boolean) {
+        _state.update { it.copy(calendarShareComposer = CalendarPickerState()) }
+        viewModelScope.launch {
+            repository.shareCalendar(conversationId, calendarId, permission, includeBookingLink, text = null)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    private fun loadCalendars(forEvent: Boolean) {
+        viewModelScope.launch {
+            val r = repository.listCalendars()
+            _state.update {
+                if (forEvent) {
+                    when (r) {
+                        is ApiResult.Success -> it.copy(calendarEventComposer = it.calendarEventComposer.copy(loading = false, calendars = r.data))
+                        else -> it.copy(calendarEventComposer = it.calendarEventComposer.copy(loading = false, error = "Couldn't load calendars"))
+                    }
+                } else {
+                    when (r) {
+                        is ApiResult.Success -> it.copy(calendarShareComposer = it.calendarShareComposer.copy(loading = false, calendars = r.data))
+                        else -> it.copy(calendarShareComposer = it.calendarShareComposer.copy(loading = false, error = "Couldn't load calendars"))
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- file-manager share ----
+    fun onAttachFileShare() {
+        _state.update { it.copy(fileShareComposer = FilePickerState(visible = true, loading = true)) }
+        viewModelScope.launch {
+            when (val r = repository.listFiles("/")) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(fileShareComposer = it.fileShareComposer.copy(loading = false, files = r.data))
+                }
+                else -> _state.update {
+                    it.copy(fileShareComposer = it.fileShareComposer.copy(loading = false, error = "Couldn't load files"))
+                }
+            }
+        }
+    }
+    fun onDismissFileShareComposer() { _state.update { it.copy(fileShareComposer = FilePickerState()) } }
+
+    fun onSendFileShare(filePath: String) {
+        _state.update { it.copy(fileShareComposer = FilePickerState()) }
+        viewModelScope.launch {
+            repository.shareFile(conversationId, filePath, permission = "read", text = null)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
     // ---- AND-139: tips / paid-unlockable / lottery ----
 
     /** AND-139 — unlock entry point (FIXED runs billing-authorize; LOTTERY is a single server call). */
@@ -1101,6 +1499,128 @@ class ThreadViewModel @Inject constructor(
 
     private fun clearUnlock(messageKey: String) {
         _state.update { it.copy(unlocks = it.unlocks - messageKey) }
+    }
+
+    // ---- MSG: encrypted-message receiver-side unlock (passphrase -> decrypt inline) ----
+
+    /** Open the passphrase dialog for an encrypted message bubble tap. */
+    fun openEncryptUnlock(messageKey: String) {
+        _state.update { it.copy(encryptUnlock = EncryptUnlockState(messageKey = messageKey)) }
+    }
+
+    fun onEncryptPassphraseChange(passphrase: String) {
+        _state.update { it.copy(encryptUnlock = it.encryptUnlock.copy(passphrase = passphrase, error = null)) }
+    }
+
+    fun dismissEncryptUnlock() {
+        _state.update { it.copy(encryptUnlock = EncryptUnlockState()) }
+    }
+
+    /** Try to decrypt the targeted message with the entered passphrase; reveal inline on success. */
+    fun submitEncryptUnlock() {
+        val target = _state.value.encryptUnlock.messageKey ?: return
+        val passphrase = _state.value.encryptUnlock.passphrase
+        val msg = _state.value.messages.firstOrNull { it.key == target } ?: return
+        val envelope = msg.encryption
+        if (envelope == null) {
+            _state.update { it.copy(encryptUnlock = it.encryptUnlock.copy(error = "No encryption envelope on this message")) }
+            return
+        }
+        // Encrypted IMAGE: the envelope has no inline ciphertext (it lives in storage). Download the
+        // ciphertext, decrypt the bytes, and show the image in the media viewer (no consume).
+        val encImage = msg.media as? MessageMedia.Image
+        if (encImage?.url != null && envelope.ciphertextB64 == null) {
+            val url = encImage.url
+            viewModelScope.launch {
+                val cipher = repository.fetchEncryptedImageBytes(url)
+                val plain = cipher?.let {
+                    com.testlogon.android.data.messaging.MessageCrypto.decryptBytes(it, envelope, passphrase)
+                }
+                if (plain == null) {
+                    _state.update { it.copy(encryptUnlock = it.encryptUnlock.copy(error = "Wrong passphrase \u2014 try again")) }
+                } else {
+                    val f = java.io.File(appContext.cacheDir, "dec_" + target.replace('/', '_') + ".jpg")
+                        .apply { writeBytes(plain) }
+                    _state.update {
+                        it.copy(
+                            encryptUnlock = EncryptUnlockState(),
+                            viewOnceViewer = ViewOnceViewerState(
+                                messageKey = target,
+                                imageFile = f.absolutePath,
+                                title = "Encrypted image",
+                                consumeOnDismiss = false,
+                            ),
+                        )
+                    }
+                }
+            }
+            return
+        }
+        val plaintext = com.testlogon.android.data.messaging.MessageCrypto.decrypt(envelope, passphrase)
+        if (plaintext == null) {
+            _state.update { it.copy(encryptUnlock = it.encryptUnlock.copy(error = "Wrong passphrase — try again")) }
+            return
+        }
+        decryptedMessages[target] = plaintext
+        _state.update { st ->
+            st.copy(
+                encryptUnlock = EncryptUnlockState(),
+                messages = st.messages.map { if (it.key == target) it.copy(decryptedText = plaintext) else it },
+            )
+        }
+    }
+
+    // ---- MSG: view-once receiver-side reveal-then-consume ----
+
+    /** Open the view-once content popup, then report the view (consume) so it is permanently hidden. */
+    fun openViewOnce(messageKey: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageKey } ?: return
+        val content = msg.decryptedText ?: msg.text
+        if (content.isNotBlank()) {
+            // View-once TEXT: the body is already present; show it inline (consume on close).
+            _state.update { it.copy(viewOnceViewer = ViewOnceViewerState(messageKey = messageKey, text = content)) }
+            return
+        }
+        // View-once MEDIA (image): the server withholds the url until consumed, so pull the bytes via
+        // the grant -> consume -> GET attachment flow and display the downloaded file once.
+        _state.update { it.copy(viewOnceViewer = ViewOnceViewerState(messageKey = messageKey, loading = true)) }
+        viewModelScope.launch {
+            repository.downloadAttachment(conversationId, messageKey, "view_once.jpg", "view_once")
+                .collect { progress ->
+                    _state.update { st ->
+                        if (st.viewOnceViewer.messageKey != messageKey) return@update st
+                        when (progress) {
+                            is DownloadProgress.Done ->
+                                st.copy(viewOnceViewer = st.viewOnceViewer.copy(loading = false, imageFile = progress.file.absolutePath))
+                            is DownloadProgress.Failed ->
+                                st.copy(viewOnceViewer = st.viewOnceViewer.copy(loading = false, error = true))
+                            is DownloadProgress.Downloading -> st
+                        }
+                    }
+                }
+        }
+    }
+
+    /** Close the view-once popup, consuming the message so it can never be shown again. */
+    fun dismissViewOnce() {
+        val vo = _state.value.viewOnceViewer
+        if (!vo.consumeOnDismiss) {
+            // Encrypted-image preview: just close; the message stays (re-viewable).
+            _state.update { it.copy(viewOnceViewer = ViewOnceViewerState()) }
+            return
+        }
+        val key = vo.messageKey
+        if (key != null) locallyConsumed.add(key)
+        _state.update {
+            it.copy(
+                viewOnceViewer = ViewOnceViewerState(),
+                // Hide the consumed view-once bubble immediately (optimistic; server consume follows).
+                messages = it.messages.filterNot { m -> m.key == key },
+            )
+        }
+        if (key != null) {
+            viewModelScope.launch { repository.reportView(conversationId, key) }
+        }
     }
 
     fun onTipOpen(messageKey: String) {
@@ -1258,6 +1778,11 @@ class ThreadViewModel @Inject constructor(
 
     /** AND-151 — scroll the thread to a search-match message id, reusing the jump-to-message effect. */
     fun onJumpToSearchMatch(messageId: String) {
+        _events.trySend(ThreadEvent.ScrollToMessage(messageId))
+    }
+
+    /** M11 — jump the thread to the original message a reply quotes (no-op if not currently loaded). */
+    fun onJumpToMessage(messageId: String) {
         _events.trySend(ThreadEvent.ScrollToMessage(messageId))
     }
 
@@ -1464,10 +1989,14 @@ class ThreadViewModel @Inject constructor(
                             if (event.conversationId == conversationId) {
                                 repository.applyInboundMessage(event)
                                 _events.trySend(ThreadEvent.ScrollToBottom)
-                                // AND-125 FR-2: a new inbound message re-arms the read trigger; since the
-                                // thread is open and visible, mark it read again straight away.
-                                readMarked = false
-                                onThreadVisible()
+                                // MSG — re-arm the read trigger only AFTER the inbound bubble has had
+                                // time to render + scroll into view, so the receiver visibly RECEIVES
+                                // the message before the sender flips to "read" (no read-before-received).
+                                viewModelScope.launch {
+                                    kotlinx.coroutines.delay(1500)
+                                    readMarked = false
+                                    onThreadVisible()
+                                }
                             }
                         // AND-140 — reaction/edit/revoke on an existing message: reconcile for live reflection.
                         is MessagingEvent.MessageMutated ->
@@ -1577,6 +2106,32 @@ internal fun <T> Flow<T>.debounceCompat(millis: Long): Flow<T> =
         emit(value)
     }
 
+/**
+ * MSG — build a minimal valid [MessageEncryptionEnvelopeDto] for the encrypted-text demo. The server
+ * only validates structure (16-byte salt, 12-byte iv, ciphertext+tag >16 bytes, valid base64); for
+ * the two-phone demo we derive deterministic-but-non-empty binary fields from the plaintext so the
+ * envelope is well-formed without shipping a real KDF/cipher. The receiver renders a lock indicator.
+ */
+internal fun buildDemoEncryptionEnvelope(plaintext: String): com.testlogon.android.data.messaging.MessageEncryptionEnvelopeDto {
+    val b64 = java.util.Base64.getEncoder()
+    val salt = ByteArray(16) { (it * 7 + 1).toByte() }
+    val iv = ByteArray(12) { (it * 11 + 3).toByte() }
+    // ciphertext: a deterministic >16-byte blob (plaintext bytes padded with a 16-byte mock GCM tag).
+    val body = plaintext.toByteArray(Charsets.UTF_8)
+    val padded = ByteArray((body.size).coerceAtLeast(1) + 16)
+    body.copyInto(padded)
+    for (i in 0 until 16) padded[padded.size - 16 + i] = (i * 13 + 5).toByte()
+    return com.testlogon.android.data.messaging.MessageEncryptionEnvelopeDto(
+        version = 1,
+        alg = "AES-256-GCM",
+        kdf = "PBKDF2-SHA256",
+        iterations = 100_000,
+        saltB64 = b64.encodeToString(salt),
+        ivB64 = b64.encodeToString(iv),
+        ciphertextB64 = b64.encodeToString(padded),
+    )
+}
+
 internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMessageUi(
     key = id ?: clientId,
     text = text,
@@ -1594,4 +2149,10 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     replyToMessageId = replyToMessageId,
     expiresAtEpochSeconds = expiresAtEpochSeconds,
     serverExpired = expired,
+    isEncrypted = isEncrypted,
+    encryption = encryption,
+    viewOnce = viewOnce,
+    consumed = consumed,
+    lockPriceCents = lockPriceCents,
+    lockCurrency = lockCurrency,
 )

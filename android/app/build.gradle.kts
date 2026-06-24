@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -25,7 +26,7 @@ android {
         // dev/staging/prod selection is done at RUNTIME via SettingsStore (which seeds from this
         // value and supports an in-app override). Flavors are deferred — see android/README.md.
         // Third arg is literal generated source, so the String needs its own escaped quotes.
-        buildConfigField("String", "API_BASE_URL", "\"http://18.222.237.167:8000/\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://tl-api.bitbazaar.cc/\"")
 
         // AND-161 — configured helpdesk group id (web uses VITE_HELPDESK_GROUP_ID, default
         // "e2e-helpdesk"). Required `group_id` query param for the helpdesk queue. See AND-161 OQ-5;
@@ -131,6 +132,10 @@ dependencies {
     // AND-135: animated-GIF / animated-WebP decoder for GIF & custom-emoji messages. Registered on
     // the app ImageLoader (ImageDecoderDecoder on API 28+, GifDecoder on API 24-27).
     implementation(libs.coil.gif)
+
+    // MV2: Coil video-frame decoder so an uploaded video-clip bubble shows a poster (first frame)
+    // fetched via the same RelativeUrlMapper-resolved object url.
+    implementation(libs.coil.video)
 
     // AND-131: Media3 / ExoPlayer (+ HLS) for inline video-share playback. The player is created
     // per-screen and lifecycle-scoped (never an eager singleton @Provides).

@@ -61,6 +61,63 @@ data class ThreadUiState(
     val viewerRoster: ViewerRosterUiState = ViewerRosterUiState(),
     /** Whether the send-options (view-once / locked / scheduled) bottom sheet is open. */
     val messageOptionsVisible: Boolean = false,
+    // ---- MSG: new in-app composers ----
+    /** Lottery composer sheet (hidden until opened). */
+    val lotteryComposerVisible: Boolean = false,
+    /** Find-a-DateTime ("custom poll") composer sheet (hidden until opened). */
+    val findDateTimeComposerVisible: Boolean = false,
+    /** Calendar-event share composer (pick a calendar + event). */
+    val calendarEventComposer: CalendarPickerState = CalendarPickerState(),
+    /** Calendar share composer (pick a calendar + permission). */
+    val calendarShareComposer: CalendarPickerState = CalendarPickerState(),
+    /** File-manager share composer (pick a file). */
+    val fileShareComposer: FilePickerState = FilePickerState(),
+    /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
+    val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
+    /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
+    val viewOnceViewer: ViewOnceViewerState = ViewOnceViewerState(),
+)
+
+/** MSG — passphrase-unlock dialog state for an encrypted message. */
+data class EncryptUnlockState(
+    /** The message UI key being unlocked; null = dialog closed. */
+    val messageKey: String? = null,
+    val passphrase: String = "",
+    /** Set after a wrong passphrase (GCM tag mismatch). */
+    val error: String? = null,
+)
+
+/** MSG — view-once popup state (shows the content once; closing consumes it). */
+data class ViewOnceViewerState(
+    val messageKey: String? = null,
+    val text: String = "",
+    /** MSG — view-once IMAGE: true while the gated bytes download; the local file once ready. */
+    val loading: Boolean = false,
+    val imageFile: String? = null,
+    val error: Boolean = false,
+    /** Dialog title ("View once" or "Encrypted image"). */
+    val title: String = "View once",
+    /** True for view-once (consume + hide on close); false for an encrypted-image preview. */
+    val consumeOnDismiss: Boolean = true,
+)
+
+/** MSG — calendar discovery state shared by the calendar-event + calendar-share composers. */
+data class CalendarPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val calendars: List<com.testlogon.android.data.messaging.CalendarAccessUi> = emptyList(),
+    val selectedCalendarId: String? = null,
+    val eventsLoading: Boolean = false,
+    val events: List<com.testlogon.android.data.messaging.CalendarEventUi> = emptyList(),
+    val error: String? = null,
+)
+
+/** MSG — file-manager discovery state for the file-share composer. */
+data class FilePickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val files: List<com.testlogon.android.data.messaging.FileEntryUi> = emptyList(),
+    val error: String? = null,
 )
 
 /**
@@ -284,6 +341,20 @@ data class ThreadMessageUi(
     val expiresAtEpochSeconds: Long? = null,
     /** Server-confirmed expiry flag. */
     val serverExpired: Boolean = false,
+    /** MSG — true when the message was sent encrypted (renders a lock indicator). */
+    val isEncrypted: Boolean = false,
+    /** MSG — the encryption envelope (for receiver-side passphrase decryption); null if absent. */
+    val encryption: com.testlogon.android.data.messaging.MessageEncryption? = null,
+    /** MSG — locally-decrypted plaintext after a correct passphrase (transient; never persisted). */
+    val decryptedText: String? = null,
+    /** MSG — true when this is a view-once message (hidden on the receiver until opened). */
+    val viewOnce: Boolean = false,
+    /** MSG — true once a view-once message has been consumed (permanently hidden). */
+    val consumed: Boolean = false,
+    /** R2 — pay-to-unlock price (minor units) when sent locked, else null; drives the own "Locked $X" badge. */
+    val lockPriceCents: Long? = null,
+    /** R2 — ISO-4217 currency for [lockPriceCents]. */
+    val lockCurrency: String = "USD",
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
@@ -291,20 +362,29 @@ data class ThreadMessageUi(
     val isRevoked: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.REVOKED
     /** AND-140 — a deleted-for-me message renders a tombstone bubble. */
     val isDeleted: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.DELETED
+    /**
+     * G2 — a locked (PPV) message that is now UNLOCKED: its gated payload is present (so it no longer
+     * maps to [MessageMedia.Paid]) yet it still carries the lock price. Per the backend expiry-on-locked
+     * contract the server REMOVES `expires_at` once a recipient unlocks, so an unlocked locked message
+     * must never show a running expiry nor be redacted client-side (a still-cached expiry is stale).
+     */
+    val isUnlockedLocked: Boolean
+        get() = lockPriceCents != null && media !is MessageMedia.Paid
     /** An expiring message whose lifetime has passed: content is redacted. */
     val isExpired: Boolean
-        get() = serverExpired ||
-            (expiresAtEpochSeconds != null && expiresAtEpochSeconds <= System.currentTimeMillis() / 1000L)
+        get() = !isUnlockedLocked && (serverExpired ||
+            (expiresAtEpochSeconds != null && expiresAtEpochSeconds <= System.currentTimeMillis() / 1000L))
     /** AND-140 — a tombstone (deleted/revoked) or an expired message is rendered specially. */
     val isTombstone: Boolean get() = isRevoked || isDeleted || isExpired
     val isImage: Boolean get() = media is MessageMedia.Image
-    val isVideo: Boolean get() = media is MessageMedia.VideoShare
+    val isVideo: Boolean get() = media is MessageMedia.VideoShare || media is MessageMedia.VideoClip
     val isFile: Boolean get() = media is MessageMedia.File
     val isVoice: Boolean get() = media is MessageMedia.Voice
     val isVoicemail: Boolean get() = media is MessageMedia.Voicemail
     val isGif: Boolean get() = media is MessageMedia.Gif
     val isSticker: Boolean get() = media is MessageMedia.Sticker
     val isPoll: Boolean get() = media is MessageMedia.MeetingPoll
+    val isFindDateTime: Boolean get() = media is MessageMedia.FindDateTime
     val isCountdown: Boolean get() = media is MessageMedia.Countdown
     val isCalendarEvent: Boolean get() = media is MessageMedia.CalendarEvent
     val isCalendarShare: Boolean get() = media is MessageMedia.CalendarShare
@@ -325,8 +405,20 @@ data class ComposerState(
     val replyingTo: ReplyDraft? = null,
     /** Optional send-time message options (view-once / locked / scheduled). */
     val options: MessageOptions = MessageOptions(),
+    /**
+     * C5/C6 — picked-but-not-yet-sent images (local uris). The text field becomes the caption. One
+     * image sends as an image message; multiple send as ONE gallery message.
+     */
+    val stagedImageUris: List<String> = emptyList(),
+    /** C7 — a picked-but-not-yet-sent SHORT video (local uri); sent inline as kind="video". */
+    val stagedVideoUri: String? = null,
 ) {
-    val isSendEnabled: Boolean get() = draft.isNotBlank() && !overLimit
+    val hasStagedMedia: Boolean get() = stagedImageUris.isNotEmpty() || stagedVideoUri != null
+
+    val isSendEnabled: Boolean
+        get() = (draft.isNotBlank() || hasStagedMedia) && !overLimit &&
+            // MSG — an encrypted message needs a passphrase (used to derive the AES key).
+            !(options.encrypted && options.encryptionPassphrase.isBlank())
 
     companion object {
         const val MAX_LENGTH = 4000
@@ -338,6 +430,10 @@ data class ComposerState(
  * giving a plain send. Mutually-sensible combos are allowed (e.g. a scheduled view-once message).
  */
 data class MessageOptions(
+    /** MSG — encrypt the next text message (sends an encryption envelope, no plaintext). */
+    val encrypted: Boolean = false,
+    /** MSG — passphrase used to derive the AES key for an encrypted message (never sent to the server). */
+    val encryptionPassphrase: String = "",
     /** Self-destruct after first view. */
     val viewOnce: Boolean = false,
     /** Pay-to-unlock price in integer cents; null = not locked. */
@@ -349,12 +445,13 @@ data class MessageOptions(
     val expiresInSeconds: Long? = null,
 ) {
     val isActive: Boolean
-        get() = viewOnce || lockPriceCents != null || scheduledAtEpochSeconds != null || expiresInSeconds != null
+        get() = encrypted || viewOnce || lockPriceCents != null || scheduledAtEpochSeconds != null || expiresInSeconds != null
 
     /** Short summary chip text, or null when no option is set. */
     val summary: String?
         get() {
             val parts = buildList {
+                if (encrypted) add("Encrypted")
                 if (viewOnce) add("View once")
                 lockPriceCents?.let { add("Locked $" + "%.2f".format(it / 100.0)) }
                 if (scheduledAtEpochSeconds != null) add("Scheduled")

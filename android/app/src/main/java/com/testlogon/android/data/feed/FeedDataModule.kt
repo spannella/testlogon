@@ -35,6 +35,12 @@ object FeedApiModule {
     @Singleton
     fun providePollApi(retrofit: Retrofit): PollApi =
         retrofit.create(PollApi::class.java)
+
+    /** FD1 — current-user identity (GET /ui/me) for the "Your posts" author filter. */
+    @Provides
+    @Singleton
+    fun provideCurrentUserApi(retrofit: Retrofit): CurrentUserApi =
+        retrofit.create(CurrentUserApi::class.java)
 }
 
 /** AND-097 / AND-173 / AND-174 / AND-175 — binds the feed + engagement repositories. */

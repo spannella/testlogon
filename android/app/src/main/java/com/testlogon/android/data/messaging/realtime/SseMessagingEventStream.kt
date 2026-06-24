@@ -190,7 +190,7 @@ class SseMessagingEventStream @Inject constructor(
     private companion object {
         const val STREAM_PATH = "messaging/events/stream"
         const val POLL_PATH = "messaging/events/poll?limit=100"
-        const val POLL_INTERVAL_MS = 1500L
+        const val POLL_INTERVAL_MS = 600L
 
         /** AND-149 — poll cadence while parked in the background (cheap; the thread is otherwise idle). */
         const val FOREGROUND_POLL_MS = 250L

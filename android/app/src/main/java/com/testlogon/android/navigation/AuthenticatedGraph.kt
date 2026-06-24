@@ -151,6 +151,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         galleryDestination(navController)
         // Newsfeed post compose (create a post).
         composePostDestination(navController)
+        myPostsDestination(navController)
         // VOD upload (publish a video).
         videoUploadDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).

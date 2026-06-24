@@ -25,6 +25,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -171,6 +175,10 @@ interface MessagingRepository {
      */
     suspend fun reportView(conversationId: String, messageId: String): ApiResult<Unit>
 
+    /** Record consumption of a once-media message (grant -> consume) without downloading bytes;
+     *  used for listen-once audio whose url is already exposed for direct playback. */
+    suspend fun consumeOnceMedia(conversationId: String, messageId: String, trigger: String)
+
     /**
      * AND-147 — fetch the viewer roster for [messageId] (FR-5). Returns viewers sorted most-recent
      * first with the local user excluded (FR-6). The roster is a single bounded fetch (server has no
@@ -246,7 +254,64 @@ interface MessagingRepository {
         conversationId: String,
         clientId: String,
         localUri: String,
+        caption: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+        encryptionPassphrase: String? = null,
     ): ApiResult<Message>
+
+    /** C6 — enqueue an optimistic gallery (multi-image) outbox row (renders the first thumbnail + a
+     * "+N" badge while uploading). */
+    suspend fun enqueueOptimisticGallery(
+        conversationId: String,
+        clientId: String,
+        firstLocalUri: String,
+        imageCount: Int,
+        nowSeconds: Long,
+    )
+
+    /**
+     * C6 — send MULTIPLE picked images as ONE gallery message: process + presign + PUT each image,
+     * collect the refs, then POST messages/gallery once. Reconciles the optimistic row or marks it
+     * FAILED. Manual retry (no server idempotency key).
+     */
+    suspend fun sendGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        localUris: List<String>,
+        caption: String? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<Message>
+
+    /** C7 — enqueue an optimistic short-video outbox row (renders a file/clip bubble + progress). */
+    suspend fun enqueueOptimisticVideoClip(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    )
+
+    /**
+     * C7 — send a picked SHORT video inline: stream the raw clip through the messaging images presign
+     * (+ PUT, NO image processing/compression) and POST messages/image with kind="video". The server
+     * stores it as a file attachment, so it renders as a downloadable/playable video bubble.
+     */
+    suspend fun sendVideoClipOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        caption: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<Message>
+
+    /** MSG (encrypted media) — GET raw bytes from a media url (encrypted-image ciphertext). */
+    suspend fun fetchEncryptedImageBytes(url: String): ByteArray?
 
     /** AND-131 — list the current user's published videos for the share picker. */
     suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>>
@@ -280,6 +345,11 @@ interface MessagingRepository {
         localUri: String,
         fileName: String,
         mimeType: String,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        lockDescription: String? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
     ): ApiResult<Message>
 
     /** AND-132 — share an existing owned file (by VFS path) into a conversation; returns the message. */
@@ -318,6 +388,8 @@ interface MessagingRepository {
         localFilePath: String,
         durationSeconds: Double,
         waveform: List<Float>,
+        consumptionPolicy: String = "none",
+        sendAtEpochSeconds: Long? = null,
     ): ApiResult<Message>
 
     // ---- AND-134: voicemail ----
@@ -455,7 +527,112 @@ interface MessagingRepository {
         note: String?,
         paymentMethodId: String?,
     ): ApiResult<TipReceipt>
+
+    // ---- MSG: new in-app composers ----
+
+    /** Lottery DM (conversation_id in BODY). Outcomes default-split weights to sum 10000. */
+    suspend fun sendLottery(
+        conversationId: String,
+        outcomes: List<LotteryOutcomeDraft>,
+        image: LotteryImageRef? = null,
+    ): ApiResult<Message>
+
+    /**
+     * C10 — upload a picked image for a lottery message (reuses the conversation image presign/PUT
+     * transport; no confirm step). Returns the bucket/key/dimensions ref, or null on failure.
+     */
+    suspend fun uploadLotteryImage(
+        conversationId: String,
+        localUri: String,
+    ): LotteryImageRef?
+
+    /** Find-a-DateTime ("custom") poll. */
+    suspend fun createFindDateTime(
+        conversationId: String,
+        draft: FindDateTimeDraft,
+    ): ApiResult<Message>
+
+    /** Share a calendar event. */
+    suspend fun shareCalendarEvent(
+        conversationId: String,
+        calendarId: String,
+        eventId: String,
+        text: String?,
+    ): ApiResult<Message>
+
+    /** Share a calendar (read/write, optional booking link). */
+    suspend fun shareCalendar(
+        conversationId: String,
+        calendarId: String,
+        permission: String,
+        includeBookingLink: Boolean,
+        text: String?,
+    ): ApiResult<Message>
+
+    /** Send an encrypted text message (envelope populated; no plaintext on the wire). */
+    suspend fun sendEncryptedText(
+        conversationId: String,
+        clientId: String,
+        envelope: MessageEncryptionEnvelopeDto,
+        replyToMessageId: String?,
+    ): ApiResult<Message>
+
+    /** Discovery: the user's calendars. */
+    suspend fun listCalendars(): ApiResult<List<CalendarAccessUi>>
+
+    /** Discovery: events in a calendar. */
+    suspend fun listCalendarEvents(calendarId: String): ApiResult<List<CalendarEventUi>>
+
+    /** Discovery: file-manager files at [path] (default root). */
+    suspend fun listFiles(path: String = "/"): ApiResult<List<FileEntryUi>>
 }
+
+/** A single lottery outcome draft from the composer (label + revealed text). */
+data class LotteryOutcomeDraft(val label: String?, val text: String, val weightBps: Int? = null)
+
+/** C10 — resolved upload result for a lottery cover image (Backend B3 image object fields). */
+data class LotteryImageRef(
+    val bucket: String,
+    val key: String,
+    val contentType: String?,
+    val width: Int?,
+    val height: Int?,
+)
+
+/** A Find-a-DateTime poll creation draft. */
+data class FindDateTimeDraft(
+    val title: String,
+    val fromDate: String,
+    val toDate: String,
+    val startHour: Int,
+    val endHour: Int,
+    val slotDurationMinutes: Int,
+    val deadlineHours: Int = 48,
+    val text: String? = null,
+)
+
+/** Discovery: a calendar the user can pick to share an event from or share wholesale. */
+data class CalendarAccessUi(
+    val calendarId: String,
+    val name: String,
+    val permission: String,
+)
+
+/** Discovery: a calendar event the user can share. */
+data class CalendarEventUi(
+    val eventId: String,
+    val calendarId: String,
+    val name: String,
+    val startUtc: String?,
+)
+
+/** Discovery: a file the user can share (path is absolute, starts with /). */
+data class FileEntryUi(
+    val path: String,
+    val name: String,
+    val isFolder: Boolean,
+    val sizeBytes: Long?,
+)
 
 /** AND-137 — a countdown creation draft (validated by the ViewModel before send). */
 data class CountdownDraft(
@@ -553,6 +730,7 @@ class MessagingRepositoryImpl @Inject constructor(
     private val meetingPollDao: MeetingPollDao,
     private val errorParser: ApiErrorParser,
     private val authStateStore: AuthStateStore,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     private val uploader: AttachmentUploader,
     private val imageProcessor: MessageImageProcessor,
     private val uriMetadata: com.testlogon.android.data.upload.UriMetadata,
@@ -666,16 +844,31 @@ class MessagingRepositoryImpl @Inject constructor(
     override suspend fun applyInboundMessage(event: MessagingEvent.NewMessage) = withContext(io) {
         // Ignore if we already have this message (e.g. our own send already reconciled).
         if (messageDao.findById(event.messageId) != null) return@withContext
+        // Prefer the canonical message from the list (real created_at + full media), mirroring
+        // applyMessageMutation. The realtime frame often omits created_at/url, which previously made
+        // the bubble show "0 minutes ago" and drop its media until the next manual refresh.
+        when (val r = apiCall { api.listMessages(event.conversationId, limit = PAGE_SIZE, before = null) }) {
+            is ApiResult.Success -> {
+                val fresh = r.data.firstOrNull { it.messageId == event.messageId }
+                if (fresh != null) {
+                    reconcilePreservingLocalFlags(fresh.toDomain())
+                    return@withContext
+                }
+            }
+            else -> Unit
+        }
+        // Fallback (offline / not yet in the list): insert a minimal row. Use the frame's created_at
+        // when present, else NOW (the message just arrived) — never 0, which renders a blank time.
+        val created = event.createdAtEpochSeconds.takeIf { it > 0L } ?: (System.currentTimeMillis() / 1000L)
         messageDao.upsert(
             MessageEntity(
                 messageId = event.messageId,
                 conversationId = event.conversationId,
                 senderId = event.senderId,
                 text = event.text.orEmpty(),
-                createdAtEpochSeconds = event.createdAtEpochSeconds,
+                createdAtEpochSeconds = created,
                 clientId = null,
                 kind = event.kind,
-                // Media fields (urls) arrive on the next list refresh; the SSE frame carries no url.
             ),
         )
     }
@@ -959,6 +1152,26 @@ class MessagingRepositoryImpl @Inject constructor(
             }
         }
 
+    override suspend fun consumeOnceMedia(conversationId: String, messageId: String, trigger: String) =
+        withContext(io) {
+            runCatching {
+                val grant = api.createAttachmentGrant(conversationId, messageId)
+                api.consumeAttachment(
+                    id = conversationId,
+                    messageId = messageId,
+                    grantToken = grant.grantToken,
+                    body = ConsumeAttachmentReq(
+                        consumptionAttemptId = java.util.UUID.randomUUID().toString(),
+                        trigger = trigger,
+                    ),
+                )
+            }
+            Unit
+        }
+
+    override suspend fun fetchEncryptedImageBytes(url: String): ByteArray? =
+        withContext(io) { storageClient.getBytesBlocking(url) }
+
     override suspend fun getViewers(
         conversationId: String,
         messageId: String,
@@ -1082,6 +1295,12 @@ class MessagingRepositoryImpl @Inject constructor(
         conversationId: String,
         clientId: String,
         localUri: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+        encryptionPassphrase: String?,
     ): ApiResult<Message> = withContext(io) {
         try {
             // 1. Process (compress, EXIF-strip) the picked uri.
@@ -1089,16 +1308,32 @@ class MessagingRepositoryImpl @Inject constructor(
                 ?: return@withContext failImage(clientId, "Couldn't process this image.")
             val fileName = processed.uri.lastPathSegment ?: "image.jpg"
 
+            // MSG (encrypted image) — if a passphrase is armed, encrypt the bytes and upload the
+            // CIPHERTEXT; the message carries only the salt/iv envelope. The receiver downloads the
+            // ciphertext and decrypts with the same passphrase.
+            var uploadUri = processed.uri
+            var uploadSize = processed.byteSize
+            var encEnvelope: MessageEncryptionEnvelopeDto? = null
+            if (!encryptionPassphrase.isNullOrBlank()) {
+                val plain = appContext.contentResolver.openInputStream(processed.uri)?.use { it.readBytes() }
+                    ?: return@withContext failImage(clientId, "Couldn't read image to encrypt.")
+                val (env, cipher) = MessageCrypto.encryptBytes(plain, encryptionPassphrase)
+                val encFile = java.io.File(appContext.cacheDir, "enc_$clientId.bin").apply { writeBytes(cipher) }
+                uploadUri = Uri.fromFile(encFile)
+                uploadSize = cipher.size.toLong()
+                encEnvelope = env
+            }
+
             // 2. Presign + PUT via the AND-129 uploader (image flow has NO confirm step). The
             //    uploader returns an AttachmentRef carrying the presign bucket/key we send next.
             var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
             var uploadError: ApiError? = null
             uploader.upload(
                 UploadRequest(
-                    uri = processed.uri,
+                    uri = uploadUri,
                     mimeType = processed.mimeType,
                     category = "message",
-                    sizeBytes = processed.byteSize,
+                    sizeBytes = uploadSize,
                     displayName = fileName,
                     presignPath = "messaging/conversations/$conversationId/images/presign",
                     confirmPath = null,
@@ -1141,6 +1376,13 @@ class MessagingRepositoryImpl @Inject constructor(
                             filesize = processed.byteSize,
                             width = processed.width,
                             height = processed.height,
+                            caption = caption?.takeIf { it.isNotBlank() },
+                            consumptionPolicy = if (viewOnce) "view_once" else null,
+                            viewOnce = viewOnce,
+                            expiresInSeconds = expiresInSeconds,
+                            lockPriceCents = lockPriceCents,
+                            sendAt = sendAtEpochSeconds,
+                            encryption = encEnvelope,
                         ),
                     )
                 }
@@ -1162,6 +1404,247 @@ class MessagingRepositoryImpl @Inject constructor(
     private suspend fun failImage(clientId: String, message: String): ApiResult<Message> {
         markOutboxFailed(clientId)
         return ApiResult.Failure(ApiError(status = ApiError.STATUS_PARSE, message = message))
+    }
+
+    override suspend fun enqueueOptimisticGallery(
+        conversationId: String,
+        clientId: String,
+        firstLocalUri: String,
+        imageCount: Int,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                // Optimistic gallery rows reuse the "image" kind (single thumbnail) until the server
+                // kind="gallery" message replaces the row with the full grid. `fileSizeBytes` stashes
+                // the picked-image count for an optimistic "+N" badge (no schema migration needed).
+                kind = "image",
+                imageLocalUri = firstLocalUri,
+                fileSizeBytes = imageCount.toLong(),
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    /** C6 — process + presign + PUT a single image, returning its gallery item ref (or null). */
+    private suspend fun uploadGalleryImage(
+        conversationId: String,
+        localUri: String,
+    ): GalleryImageItemReq? {
+        val processed = imageProcessor.process(Uri.parse(localUri)) ?: return null
+        val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = processed.uri,
+                mimeType = processed.mimeType,
+                category = "message",
+                sizeBytes = processed.byteSize,
+                displayName = fileName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        return attachment?.let {
+            GalleryImageItemReq(
+                bucket = it.bucket,
+                key = it.key,
+                contentType = it.contentType,
+                width = processed.width,
+                height = processed.height,
+                filename = fileName,
+                filesize = processed.byteSize,
+            )
+        }
+    }
+
+    override suspend fun sendGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        localUris: List<String>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            if (localUris.isEmpty()) return@withContext failImage(clientId, "No images selected.")
+            val total = localUris.size
+            // MV3 — upload all images CONCURRENTLY (each is an independent process+presign+PUT) instead
+            // of strictly sequentially, so the 2nd/Nth image no longer waits on the 1st. Order is
+            // preserved by awaitAll (results come back in the launched order); a completion counter
+            // drives coarse progress as each finishes.
+            val done = AtomicInteger(0)
+            val refs = coroutineScope {
+                localUris.map { uri ->
+                    async {
+                        val ref = uploadGalleryImage(conversationId, uri)
+                        if (ref != null) {
+                            outboxDao.updateUploadPercent(clientId, (done.incrementAndGet() * 100 / total))
+                        }
+                        ref
+                    }
+                }.awaitAll()
+            }
+            if (refs.any { it == null }) {
+                return@withContext failImage(clientId, "Couldn't upload one of the images.")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val readyRefs = refs as List<GalleryImageItemReq>
+            when (
+                val created = apiCall {
+                    api.createGalleryMessage(
+                        conversationId,
+                        CreateGalleryMessageReq(
+                            freeImages = readyRefs,
+                            text = caption?.takeIf { it.isNotBlank() },
+                            expiresInSeconds = expiresInSeconds,
+                            sendAt = sendAtEpochSeconds,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    override suspend fun enqueueOptimisticVideoClip(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        val info = uriMetadata.resolve(Uri.parse(localUri), fallbackMime = "video/mp4")
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                // MV2 — optimistic short-video rows render as an inline VIDEO clip bubble (poster from
+                // the local source uri), matching the reconciled server kind="video" render.
+                kind = "video",
+                attachmentLocalUri = localUri,
+                fileName = info.displayName ?: "video.mp4",
+                fileSizeBytes = info.sizeBytes,
+                fileMimeType = info.mimeType,
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    override suspend fun sendVideoClipOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            val uri = Uri.parse(localUri)
+            val info = uriMetadata.resolve(uri, fallbackMime = "video/mp4")
+            val resolvedName = info.displayName ?: "video.mp4"
+            // Guard: keep clips SHORT (size-bounded; the picker also requests short videos). Reject
+            // anything over 50 MB rather than uploading a huge file.
+            if (info.sizeBytes > 50L * 1024L * 1024L) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    ApiError(status = ApiError.STATUS_PARSE, message = "That video is too large (max 50 MB)."),
+                )
+            }
+
+            // Presign + PUT via the messaging IMAGES transport (no VFS entitlement gates, no confirm),
+            // streaming the raw video bytes (NO bitmap processing).
+            var ref: com.testlogon.android.data.upload.AttachmentRef? = null
+            var uploadError: ApiError? = null
+            uploader.upload(
+                UploadRequest(
+                    uri = uri,
+                    mimeType = info.mimeType,
+                    category = "message",
+                    sizeBytes = info.sizeBytes,
+                    displayName = resolvedName,
+                    presignPath = "messaging/conversations/$conversationId/images/presign",
+                    confirmPath = null,
+                ),
+            ).collect { progress ->
+                when (progress) {
+                    is UploadProgress.Uploading ->
+                        outboxDao.updateUploadPercent(clientId, (progress.fraction * 100).toInt())
+                    is UploadProgress.Succeeded -> {
+                        outboxDao.updateUploadPercent(clientId, 100)
+                        ref = progress.attachment
+                    }
+                    is UploadProgress.Failed -> uploadError = ApiError(
+                        status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                        message = progress.error.message ?: "Upload failed",
+                    )
+                    UploadProgress.Cancelled ->
+                        uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                    else -> Unit
+                }
+            }
+            val attachment = ref
+            if (attachment == null) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+                )
+            }
+
+            when (
+                val created = apiCall {
+                    api.createImageMessage(
+                        conversationId,
+                        CreateImageMessageReq(
+                            bucket = attachment.bucket,
+                            key = attachment.key,
+                            contentType = info.mimeType,
+                            kind = "video",
+                            filename = resolvedName,
+                            filesize = info.sizeBytes,
+                            caption = caption?.takeIf { it.isNotBlank() },
+                            consumptionPolicy = if (viewOnce) "view_once" else null,
+                            viewOnce = viewOnce,
+                            expiresInSeconds = expiresInSeconds,
+                            lockPriceCents = lockPriceCents,
+                            sendAt = sendAtEpochSeconds,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
     }
 
     override suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>> = withContext(io) {
@@ -1238,6 +1721,11 @@ class MessagingRepositoryImpl @Inject constructor(
         localUri: String,
         fileName: String,
         mimeType: String,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        lockDescription: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> = withContext(io) {
         try {
             val uri = Uri.parse(localUri)
@@ -1292,7 +1780,16 @@ class MessagingRepositoryImpl @Inject constructor(
                 val created = apiCall {
                     api.createFileMessage(
                         conversationId,
-                        CreateFileMessageReq(path = serverPath, kind = "file"),
+                        CreateFileMessageReq(
+                            path = serverPath,
+                            kind = "file",
+                            consumptionPolicy = if (viewOnce) "view_once" else null,
+                            viewOnce = viewOnce,
+                            expiresInSeconds = expiresInSeconds,
+                            lockPriceCents = lockPriceCents,
+                            lockDescription = lockDescription,
+                            sendAt = sendAtEpochSeconds,
+                        ),
                     )
                 }
             ) {
@@ -1378,6 +1875,8 @@ class MessagingRepositoryImpl @Inject constructor(
         localFilePath: String,
         durationSeconds: Double,
         waveform: List<Float>,
+        consumptionPolicy: String,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> = withContext(io) {
         try {
             val clip = java.io.File(localFilePath)
@@ -1435,6 +1934,8 @@ class MessagingRepositoryImpl @Inject constructor(
                             sizeBytes = sizeBytes,
                             durationSeconds = durationSeconds,
                             waveformData = waveform,
+                            consumptionPolicy = consumptionPolicy,
+                            sendAt = sendAtEpochSeconds,
                         ),
                     )
                 }
@@ -1907,6 +2408,217 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    // ---- MSG: new in-app composers (implementations) ----
+
+    override suspend fun uploadLotteryImage(
+        conversationId: String,
+        localUri: String,
+    ): LotteryImageRef? = withContext(io) {
+        // Reuse the conversation image presign/PUT transport (no confirm step), like sendImageOutbox.
+        val processed = imageProcessor.process(Uri.parse(localUri)) ?: return@withContext null
+        val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = processed.uri,
+                mimeType = processed.mimeType,
+                category = "message",
+                sizeBytes = processed.byteSize,
+                displayName = fileName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        attachment?.let {
+            LotteryImageRef(
+                bucket = it.bucket,
+                key = it.key,
+                contentType = it.contentType,
+                width = processed.width,
+                height = processed.height,
+            )
+        }
+    }
+
+    override suspend fun sendLottery(
+        conversationId: String,
+        outcomes: List<LotteryOutcomeDraft>,
+        image: LotteryImageRef?,
+    ): ApiResult<Message> = withContext(io) {
+        // Weights: use the sender-provided weight_bps when present (normalized to sum exactly 10000),
+        // else split evenly. Any rounding remainder is added to the first outcome so the sum is 10000.
+        val n = outcomes.size.coerceAtLeast(1)
+        val hasWeights = outcomes.any { (it.weightBps ?: 0) > 0 }
+        val rawWeights: List<Int> = if (hasWeights) {
+            outcomes.map { (it.weightBps ?: 0).coerceAtLeast(0) }
+        } else {
+            val base = 10_000 / n
+            List(n) { base }
+        }
+        val total = rawWeights.sum().coerceAtLeast(1)
+        // Scale to 10000 bps.
+        val scaled = rawWeights.map { (it.toLong() * 10_000L / total).toInt() }
+        val remainder = 10_000 - scaled.sum()
+        val finalWeights = scaled.mapIndexed { i, w -> (w + if (i == 0) remainder else 0).coerceAtLeast(1) }
+        val outcomeReqs = outcomes.mapIndexed { i, o ->
+            LotteryOutcomeReq(
+                displayLabel = o.label?.takeIf { it.isNotBlank() },
+                weightBps = finalWeights.getOrElse(i) { 10_000 / n },
+                payloadType = "text",
+                textContent = o.text,
+            )
+        }
+        val req = CreateLotteryReq(
+            conversationId = conversationId,
+            lotteryConfig = LotteryConfigReq(version = "v1", outcomes = outcomeReqs),
+            image = image?.let {
+                LotteryMessageImageReq(
+                    bucket = it.bucket,
+                    key = it.key,
+                    contentType = it.contentType,
+                    width = it.width,
+                    height = it.height,
+                )
+            },
+        )
+        when (val r = apiCall { api.createLottery(req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun createFindDateTime(
+        conversationId: String,
+        draft: FindDateTimeDraft,
+    ): ApiResult<Message> = withContext(io) {
+        val req = CreateFindDateTimeReq(
+            title = draft.title,
+            fromDate = draft.fromDate,
+            toDate = draft.toDate,
+            startHour = draft.startHour,
+            endHour = draft.endHour,
+            slotDurationMinutes = draft.slotDurationMinutes,
+            deadlineHours = draft.deadlineHours,
+            text = draft.text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createFindDateTime(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun shareCalendarEvent(
+        conversationId: String,
+        calendarId: String,
+        eventId: String,
+        text: String?,
+    ): ApiResult<Message> = withContext(io) {
+        val req = CreateCalendarEventReq(
+            calendarId = calendarId,
+            eventId = eventId,
+            text = text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createCalendarEventMessage(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun shareCalendar(
+        conversationId: String,
+        calendarId: String,
+        permission: String,
+        includeBookingLink: Boolean,
+        text: String?,
+    ): ApiResult<Message> = withContext(io) {
+        val req = CreateCalendarShareReq(
+            calendarId = calendarId,
+            permission = permission,
+            includeBookingLink = includeBookingLink,
+            text = text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createCalendarShareMessage(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun sendEncryptedText(
+        conversationId: String,
+        clientId: String,
+        envelope: MessageEncryptionEnvelopeDto,
+        replyToMessageId: String?,
+    ): ApiResult<Message> = withContext(io) {
+        val req = SendTextMessageReq(
+            text = null,
+            replyToMessageId = replyToMessageId,
+            encryption = envelope,
+        )
+        when (val r = apiCall { api.sendMessage(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain(clientId = clientId)
+                messageDao.upsert(message.toEntity(clientId = clientId))
+                outboxDao.delete(clientId)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> { markOutboxFailed(clientId); r }
+            is ApiResult.NetworkError -> { markOutboxFailed(clientId); r }
+        }
+    }
+
+    override suspend fun listCalendars(): ApiResult<List<CalendarAccessUi>> = withContext(io) {
+        when (val r = apiCall { api.listCalendars() }) {
+            is ApiResult.Success -> ApiResult.Success(
+                r.data.map { CalendarAccessUi(it.calendarId, it.name, it.permission) },
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun listCalendarEvents(calendarId: String): ApiResult<List<CalendarEventUi>> =
+        withContext(io) {
+            when (val r = apiCall { api.listCalendarEvents(calendarId) }) {
+                is ApiResult.Success -> ApiResult.Success(
+                    r.data.events.map { CalendarEventUi(it.eventId, it.calendarId.ifBlank { calendarId }, it.name, it.startUtc) },
+                )
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    override suspend fun listFiles(path: String): ApiResult<List<FileEntryUi>> = withContext(io) {
+        when (val r = apiCall { api.listFiles(path) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                r.data.items.map { FileEntryUi(it.path, it.name, it.type == "folder", it.size) },
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
     /** Re-fetch the newest thread page and reconcile the cache, then return the (now revealed) row. */
     private suspend fun refreshAndReveal(conversationId: String, messageId: String): ApiResult<Message> {
         return when (val r = apiCall { api.listMessages(conversationId, limit = 30, before = null) }) {
@@ -1996,6 +2708,11 @@ class MessagingRepositoryImpl @Inject constructor(
         ApiResult.Failure(errorParser.from(e))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+    } catch (e: com.squareup.moshi.JsonDataException) {
+        // MSG — a single malformed/unexpected field must not crash the whole call (it previously took
+        // out the entire message-list parse, dropping rich messages on the receiver). Degrade to a
+        // recoverable failure so the cached thread keeps rendering.
+        ApiResult.NetworkError(java.io.IOException(e), isTimeout = false)
     }
 
     companion object {
@@ -2079,13 +2796,16 @@ internal fun ConversationEntity.toDomain(): Conversation = Conversation(
 
 internal fun Message.toEntity(clientId: String?): MessageEntity {
     val image = media as? MessageMedia.Image
+    val gallery = media as? MessageMedia.Gallery
     val video = media as? MessageMedia.VideoShare
     val file = media as? MessageMedia.File
+    val videoClip = media as? MessageMedia.VideoClip
     val voice = media as? MessageMedia.Voice
     val voicemail = media as? MessageMedia.Voicemail
     val gif = media as? MessageMedia.Gif
     val sticker = media as? MessageMedia.Sticker
     val poll = media as? MessageMedia.MeetingPoll
+    val fadt = media as? MessageMedia.FindDateTime
     val countdown = media as? MessageMedia.Countdown
     val calEvent = media as? MessageMedia.CalendarEvent
     val calShare = media as? MessageMedia.CalendarShare
@@ -2106,17 +2826,20 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         imageUrl = image?.url,
         imageWidth = image?.width,
         imageHeight = image?.height,
+        galleryImagesJson = gallery?.images?.let(::galleryToJson),
         videoId = video?.videoId,
         videoTitle = video?.title,
         videoThumbnailUrl = video?.thumbnailUrl,
-        videoDurationSeconds = video?.durationSeconds,
+        videoDurationSeconds = video?.durationSeconds ?: videoClip?.durationSeconds,
         videoHlsManifestUrl = video?.hlsManifestUrl,
         videoDrmEnabled = video?.drmEnabled ?: false,
         fileName = file?.fileName,
         fileSizeBytes = file?.sizeBytes,
         fileMimeType = file?.mimeType,
         fileIsShare = file?.isShare ?: false,
-        consumptionPolicy = file?.consumptionPolicy ?: "none",
+        // MV2 — persist the video clip's playable object url (new fileUrl column).
+        fileUrl = videoClip?.playbackUrl,
+        consumptionPolicy = consumptionPolicy,
         voiceAudioUrl = voice?.audioUrl,
         // Reuse the generic duration/waveform columns for voicemail too (both are audio peaks 0..1).
         voiceDurationSeconds = voice?.durationSeconds ?: voicemail?.durationSeconds,
@@ -2133,10 +2856,10 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         stickerAltText = sticker?.altText,
         stickerId = sticker?.stickerId,
         stickerCollectionId = sticker?.collectionId,
-        pollId = poll?.pollId,
-        pollTitle = poll?.title,
-        pollCreatorId = poll?.creatorId,
-        pollStatus = poll?.status,
+        pollId = poll?.pollId ?: fadt?.pollId,
+        pollTitle = poll?.title ?: fadt?.title,
+        pollCreatorId = poll?.creatorId ?: fadt?.creatorId,
+        pollStatus = poll?.status ?: fadt?.status,
         pollConfirmedSlotId = poll?.confirmedSlotId,
         countdownTitle = countdown?.title,
         countdownTargetEpochSeconds = countdown?.targetEpochSeconds,
@@ -2159,10 +2882,34 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         calShareBookingUrl = calShare?.bookingPublicUrl,
         monetizationType = paid?.type?.name,
         monetizationUnlocked = paid?.unlocked ?: false,
-        lockPriceCents = paid?.priceMinorUnits,
-        lockCurrency = paid?.currency,
+        // R2 — persist the lock price even when the message is NOT a Paid bubble (the sender's own
+        // locked image is a plain Image with the gated media present), so the own "Locked $X" badge
+        // survives the Room round-trip.
+        lockPriceCents = paid?.priceMinorUnits ?: lockPriceCents,
+        lockCurrency = paid?.currency ?: lockCurrency,
         lockTeaser = paid?.teaser,
         revealedText = paid?.revealedText,
+        // MSG — find_datetime detail (the card needs date range + hours).
+        fadtFromDate = fadt?.fromDate,
+        fadtToDate = fadt?.toDate,
+        fadtStartHour = fadt?.startHour,
+        fadtEndHour = fadt?.endHour,
+        fadtSlotDurationMinutes = fadt?.slotDurationMinutes,
+        // MSG — lottery lock_state + revealed outcome (Paid+LOTTERY already carries unlocked/revealedText;
+        // these mirror it for clarity and a kind-based round-trip).
+        lotteryLockState = paid?.takeIf { it.type == UnlockType.LOTTERY }?.let { if (it.unlocked) "unlocked" else "locked" },
+        lotterySelectedText = paid?.takeIf { it.type == UnlockType.LOTTERY }?.revealedText,
+        // MSG — client-side encryption flag + envelope.
+        isEncrypted = isEncrypted,
+        encVersion = encryption?.version,
+        encAlg = encryption?.alg,
+        encKdf = encryption?.kdf,
+        encIterations = encryption?.iterations,
+        encSaltB64 = encryption?.saltB64,
+        encIvB64 = encryption?.ivB64,
+        encCiphertextB64 = encryption?.ciphertextB64,
+        viewOnce = viewOnce,
+        consumed = consumed,
         // AND-140 — moderation / engagement columns.
         reactionsJson = reactionsToJson(reactions),
         isPinned = isPinned,
@@ -2203,6 +2950,30 @@ private val ReactionJsonRegex =
 internal fun waveformToJson(values: List<Float>): String =
     values.joinToString(prefix = "[", postfix = "]") { String.format(java.util.Locale.ROOT, "%.3f", it) }
 
+/**
+ * C6 — serialize gallery images as one "url|width|height" record per line (URLs never contain a
+ * newline). Kept JVM-test-safe (no org.json, which is unmocked in :app unit tests).
+ */
+private const val GALLERY_RECORD_SEP = "\n"
+
+internal fun galleryToJson(images: List<MessageMedia.GalleryImage>): String =
+    images.joinToString(GALLERY_RECORD_SEP) { "${it.url.orEmpty()}|${it.width ?: ""}|${it.height ?: ""}" }
+
+/** C6 — parse the gallery records back into [MessageMedia.GalleryImage]s; tolerates null/blank. */
+internal fun galleryFromJson(json: String?): List<MessageMedia.GalleryImage> {
+    if (json.isNullOrBlank()) return emptyList()
+    return json.split(GALLERY_RECORD_SEP).mapNotNull { line ->
+        if (line.isBlank()) return@mapNotNull null
+        val parts = line.split("|")
+        val url = parts.getOrNull(0)?.takeIf { it.isNotBlank() }
+        MessageMedia.GalleryImage(
+            url = url,
+            width = parts.getOrNull(1)?.toIntOrNull(),
+            height = parts.getOrNull(2)?.toIntOrNull(),
+        )
+    }
+}
+
 /** Parses a JSON number[] string back into a waveform; tolerates null/blank/garbage -> empty list. */
 internal fun waveformFromJson(json: String?): List<Float> {
     if (json.isNullOrBlank()) return emptyList()
@@ -2230,8 +3001,28 @@ internal fun MessageEntity.toDomain(): Message = Message(
     lifecycle = runCatching { MessageLifecycle.valueOf(lifecycle) }.getOrDefault(MessageLifecycle.ACTIVE),
     editedAtEpochSeconds = editedAtEpochSeconds,
     isHiddenLocal = isHidden,
+    isEncrypted = isEncrypted,
+    encryption = encSaltB64?.let { salt ->
+        com.testlogon.android.data.messaging.MessageEncryption(
+            version = encVersion ?: 1,
+            alg = encAlg ?: "AES-256-GCM",
+            kdf = encKdf ?: "PBKDF2-SHA256",
+            iterations = encIterations ?: 100000,
+            saltB64 = salt,
+            ivB64 = encIvB64.orEmpty(),
+            ciphertextB64 = encCiphertextB64,
+        )
+    },
+    viewOnce = viewOnce,
+    consumed = consumed,
+    consumptionPolicy = consumptionPolicy,
+    // R2 — restore the lock price/currency for the own "Locked $X" badge (set for any locked message,
+    // including the sender's own locked image which renders as a plain Image, not a Paid bubble).
+    lockPriceCents = lockPriceCents,
+    lockCurrency = lockCurrency ?: "USD",
     media = when (kind) {
         "image" -> MessageMedia.Image(url = imageUrl, width = imageWidth, height = imageHeight)
+        "gallery" -> MessageMedia.Gallery(images = galleryFromJson(galleryImagesJson))
         "video_share" -> MessageMedia.VideoShare(
             videoId = videoId.orEmpty(),
             title = videoTitle,
@@ -2246,6 +3037,7 @@ internal fun MessageEntity.toDomain(): Message = Message(
             audioUrl = voiceAudioUrl,
             durationSeconds = voiceDurationSeconds ?: 0.0,
             waveform = waveformFromJson(voiceWaveformJson),
+            consumptionPolicy = consumptionPolicy,
         )
         "voicemail" -> MessageMedia.Voicemail(
             mediaUrl = voicemailMediaUrl,
@@ -2274,7 +3066,18 @@ internal fun MessageEntity.toDomain(): Message = Message(
             status = pollStatus ?: "open",
             confirmedSlotId = pollConfirmedSlotId,
         )
-        "countdown" -> MessageMedia.Countdown(
+        "find_datetime" -> MessageMedia.FindDateTime(
+            pollId = pollId.orEmpty(),
+            title = pollTitle.orEmpty(),
+            creatorId = pollCreatorId.orEmpty(),
+            status = pollStatus ?: "open",
+            fromDate = fadtFromDate,
+            toDate = fadtToDate,
+            startHour = fadtStartHour,
+            endHour = fadtEndHour,
+            slotDurationMinutes = fadtSlotDurationMinutes,
+        )
+                "countdown" -> MessageMedia.Countdown(
             title = countdownTitle.orEmpty(),
             targetEpochSeconds = countdownTargetEpochSeconds ?: 0L,
             associatedEventType = countdownEventType.toAssociatedEventType(),
@@ -2299,7 +3102,12 @@ internal fun MessageEntity.toDomain(): Message = Message(
             permission = calSharePermission.toSharePermission(),
             bookingPublicUrl = calShareBookingUrl,
         )
-        "file", "file_share", "audio", "video" -> MessageMedia.File(
+        // MV2 — an uploaded video clip persists its playable url in fileUrl; render as a video bubble.
+        "video" -> MessageMedia.VideoClip(
+            playbackUrl = fileUrl,
+            durationSeconds = videoDurationSeconds,
+        )
+        "file", "file_share", "audio" -> MessageMedia.File(
             fileName = fileName ?: "file",
             sizeBytes = fileSizeBytes,
             mimeType = fileMimeType,
@@ -2344,6 +3152,12 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
             fileName = fileName ?: "file",
             sizeBytes = fileSizeBytes,
             mimeType = fileMimeType,
+            localUri = attachmentLocalUri,
+            uploadProgress = uploadPercent?.let { it / 100f },
+        )
+        // MV2 — optimistic short-video row: poster from the local source uri while the clip uploads.
+        "video" -> MessageMedia.VideoClip(
+            playbackUrl = null,
             localUri = attachmentLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
         )

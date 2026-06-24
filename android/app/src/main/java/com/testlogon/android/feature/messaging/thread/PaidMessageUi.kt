@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package com.testlogon.android.feature.messaging.thread
 
@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.CalendarContract
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -138,7 +139,7 @@ fun CountdownPickerSheet(
     onSend: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(PaidMessageTestTags.COUNTDOWN_PICKER)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(PaidMessageTestTags.COUNTDOWN_PICKER).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
             Text(stringResource(R.string.countdown_picker_title), style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
@@ -268,6 +269,8 @@ fun PaidMessageBubble(
     unlock: UnlockUiState,
     onUnlock: () -> Unit,
     modifier: Modifier = Modifier,
+    /** G1 — true when the locked message is ALSO encrypted; renders an extra "Encrypted" indicator. */
+    isEncrypted: Boolean = false,
 ) {
     if (monetization.unlocked) {
         Surface(
@@ -320,6 +323,24 @@ fun PaidMessageBubble(
                     modifier = Modifier.padding(start = 6.dp),
                 )
             }
+            // G1 — when the locked message is ALSO encrypted, show a second "Encrypted" indicator so
+            // the receiver knows BOTH gates apply (unlock to pay, then a passphrase to decrypt).
+            if (isEncrypted) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .testTag(RichMessageTestTags.ENCRYPTED_INDICATOR),
+                ) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Text(
+                        stringResource(R.string.paid_encrypted_indicator),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
+            }
             // Teaser caption ONLY — never the gated body/media.
             monetization.teaser?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
@@ -327,21 +348,50 @@ fun PaidMessageBubble(
             unlock.error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
             }
-            Button(
-                onClick = onUnlock,
-                enabled = !busy && !isOwn,
-                modifier = Modifier
-                    .padding(top = 8.dp)
-                    .testTag(PaidMessageTestTags.UNLOCK_BUTTON)
-                    .semantics {
-                        contentDescription = unlockCd
-                        phaseLabel?.let { stateDescription = it }
-                    },
-            ) {
-                if (busy) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+            if (isOwn) {
+                // M8 — the SENDER can't unlock their own gated message; show a clear "$X.XX to unlock"
+                // status badge (parity with the view-once / "Disappears" sender badges) instead of a
+                // dead disabled Unlock button.
+                val senderBadge = if (monetization.type == UnlockType.LOTTERY) {
+                    stringResource(R.string.paid_sender_locked_lottery)
                 } else {
-                    Text(stringResource(R.string.paid_unlock))
+                    stringResource(R.string.paid_sender_locked_badge, priceLabel)
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.padding(top = 8.dp).testTag("thread_locked_sender_badge"),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Text(
+                            senderBadge,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onUnlock,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .testTag(PaidMessageTestTags.UNLOCK_BUTTON)
+                        .semantics {
+                            contentDescription = unlockCd
+                            phaseLabel?.let { stateDescription = it }
+                        },
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                    } else {
+                        Text(stringResource(R.string.paid_unlock))
+                    }
                 }
             }
         }
@@ -358,7 +408,7 @@ fun TipSheet(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(PaidMessageTestTags.TIP_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(PaidMessageTestTags.TIP_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
             Text(stringResource(R.string.tip_title), style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {

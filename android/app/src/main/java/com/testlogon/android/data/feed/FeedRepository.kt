@@ -23,10 +23,14 @@ import javax.inject.Singleton
  */
 interface FeedRepository {
 
-    /** One page of the feed keyed by the opaque [cursor] (null = head). */
+    /**
+     * One page of the feed keyed by the opaque [cursor] (null = head). When [authorId] is non-null the
+     * server scopes the page to that author's posts (FD1 — "Your posts" view).
+     */
     suspend fun getFeedPage(
         cursor: String? = null,
         limit: Int? = FeedApi.DEFAULT_PAGE_SIZE,
+        authorId: String? = null,
     ): ApiResult<FeedPage>
 
     /** A single post by id. */
@@ -41,9 +45,9 @@ class FeedRepositoryImpl @Inject constructor(
 
     private val io: CoroutineDispatcher = Dispatchers.IO
 
-    override suspend fun getFeedPage(cursor: String?, limit: Int?): ApiResult<FeedPage> =
+    override suspend fun getFeedPage(cursor: String?, limit: Int?, authorId: String?): ApiResult<FeedPage> =
         withContext(io) {
-            apiCall { api.getFeed(cursor = cursor, limit = limit) }.map { it.toDomain() }
+            apiCall { api.getFeed(cursor = cursor, limit = limit, authorId = authorId) }.map { it.toDomain() }
         }
 
     override suspend fun getPost(postId: String): ApiResult<FeedPost> =

@@ -2,6 +2,16 @@ package com.testlogon.android.feature.messaging.media
 
 import android.content.Intent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.testlogon.android.BuildConfig
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -169,3 +179,172 @@ internal fun MessageMedia.VideoShare.tokenizedManifestUrl(): String? =
         manifestUrl = hlsManifestUrl,
         playbackToken = playbackToken,
     )
+
+// ==================== MV2: uploaded short-video clip bubble ====================
+
+/** MV2 — stable testTags for the uploaded video-clip bubble. */
+object VideoClipTestTags {
+    const val BUBBLE = "video_clip_bubble"
+    const val POSTER = "video_clip_poster"
+    const val PLAY = "video_clip_play"
+    const val FULLSCREEN = "video_clip_fullscreen"
+    const val PLAYER = "video_clip_player"
+    const val VIEWER = "video_clip_viewer"
+    const val VIEWER_CLOSE = "video_clip_viewer_close"
+}
+
+/**
+ * MV2 — an uploaded SHORT video clip (kind="video"). Renders a poster (first frame, decoded by Coil's
+ * VideoFrameDecoder from the object url) with a play glyph. Tapping the play glyph plays it INLINE in
+ * the bubble (lifecycle-scoped ExoPlayer, released on dispose); the expand glyph opens a FULL-SCREEN
+ * player. While an optimistic outbox row is still uploading ([uploadProgress] != null) only the local
+ * poster + a progress ring show.
+ *
+ * The ExoPlayer is created per-cell via [remember] and RELEASED on disposal — never an eager singleton.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+fun VideoClipBubble(
+    media: MessageMedia.VideoClip,
+    modifier: Modifier = Modifier,
+) {
+    val source = media.playbackUrl ?: media.localUri
+    val uploading = media.uploadProgress != null && media.uploadProgress < 1f
+    val canPlay = media.playbackUrl != null && !uploading
+
+    var playingInline by remember(source) { mutableStateOf(false) }
+    var fullScreen by remember(source) { mutableStateOf(false) }
+
+    Box(
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .testTag(VideoClipTestTags.BUBBLE),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (playingInline && canPlay) {
+            ClipExoPlayer(
+                url = media.playbackUrl!!,
+                autoPlay = true,
+                modifier = Modifier.fillMaxSize().testTag(VideoClipTestTags.PLAYER),
+            )
+        } else {
+            // Poster: a video frame decoded from the (remote or local) source via VideoFrameDecoder.
+            AsyncImage(
+                model = source,
+                contentDescription = stringResource(R.string.video_thumbnail_cd),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag(VideoClipTestTags.POSTER),
+            )
+            if (uploading) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.size(40.dp),
+                )
+            } else if (canPlay) {
+                val playLabel = stringResource(R.string.video_play)
+                Icon(
+                    imageVector = Icons.Filled.PlayCircle,
+                    contentDescription = playLabel,
+                    tint = Color.White,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clickable { playingInline = true }
+                        .semantics { role = Role.Button; contentDescription = playLabel }
+                        .testTag(VideoClipTestTags.PLAY),
+                )
+                // Expand-to-fullscreen affordance (top-right).
+                Icon(
+                    imageVector = Icons.Filled.Fullscreen,
+                    contentDescription = "Play full screen",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(28.dp)
+                        .clickable { fullScreen = true }
+                        .semantics { role = Role.Button; contentDescription = "Play full screen" }
+                        .testTag(VideoClipTestTags.FULLSCREEN),
+                )
+            }
+        }
+    }
+
+    if (fullScreen && media.playbackUrl != null) {
+        FullScreenVideoViewer(url = media.playbackUrl, onDismiss = { fullScreen = false })
+    }
+}
+
+/**
+ * MV2 — a lifecycle-scoped ExoPlayer rendered in a [PlayerView]. Pauses on ON_PAUSE, stops on ON_STOP,
+ * and releases on disposal.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun ClipExoPlayer(
+    url: String,
+    autoPlay: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val resolved = remember(url) {
+        if (url.startsWith("/")) BuildConfig.API_BASE_URL.trimEnd('/') + url else url
+    }
+    val player = remember(resolved) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(resolved))
+            prepare()
+            playWhenReady = autoPlay
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> player.pause()
+                Lifecycle.Event.ON_STOP -> player.playWhenReady = false
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            player.release()
+        }
+    }
+    AndroidView(
+        factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
+        modifier = modifier,
+    )
+}
+
+/** MV2 — full-screen video player dialog for an uploaded clip. */
+@OptIn(UnstableApi::class)
+@Composable
+private fun FullScreenVideoViewer(url: String, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .testTag(VideoClipTestTags.VIEWER),
+            contentAlignment = Alignment.Center,
+        ) {
+            ClipExoPlayer(url = url, autoPlay = true, modifier = Modifier.fillMaxSize())
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .testTag(VideoClipTestTags.VIEWER_CLOSE),
+            ) {
+                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+            }
+        }
+    }
+}
+

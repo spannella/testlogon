@@ -16,7 +16,7 @@ android {
         // plaintext dev host is never hard-coded in Kotlin source. SettingsStore seeds from this
         // and supports a runtime override. Keep this value in sync with the :app module.
         // (Library modules get their own BuildConfig; the field is re-declared here by design.)
-        buildConfigField("String", "API_BASE_URL", "\"http://18.222.237.167:8000/\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://tl-api.bitbazaar.cc/\"")
     }
 
     buildFeatures {

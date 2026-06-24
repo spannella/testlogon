@@ -33,6 +33,21 @@ sealed interface MessageMedia {
         val uploadProgress: Float? = null,
     ) : MessageMedia
 
+    /**
+     * C6 — multiple images sent as ONE message (kind="gallery"). Renders as a grid; each item opens
+     * full-screen. [images] are the free (always-visible) images projected by the server.
+     */
+    data class Gallery(
+        val images: List<GalleryImage>,
+    ) : MessageMedia
+
+    /** C6 — one image inside a [Gallery]. */
+    data class GalleryImage(
+        val url: String?,
+        val width: Int? = null,
+        val height: Int? = null,
+    )
+
     /** Shared library video — inline HLS playback (AND-131). */
     data class VideoShare(
         val videoId: String,
@@ -44,6 +59,19 @@ sealed interface MessageMedia {
         val drmEnabled: Boolean,
         val width: Int? = null,
         val height: Int? = null,
+    ) : MessageMedia
+
+    /**
+     * MV2 — a SHORT uploaded video clip (kind="video"). Unlike [VideoShare] (HLS library video), this
+     * is a single object-URL clip. [playbackUrl] is the server-relative /mock/s3 object url (used as the
+     * ExoPlayer source AND the Coil video-frame poster); [localUri] is the optimistic local source while
+     * an outbox row is still uploading. Renders a poster + play glyph; tapping plays it in-app.
+     */
+    data class VideoClip(
+        val playbackUrl: String?,
+        val localUri: String? = null,
+        val durationSeconds: Int? = null,
+        val uploadProgress: Float? = null,
     ) : MessageMedia
 
     /**
@@ -73,6 +101,8 @@ sealed interface MessageMedia {
         val waveform: List<Float>,
         val localUri: String? = null,
         val uploadProgress: Float? = null,
+        /** "none" | "listen_once" — listen-once plays exactly once then is consumed. */
+        val consumptionPolicy: String = "none",
     ) : MessageMedia
 
     /**
@@ -121,6 +151,23 @@ sealed interface MessageMedia {
         val creatorId: String,
         val status: String,
         val confirmedSlotId: String?,
+    ) : MessageMedia
+
+    /**
+     * MSG-009 — a Find-a-DateTime poll ("custom poll"). Distinct from [MeetingPoll]; renders a
+     * simple "Find a time" card from the create/list response. Availability voting is out of scope
+     * for the composer demo (the card is read-mostly).
+     */
+    data class FindDateTime(
+        val pollId: String,
+        val title: String,
+        val creatorId: String,
+        val status: String,
+        val fromDate: String? = null,
+        val toDate: String? = null,
+        val startHour: Int? = null,
+        val endHour: Int? = null,
+        val slotDurationMinutes: Int? = null,
     ) : MessageMedia
 
     /**
@@ -241,6 +288,21 @@ data class MessageEdit(val revision: Int, val body: String, val editedAtEpochSec
  */
 enum class MessageLifecycle { ACTIVE, EDITED, DELETED, REVOKED }
 
+/**
+ * MSG — a client-side encryption envelope carried on a message (AES-256-GCM / PBKDF2-SHA256). Mirrors
+ * [MessageEncryptionEnvelopeDto] but stays a domain type so the UI can decrypt on passphrase entry.
+ * Persisted to Room so the receiver renders the locked state + can unlock after a process restart.
+ */
+data class MessageEncryption(
+    val version: Int,
+    val alg: String,
+    val kdf: String,
+    val iterations: Int,
+    val saltB64: String,
+    val ivB64: String,
+    val ciphertextB64: String?,
+)
+
 /** A single message in a conversation, merged from history + the local outbox at render time. */
 data class Message(
     /** Server message id; null until a send is acked (outbox rows have no server id yet). */
@@ -280,6 +342,23 @@ data class Message(
     /** Self-destruct expiry epoch seconds (null = never); [expired] = server-confirmed. */
     val expiresAtEpochSeconds: Long? = null,
     val expired: Boolean = false,
+    /** MSG — true when the message is client-side encrypted. */
+    val isEncrypted: Boolean = false,
+    /** MSG — the encryption envelope (persisted to Room) used to decrypt on the receiver. */
+    val encryption: MessageEncryption? = null,
+    /** MSG — true when the message is view-once (hidden on the receiver until opened). */
+    val viewOnce: Boolean = false,
+    /** MSG — true once the view-once message has been consumed (permanently hidden). */
+    val consumed: Boolean = false,
+    val consumptionPolicy: String = "none",
+    /**
+     * R2 — pay-to-unlock price in minor units when this message was sent locked (PPV), else null.
+     * Carried even for the SENDER's own copy (whose gated media IS present, so it maps to
+     * MessageMedia.Image not MessageMedia.Paid) so the sender's own bubble can badge "Locked $X".
+     */
+    val lockPriceCents: Long? = null,
+    /** R2 — ISO-4217 currency for [lockPriceCents] (defaults to USD when the wire omits it). */
+    val lockCurrency: String = "USD",
 )
 
 /** A conversation summary for the inbox list. */
@@ -344,6 +423,25 @@ internal fun MessageDto.toDomain(
         readByUserIds = readByUserIds ?: emptyList(),
         expiresAtEpochSeconds = expiresAt,
         expired = expired ?: false,
+        isEncrypted = isEncrypted ?: false,
+        viewOnce = (viewOnce ?: false) || consumptionPolicy == "view_once",
+        consumed = consumptionState == "consumed",
+        consumptionPolicy = consumptionPolicy ?: "none",
+        // R2 — capture the lock price whenever the message was sent locked (even if it maps to a
+        // plain Image for the sender / unlocked viewer) so the bubble can badge "Locked $X".
+        lockPriceCents = if (locked == true) lockPriceCents else null,
+        lockCurrency = tipCurrency ?: "USD",
+        encryption = encryption?.let {
+            MessageEncryption(
+                version = it.version,
+                alg = it.alg,
+                kdf = it.kdf,
+                iterations = it.iterations,
+                saltB64 = it.saltB64,
+                ivB64 = it.ivB64,
+                ciphertextB64 = it.ciphertextB64,
+            )
+        },
     )
 }
 
@@ -390,6 +488,14 @@ internal fun List<EditHistoryEntryDto>.toMessageEdits(): List<MessageEdit> =
 
 /** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {
+    // C6 — gallery (multi-image) message. Sender + unlocked recipients get free_images here.
+    kind == "gallery" && !freeImages.isNullOrEmpty() -> MessageMedia.Gallery(
+        images = freeImages.map { gi ->
+            MessageMedia.GalleryImage(
+                url = gi.url?.takeIf { it.isNotBlank() } ?: deriveS3Url(gi.bucket, gi.key),
+            )
+        },
+    )
     image != null -> MessageMedia.Image(
         url = image.url?.takeIf { it.isNotBlank() }
             ?: deriveS3Url(image.bucket, image.key),
@@ -411,6 +517,7 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         audioUrl = voiceMessage.audioUrl?.takeIf { it.isNotBlank() },
         durationSeconds = voiceMessage.durationSeconds ?: 0.0,
         waveform = voiceMessage.waveformData ?: emptyList(),
+        consumptionPolicy = consumptionPolicy ?: "none",
     )
     voicemail != null -> MessageMedia.Voicemail(
         mediaUrl = (voicemail.videoUrl ?: voicemail.audioUrl)?.takeIf { it.isNotBlank() },
@@ -467,7 +574,19 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         permission = calendarShare.permission.toSharePermission(),
         bookingPublicUrl = calendarShare.bookingPublicUrl,
     )
-    // AND-139 — lottery paid message (nested lottery sub-object). Reveal only when unlocked.
+    // MSG-009 — find-a-datetime poll (nested find_datetime attachment).
+    findDatetime != null -> MessageMedia.FindDateTime(
+        pollId = findDatetime.pollId,
+        title = findDatetime.title,
+        creatorId = findDatetime.creatorId,
+        status = findDatetime.status ?: "open",
+        fromDate = findDatetime.fromDate,
+        toDate = findDatetime.toDate,
+        startHour = findDatetime.startHour,
+        endHour = findDatetime.endHour,
+        slotDurationMinutes = findDatetime.slotDurationMinutes,
+    )
+        // AND-139 — lottery paid message (nested lottery sub-object). Reveal only when unlocked.
     lottery != null -> MessageMedia.Paid(
         MessageMonetization(
             type = UnlockType.LOTTERY,
@@ -490,6 +609,13 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         ),
     )
     fileShare != null -> fileShare.toFileMedia(consumptionPolicy ?: "none", isShare = true)
+    // MV2 — an uploaded short video clip (server stores it as a `file` object with kind="video").
+    // Render it as an inline video bubble (poster + play) rather than a plain file bubble. The server
+    // populates file.url with the directly-playable /mock/s3 object url (dev) used by ExoPlayer + Coil.
+    kind == "video" && file != null -> MessageMedia.VideoClip(
+        playbackUrl = file.url?.takeIf { it.isNotBlank() } ?: file.path?.takeIf { it.isNotBlank() },
+        durationSeconds = file.durationSeconds,
+    )
     file != null -> file.toFileMedia(consumptionPolicy ?: "none", isShare = false)
     else -> MessageMedia.None
 }
@@ -510,7 +636,12 @@ internal fun MessageFileDto.toFileMedia(policy: String, isShare: Boolean): Messa
  */
 internal fun deriveS3Url(bucket: String?, key: String?): String? {
     if (bucket.isNullOrBlank() || key.isNullOrBlank()) return null
-    return "https://$bucket.s3.amazonaws.com/$key"
+    // The backend serves uploaded objects through its storage gateway at /mock/s3/<bucket>/<key> --
+    // the same server-relative path the list/get endpoints return as image.url and that presign hands
+    // out for upload. The image-CREATE response omits url, so the sender's just-sent bubble must
+    // derive it here; Coil's RelativeUrlMapper resolves the leading-"/" path against the API origin.
+    // (Without this the sender saw a broken/blank thumbnail until a thread refresh re-fetched url.)
+    return "/mock/s3/$bucket/$key"
 }
 
 internal fun ConversationDto.toDomain(): Conversation = Conversation(

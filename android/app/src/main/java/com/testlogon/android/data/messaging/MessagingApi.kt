@@ -100,6 +100,18 @@ interface MessagingApi {
     ): MessageDto
 
     /**
+     * C6 — create a gallery (multi-image) message referencing already-uploaded objects by
+     * bucket+key. Body = CreateGalleryMessageIn {free_images:[...], text?}; returns MessageOut
+     * (kind="gallery").
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/gallery")
+    suspend fun createGalleryMessage(
+        @Path("id") id: String,
+        @Body body: CreateGalleryMessageReq,
+    ): MessageDto
+
+    /**
      * AND-131 — share an existing library video into a conversation. Body =
      * CreateVideoShareMessageIn {video_id, text?, send_at?}; returns MessageOut (kind="video_share").
      */
@@ -174,7 +186,7 @@ interface MessagingApi {
     suspend fun downloadAttachment(
         @Path("id") id: String,
         @Path("messageId") messageId: String,
-        @Query("grant_token") grantToken: String,
+        @Query("grant_token") grantToken: String?,
     ): ResponseBody
 
     /**
@@ -503,6 +515,60 @@ interface MessagingApi {
         @Path("messageId") messageId: String,
         @Query("limit") limit: Int = 200,
     ): List<MessageViewOut>
+
+    // ---- MSG: new composers (lottery / find-datetime / calendar-event / calendar-share + discovery) ----
+
+    /**
+     * Create a lottery DM. NOTE: conversation_id is in the BODY (not the path). Returns MessageOut.
+     * Body = CreateLotteryMessageIn {message_type, conversation_id, lottery_config}.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/messages/lottery")
+    suspend fun createLottery(
+        @Body body: CreateLotteryReq,
+    ): MessageDto
+
+    /** Create a Find-a-DateTime poll message. Returns MessageOut (HTTP 201). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/find-datetime")
+    suspend fun createFindDateTime(
+        @Path("id") id: String,
+        @Body body: CreateFindDateTimeReq,
+    ): MessageDto
+
+    /** Share a calendar event into a conversation. Returns MessageOut (kind="calendar_event"). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/calendar-event")
+    suspend fun createCalendarEventMessage(
+        @Path("id") id: String,
+        @Body body: CreateCalendarEventReq,
+    ): MessageDto
+
+    /** Share a calendar into a conversation. Returns MessageOut (kind="calendar_share"). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/calendar-share")
+    suspend fun createCalendarShareMessage(
+        @Path("id") id: String,
+        @Body body: CreateCalendarShareReq,
+    ): MessageDto
+
+    /** Discovery: the current users calendars (bare array of CalendarAccessOut). Idempotent GET. */
+    @GET("ui/calendars")
+    suspend fun listCalendars(): List<CalendarAccessDto>
+
+    /** Discovery: events in a calendar (EventsPageOut). Idempotent GET. */
+    @GET("ui/calendars/{calendarId}/events")
+    suspend fun listCalendarEvents(
+        @Path("calendarId") calendarId: String,
+        @Query("limit") limit: Int = 50,
+    ): CalendarEventsPageDto
+
+    /** Discovery: file-manager listing for a folder (default root). Idempotent GET. */
+    @GET("v1/fs/list")
+    suspend fun listFiles(
+        @Query("path") path: String = "/",
+        @Query("limit") limit: Int = 100,
+    ): FsListRespDto
 
     // ---- AND-151 / AND-152: message search ----
 

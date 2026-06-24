@@ -1,9 +1,12 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 package com.testlogon.android.feature.messaging.thread
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.horizontalScroll
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +37,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.EditCalendar
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DoneAll
@@ -42,18 +51,24 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.PermMedia
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Switch
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -99,6 +114,7 @@ import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.feature.messaging.media.FileMessageBubble
 import com.testlogon.android.feature.messaging.media.FullScreenImageViewer
 import com.testlogon.android.feature.messaging.media.InlineVideoPlayer
+import com.testlogon.android.feature.messaging.media.VideoClipBubble
 import com.testlogon.android.feature.messaging.media.openDownloadedFile
 import com.testlogon.android.feature.messaging.media.rememberImageViewerState
 import com.testlogon.android.feature.messaging.relativeTimeFromSeconds
@@ -175,10 +191,32 @@ fun ThreadRoute(
         }
     }
 
-    // AND-130 — system photo picker (no storage permission on any supported API level).
-    val pickImage = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> if (uri != null) viewModel.onImagePicked(uri) }
+    // MV1 — ONE unified media picker (no storage permission). Accepts BOTH images and videos in a
+    // single PickMultipleVisualMedia(ImageAndVideo) flow, then routes the result: picked images go to
+    // image/gallery staging (one image -> image message, several -> ONE gallery message) and a picked
+    // video goes to short-video staging. (Multi-image still works; a video is staged singly.)
+    val pickMedia = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(20),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val (videos, images) = uris.partition { uri ->
+            context.contentResolver.getType(uri)?.startsWith("video/") == true
+        }
+        when {
+            // Prefer images when both are present (a gallery message); stage a single video otherwise.
+            images.isNotEmpty() -> viewModel.onImagesPicked(images)
+            else -> {
+                val uri = videos.first()
+                val size = runCatching {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                        val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else 0L
+                    } ?: 0L
+                }.getOrDefault(0L)
+                viewModel.onVideoPicked(uri, size)
+            }
+        }
+    }
 
     // AND-132 — system document picker (OpenDocument, wildcard MIME; no storage permission needed).
     val pickFile = rememberLauncherForActivityResult(
@@ -268,8 +306,9 @@ fun ThreadRoute(
         onSend = viewModel::onSend,
         onRetrySend = viewModel::onRetry,
         onAttachImage = {
-            pickImage.launch(
-                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            // MV1 — single attach action for BOTH photos and short videos.
+            pickMedia.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
             )
         },
         onAttachFile = { pickFile.launch(arrayOf("*/*")) },
@@ -308,11 +347,32 @@ fun ThreadRoute(
         onCountdownTitleChange = viewModel::onCountdownTitleChange,
         onCountdownTargetChange = viewModel::onCountdownTargetChange,
         onSendCountdown = viewModel::onSendCountdown,
+        onAttachLottery = viewModel::onAttachLottery,
+        onDismissLottery = viewModel::onDismissLotteryComposer,
+        onSendLottery = { outcomes, imageUri -> viewModel.onSendLottery(outcomes, imageUri) },
+        onAttachFindDateTime = viewModel::onAttachFindDateTime,
+        onDismissFindDateTime = viewModel::onDismissFindDateTimeComposer,
+        onSendFindDateTime = viewModel::onSendFindDateTime,
+        onAttachCalendarEvent = viewModel::onAttachCalendarEvent,
+        onDismissCalendarEvent = viewModel::onDismissCalendarEventComposer,
+        onSelectCalendarForEvent = viewModel::onSelectCalendarForEvent,
+        onSendCalendarEvent = viewModel::onSendCalendarEvent,
+        onAttachCalendarShare = viewModel::onAttachCalendarShare,
+        onDismissCalendarShare = viewModel::onDismissCalendarShareComposer,
+        onSelectCalendarForShare = viewModel::onSelectCalendarForShare,
+        onSendCalendarShare = viewModel::onSendCalendarShare,
+        onAttachFileShare = viewModel::onAttachFileShare,
+        onDismissFileShare = viewModel::onDismissFileShareComposer,
+        onSendFileShare = viewModel::onSendFileShare,
         onOpenMessageOptions = viewModel::openMessageOptions,
         onClearMessageOptions = viewModel::clearMessageOptions,
-        nowSeconds = System.currentTimeMillis() / 1000L,
+        onRemoveStagedImage = viewModel::onRemoveStagedImage,
+        onRemoveStagedVideo = viewModel::onRemoveStagedVideo,
+        nowSeconds = rememberNowTicker(),
         onUnlock = viewModel::onUnlockClick,
         onTip = viewModel::onTipOpen,
+        onOpenEncrypted = viewModel::openEncryptUnlock,
+        onOpenViewOnce = viewModel::openViewOnce,
         onAddToCalendar = { event ->
             if (!launchAddToCalendar(context, event)) {
                 routeScope.launch { snackbarHostState.showSnackbar(noCalendarAppMessage) }
@@ -332,6 +392,7 @@ fun ThreadRoute(
             }
         },
         onJumpToPinned = viewModel::onJumpToPinned,
+        onJumpToMessage = viewModel::onJumpToMessage,
         onDiscardDraft = viewModel::onDiscardDraft,
         searchActive = searchUi.active,
         onOpenSearch = viewModel::onOpenSearch,
@@ -374,12 +435,75 @@ fun ThreadRoute(
     if (state.messageOptionsVisible) {
         MessageOptionsSheet(
             options = state.composer.options,
-            nowSeconds = System.currentTimeMillis() / 1000L,
+            nowSeconds = rememberNowTicker(),
             onViewOnceChange = viewModel::setViewOnce,
             onLockPriceChange = viewModel::setLockPrice,
             onScheduleChange = viewModel::setScheduledAt,
             onExpiresChange = viewModel::setExpiresIn,
+            onEncryptedChange = viewModel::setEncrypted,
+            onPassphraseChange = viewModel::setEncryptionPassphrase,
             onDismiss = viewModel::closeMessageOptions,
+        )
+    }
+
+    // MSG — receiver passphrase-unlock dialog for an encrypted message.
+    val enc = state.encryptUnlock
+    if (enc.messageKey != null) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissEncryptUnlock,
+            title = { Text("Unlock encrypted message") },
+            text = {
+                Column {
+                    Text("Enter the passphrase the sender shared with you.")
+                    OutlinedTextField(
+                        value = enc.passphrase,
+                        onValueChange = viewModel::onEncryptPassphraseChange,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("thread_unlock_passphrase"),
+                        label = { Text("Passphrase") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        isError = enc.error != null,
+                    )
+                    enc.error?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::submitEncryptUnlock, modifier = Modifier.testTag("thread_unlock_confirm")) { Text("Unlock") }
+            },
+            dismissButton = { TextButton(onClick = viewModel::dismissEncryptUnlock) { Text("Cancel") } },
+        )
+    }
+
+    // MSG — view-once content popup; closing it consumes the message permanently.
+    val vo = state.viewOnceViewer
+    if (vo.messageKey != null) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissViewOnce,
+            title = { Text(vo.title) },
+            text = {
+                when {
+                    vo.loading -> androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.testTag("thread_view_once_loading"),
+                    )
+                    vo.imageFile != null -> AsyncImage(
+                        // Pass a File (not the path String): a leading-"/" string is otherwise
+                        // rewritten to an http url by the Coil RelativeUrlMapper and fails to load.
+                        model = java.io.File(vo.imageFile),
+                        contentDescription = "View-once image",
+                        modifier = Modifier.fillMaxWidth().testTag("thread_view_once_content"),
+                    )
+                    vo.error -> Text(
+                        "Couldn't load this once-only content.",
+                        modifier = Modifier.testTag("thread_view_once_content"),
+                    )
+                    else -> Text(vo.text, modifier = Modifier.testTag("thread_view_once_content"))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissViewOnce, modifier = Modifier.testTag("thread_view_once_close")) { Text("Close") }
+            },
         )
     }
 }
@@ -394,16 +518,49 @@ private fun MessageOptionsSheet(
     onLockPriceChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
     onExpiresChange: (Long?) -> Unit,
+    onEncryptedChange: (Boolean) -> Unit,
+    onPassphraseChange: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var lockInput by remember {
         mutableStateOf(options.lockPriceCents?.let { "%.2f".format(it / 100.0) } ?: "")
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("thread_options_sheet")) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("thread_options_sheet").semantics { testTagsAsResourceId = true }) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
         ) {
             Text("Message options", style = MaterialTheme.typography.titleMedium)
+            // Encrypted (client-side encryption envelope)
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Encrypted", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Send end-to-end encrypted (no plaintext on the server)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = options.encrypted,
+                    onCheckedChange = onEncryptedChange,
+                    modifier = Modifier.testTag("thread_option_encrypted"),
+                )
+            }
+            if (options.encrypted) {
+                OutlinedTextField(
+                    value = options.encryptionPassphrase,
+                    onValueChange = onPassphraseChange,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("thread_option_passphrase"),
+                    label = { Text("Passphrase") },
+                    placeholder = { Text("Recipient must know this to unlock") },
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    isError = options.encryptionPassphrase.isBlank(),
+                )
+            }
             // View once
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 10.dp),
@@ -454,7 +611,7 @@ private fun MessageOptionsSheet(
             // Expiring (self-destruct after delivery)
             Text("Expires after", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
             Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(300L to "5 min", 3_600L to "1 hour", 86_400L to "1 day").forEach { (secs, label) ->
+                listOf(60L to "1 min", 300L to "5 min", 3_600L to "1 hour", 86_400L to "1 day").forEach { (secs, label) ->
                     FilterChip(
                         selected = options.expiresInSeconds == secs,
                         onClick = { onExpiresChange(if (options.expiresInSeconds == secs) null else secs) },
@@ -468,6 +625,62 @@ private fun MessageOptionsSheet(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp).testTag("thread_options_done"),
             ) { Text("Done") }
             Box(Modifier.fillMaxWidth().height(16.dp))
+        }
+    }
+}
+
+
+/**
+ * MSG — a live "Disappears in Xm" status line for an expiring message, styled like the timestamp.
+ * Ticks once per second from the device clock (lifecycle-scoped) and flips to "Disappeared" at zero.
+ */
+@Composable
+private fun ExpiryCountdownLine(expiresAtEpochSeconds: Long) {
+    val now by remember(expiresAtEpochSeconds) {
+        kotlinx.coroutines.flow.flow {
+            while (true) {
+                emit(System.currentTimeMillis() / 1000L)
+                kotlinx.coroutines.delay(1_000L)
+            }
+        }
+    }.collectAsStateWithLifecycle(initialValue = System.currentTimeMillis() / 1000L)
+    val remaining = (expiresAtEpochSeconds - now).coerceAtLeast(0L)
+    val text = if (remaining <= 0L) "Disappeared" else "Disappears in " + expiryLabel(remaining)
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 2.dp).testTag("thread_expiry_countdown"),
+    )
+}
+
+/** MSG — a tappable teaser bubble for gated content (encrypted / view-once) on the receiver. */
+@Composable
+private fun GatedTeaserBubble(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    hint: String,
+    onClick: () -> Unit,
+    testTag: String,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 1.dp,
+        modifier = Modifier
+            .widthIn(max = 280.dp)
+            .clickable(onClick = onClick)
+            .testTag(testTag),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Column(Modifier.padding(start = 8.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+                Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
@@ -488,6 +701,7 @@ fun ThreadScreen(
     onSend: () -> Unit,
     onRetrySend: (String) -> Unit,
     onAttachImage: () -> Unit,
+    onAttachVideoClip: () -> Unit = {},
     onAttachFile: () -> Unit,
     onShareVideo: () -> Unit,
     onDismissVideoPicker: () -> Unit,
@@ -518,11 +732,33 @@ fun ThreadScreen(
     onCountdownTitleChange: (String) -> Unit,
     onCountdownTargetChange: (Long?) -> Unit,
     onSendCountdown: () -> Unit,
+    // MSG: new in-app composers.
+    onAttachLottery: () -> Unit = {},
+    onRemoveStagedImage: (Int) -> Unit = {},
+    onRemoveStagedVideo: () -> Unit = {},
+    onDismissLottery: () -> Unit = {},
+    onSendLottery: (List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>, String?) -> Unit = { _, _ -> },
+    onAttachFindDateTime: () -> Unit = {},
+    onDismissFindDateTime: () -> Unit = {},
+    onSendFindDateTime: (com.testlogon.android.data.messaging.FindDateTimeDraft) -> Unit = {},
+    onAttachCalendarEvent: () -> Unit = {},
+    onDismissCalendarEvent: () -> Unit = {},
+    onSelectCalendarForEvent: (String) -> Unit = {},
+    onSendCalendarEvent: (String, String) -> Unit = { _, _ -> },
+    onAttachCalendarShare: () -> Unit = {},
+    onDismissCalendarShare: () -> Unit = {},
+    onSelectCalendarForShare: (String) -> Unit = {},
+    onSendCalendarShare: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    onAttachFileShare: () -> Unit = {},
+    onDismissFileShare: () -> Unit = {},
+    onSendFileShare: (String) -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     nowSeconds: Long,
     onUnlock: (String) -> Unit,
     onTip: (String) -> Unit,
+    onOpenEncrypted: (String) -> Unit,
+    onOpenViewOnce: (String) -> Unit,
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
     onTipPreset: (Long) -> Unit,
     onTipCustomChange: (String) -> Unit,
@@ -531,6 +767,7 @@ fun ThreadScreen(
     onTipDismiss: () -> Unit,
     onAction: (ThreadAction) -> Unit = {},
     onJumpToPinned: (String) -> Unit = {},
+    onJumpToMessage: (String) -> Unit = {},
     onDiscardDraft: () -> Unit = {},
     // AND-151 — in-conversation search: when [searchActive] the search bar replaces the app bar.
     searchActive: Boolean = false,
@@ -658,14 +895,22 @@ fun ThreadScreen(
                         onDraftChange = onDraftChange,
                         onSend = onSend,
                         onAttachImage = onAttachImage,
+                        onAttachVideoClip = onAttachVideoClip,
                         onAttachFile = onAttachFile,
                         onShareVideo = onShareVideo,
                         onRecordVoice = onRecordVoice,
                         onAttachMedia = onOpenMediaPicker,
                         onAttachPoll = onOpenPollComposer,
                         onAttachCountdown = onAttachCountdown,
+                        onAttachLottery = onAttachLottery,
+                        onAttachFindDateTime = onAttachFindDateTime,
+                        onAttachCalendarEvent = onAttachCalendarEvent,
+                        onAttachCalendarShare = onAttachCalendarShare,
+                        onAttachFileShare = onAttachFileShare,
                         onOpenMessageOptions = onOpenMessageOptions,
                         onClearMessageOptions = onClearMessageOptions,
+                        onRemoveStagedImage = onRemoveStagedImage,
+                        onRemoveStagedVideo = onRemoveStagedVideo,
                         onCancelReply = { onAction(ThreadAction.CancelReply) },
                     )
                 }
@@ -698,9 +943,13 @@ fun ThreadScreen(
                     onPollConfirm = onPollConfirm,
                     onUnlock = onUnlock,
                     onTip = onTip,
+                    onOpenEncrypted = onOpenEncrypted,
+                    onOpenViewOnce = onOpenViewOnce,
                     onAddToCalendar = onAddToCalendar,
                     onAction = onAction,
                     onMessageLongPress = { actionTarget = it },
+                    onJumpToMessage = onJumpToMessage,
+                    nowSeconds = nowSeconds,
                 )
             }
         }
@@ -756,6 +1005,36 @@ fun ThreadScreen(
         )
     }
 
+    if (state.lotteryComposerVisible) {
+        LotteryComposerSheet(onSend = onSendLottery, onDismiss = onDismissLottery)
+    }
+    if (state.findDateTimeComposerVisible) {
+        FindDateTimeComposerSheet(onSend = onSendFindDateTime, onDismiss = onDismissFindDateTime)
+    }
+    if (state.calendarEventComposer.visible) {
+        CalendarEventComposerSheet(
+            state = state.calendarEventComposer,
+            onSelectCalendar = onSelectCalendarForEvent,
+            onSendEvent = onSendCalendarEvent,
+            onDismiss = onDismissCalendarEvent,
+        )
+    }
+    if (state.calendarShareComposer.visible) {
+        CalendarShareComposerSheet(
+            state = state.calendarShareComposer,
+            onSelectCalendar = onSelectCalendarForShare,
+            onSend = onSendCalendarShare,
+            onDismiss = onDismissCalendarShare,
+        )
+    }
+    if (state.fileShareComposer.visible) {
+        FileShareComposerSheet(
+            state = state.fileShareComposer,
+            onSendFile = onSendFileShare,
+            onDismiss = onDismissFileShare,
+        )
+    }
+
     if (state.tipSheet.messageId != null) {
         TipSheet(
             state = state.tipSheet,
@@ -794,6 +1073,31 @@ private fun defaultPollSlots(): List<com.testlogon.android.data.messaging.Meetin
     return listOf(slot(1, 15), slot(2, 21))
 }
 
+/**
+ * M12 — a short preview of a replied-to message for the quoted-reply card. Uses the message text when
+ * present, else a media-kind placeholder ([image]/[file]/etc.) so non-text originals still read sensibly.
+ */
+private fun replyQuoteSnippet(m: ThreadMessageUi): String {
+    val text = m.text.trim()
+    if (text.isNotBlank()) return text
+    return when (m.media) {
+        is MessageMedia.Image -> "[image]"
+        is MessageMedia.Gallery -> "[photos]"
+        is MessageMedia.VideoShare -> "[video]"
+        is MessageMedia.VideoClip -> "[video]"
+        is MessageMedia.File -> "[file]"
+        is MessageMedia.Voice -> "[voice message]"
+        is MessageMedia.Voicemail -> "[voicemail]"
+        is MessageMedia.Gif -> "[GIF]"
+        is MessageMedia.Sticker -> "[sticker]"
+        is MessageMedia.MeetingPoll, is MessageMedia.FindDateTime -> "[poll]"
+        is MessageMedia.Countdown -> "[countdown]"
+        is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
+        is MessageMedia.Paid -> "[locked]"
+        MessageMedia.None -> "message"
+    }
+}
+
 @Composable
 private fun ThreadList(
     state: ThreadUiState,
@@ -808,9 +1112,13 @@ private fun ThreadList(
     onPollConfirm: (String, String) -> Unit,
     onUnlock: (String) -> Unit,
     onTip: (String) -> Unit,
+    onOpenEncrypted: (String) -> Unit,
+    onOpenViewOnce: (String) -> Unit,
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
     onAction: (ThreadAction) -> Unit,
     onMessageLongPress: (ThreadMessageUi) -> Unit,
+    onJumpToMessage: (String) -> Unit = {},
+    nowSeconds: Long,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
     val reversed = remember(state.messages) { state.messages.asReversed() }
@@ -838,8 +1146,10 @@ private fun ThreadList(
                 MessageBubble(
                     message = message,
                     repliedToPreview = repliedTo?.let {
-                        (if (it.isOwn) "You" else "Them") + ": " + it.text.ifBlank { "message" }
+                        (if (it.isOwn) "You" else "Them") + ": " + replyQuoteSnippet(it)
                     },
+                    // M11 — tapping the quoted reply jumps the thread to the original message.
+                    onReplyQuoteClick = repliedTo?.let { orig -> { onJumpToMessage(orig.key) } },
                     download = state.downloads[message.key] ?: FileDownloadUi.NotDownloaded,
                     voicePlayback = voicePlayback,
                     polls = state.polls,
@@ -853,11 +1163,14 @@ private fun ThreadList(
                     onPollConfirm = onPollConfirm,
                     onUnlock = { onUnlock(message.key) },
                     onTip = { onTip(message.key) },
+                    onOpenEncrypted = { onOpenEncrypted(message.key) },
+                    onOpenViewOnce = { onOpenViewOnce(message.key) },
                     onAddToCalendar = onAddToCalendar,
                     onLongPress = { onMessageLongPress(message) },
                     onToggleReaction = { emoji -> onAction(ThreadAction.ToggleReaction(message.key, emoji)) },
                     onSeeWhoReacted = { onAction(ThreadAction.OpenReactionDetails(message.key)) },
                     onOpenEditHistory = { onAction(ThreadAction.OpenEditHistory(message.key)) },
+                    nowSeconds = nowSeconds,
                 )
             }
             if (state.isLoadingOlder) {
@@ -888,6 +1201,23 @@ private fun ThreadList(
     }
 }
 
+/**
+ * MSG — a coarse wall-clock ticker (epoch seconds) for relative timestamps. Re-emits on a fixed
+ * cadence so "Just now" rolls over to "1 minute ago", etc., without per-frame recomposition.
+ */
+@Composable
+private fun rememberNowTicker(periodMs: Long = 15_000L): Long {
+    val now by remember {
+        kotlinx.coroutines.flow.flow {
+            while (true) {
+                emit(System.currentTimeMillis() / 1000L)
+                kotlinx.coroutines.delay(periodMs)
+            }
+        }
+    }.collectAsStateWithLifecycle(initialValue = System.currentTimeMillis() / 1000L)
+    return now
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -905,12 +1235,17 @@ private fun MessageBubble(
     onPollConfirm: (String, String) -> Unit,
     onUnlock: () -> Unit,
     onTip: () -> Unit,
+    onOpenEncrypted: () -> Unit = {},
+    onOpenViewOnce: () -> Unit = {},
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
     onLongPress: () -> Unit = {},
     onToggleReaction: (String) -> Unit = {},
     onSeeWhoReacted: () -> Unit = {},
     onOpenEditHistory: () -> Unit = {},
     repliedToPreview: String? = null,
+    /** M11 — non-null when this message is a reply: tapping the quote jumps to the original. */
+    onReplyQuoteClick: (() -> Unit)? = null,
+    nowSeconds: Long = System.currentTimeMillis() / 1000L,
 ) {
     val alignment = if (message.isOwn) Alignment.End else Alignment.Start
     val bubbleColor = if (message.isOwn) {
@@ -918,8 +1253,8 @@ private fun MessageBubble(
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
-    val relative = remember(message.createdAtEpochSeconds) {
-        relativeTimeFromSeconds(message.createdAtEpochSeconds)
+    val relative = remember(message.createdAtEpochSeconds, nowSeconds) {
+        relativeTimeFromSeconds(message.createdAtEpochSeconds, nowSeconds * 1000L)
     }
     val stateDesc = when {
         message.isFailed -> "Failed to send"
@@ -967,12 +1302,22 @@ private fun MessageBubble(
                 modifier = Modifier.semantics { stateDescription = "Pinned" },
             )
         }
-        // Quoted reply context: the message this bubble is replying to.
+        // Quoted reply context: the message this bubble is replying to. M11 — tap to jump to the original.
         if (repliedToPreview != null) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                 shape = MaterialTheme.shapes.small,
-                modifier = Modifier.widthIn(max = 280.dp).padding(bottom = 2.dp).testTag("thread_reply_quote"),
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .padding(bottom = 2.dp)
+                    .testTag("thread_reply_quote")
+                    .then(
+                        if (onReplyQuoteClick != null) {
+                            Modifier.clickable(onClick = onReplyQuoteClick)
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 Text(
                     text = repliedToPreview,
@@ -984,9 +1329,83 @@ private fun MessageBubble(
                 )
             }
         }
-        when (val media = message.media) {
-            is MessageMedia.Image -> ImageBubble(media = media, onOpenImage = onOpenImage)
+        // MSG — receiver-side gated bubbles: encrypted (tap to enter passphrase) and view-once (tap to
+        // view, then consumed). The sender sees a normal "sent" treatment. These take precedence over
+        // the media dispatch because the gated content must never render until the user acts.
+        // G1/G3 — a still-locked PPV message (the server withholds ALL gated payload, incl. the
+        // encryption envelope, until the user pays) MUST gate on the PRICE first: render the locked
+        // teaser (with an encrypted indicator when applicable) and suppress the encrypted/view-once
+        // teasers so the paywall is never bypassed by the encryption/view-once gate. After unlock the
+        // server returns the (still-encrypted) message and the encrypted-teaser path takes over.
+        val lockedNotUnlocked = !message.isOwn &&
+            (message.media as? MessageMedia.Paid)?.monetization?.unlocked == false
+        val isEncryptedImage = !lockedNotUnlocked && message.isEncrypted && message.media is MessageMedia.Image
+        val showEncryptedLocked = !lockedNotUnlocked &&
+            message.isEncrypted && !message.isOwn && message.decryptedText == null && !isEncryptedImage
+        val showViewOnceHidden = !lockedNotUnlocked && message.viewOnce && !message.isOwn && !message.consumed
+        val showListenOnceConsumed = !lockedNotUnlocked &&
+            (message.media as? MessageMedia.Voice)?.consumptionPolicy == "listen_once" &&
+            !message.isOwn && message.consumed
+        if (isEncryptedImage) {
+            GatedTeaserBubble(
+                icon = Icons.Filled.Lock,
+                label = "Encrypted image",
+                hint = "Tap to view",
+                onClick = onOpenEncrypted,
+                testTag = "thread_encrypted_image",
+            )
+        } else if (showEncryptedLocked) {
+            GatedTeaserBubble(
+                icon = Icons.Filled.Lock,
+                label = "Encrypted message",
+                hint = "Tap to unlock",
+                onClick = onOpenEncrypted,
+                testTag = RichMessageTestTags.ENCRYPTED_INDICATOR,
+            )
+        } else if (showListenOnceConsumed) {
+            GatedTeaserBubble(
+                icon = Icons.Filled.GraphicEq,
+                label = "Voice message",
+                hint = "Played",
+                onClick = {},
+                testTag = "thread_listen_once_played",
+            )
+        } else if (showViewOnceHidden) {
+            GatedTeaserBubble(
+                icon = Icons.Filled.Visibility,
+                label = "View once",
+                hint = "Tap to view",
+                onClick = onOpenViewOnce,
+                testTag = "thread_view_once_bubble",
+            )
+        } else when (val media = message.media) {
+            is MessageMedia.Image -> ImageBubble(
+                media = media,
+                onOpenImage = onOpenImage,
+                onLongPress = onLongPress,
+                badge = if (message.isOwn) {
+                    when {
+                        // R2 — the SENDER's own locked image maps to a plain Image (gated media IS
+                        // present for them), so the "$X to unlock" Paid badge never renders. Surface
+                        // the lock + price here, mirroring the view-once / Disappears own badges.
+                        message.lockPriceCents != null ->
+                            "Locked ${formatMoney(message.lockPriceCents, message.lockCurrency)}"
+                        message.viewOnce -> "View once"
+                        message.expiresAtEpochSeconds != null -> "Disappears"
+                        else -> null
+                    }
+                } else {
+                    null
+                },
+            )
+            is MessageMedia.Gallery -> GalleryBubble(media = media, onOpenImage = onOpenImage, onLongPress = onLongPress)
             is MessageMedia.VideoShare -> VideoBubble(media = media)
+            is MessageMedia.VideoClip -> VideoClipBubble(
+                media = media,
+                modifier = Modifier
+                    .width(240.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+            )
             is MessageMedia.File -> FileMessageBubble(
                 file = media,
                 download = download,
@@ -1015,11 +1434,15 @@ private fun MessageBubble(
                 onAddToCalendar = { onAddToCalendar(media) },
             )
             is MessageMedia.CalendarShare -> CalendarShareBubble(media = media, isOwn = message.isOwn)
+            is MessageMedia.FindDateTime -> FindDateTimeCard(media = media)
             is MessageMedia.Paid -> PaidMessageBubble(
                 monetization = media.monetization,
                 isOwn = message.isOwn,
                 unlock = unlock,
                 onUnlock = onUnlock,
+                // G1 — a locked+encrypted message shows BOTH a locked teaser AND an encrypted
+                // indicator. The receiver must unlock (pay) first; decrypting alone reveals nothing.
+                isEncrypted = message.isEncrypted,
             )
             is MessageMedia.MeetingPoll -> {
                 val pollState = polls[media.pollId]
@@ -1056,11 +1479,31 @@ private fun MessageBubble(
                     .testTag(tag)
                     .semantics { stateDescription = stateDesc },
             ) {
-                Text(
-                    text = message.text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                )
+                if (message.isEncrypted && message.decryptedText == null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                            .testTag(RichMessageTestTags.ENCRYPTED_INDICATOR),
+                    ) {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = "Encrypted message",
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = message.text.ifBlank { "Encrypted message" },
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                    }
+                } else {
+                    Text(
+                        text = message.decryptedText ?: message.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    )
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1109,6 +1552,13 @@ private fun MessageBubble(
                         .semantics { contentDescription = "Edited; open edit history" },
                 )
             }
+        }
+        // MSG — expiring message: a small live "Disappears in Xm" status line under the bubble.
+        // G2 — once a locked message is UNLOCKED the server clears its expiry (it never disappears for
+        // a payer), so suppress the countdown for an unlocked locked message even if a stale
+        // expires_at is still cached. A still-locked message keeps its countdown (it expires unpaid).
+        if (message.expiresAtEpochSeconds != null && !message.isExpired && !message.isUnlockedLocked) {
+            ExpiryCountdownLine(expiresAtEpochSeconds = message.expiresAtEpochSeconds)
         }
         // AND-140 — under-bubble reaction chip row.
         ReactionChipsRow(
@@ -1191,9 +1641,81 @@ private fun dayLabel(epochSeconds: Long): String {
     }
 }
 
-/** AND-130 — image bubble: optimistic local thumbnail + progress, else remote Coil image. */
+/**
+ * C6 — gallery (multi-image) bubble: a 2-column grid of thumbnails (max 4 shown, with a "+N" overlay
+ * on the last when there are more). Each thumbnail opens full-screen. Sent as ONE message.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ImageBubble(media: MessageMedia.Image, onOpenImage: (String) -> Unit) {
+private fun GalleryBubble(
+    media: MessageMedia.Gallery,
+    onOpenImage: (String) -> Unit,
+    onLongPress: () -> Unit = {},
+) {
+    val images = media.images
+    val maxShown = 4
+    val shown = images.take(maxShown)
+    val overflow = (images.size - maxShown).coerceAtLeast(0)
+    val cols = if (shown.size == 1) 1 else 2
+    Column(
+        modifier = Modifier
+            .width(220.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .testTag("thread_gallery_bubble"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        shown.chunked(cols).forEachIndexed { rowIdx, rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.fillMaxWidth()) {
+                rowItems.forEachIndexed { colIdx, gi ->
+                    val flatIndex = rowIdx * cols + colIdx
+                    val isLastShown = flatIndex == shown.lastIndex
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .combinedClickable(
+                                onClick = { gi.url?.let(onOpenImage) },
+                                onLongClick = onLongPress,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AsyncImage(
+                            model = gi.url,
+                            contentDescription = "Gallery image",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (isLastShown && overflow > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.45f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("+$overflow", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    }
+                }
+                // Pad an odd final row so a lone item doesn't stretch full width.
+                if (rowItems.size < cols) {
+                    repeat(cols - rowItems.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+/** AND-130 — image bubble: optimistic local thumbnail + progress, else remote Coil image. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ImageBubble(
+    media: MessageMedia.Image,
+    onOpenImage: (String) -> Unit,
+    onLongPress: () -> Unit = {},
+    badge: String? = null,
+) {
     val display = media.url ?: media.localUri
     val cd = stringResource(R.string.thread_image_cd)
     Box(
@@ -1206,7 +1728,10 @@ private fun ImageBubble(media: MessageMedia.Image, onOpenImage: (String) -> Unit
             })
             .clip(RoundedCornerShape(12.dp))
             .testTag(ThreadTestTags.IMAGE_BUBBLE)
-            .clickable(enabled = media.url != null) { media.url?.let(onOpenImage) }
+            .combinedClickable(
+                onClick = { media.url?.let(onOpenImage) },
+                onLongClick = onLongPress,
+            )
             .semantics { contentDescription = cd },
         contentAlignment = Alignment.Center,
     ) {
@@ -1216,6 +1741,17 @@ private fun ImageBubble(media: MessageMedia.Image, onOpenImage: (String) -> Unit
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
+        if (badge != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(badge, color = Color.White, style = MaterialTheme.typography.labelSmall)
+            }
+        }
         val progress = media.uploadProgress
         if (progress != null && media.url == null) {
             Box(
@@ -1344,14 +1880,22 @@ private fun MessageComposer(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onAttachImage: () -> Unit,
+    onAttachVideoClip: () -> Unit = {},
     onAttachFile: () -> Unit,
     onShareVideo: () -> Unit,
     onRecordVoice: () -> Unit,
     onAttachMedia: () -> Unit,
     onAttachPoll: () -> Unit,
     onAttachCountdown: () -> Unit,
+    onAttachLottery: () -> Unit = {},
+    onAttachFindDateTime: () -> Unit = {},
+    onAttachCalendarEvent: () -> Unit = {},
+    onAttachCalendarShare: () -> Unit = {},
+    onAttachFileShare: () -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
+    onRemoveStagedImage: (Int) -> Unit = {},
+    onRemoveStagedVideo: () -> Unit = {},
     onCancelReply: () -> Unit = {},
 ) {
     Surface(tonalElevation = 2.dp) {
@@ -1401,10 +1945,17 @@ private fun MessageComposer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(
+                        onClick = { actionsExpanded = false; onOpenMessageOptions() },
+                        modifier = Modifier.size(44.dp).testTag("thread_msg_options"),
+                    ) {
+                        Icon(Icons.Filled.Tune, contentDescription = "Message options (view once, locked, schedule)", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
                         onClick = { actionsExpanded = false; onAttachImage() },
                         modifier = Modifier.size(44.dp).testTag(ThreadTestTags.ATTACH_IMAGE),
                     ) {
-                        Icon(Icons.Filled.Image, contentDescription = stringResource(R.string.thread_attach_image), tint = MaterialTheme.colorScheme.primary)
+                        // MV1 — single attach action for photos AND short videos.
+                        Icon(Icons.Filled.PermMedia, contentDescription = "Attach photo or video", tint = MaterialTheme.colorScheme.primary)
                     }
                     IconButton(
                         onClick = { actionsExpanded = false; onAttachFile() },
@@ -1443,10 +1994,34 @@ private fun MessageComposer(
                         Icon(Icons.Filled.Timer, contentDescription = stringResource(R.string.composer_add_countdown), tint = MaterialTheme.colorScheme.primary)
                     }
                     IconButton(
-                        onClick = { actionsExpanded = false; onOpenMessageOptions() },
-                        modifier = Modifier.size(44.dp).testTag("thread_msg_options"),
+                        onClick = { actionsExpanded = false; onAttachLottery() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_LOTTERY),
                     ) {
-                        Icon(Icons.Filled.Tune, contentDescription = "Message options (view once, locked, schedule)", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Filled.Casino, contentDescription = "Create a lottery", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachFindDateTime() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_FADT),
+                    ) {
+                        Icon(Icons.Filled.EditCalendar, contentDescription = "Find a time poll", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachCalendarEvent() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_CAL_EVENT),
+                    ) {
+                        Icon(Icons.Filled.Event, contentDescription = "Share a calendar event", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachCalendarShare() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_CAL_SHARE),
+                    ) {
+                        Icon(Icons.Filled.CalendarMonth, contentDescription = "Share a calendar", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachFileShare() },
+                        modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_FILE_SHARE),
+                    ) {
+                        Icon(Icons.Filled.FolderShared, contentDescription = "Share a file", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
@@ -1468,6 +2043,69 @@ private fun MessageComposer(
                     }
                 }
             }
+            // C5/C6 — staged image preview(s): a horizontal row of thumbnails, each with a remove 'x';
+            // the text field is the shared caption. Multiple images send as ONE gallery message.
+            if (composer.stagedImageUris.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("thread_staged_image"),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    composer.stagedImageUris.forEachIndexed { index, stagedUri ->
+                        Box(modifier = Modifier.testTag("thread_staged_image_$index")) {
+                            AsyncImage(
+                                model = stagedUri,
+                                contentDescription = "Staged image",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
+                            )
+                            IconButton(
+                                onClick = { onRemoveStagedImage(index) },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(24.dp)
+                                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                                    .testTag("thread_remove_staged_image_$index"),
+                            ) {
+                                Icon(Icons.Filled.Close, contentDescription = "Remove image", tint = Color.White, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            // C7 — staged short-video preview: a thumbnail (Coil decodes the first video frame) with a
+            // play glyph + remove 'x'.
+            composer.stagedVideoUri?.let { videoUri ->
+                Box(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp).testTag("thread_staged_video"),
+                ) {
+                    AsyncImage(
+                        model = videoUri,
+                        contentDescription = "Staged video",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
+                    )
+                    Icon(
+                        Icons.Filled.Videocam,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.align(Alignment.Center).size(28.dp),
+                    )
+                    IconButton(
+                        onClick = onRemoveStagedVideo,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(24.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                            .testTag("thread_remove_staged_video"),
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = "Remove video", tint = Color.White, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -1486,7 +2124,11 @@ private fun MessageComposer(
                     value = composer.draft,
                     onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f).testTag("thread_input"),
-                    placeholder = { Text(stringResource(R.string.thread_composer_hint)) },
+                    placeholder = {
+                        Text(
+                            if (composer.hasStagedMedia) "Add a caption…" else stringResource(R.string.thread_composer_hint),
+                        )
+                    },
                     isError = composer.overLimit,
                     maxLines = 5,
                     supportingText = if (composer.overLimit) {

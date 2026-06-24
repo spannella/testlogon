@@ -56,5 +56,14 @@ class StubBillingAuthorizer @Inject constructor() : BillingAuthorizer {
         amountMinorUnits: Long,
         currency: String,
         memo: String?,
-    ): BillingResult = BillingResult.NotConfigured
+    ): BillingResult =
+        // DEV/DEMO bypass: in debug builds, authorize with a BLANK payment-method id. The backend's
+        // dev-mode unlock/tip path skips payment-method validation when the id is blank and mock-
+        // completes the charge, so on-device pay-to-unlock + tips work without a real vendor. Release
+        // builds keep returning NotConfigured until the real vendor authorizer (AND-031) is wired.
+        if (com.testlogon.android.BuildConfig.DEBUG) {
+            BillingResult.Authorized(paymentMethodId = "", authorizedMinorUnits = amountMinorUnits)
+        } else {
+            BillingResult.NotConfigured
+        }
 }
