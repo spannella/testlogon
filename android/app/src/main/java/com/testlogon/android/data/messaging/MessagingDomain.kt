@@ -423,7 +423,12 @@ internal fun MessageDto.toDomain(
         readByUserIds = readByUserIds ?: emptyList(),
         expiresAtEpochSeconds = expiresAt,
         expired = expired ?: false,
-        isEncrypted = isEncrypted ?: false,
+        // RG22 — a locked+encrypted message has its `is_encrypted` flag/`encryption` envelope
+        // WITHHELD by the server while still locked (paywall-first); after the recipient pays,
+        // the re-fetch returns the envelope. Treat the presence of an envelope as encrypted even
+        // if the flag lags, so the bubble keeps showing the ENCRYPTED teaser (enter passphrase)
+        // after unlock instead of falling through to a blank/normal bubble.
+        isEncrypted = (isEncrypted ?: false) || encryption != null,
         viewOnce = (viewOnce ?: false) || consumptionPolicy == "view_once",
         consumed = consumptionState == "consumed",
         consumptionPolicy = consumptionPolicy ?: "none",
@@ -647,11 +652,17 @@ internal fun deriveS3Url(bucket: String?, key: String?): String? {
 internal fun ConversationDto.toDomain(): Conversation = Conversation(
     id = conversationId,
     title = title?.takeIf { it.isNotBlank() } ?: deriveTitle(),
-    iconUrl = icon,
+    // ID15 - prefer a set conversation icon; for a DM (no icon) fall back to a participant's
+    // profile photo so the row avatar shows the person instead of an initial.
+    iconUrl = icon?.takeIf { it.isNotBlank() } ?: deriveParticipantPhoto(),
     lastMessagePreview = lastMessagePreview ?: lastMessage?.preview ?: lastMessage?.text,
     lastActivityEpochSeconds = lastMessageAt ?: createdAt,
     unreadCount = unreadCount,
 )
+
+/** ID15 - first participant with a profile photo (the other party in a DM); null otherwise. */
+private fun ConversationDto.deriveParticipantPhoto(): String? =
+    participants.firstNotNullOfOrNull { it.profilePhotoUrl?.takeIf(String::isNotBlank) }
 
 /** DM title fallback: the other participant's display name, else a generic label. */
 private fun ConversationDto.deriveTitle(): String =

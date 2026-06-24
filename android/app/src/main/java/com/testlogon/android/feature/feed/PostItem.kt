@@ -50,6 +50,8 @@ fun PostItem(
     onAuthorClick: (authorId: String) -> Unit = {},
     // Resolved human display name for the author; falls back to authorId when null/blank.
     authorName: String? = null,
+    // ID15 - resolved profile_photo_url for the author; null => show the monogram avatar.
+    authorPhotoUrl: String? = null,
     onMediaClick: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
@@ -65,6 +67,10 @@ fun PostItem(
     onToggleBookmark: (FeedPost) -> Unit = {},
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
+    // FD13 — hide the Tip action when this is the viewer's own post (can't tip yourself).
+    showTip: Boolean = true,
+    // FD12 — when non-null, an Edit item appears in the post overflow (own posts only).
+    onEdit: ((FeedPost) -> Unit)? = null,
     // AND-177 — unlock flow state driving the paywall CTA.
     unlockState: UnlockState = UnlockState.Idle,
     // AND-179 — poll state + vote callbacks; null => render the post's embedded poll read-only.
@@ -85,6 +91,7 @@ fun PostItem(
             PostAuthorHeader(
                 authorId = post.authorId,
                 authorName = authorName,
+                authorPhotoUrl = authorPhotoUrl,
                 createdAtEpochSeconds = post.createdAtEpochSeconds,
                 isLocked = post.isLocked,
                 onClick = { onAuthorClick(post.authorId) },
@@ -134,6 +141,8 @@ fun PostItem(
                     onToggleBookmark = { onToggleBookmark(post) },
                     onShare = { onShare(post) },
                     onTip = { onTip(post) },
+                    showTip = showTip,
+                    onEdit = onEdit?.let { edit -> { edit(post) } },
                 )
             }
         }
@@ -145,12 +154,12 @@ fun PostItem(
 private fun PostAuthorHeader(
     authorId: String,
     authorName: String?,
+    authorPhotoUrl: String?,
     createdAtEpochSeconds: Long,
     isLocked: Boolean,
     onClick: () -> Unit,
 ) {
     val label = authorName?.takeIf { it.isNotBlank() } ?: authorId
-    val initials = remember(label) { monogram(label) }
     val relative = relativeTime(createdAtEpochSeconds)
     Row(
         modifier = Modifier
@@ -160,19 +169,12 @@ private fun PostAuthorHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = initials,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-        }
+        com.testlogon.android.feature.common.TlAvatar(
+            name = label,
+            photoUrl = authorPhotoUrl,
+            size = 36.dp,
+            textStyle = MaterialTheme.typography.labelLarge,
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = label,

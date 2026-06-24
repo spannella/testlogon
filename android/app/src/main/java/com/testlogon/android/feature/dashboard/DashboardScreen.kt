@@ -3,6 +3,7 @@
 package com.testlogon.android.feature.dashboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -189,7 +190,7 @@ private fun DashboardLaunchpad(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item { LaunchpadHeader(onOpenProfile = onOpenProfile) }
+        item { LaunchpadHeader(onOpenProfile = onOpenProfile, viewerName = state.viewerName, viewerPhotoUrl = state.viewerPhotoUrl) }
 
         if (state.isStale) {
             item { DashboardStaleBanner(onRetry = onRetry, refreshing = state.isRefreshing) }
@@ -222,25 +223,42 @@ private fun DashboardLaunchpad(
 }
 
 @Composable
-private fun LaunchpadHeader(onOpenProfile: () -> Unit) {
+private fun LaunchpadHeader(
+    onOpenProfile: () -> Unit,
+    viewerName: String? = null,
+    viewerPhotoUrl: String? = null,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(
-            text = stringResource(R.string.dashboard_greeting),
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.semantics { heading() },
-        )
-        FilledTonalIconButton(
-            onClick = onOpenProfile,
-            shape = CircleShape,
-            modifier = Modifier.testTag(DashboardTestTags.PROFILE_ACTION),
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.dashboard_greeting),
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.semantics { heading() },
+            )
+            // ID15 - show the signed-in user's name under the greeting when known.
+            viewerName?.takeIf { it.isNotBlank() }?.let { name ->
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // ID15 - greeting avatar: the user's profile photo when set, else a monogram; taps to profile.
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable(onClick = onOpenProfile)
+                .testTag(DashboardTestTags.PROFILE_ACTION),
         ) {
-            Icon(
-                Icons.Outlined.Person,
-                contentDescription = stringResource(R.string.dashboard_quick_link_profile),
+            com.testlogon.android.feature.common.TlAvatar(
+                name = viewerName,
+                photoUrl = viewerPhotoUrl,
+                size = 44.dp,
             )
         }
     }

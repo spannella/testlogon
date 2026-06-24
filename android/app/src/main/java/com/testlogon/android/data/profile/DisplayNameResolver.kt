@@ -33,15 +33,22 @@ class DisplayNameResolver @Inject constructor(
     /** id -> display name, for every id resolved so far. Observe this to re-render when names arrive. */
     val names: StateFlow<Map<String, String>> = _names.asStateFlow()
 
+    private val _photos = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** ID15 - id -> profile_photo_url, for every id whose profile resolved with a photo. */
+    val photos: StateFlow<Map<String, String>> = _photos.asStateFlow()
+
     /** Cached display name for [id], or null while a background lookup is kicked off on first miss. */
     fun resolve(id: String): String? {
         if (id.isBlank()) return null
         _names.value[id]?.let { return it }
         if (inFlight.add(id)) {
             scope.launch {
-                val name = (profileRepository.getPublicProfile(id) as? ProfileResult.Found)
-                    ?.profile?.displayName?.takeIf { it.isNotBlank() }
+                val profile = (profileRepository.getPublicProfile(id) as? ProfileResult.Found)?.profile
+                val name = profile?.displayName?.takeIf { it.isNotBlank() }
                 if (name != null) _names.update { it + (id to name) }
+                val photo = profile?.profilePhotoUrl?.takeIf { it.isNotBlank() }
+                if (photo != null) _photos.update { it + (id to photo) }
                 inFlight.remove(id)
             }
         }

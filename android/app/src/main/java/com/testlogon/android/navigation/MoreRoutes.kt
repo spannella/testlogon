@@ -91,6 +91,9 @@ object MoreRoutes {
     // AND-224: saved payment-methods management (list / set-default / remove + add-card CTA).
     val PAYMENT_METHODS: String get() = PaymentMethodsDest.ROUTE
 
+    // PW18: Wallet transactions (ledger) history — date/amount/type/status from BK3.
+    val WALLET_TRANSACTIONS: String get() = WalletTransactionsDest.ROUTE
+
     // AND-243: the invoices list (paged number/date/amount/status + detail/email/PDF).
     const val INVOICES = InvoicesListDest.ROUTE
 
@@ -276,6 +279,7 @@ object MoreRoutes {
             FILES,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
+            WALLET_TRANSACTIONS,
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,

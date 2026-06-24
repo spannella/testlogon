@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.PostComposeRepository
 import com.testlogon.android.data.feed.PostVisibility
+import com.testlogon.android.data.videos.VideoUploadRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,8 @@ data class ComposePostUiState(
     /** Uploaded media to attach: image urls (0..n) + an optional video id. */
     val imageUrls: List<String> = emptyList(),
     val videoId: String? = null,
+    /** True while a picked video is being uploaded to the VOD pipeline (FD8). */
+    val uploadingVideo: Boolean = false,
     val uploadingMedia: Boolean = false,
     val submitting: Boolean = false,
     val error: String? = null,
@@ -30,12 +33,14 @@ data class ComposePostUiState(
     val posted: Boolean = false,
 ) {
     val canPost: Boolean
-        get() = (body.isNotBlank() || imageUrls.isNotEmpty() || videoId != null) && !submitting && !uploadingMedia
+        get() = (body.isNotBlank() || imageUrls.isNotEmpty() || videoId != null) &&
+            !submitting && !uploadingMedia && !uploadingVideo
 }
 
 @HiltViewModel
 class ComposePostViewModel @Inject constructor(
     private val repository: PostComposeRepository,
+    private val videoUploads: VideoUploadRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ComposePostUiState())
@@ -46,6 +51,20 @@ class ComposePostViewModel @Inject constructor(
     fun onLockPriceChange(text: String) = _state.update { it.copy(lockPriceInput = text) }
     fun onScheduleChange(epochSeconds: Long?) = _state.update { it.copy(publishAtEpochSeconds = epochSeconds) }
     fun removeImage(url: String) = _state.update { it.copy(imageUrls = it.imageUrls - url) }
+    fun removeVideo() = _state.update { it.copy(videoId = null) }
+
+    /** FD8 — upload a picked video to the VOD pipeline and attach its video_id to the post. */
+    fun onVideoPicked(uri: android.net.Uri?) {
+        if (uri == null) return
+        _state.update { it.copy(uploadingVideo = true, error = null) }
+        viewModelScope.launch {
+            when (val r = videoUploads.upload(uri, title = (_state.value.body.trim().take(80)).ifBlank { "Video post" }, description = "")) {
+                is ApiResult.Success -> _state.update { it.copy(uploadingVideo = false, videoId = r.data) }
+                is ApiResult.Failure -> _state.update { it.copy(uploadingVideo = false, error = r.error.message) }
+                is ApiResult.NetworkError -> _state.update { it.copy(uploadingVideo = false, error = "Video upload failed.") }
+            }
+        }
+    }
 
     /** Upload picked images (uris) and add their urls to the post. */
     fun onImagesPicked(uris: List<android.net.Uri>) {

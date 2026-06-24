@@ -3001,7 +3001,9 @@ internal fun MessageEntity.toDomain(): Message = Message(
     lifecycle = runCatching { MessageLifecycle.valueOf(lifecycle) }.getOrDefault(MessageLifecycle.ACTIVE),
     editedAtEpochSeconds = editedAtEpochSeconds,
     isHiddenLocal = isHidden,
-    isEncrypted = isEncrypted,
+    // RG22 — keep the encrypted flag set when an envelope is present (post-unlock the server returns
+    // the envelope; the flag must not regress to a plain/blank bubble).
+    isEncrypted = isEncrypted || encSaltB64 != null,
     encryption = encSaltB64?.let { salt ->
         com.testlogon.android.data.messaging.MessageEncryption(
             version = encVersion ?: 1,

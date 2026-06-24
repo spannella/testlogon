@@ -201,7 +201,7 @@
     <string name="media_prefs_resolution_1080">1080p (Full HD)</string>
 
     <!-- Notification preferences (AND-080) -->
-    <string name="notif_prefs_title">Notifications</string>
+    <string name="notif_prefs_title">Notification settings</string>
     <string name="notif_prefs_empty">No notification categories available.</string>
     <string name="notif_prefs_stale_banner">Showing saved settings — couldn\'t reach the server.</string>
     <string name="notif_prefs_channel_push">Push</string>
@@ -213,6 +213,18 @@
     <string name="notif_prefs_category_product">Product updates</string>
     <string name="notif_prefs_category_billing">Billing</string>
     <string name="notif_prefs_category_marketing">Marketing</string>
+    <!-- SC17: settings screen clarity -->
+    <string name="notif_prefs_subtitle">Choose how you want to be notified. Toggle each delivery channel per category.</string>
+    <string name="notif_prefs_section_header">Notification categories</string>
+    <string name="notif_prefs_channel_push_desc">Alerts on this device</string>
+    <string name="notif_prefs_channel_email_desc">Sent to your email address</string>
+    <string name="notif_prefs_channel_sms_desc">Text messages to your phone</string>
+    <string name="notif_prefs_category_generic_desc">General notifications.</string>
+    <string name="notif_prefs_category_security_desc">Sign-ins, password changes, and suspicious activity.</string>
+    <string name="notif_prefs_category_account_desc">Updates about your account and profile.</string>
+    <string name="notif_prefs_category_product_desc">New features and product announcements.</string>
+    <string name="notif_prefs_category_billing_desc">Payments, invoices, and subscription changes.</string>
+    <string name="notif_prefs_category_marketing_desc">Tips, offers, and promotional messages.</string>
 
     <!-- Account settings &amp; status (AND-082) -->
     <string name="account_settings_title">Account</string>
@@ -524,10 +536,46 @@
 
     <!-- AND-271/AND-272: calendar views + event detail -->
     <string name="more_entry_calendar">Calendar</string>
+    <!-- SC16: social activity feed -->
+    <string name="activity_screen_title">Activity</string>
+    <string name="activity_screen_subtitle">Follows, likes, comments, and tips on your content.</string>
+    <string name="activity_empty_title">No activity yet</string>
+    <string name="activity_empty_body">When people follow, like, comment on, or tip your content, it shows up here.</string>
     <string name="calendar_title">Calendar</string>
     <string name="calendar_view_month">Month</string>
     <string name="calendar_view_week">Week</string>
     <string name="calendar_view_agenda">Agenda</string>
+    <!-- SC19: real calendar (month/week/day + CRUD) -->
+    <string name="calendar_view_day">Day</string>
+    <string name="calendar_weekday_mon">Mon</string>
+    <string name="calendar_weekday_tue">Tue</string>
+    <string name="calendar_weekday_wed">Wed</string>
+    <string name="calendar_weekday_thu">Thu</string>
+    <string name="calendar_weekday_fri">Fri</string>
+    <string name="calendar_weekday_sat">Sat</string>
+    <string name="calendar_weekday_sun">Sun</string>
+    <string name="calendar_add_event">Add event</string>
+    <string name="calendar_edit_event">Edit event</string>
+    <string name="calendar_delete_event">Delete event</string>
+    <string name="calendar_new_event_title">New event</string>
+    <string name="calendar_event_actions">Event options</string>
+    <string name="calendar_field_name">Title</string>
+    <string name="calendar_field_description">Description (optional)</string>
+    <string name="calendar_field_all_day">All day</string>
+    <string name="calendar_field_start">Start time (HH:MM)</string>
+    <string name="calendar_field_end">End time (HH:MM)</string>
+    <string name="calendar_field_calendar">Calendar</string>
+    <string name="calendar_save">Save</string>
+    <string name="calendar_cancel">Cancel</string>
+    <string name="calendar_delete">Delete</string>
+    <string name="calendar_today_label">Today</string>
+    <string name="calendar_no_calendar">No calendar available to add events.</string>
+    <string name="calendar_saved">Event saved</string>
+    <string name="calendar_deleted">Event deleted</string>
+    <string name="calendar_save_failed">Couldn\'t save the event. Try again.</string>
+    <string name="calendar_delete_failed">Couldn\'t delete the event. Try again.</string>
+    <string name="calendar_name_required">Enter a title</string>
+    <string name="calendar_day_no_events">No events on this day. Long-press to add one.</string>
     <string name="calendar_nav_previous">Previous</string>
     <string name="calendar_nav_next">Next</string>
     <string name="calendar_today">Today</string>
@@ -2777,6 +2825,12 @@
     <string name="files_move_label">Destination folder path</string>
     <string name="files_move_confirm">Move</string>
     <string name="files_copy_unavailable">Copy isn\u2019t available yet.</string>
+    <!-- FM3/FM4/FM6 file-manager copy + inline-rename + move/copy destination picker -->
+    <string name="files_move_banner">Moving “%1$s” — tap a folder, then Move here</string>
+    <string name="files_copy_banner">Copying “%1$s” — tap a folder, then Copy here</string>
+    <string name="files_move_here">Move here</string>
+    <string name="files_copy_here">Copy here</string>
+    <string name="files_transfer_destination">Destination: %1$s</string>
     <string name="files_row_menu_cd">More actions for %1$s</string>
 
     <!-- AND-335 share links (owner sheet) -->
@@ -3868,4 +3922,11 @@
     <string name="group_settings_visibility_public">Public</string>
     <string name="group_settings_visibility_private">Private</string>
     <string name="group_settings_save">Save</string>
+    <!-- PW18: Wallet transactions (ledger) history. -->
+    <string name="more_entry_wallet_transactions">Transactions</string>
+    <string name="wallet_transactions_title">Transactions</string>
+    <string name="wallet_transactions_balance_label">Wallet balance</string>
+    <string name="wallet_transactions_empty_title">No transactions yet</string>
+    <string name="wallet_transactions_empty_body">Your wallet activity &#8212; deposits, charges, payouts and credits &#8212; will show up here.</string>
+    <string name="wallet_transactions_default_reason">Transaction</string>
 </resources>

@@ -58,6 +58,8 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.billing.CardBrand
 import com.testlogon.android.data.billing.PaymentMethod
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 /** Stable testTags for the Payment Methods screen (AND-224). */
 object PaymentMethodsTestTags {
@@ -78,10 +80,25 @@ fun PaymentMethodsRoute(
     onBack: () -> Unit,
     onAddCard: () -> Unit,
     modifier: Modifier = Modifier,
+    // PW14 — a one-shot signal (true) emitted by the add-card flow on return so the list refreshes
+    // IMMEDIATELY (not only on the next ON_RESUME). Defaulted off so other callers are unaffected.
+    refreshSignal: Flow<Boolean> = emptyFlow(),
+    onRefreshSignalConsumed: () -> Unit = {},
     viewModel: PaymentMethodsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // PW14 — when the add-card flow signals a freshly-added method, force a refresh right away and
+    // clear the signal so a later return doesn't re-trigger it. This is the reliable path; the
+    // ON_RESUME re-fetch below is kept only as a backstop.
+    val added by refreshSignal.collectAsStateWithLifecycle(initialValue = false)
+    LaunchedEffect(added) {
+        if (added) {
+            viewModel.refresh()
+            onRefreshSignalConsumed()
+        }
+    }
 
     // Re-fetch when returning to this screen (e.g. after adding a method) so the list stays fresh.
     // Skip the very first resume — the ViewModel's init already performs the initial load.

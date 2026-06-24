@@ -100,6 +100,16 @@ interface FilesApi {
     @POST("v1/fs/move")
     suspend fun move(@Body body: MoveRequest): MoveResultDto
 
+    /**
+     * FM3 - copies the FILE at `src` to the full destination path `dst` (BK1 backend). The response is a
+     * MoveResult-shaped body `{ ok, type, src, dst, size }`; the extra `size` is ignored by Moshi and the
+     * shared [MoveResultDto] (all fields optional) deserializes it cleanly. Folder/recursive copy is NOT
+     * supported by the backend (400) - callers only offer Copy for files.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("v1/fs/copy")
+    suspend fun copy(@Body body: MoveRequest): MoveResultDto
+
     @DELETE("v1/fs/file")
     suspend fun deleteFile(@Query("path") path: String): OkRespDto
 

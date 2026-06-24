@@ -17,6 +17,7 @@ import com.testlogon.android.data.feed.Poll
 import com.testlogon.android.data.feed.PollRepository
 import com.testlogon.android.data.feed.PollVoteResult
 import com.testlogon.android.data.feed.PostActionsRepository
+import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
 import com.testlogon.android.data.feed.applyVote
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -58,10 +59,26 @@ class FeedViewModel @Inject constructor(
     private val bookmarks: FeedBookmarkRepository,
     private val polls: PollRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
+    private val currentUser: CurrentUserRepository,
 ) : ViewModel() {
 
     /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
     val authorNames: StateFlow<Map<String, String>> = displayNames.names
+
+    /** ID15 - author id -> profile_photo_url, resolved alongside the name for visible posts. */
+    val authorPhotos: StateFlow<Map<String, String>> = displayNames.photos
+
+    // FD12/FD13 — the signed-in user's id, so the feed can show an Edit affordance and hide the
+    // Tip action on the viewer's own posts. Resolved once; null until known (treat as 'not mine').
+    private val _currentUserSub = MutableStateFlow<String?>(null)
+    val currentUserSub: StateFlow<String?> = _currentUserSub.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            val r = currentUser.currentUserSub()
+            if (r is ApiResult.Success) _currentUserSub.value = r.data
+        }
+    }
 
     /** Kick off (cached) resolution of an author's display name; UI reads it from [authorNames]. */
     fun resolveAuthor(authorId: String) {

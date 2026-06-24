@@ -96,6 +96,7 @@ class ThreadViewModel @Inject constructor(
     private val billing: BillingAuthorizer,
     private val draftRepository: com.testlogon.android.data.messaging.DraftRepository,
     private val typingRepository: TypingRepository,
+    private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
 ) : ViewModel() {
 
     /**
@@ -209,6 +210,29 @@ class ThreadViewModel @Inject constructor(
         restoreDraft()
         observeDraftSaver()
         startTyping()
+        observePeerPhoto()
+    }
+
+    /**
+     * ID15 - resolve the DM peer's profile photo (via the shared display-name/photo resolver) once
+     * [ThreadUiState.peerUserSub] is known, so the thread header avatar can show the person's photo.
+     */
+    private fun observePeerPhoto() {
+        viewModelScope.launch {
+            _state.collect { st ->
+                val peer = st.peerUserSub ?: return@collect
+                if (st.peerPhotoUrl == null) displayNames.resolve(peer)
+            }
+        }
+        viewModelScope.launch {
+            displayNames.photos.collect { photos ->
+                val peer = _state.value.peerUserSub
+                val photo = peer?.let { photos[it] }
+                if (photo != null && _state.value.peerPhotoUrl != photo) {
+                    _state.update { it.copy(peerPhotoUrl = photo) }
+                }
+            }
+        }
     }
 
     /** AND-146 — run the debounced typing send controller. */

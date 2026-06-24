@@ -133,6 +133,12 @@ fun AuthedShellScreen(
                 com.testlogon.android.feature.feed.FeedRoute(
                     onComposePost = { onOpenRoute(com.testlogon.android.navigation.ComposePostDest.ROUTE) },
                     onOpenDiscover = { tabNav.navigateToTab(AuthedTab.DISCOVER) },
+                    // FD11 — a visible 'Your posts' entry straight from the feed top bar.
+                    onOpenMyPosts = { onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE) },
+                    // FD12 — Edit own post from the feed overflow.
+                    onEditPost = { postId ->
+                        onOpenRoute(com.testlogon.android.navigation.EditPostDest.build(postId))
+                    },
                     onPostClick = { postId ->
                         onOpenRoute(com.testlogon.android.navigation.PostDetailDest.build(postId))
                     },

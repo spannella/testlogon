@@ -48,6 +48,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
+import coil.decode.VideoFrameDecoder
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 import com.testlogon.android.R
 import com.testlogon.android.data.messaging.MessageMedia
 
@@ -215,9 +219,29 @@ fun VideoClipBubble(
     var playingInline by remember(source) { mutableStateOf(false) }
     var fullScreen by remember(source) { mutableStateOf(false) }
 
+    val context = LocalContext.current
+    // RG20 — resolve a server-relative ("/mock/s3/...") object url the SAME way ExoPlayer does, so the
+    // poster frame decodes from the exact bytes that will play. (The app ImageLoader also maps relative
+    // urls, but resolving here is explicit and lets us attach VideoFrameDecoder + a first-frame request.)
+    val posterModel = remember(source) {
+        source?.let { if (it.startsWith("/")) BuildConfig.API_BASE_URL.trimEnd('/') + it else it }
+    }
+    // RG20 — an EXPLICIT request that forces the video-frame decoder + the first keyframe, with a
+    // painter state we can observe so we can keep a dark backdrop (never a blank/transparent bubble)
+    // until the frame is ready, and surface the play glyph regardless of decode outcome.
+    val posterPainter = rememberAsyncImagePainter(
+        model = ImageRequest.Builder(context)
+            .data(posterModel)
+            .videoFrameMillis(0L)
+            .decoderFactory(VideoFrameDecoder.Factory())
+            .crossfade(true)
+            .build(),
+    )
+
     Box(
         modifier = modifier
             .aspectRatio(16f / 9f)
+            .background(Color.Black)
             .testTag(VideoClipTestTags.BUBBLE),
         contentAlignment = Alignment.Center,
     ) {
@@ -228,9 +252,11 @@ fun VideoClipBubble(
                 modifier = Modifier.fillMaxSize().testTag(VideoClipTestTags.PLAYER),
             )
         } else {
-            // Poster: a video frame decoded from the (remote or local) source via VideoFrameDecoder.
-            AsyncImage(
-                model = source,
+            // Poster: a video frame decoded from the (remote or local) source via VideoFrameDecoder,
+            // painted over a black backdrop so the bubble is NEVER blank (RG20) — even while the frame
+            // is still decoding or if decode fails, the dark poster + play glyph are visible.
+            androidx.compose.foundation.Image(
+                painter = posterPainter,
                 contentDescription = stringResource(R.string.video_thumbnail_cd),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier

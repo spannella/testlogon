@@ -15,6 +15,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.FloatingActionButton
@@ -34,6 +35,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +78,8 @@ fun FeedRoute(
     onPostClick: (postId: String) -> Unit,
     onComposePost: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
+    onOpenMyPosts: () -> Unit = {},
+    onEditPost: (postId: String) -> Unit = {},
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
@@ -89,8 +96,10 @@ fun FeedRoute(
     val coroutineScope = rememberCoroutineScope()
     val shareLauncher = remember { ShareLauncher() }
     val savedIds by viewModel.savedIds.collectAsState()
+    val currentUserSub by viewModel.currentUserSub.collectAsState()
     val pollStates by viewModel.pollUiStates.collectAsState()
     val authorNames by viewModel.authorNames.collectAsState()
+    val authorPhotos by viewModel.authorPhotos.collectAsState()
     val unlockStates by paywallViewModel.states.collectAsState()
     val tipState by tipViewModel.state.collectAsState()
 
@@ -162,10 +171,27 @@ fun FeedRoute(
     // AND-199 — refresh the stories bar when the feed becomes active (web parity: poll/refresh on view).
     LaunchedEffect(storiesTrayViewModel) { storiesTrayViewModel.refresh() }
 
+    // FD10 — refresh the feed whenever it resumes (e.g. on return from the composer) so a newly
+    // published post shows up immediately without a manual pull-to-refresh.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (first) { first = false } else { items.refresh() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     FeedScreen(
         items = items,
         onComposePost = onComposePost,
         onOpenDiscover = onOpenDiscover,
+        onOpenMyPosts = onOpenMyPosts,
+        currentUserSub = currentUserSub,
+        onEditPost = onEditPost,
         snackbarHostState = snackbarHostState,
         savedIds = savedIds,
         pollStates = pollStates,
@@ -189,6 +215,7 @@ fun FeedRoute(
         onTip = { post -> tipViewModel.open(post.id) },
         onEnsurePoll = viewModel::ensurePollState,
         authorNames = authorNames,
+        authorPhotos = authorPhotos,
         onEnsureAuthorName = viewModel::resolveAuthor,
         onPollOptionClick = viewModel::onPollOptionSelected,
         onPollRetry = viewModel::onPollRetry,
@@ -212,6 +239,9 @@ fun FeedScreen(
     onRefresh: () -> Unit,
     onComposePost: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
+    onOpenMyPosts: () -> Unit = {},
+    currentUserSub: String? = null,
+    onEditPost: (postId: String) -> Unit = {},
     onPostClick: (FeedPost) -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
@@ -233,6 +263,7 @@ fun FeedScreen(
     onTip: (FeedPost) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit = {},
     authorNames: Map<String, String> = emptyMap(),
+    authorPhotos: Map<String, String> = emptyMap(),
     onEnsureAuthorName: (authorId: String) -> Unit = {},
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
@@ -240,7 +271,22 @@ fun FeedScreen(
     val listState = rememberLazyListState()
     Scaffold(
         modifier = modifier.testTag(FeedTestTags.SCREEN),
-        topBar = { TopAppBar(title = { Text("Feed") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Feed") },
+                actions = {
+                    androidx.compose.material3.IconButton(
+                        onClick = onOpenMyPosts,
+                        modifier = Modifier.testTag("feed_my_posts_action"),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ListAlt,
+                            contentDescription = "Your posts",
+                        )
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onComposePost, modifier = Modifier.testTag("feed_compose_fab")) {
                 Icon(Icons.Filled.Edit, contentDescription = "New post")
@@ -291,6 +337,8 @@ fun FeedScreen(
                         items = items,
                         listState = listState,
                         savedIds = savedIds,
+                        currentUserSub = currentUserSub,
+                        onEditPost = onEditPost,
                         pollStates = pollStates,
                         unlockStates = unlockStates,
                         onPostClick = onPostClick,
@@ -306,6 +354,7 @@ fun FeedScreen(
                         onTip = onTip,
                         onEnsurePoll = onEnsurePoll,
                         authorNames = authorNames,
+                        authorPhotos = authorPhotos,
                         onEnsureAuthorName = onEnsureAuthorName,
                         onPollOptionClick = onPollOptionClick,
                         onPollRetry = onPollRetry,
@@ -370,6 +419,8 @@ private fun FeedList(
     items: LazyPagingItems<FeedPost>,
     listState: androidx.compose.foundation.lazy.LazyListState,
     savedIds: Set<String>,
+    currentUserSub: String? = null,
+    onEditPost: (postId: String) -> Unit = {},
     pollStates: Map<String, PollCardState>,
     unlockStates: Map<String, UnlockState>,
     onPostClick: (FeedPost) -> Unit,
@@ -385,6 +436,7 @@ private fun FeedList(
     onTip: (FeedPost) -> Unit,
     onEnsurePoll: (FeedPost) -> Unit,
     authorNames: Map<String, String>,
+    authorPhotos: Map<String, String>,
     onEnsureAuthorName: (authorId: String) -> Unit,
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit,
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit,
@@ -403,6 +455,7 @@ private fun FeedList(
                 PostItem(
                     post = item,
                     authorName = authorNames[item.authorId],
+                    authorPhotoUrl = authorPhotos[item.authorId],
                     onPostClick = onPostClick,
                     onAuthorClick = onAuthorClick,
                     onMediaClick = { post, _ -> onPostClick(post) },
@@ -416,6 +469,10 @@ private fun FeedList(
                     onToggleBookmark = onToggleBookmark,
                     onShare = onShare,
                     onTip = onTip,
+                    showTip = !(currentUserSub != null && item.authorId == currentUserSub),
+                    onEdit = if (currentUserSub != null && item.authorId == currentUserSub) {
+                        { post -> onEditPost(post.id) }
+                    } else null,
                     unlockState = unlockStates[item.id] ?: UnlockState.Idle,
                     pollState = pollStates[item.id],
                     onPollOptionClick = onPollOptionClick,

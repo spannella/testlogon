@@ -19,6 +19,9 @@ data class DashboardUiState(
     val isRefreshing: Boolean = false,
     val isStale: Boolean = false,
     val errorMessage: String? = null,
+    /** ID15 - the signed-in user's display name + profile photo for the Home greeting avatar. */
+    val viewerName: String? = null,
+    val viewerPhotoUrl: String? = null,
 ) {
     enum class Phase { Loading, Content, Empty, Error }
 

@@ -67,6 +67,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -123,6 +125,14 @@ object FilesTestTags {
 
     /** FM1 - the floating chip shown while a row is being dragged to a folder. */
     const val DRAG_CHIP = "files_drag_chip"
+
+    /** FM4 - the inline rename text field that replaces a row's name while editing. */
+    const val RENAME_FIELD = "files_rename_field"
+
+    /** FM6/FM3 - the move/copy destination-picker banner + its Confirm / Cancel actions. */
+    const val TRANSFER_BANNER = "files_transfer_banner"
+    const val TRANSFER_CONFIRM = "files_transfer_confirm"
+    const val TRANSFER_CANCEL = "files_transfer_cancel"
 
     /** AND-336 - the import-from-Google-Drive top-bar affordance. */
     const val DRIVE_IMPORT = "files_drive_import"
@@ -182,6 +192,12 @@ private class DragMoveState {
     fun registerTarget(path: String, bounds: Rect) { dropTargets[path] = bounds }
     fun unregisterTarget(path: String) { dropTargets.remove(path) }
 }
+
+/** FM6/FM3 - which kind of transfer the destination-picker banner is confirming. */
+private enum class TransferOp { MOVE, COPY }
+
+/** FM6/FM3 - an in-flight "tap a destination folder" transfer of [node] via [op]. */
+private data class Transfer(val node: FileNode, val op: TransferOp)
 
 @Composable
 fun FilesRoute(
@@ -267,6 +283,8 @@ fun FilesRoute(
         onRename = { node, newName -> viewModel.rename(node.path, newName, node.type == FileNodeType.FOLDER) },
         onDelete = { node -> viewModel.delete(node.path, node.type == FileNodeType.FOLDER) },
         onMove = { node, dst -> viewModel.move(node.path, dst) },
+        // FM3 - copy wires the BK1 copy endpoint (file-only; dst is the full destination path).
+        onCopy = { node, dst -> viewModel.copy(node.path, dst) },
         onCreateFolder = { name -> viewModel.createFolder(name) },
     )
 
@@ -313,14 +331,21 @@ fun FilesScreen(
     onRename: (FileNode, String) -> Unit = { _, _ -> },
     onDelete: (FileNode) -> Unit = {},
     onMove: (FileNode, String) -> Unit = { _, _ -> },
+    // FM3 - copy a file to a destination folder (dst = full destination path). Defaulted no-op so existing
+    // callers / tests are unaffected.
+    onCopy: (FileNode, String) -> Unit = { _, _ -> },
     onCreateFolder: (String) -> Unit = {},
 ) {
     var sortSheetVisible by remember { mutableStateOf(false) }
     // F13 - which row's context menu / dialog is active (null = none). Shared across browse + search.
     var contextNode by remember { mutableStateOf<FileNode?>(null) }
-    var renameNode by remember { mutableStateOf<FileNode?>(null) }
+    // FM4 - inline rename: the path of the row currently being renamed in-place (null = none). Editing
+    // the name on the row replaces the old rename dialog.
+    var renamingPath by remember { mutableStateOf<String?>(null) }
     var deleteNode by remember { mutableStateOf<FileNode?>(null) }
-    var moveNode by remember { mutableStateOf<FileNode?>(null) }
+    // FM6/FM3 - transfer mode: the node being moved/copied to a folder the user taps into, plus which op.
+    // While non-null a banner ("Moving/Copying <name> - tap a folder") is shown with Confirm / Cancel.
+    var transfer by remember { mutableStateOf<Transfer?>(null) }
     var newFolderVisible by remember { mutableStateOf(false) }
     // FM1 - drag-and-drop MOVE state, shared by the browse list, breadcrumb + the drag chip.
     val dragState = remember { DragMoveState() }
@@ -391,6 +416,23 @@ fun FilesScreen(
                 onToggleMode = onToggleSearchMode,
             )
             HorizontalDivider()
+            // FM6/FM3 - destination-picker banner: while a transfer is active the user navigates into the
+            // target folder (folder taps drill in, breadcrumbs jump) then taps Move/Copy here. Cancel exits.
+            transfer?.let { t ->
+                TransferBanner(
+                    transfer = t,
+                    destinationPath = state.currentPath,
+                    onConfirm = {
+                        val dst = FilePath.child(state.currentPath, t.node.name)
+                        when (t.op) {
+                            TransferOp.MOVE -> onMove(t.node, dst)
+                            TransferOp.COPY -> onCopy(t.node, dst)
+                        }
+                        transfer = null
+                    },
+                    onCancel = { transfer = null },
+                )
+            }
             Box(Modifier.fillMaxSize()) {
                 if (state.isSearching) {
                     SearchContent(
@@ -399,6 +441,9 @@ fun FilesScreen(
                         onOpenFile = onOpenFile,
                         onShareFile = onShareFile,
                         onLongPress = { contextNode = it },
+                        renamingPath = renamingPath,
+                        onRenameCommit = { node, newName -> onRename(node, newName); renamingPath = null },
+                        onRenameCancel = { renamingPath = null },
                     )
                 } else {
                     BrowseContent(
@@ -408,6 +453,9 @@ fun FilesScreen(
                         onOpenFile = onOpenFile,
                         onShareFile = onShareFile,
                         onLongPress = { contextNode = it },
+                        renamingPath = renamingPath,
+                        onRenameCommit = { node, newName -> onRename(node, newName); renamingPath = null },
+                        onRenameCancel = { renamingPath = null },
                         dragState = dragState,
                         onDrop = { node, destFolder ->
                             // dst is the FULL new path of the moved node (the backend splits its
@@ -470,22 +518,15 @@ fun FilesScreen(
     contextNode?.let { node ->
         FileContextSheet(
             node = node,
-            onRename = { contextNode = null; renameNode = node },
+            // FM4 - rename now edits the row name in-place instead of opening a dialog.
+            onRename = { contextNode = null; renamingPath = node.path },
             onDelete = { contextNode = null; deleteNode = node },
-            onMove = { contextNode = null; moveNode = node },
+            // FM6 - move enters a "tap a destination folder" mode (was a type-a-path dialog).
+            onMove = { contextNode = null; transfer = Transfer(node, TransferOp.MOVE) },
+            // FM3 - copy enters the same destination-picker mode (files only; folder copy unsupported).
+            onCopy = { contextNode = null; transfer = Transfer(node, TransferOp.COPY) },
             onNewFolder = { contextNode = null; newFolderVisible = true },
             onDismiss = { contextNode = null },
-        )
-    }
-
-    renameNode?.let { node ->
-        TextEntryDialog(
-            title = stringResource(R.string.files_rename_title),
-            label = stringResource(R.string.files_rename_label),
-            confirmLabel = stringResource(R.string.files_rename_confirm),
-            initial = node.name,
-            onConfirm = { value -> onRename(node, value); renameNode = null },
-            onDismiss = { renameNode = null },
         )
     }
 
@@ -504,17 +545,6 @@ fun FilesScreen(
                     Text(stringResource(R.string.action_cancel))
                 }
             },
-        )
-    }
-
-    moveNode?.let { node ->
-        TextEntryDialog(
-            title = stringResource(R.string.files_move_title),
-            label = stringResource(R.string.files_move_label),
-            confirmLabel = stringResource(R.string.files_move_confirm),
-            initial = state.currentPath,
-            onConfirm = { dst -> onMove(node, dst); moveNode = null },
-            onDismiss = { moveNode = null },
         )
     }
 
@@ -638,6 +668,10 @@ private fun BrowseContent(
     onOpenFile: (FileNode) -> Unit,
     onShareFile: (FileNode) -> Unit = {},
     onLongPress: (FileNode) -> Unit = {},
+    // FM4 - inline rename plumbing.
+    renamingPath: String? = null,
+    onRenameCommit: (FileNode, String) -> Unit = { _, _ -> },
+    onRenameCancel: () -> Unit = {},
     dragState: DragMoveState? = null,
     onDrop: (FileNode, String) -> Unit = { _, _ -> },
 ) {
@@ -683,6 +717,9 @@ private fun BrowseContent(
                                 onClick = { if (node.type == FileNodeType.FOLDER) onOpenFolder(node) else onOpenFile(node) },
                                 onLongClick = { onLongPress(node) },
                                 onShare = if (node.type == FileNodeType.FOLDER) null else ({ onShareFile(node) }),
+                                isRenaming = renamingPath == node.path,
+                                onRenameCommit = { newName -> onRenameCommit(node, newName) },
+                                onRenameCancel = onRenameCancel,
                                 dragState = dragState,
                                 onDrop = onDrop,
                             )
@@ -727,6 +764,10 @@ private fun SearchContent(
     onOpenFile: (FileNode) -> Unit,
     onShareFile: (FileNode) -> Unit = {},
     onLongPress: (FileNode) -> Unit = {},
+    // FM4 - inline rename plumbing.
+    renamingPath: String? = null,
+    onRenameCommit: (FileNode, String) -> Unit = { _, _ -> },
+    onRenameCancel: () -> Unit = {},
 ) {
     when {
         state.searchLoading -> LoadingState()
@@ -751,6 +792,9 @@ private fun SearchContent(
                     onClick = { if (node.type == FileNodeType.FOLDER) onOpenFolder(node) else onOpenFile(node) },
                     onLongClick = { onLongPress(node) },
                     onShare = if (node.type == FileNodeType.FOLDER) null else ({ onShareFile(node) }),
+                    isRenaming = renamingPath == node.path,
+                    onRenameCommit = { newName -> onRenameCommit(node, newName) },
+                    onRenameCancel = onRenameCancel,
                 )
             }
         }
@@ -764,6 +808,11 @@ private fun FileRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    // FM4 - when [isRenaming] the name area becomes an inline editable field; commit calls
+    // [onRenameCommit](newName), cancel (Esc / focus loss / blank) calls [onRenameCancel].
+    isRenaming: Boolean = false,
+    onRenameCommit: (String) -> Unit = {},
+    onRenameCancel: () -> Unit = {},
     // FM1 - when provided, the row is draggable (long-press to pick up) and FOLDER rows register as
     // drop targets. A drop on a folder calls [onDrop](draggedNode, destFolderPath).
     dragState: DragMoveState? = null,
@@ -837,13 +886,19 @@ private fun FileRow(
       } else {
           Modifier
       }
+      // FM4 - while renaming, the row's tap/drag is suppressed so the inline field owns all interaction.
+      val contentMod = if (isRenaming) {
+          Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 8.dp)
+      } else {
+          Modifier
+              .weight(1f)
+              .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+              .then(dragMod)
+              .padding(horizontal = 16.dp, vertical = 12.dp)
+              .clearAndSetSemantics { contentDescription = cd }
+      }
       Row(
-        modifier = Modifier
-            .weight(1f)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .then(dragMod)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .clearAndSetSemantics { contentDescription = cd },
+        modifier = contentMod,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -856,40 +911,48 @@ private fun FileRow(
             modifier = Modifier.padding(start = 12.dp).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = node.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            if (isRenaming) {
+                InlineRenameField(
+                    initial = node.name,
+                    onCommit = onRenameCommit,
+                    onCancel = onRenameCancel,
                 )
-                if (node.isEncrypted) {
-                    Icon(
-                        Icons.Filled.Lock,
-                        contentDescription = null,
-                        modifier = Modifier.padding(start = 6.dp).size(14.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = node.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (node.isEncrypted) {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.padding(start = 6.dp).size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                val meta = buildString {
+                    sizeText?.let { append(it) }
+                    if (relative.isNotEmpty()) {
+                        if (isNotEmpty()) append(" · ")
+                        append(relative)
+                    }
+                }
+                if (meta.isNotEmpty()) {
+                    Text(
+                        text = meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            val meta = buildString {
-                sizeText?.let { append(it) }
-                if (relative.isNotEmpty()) {
-                    if (isNotEmpty()) append(" · ")
-                    append(relative)
-                }
-            }
-            if (meta.isNotEmpty()) {
-                Text(
-                    text = meta,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
       }
-        // AND-335 - per-file share affordance (files only; null for folders).
-        if (onShare != null) {
+        // AND-335 - per-file share affordance (files only; null for folders). Hidden while renaming.
+        if (onShare != null && !isRenaming) {
             IconButton(
                 onClick = onShare,
                 modifier = Modifier
@@ -980,10 +1043,10 @@ private fun relativeTime(instant: Instant?): String {
 
 
 /**
- * F13 - the long-press context menu for a file / folder row. Rename / Delete / New folder are fully
- * wired through the FilesViewModel CRUD ops; Move re-uses the repository move endpoint (a destination
- * folder path is entered in a dialog). Copy is shown but disabled with a note - the FilesRepository /
- * backend expose NO copy op (only move), so a real copy is a documented stub for a later ticket.
+ * F13 - the long-press context menu for a file / folder row. Rename (FM4, inline on the row), Delete,
+ * New folder and Move/Copy (FM6/FM3, "tap a destination folder" mode) are all wired through the
+ * FilesViewModel CRUD ops. Copy is FILE-ONLY (the backend supports file copy only; recursive folder copy
+ * is rejected), so it's hidden for folders.
  */
 @Composable
 private fun FileContextSheet(
@@ -991,11 +1054,12 @@ private fun FileContextSheet(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onMove: () -> Unit,
+    onCopy: () -> Unit,
     onNewFolder: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
-    val context = LocalContext.current
+    val isFolder = node.type == FileNodeType.FOLDER
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
             Text(
@@ -1009,22 +1073,110 @@ private fun FileContextSheet(
             MenuRow(stringResource(R.string.files_menu_rename), onClick = onRename)
             MenuRow(stringResource(R.string.files_menu_delete), onClick = onDelete)
             MenuRow(stringResource(R.string.files_menu_move), onClick = onMove)
-            // Copy: no backend / repository copy op exists (only move) -> documented stub.
-            MenuRow(
-                label = stringResource(R.string.files_menu_copy),
-                enabled = false,
-                onClick = {
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.files_copy_unavailable),
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                },
-            )
+            // FM3 - copy is now a real action via the BK1 copy endpoint; file-only (folder copy unsupported).
+            if (!isFolder) {
+                MenuRow(stringResource(R.string.files_menu_copy), onClick = onCopy)
+            }
             HorizontalDivider()
             MenuRow(stringResource(R.string.files_menu_new_folder), onClick = onNewFolder)
         }
     }
+}
+
+/**
+ * FM6/FM3 - a banner shown while a move/copy transfer is choosing its destination. The user navigates
+ * into the target folder using the breadcrumbs / folder rows behind it; [destinationPath] is the folder
+ * currently on screen. Confirm places [transfer].node into that folder; Cancel aborts.
+ */
+@Composable
+private fun TransferBanner(
+    transfer: Transfer,
+    destinationPath: String,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val label = when (transfer.op) {
+        TransferOp.MOVE -> stringResource(R.string.files_move_banner, transfer.node.name)
+        TransferOp.COPY -> stringResource(R.string.files_copy_banner, transfer.node.name)
+    }
+    val confirmLabel = when (transfer.op) {
+        TransferOp.MOVE -> stringResource(R.string.files_move_here)
+        TransferOp.COPY -> stringResource(R.string.files_copy_here)
+    }
+    val destLabel = FilePath.segments(destinationPath).lastOrNull()
+        ?: stringResource(R.string.files_root_label)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag(FilesTestTags.TRANSFER_BANNER),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.files_transfer_destination, destLabel),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.testTag(FilesTestTags.TRANSFER_CANCEL),
+            ) { Text(stringResource(R.string.action_cancel)) }
+            TextButton(
+                onClick = onConfirm,
+                modifier = Modifier.testTag(FilesTestTags.TRANSFER_CONFIRM),
+            ) { Text(confirmLabel) }
+        }
+    }
+}
+
+/**
+ * FM4 - inline rename text field for a row. Auto-focuses on appear; commits a non-blank trimmed value on
+ * IME Done / Enter, cancels on a blank value or focus loss. Kept self-contained (its own remembered text).
+ */
+@Composable
+private fun InlineRenameField(
+    initial: String,
+    onCommit: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var text by remember(initial) { mutableStateOf(initial) }
+    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    val commit = {
+        val trimmed = text.trim()
+        if (trimmed.isNotEmpty() && trimmed != initial) onCommit(trimmed) else onCancel()
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .onFocusChanged { focusState ->
+                // FM4 - losing focus (tap elsewhere / system back) cancels the inline edit.
+                if (!focusState.isFocused) onCancel()
+            }
+            .testTag(FilesTestTags.RENAME_FIELD),
+    )
 }
 
 @Composable

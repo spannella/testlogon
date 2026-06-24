@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -54,6 +55,7 @@ object PostActionTestTags {
     const val OVERFLOW = "post_overflow"
     const val MENU_HIDE = "post_menu_hide"
     const val MENU_NOT_INTERESTED = "post_menu_not_interested"
+    const val MENU_EDIT = "post_menu_edit"
     const val BOOKMARK = "post_bookmark"
     const val SHARE = "post_share"
     const val TIP = "post_tip"
@@ -83,6 +85,8 @@ fun PostActionBar(
     onShare: () -> Unit = {},
     showTip: Boolean = true,
     onTip: () -> Unit = {},
+    // FD12 — when non-null, the overflow menu shows an Edit item (own posts only).
+    onEdit: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -97,7 +101,7 @@ fun PostActionBar(
         BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
         ShareButton(onClick = onShare)
         Box(modifier = Modifier.weight(1f))
-        PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested)
+        PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit)
     }
 }
 
@@ -223,6 +227,7 @@ private fun CommentButton(commentCount: Int, onClick: () -> Unit, modifier: Modi
 private fun PostOverflowMenu(
     onHide: () -> Unit,
     onNotInterested: () -> Unit,
+    onEdit: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -238,6 +243,17 @@ private fun PostOverflowMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (onEdit != null) {
+                DropdownMenuItem(
+                    text = { Text("Edit post") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onEdit()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_EDIT),
+                )
+            }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.feed_action_hide)) },
                 leadingIcon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null) },

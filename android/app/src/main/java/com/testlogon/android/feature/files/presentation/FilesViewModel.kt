@@ -72,7 +72,7 @@ sealed interface FilesEvent {
 }
 
 /** AND-337 - which folder CRUD op a [FilesEvent.CrudMessage] reports. */
-enum class CrudKind { CREATE_FOLDER, RENAME, DELETE, DELETE_BATCH, MOVE, MOVE_BATCH }
+enum class CrudKind { CREATE_FOLDER, RENAME, DELETE, DELETE_BATCH, MOVE, MOVE_BATCH, COPY }
 
 /**
  * AND-332 - presentation logic for the read-only file-manager browse surface.
@@ -350,6 +350,19 @@ class FilesViewModel @Inject constructor(
             try {
                 val result = repository.move(src, dst)
                 emitCrud(CrudKind.MOVE, result is ApiResult.Success)
+            } finally {
+                endCrud()
+            }
+        }
+    }
+
+    /** FM3 - copies the FILE at [src] to the full destination path [dst], then reports the outcome. */
+    fun copy(src: String, dst: String) {
+        if (!beginCrud()) return
+        viewModelScope.launch {
+            try {
+                val result = repository.copy(src, dst)
+                emitCrud(CrudKind.COPY, result is ApiResult.Success)
             } finally {
                 endCrud()
             }

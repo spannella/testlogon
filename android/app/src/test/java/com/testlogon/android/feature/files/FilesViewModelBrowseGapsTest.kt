@@ -102,6 +102,12 @@ class FilesViewModelBrowseGapsTest {
             moveCalls += src to dst
             return moveOutcomeFor(src)
         }
+
+        val copyCalls = mutableListOf<Pair<String, String>>()
+        override suspend fun copy(src: String, dst: String): ApiResult<Unit> {
+            copyCalls += src to dst
+            return moveOutcomeFor(src)
+        }
     }
 
     private class GapsFakeSortPrefs(var stored: FileSort = FileSort()) : SortPrefs {

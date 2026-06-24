@@ -789,11 +789,24 @@ fun ThreadScreen(
             } else {
                 TopAppBar(
                 title = {
-                    Text(
-                        text = state.title.ifBlank { stringResource(R.string.thread_default_title) },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    androidx.compose.foundation.layout.Row(
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                    ) {
+                        val headerTitle = state.title.ifBlank { stringResource(R.string.thread_default_title) }
+                        // ID15 - peer avatar (photo when resolved, else monogram) beside the title.
+                        com.testlogon.android.feature.common.TlAvatar(
+                            name = headerTitle,
+                            photoUrl = state.peerPhotoUrl,
+                            size = 32.dp,
+                            textStyle = MaterialTheme.typography.labelMedium,
+                        )
+                        Text(
+                            text = headerTitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

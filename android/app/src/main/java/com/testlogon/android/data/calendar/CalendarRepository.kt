@@ -49,6 +49,19 @@ interface CalendarRepository {
 
     /** A single public (unauthenticated) event (reduced payload). */
     suspend fun publicEvent(calendarId: String, eventId: String): ApiResult<CalendarEvent>
+
+    /** SC19 — create an event on [calendarId]. */
+    suspend fun createEvent(calendarId: String, body: EventCreateReqDto): ApiResult<CalendarEvent>
+
+    /** SC19 — patch an existing event (partial body; null fields are dropped by Moshi). */
+    suspend fun updateEvent(
+        calendarId: String,
+        eventId: String,
+        body: EventCreateReqDto,
+    ): ApiResult<CalendarEvent>
+
+    /** SC19 — delete an event. */
+    suspend fun deleteEvent(calendarId: String, eventId: String): ApiResult<Unit>
 }
 
 @Singleton
@@ -112,6 +125,26 @@ class CalendarRepositoryImpl @Inject constructor(
     override suspend fun publicEvent(calendarId: String, eventId: String): ApiResult<CalendarEvent> =
         withContext(io) {
             call { publicApi.getPublicEvent(calendarId, eventId) }.map { it.toDomain() }
+        }
+
+    override suspend fun createEvent(
+        calendarId: String,
+        body: EventCreateReqDto,
+    ): ApiResult<CalendarEvent> = withContext(io) {
+        call { api.createEvent(calendarId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun updateEvent(
+        calendarId: String,
+        eventId: String,
+        body: EventCreateReqDto,
+    ): ApiResult<CalendarEvent> = withContext(io) {
+        call { api.updateEvent(calendarId, eventId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun deleteEvent(calendarId: String, eventId: String): ApiResult<Unit> =
+        withContext(io) {
+            call { api.deleteEvent(calendarId, eventId) }.map { }
         }
 
     /**

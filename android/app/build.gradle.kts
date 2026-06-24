@@ -129,6 +129,9 @@ dependencies {
     // AND-074 / AND-130: Coil for avatar/cover/message images.
     implementation(libs.coil.compose)
 
+    // ID1: ZXing core (pure-JVM, no Play Services) to render the MFA TOTP otpauth QR client-side.
+    implementation(libs.zxing.core)
+
     // AND-135: animated-GIF / animated-WebP decoder for GIF & custom-emoji messages. Registered on
     // the app ImageLoader (ImageDecoderDecoder on API 28+, GifDecoder on API 24-27).
     implementation(libs.coil.gif)

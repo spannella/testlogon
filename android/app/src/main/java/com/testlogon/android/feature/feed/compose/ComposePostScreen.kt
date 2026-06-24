@@ -12,9 +12,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -31,10 +40,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.testlogon.android.data.feed.PostVisibility
 import com.testlogon.android.feature.common.DateTimePickerField
 
@@ -50,6 +63,9 @@ fun ComposePostRoute(
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(5),
     ) { uris -> viewModel.onImagesPicked(uris) }
+    val pickVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> viewModel.onVideoPicked(uri) }
 
     ComposePostScreen(
         state = state,
@@ -61,6 +77,11 @@ fun ComposePostRoute(
         onAddPhotos = {
             pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
+        onAddVideo = {
+            pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+        },
+        onRemoveImage = viewModel::removeImage,
+        onRemoveVideo = viewModel::removeVideo,
         onPost = viewModel::post,
     )
 }
@@ -75,6 +96,9 @@ fun ComposePostScreen(
     onLockPriceChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
     onAddPhotos: () -> Unit,
+    onAddVideo: () -> Unit,
+    onRemoveImage: (String) -> Unit,
+    onRemoveVideo: () -> Unit,
     onPost: () -> Unit,
 ) {
     Scaffold(
@@ -113,14 +137,67 @@ fun ComposePostScreen(
                     Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("Add photos", modifier = Modifier.padding(start = 6.dp))
                 }
-                if (state.uploadingMedia) CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                OutlinedButton(
+                    onClick = onAddVideo,
+                    enabled = !state.uploadingVideo && state.videoId == null,
+                    modifier = Modifier.testTag("compose_add_video"),
+                ) {
+                    Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Add video", modifier = Modifier.padding(start = 6.dp))
+                }
+                if (state.uploadingMedia || state.uploadingVideo) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                }
             }
+
+            // FD7 — image thumbnails preview (each with a remove "x").
             if (state.imageUrls.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("compose_image_previews"),
+                ) {
+                    items(state.imageUrls, key = { it }) { url ->
+                        Box(modifier = Modifier.size(96.dp)) {
+                            AsyncImage(
+                                model = url,
+                                contentDescription = "Attached photo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .testTag("compose_image_thumb"),
+                            )
+                            RemoveBadge(
+                                onClick = { onRemoveImage(url) },
+                                modifier = Modifier.align(Alignment.TopEnd).testTag("compose_image_remove"),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // FD8 — attached-video preview chip (with remove).
+            if (state.videoId != null) {
+                Box(modifier = Modifier.size(width = 140.dp, height = 96.dp).testTag("compose_video_preview")) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(36.dp))
+                    }
+                    RemoveBadge(
+                        onClick = onRemoveVideo,
+                        modifier = Modifier.align(Alignment.TopEnd).testTag("compose_video_remove"),
+                    )
+                }
                 Text(
-                    "${state.imageUrls.size} photo${if (state.imageUrls.size == 1) "" else "s"} attached",
+                    "Video attached",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.testTag("compose_media_count"),
                 )
             }
 
@@ -170,5 +247,26 @@ fun ComposePostScreen(
             }
             Box(Modifier.fillMaxWidth().height(8.dp))
         }
+    }
+}
+
+/** A small circular "x" remove badge overlaid on a media thumbnail. */
+@Composable
+private fun RemoveBadge(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .padding(4.dp)
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.55f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "Remove",
+            tint = Color.White,
+            modifier = Modifier.size(14.dp),
+        )
     }
 }

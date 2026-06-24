@@ -19,12 +19,38 @@ enum class ActivityEventType {
     PASSWORD_CHANGED,
     PROFILE_UPDATED,
     SECURITY_ALERT,
+    // Social activity kinds (BK5: /ui/activity/feed records follow/like/comment/tip/mention).
+    FOLLOW,
+    LIKE,
+    COMMENT,
+    MENTION,
+    TIP,
+    SUBSCRIBE,
     UNKNOWN,
     ;
 
     companion object {
-        fun fromToken(token: String?): ActivityEventType =
-            entries.firstOrNull { it != UNKNOWN && it.name.equals(token, ignoreCase = true) } ?: UNKNOWN
+        fun fromToken(token: String?): ActivityEventType {
+            if (token.isNullOrBlank()) return UNKNOWN
+            entries.firstOrNull { it != UNKNOWN && it.name.equals(token, ignoreCase = true) }?.let { return it }
+            val t = token.lowercase()
+            return when {
+                "follow" in t -> FOLLOW
+                "subscrib" in t -> SUBSCRIBE
+                "tip" in t || "donat" in t -> TIP
+                "like" in t || "react" in t -> LIKE
+                "comment" in t || "reply" in t -> COMMENT
+                "mention" in t -> MENTION
+                "login_success" in t -> LOGIN_SUCCESS
+                "login_fail" in t -> LOGIN_FAILED
+                "mfa" in t -> MFA_CHALLENGE
+                "session" in t && "revok" in t -> SESSION_REVOKED
+                "password" in t -> PASSWORD_CHANGED
+                "profile" in t -> PROFILE_UPDATED
+                "security" in t || "alert" in t -> SECURITY_ALERT
+                else -> UNKNOWN
+            }
+        }
     }
 }
 

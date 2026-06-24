@@ -197,7 +197,7 @@ private fun TotpEnrollContent(
         Text("Add an authenticator app", style = MaterialTheme.typography.titleMedium)
         val enrollment = state.enrollment
         if (enrollment != null) {
-            QrImage(enrollment.qrCodeUri)
+            QrImage(qrCodeUri = enrollment.qrCodeUri, secret = enrollment.secret)
             Text("Or enter this code in your authenticator app:", style = MaterialTheme.typography.bodyMedium)
             Text(enrollment.secret, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("mfa_totp_secret"))
         }
@@ -332,34 +332,76 @@ private fun RemoveDialog(
 }
 
 @Composable
-private fun QrImage(qrCodeUri: String) {
-    val bitmap = remember(qrCodeUri) { decodeDataUriBitmap(qrCodeUri) }
+private fun QrImage(qrCodeUri: String, secret: String) {
+    // ID1 - render a scannable QR. The backend qr_code_uri is an SVG data URI (which BitmapFactory
+    // cannot decode) or a raw otpauth:// string, so we (a) decode it only if it is a *raster* data
+    // URI, otherwise (b) generate the QR ourselves from the otpauth content via ZXing. The monogram
+    // text + secret below remain as a documented fallback if even generation fails.
+    val bitmap = remember(qrCodeUri, secret) {
+        decodeRasterDataUriBitmap(qrCodeUri)
+            ?: generateQrBitmap(otpauthContentFor(qrCodeUri, secret))
+    }
     if (bitmap != null) {
         Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = "QR code to scan in your authenticator app",
-            modifier = Modifier.size(180.dp).testTag("mfa_totp_qr"),
+            modifier = Modifier.size(220.dp).testTag("mfa_totp_qr"),
         )
     } else {
-        // Fallback: cannot render the URI as an image (e.g. an otpauth:// value); rely on the secret.
+        // Documented fallback: QR could not be rendered; the user enters the secret manually (shown below).
         Text(
-            "Scan the QR in your authenticator, or use the code below.",
+            "Couldn't render the QR. Enter the code below in your authenticator app instead.",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.testTag("mfa_totp_qr_fallback"),
         )
     }
 }
 
-/** Decodes a `data:image/...;base64,<payload>` URI to a Bitmap; null for non-data/unsupported URIs. */
-private fun decodeDataUriBitmap(uri: String): android.graphics.Bitmap? {
+/**
+ * The otpauth content to encode: the server qr_code_uri verbatim when it is already an otpauth URI;
+ * otherwise a minimal otpauth URI built from the base32 [secret] (works for any authenticator app).
+ */
+private fun otpauthContentFor(qrCodeUri: String, secret: String): String =
+    if (qrCodeUri.startsWith("otpauth://")) qrCodeUri
+    else "otpauth://totp/TestLogon?secret=" + secret.trim().replace(" ", "") + "&issuer=TestLogon"
+
+/** Decodes a `data:image/<raster>;base64,<payload>` URI to a Bitmap; null for svg/non-data URIs. */
+private fun decodeRasterDataUriBitmap(uri: String): android.graphics.Bitmap? {
     val marker = "base64,"
     if (!uri.startsWith("data:") || !uri.contains(marker)) return null
+    // BitmapFactory cannot decode SVG; only attempt raster mime types.
+    if (uri.contains("svg", ignoreCase = true)) return null
     return runCatching {
         val payload = uri.substringAfter(marker)
         val bytes = Base64.decode(payload, Base64.DEFAULT)
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }.getOrNull()
 }
+
+/** Encodes [content] to a black/white QR [android.graphics.Bitmap] via ZXing; null on failure. */
+private fun generateQrBitmap(content: String, sizePx: Int = 600): android.graphics.Bitmap? =
+    runCatching {
+        val hints = mapOf(
+            com.google.zxing.EncodeHintType.MARGIN to 1,
+            com.google.zxing.EncodeHintType.CHARACTER_SET to "UTF-8",
+            com.google.zxing.EncodeHintType.ERROR_CORRECTION to
+                com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M,
+        )
+        val matrix = com.google.zxing.qrcode.QRCodeWriter()
+            .encode(content, com.google.zxing.BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+        val w = matrix.width
+        val h = matrix.height
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                pixels[row + x] = if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+            }
+        }
+        android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, w, 0, 0, w, h)
+        }
+    }.getOrNull()
 
 /** Client-side masking of a phone/email for display (the list wire is not pre-masked). */
 private fun maskDestination(raw: String): String {

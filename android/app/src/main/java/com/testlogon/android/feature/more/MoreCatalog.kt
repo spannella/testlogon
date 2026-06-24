@@ -301,6 +301,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.WALLET,
             section = MoreSection.ACCOUNT,
         ),
+        // PW18: wallet transactions (ledger) history.
+        MoreEntry(
+            id = "wallet_transactions",
+            labelRes = R.string.more_entry_wallet_transactions,
+            icon = Icons.Outlined.History,
+            route = MoreRoutes.WALLET_TRANSACTIONS,
+            hub = MoreHub.WALLET,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "earnings",
             labelRes = R.string.more_entry_earnings,

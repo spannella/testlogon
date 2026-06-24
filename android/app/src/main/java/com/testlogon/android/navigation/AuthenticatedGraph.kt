@@ -189,6 +189,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         purchaseHistoryDestination(navController)
         // AND-224/AND-226: saved payment-methods management + add-card (FLAGGED stub card-entry seam).
         billingDestinations(navController)
+        // PW18: Wallet transactions (ledger) history (BK3 GET /ui/billing/ledger + /ui/billing/wallet).
+        walletTransactionsDestination(navController)
         // AND-227/228/229/230: redirect checkout (hosted/PayPal/CCBill via Custom Tabs, gated by the
         // BillingAuthorizer stub) + US-bank micro-deposit verification.
         paymentsDestinations(navController)

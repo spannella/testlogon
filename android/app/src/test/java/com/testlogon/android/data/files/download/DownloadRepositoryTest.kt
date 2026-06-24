@@ -87,6 +87,7 @@ class DownloadRepositoryTest {
         override suspend fun renameFile(body: RenameRequest): MoveResultDto = error("unused")
         override suspend fun renameFolder(body: RenameRequest): MoveResultDto = error("unused")
         override suspend fun move(body: MoveRequest): MoveResultDto = error("unused")
+        override suspend fun copy(body: MoveRequest): MoveResultDto = error("unused")
         override suspend fun deleteFile(path: String): OkRespDto = error("unused")
         override suspend fun deleteFolder(path: String): DeleteFolderDto = error("unused")
         override suspend fun presignUpload(body: PresignRequest): PresignResponse = error("unused")

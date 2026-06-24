@@ -28,6 +28,7 @@ import javax.inject.Inject
 @HiltViewModel
 class DashboardViewModel @Inject constructor(
     private val repository: DashboardRepository,
+    private val profileRepository: com.testlogon.android.data.profile.ProfileRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
@@ -38,6 +39,22 @@ class DashboardViewModel @Inject constructor(
 
     init {
         load(fromUser = false)
+        loadViewer()
+    }
+
+    /** ID15 - fetch the signed-in user's own profile for the greeting avatar (name + photo). */
+    private fun loadViewer() {
+        viewModelScope.launch {
+            val r = profileRepository.getOwnProfile()
+            if (r is ApiResult.Success) {
+                _uiState.update {
+                    it.copy(
+                        viewerName = r.data.bestName,
+                        viewerPhotoUrl = r.data.profilePhotoUrl,
+                    )
+                }
+            }
+        }
     }
 
     /** Pull-to-refresh: forces a server-side refresh trigger before re-reading the summary. */

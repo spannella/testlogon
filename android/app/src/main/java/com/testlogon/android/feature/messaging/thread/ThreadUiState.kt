@@ -17,6 +17,8 @@ import com.testlogon.android.data.messaging.StickerCollectionUi
 data class ThreadUiState(
     val conversationId: String,
     val peerUserSub: String? = null,
+    /** ID15 - the DM peer's profile photo, resolved lazily once [peerUserSub] is known. */
+    val peerPhotoUrl: String? = null,
     val title: String = "",
     val messages: List<ThreadMessageUi> = emptyList(),
     val isLoadingInitial: Boolean = true,

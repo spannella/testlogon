@@ -16,11 +16,17 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.Comment
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Subscriptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
@@ -48,6 +55,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
+import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -95,7 +103,16 @@ fun ActivityFeedScreen(
         modifier = modifier.testTag(ActivityTestTags.SCREEN),
         topBar = {
             TopAppBar(
-                title = { Text("Activity") },
+                title = {
+                    Column {
+                        Text(stringResource(R.string.activity_screen_title))
+                        Text(
+                            text = stringResource(R.string.activity_screen_subtitle),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("activity_back")) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -127,8 +144,8 @@ fun ActivityFeedScreen(
 
                     refreshState is LoadState.NotLoading && items.itemCount == 0 ->
                         EmptyState(
-                            title = "No activity yet",
-                            body = "Account events will show up here.",
+                            title = stringResource(R.string.activity_empty_title),
+                            body = stringResource(R.string.activity_empty_body),
                             modifier = Modifier.testTag(ActivityTestTags.EMPTY),
                         )
 
@@ -262,6 +279,12 @@ private fun iconFor(type: ActivityEventType): ImageVector = when (type) {
     ActivityEventType.SESSION_REVOKED -> Icons.Filled.Security
     ActivityEventType.PASSWORD_CHANGED -> Icons.Filled.Lock
     ActivityEventType.SECURITY_ALERT -> Icons.Filled.Shield
+    ActivityEventType.FOLLOW -> Icons.Filled.PersonAdd
+    ActivityEventType.LIKE -> Icons.Filled.Favorite
+    ActivityEventType.COMMENT -> Icons.Filled.Comment
+    ActivityEventType.MENTION -> Icons.Filled.AlternateEmail
+    ActivityEventType.TIP -> Icons.Filled.AttachMoney
+    ActivityEventType.SUBSCRIBE -> Icons.Filled.Subscriptions
     ActivityEventType.PROFILE_UPDATED, ActivityEventType.UNKNOWN -> Icons.Filled.Notifications
 }
 
@@ -273,6 +296,12 @@ private fun titleFor(item: ActivityEvent): String = when (item.type) {
     ActivityEventType.PASSWORD_CHANGED -> "Password changed"
     ActivityEventType.PROFILE_UPDATED -> "Profile updated"
     ActivityEventType.SECURITY_ALERT -> "Security alert"
+    ActivityEventType.FOLLOW -> "New follower"
+    ActivityEventType.LIKE -> "Liked your content"
+    ActivityEventType.COMMENT -> "New comment"
+    ActivityEventType.MENTION -> "You were mentioned"
+    ActivityEventType.TIP -> "You received a tip"
+    ActivityEventType.SUBSCRIBE -> "New subscriber"
     ActivityEventType.UNKNOWN -> item.rawType.ifBlank { "Account activity" }
         .replace('_', ' ')
         .replaceFirstChar { it.uppercase() }
