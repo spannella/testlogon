@@ -142,6 +142,10 @@ data class MessageEntity(
     val lockTeaser: String? = null,
     /** Revealed text written ONLY after a successful unlock/draw. */
     val revealedText: String? = null,
+    // #13 — revealed lottery option MEDIA (image/video) after an unlock/draw. Server-relative object
+    // url derived from the selected outcome's media_asset_id; null for text-only/locked.
+    val revealedMediaUrl: String? = null,
+    val revealedMediaIsVideo: Boolean = false,
     // MSG (DB schema v11) — find_datetime detail columns (the FindDateTime card needs the range/hours).
     val fadtFromDate: String? = null,
     val fadtToDate: String? = null,

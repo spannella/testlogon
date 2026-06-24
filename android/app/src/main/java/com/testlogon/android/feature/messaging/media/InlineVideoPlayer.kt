@@ -88,6 +88,8 @@ fun InlineVideoPlayer(
     val canPlayInline = manifestUrl != null && !video.drmEnabled
 
     var playing by remember(video.videoId) { mutableStateOf(false) }
+    // #19 — tapping a video message opens it FULL-SCREEN (reuses the shared player dialog below).
+    var fullScreen by remember(video.videoId) { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -141,12 +143,26 @@ fun InlineVideoPlayer(
             )
             if (canPlayInline) {
                 val playLabel = stringResource(R.string.video_play)
+                // #19 — primary tap opens FULL-SCREEN playback (matches the image full-screen viewer
+                // pattern); long-form library video plays best full-bleed.
                 Icon(
                     imageVector = Icons.Filled.PlayCircle,
                     contentDescription = playLabel,
                     tint = Color.White,
                     modifier = Modifier
                         .size(64.dp)
+                        .clickable { fullScreen = true }
+                        .semantics { role = Role.Button; contentDescription = playLabel },
+                )
+                // Secondary affordance: play INLINE in the bubble (top-right expand glyph inverted).
+                Icon(
+                    imageVector = Icons.Filled.Fullscreen,
+                    contentDescription = playLabel,
+                    tint = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(28.dp)
                         .clickable { playing = true }
                         .semantics { role = Role.Button; contentDescription = playLabel },
                 )
@@ -170,6 +186,10 @@ fun InlineVideoPlayer(
                 )
             }
         }
+    }
+
+    if (fullScreen && manifestUrl != null) {
+        FullScreenVideoViewer(url = manifestUrl, onDismiss = { fullScreen = false })
     }
 }
 

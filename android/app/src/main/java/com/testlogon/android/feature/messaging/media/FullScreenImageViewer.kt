@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.core.graphics.drawable.toBitmap
 import coil.compose.AsyncImage
+import coil.ImageLoader
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
@@ -71,9 +72,14 @@ fun FullScreenImageViewer(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
+    // #6 - an optional authenticated Coil loader; when null the app-wide loader is used (unchanged for
+    // existing messaging callers). The file manager passes its session-authed loader so the cookie-authed
+    // /v1/fs/preview endpoint resolves instead of 401.
+    imageLoader: ImageLoader? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val activeLoader = imageLoader ?: context.imageLoader
     var saving by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -99,7 +105,7 @@ fun FullScreenImageViewer(
                         onClick = {
                             saving = true
                             scope.launch {
-                                val ok = saveImageToGallery(context, url)
+                                val ok = saveImageToGallery(context, url, activeLoader)
                                 Toast.makeText(
                                     context,
                                     if (ok) "Saved to Photos" else "Couldn't save image",
@@ -129,6 +135,7 @@ fun FullScreenImageViewer(
         ) {
             AsyncImage(
                 model = url,
+                imageLoader = activeLoader,
                 contentDescription = cd,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
@@ -176,10 +183,10 @@ fun FullScreenImageViewer(
  * the on-screen image) and writes the bitmap to the device gallery. MediaStore on API 29+ needs no
  * runtime permission; pre-29 falls back to the same insert (best-effort).
  */
-private suspend fun saveImageToGallery(context: Context, url: String): Boolean = withContext(Dispatchers.IO) {
+private suspend fun saveImageToGallery(context: Context, url: String, loader: ImageLoader): Boolean = withContext(Dispatchers.IO) {
     runCatching {
         val request = ImageRequest.Builder(context).data(url).allowHardware(false).build()
-        val result = context.imageLoader.execute(request)
+        val result = loader.execute(request)
         val bitmap = (result as? SuccessResult)?.drawable?.toBitmap() ?: return@runCatching false
 
         val name = "TestLogon_" + url.substringAfterLast('/').substringBefore('?').ifBlank { "image" }

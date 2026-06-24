@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -296,6 +296,15 @@ abstract class MessagingDatabase : RoomDatabase() {
             }
         }
 
+        // #13 — persist the revealed lottery option media (image/video) url so an unlocked lottery
+        // bubble keeps its revealed thumbnail across a Room round-trip / app restart.
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedMediaUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedMediaIsVideo INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
     }
 }
 
@@ -324,6 +333,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_10_11,
             MessagingDatabase.MIGRATION_11_12,
             MessagingDatabase.MIGRATION_12_13,
+            MessagingDatabase.MIGRATION_13_14,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

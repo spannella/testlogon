@@ -58,7 +58,14 @@ fun LotteryComposerSheet(
     onSend: (List<LotteryOutcomeDraft>, String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    class OutcomeDraft(var label: String, var text: String, var weight: String = "1")
+    class OutcomeDraft(
+        var label: String,
+        var text: String,
+        var weight: String = "1",
+        // #13 — per-option media: a picked local content uri + its type ("image"|"video"); null = text.
+        var mediaUri: String? = null,
+        var mediaType: String? = null,
+    )
     val outcomes = remember {
         mutableStateListOf(OutcomeDraft("", ""), OutcomeDraft("", ""))
     }
@@ -68,7 +75,22 @@ fun LotteryComposerSheet(
         if (uri != null) imageUri = uri.toString()
     }
     var version by remember { mutableStateOf(0) }
-    val valid = version >= 0 && outcomes.count { it.text.trim().isNotEmpty() } >= 2
+    // #13 — per-option media pickers (reuse the same system PickVisualMedia picker as image messages).
+    var pickTargetIndex by remember { mutableStateOf(-1) }
+    val pickOptionImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val idx = pickTargetIndex
+        if (uri != null && idx in outcomes.indices) {
+            outcomes[idx].mediaUri = uri.toString(); outcomes[idx].mediaType = "image"; version++
+        }
+    }
+    val pickOptionVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val idx = pickTargetIndex
+        if (uri != null && idx in outcomes.indices) {
+            outcomes[idx].mediaUri = uri.toString(); outcomes[idx].mediaType = "video"; version++
+        }
+    }
+    // An outcome is valid if it has revealed text OR a picked media asset.
+    val valid = version >= 0 && outcomes.count { it.text.trim().isNotEmpty() || it.mediaUri != null } >= 2
     // Live probability = this outcome's weight / sum of all positive weights.
     val totalWeight = outcomes.fold(0f) { acc, o -> acc + (o.weight.toFloatOrNull()?.coerceAtLeast(0f) ?: 0f) }.coerceAtLeast(0.0001f)
 
@@ -112,12 +134,51 @@ fun LotteryComposerSheet(
                     placeholder = { Text("Label (optional)") },
                     singleLine = true,
                 )
-                OutlinedTextField(
-                    value = o.text,
-                    onValueChange = { o.text = it; version++ },
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag(RichMessageTestTags.LOTTERY_OUTCOME_TEXT + i),
-                    placeholder = { Text("Revealed text") },
-                )
+                // #13 — a media outcome reveals an image/video instead of text. Picking media hides the
+                // revealed-text field for that option.
+                val curMedia = o.mediaUri
+                if (curMedia == null) {
+                    OutlinedTextField(
+                        value = o.text,
+                        onValueChange = { o.text = it; version++ },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag(RichMessageTestTags.LOTTERY_OUTCOME_TEXT + i),
+                        placeholder = { Text("Revealed text") },
+                    )
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                pickTargetIndex = i
+                                pickOptionImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            modifier = Modifier.weight(1f).testTag(RichMessageTestTags.LOTTERY_OUTCOME_ADD_IMAGE + i),
+                        ) { Text("Image") }
+                        OutlinedButton(
+                            onClick = {
+                                pickTargetIndex = i
+                                pickOptionVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                            },
+                            modifier = Modifier.weight(1f).testTag(RichMessageTestTags.LOTTERY_OUTCOME_ADD_VIDEO + i),
+                        ) { Text("Video") }
+                    }
+                } else {
+                    Row(Modifier.padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        AsyncImage(
+                            model = curMedia,
+                            contentDescription = "Outcome ${i + 1} media",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).testTag(RichMessageTestTags.LOTTERY_OUTCOME_MEDIA_PREVIEW + i),
+                        )
+                        Text(
+                            if (o.mediaType == "video") "Video prize" else "Image prize",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 10.dp),
+                        )
+                        OutlinedButton(
+                            onClick = { o.mediaUri = null; o.mediaType = null; version++ },
+                            modifier = Modifier.padding(start = 10.dp).testTag(RichMessageTestTags.LOTTERY_OUTCOME_REMOVE_MEDIA + i),
+                        ) { Text("Remove") }
+                    }
+                }
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = o.weight,
@@ -144,12 +205,24 @@ fun LotteryComposerSheet(
             Button(
                 onClick = {
                     onSend(
-                        outcomes.filter { it.text.trim().isNotEmpty() }
+                        outcomes.filter { it.text.trim().isNotEmpty() || it.mediaUri != null }
                             .map {
                                 val w = it.weight.toFloatOrNull()?.coerceAtLeast(0f) ?: 0f
                                 // Convert the relative weight to basis points of the total.
                                 val bps = (w / totalWeight * 10_000f).toInt().coerceAtLeast(1)
-                                LotteryOutcomeDraft(it.label.trim().ifEmpty { null }, it.text.trim(), weightBps = bps)
+                                // #13 — a media outcome carries its picked LOCAL uri in mediaAssetId; the
+                                // ViewModel uploads it and swaps in the resolved "bucket:key" before send.
+                                if (it.mediaUri != null) {
+                                    LotteryOutcomeDraft(
+                                        label = it.label.trim().ifEmpty { null },
+                                        text = it.text.trim(),
+                                        weightBps = bps,
+                                        payloadType = it.mediaType ?: "image",
+                                        mediaAssetId = it.mediaUri,
+                                    )
+                                } else {
+                                    LotteryOutcomeDraft(it.label.trim().ifEmpty { null }, it.text.trim(), weightBps = bps)
+                                }
                             },
                         imageUri,
                     )

@@ -124,6 +124,17 @@ class ThreadSearchController(
     /** Go to the previous match (wraps first -> last). No-op with zero matches. */
     fun prev() = move(-1)
 
+    /**
+     * #17 — jump straight to a match the user TAPPED in the results list (sets the active cursor to the
+     * first occurrence of [messageId]); the screen's activeMatch effect then scrolls to it.
+     */
+    fun selectMatch(messageId: String) {
+        val idx = _state.value.matches.indexOfFirst { it.messageId == messageId }
+        if (idx < 0) return
+        _state.update { it.copy(activeIndex = idx) }
+        saved[KEY_ACTIVE_INDEX] = idx
+    }
+
     private fun move(delta: Int) {
         val n = _state.value.total
         if (n == 0) return

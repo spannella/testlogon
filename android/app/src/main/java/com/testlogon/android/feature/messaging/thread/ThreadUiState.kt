@@ -19,6 +19,12 @@ data class ThreadUiState(
     val peerUserSub: String? = null,
     /** ID15 - the DM peer's profile photo, resolved lazily once [peerUserSub] is known. */
     val peerPhotoUrl: String? = null,
+    /** #15 - the CURRENT user's own profile photo, for the DM overlapping-avatar pair. */
+    val myPhotoUrl: String? = null,
+    /** #15 - the CURRENT user's display name (monogram fallback for the own avatar circle). */
+    val myName: String? = null,
+    /** #15 - true for a 1:1 DM (renders the overlapping two-circle avatar in the header). */
+    val isDm: Boolean = false,
     val title: String = "",
     val messages: List<ThreadMessageUi> = emptyList(),
     val isLoadingInitial: Boolean = true,

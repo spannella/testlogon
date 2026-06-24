@@ -83,6 +83,9 @@ fun EventDetailRoute(
     val shareSubjectTemplate = stringResource(R.string.event_detail_share_subject)
     // AND-391 — no-handler fallback for the public iCal download (ACTION_VIEW).
     val noBrowserApp = stringResource(R.string.event_detail_no_browser_app)
+    // SC19 #11 - client-side .ics generation feedback.
+    val icsFailed = stringResource(R.string.calendar_ics_failed)
+    val icsNoApp = stringResource(R.string.calendar_ics_no_app)
 
     EventDetailScreen(
         state = state,
@@ -112,9 +115,19 @@ fun EventDetailRoute(
             if (!ok) scope.launch { snackbarHostState.showSnackbar(noCalendarApp) }
         },
         onDownloadIcs = { content ->
-            // AND-391 — open the public iCal URL (unauthenticated GET) via the browser/download manager.
-            val ok = intents.openUrl(context, content.publicIcalUrl)
-            if (!ok) scope.launch { snackbarHostState.showSnackbar(noBrowserApp) }
+            // SC19 #11 - generate the .ics client-side from the loaded event and open it
+            // (ACTION_VIEW), falling back to the share sheet then a Snackbar. No web host needed.
+            val uri = viewModel.exportIcs()
+            if (uri == null) {
+                scope.launch { snackbarHostState.showSnackbar(icsFailed) }
+            } else {
+                val subject = shareSubjectTemplate.format(content.event.name)
+                val opened = intents.openIcs(context, uri)
+                if (!opened) {
+                    val shared = intents.shareIcs(context, uri, subject)
+                    if (!shared) scope.launch { snackbarHostState.showSnackbar(icsNoApp) }
+                }
+            }
         },
         modifier = modifier,
     )

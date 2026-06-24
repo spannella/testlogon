@@ -38,6 +38,9 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -48,6 +51,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +71,7 @@ import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.calendar.RecurrenceFreq
 
 /** AND-271 / SC19 — stable test tags for the calendar views. */
 object CalendarTestTags {
@@ -652,6 +659,7 @@ private fun EventEditorDialog(
                     label = { Text(stringResource(R.string.calendar_field_description)) },
                     modifier = Modifier.fillMaxWidth().testTag("calendar_field_description"),
                 )
+                TimezoneField(editor = editor, onChange = onChange)
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -680,6 +688,7 @@ private fun EventEditorDialog(
                         modifier = Modifier.fillMaxWidth().testTag("calendar_field_end"),
                     )
                 }
+                RecurrenceField(editor = editor, onChange = onChange)
             }
         },
         confirmButton = {
@@ -710,4 +719,122 @@ private fun EventEditorDialog(
             }
         },
     )
+}
+
+
+@Composable
+private fun TimezoneField(
+    editor: EventEditorState,
+    onChange: ((EventEditorState) -> EventEditorState) -> Unit,
+) {
+    val options = editor.timezoneOptions.ifEmpty { listOf(editor.timezone) }
+    LabeledDropdown(
+        label = stringResource(R.string.calendar_field_timezone),
+        selectedText = editor.timezone,
+        options = options,
+        optionLabel = { it },
+        onSelected = { tz -> onChange { it.copy(timezone = tz) } },
+        testTag = "calendar_field_timezone",
+    )
+}
+
+@Composable
+private fun RecurrenceField(
+    editor: EventEditorState,
+    onChange: ((EventEditorState) -> EventEditorState) -> Unit,
+) {
+    val freqOptions: List<RecurrenceFreq?> = listOf(
+        null,
+        RecurrenceFreq.DAILY,
+        RecurrenceFreq.WEEKLY,
+        RecurrenceFreq.MONTHLY,
+        RecurrenceFreq.YEARLY,
+    )
+    LabeledDropdown(
+        label = stringResource(R.string.calendar_field_repeat),
+        selectedText = recurrenceLabel(editor.recurrenceFreq),
+        options = freqOptions,
+        optionLabel = { recurrenceLabel(it) },
+        onSelected = { f -> onChange { it.copy(recurrenceFreq = f) } },
+        testTag = "calendar_field_repeat",
+    )
+    if (editor.recurrenceFreq != null) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = if (editor.recurrenceInterval <= 0) "" else editor.recurrenceInterval.toString(),
+                onValueChange = { v ->
+                    val n = v.filter { it.isDigit() }.take(3).toIntOrNull() ?: 0
+                    onChange { it.copy(recurrenceInterval = n) }
+                },
+                label = { Text(stringResource(R.string.calendar_repeat_interval)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f).testTag("calendar_field_repeat_interval"),
+            )
+            OutlinedTextField(
+                value = editor.recurrenceCount?.toString().orEmpty(),
+                onValueChange = { v ->
+                    val n = v.filter { it.isDigit() }.take(4).toIntOrNull()
+                    onChange { it.copy(recurrenceCount = n) }
+                },
+                label = { Text(stringResource(R.string.calendar_repeat_count)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f).testTag("calendar_field_repeat_count"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun recurrenceLabel(freq: RecurrenceFreq?): String = stringResource(
+    when (freq) {
+        RecurrenceFreq.DAILY -> R.string.calendar_repeat_daily
+        RecurrenceFreq.WEEKLY -> R.string.calendar_repeat_weekly
+        RecurrenceFreq.MONTHLY -> R.string.calendar_repeat_monthly
+        RecurrenceFreq.YEARLY -> R.string.calendar_repeat_yearly
+        RecurrenceFreq.UNKNOWN, null -> R.string.calendar_repeat_none
+    },
+)
+
+/** A small labeled exposed-dropdown used for the timezone + recurrence pickers. */
+@Composable
+private fun <T> LabeledDropdown(
+    label: String,
+    selectedText: String,
+    options: List<T>,
+    optionLabel: @Composable (T) -> String,
+    onSelected: (T) -> Unit,
+    testTag: String,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = selectedText,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
+                .testTag(testTag),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
 }

@@ -106,6 +106,12 @@ object RichMessageTestTags {
     const val LOTTERY_ADD_IMAGE = "thread_lottery_add_image"
     const val LOTTERY_IMAGE_PREVIEW = "thread_lottery_image_preview"
     const val LOTTERY_REMOVE_IMAGE = "thread_lottery_remove_image"
+    // #13 — per-OPTION media (image/video) pickers + reveal thumbnail.
+    const val LOTTERY_OUTCOME_ADD_IMAGE = "thread_lottery_outcome_add_image_"
+    const val LOTTERY_OUTCOME_ADD_VIDEO = "thread_lottery_outcome_add_video_"
+    const val LOTTERY_OUTCOME_MEDIA_PREVIEW = "thread_lottery_outcome_media_preview_"
+    const val LOTTERY_OUTCOME_REMOVE_MEDIA = "thread_lottery_outcome_remove_media_"
+    const val LOTTERY_REVEAL_MEDIA = "thread_lottery_reveal_media"
     const val LOTTERY_SEND = "thread_lottery_send"
 
     const val ATTACH_FADT = "thread_attach_find_datetime"

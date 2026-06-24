@@ -127,6 +127,13 @@ fun AuthedShellScreen(
                     onOpenMore = { tabNav.navigateToTab(AuthedTab.MORE) },
                     onOpenRoute = onOpenRoute,
                     onOpenInbox = { tabNav.navigateToTab(AuthedTab.INBOX) },
+                    // UX-2 launchpad tiles open a More hub. The hub-detail destination is registered in
+                    // THIS inner tab NavController (not the outer graph), so drill into it on tabNav
+                    // directly — routing it through onOpenRoute hits the outer graph where the route is
+                    // unregistered and the runCatching guard silently dropped it (tiles did nothing).
+                    onOpenHub = { hub ->
+                        tabNav.navigate(com.testlogon.android.navigation.MoreHubDest.build(hub))
+                    },
                 )
             }
             composable(AuthedTab.FEED.route) {

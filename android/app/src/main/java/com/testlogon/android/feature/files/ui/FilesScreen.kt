@@ -94,6 +94,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
+import coil.ImageLoader
+import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.request.ImageRequest
 import com.testlogon.android.R
 import com.testlogon.android.core.model.files.FileNode
 import com.testlogon.android.core.model.files.FileNodeType
@@ -103,6 +107,7 @@ import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.feature.files.data.FileSort
 import com.testlogon.android.feature.files.data.FileSortBy
 import com.testlogon.android.feature.files.data.FileSortDir
+import com.testlogon.android.feature.files.data.FilesImageLoaderEntryPoint
 import com.testlogon.android.feature.files.data.SearchMode
 import com.testlogon.android.feature.files.presentation.Breadcrumb
 import com.testlogon.android.feature.files.presentation.FilePath
@@ -145,6 +150,12 @@ object FilesTestTags {
 
     /** AND-335 - per-row share affordance tag: file_share_<path-or-name>. */
     fun share(node: FileNode): String = "file_share_${node.path.ifBlank { node.name }}"
+
+    /** #6 - per-row image-thumbnail tag: file_thumb_<path-or-name>. */
+    fun thumbnail(node: FileNode): String = "file_thumb_${node.path.ifBlank { node.name }}"
+
+    /** #6 - the PDF / non-image download-preview progress sheet. */
+    const val DOWNLOAD_SHEET = "files_download_sheet"
 }
 
 /**
@@ -215,6 +226,15 @@ fun FilesRoute(
     downloadViewModel: com.testlogon.android.feature.files.download.FileActionsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    // #6 - the AUTHENTICATED Coil loader for file thumbnails / previews (the global loader has no session
+    // cookies, so the cookie-authed /v1/fs image endpoints would 401). Fetched via a Hilt EntryPoint
+    // because this @Composable already injects its VMs via hiltViewModel and the loader is a plain @Provides.
+    val authedImageLoader = remember(context) {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            FilesImageLoaderEntryPoint::class.java,
+        ).filesImageLoader()
+    }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val items = viewModel.pagedItems.collectAsLazyPagingItems()
     val uploadJobs by uploadViewModel.uploadJobs.collectAsStateWithLifecycle()
@@ -231,7 +251,12 @@ fun FilesRoute(
     var previewImageUrl by remember { mutableStateOf<String?>(null) }
 
     androidx.compose.runtime.LaunchedEffect(Unit) {
-        downloadViewModel.events.collect { event -> openLauncher.open(context, event.cached) }
+        downloadViewModel.events.collect { event ->
+            // #6 - download finished: fire the external viewer and dismiss the progress sheet.
+            openLauncher.open(context, event.cached)
+            downloadSheetVisible = false
+            pendingDownloadNode = null
+        }
     }
 
     // AND-333 - system document picker; placement is path-based, so we capture the folder on screen.
@@ -262,13 +287,18 @@ fun FilesRoute(
         onBreadcrumb = viewModel::onBreadcrumb,
         onOpenFolder = viewModel::onOpenFolder,
         onOpenFile = { node ->
-            // F14 - image files open the in-place preview; everything else keeps the old handoff.
+            // #6 - image files open the in-place full-screen preview (authed Coil loader). Every other
+            // file (PDF, docs, ...) downloads via the authenticated pipeline then opens with an external
+            // viewer (ACTION_VIEW via FileProvider) - this is the working PDF-preview path.
             if (isImageNode(node)) {
                 previewImageUrl = imageViewUrl(node)
             } else {
-                viewModel.onOpenFile(node)
+                downloadSheetVisible = true
+                pendingDownloadNode = node
+                downloadViewModel.onDownload(node)
             }
         },
+        imageLoader = authedImageLoader,
         onSearchChanged = viewModel::onSearchChanged,
         onToggleSearchMode = viewModel::onToggleSearchMode,
         onSortChanged = viewModel::onSortChanged,
@@ -288,11 +318,33 @@ fun FilesRoute(
         onCreateFolder = { name -> viewModel.createFolder(name) },
     )
 
-    // F14 - the in-place full-screen image viewer (Coil resolves the server-relative url).
+    // #6 - the in-place full-screen image viewer, fed the AUTHENTICATED Coil loader so the cookie-authed
+    // /v1/fs/preview endpoint resolves (the global loader would 401).
     previewImageUrl?.let { url ->
         com.testlogon.android.feature.messaging.media.FullScreenImageViewer(
             url = url,
             onClose = { previewImageUrl = null },
+            imageLoader = authedImageLoader,
+        )
+    }
+
+    // #6 - PDF / non-image preview: a small progress sheet while the file downloads; on success the
+    // FileActionsViewModel emits OpenFile -> openLauncher fires the external viewer (handled above).
+    if (downloadSheetVisible) {
+        FileDownloadSheet(
+            node = pendingDownloadNode,
+            state = downloadState,
+            onCancel = {
+                downloadViewModel.onCancel()
+                downloadSheetVisible = false
+                pendingDownloadNode = null
+            },
+            onDismiss = {
+                downloadViewModel.onDismiss()
+                downloadSheetVisible = false
+                pendingDownloadNode = null
+            },
+            onRetry = { pendingDownloadNode?.let { downloadViewModel.onDownload(it) } },
         )
     }
 
@@ -321,6 +373,8 @@ fun FilesScreen(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     onUploadClick: (() -> Unit)? = null,
+    // #6 - authenticated Coil loader used for image-row thumbnails (null = icons only, e.g. tests/previews).
+    imageLoader: ImageLoader? = null,
     // AND-335 - per-file share action (defaults to no-op so existing call sites/tests are unaffected).
     onShareFile: (FileNode) -> Unit = {},
     // AND-336 - "Import from Google Drive" action (null -> the affordance is hidden, so existing AND-332
@@ -444,6 +498,7 @@ fun FilesScreen(
                         renamingPath = renamingPath,
                         onRenameCommit = { node, newName -> onRename(node, newName); renamingPath = null },
                         onRenameCancel = { renamingPath = null },
+                        imageLoader = imageLoader,
                     )
                 } else {
                     BrowseContent(
@@ -462,6 +517,7 @@ fun FilesScreen(
                             // parent), so place the node INSIDE the destination folder under its name.
                             onMove(node, FilePath.child(destFolder, node.name))
                         },
+                        imageLoader = imageLoader,
                     )
                 }
             }
@@ -674,6 +730,7 @@ private fun BrowseContent(
     onRenameCancel: () -> Unit = {},
     dragState: DragMoveState? = null,
     onDrop: (FileNode, String) -> Unit = { _, _ -> },
+    imageLoader: ImageLoader? = null,
 ) {
     val listState = rememberLazyListState()
     val refresh = items.loadState.refresh
@@ -722,6 +779,7 @@ private fun BrowseContent(
                                 onRenameCancel = onRenameCancel,
                                 dragState = dragState,
                                 onDrop = onDrop,
+                                imageLoader = imageLoader,
                             )
                         }
                     }
@@ -768,6 +826,7 @@ private fun SearchContent(
     renamingPath: String? = null,
     onRenameCommit: (FileNode, String) -> Unit = { _, _ -> },
     onRenameCancel: () -> Unit = {},
+    imageLoader: ImageLoader? = null,
 ) {
     when {
         state.searchLoading -> LoadingState()
@@ -795,6 +854,7 @@ private fun SearchContent(
                     isRenaming = renamingPath == node.path,
                     onRenameCommit = { newName -> onRenameCommit(node, newName) },
                     onRenameCancel = onRenameCancel,
+                    imageLoader = imageLoader,
                 )
             }
         }
@@ -817,6 +877,8 @@ private fun FileRow(
     // drop targets. A drop on a folder calls [onDrop](draggedNode, destFolderPath).
     dragState: DragMoveState? = null,
     onDrop: (FileNode, String) -> Unit = { _, _ -> },
+    // #6 - authenticated Coil loader for the leading image thumbnail (null = generic icon only).
+    imageLoader: ImageLoader? = null,
 ) {
     val context = LocalContext.current
     val isFolder = node.type == FileNodeType.FOLDER
@@ -901,12 +963,41 @@ private fun FileRow(
         modifier = contentMod,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = iconFor(node),
-            contentDescription = null,
-            tint = if (isFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp),
-        )
+        // #6 - image files show a real Coil thumbnail (authed loader -> /v1/fs/thumbnail); on a missing
+        // loader or a load error this falls back to the generic type icon.
+        if (imageLoader != null && isImageNode(node)) {
+            var thumbFailed by remember(node.path) { mutableStateOf(false) }
+            if (thumbFailed) {
+                Icon(
+                    imageVector = iconFor(node),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(40.dp),
+                )
+            } else {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(thumbnailUrl(node))
+                        .crossfade(true)
+                        .build(),
+                    imageLoader = imageLoader,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    onState = { st -> if (st is AsyncImagePainter.State.Error) thumbFailed = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .testTag(FilesTestTags.thumbnail(node)),
+                )
+            }
+        } else {
+            Icon(
+                imageVector = iconFor(node),
+                contentDescription = null,
+                tint = if (isFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp),
+            )
+        }
         Column(
             modifier = Modifier.padding(start = 12.dp).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1144,6 +1235,61 @@ private fun TransferBanner(
 }
 
 /**
+ * #6 - a small bottom-sheet shown while a PDF / non-image file downloads for preview. On success the
+ * external viewer is launched (by the route) and this sheet is dismissed; on error it offers Retry.
+ */
+@Composable
+private fun FileDownloadSheet(
+    node: FileNode?,
+    state: com.testlogon.android.feature.files.download.FileDownloadUiState,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(FilesTestTags.DOWNLOAD_SHEET),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = node?.name ?: stringResource(R.string.files_title),
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            when (val s = state) {
+                is com.testlogon.android.feature.files.download.FileDownloadUiState.Error -> {
+                    Text(s.message, style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (s.retryable) {
+                            TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
+                        }
+                        TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+                    }
+                }
+                else -> {
+                    val fraction = (s as? com.testlogon.android.feature.files.download.FileDownloadUiState.InProgress)?.fraction
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (fraction != null) {
+                            CircularProgressIndicator(progress = { fraction }, modifier = Modifier.size(28.dp))
+                        } else {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        }
+                        Text(stringResource(R.string.files_download_opening), style = MaterialTheme.typography.bodyMedium)
+                    }
+                    TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
+                }
+            }
+        }
+    }
+}
+
+/**
  * FM4 - inline rename text field for a row. Auto-focuses on appear; commits a non-blank trimmed value on
  * IME Done / Enter, cancels on a blank value or focus loss. Kept self-contained (its own remembered text).
  */
@@ -1155,9 +1301,18 @@ private fun InlineRenameField(
 ) {
     var text by remember(initial) { mutableStateOf(initial) }
     val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
-    val commit = {
-        val trimmed = text.trim()
-        if (trimmed.isNotEmpty() && trimmed != initial) onCommit(trimmed) else onCancel()
+    // FM4 fix: the field finishes EXACTLY ONCE. Without this guard the IME-Done commit (which clears the
+    // editing row) is immediately followed by the field's focus-loss callback firing a SECOND outcome -
+    // and, worse, the FIRST onFocusChanged emission (before requestFocus runs) reported isFocused=false
+    // and cancelled the edit before the user could type, so the rename "never committed".
+    var hasFocused by remember(initial) { mutableStateOf(false) }
+    var finished by remember(initial) { mutableStateOf(false) }
+    val finish = { commitIt: Boolean ->
+        if (!finished) {
+            finished = true
+            val trimmed = text.trim()
+            if (commitIt && trimmed.isNotEmpty() && trimmed != initial) onCommit(trimmed) else onCancel()
+        }
     }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -1167,13 +1322,20 @@ private fun InlineRenameField(
         onValueChange = { text = it },
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { commit() }),
+        // IME Done / Enter commits the typed name (this is the primary commit path).
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { finish(true) }),
         modifier = Modifier
             .fillMaxWidth()
             .focusRequester(focusRequester)
             .onFocusChanged { focusState ->
-                // FM4 - losing focus (tap elsewhere / system back) cancels the inline edit.
-                if (!focusState.isFocused) onCancel()
+                // FM4 - track focus so the pre-focus emission can't cancel the edit; once the field has
+                // actually held focus, losing it (tap elsewhere / keyboard dismiss) COMMITS the typed
+                // name (falling back to cancel for a blank/unchanged value) instead of discarding it.
+                if (focusState.isFocused) {
+                    hasFocused = true
+                } else if (hasFocused) {
+                    finish(true)
+                }
             }
             .testTag(FilesTestTags.RENAME_FIELD),
     )
@@ -1243,12 +1405,26 @@ private fun isImageNode(node: FileNode): Boolean {
 }
 
 /**
- * F14 - the viewable url for an image [node]. Prefers a server-supplied poster/preview url when present;
- * otherwise the authenticated download endpoint (server-RELATIVE so Coil's RelativeUrlMapper resolves it
- * against API_BASE_URL, the same way the on-screen file download fetches the bytes).
+ * #6 - the full-screen viewable url for an image [node]. Prefers a server-supplied poster/preview url
+ * when present; otherwise the authenticated PREVIEW endpoint (server-RELATIVE so the authed loader's
+ * RelativeUrlMapper resolves it against API_BASE_URL). `/v1/fs/preview` returns image bytes the loader
+ * can decode (the download endpoint advertises a misleading application/json content-type).
  */
 private fun imageViewUrl(node: FileNode): String {
     node.posterUrl?.takeIf { it.isNotBlank() }?.let { return it }
     val encoded = java.net.URLEncoder.encode(node.path, "UTF-8")
-    return "/v1/fs/download?path=$encoded"
+    return "/v1/fs/preview?path=$encoded"
+}
+
+/**
+ * #6 - the list-thumbnail url for an image [node]. Prefers a server poster url; then the dedicated
+ * thumbnail endpoint; the URL is server-RELATIVE so the authed loader resolves it against API_BASE_URL.
+ * NOTE: the backend only serves `/v1/fs/thumbnail` once a thumbnail artifact has been generated (it
+ * 404s otherwise), so the row falls back to `/v1/fs/preview` (the full image bytes, which Coil
+ * downsamples) - this is handled by the AsyncImage error-fallback chain in [FileRow].
+ */
+private fun thumbnailUrl(node: FileNode): String {
+    node.posterUrl?.takeIf { it.isNotBlank() }?.let { return it }
+    val encoded = java.net.URLEncoder.encode(node.path, "UTF-8")
+    return "/v1/fs/preview?path=$encoded"
 }

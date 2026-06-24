@@ -153,7 +153,7 @@ class GroupRepositoryImpl @Inject constructor(
             // conversation GET (the web app derives the roster from ConversationOut.participants).
             val participantsResult = apiCall { api.listParticipants(conversationId) }
             val dtos: List<ParticipantDto> = when (participantsResult) {
-                is ApiResult.Success -> participantsResult.data.participants.orEmpty()
+                is ApiResult.Success -> participantsResult.data
                 is ApiResult.Failure -> return@withContext participantsResult
                 is ApiResult.NetworkError -> return@withContext participantsResult
             }.ifEmpty {

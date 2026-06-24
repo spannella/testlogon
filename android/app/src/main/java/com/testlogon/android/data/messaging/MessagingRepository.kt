@@ -546,6 +546,17 @@ interface MessagingRepository {
         localUri: String,
     ): LotteryImageRef?
 
+    /**
+     * Number-13 — upload a per-OPTION image/video for a lottery outcome (reuses the conversation image
+     * presign/PUT transport; the resulting key is scoped conversationId/owner/ as the B-LOT media
+     * validator requires). Returns the media_asset_id ("bucket:key") to send, or null on failure.
+     */
+    suspend fun uploadLotteryOptionMedia(
+        conversationId: String,
+        localUri: String,
+        isVideo: Boolean,
+    ): String?
+
     /** Find-a-DateTime ("custom") poll. */
     suspend fun createFindDateTime(
         conversationId: String,
@@ -587,8 +598,18 @@ interface MessagingRepository {
     suspend fun listFiles(path: String = "/"): ApiResult<List<FileEntryUi>>
 }
 
-/** A single lottery outcome draft from the composer (label + revealed text). */
-data class LotteryOutcomeDraft(val label: String?, val text: String, val weightBps: Int? = null)
+/**
+ * A single lottery outcome draft from the composer. payloadType is "text"|"image"|"video". For media
+ * outcomes mediaAssetId is the resolved S3 key ("bucket:key") of an image/video already uploaded via
+ * the conversation image-presign transport; text is the revealed text for "text" outcomes.
+ */
+data class LotteryOutcomeDraft(
+    val label: String?,
+    val text: String,
+    val weightBps: Int? = null,
+    val payloadType: String = "text",
+    val mediaAssetId: String? = null,
+)
 
 /** C10 — resolved upload result for a lottery cover image (Backend B3 image object fields). */
 data class LotteryImageRef(
@@ -2353,8 +2374,13 @@ class MessagingRepositoryImpl @Inject constructor(
     ): ApiResult<Message> = withContext(io) {
         when (val r = apiCall { api.unlockLottery(messageId) }) {
             is ApiResult.Success -> {
-                val revealed = r.data.selectedOutcome?.textContent
-                // Reconcile the cached row to unlocked + revealed text (server-authoritative).
+                val selected = r.data.selectedOutcome
+                val payloadType = selected?.payloadType ?: "text"
+                val revealed = selected?.takeIf { payloadType == "text" }?.textContent
+                val revealedMediaUrl = selected
+                    ?.takeIf { payloadType == "image" || payloadType == "video" }
+                    ?.let { deriveMediaAssetUrl(it.mediaAssetId) }
+                // Reconcile the cached row to unlocked + revealed text/media (server-authoritative).
                 val existing = messageDao.findById(messageId)?.toDomain()
                 if (existing != null) {
                     val paid = (existing.media as? MessageMedia.Paid)?.monetization
@@ -2363,6 +2389,8 @@ class MessagingRepositoryImpl @Inject constructor(
                             (paid ?: MessageMonetization(UnlockType.LOTTERY, false, null, "USD", null)).copy(
                                 unlocked = true,
                                 revealedText = revealed,
+                                revealedMediaUrl = revealedMediaUrl,
+                                revealedMediaIsVideo = payloadType == "video",
                             ),
                         ),
                     )
@@ -2442,6 +2470,48 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun uploadLotteryOptionMedia(
+        conversationId: String,
+        localUri: String,
+        isVideo: Boolean,
+    ): String? = withContext(io) {
+        // Reuse the conversation image presign/PUT transport (same endpoint images + video clips use).
+        // Images are normalized through the processor; videos are uploaded as-is (no re-encode).
+        val uploadUri: Uri
+        val mime: String
+        val sizeBytes: Long
+        val name: String
+        if (isVideo) {
+            uploadUri = Uri.parse(localUri)
+            mime = "video/mp4"
+            sizeBytes = 0L
+            name = uploadUri.lastPathSegment ?: "clip.mp4"
+        } else {
+            val processed = imageProcessor.process(Uri.parse(localUri)) ?: return@withContext null
+            uploadUri = processed.uri
+            mime = processed.mimeType
+            sizeBytes = processed.byteSize
+            name = processed.uri.lastPathSegment ?: "image.jpg"
+        }
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = uploadUri,
+                mimeType = mime,
+                category = "message",
+                sizeBytes = sizeBytes,
+                displayName = name,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        // Send media_asset_id as "bucket:key" (the B-LOT validator accepts this form and the key is
+        // already under conversationId/owner/ from the presign).
+        attachment?.let { "${it.bucket}:${it.key}" }
+    }
+
     override suspend fun sendLottery(
         conversationId: String,
         outcomes: List<LotteryOutcomeDraft>,
@@ -2463,11 +2533,14 @@ class MessagingRepositoryImpl @Inject constructor(
         val remainder = 10_000 - scaled.sum()
         val finalWeights = scaled.mapIndexed { i, w -> (w + if (i == 0) remainder else 0).coerceAtLeast(1) }
         val outcomeReqs = outcomes.mapIndexed { i, o ->
+            val isMedia = o.payloadType == "image" || o.payloadType == "video"
             LotteryOutcomeReq(
                 displayLabel = o.label?.takeIf { it.isNotBlank() },
                 weightBps = finalWeights.getOrElse(i) { 10_000 / n },
-                payloadType = "text",
-                textContent = o.text,
+                payloadType = if (isMedia) o.payloadType else "text",
+                // text_content only for text outcomes; media_asset_id only for image/video outcomes.
+                textContent = if (isMedia) null else o.text,
+                mediaAssetId = if (isMedia) o.mediaAssetId else null,
             )
         }
         val req = CreateLotteryReq(
@@ -2654,7 +2727,11 @@ class MessagingRepositoryImpl @Inject constructor(
                             priceMinorUnits = null,
                             currency = "USD",
                             teaser = null,
-                            revealedText = r.data.selectedOutcome?.takeIf { unlocked }?.textContent,
+                            revealedText = r.data.selectedOutcome?.takeIf { unlocked && (it.payloadType == "text") }?.textContent,
+                            revealedMediaUrl = r.data.selectedOutcome
+                                ?.takeIf { unlocked && (it.payloadType == "image" || it.payloadType == "video") }
+                                ?.let { deriveMediaAssetUrl(it.mediaAssetId) },
+                            revealedMediaIsVideo = unlocked && (r.data.selectedOutcome?.payloadType == "video"),
                         ),
                     ),
                 )
@@ -2889,6 +2966,9 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         lockCurrency = paid?.currency ?: lockCurrency,
         lockTeaser = paid?.teaser,
         revealedText = paid?.revealedText,
+        // Number-13 - persist the revealed lottery option media url across a Room round-trip.
+        revealedMediaUrl = paid?.revealedMediaUrl,
+        revealedMediaIsVideo = paid?.revealedMediaIsVideo ?: false,
         // MSG — find_datetime detail (the card needs date range + hours).
         fadtFromDate = fadt?.fromDate,
         fadtToDate = fadt?.toDate,
@@ -3127,6 +3207,8 @@ internal fun MessageEntity.toDomain(): Message = Message(
                     currency = lockCurrency ?: "USD",
                     teaser = lockTeaser,
                     revealedText = revealedText,
+                    revealedMediaUrl = revealedMediaUrl,
+                    revealedMediaIsVideo = revealedMediaIsVideo,
                 ),
             )
         } else {

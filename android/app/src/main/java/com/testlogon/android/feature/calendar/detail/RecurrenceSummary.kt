@@ -16,6 +16,7 @@ object RecurrenceSummary {
             RecurrenceFreq.DAILY -> if (recurrence.interval > 1) "Every ${recurrence.interval} days" else "Daily"
             RecurrenceFreq.WEEKLY -> if (recurrence.interval > 1) "Every ${recurrence.interval} weeks" else "Weekly"
             RecurrenceFreq.MONTHLY -> if (recurrence.interval > 1) "Every ${recurrence.interval} months" else "Monthly"
+            RecurrenceFreq.YEARLY -> if (recurrence.interval > 1) "Every ${recurrence.interval} years" else "Yearly"
             RecurrenceFreq.UNKNOWN -> return null
         }
         val days = if (recurrence.byDay.isNotEmpty()) " on ${recurrence.byDay.joinToString(", ")}" else ""

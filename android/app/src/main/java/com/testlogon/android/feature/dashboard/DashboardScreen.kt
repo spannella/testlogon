@@ -66,7 +66,6 @@ import com.testlogon.android.feature.more.MoreHub
 import com.testlogon.android.feature.more.accent
 import com.testlogon.android.navigation.BroadcastBrowseDest
 import com.testlogon.android.navigation.ComposePostDest
-import com.testlogon.android.navigation.MoreHubDest
 
 /**
  * AND-066 — route-level Dashboard entry wired into the Home tab. Collects state lifecycle-aware,
@@ -83,6 +82,7 @@ fun DashboardRoute(
     onOpenMore: () -> Unit,
     onOpenRoute: (String) -> Unit,
     onOpenInbox: () -> Unit,
+    onOpenHub: (MoreHub) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: DashboardViewModel = hiltViewModel(),
 ) {
@@ -115,6 +115,7 @@ fun DashboardRoute(
         onOpenMore = onOpenMore,
         onOpenRoute = onOpenRoute,
         onOpenInbox = onOpenInbox,
+        onOpenHub = onOpenHub,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -132,6 +133,7 @@ fun DashboardScreen(
     onOpenMore: () -> Unit = {},
     onOpenRoute: (String) -> Unit = {},
     onOpenInbox: () -> Unit = {},
+    onOpenHub: (MoreHub) -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     TlScaffold(
@@ -164,6 +166,7 @@ fun DashboardScreen(
                         onOpenMore = onOpenMore,
                         onOpenRoute = onOpenRoute,
                         onOpenInbox = onOpenInbox,
+                        onOpenHub = onOpenHub,
                     )
             }
         }
@@ -183,6 +186,7 @@ private fun DashboardLaunchpad(
     onOpenMore: () -> Unit,
     onOpenRoute: (String) -> Unit,
     onOpenInbox: () -> Unit,
+    onOpenHub: (MoreHub) -> Unit,
 ) {
     val data = state.dashboard
     LazyColumn(
@@ -205,10 +209,11 @@ private fun DashboardLaunchpad(
             QuickActionsRow(
                 onOpenRoute = onOpenRoute,
                 onOpenInbox = onOpenInbox,
+                onOpenHub = onOpenHub,
             )
         }
 
-        item { ShortcutsSection(onOpenRoute = onOpenRoute, onOpenMore = onOpenMore) }
+        item { ShortcutsSection(onOpenHub = onOpenHub, onOpenMore = onOpenMore) }
 
         // Activity / content: real widgets when present, else a slim inline note.
         if (data != null && !data.isEmpty) {
@@ -268,6 +273,7 @@ private fun LaunchpadHeader(
 private fun QuickActionsRow(
     onOpenRoute: (String) -> Unit,
     onOpenInbox: () -> Unit,
+    onOpenHub: (MoreHub) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     Row(
@@ -307,7 +313,7 @@ private fun QuickActionsRow(
             testTag = DashboardTestTags.ACTION_WALLET,
             circleColor = MoreHub.WALLET.accent().container,
             iconTint = MoreHub.WALLET.accent().onAccent,
-            onClick = { onOpenRoute(MoreHubDest.build(MoreHub.WALLET)) },
+            onClick = { onOpenHub(MoreHub.WALLET) },
             modifier = Modifier.weight(1f),
         )
     }
@@ -352,7 +358,7 @@ private fun QuickActionItem(
 
 @Composable
 private fun ShortcutsSection(
-    onOpenRoute: (String) -> Unit,
+    onOpenHub: (MoreHub) -> Unit,
     onOpenMore: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -370,7 +376,7 @@ private fun ShortcutsSection(
                     testTag = DashboardTestTags.HUB_STUDIO,
                     circleColor = MoreHub.STUDIO.accent().container,
                     iconTint = MoreHub.STUDIO.accent().onAccent,
-                    onClick = { onOpenRoute(MoreHubDest.build(MoreHub.STUDIO)) },
+                    onClick = { onOpenHub(MoreHub.STUDIO) },
                     modifier = Modifier.weight(1f),
                 )
             },
@@ -381,7 +387,7 @@ private fun ShortcutsSection(
                     testTag = DashboardTestTags.HUB_GROWTH,
                     circleColor = MoreHub.GROWTH.accent().container,
                     iconTint = MoreHub.GROWTH.accent().onAccent,
-                    onClick = { onOpenRoute(MoreHubDest.build(MoreHub.GROWTH)) },
+                    onClick = { onOpenHub(MoreHub.GROWTH) },
                     modifier = Modifier.weight(1f),
                 )
             },
@@ -394,7 +400,7 @@ private fun ShortcutsSection(
                     testTag = DashboardTestTags.HUB_COMMUNITY,
                     circleColor = MoreHub.COMMUNITY.accent().container,
                     iconTint = MoreHub.COMMUNITY.accent().onAccent,
-                    onClick = { onOpenRoute(MoreHubDest.build(MoreHub.COMMUNITY)) },
+                    onClick = { onOpenHub(MoreHub.COMMUNITY) },
                     modifier = Modifier.weight(1f),
                 )
             },
@@ -405,7 +411,7 @@ private fun ShortcutsSection(
                     testTag = DashboardTestTags.HUB_SHOP,
                     circleColor = MoreHub.SHOP.accent().container,
                     iconTint = MoreHub.SHOP.accent().onAccent,
-                    onClick = { onOpenRoute(MoreHubDest.build(MoreHub.SHOP)) },
+                    onClick = { onOpenHub(MoreHub.SHOP) },
                     modifier = Modifier.weight(1f),
                 )
             },

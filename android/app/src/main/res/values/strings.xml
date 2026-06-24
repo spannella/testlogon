@@ -331,6 +331,7 @@
     <string name="search_prompt_title">Search your messages</string>
     <string name="search_error_short">Search failed</string>
     <string name="search_match_cursor">%1$d of %2$d</string>
+    <string name="search_result_no_text">(no text)</string>
     <string name="search_result_count">%1$d results in %2$d conversations</string>
 
     <!-- AND-120..124: messaging (conversation list + thread + composer) -->
@@ -565,6 +566,17 @@
     <string name="calendar_field_start">Start time (HH:MM)</string>
     <string name="calendar_field_end">End time (HH:MM)</string>
     <string name="calendar_field_calendar">Calendar</string>
+    <string name="calendar_field_timezone">Timezone</string>
+    <string name="calendar_field_repeat">Repeat</string>
+    <string name="calendar_repeat_none">Does not repeat</string>
+    <string name="calendar_repeat_daily">Daily</string>
+    <string name="calendar_repeat_weekly">Weekly</string>
+    <string name="calendar_repeat_monthly">Monthly</string>
+    <string name="calendar_repeat_yearly">Yearly</string>
+    <string name="calendar_repeat_interval">Every (interval)</string>
+    <string name="calendar_repeat_count">End after (occurrences, optional)</string>
+    <string name="calendar_ics_failed">Couldn\'t create the .ics file.</string>
+    <string name="calendar_ics_no_app">No app can open .ics files.</string>
     <string name="calendar_save">Save</string>
     <string name="calendar_cancel">Cancel</string>
     <string name="calendar_delete">Delete</string>
@@ -2779,6 +2791,7 @@
     <string name="files_folder_cd">Folder %1$s</string>
     <string name="files_file_cd">File %1$s</string>
     <string name="files_empty_folder">This folder is empty</string>
+    <string name="files_download_opening">Opening file…</string>
     <string name="files_empty_search">No matches</string>
     <string name="files_error">Couldn\'t load this folder.</string>
     <string name="files_search_error">Couldn\'t run the search.</string>

@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,6 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
@@ -70,6 +74,10 @@ fun MyPostsRoute(
     onEditPost: (postId: String) -> Unit,
     onPostClick: (postId: String) -> Unit,
     viewModel: MyPostsViewModel = hiltViewModel(),
+    // #4 — emits true after an edit/compose returns so this list force-refreshes immediately (rather
+    // than relying solely on ON_RESUME, which does not always fire across an outer-graph→outer-graph pop).
+    refreshSignal: kotlinx.coroutines.flow.StateFlow<Boolean>? = null,
+    onRefreshSignalConsumed: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val items = viewModel.items.collectAsLazyPagingItems()
@@ -82,6 +90,31 @@ fun MyPostsRoute(
                 is MyPostsEffect.ShowMessage -> snackbarHostState.showSnackbar(effect.message)
             }
         }
+    }
+
+    // #4 — primary path: when the Edit screen pops back it sets a result flag on this entry; refresh the
+    // pager (which re-runs GET /feed?author_id) and clear the flag so a later return doesn't loop.
+    val edited by (refreshSignal ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) })
+        .collectAsStateWithLifecycle()
+    LaunchedEffect(edited) {
+        if (edited) {
+            viewModel.refresh()
+            onRefreshSignalConsumed()
+        }
+    }
+
+    // #4 — belt-and-suspenders: also refresh on ON_RESUME (e.g. on return from the composer), so a newly
+    // published / edited post's text / photos / visibility / lock show up without restarting the app.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (first) first = false else viewModel.refresh()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     MyPostsScreen(

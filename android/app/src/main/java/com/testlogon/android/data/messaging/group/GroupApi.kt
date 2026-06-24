@@ -47,11 +47,14 @@ interface GroupApi {
     suspend fun getConversation(@Path("id") id: String): ConversationDto
 
     /**
-     * AND-158 — roster GET. The OpenAPI response is untyped (`schema: {}`); we map defensively from
-     * [RosterResponse] which tolerates both a bare `[...]` (handled by the repo) and `{participants:[...]}`.
+     * AND-158 — roster GET. The OpenAPI response is untyped (`schema: {}`) and the server returns a
+     * BARE JSON ARRAY of ParticipantOut (verified on-device). Typing it as List<ParticipantDto> uses
+     * Moshi's built-in collection adapter (the old RosterResponse object envelope crashed with
+     * "Expected BEGIN_OBJECT but was BEGIN_ARRAY" — bug #14 P0). The repo still falls back to the
+     * conversation GET when this list is empty.
      */
     @GET("messaging/conversations/{id}/participants")
-    suspend fun listParticipants(@Path("id") id: String): RosterResponse
+    suspend fun listParticipants(@Path("id") id: String): List<com.testlogon.android.data.messaging.ParticipantDto>
 
     /**
      * AND-158 — add members. Body = AddParticipantsIn {participant_ids}. Response = {ok, added_count}

@@ -150,6 +150,7 @@ class ThreadViewModel @Inject constructor(
     fun onSearchQueryChange(query: String) = searchController.onQueryChange(query)
     fun onSearchNext() = searchController.next()
     fun onSearchPrev() = searchController.prev()
+    fun onSelectSearchMatch(messageId: String) = searchController.selectMatch(messageId)
 
     // ---- AND-146: typing indicators ----
 
@@ -218,18 +219,49 @@ class ThreadViewModel @Inject constructor(
      * [ThreadUiState.peerUserSub] is known, so the thread header avatar can show the person's photo.
      */
     private fun observePeerPhoto() {
+        // Resolve MY own profile (name+photo) once for the #15 overlapping DM avatar pair.
+        authStateStore.userSub.value?.let { displayNames.resolve(it) }
         viewModelScope.launch {
             _state.collect { st ->
                 val peer = st.peerUserSub ?: return@collect
-                if (st.peerPhotoUrl == null) displayNames.resolve(peer)
+                // Resolve the peer's name (header title + #18 outgoing-call peerName) and photo.
+                if (st.peerPhotoUrl == null || st.title.isBlank()) displayNames.resolve(peer)
+            }
+        }
+        viewModelScope.launch {
+            // Re-resolve names so the peer title fills in even if only the name (not photo) arrives.
+            displayNames.names.collect { names ->
+                val st = _state.value
+                val self = authStateStore.userSub.value
+                val peerName = st.peerUserSub?.let { names[it] }
+                val myName = self?.let { names[it] }
+                if ((peerName != null && st.title.isBlank()) ||
+                    (myName != null && st.myName != myName)
+                ) {
+                    _state.update {
+                        it.copy(
+                            title = if (peerName != null && it.title.isBlank()) peerName else it.title,
+                            myName = myName ?: it.myName,
+                        )
+                    }
+                }
             }
         }
         viewModelScope.launch {
             displayNames.photos.collect { photos ->
-                val peer = _state.value.peerUserSub
-                val photo = peer?.let { photos[it] }
-                if (photo != null && _state.value.peerPhotoUrl != photo) {
-                    _state.update { it.copy(peerPhotoUrl = photo) }
+                val st = _state.value
+                val self = authStateStore.userSub.value
+                val peerPhoto = st.peerUserSub?.let { photos[it] }
+                val myPhoto = self?.let { photos[it] }
+                if ((peerPhoto != null && st.peerPhotoUrl != peerPhoto) ||
+                    (myPhoto != null && st.myPhotoUrl != myPhoto)
+                ) {
+                    _state.update {
+                        it.copy(
+                            peerPhotoUrl = peerPhoto ?: it.peerPhotoUrl,
+                            myPhotoUrl = myPhoto ?: it.myPhotoUrl,
+                        )
+                    }
                 }
             }
         }
@@ -257,6 +289,12 @@ class ThreadViewModel @Inject constructor(
                     newestMessageId = it.id
                     newestMessageEpochSeconds = it.createdAtEpochSeconds
                 }
+                // #15 — distinct non-self, non-system senders. A 1:1 DM has at most one (renders the
+                // overlapping two-circle avatar); two or more => a group thread.
+                val otherSenders = visible
+                    .map { it.senderId }
+                    .filter { it.isNotEmpty() && it != self && it != "system" }
+                    .distinct()
                 _state.update { prior ->
                     prior.copy(
                         messages = visible.map { msg ->
@@ -264,8 +302,9 @@ class ThreadViewModel @Inject constructor(
                             ui.copy(decryptedText = decryptedMessages[ui.key])
                         },
                         receipts = computeReceipts(visible, self),
-                        peerUserSub = prior.peerUserSub
-                            ?: visible.firstOrNull { it.senderId.isNotEmpty() && it.senderId != self && it.senderId != "system" }?.senderId,
+                        peerUserSub = prior.peerUserSub ?: otherSenders.firstOrNull(),
+                        // Once messages exist, lock isDm from the distinct-sender count.
+                        isDm = if (visible.isEmpty()) prior.isDm else otherSenders.size <= 1,
                     )
                 }
                 // AND-152 — once the deep-link target message is loaded, scroll to it (once).
@@ -1360,8 +1399,30 @@ class ThreadViewModel @Inject constructor(
         if (outcomes.size < 2) return
         _state.update { it.copy(lotteryComposerVisible = false) }
         viewModelScope.launch {
+            // #13 — a media outcome arrives with payloadType image|video and mediaAssetId carrying the
+            // picked LOCAL uri; upload each via the conversation image-presign transport and swap in the
+            // resolved "bucket:key" media_asset_id before creating the lottery. A failed upload demotes
+            // that option to text so the lottery still sends.
+            val resolved = outcomes.map { o ->
+                val isMedia = (o.payloadType == "image" || o.payloadType == "video")
+                val localUri = o.mediaAssetId
+                if (isMedia && !localUri.isNullOrBlank()) {
+                    val assetId = repository.uploadLotteryOptionMedia(
+                        conversationId,
+                        localUri,
+                        isVideo = o.payloadType == "video",
+                    )
+                    if (assetId != null) {
+                        o.copy(mediaAssetId = assetId)
+                    } else {
+                        o.copy(payloadType = "text", mediaAssetId = null, text = o.text.ifBlank { "Prize" })
+                    }
+                } else {
+                    o
+                }
+            }
             val imageRef = imageUri?.let { repository.uploadLotteryImage(conversationId, it) }
-            repository.sendLottery(conversationId, outcomes, image = imageRef)
+            repository.sendLottery(conversationId, resolved, image = imageRef)
             _events.trySend(ThreadEvent.ScrollToBottom)
         }
     }

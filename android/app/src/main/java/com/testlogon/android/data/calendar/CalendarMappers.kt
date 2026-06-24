@@ -36,6 +36,7 @@ internal fun String?.toRecurrenceFreq(): RecurrenceFreq = when (this?.uppercase(
     "DAILY" -> RecurrenceFreq.DAILY
     "WEEKLY" -> RecurrenceFreq.WEEKLY
     "MONTHLY" -> RecurrenceFreq.MONTHLY
+    "YEARLY" -> RecurrenceFreq.YEARLY
     else -> RecurrenceFreq.UNKNOWN
 }
 

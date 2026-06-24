@@ -1,5 +1,7 @@
 package com.testlogon.android.feature.calendar
 
+import com.testlogon.android.data.calendar.RecurrenceFreq
+
 /**
  * AND-271 / SC19 — UI state for the calendar screen. Loading / Content / Error, with the resolved
  * display zone, a zone-mismatch flag for the banner, the period header label, weekday headers, the
@@ -51,6 +53,16 @@ data class EventEditorState(
     /** "HH:MM" 24h local start/end for timed events. */
     val startTime: String = "09:00",
     val endTime: String = "10:00",
+    /** SC19 #10 — IANA timezone the start/end times are interpreted in (default = device zone). */
+    val timezone: String = "UTC",
+    /** Available timezones for the picker (device zone first, then a common set). */
+    val timezoneOptions: List<String> = emptyList(),
+    /** SC19 #9 — recurrence frequency; null = does not repeat. */
+    val recurrenceFreq: RecurrenceFreq? = null,
+    /** Recurrence interval (every N days/weeks/months/years); >=1. */
+    val recurrenceInterval: Int = 1,
+    /** Optional "ends after N occurrences"; null = no end. */
+    val recurrenceCount: Int? = null,
     val saving: Boolean = false,
     val nameError: Boolean = false,
 ) {

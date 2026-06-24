@@ -56,6 +56,10 @@ data class MessageFileDto(
     val size: Long? = null,
     @Json(name = "content_type") val contentType: String? = null,
     val url: String? = null,
+    // RG20 fix — the message-CREATE response carries bucket/key (no url); kept so kind="video"
+    // (and files) can derive a directly-playable /mock/s3 object url on the sender's just-sent bubble.
+    val bucket: String? = null,
+    val key: String? = null,
     @Json(name = "duration_seconds") val durationSeconds: Int? = null,
     // file_share-only metadata.
     val permission: String? = null,

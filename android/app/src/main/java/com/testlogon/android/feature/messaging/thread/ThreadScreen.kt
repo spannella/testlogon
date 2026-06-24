@@ -171,6 +171,7 @@ fun ThreadRoute(
     val listState = rememberLazyListState()
     val imageViewer = rememberImageViewerState()
     val context = LocalContext.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     val routeScope = rememberCoroutineScope()
     val noCalendarAppMessage = stringResource(R.string.calendar_no_app)
@@ -403,6 +404,11 @@ fun ThreadRoute(
                 onClose = viewModel::onCloseSearch,
                 onNext = viewModel::onSearchNext,
                 onPrev = viewModel::onSearchPrev,
+                onPickMatch = { match ->
+                    // #17 — jump the thread to the tapped result (the activeMatch effect scrolls there).
+                    keyboardController?.hide()
+                    viewModel.onSelectSearchMatch(match.messageId)
+                },
             )
         },
         snackbarHostState = snackbarHostState,
@@ -794,13 +800,27 @@ fun ThreadScreen(
                         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                     ) {
                         val headerTitle = state.title.ifBlank { stringResource(R.string.thread_default_title) }
-                        // ID15 - peer avatar (photo when resolved, else monogram) beside the title.
-                        com.testlogon.android.feature.common.TlAvatar(
-                            name = headerTitle,
-                            photoUrl = state.peerPhotoUrl,
-                            size = 32.dp,
-                            textStyle = MaterialTheme.typography.labelMedium,
-                        )
+                        // #15 - a 1:1 DM shows TWO overlapping circles (peer in front/left, me behind/
+                        // right); group/unknown threads keep the single avatar.
+                        if (state.isDm) {
+                            com.testlogon.android.feature.common.DmAvatarPair(
+                                // Prefer the resolved peer name; fall back to the peer id (so the front
+                                // circle shows the peer's initials, never the generic "Conversation").
+                                peerName = state.title.ifBlank { state.peerUserSub.orEmpty() },
+                                peerPhotoUrl = state.peerPhotoUrl,
+                                myName = state.myName,
+                                myPhotoUrl = state.myPhotoUrl,
+                                size = 32.dp,
+                            )
+                        } else {
+                            // ID15 - peer avatar (photo when resolved, else monogram) beside the title.
+                            com.testlogon.android.feature.common.TlAvatar(
+                                name = headerTitle,
+                                photoUrl = state.peerPhotoUrl,
+                                size = 32.dp,
+                                textStyle = MaterialTheme.typography.labelMedium,
+                            )
+                        }
                         Text(
                             text = headerTitle,
                             maxLines = 1,
@@ -836,7 +856,7 @@ fun ThreadScreen(
                                         conversationId = state.conversationId,
                                         calleeUserId = callee,
                                         mode = com.testlogon.android.data.call.CallMode.VIDEO.wire,
-                                        peerName = state.title.takeIf { it.isNotBlank() },
+                                        peerName = state.title.takeIf { it.isNotBlank() } ?: state.peerUserSub,
                                     ),
                                 )
                             },

@@ -57,6 +57,9 @@ class OutgoingCallViewModel @Inject constructor(
     // AND-304: best-effort self-managed Telecom modeling, UNDER the AND-296 flow. Optional/guarded — a
     // Telecom failure never affects placing the call (the control-plane invite below is authoritative).
     private val telecomCallController: TelecomCallController,
+    // #18 — resolve the callee's real display name when the launching screen didn't pass a peerName
+    // (the thread header title may not have resolved yet), so the call never shows "Unknown caller".
+    private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -64,6 +67,11 @@ class OutgoingCallViewModel @Inject constructor(
     private val calleeUserId: String = savedState.get<String>(ARG_CALLEE_USER_ID).orEmpty()
     private val mode: CallMode = CallMode.fromWire(savedState.get<String>(ARG_MODE))
     private val peerName: String? = savedState.get<String>(ARG_PEER_NAME)
+    // #18 — best display name known so far for the peer: the nav-arg name, else the resolved name,
+    // else the callee id itself (we always KNOW the peer, so never show "Unknown caller").
+    private val resolvedPeerName = MutableStateFlow(
+        peerName?.takeIf { it.isNotBlank() } ?: calleeUserId.takeIf { it.isNotBlank() },
+    )
     private val paid: Boolean = savedState[ARG_PAID] ?: false
     private val rateCentsPerMin: Int? = savedState.get<Int>(ARG_RATE_CENTS_PER_MIN)
 
@@ -75,15 +83,27 @@ class OutgoingCallViewModel @Inject constructor(
     private val _billing = MutableStateFlow(CallBillingUiState.free())
     val billing: StateFlow<CallBillingUiState> = _billing.asStateFlow()
 
-    val uiState: StateFlow<CallUiState> = callManager.state
-        .map { it.toUi() }
-        .stateIn(
+    val uiState: StateFlow<CallUiState> =
+        kotlinx.coroutines.flow.combine(callManager.state, resolvedPeerName) { session, name ->
+            session.toUi(name)
+        }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = CallSessionState().toUi(),
+            initialValue = CallSessionState().toUi(resolvedPeerName.value),
         )
 
     init {
+        // #18 — when the launching screen didn't pass a real display name, resolve the callee's name
+        // (the id is shown meanwhile) and upgrade in place once it arrives.
+        if (peerName.isNullOrBlank() && calleeUserId.isNotBlank()) {
+            displayNames.resolve(calleeUserId)?.let { resolvedPeerName.value = it }
+            viewModelScope.launch {
+                displayNames.names.collect { names ->
+                    val n = names[calleeUserId]
+                    if (!n.isNullOrBlank()) resolvedPeerName.value = n
+                }
+            }
+        }
         // AND-301: seed the paid-call confirm BEFORE placing the call. The wallet balance comes from the
         // FLAGGED seam (NotConfigured -> null balance), so the dialog allows Start.
         if (paid && rateCentsPerMin != null) {
@@ -129,10 +149,11 @@ class OutgoingCallViewModel @Inject constructor(
         // AND-304: model the call to the OS via self-managed Telecom (audio focus / DND / headset). This is
         // additive and fully guarded: placeOutgoing() returns false (and no-ops) on unsupported devices or
         // any OEM failure, so the AND-296 placeCall() below ALWAYS runs and remains the source of truth.
+        val effectivePeerName = resolvedPeerName.value ?: peerName
         runCatching {
             telecomCallController.placeOutgoing(
                 callId = com.testlogon.android.data.call.CallId.new(),
-                displayName = peerName,
+                displayName = effectivePeerName,
                 video = mode == CallMode.VIDEO,
             )
         }
@@ -140,7 +161,7 @@ class OutgoingCallViewModel @Inject constructor(
             conversationId = conversationId,
             calleeUserId = calleeUserId,
             mode = mode,
-            peerName = peerName,
+            peerName = effectivePeerName,
             paid = paid,
             rateCentsPerMin = rateCentsPerMin,
         )
@@ -154,8 +175,8 @@ class OutgoingCallViewModel @Inject constructor(
         viewModelScope.launch { effects.send(OutgoingCallEffect.Finish) }
     }
 
-    private fun CallSessionState.toUi(): CallUiState = CallUiState(
-        peerName = peerName,
+    private fun CallSessionState.toUi(name: String? = resolvedPeerName.value): CallUiState = CallUiState(
+        peerName = name ?: peerName,
         phase = phase.toUiPhase(),
         elapsedSeconds = elapsedSeconds,
         mediaUnavailable = mediaUnavailable,

@@ -127,6 +127,9 @@ data class LotteryOutcomeReq(
     @Json(name = "weight_bps") val weightBps: Int,
     @Json(name = "payload_type") val payloadType: String = "text",
     @Json(name = "text_content") val textContent: String? = null,
+    // #13 — per-option media: an S3 key (or "bucket:key") under {conversation_id}/{owner}/ in the
+    // image bucket, required when payload_type is "image"|"video" (Backend B-LOT contract).
+    @Json(name = "media_asset_id") val mediaAssetId: String? = null,
 )
 
 /** LotteryConfigIn — {version, outcomes[]}. */

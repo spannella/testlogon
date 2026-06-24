@@ -53,6 +53,7 @@ object IcsMapper {
             RecurrenceFreq.DAILY -> "DAILY"
             RecurrenceFreq.WEEKLY -> "WEEKLY"
             RecurrenceFreq.MONTHLY -> "MONTHLY"
+            RecurrenceFreq.YEARLY -> "YEARLY"
             RecurrenceFreq.UNKNOWN -> return null
         }
         val parts = ArrayList<String>()

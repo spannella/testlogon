@@ -56,14 +56,36 @@ data class CreatePostResp(
 )
 
 /**
- * FD1 — edit an existing post (PATCH /posts/{post_id}, EditPostRequest). Only the fields a creator
- * commonly changes are sent: the text body and (optionally) the attached image urls. All fields are
- * optional server-side; we send body via the legacy `body` key (the backend accepts it).
+ * FD1 / FD-EDIT — edit an existing post (PATCH /posts/{post_id}, EditPostRequest). Carries every field a
+ * creator commonly changes in place: the text body, the attached image urls, the audience (visibility)
+ * and the paid-lock (lock_type + unlock_price_cents). All fields are optional server-side; we send body
+ * via the legacy `body` key (the backend accepts it). Per the B-POST contract, edit `visibility` is one
+ * of "public"|"followers" and `lock_type` is "fixed_price" (with unlock_price_cents) or "none" (unlocks).
  */
 @JsonClass(generateAdapter = true)
 data class EditPostReq(
     val body: String,
     @Json(name = "image_urls") val imageUrls: List<String>? = null,
+    @Json(name = "visibility") val visibility: String? = null,
+    @Json(name = "lock_type") val lockType: String? = null,
+    @Json(name = "unlock_price_cents") val unlockPriceCents: Long? = null,
+)
+
+/**
+ * FD-EDIT — the editable fields of an owned post, fetched fresh so the edit screen pre-fills the CURRENT
+ * body / photos / audience / lock. The owner's own GET /posts/{id} is NOT redacted server-side, so these
+ * carry real values even for a locked post (unlike the redaction-safe consumer [FeedPost]).
+ */
+@JsonClass(generateAdapter = true)
+data class EditablePostDto(
+    @Json(name = "post_id") val postId: String = "",
+    @Json(name = "body") val body: String? = null,
+    @Json(name = "body_plain") val bodyPlain: String? = null,
+    @Json(name = "image_urls") val imageUrls: List<String>? = null,
+    @Json(name = "visibility") val visibility: String? = null,
+    @Json(name = "locked") val locked: Boolean = false,
+    @Json(name = "lock_type") val lockType: String? = null,
+    @Json(name = "unlock_price_cents") val unlockPriceCents: Long? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -86,6 +108,10 @@ interface PostComposeApi {
     /** FD1 — edit an owned post's text/media. 403 if not the owner, 404 if missing. */
     @PATCH("posts/{post_id}")
     suspend fun editPost(@Path("post_id") postId: String, @Body body: EditPostReq)
+
+    /** FD-EDIT — fetch an owned post's editable fields (owner GET is un-redacted). */
+    @retrofit2.http.GET("posts/{post_id}")
+    suspend fun getEditablePost(@Path("post_id") postId: String): EditablePostDto
 
     /** FD1 — delete an owned post. 403 if not the owner, 404 if missing. */
     @DELETE("posts/{post_id}")
@@ -135,10 +161,40 @@ class PostComposeRepository @Inject constructor(
         Unit
     }
 
-    /** FD1 — edit an owned post's text body. */
+    /** FD1 — edit an owned post's text body (text-only convenience overload). */
     suspend fun editPost(postId: String, body: String): ApiResult<Unit> = call {
         api.editPost(postId, EditPostReq(body = body.trim()))
         Unit
+    }
+
+    /**
+     * FD-EDIT — edit an owned post's body + photos + audience + paid-lock in one PATCH (B-POST contract).
+     * [imageUrls] is sent verbatim (empty list REMOVES all photos server-side); [visibility] is one of
+     * [PostVisibility]; a non-null [unlockPriceCents] sets a fixed-price lock, else the post is unlocked.
+     */
+    suspend fun editPost(
+        postId: String,
+        body: String,
+        visibility: PostVisibility,
+        imageUrls: List<String>,
+        unlockPriceCents: Long?,
+    ): ApiResult<Unit> = call {
+        api.editPost(
+            postId,
+            EditPostReq(
+                body = body.trim(),
+                imageUrls = imageUrls,
+                visibility = visibility.wire,
+                lockType = if (unlockPriceCents != null) "fixed_price" else "none",
+                unlockPriceCents = if (unlockPriceCents != null) unlockPriceCents else 0L,
+            ),
+        )
+        Unit
+    }
+
+    /** FD-EDIT — load an owned post's current editable fields for pre-filling the edit screen. */
+    suspend fun getEditablePost(postId: String): ApiResult<EditablePostDto> = call {
+        api.getEditablePost(postId)
     }
 
     /** FD1 — delete an owned post. */

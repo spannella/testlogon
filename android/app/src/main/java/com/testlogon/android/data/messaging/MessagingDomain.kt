@@ -234,6 +234,10 @@ data class MessageMonetization(
     val teaser: String?,
     /** AND-139 — revealed text content after a successful unlock/draw (else null while locked). */
     val revealedText: String? = null,
+    // #13 — revealed lottery option MEDIA after a draw: a server-relative object url derived from the
+    // winning outcome's media_asset_id (image or video). Null for text-only or while locked.
+    val revealedMediaUrl: String? = null,
+    val revealedMediaIsVideo: Boolean = false,
 )
 
 /** AND-139 — fixed-price unlock vs server-resolved lottery unlock. */
@@ -592,16 +596,24 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         slotDurationMinutes = findDatetime.slotDurationMinutes,
     )
         // AND-139 — lottery paid message (nested lottery sub-object). Reveal only when unlocked.
-    lottery != null -> MessageMedia.Paid(
-        MessageMonetization(
-            type = UnlockType.LOTTERY,
-            unlocked = lottery.lockState == "unlocked",
-            priceMinorUnits = null,
-            currency = tipCurrency ?: "USD",
-            teaser = lockDescription,
-            revealedText = lottery.selectedOutcome?.takeIf { lottery.lockState == "unlocked" }?.textContent,
-        ),
-    )
+    lottery != null -> run {
+        val lot = lottery!!
+        val revealed = lot.selectedOutcome?.takeIf { lot.lockState == "unlocked" }
+        val revealedIsVideo = revealed?.payloadType == "video"
+        MessageMedia.Paid(
+            MessageMonetization(
+                type = UnlockType.LOTTERY,
+                unlocked = lot.lockState == "unlocked",
+                priceMinorUnits = null,
+                currency = tipCurrency ?: "USD",
+                teaser = lockDescription,
+                revealedText = revealed?.takeIf { it.payloadType == "text" }?.textContent,
+                revealedMediaUrl = revealed?.takeIf { it.payloadType == "image" || it.payloadType == "video" }
+                    ?.let { deriveMediaAssetUrl(it.mediaAssetId) },
+                revealedMediaIsVideo = revealedIsVideo,
+            ),
+        )
+    }
     // AND-139 — fixed-price locked paid message (flat lock_* fields). Gated body never carried while locked.
     locked == true && isUnlocked != true -> MessageMedia.Paid(
         MessageMonetization(
@@ -618,7 +630,12 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
     // Render it as an inline video bubble (poster + play) rather than a plain file bubble. The server
     // populates file.url with the directly-playable /mock/s3 object url (dev) used by ExoPlayer + Coil.
     kind == "video" && file != null -> MessageMedia.VideoClip(
-        playbackUrl = file.url?.takeIf { it.isNotBlank() } ?: file.path?.takeIf { it.isNotBlank() },
+        // RG20 fix — the message-CREATE response omits file.url (only bucket/key), so derive the
+        // /mock/s3 object url from bucket/key (same as images' deriveS3Url) instead of rendering a
+        // blank, un-tappable bubble until a thread refetch repopulates url.
+        playbackUrl = file.url?.takeIf { it.isNotBlank() }
+            ?: file.path?.takeIf { it.isNotBlank() }
+            ?: deriveS3Url(file.bucket, file.key),
         durationSeconds = file.durationSeconds,
     )
     file != null -> file.toFileMedia(consumptionPolicy ?: "none", isShare = false)
@@ -647,6 +664,24 @@ internal fun deriveS3Url(bucket: String?, key: String?): String? {
     // derive it here; Coil's RelativeUrlMapper resolves the leading-"/" path against the API origin.
     // (Without this the sender saw a broken/blank thumbnail until a thread refresh re-fetched url.)
     return "/mock/s3/$bucket/$key"
+}
+
+/**
+ * #13 — resolve a lottery outcome's media_asset_id to a server-relative object url. The backend
+ * persists/echoes media_asset_id as "bucket:key" (or "s3://bucket/key", or a bare key under the image
+ * bucket). Coil's RelativeUrlMapper resolves the leading-"/" path against the API origin.
+ */
+internal fun deriveMediaAssetUrl(mediaAssetId: String?): String? {
+    val raw = mediaAssetId?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+    val (bucket, key) = when {
+        raw.startsWith("s3://") -> raw.removePrefix("s3://").substringBefore('/', "") to raw.removePrefix("s3://").substringAfter('/', "")
+        ':' in raw -> raw.substringBefore(':') to raw.substringAfter(':')
+        else -> null to raw
+    }
+    if (key.isBlank()) return null
+    // A bare key (no bucket) is served from the same /mock/s3 gateway; without a bucket we cannot build
+    // the path, so fall back to a key-only relative url the gateway also accepts.
+    return if (bucket.isNullOrBlank()) "/mock/s3/$key" else "/mock/s3/$bucket/$key"
 }
 
 internal fun ConversationDto.toDomain(): Conversation = Conversation(

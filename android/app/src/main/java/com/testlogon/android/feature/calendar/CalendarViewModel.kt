@@ -8,6 +8,9 @@ import com.testlogon.android.data.calendar.Calendar
 import com.testlogon.android.data.calendar.CalendarEvent
 import com.testlogon.android.data.calendar.CalendarRepository
 import com.testlogon.android.data.calendar.EventCreateReqDto
+import com.testlogon.android.data.calendar.Recurrence
+import com.testlogon.android.data.calendar.RecurrenceFreq
+import com.testlogon.android.data.calendar.RecurrenceRuleDto
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -49,6 +52,9 @@ class CalendarViewModel @Inject constructor(
 
     /** Cached calendars from the latest successful load (for the editor dropdown + add gating). */
     private var calendars: List<Calendar> = emptyList()
+
+    /** SC19 - master domain events from the latest load, keyed "calId|eventId" (editor prefill source). */
+    private var eventCache: Map<String, CalendarEvent> = emptyMap()
 
     private var mode: CalendarViewMode
         get() = savedState.get<String>(KEY_MODE)?.let { runCatching { CalendarViewMode.valueOf(it) }.getOrNull() }
@@ -117,6 +123,8 @@ class CalendarViewModel @Inject constructor(
                     calendarId = defaultCal.calendarId,
                     calendarOptions = options,
                     epochDay = epochDay,
+                    timezone = deviceZoneId,
+                    timezoneOptions = timezoneOptions(),
                 ),
                 actionSheet = null,
             ) ?: it
@@ -136,13 +144,16 @@ class CalendarViewModel @Inject constructor(
         _state.update { (it as? CalendarUiState.Content)?.copy(actionSheet = null) ?: it }
     }
 
-    /** Opens the editor to EDIT an existing slotted event. */
+    /** Opens the editor to EDIT an existing slotted event (prefilled from the master domain event). */
     fun openEditEvent(calendarId: String, eventId: String) {
         val event = findSlotted(calendarId, eventId)
+        val master = eventCache["$calendarId|$eventId"]
         val options = calendars.map { CalendarOption(it.calendarId, it.name) }
+        val tz = master?.timezone?.takeIf { it.isNotBlank() } ?: deviceZoneId
+        val offset = zoneOffsetMinutes(tz)
         val epochDay = event?.let {
             if (it.isAllDay && it.allDayEpochDay != null) it.allDayEpochDay
-            else CalendarMath.localEpochDay(it.startMillis, offsetForFocus())
+            else CalendarMath.localEpochDay(it.startMillis, offset)
         } ?: focusEpochDay
         _state.update {
             (it as? CalendarUiState.Content)?.copy(
@@ -151,10 +162,16 @@ class CalendarViewModel @Inject constructor(
                     calendarId = calendarId,
                     calendarOptions = options,
                     name = event?.title.orEmpty(),
+                    description = master?.description.orEmpty(),
                     allDay = event?.isAllDay ?: false,
                     epochDay = epochDay,
-                    startTime = event?.let { e -> if (!e.isAllDay) timeOf(e.startMillis) else "09:00" } ?: "09:00",
-                    endTime = event?.let { e -> if (!e.isAllDay) timeOf(e.endMillis) else "10:00" } ?: "10:00",
+                    startTime = event?.let { e -> if (!e.isAllDay) timeOfIn(e.startMillis, offset) else "09:00" } ?: "09:00",
+                    endTime = event?.let { e -> if (!e.isAllDay) timeOfIn(e.endMillis, offset) else "10:00" } ?: "10:00",
+                    timezone = tz,
+                    timezoneOptions = timezoneOptions(tz),
+                    recurrenceFreq = master?.recurrence?.freq?.takeIf { f -> f != RecurrenceFreq.UNKNOWN },
+                    recurrenceInterval = master?.recurrence?.interval?.coerceAtLeast(1) ?: 1,
+                    recurrenceCount = master?.recurrence?.count,
                 ),
                 actionSheet = null,
             ) ?: it
@@ -221,31 +238,47 @@ class CalendarViewModel @Inject constructor(
 
     private fun buildBody(ed: EventEditorState): EventCreateReqDto {
         val desc = ed.description.ifBlank { null }
+        val tz = ed.timezone.ifBlank { deviceZoneId }
+        val recurrence = buildRecurrenceDto(ed)
         return if (ed.allDay) {
             EventCreateReqDto(
                 name = ed.name.trim(),
                 description = desc,
-                timezone = displayZoneId,
+                timezone = tz,
                 allDay = true,
                 allDayDate = isoDate(ed.epochDay),
                 startUtc = null,
                 endUtc = null,
+                recurrenceRule = recurrence,
             )
         } else {
-            val offset = offsetForDay(ed.epochDay)
+            // Interpret the entered wall-clock time in the EVENT's selected timezone (SC19 #10).
+            val offset = zoneOffsetMinutesForDay(tz, ed.epochDay)
             val startMillis = localDateTimeToUtcMillis(ed.epochDay, ed.startTime, offset)
             val endMillis = localDateTimeToUtcMillis(ed.epochDay, ed.endTime, offset)
                 .let { if (it <= startMillis) startMillis + CalendarMath.MILLIS_PER_MINUTE * 60 else it }
             EventCreateReqDto(
                 name = ed.name.trim(),
                 description = desc,
-                timezone = displayZoneId,
+                timezone = tz,
                 allDay = false,
                 allDayDate = null,
                 startUtc = Instant.ofEpochMilli(startMillis).toString(),
                 endUtc = Instant.ofEpochMilli(endMillis).toString(),
+                recurrenceRule = recurrence,
             )
         }
+    }
+
+    /** SC19 #9 - maps the editor recurrence selection to the wire DTO (null = does not repeat). */
+    private fun buildRecurrenceDto(ed: EventEditorState): RecurrenceRuleDto? {
+        val freq = ed.recurrenceFreq ?: return null
+        if (freq == RecurrenceFreq.UNKNOWN) return null
+        return RecurrenceRuleDto(
+            freq = freq.name,
+            interval = ed.recurrenceInterval.coerceAtLeast(1),
+            count = ed.recurrenceCount?.takeIf { it > 0 },
+        )
     }
 
     private fun load() {
@@ -295,12 +328,24 @@ class CalendarViewModel @Inject constructor(
             }
         }
 
-        val slotted = merged.map { it.toSlotted(displayZoneId) }
-        slottedCache = slotted
+        // Cache master events for the editor (description / recurrence / timezone prefill).
+        eventCache = merged.associateBy { "${it.calendarId}|${it.eventId}" }
+
         // The display-zone offset at the focus instant (sufficient for a window without a DST boundary).
         val offsetMinutes = offsetForFocus(activeFocus)
 
+        // SC19 #9 - expand recurring events into per-occurrence instances across the widest window
+        // (the month grid) so they render on every recurring day. Non-recurring events pass through.
         val monthRange = CalendarMath.rangeFor(CalendarViewMode.MONTH, activeFocus)
+        val expandRange = CalendarMath.rangeFor(CalendarViewMode.AGENDA, activeFocus)
+        val expandStart = minOf(monthRange.startEpochDay, expandRange.startEpochDay) - 1L
+        val expandEnd = maxOf(monthRange.endEpochDayExclusive, expandRange.endEpochDayExclusive) + 1L
+        val expanded = merged.flatMap {
+            RecurrenceExpander.expand(it, expandStart, expandEnd, offsetMinutes)
+        }
+        val slotted = expanded.map { it.toSlotted(displayZoneId) }
+        slottedCache = slotted
+
         val monthDays = EventSlotter.toDaySlots(slotted, monthRange, offsetMinutes)
         val weekGrid = if (activeMode == CalendarViewMode.WEEK) {
             EventSlotter.toWeekGrid(slotted, CalendarMath.weekDays(activeFocus), offsetMinutes)
@@ -358,7 +403,31 @@ class CalendarViewModel @Inject constructor(
         return zoneProvider.offsetMinutesAt(displayZoneId, instant)
     }
 
-    private fun offsetForDay(epochDay: Long): Int = offsetForFocus(epochDay)
+    /** SC19 #10 - total offset (minutes) of [zoneId] at "now" (for editor prefill). */
+    private fun zoneOffsetMinutes(zoneId: String): Int =
+        runCatching { zoneProvider.offsetMinutesAt(zoneId, Instant.ofEpochMilli(clock.nowMillis())) }
+            .getOrElse { offsetForFocus() }
+
+    /** SC19 #10 - total offset (minutes) of [zoneId] at the start of [epochDay]. */
+    private fun zoneOffsetMinutesForDay(zoneId: String, epochDay: Long): Int =
+        runCatching {
+            zoneProvider.offsetMinutesAt(zoneId, Instant.ofEpochMilli(epochDay * CalendarMath.MILLIS_PER_DAY))
+        }.getOrElse { offsetForFocus(epochDay) }
+
+    /** SC19 #10 - the timezone picker options: the supplied/selected zone + device + a common set. */
+    private fun timezoneOptions(selected: String? = null): List<String> {
+        val out = LinkedHashSet<String>()
+        selected?.takeIf { it.isNotBlank() }?.let { out.add(it) }
+        out.add(deviceZoneId)
+        out.addAll(COMMON_ZONES)
+        return out.toList()
+    }
+
+    /** "HH:MM" local time of a UTC-millis instant under an explicit zone offset (minutes). */
+    private fun timeOfIn(utcMillis: Long, offsetMinutes: Int): String {
+        val minuteOfDay = CalendarMath.localMinuteOfDay(utcMillis, offsetMinutes)
+        return "%02d:%02d".format(minuteOfDay / 60, minuteOfDay % 60)
+    }
 
     private fun headerLabelFor(activeMode: CalendarViewMode, focus: Long): String {
         val utc = focus * CalendarMath.MILLIS_PER_DAY
@@ -373,15 +442,6 @@ class CalendarViewModel @Inject constructor(
             CalendarViewMode.DAY -> CalendarDateFormat.formatDate(utc, "UTC")
             CalendarViewMode.AGENDA -> CalendarDateFormat.formatMonthYear(utc, "UTC")
         }
-    }
-
-    /** "HH:MM" local time of a UTC-millis instant in the display zone. */
-    private fun timeOf(utcMillis: Long): String {
-        val offset = offsetForFocus()
-        val minuteOfDay = CalendarMath.localMinuteOfDay(utcMillis, offset)
-        val h = minuteOfDay / 60
-        val m = minuteOfDay % 60
-        return "%02d:%02d".format(h, m)
     }
 
     /** Parses "HH:MM" + epoch day + zone offset into a UTC epoch-millis instant. */
@@ -442,5 +502,13 @@ class CalendarViewModel @Inject constructor(
 
         // Mon..Sun (week starts Monday, matching CalendarMath.weekStartIso default of 1).
         val WEEKDAY_HEADERS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+        // A small, common IANA-zone set for the editor timezone picker (device zone is prepended).
+        val COMMON_ZONES = listOf(
+            "UTC",
+            "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+            "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
+            "Asia/Dubai", "Asia/Kolkata", "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney",
+        )
     }
 }

@@ -6,6 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.provider.CalendarContract
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,6 +48,7 @@ import com.testlogon.android.R
 import com.testlogon.android.data.messaging.CountdownLogic
 import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessageMonetization
+import com.testlogon.android.feature.messaging.media.VideoClipBubble
 import com.testlogon.android.data.messaging.SharePermission
 import com.testlogon.android.data.messaging.UnlockType
 import kotlinx.coroutines.delay
@@ -273,16 +278,40 @@ fun PaidMessageBubble(
     isEncrypted: Boolean = false,
 ) {
     if (monetization.unlocked) {
-        Surface(
-            color = if (isOwn) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-            shape = MaterialTheme.shapes.medium,
-            modifier = modifier.widthIn(max = 280.dp),
-        ) {
-            Text(
-                text = monetization.revealedText?.takeIf { it.isNotBlank() }
-                    ?: stringResource(R.string.paid_unlocked),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            )
+        // #13 — a lottery can reveal an IMAGE or VIDEO outcome, not just text. Render the revealed media
+        // thumbnail (image inline, video as a tap-to-play poster) when present; else the revealed text.
+        val revealedMedia = monetization.revealedMediaUrl?.takeIf { it.isNotBlank() }
+        when {
+            revealedMedia != null && monetization.revealedMediaIsVideo -> {
+                VideoClipBubble(
+                    media = MessageMedia.VideoClip(playbackUrl = revealedMedia),
+                    modifier = modifier.widthIn(max = 280.dp).testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA),
+                )
+            }
+            revealedMedia != null -> {
+                AsyncImage(
+                    model = revealedMedia,
+                    contentDescription = stringResource(R.string.paid_unlocked),
+                    contentScale = ContentScale.Fit,
+                    modifier = modifier
+                        .widthIn(max = 280.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA),
+                )
+            }
+            else -> {
+                Surface(
+                    color = if (isOwn) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = modifier.widthIn(max = 280.dp),
+                ) {
+                    Text(
+                        text = monetization.revealedText?.takeIf { it.isNotBlank() }
+                            ?: stringResource(R.string.paid_unlocked),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
         }
         return
     }
