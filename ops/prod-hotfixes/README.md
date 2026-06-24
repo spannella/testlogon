@@ -62,3 +62,15 @@ Apply these patches (or re-do the documented changes) onto prod's real source br
 redeploy. Do **not** `git apply` them onto `android-impl` — the base does not match.
 Full reference of every change also lives in the assistant memory file
 `messaging-push-realtime-fixes.md`.
+
+## Batch-5 additions (2026-06-24)
+
+- `app_routers_newsfeed.py.patch` REGENERATED (vs the oldest newsfeed `.bak`) so it now captures
+  BOTH the social hooks AND the B-POST edit hotfix: `PATCH /posts/{id}` gains editable
+  `visibility`, `video_id`, and `lock_type`+`unlock_price_cents` (paid-lock toggle), and returns
+  the full updated post for in-place refresh.
+- `app_routers_calendar.py.patch` NEW: fixes a 500 in `update_event` when a recurrence rule is
+  supplied on the body (`RecurrenceRule(**model)` TypeError → isinstance branch).
+
+Lottery per-option media and calendar description/timezone/.ics were already supported
+server-side and needed no change.

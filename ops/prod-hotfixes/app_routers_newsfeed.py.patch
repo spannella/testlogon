@@ -1,6 +1,104 @@
 --- app/routers/newsfeed.py.bak_social_1782303162	2026-06-24 12:12:42.561145380 +0000
-+++ app/routers/newsfeed.py	2026-06-24 12:16:23.124436505 +0000
-@@ -4760,6 +4760,11 @@
++++ app/routers/newsfeed.py	2026-06-24 13:52:14.141338649 +0000
+@@ -1819,6 +1819,10 @@
+ class EditPostRequest(ContentFieldsMixin):
+     image_urls: Optional[List[str]] = None
+     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
++    # B-POST #5: visibility + paid-lock are editable in place.
++    visibility: Optional[Literal["followers", "public"]] = None
++    lock_type: Optional[Literal["fixed_price", "none"]] = None
++    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+     publish_at: Optional[int] = Field(default=None, ge=0)
+     schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+     scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
+@@ -4103,6 +4107,62 @@
+             expr_vals[":unlock_limit"] = req.unlock_limit
+         else:
+             remove_parts.append("unlock_limit")
++    # B-POST #5: visibility is editable in place.
++    if "visibility" in req.model_fields_set and req.visibility is not None:
++        set_parts.append("visibility = :vis")
++        expr_vals[":vis"] = req.visibility
++    # B-POST #5: video attachment is editable (set or clear). video_id was declared
++    # on EditPostRequest but previously ignored by the handler.
++    if "video_id" in req.model_fields_set:
++        if req.video_id:
++            set_parts.append("video_id = :vid")
++            expr_vals[":vid"] = req.video_id
++        else:
++            remove_parts.append("video_id")
++    # B-POST #5: paid-lock state is editable in place (fixed_price only; the
++    # tip_lottery strategy keeps its dedicated lottery flow untouched).
++    locked_name_used = False
++    lock_in_payload = ("unlock_price_cents" in req.model_fields_set) or ("lock_type" in req.model_fields_set)
++    if lock_in_payload:
++        existing_lock_type = post.get("lock_type")
++        if existing_lock_type == "tip_lottery":
++            raise HTTPException(
++                status_code=400,
++                detail={
++                    "code": "lock_edit_unsupported_for_tip_lottery",
++                    "message": "tip_lottery locks cannot be edited via PATCH /posts/{id}",
++                },
++            )
++        requested_lock_type = req.lock_type if "lock_type" in req.model_fields_set else (
++            "fixed_price" if existing_lock_type == "fixed_price" else "none"
++        )
++        if requested_lock_type == "none":
++            set_parts.append("#locked = :locked")
++            expr_vals[":locked"] = False
++            locked_name_used = True
++            remove_parts.append("unlock_price_cents")
++            remove_parts.append("lock_type")
++        else:  # fixed_price
++            price = req.unlock_price_cents if "unlock_price_cents" in req.model_fields_set else post.get("unlock_price_cents")
++            try:
++                price = _validate_and_normalize_unlock_price(price)
++            except ValueError as exc:
++                raise HTTPException(status_code=400, detail=str(exc)) from exc
++            if price is None:
++                raise HTTPException(
++                    status_code=400,
++                    detail={
++                        "code": "fixed_price_requires_unlock_price",
++                        "message": "unlock_price_cents (> 0) is required for a fixed_price lock",
++                    },
++                )
++            set_parts.append("#locked = :locked")
++            expr_vals[":locked"] = True
++            locked_name_used = True
++            set_parts.append("unlock_price_cents = :upc")
++            expr_vals[":upc"] = price
++            set_parts.append("lock_type = :ltype")
++            expr_vals[":ltype"] = "fixed_price"
+     update_expr = f"SET {', '.join(set_parts)}"
+     if remove_parts:
+         update_expr = f"{update_expr} REMOVE {', '.join(remove_parts)}"
+@@ -4121,7 +4181,7 @@
+                     "TableName": APP_TABLE,
+                     "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
+                     "UpdateExpression": update_expr,
+-                    "ExpressionAttributeNames": {"#body": "body", "#status": "status", "#user": "user_id"},
++                    "ExpressionAttributeNames": ({"#body": "body", "#status": "status", "#user": "user_id", "#locked": "locked"} if locked_name_used else {"#body": "body", "#status": "status", "#user": "user_id"}),
+                     "ExpressionAttributeValues": _ddb_serialize_map(expr_vals_tx),
+                     "ConditionExpression": condition_expr,
+                 }
+@@ -4174,10 +4234,13 @@
+         updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {}
+         record_newsfeed_schedule_operation(operation="edit", outcome="success")
+     else:
++        _expr_names = {"#body": "body"}
++        if locked_name_used:
++            _expr_names["#locked"] = "locked"
+         updated = ddb_update_item(
+             key={"pk": pk_post(post_id), "sk": sk_post()},
+             update_expr=update_expr,
+-            expr_names={"#body": "body"},
++            expr_names=_expr_names,
+             expr_vals=expr_vals,
+         )
+     return _post_to_dict(updated, viewer_id=user_id)
+@@ -4760,6 +4823,11 @@
              logger.debug("analytics hook: like_post engagement", exc_info=True)
          # NRS-003: For-You engagement signal (no-op unless flag on).
          _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="like")
@@ -12,7 +110,7 @@
      except ClientError as exc:
          if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
              raise HTTPException(
-@@ -4852,6 +4857,11 @@
+@@ -4852,6 +4920,11 @@
              payment_method_id=req.payment_method_id,
              extra_meta={"post_id": post_id},
          ))
@@ -24,7 +122,7 @@
  
      # GAP-0026: Best-effort license revenue split for tipped post.
      # Wrapped in try/except so a split failure never breaks the tip transaction.
-@@ -6041,6 +6051,11 @@
+@@ -6041,6 +6114,11 @@
              notif_type="comment_on_post",
              payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
          )
