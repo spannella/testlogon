@@ -91,3 +91,16 @@ server-side and needed no change.
 
 Already-correct server-side (no change, verified): video gating parity (locked/encrypted/
 view-once), comment edit/react/image/tip, multi-emoji post reactions, payment-method delete.
+
+## Batch-7 additions (2026-06-25)
+
+- `app_routers_video_listing.py.patch` NEW — dev_mode: `list_own_videos` fast-forwards any
+  dev-stuck in-pipeline video (created/probing/encoding) to `published` (mock HLS+thumb) on read,
+  so "My Videos" no longer stalls on "processing" (no transcode worker exists in dev). No-op in
+  real prod. (Also a one-time data fast-forward was applied to spannella's 3 stuck rows.)
+- `app_routers_ui_session.py.patch` NEW — `/ui/me` now returns `role` + `is_admin` so the app can
+  branch the Support UI (and other admin-gated surfaces) on an authoritative role signal.
+
+Already-correct server-side (no change, verified): Projects (/v1/projects healthy — the bug was
+app-side Paging error handling), Groups create (POST /ui/groups), Syndicates create
+(POST /ui/syndicates), KYC flow (/v1/kyc/*, /ui/kyc/*), API keys (/ui/api_keys).

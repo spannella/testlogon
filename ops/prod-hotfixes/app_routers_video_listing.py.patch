@@ -1,0 +1,69 @@
+--- app/routers/video_listing.py.bak_b7vodlist_1782368582	2026-06-25 06:23:02.783662284 +0000
++++ app/routers/video_listing.py	2026-06-25 06:24:33.872218328 +0000
+@@ -1173,6 +1173,49 @@
+     return None
+ 
+ 
++
++# B7-VOD: dev stuck-state fast-forward. In dev mode there is no transcode/probe/
++# review worker, so videos uploaded before the B-FEEDVID /upload/complete fix
++# stay stuck in "probing"/"pending_encoding"/etc forever and the "My Videos"
++# screen shows them as perpetually "processing". When listing the caller's own
++# videos in dev mode, fast-forward any non-terminal in-pipeline video to
++# "published" (mock HLS manifest + thumbnail) so it becomes playable. No-op in
++# prod (the real pipeline owns these transitions).
++_DEV_STUCK_STATES = (
++    "probing", "pending_encoding", "encoding", "pending_review", "approved",
++)
++_DEV_FF_CHAIN = {
++    "probing": ["pending_encoding", "encoding", "pending_review", "approved", "published"],
++    "pending_encoding": ["encoding", "pending_review", "approved", "published"],
++    "encoding": ["pending_review", "approved", "published"],
++    "pending_review": ["approved", "published"],
++    "approved": ["published"],
++}
++
++
++def _dev_fast_forward_video(video: VideoMetadataModel) -> VideoMetadataModel:
++    """Advance a dev-stuck video to published; returns the refreshed model."""
++    from app.services.video_metadata_store import transition_video_status as _tvs
++    bucket = S.video_upload_bucket or "local-uploads"
++    key = video.source_s3_key or f"vod/{video.id}/source.mp4"
++    mock_manifest = f"{S.public_base_url}/mock/s3/{bucket}/{key}.m3u8"
++    mock_thumb = f"{S.public_base_url}/mock/s3/{bucket}/{key}.jpg"
++    chain = _DEV_FF_CHAIN.get(video.status, [])
++    for nxt in chain:
++        try:
++            if nxt in ("pending_review", "published"):
++                _tvs(video_id=video.id, to_status=nxt, reason="dev list fast-forward",
++                     actor=video.owner_user_id, hls_manifest_url=mock_manifest,
++                     thumbnail_url=mock_thumb)
++            else:
++                _tvs(video_id=video.id, to_status=nxt, reason="dev list fast-forward",
++                     actor=video.owner_user_id)
++        except Exception:
++            logger.warning("dev fast-forward failed for %s -> %s", video.id, nxt, exc_info=True)
++            break
++    return get_video(video.id)
++
++
+ @router.get("", response_model=VideoListOut)
+ def list_own_videos(
+     limit: int = Query(default=50, ge=1, le=200),
+@@ -1191,7 +1234,15 @@
+         status_filter=status,
+         visibility_filter=visibility,
+     )
+-    items = [_video_to_list_item(v) for v in result["items"]]
++    raw_items = result["items"]
++    if S.dev_mode:
++        ffd = []
++        for v in raw_items:
++            if v.status in _DEV_STUCK_STATES:
++                v = _dev_fast_forward_video(v)
++            ffd.append(v)
++        raw_items = ffd
++    items = [_video_to_list_item(v) for v in raw_items]
+     return VideoListOut(items=items, cursor=encode_cursor(_sanitize_cursor(result.get("cursor"))))
+ 
+ 
