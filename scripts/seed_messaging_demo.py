@@ -72,6 +72,45 @@ ENVELOPE = {
     "ciphertext_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 }
 
+import base64
+import io
+
+
+def _demo_png(label="VENUE", size=(640, 400), color=(37, 99, 235)):
+    """A real, visible demo image (PIL); falls back to a 1x1 PNG if PIL absent."""
+    try:
+        from PIL import Image, ImageDraw  # noqa
+        img = Image.new("RGB", size, color)
+        d = ImageDraw.Draw(img)
+        d.rectangle([8, 8, size[0] - 8, size[1] - 8], outline=(255, 255, 255), width=4)
+        d.text((size[0] // 2 - 40, size[1] // 2 - 8), label, fill=(255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+
+
+_PNG = _demo_png()
+
+
+def upload_image(cookie, csrf, conversation_id, filename="photo.png"):
+    """presign + PUT a PNG; return (bucket, key) or (None, None)."""
+    pres = call(cookie, csrf, "POST", f"/messaging/conversations/{conversation_id}/images/presign",
+                {"content_type": "image/png", "filename": filename}, f"presign {filename}")
+    if not pres.get("upload_url"):
+        return None, None
+    try:
+        r = urllib.request.Request(BASE + pres["upload_url"], data=_PNG, method="PUT",
+                                   headers={"Content-Type": "image/png"})
+        urllib.request.urlopen(r, timeout=30)
+    except Exception as e:  # noqa
+        print(f"  XX PUT image failed: {str(e)[:120]}")
+        return None, None
+    return pres.get("bucket"), pres.get("key")
+
 print("== DM alice <-> bob ==")
 dm = alice("POST", "/messaging/conversations/dm/find-or-create",
            {"user_id": BOB_SUB}, "create DM")
@@ -97,6 +136,52 @@ if cid:
           "alice locked")
     bob("POST", f"/messaging/conversations/{cid}/messages",
         {"text": "Awesome. Let's sync live tomorrow 👍"}, "bob text 2")
+
+    # Image message (alice)
+    bkt, key = upload_image(ALICE_CK, ALICE_CSRF, cid, "venue.png")
+    if bkt and key:
+        alice("POST", f"/messaging/conversations/{cid}/messages/image",
+              {"bucket": bkt, "key": key, "content_type": "image/png",
+               "filename": "venue.png", "filesize": len(_PNG), "kind": "image",
+               "caption": "Proposed venue for the offsite"}, "alice image")
+
+    # Meeting poll (alice)
+    alice("POST", f"/messaging/conversations/{cid}/messages/meeting-poll",
+          {"title": "Pick a time for the sync", "duration_minutes": 30,
+           "text": "Which slot works for you?",
+           "slots": [{"start_utc": "2026-06-24T15:00:00Z", "end_utc": "2026-06-24T15:30:00Z"},
+                     {"start_utc": "2026-06-25T17:00:00Z", "end_utc": "2026-06-25T17:30:00Z"},
+                     {"start_utc": "2026-06-26T16:00:00Z", "end_utc": "2026-06-26T16:30:00Z"}]},
+          "alice meeting poll")
+
+    # Calendar share + calendar event (alice creates a calendar + event first)
+    cal = alice("POST", "/ui/calendars", {"name": "Alice — Work", "timezone": "UTC"}, "alice calendar")
+    cal_id = cal.get("calendar_id")
+    if cal_id:
+        evt = alice("POST", f"/ui/calendars/{cal_id}/events",
+                    {"name": "Quarterly Planning", "start_utc": "2026-06-27T16:00:00Z",
+                     "end_utc": "2026-06-27T17:00:00Z", "timezone": "UTC"}, "alice event")
+        evt_id = evt.get("event_id")
+        alice("POST", f"/messaging/conversations/{cid}/messages/calendar-share",
+              {"calendar_id": cal_id, "permission": "read", "include_booking_link": True,
+               "text": "Here's my work calendar — grab any open slot."}, "alice calendar-share")
+        if evt_id:
+            alice("POST", f"/messaging/conversations/{cid}/messages/calendar-event",
+                  {"calendar_id": cal_id, "event_id": evt_id,
+                   "text": "Adding you to the planning session."}, "alice calendar-event")
+
+    # Find-a-time poll
+    alice("POST", f"/messaging/conversations/{cid}/messages/find-datetime",
+          {"title": "Find time next week", "from_date": "2026-06-29", "to_date": "2026-07-01",
+           "start_hour": 9, "end_hour": 17, "slot_duration_minutes": 30, "deadline_hours": 48,
+           "text": "Mark your availability ↓"}, "alice find-a-time")
+
+    # Reactions (bob reacts to alice's first message)
+    if first_id:
+        bob("POST", f"/messaging/conversations/{cid}/messages/{first_id}/reactions",
+            {"emoji": "👍", "action": "add"}, "bob react 👍")
+        bob("POST", f"/messaging/conversations/{cid}/messages/{first_id}/reactions",
+            {"emoji": "🔥", "action": "add"}, "bob react 🔥")
 
 print("== Group: Project Falcon ==")
 grp = alice("POST", "/messaging/conversations/group",

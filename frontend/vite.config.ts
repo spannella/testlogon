@@ -56,12 +56,22 @@ export default defineConfig({
     host: "0.0.0.0",   // listen on all interfaces so the EC2 server is reachable
     port: 3000,
     strictPort: true,  // fail fast instead of silently falling back to 5173
-    hmr: {
-      // Tell the HMR client to open its WebSocket on the same port the browser
-      // used to load the page.  This works whether the user is on an SSH tunnel
-      // (localhost:3000) or hitting the EC2 IP directly (18.222.237.167:3000).
-      clientPort: 3000,
-    },
+    // Allow the app to be served behind a domain (e.g. via Caddy HTTPS). Leading
+    // dot = match all subdomains. IPs/localhost are always allowed by Vite.
+    allowedHosts: [".bitbazaar.cc", ".amazonaws.com"],
+    hmr: process.env.VITE_PUBLIC_HMR_HOST
+      ? {
+          // Served behind an HTTPS reverse proxy (Caddy): the HMR WebSocket must
+          // go to the public host over wss on 443 (Caddy proxies the upgrade).
+          host: process.env.VITE_PUBLIC_HMR_HOST,
+          protocol: "wss",
+          clientPort: 443,
+        }
+      : {
+          // Direct dev: open the WebSocket on the same port the page loaded from
+          // (SSH tunnel localhost:3000 or EC2 IP :3000).
+          clientPort: 3000,
+        },
     proxy: {
       "/saml": "http://localhost:8000",
       "/ui": "http://localhost:8000",

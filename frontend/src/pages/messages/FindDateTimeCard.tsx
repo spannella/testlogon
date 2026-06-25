@@ -71,7 +71,7 @@ export function FindDateTimeCard({ stub, isOwn }: FindDateTimeCardProps) {
   }
 
   return (
-    <div className="mt-1 max-w-md space-y-2 rounded-lg border bg-muted/40 p-3" data-testid="fadt-card">
+    <div className="mt-1 max-w-md space-y-2 rounded-lg border bg-background text-foreground p-3" data-testid="fadt-card">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
           <CalendarClock className="h-5 w-5 shrink-0 text-primary/70" />

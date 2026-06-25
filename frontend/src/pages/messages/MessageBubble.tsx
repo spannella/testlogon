@@ -134,6 +134,16 @@ function LotterySpinner({ phase, reducedMotion }: { phase: LotteryRevealPhase; r
   );
 }
 
+// Message kinds that render their own caption below an attachment card; the
+// generic text render is skipped for these to avoid a duplicate caption.
+const ATTACHMENT_CAPTION_KINDS = new Set([
+  "file_share",
+  "calendar_share",
+  "calendar_event",
+  "meeting_poll",
+  "find_datetime",
+]);
+
 const onceLabel = (message: Message): string | undefined => {
   if (message.consumption_policy === "view_once") return "View once";
   if (message.consumption_policy === "listen_once") return "Listen once";
@@ -264,7 +274,7 @@ function MeetingPollCard({ pollStub, conversationId, isOwn }: MeetingPollCardPro
   }
 
   return (
-    <div className="mt-1 rounded-lg border bg-muted/40 p-3 max-w-sm space-y-2">
+    <div className="mt-1 rounded-lg border bg-background text-foreground p-3 max-w-sm space-y-2">
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -304,8 +314,8 @@ function MeetingPollCard({ pollStub, conversationId, isOwn }: MeetingPollCardPro
         <div className="space-y-1">
           {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
           {poll?.slots.map((slot) => (
-            <div key={slot.slot_id} className="rounded border bg-background/60 px-2 py-1.5 space-y-1">
-              <p className="text-xs">{formatSlotTime(slot.start_utc, slot.end_utc)}</p>
+            <div key={slot.slot_id} className="rounded border bg-muted px-2 py-1.5 space-y-1">
+              <p className="text-xs font-medium">{formatSlotTime(slot.start_utc, slot.end_utc)}</p>
               <div className="flex flex-wrap items-center gap-2">
                 {(["yes", "maybe", "no"] as const).map((choice) => {
                   const label = choice === "yes" ? "👍" : choice === "maybe" ? "🤔" : "👎";
@@ -1420,7 +1430,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 Tap to view once
               </button>
             )
-          ) : message.text ? (
+          ) : message.text && !ATTACHMENT_CAPTION_KINDS.has(message.kind) ? (
+            // Attachment kinds (file/calendar/poll/find-time) render their own
+            // caption below the card — skip here to avoid a duplicate.
             <MessageText text={message.text} />
           ) : null}
 
@@ -1695,7 +1707,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
 
           {message.kind === "file_share" && message.file_share && (
             <>
-              <div className="mt-1 rounded-lg border bg-muted/40 p-3 flex gap-3 items-start max-w-xs">
+              <div className="mt-1 rounded-lg border bg-background text-foreground p-3 flex gap-3 items-start max-w-xs">
                 <FileText className="h-8 w-8 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1 space-y-1">
                   <p className="font-medium text-sm truncate">{message.file_share.name}</p>
@@ -1804,7 +1816,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
 
           {/* ── Calendar share card ── */}
           {message.kind === "calendar_share" && message.calendar_share && (
-            <div className="mt-1 rounded-lg border bg-muted/40 p-3 flex gap-3 items-start max-w-xs">
+            <div className="mt-1 rounded-lg border bg-background text-foreground p-3 flex gap-3 items-start max-w-xs">
               <CalendarDays className="h-8 w-8 shrink-0 text-primary/70" />
               <div className="min-w-0 flex-1 space-y-1">
                 <p className="font-medium text-sm truncate">{message.calendar_share.name}</p>
@@ -1850,7 +1862,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   minute: "2-digit",
                 }) ?? "");
             return (
-              <div className="mt-1 rounded-lg border bg-muted/40 p-3 flex gap-3 items-start max-w-xs">
+              <div className="mt-1 rounded-lg border bg-background text-foreground p-3 flex gap-3 items-start max-w-xs">
                 <CalendarCheck className="h-8 w-8 shrink-0 text-primary/70" />
                 <div className="min-w-0 flex-1 space-y-1">
                   <p className="font-medium text-sm truncate">{ev.name}</p>
