@@ -1469,6 +1469,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           open={galleryOpen}
           onOpenChange={setGalleryOpen}
           conversationId={convoId}
+          resolveSenderName={resolveSenderName}
           onJumpToMessage={(messageId) => {
             setGalleryOpen(false);
             jumpToMessage(messageId);

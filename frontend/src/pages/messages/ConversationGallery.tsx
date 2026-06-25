@@ -14,6 +14,9 @@ import { useConversationGallery } from "@/hooks/useConversationGallery";
 
 const TAB_ORDER: MessageGalleryType[] = ["image", "video", "file", "link"];
 
+// Resolve a sender id (sub/email) to a display name; defaults to the raw id.
+const SenderNameContext = React.createContext<(id: string) => string>((id) => id);
+
 function tabLabel(type: MessageGalleryType): string {
   if (type === "image") return "Images";
   if (type === "video") return "Videos";
@@ -26,9 +29,10 @@ function formatTimestamp(ts: number): string {
 }
 
 function ItemFooter({ item, onJump }: { item: ConversationGalleryItem; onJump: (messageId: string) => void }) {
+  const resolveSenderName = React.useContext(SenderNameContext);
   return (
     <div className="mt-2 flex items-center justify-between gap-2">
-      <p className="text-xs text-muted-foreground">Sent by {item.sender_id} • {formatTimestamp(item.created_at)}</p>
+      <p className="text-xs text-muted-foreground">Sent by {resolveSenderName(item.sender_id)} • {formatTimestamp(item.created_at)}</p>
       <div className="flex items-center gap-1">
         <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex">
           <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
@@ -164,11 +168,13 @@ export function ConversationGallery({
   onOpenChange,
   conversationId,
   onJumpToMessage,
+  resolveSenderName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   conversationId: string;
   onJumpToMessage: (messageId: string) => void;
+  resolveSenderName?: (id: string) => string;
 }) {
   const [activeTab, setActiveTab] = React.useState<MessageGalleryType>("image");
 
@@ -178,6 +184,7 @@ export function ConversationGallery({
   const isLoading = galleryQuery.isLoading && items.length === 0;
 
   return (
+    <SenderNameContext.Provider value={resolveSenderName ?? ((id) => id)}>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
@@ -226,5 +233,6 @@ export function ConversationGallery({
         </Tabs>
       </DialogContent>
     </Dialog>
+    </SenderNameContext.Provider>
   );
 }
