@@ -1,6 +1,6 @@
 --- app/routers/vod.py.bak_b6feedvid_1782357296	2026-06-25 03:14:56.427824914 +0000
-+++ app/routers/vod.py	2026-06-25 03:16:37.773119540 +0000
-@@ -340,6 +340,43 @@
++++ app/routers/vod.py	2026-06-25 13:36:22.380649521 +0000
+@@ -340,6 +340,49 @@
      except Exception:
          logger.warning("Failed to delete upload ticket %s", inp.ticket_id)
  
@@ -15,8 +15,14 @@
 +    final_thumbnail_url = None
 +    if S.dev_mode:
 +        try:
-+            mock_manifest = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}.m3u8"
-+            mock_thumb = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}.jpg"
++            # B8 B-VIDPLAY: the user PUT the raw video bytes to {s3_key} (servable
++            # via the /mock/s3 proxy). The old ".m3u8"/".jpg" keys were NEVER
++            # uploaded -> 404 -> blank bubble + "connection issues". Point both at
++            # the real uploaded object so the app plays it progressively (the app
++            # routes non-.m3u8 URLs to the progressive MP4 source) and Coil's
++            # VideoFrameDecoder renders a poster frame from it. Dev-only.
++            mock_manifest = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}"
++            mock_thumb = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}"
 +            for nxt in ("pending_encoding", "encoding"):
 +                transition_video_status(
 +                    video_id=video_id, to_status=nxt,
@@ -44,7 +50,7 @@
      return VideoUploadCompleteOut(
          ok=True,
          video_id=video_id,
-@@ -347,8 +384,8 @@
+@@ -347,8 +390,8 @@
          size_bytes=actual_size,
          content_type=actual_ct,
          duration_seconds=None,

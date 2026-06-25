@@ -104,3 +104,21 @@ view-once), comment edit/react/image/tip, multi-emoji post reactions, payment-me
 Already-correct server-side (no change, verified): Projects (/v1/projects healthy — the bug was
 app-side Paging error handling), Groups create (POST /ui/groups), Syndicates create
 (POST /ui/syndicates), KYC flow (/v1/kyc/*, /ui/kyc/*), API keys (/ui/api_keys).
+
+## Batch-8 additions (2026-06-25)
+
+- `app_routers_newsfeed.py.patch` REGENERATED — now also includes B-LOCK (CREATE lock_type accepts
+  `price`/`none` aliases + normalizes, matching the edit path) and B-COMMENT2 (a text comment may
+  carry image_url; EditCommentRequest gains image_url/alt/width/height; edit applies image changes).
+- `app_routers_vod.py.patch` + `app_routers_video_listing.py.patch` REGENERATED — B-VIDPLAY: in
+  dev_mode point hls_manifest_url + thumbnail_url at the REAL uploaded object {s3_key} (no .m3u8/.jpg
+  extension) so videos actually play (was 404 "connection issues"). Repaired 7 stale persisted rows.
+- `app_models.py.patch` REGENERATED — B-SYND2: SyndicateOut additionally emits `id` (mirror of
+  syndicate_id) + `is_member` so the app's SyndicateProfileOut (requires non-null id) parses.
+- `app_routers_syndicates.py.patch` NEW — B-SYND2: populate id/is_member in create + by-id reads.
+- `app_routers_tickets.py.patch` + `app_services_tickets.py.patch` NEW — B-SUP2 #15: owner-callable
+  `POST /tickets/{id}/close {action:"close"|"cancel"}` (done/cancelled, idempotent) + TicketStore.owner_close_ticket.
+
+Already-correct server-side (no change, verified): group members include owner + group feed
+(group_feed.py, POST/GET /ui/groups/{id}/posts|feed), helpdesk user live-chat (routing_mode
+helpdesk_bridge), ticket-create returns the ticket, KYC start flow (the #16 break was app-side UI).

@@ -1,5 +1,5 @@
 --- app/models.py.bak_bkc_1782229906	2026-06-23 15:51:46.965931320 +0000
-+++ app/models.py	2026-06-23 15:51:46.983949366 +0000
++++ app/models.py	2026-06-25 13:42:28.869164633 +0000
 @@ -1741,6 +1741,16 @@
      cvc: str
      cardholder_name: Optional[str] = None
@@ -17,3 +17,20 @@
  class AddChargeReq(BaseModel):
      amount_cents: int = Field(ge=1)
      state: str = Field(pattern="^(pending|settled)$")
+@@ -4768,11 +4778,16 @@
+ 
+ class SyndicateOut(BaseModel):
+     syndicate_id: str
++    # B8 B-SYND2: native app's SyndicateProfileOut requires a non-null "id"
++    # (and reads "is_member"); mirror syndicate_id into "id" so a freshly-created
++    # syndicate loads in the app instead of failing with "unexpected response".
++    id: str = ""
+     name: str
+     description: str = ""
+     admin_user_id: str
+     status: str = "active"
+     member_count: int = 0
++    is_member: bool = False
+     created_at: int = 0
+     updated_at: int = 0
+     members: List[SyndicateMemberOut] = Field(default_factory=list)

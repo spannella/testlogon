@@ -1,0 +1,54 @@
+--- app/routers/syndicates.py.bak_b8synd_1782394948	2026-06-25 13:42:28.848148707 +0000
++++ app/routers/syndicates.py	2026-06-25 13:42:28.870233360 +0000
+@@ -42,7 +42,7 @@
+         name=body.name,
+         description=body.description,
+     )
+-    return _meta_to_out(meta)
++    return _meta_to_out(meta, is_member=True)
+ 
+ 
+ @router.get("")
+@@ -119,7 +119,7 @@
+ @router.get("/{syndicate_id}")
+ def get_syndicate(syndicate_id: str, session=Depends(require_ui_session)):
+     detail = svc.get_syndicate_detail(syndicate_id)
+-    return _detail_to_out(detail)
++    return _detail_to_out(detail, viewer_id=session["user_sub"])
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -453,9 +453,11 @@
+ # Helpers
+ # ---------------------------------------------------------------------------
+ 
+-def _meta_to_out(meta: dict) -> SyndicateOut:
++def _meta_to_out(meta: dict, *, is_member: bool = False) -> SyndicateOut:
+     return SyndicateOut(
+         syndicate_id=meta.get("syndicate_id", ""),
++        id=meta.get("syndicate_id", ""),
++        is_member=is_member,
+         name=meta.get("name", ""),
+         description=meta.get("description", ""),
+         admin_user_id=meta.get("admin_user_id", ""),
+@@ -491,7 +493,7 @@
+     )
+ 
+ 
+-def _detail_to_out(detail: dict) -> SyndicateOut:
++def _detail_to_out(detail: dict, *, viewer_id: str | None = None) -> SyndicateOut:
+     members = [
+         SyndicateMemberOut(
+             user_id=m.get("user_id", ""),
+@@ -501,8 +503,11 @@
+         )
+         for m in detail.get("members", [])
+     ]
++    _is_member = bool(viewer_id) and any(m.get("user_id") == viewer_id for m in detail.get("members", []))
+     return SyndicateOut(
+         syndicate_id=detail.get("syndicate_id", ""),
++        id=detail.get("syndicate_id", ""),
++        is_member=_is_member,
+         name=detail.get("name", ""),
+         description=detail.get("description", ""),
+         admin_user_id=detail.get("admin_user_id", ""),

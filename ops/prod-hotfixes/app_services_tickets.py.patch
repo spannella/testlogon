@@ -1,0 +1,66 @@
+--- app/services/tickets.py.bak_b8supclose_1782395154	2026-06-25 13:45:54.858642711 +0000
++++ app/services/tickets.py	2026-06-25 13:46:08.363085002 +0000
+@@ -1408,5 +1408,63 @@
+         })
+         return self.get_ticket(ticket_id)
+ 
++    def owner_close_ticket(self, *, ticket_id: str, actor_sub: str, terminal_status: str) -> dict[str, Any] | None:
++        """B8 B-SUP2 #15: let a ticket OWNER close ("done") or cancel
++        ("cancelled") their own ticket from any non-terminal state, bypassing the
++        admin-only generic status transition map. Owner check enforced by caller."""
++        if terminal_status not in ("done", "cancelled"):
++            raise TicketStateError({
++                "code": "invalid_ticket_status",
++                "requested_status": terminal_status,
++                "allowed_statuses": ["done", "cancelled"],
++            })
++        ts = now_ts()
++        cur = self.get_ticket(ticket_id)
++        if not cur:
++            return None
++        if cur.get("status") in ("done", "cancelled"):
++            return cur
++
++        def _values(_cur: dict[str, Any]) -> dict[str, Any]:
++            assigned = _cur.get("assigned_admin_sub")
++            space_id = _cur.get("space_id")
++            return {
++                ":status": terminal_status,
++                ":assigned_admin_sub": assigned,
++                ":assigned_to_sub": _cur.get("assigned_to_sub"),
++                ":assigned_by": _cur.get("assigned_by"),
++                ":assigned_at": _cur.get("assigned_at"),
++                ":updated_at": ts,
++                ":last_message_at": _cur.get("updated_at", ts),
++                ":last_message_by_role": "user",
++                ":gsi2pk": _status_index_pk(terminal_status),
++                ":gsi2sk": _updated_index_sk(ts, ticket_id),
++                ":gsi3pk": _assignee_index_pk(assigned or "unassigned"),
++                ":gsi3sk": _updated_index_sk(ts, ticket_id),
++                ":gsi1sk": _updated_index_sk(ts, ticket_id),
++                ":gsi_space_pk": _space_index_pk(space_id) if space_id else None,
++                ":gsi_space_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
++                ":gsi_space_status_pk": _space_status_index_pk(space_id, terminal_status) if space_id else None,
++                ":gsi_space_status_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
++                ":gsi_space_assignee_pk": _space_assignee_index_pk(space_id, _cur.get("assigned_to_sub") or "unassigned") if space_id else None,
++                ":gsi_space_assignee_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
++            }
++
++        updated = self._apply_header_update_once(ticket_id=ticket_id, build_values=_values)
++        if not updated:
++            return None
++        self._table.put_item(Item={
++            "pk": _ticket_pk(ticket_id),
++            "sk": _act_sk(ts, f"act_{uuid.uuid4().hex[:12]}"),
++            "entity_type": "ticket_activity",
++            "ticket_id": ticket_id,
++            "activity_id": f"act_{uuid.uuid4().hex[:12]}",
++            "activity_type": "ticket_status_changed",
++            "actor_sub": actor_sub,
++            "status": terminal_status,
++            "created_at": ts,
++        })
++        return self.get_ticket(ticket_id)
++
+ 
+ STORE = TicketStore()

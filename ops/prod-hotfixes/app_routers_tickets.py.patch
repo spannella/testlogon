@@ -1,0 +1,47 @@
+--- app/routers/tickets.py.bak_b8supclose_1782395154	2026-06-25 13:45:54.857591738 +0000
++++ app/routers/tickets.py	2026-06-25 13:46:08.363421783 +0000
+@@ -315,6 +315,11 @@
+     status: Literal["open", "in_progress", "waiting_on_user", "done", "reopened"]
+ 
+ 
++class TicketCloseReq(BaseModel):
++    # B8 B-SUP2 #15: a ticket owner closes ("close" -> done) or cancels their own ticket.
++    action: Literal["close", "cancel"] = "close"
++
++
+ def _error(code: str, message: str, *, details: dict[str, Any] | None = None) -> dict[str, Any]:
+     return {"error": {"code": code, "message": message, "details": details}}
+ 
+@@ -1393,6 +1398,32 @@
+     return _wrap_ticket(updated)
+ 
+ 
++@router.post("/{ticket_id}/close", response_model=TicketEnvelope, responses=_error_responses())
++def close_own_ticket(
++    ticket_id: str,
++    body: TicketCloseReq,
++    request: Request,
++    _ctx: dict[str, str] = Depends(require_ui_session),
++    user: AuthenticatedUser = Depends(get_authenticated_user),
++):
++    """B8 B-SUP2 #15: the ticket OWNER (or an admin) closes/cancels their own
++    ticket. close -> "done"; cancel -> "cancelled". Owner-authorized (unlike the
++    admin-only POST /{ticket_id}/status)."""
++    ticket = _ticket_or_404(ticket_id)
++    if ticket.get("owner_sub") != user.sub and not _is_admin_actor(request, user):
++        _raise(403, "not_ticket_owner", "only the ticket owner or an admin may close this ticket")
++    terminal = "done" if body.action == "close" else "cancelled"
++    try:
++        updated = STORE.owner_close_ticket(ticket_id=ticket["ticket_id"], actor_sub=user.sub, terminal_status=terminal)
++    except TicketStateError as exc:
++        raise HTTPException(status_code=_ticket_state_http_status(exc), detail=_ticket_state_error(exc)) from exc
++    if updated is None:
++        _raise(404, "ticket_not_found", "ticket not found")
++    sync_incident_from_ticket(DynamoPaymentIncidentRepository(), ticket_id=ticket_id, ticket_status=terminal)
++    _emit_ticket_alerts("ticket_status_changed", recipients=[ticket["owner_sub"]], actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""), status=terminal)
++    return _wrap_ticket(updated)
++
++
+ # ---------------------------------------------------------------------------
+ # CAS-003: PATCH /tickets/{ticket_id}/priority
+ # ---------------------------------------------------------------------------
