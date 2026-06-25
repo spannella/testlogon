@@ -74,3 +74,20 @@ Full reference of every change also lives in the assistant memory file
 
 Lottery per-option media and calendar description/timezone/.ics were already supported
 server-side and needed no change.
+
+## Batch-6 additions (2026-06-25)
+
+- `app_routers_messaging.py.patch` REGENERATED (vs oldest .bak) — now also includes B-SCHED:
+  `list_messages` default-view full-conversation paging + sort-by-created_at (THE fix for
+  "scheduled messages never appear"), `_deliver_scheduled_message` re-keys the delivered row,
+  and `PATCH /messaging/conversations/{cid}/messages/{mid}/schedule` (reschedule/edit) beside
+  the existing scheduled LIST + DELETE.
+- `app_routers_billing.py.patch` REGENERATED — now also includes B-PAY #14: in dev_mode,
+  `add_card` derives real brand (IIN) + last4 from the submitted PAN instead of stripe-mock's
+  hardcoded visa/4242 (fixes "all cards show 4242 / look duplicated").
+- `app_routers_vod.py.patch` NEW — B-FEEDVID #16: `vod_complete_upload` fast-forwards an
+  uploaded video to `published` (with mock HLS + thumbnail) in dev_mode so feed video posts
+  succeed (no VOD worker in dev). No-op in prod.
+
+Already-correct server-side (no change, verified): video gating parity (locked/encrypted/
+view-once), comment edit/react/image/tip, multi-emoji post reactions, payment-method delete.

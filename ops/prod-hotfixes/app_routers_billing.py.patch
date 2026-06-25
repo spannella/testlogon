@@ -1,5 +1,5 @@
 --- app/routers/billing.py.bak_bkc_1782229906	2026-06-23 15:51:46.964869740 +0000
-+++ app/routers/billing.py	2026-06-23 15:51:46.984605281 +0000
++++ app/routers/billing.py	2026-06-25 03:17:02.258943014 +0000
 @@ -29,6 +29,7 @@
  from app.core.time import now_ts
  from app.models import (
@@ -8,7 +8,57 @@
      AddChargeReq,
      BillingCheckoutReq,
      PaymentIncidentEvidenceUploadReq,
-@@ -961,6 +962,92 @@
+@@ -767,6 +768,32 @@
+     return f"PM#{payment_method_id}"
+ 
+ 
++def _card_brand_from_pan(pan: str) -> str:
++    """Best-effort card-brand detection from a PAN (IIN ranges).
++
++    B-PAY FIX: the dev stripe-mock coerces every card to brand=visa/last4=4242
++    regardless of the submitted number, so a user adding e.g. a 5656... card
++    sees "Visa 4242" and two distinct cards look identical (apparent duplicate).
++    In dev mode we derive the real brand+last4 from the PAN the user typed.
++    """
++    p = (pan or "").replace(" ", "").replace("-", "")
++    if not p.isdigit():
++        return "unknown"
++    if p.startswith("4"):
++        return "visa"
++    if p[:2] in {"34", "37"}:
++        return "amex"
++    if p[:4] in {"6011"} or p[:2] == "65" or (p[:6].isdigit() and 622126 <= int(p[:6]) <= 622925):
++        return "discover"
++    if (p[:2].isdigit() and 51 <= int(p[:2]) <= 55) or (p[:4].isdigit() and 2221 <= int(p[:4]) <= 2720):
++        return "mastercard"
++    if p[:2] in {"30", "36", "38", "39"}:
++        return "diners"
++    if p[:4] == "3528" or p[:4] == "3589" or p[:2] == "35":
++        return "jcb"
++    return "unknown"
++
++
+ def list_payment_methods_ddb(user_id: str) -> List[Dict[str, Any]]:
+     items = ddb_query_pk(T.billing, user_pk(user_id))
+     return [it for it in items if it["sk"].startswith("PM#")]
+@@ -920,6 +947,16 @@
+     last4 = card.get("last4")
+     exp_month = card.get("exp_month")
+     exp_year = card.get("exp_year")
++    # B-PAY FIX: the dev stripe-mock returns brand=visa/last4=4242 for ALL PANs.
++    # Derive the real brand + last4 from the submitted card number so the saved
++    # method matches what the user typed (and distinct cards stay distinct).
++    if S.dev_mode:
++        _pan_digits = body.card_number.replace(" ", "").replace("-", "")
++        if _pan_digits.isdigit() and len(_pan_digits) >= 4:
++            last4 = _pan_digits[-4:]
++            _derived_brand = _card_brand_from_pan(_pan_digits)
++            if _derived_brand != "unknown":
++                brand = _derived_brand
+     label = f"{brand} ****{last4}" if brand and last4 else None
+ 
+     pk = user_pk(user_id)
+@@ -961,6 +998,92 @@
          "label": label,
      }
  

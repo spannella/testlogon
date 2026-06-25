@@ -1,0 +1,57 @@
+--- app/routers/vod.py.bak_b6feedvid_1782357296	2026-06-25 03:14:56.427824914 +0000
++++ app/routers/vod.py	2026-06-25 03:16:37.773119540 +0000
+@@ -340,6 +340,43 @@
+     except Exception:
+         logger.warning("Failed to delete upload ticket %s", inp.ticket_id)
+ 
++    # B-FEEDVID FIX: in dev mode there is no transcode/probe/review worker to
++    # drive the video status machine, so an uploaded video stays stuck in
++    # "probing" forever and can never be attached to a newsfeed post
++    # (create_post requires status == "published"). Fast-forward the full
++    # state chain to "published" here with a mock HLS manifest + thumbnail so
++    # the dev "create post with video" flow works end-to-end. No-op in prod
++    # (real pipeline owns these transitions).
++    final_status = "uploaded"
++    final_thumbnail_url = None
++    if S.dev_mode:
++        try:
++            mock_manifest = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}.m3u8"
++            mock_thumb = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}.jpg"
++            for nxt in ("pending_encoding", "encoding"):
++                transition_video_status(
++                    video_id=video_id, to_status=nxt,
++                    reason="dev auto-pipeline", actor=user_sub,
++                )
++            transition_video_status(
++                video_id=video_id, to_status="pending_review",
++                reason="dev auto-pipeline", actor=user_sub,
++                hls_manifest_url=mock_manifest, thumbnail_url=mock_thumb,
++            )
++            transition_video_status(
++                video_id=video_id, to_status="approved",
++                reason="dev auto-approve", actor=user_sub,
++            )
++            transition_video_status(
++                video_id=video_id, to_status="published",
++                reason="dev auto-publish", actor=user_sub,
++                hls_manifest_url=mock_manifest, thumbnail_url=mock_thumb,
++            )
++            final_status = "published"
++            final_thumbnail_url = mock_thumb
++        except Exception:
++            logger.warning("dev auto-publish failed for video %s", video_id, exc_info=True)
++
+     return VideoUploadCompleteOut(
+         ok=True,
+         video_id=video_id,
+@@ -347,8 +384,8 @@
+         size_bytes=actual_size,
+         content_type=actual_ct,
+         duration_seconds=None,
+-        thumbnail_url=None,
+-        status="uploaded",
++        thumbnail_url=final_thumbnail_url,
++        status=final_status,
+         created_at=video.created_at,
+     )
+ 

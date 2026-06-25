@@ -1,5 +1,5 @@
 --- app/routers/messaging.py.bak_b2b3_1782197824	2026-06-23 06:57:04.160143190 +0000
-+++ app/routers/messaging.py	2026-06-23 15:51:46.980376566 +0000
++++ app/routers/messaging.py	2026-06-25 03:20:06.380035863 +0000
 @@ -2293,6 +2293,12 @@
      preview: Optional[LinkPreviewIn] = None
      consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
@@ -86,7 +86,57 @@
          consumption_policy=policy,
          media_kind=media_kind,
          consumption_state=consumption_state,
-@@ -10848,6 +10883,15 @@
+@@ -7495,7 +7530,48 @@
+         parts = []
+ 
+     out: List[MessageOut] = []
+-    last_key = {"conversation_id": conversation_id, "message_id": before} if before else None
++
++    # B-SCHED/ordering FIX: the table range key is a RANDOM message_id (m_<uuid>
++    # / sys_call_... / m_lottery_...), so "ScanIndexForward=False Limit=limit"
++    # returns the limit items with the highest message_ids -- NOT the most recent
++    # by created_at. Re-sorting only that page by created_at then meant a recently
++    # delivered message whose random id ranked low (e.g. a just-fired scheduled
++    # message, or any m_ id losing to sys_call_ ids) silently never appeared in
++    # the thread. For the default "load latest" view (no `before` cursor) we now
++    # page through the whole (bounded) conversation, sort by created_at desc, and
++    # return the most-recent `limit`. The legacy message_id `before` cursor path
++    # is preserved unchanged for backward compatibility.
++    if not before:
++        raw_items: List[Dict[str, Any]] = []
++        scan_kwargs: Dict[str, Any] = {
++            "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
++        }
++        while True:
++            resp = tbl_msgs.query(**scan_kwargs)
++            raw_items.extend(resp.get("Items", []))
++            lek = resp.get("LastEvaluatedKey")
++            if not lek:
++                break
++            scan_kwargs["ExclusiveStartKey"] = lek
++
++        hidden_ids_all: set[str] = set()
++        if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED and raw_items:
++            hidden_ids_all = _load_hidden_message_ids_for_user(
++                conversation_id, user_id, [str(it.get("message_id") or "") for it in raw_items]
++            )
++
++        visible = [
++            m for m in raw_items
++            if m.get("message_id") not in hidden_ids_all and _filter_message_visible(m, user_id)
++        ]
++        visible.sort(key=lambda m: int(m.get("created_at", 0) or 0), reverse=True)
++        for m in visible[:limit]:
++            msg = _message_out_from_item(m, user_id)
++            out.append(_apply_message_receipts(msg, m, parts))
++        out.sort(key=lambda m: m.created_at, reverse=True)
++        return out
++
++    last_key = {"conversation_id": conversation_id, "message_id": before}
+ 
+     while len(out) < limit:
+         kwargs: Dict[str, Any] = {
+@@ -10848,6 +10924,15 @@
      _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
      _validate_reply_target(conversation_id, inp.reply_to_message_id)
  
@@ -102,7 +152,7 @@
      path = norm_path(inp.path, is_folder=False)
      node = get_node(user_id, path)
      if node.get("type") != "file":
-@@ -10884,6 +10928,22 @@
+@@ -10884,6 +10969,22 @@
      }
      if preview:
          item["preview"] = preview
@@ -125,7 +175,7 @@
      ttl = _message_retention_ttl(convo, ts)
      if ttl:
          item["ttl"] = ttl
-@@ -10941,6 +11001,14 @@
+@@ -10941,6 +11042,14 @@
          consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
          media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
          consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
@@ -140,7 +190,7 @@
      )
      message = _apply_message_receipts(message, item, resp.get("Items", []))
      audit_event(
-@@ -13361,6 +13429,17 @@
+@@ -13361,6 +13470,17 @@
          )
  
      ts = now_ts()
@@ -158,7 +208,7 @@
      normalized_idempotency_key = (idempotency_key or "").strip()
      if len(normalized_idempotency_key) > 128:
          record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
-@@ -13537,6 +13616,7 @@
+@@ -13537,6 +13657,7 @@
          sender_id=user_id,
          created_at=ts,
          persisted_cfg=persisted_cfg,
@@ -166,7 +216,7 @@
      )
      try:
          tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
-@@ -13586,6 +13666,17 @@
+@@ -13586,6 +13707,17 @@
              ],
          ),
          selected_outcome=None,
@@ -184,7 +234,130 @@
          idempotent=False,
          created_at=ts,
      )
-@@ -14065,6 +14156,30 @@
+@@ -13871,20 +14003,114 @@
+     return {"ok": True, "message_id": message_id}
+ 
+ 
++class RescheduleMessageIn(BaseModel):
++    # Both optional: edit text, reschedule the delivery time, or both.
++    text: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
++    send_at: Optional[int] = None  # new Unix delivery timestamp (>= now+5s)
++
++
++@router.patch(
++    "/conversations/{conversation_id}/messages/{message_id}/schedule",
++    response_model=MessageOut,
++)
++def reschedule_scheduled_message(
++    conversation_id: str,
++    message_id: str,
++    inp: RescheduleMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """Edit the text and/or reschedule a still-pending scheduled message.
++
++    Only the sender can edit, and only while the message is still in
++    ``status == "scheduled"`` (not yet delivered). At least one of ``text`` /
++    ``send_at`` must be supplied.
++    """
++    require_participant_active(user_id, conversation_id)
++    msg = _get_message_or_404(conversation_id, message_id)
++    if msg.get("sender_id") != user_id:
++        raise HTTPException(403, "Only the sender can edit a scheduled message")
++    if msg.get("status") != "scheduled":
++        raise HTTPException(400, "Message is not scheduled")
++    if inp.text is None and inp.send_at is None:
++        raise HTTPException(400, "Provide text and/or send_at to update")
++    if inp.text is not None and msg.get("kind") != "text":
++        raise HTTPException(400, "Only text scheduled messages support text edits")
++
++    set_parts: List[str] = []
++    expr_names: Dict[str, str] = {}
++    expr_vals: Dict[str, Any] = {}
++    ts = now_ts()
++
++    if inp.text is not None:
++        set_parts.append("#t = :text")
++        expr_names["#t"] = "text"
++        expr_vals[":text"] = inp.text
++
++    new_deliver_at = None
++    if inp.send_at is not None:
++        if inp.send_at <= ts + 5:
++            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
++        new_deliver_at = inp.send_at
++        set_parts.append("deliver_at = :da")
++        expr_vals[":da"] = new_deliver_at
++        # If an expiry timer was based on the old delivery time, re-base it.
++        if msg.get("expires_at") and msg.get("_expires_in_seconds"):
++            set_parts.append("expires_at = :ea")
++            expr_vals[":ea"] = new_deliver_at + int(msg["_expires_in_seconds"])
++
++    update_expr = "SET " + ", ".join(set_parts)
++    kwargs: Dict[str, Any] = {
++        "Key": {"conversation_id": conversation_id, "message_id": message_id},
++        "UpdateExpression": update_expr,
++        "ExpressionAttributeValues": expr_vals,
++    }
++    if expr_names:
++        kwargs["ExpressionAttributeNames"] = expr_names
++    tbl_msgs.update_item(**kwargs)
++
++    updated = _get_message_or_404(conversation_id, message_id)
++    audit_event(
++        "messaging_scheduled_message_edited",
++        user_id,
++        req,
++        outcome="success",
++        conversation_id=conversation_id,
++        message_id=message_id,
++    )
++    return _message_out_from_item(updated, user_id)
++
++
+ def _deliver_scheduled_message(item: dict) -> None:
+-    """Promote a scheduled message to delivered status."""
++    """Promote a scheduled message to delivered status.
++
++    B-SCHED FIX: list_messages fetches a single DynamoDB page ordered by the
++    random message_id range key then re-sorts that page by created_at. A
++    scheduled message keeps its schedule-time random message_id; if that id ranks
++    outside the first page the just-delivered message never appears in the thread
++    even though it was promoted (user sees "scheduled messages dont send"). We
++    re-key the row under a fresh message_id with a current created_at so it
++    behaves like a freshly-sent message, and the delivery event below carries the
++    re-keyed item so the live poll/SSE path renders it immediately.
++    """
+     conversation_id = item["conversation_id"]
+-    message_id = item["message_id"]
++    old_message_id = item["message_id"]
+     user_id = item["sender_id"]
+     ts = now_ts()
+ 
+-    # Remove scheduled status
+-    tbl_msgs.update_item(
+-        Key={"conversation_id": conversation_id, "message_id": message_id},
+-        UpdateExpression="REMOVE #s, deliver_at SET created_at = :ts",
+-        ExpressionAttributeNames={"#s": "status"},
+-        ExpressionAttributeValues={":ts": ts},
++    # message_id is the table range key, so re-key via put(new)+delete(old).
++    message_id = "m_" + new_id()
++    new_item = dict(item)
++    new_item["message_id"] = message_id
++    new_item["created_at"] = ts
++    new_item.pop("status", None)
++    new_item.pop("deliver_at", None)
++    tbl_msgs.put_item(Item=new_item)
++    tbl_msgs.delete_item(
++        Key={"conversation_id": conversation_id, "message_id": old_message_id}
+     )
++    # Downstream code references the new id / item.
++    item = new_item
+ 
+     # Write deferred tip billing now that the message is actually delivered.
+     # (Billing was intentionally skipped at schedule time so that cancelling
+@@ -14065,6 +14291,30 @@
              )
              for item in resp.get("Items", []):
                  try:
