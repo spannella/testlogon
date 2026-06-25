@@ -129,6 +129,34 @@ data class MemberEarningsOut(
     @Json(name = "window_days") val windowDays: Int? = null,
 )
 
+// ---- Batch-7: list (GET ui/syndicates) + create (POST ui/syndicates) ----
+
+/**
+ * Batch-7 - one row of GET ui/syndicates (a BARE ARRAY, not an envelope). The list shape differs from
+ * the create/detail shape: the id key is `syndicate_id` and the name key is `syndicate_name`.
+ */
+data class SyndicateListItemDto(
+    @Json(name = "syndicate_id") val syndicateId: String,
+    @Json(name = "syndicate_name") val syndicateName: String? = null,
+    @Json(name = "role") val role: String? = null,
+    @Json(name = "joined_at") val joinedAt: Long? = null,
+)
+
+/** Batch-7 - body for POST ui/syndicates. `name` is required (2..100 server-side); description optional. */
+data class SyndicateCreateIn(
+    @Json(name = "name") val name: String,
+    @Json(name = "description") val description: String? = null,
+)
+
+/**
+ * Batch-7 - response of POST ui/syndicates (the SyndicateOut create shape). NOTE the id key here is
+ * `syndicate_id` and the name key is `name` (DIFFERENT from the list row's `syndicate_name`).
+ */
+data class SyndicateCreateOut(
+    @Json(name = "syndicate_id") val syndicateId: String,
+    @Json(name = "name") val name: String? = null,
+)
+
 // ---- AND-357: open-licensing sub-surface (extends AND-356, same DTO file) ----
 
 /**

@@ -42,6 +42,8 @@ class FakeGroupsRepo(
     var updateGroupResult: ApiResult<Group> = ApiResult.Success(Group(id = "grp_1", name = "G")),
 ) : GroupsRepository {
 
+    val createGroupArgs = mutableListOf<CreateGroupArgs>()
+    var createGroupResult: ApiResult<Group> = ApiResult.Success(Group(id = "grp_new", name = "New"))
     val inviteArgs = mutableListOf<Pair<String, String>>()
     val changeRoleArgs = mutableListOf<Triple<String, String, GroupRole>>()
     val removeArgs = mutableListOf<Pair<String, String>>()
@@ -55,6 +57,16 @@ class FakeGroupsRepo(
     private var membersCallCount = 0
 
     override suspend fun listMyGroups(): ApiResult<List<Group>> = myGroupsResult
+
+    override suspend fun createGroup(
+        name: String,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group> {
+        createGroupArgs += CreateGroupArgs(name, description, visibility, topic)
+        return createGroupResult
+    }
 
     override suspend fun getGroup(groupId: String): ApiResult<Group> = groupResult
 
@@ -141,6 +153,13 @@ class FakeGroupsRepo(
         updateGroupArgs += UpdateGroupArgs(groupId, name, description, visibility, topic)
         return updateGroupResult
     }
+
+    data class CreateGroupArgs(
+        val name: String,
+        val description: String?,
+        val visibility: String?,
+        val topic: String?,
+    )
 
     data class CreateFundraiserArgs(
         val groupId: String,

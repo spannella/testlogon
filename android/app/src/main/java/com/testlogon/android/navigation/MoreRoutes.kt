@@ -181,7 +181,7 @@ object MoreRoutes {
     // AND-356: READ-ONLY syndicate overview (Feed/Treasury/Revenue-split). No discovery list this wave, so
     // the hub opens a known sample syndicate id for manual testing (plain constant, no Uri.encode, so the
     // JVM MoreCatalog integrity test stays Android-free).
-    const val SYNDICATES = SyndicateOverviewDest.STUB_ROUTE
+    const val SYNDICATES = SyndicateListDest.ROUTE
 
     // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
     const val COLLABORATIONS = CollaborationsListDest.ROUTE
@@ -213,6 +213,9 @@ object MoreRoutes {
     // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
     const val TICKETS = TicketSpacesListDest.ROUTE
 
+    // B-SUP (batch 7): the role-branched Support landing (USER help / ADMIN helpdesk queue).
+    const val SUPPORT = SupportDest.ROUTE
+
     // AND-398: WEBHOOKS config (light) - list outbound webhook endpoints -> detail -> a LIGHT create.
     const val WEBHOOKS = WebhooksListDest.ROUTE
 
@@ -242,6 +245,14 @@ object MoreRoutes {
 
     // AND-385: privacy & data export (request -> status -> download lifecycle; Room-cached offline history).
     const val PRIVACY_EXPORT = PrivacyExportDest.ROUTE
+
+    // B-KYC (batch 7): identity verification. Lands on the READ-ONLY KYC case list (current verification
+    // status + the ongoing-monitoring banner); "Start verification" deep-links onward to the tier-status
+    // requirements checklist + Evaluate, and the case steps (document capture, etc.). Already registered.
+    const val KYC = KycCasesDest.ROUTE
+
+    // B-APIKEY (batch 7): developer API-keys management (list / create-shown-once / revoke).
+    const val API_KEYS = ApiKeysListDest.ROUTE
 
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
@@ -316,6 +327,7 @@ object MoreRoutes {
             ADS_CAMPAIGNS,
             SEO,
             TICKETS,
+            SUPPORT,
             WEBHOOKS,
             ADMIN_DASHBOARD,
             ADMIN_EMAIL_DASHBOARD,
@@ -324,6 +336,8 @@ object MoreRoutes {
             DELEGATE_CONSOLE,
             DMCA,
             PRIVACY_EXPORT,
+            KYC,
+            API_KEYS,
             SETTINGS,
             HELP,
             ABOUT,

@@ -172,6 +172,17 @@ enum class LicensingContentType(val wire: String) {
 }
 
 /**
+ * Batch-7 - one row of the caller's syndicate list (GET ui/syndicates -> a bare array). [role] is the
+ * caller's role token (e.g. admin|member), kept raw for a small badge; [joinedAt] is a Long epoch.
+ */
+data class SyndicateListItem(
+    val id: String,
+    val name: String,
+    val role: String? = null,
+    val joinedAt: Long? = null,
+)
+
+/**
  * AND-357 - one open-licensing content row. [contentType] is the typed enum (UNKNOWN fallback); [exempt]
  * gates the "Exempt" vs "Auto-licensed" label; [registeredAt] is kept a Long epoch-SECONDS value
  * (relative-time at the UI), null when absent.

@@ -9,11 +9,13 @@ import com.testlogon.android.core.model.syndicates.OpenLicensingContent
 import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.syndicates.SyndicateApi
+import com.testlogon.android.core.network.syndicates.SyndicateCreateIn
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegisterIn
 import com.testlogon.android.data.auth.AuthStateStore
 import com.squareup.moshi.JsonDataException
@@ -46,6 +48,15 @@ import javax.inject.Singleton
  * persistence across process death is DEFERRED to a later ticket.
  */
 interface SyndicateRepository {
+
+    /** Batch-7 - GET the caller's syndicates (bare-array list -> mapped). Idempotent GET. */
+    suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>>
+
+    /**
+     * Batch-7 - POST a new syndicate (creator becomes admin). On success returns the created
+     * [SyndicateListItem]; a 4xx surfaces as Failure; transport failures -> NetworkError.
+     */
+    suspend fun createSyndicate(name: String, description: String?): ApiResult<SyndicateListItem>
 
     /** GET the syndicate overview / profile, mapped (role badge derived from the viewer's user id). */
     suspend fun getOverview(syndicateId: String): ApiResult<SyndicateOverview>
@@ -91,6 +102,22 @@ class SyndicateRepositoryImpl @Inject constructor(
     private val authStateStore: AuthStateStore,
     private val errorParser: ApiErrorParser,
 ) : SyndicateRepository {
+
+    override suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>> =
+        withContext(Dispatchers.IO) {
+            call { api.listMySyndicates().map { it.toDomain() } }
+        }
+
+    override suspend fun createSyndicate(
+        name: String,
+        description: String?,
+    ): ApiResult<SyndicateListItem> = withContext(Dispatchers.IO) {
+        call {
+            api.createSyndicate(
+                SyndicateCreateIn(name = name, description = description?.takeIf { it.isNotBlank() }),
+            ).toListItem()
+        }
+    }
 
     override suspend fun getOverview(syndicateId: String): ApiResult<SyndicateOverview> =
         withContext(Dispatchers.IO) {

@@ -49,6 +49,8 @@ import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material.icons.outlined.SupervisorAccount
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.Verified
+import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material.icons.outlined.ReceiptLong
@@ -124,6 +126,9 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.HELPDESK_DASHBOARD,
             hub = MoreHub.SUPPORT,
             section = MoreSection.SUPPORT,
+            // B-SUP (batch 7): this is the AGENT/admin dashboard - it must not be advertised to normal users
+            // (it self-gates server-side via 403, but it was previously visible in the member More hub).
+            operatorOnly = true,
         ),
         MoreEntry(
             id = "activity",
@@ -549,6 +554,16 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.STUDIO,
             section = MoreSection.ACCOUNT,
         ),
+        // B-SUP (batch 7): the role-branched Support hub. Resolves /ui/me.is_admin at runtime: a normal user
+        // sees a clean help/ticket experience; an admin sees the helpdesk/moderation queue.
+        MoreEntry(
+            id = "support",
+            labelRes = R.string.more_entry_support,
+            icon = Icons.Outlined.SupportAgent,
+            route = MoreRoutes.SUPPORT,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
         // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces -> tickets -> thread.
         MoreEntry(
             id = "tickets",
@@ -618,6 +633,24 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.DELEGATE_CONSOLE,
             hub = MoreHub.STUDIO,
             section = MoreSection.ACCOUNT,
+        ),
+        // B-KYC (batch 7): identity verification status + steps (Account / Security). Discoverable entry.
+        MoreEntry(
+            id = "kyc",
+            labelRes = R.string.more_entry_kyc,
+            icon = Icons.Outlined.Verified,
+            route = MoreRoutes.KYC,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.SECURITY,
+        ),
+        // B-APIKEY (batch 7): developer API keys (Account / Security). Discoverable entry.
+        MoreEntry(
+            id = "api_keys",
+            labelRes = R.string.more_entry_api_keys,
+            icon = Icons.Outlined.VpnKey,
+            route = MoreRoutes.API_KEYS,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.SECURITY,
         ),
         MoreEntry(
             id = "sessions",

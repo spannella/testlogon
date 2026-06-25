@@ -11,13 +11,22 @@ import kotlin.math.roundToInt
  * the `?token=` append rule lives in exactly one place.
  */
 
-/** AND-189 — a tile in the library/VOD grid. `durationSec` is rounded for the mm:ss badge. */
+/**
+ * AND-189 — a tile in the library/VOD grid. `durationSec` is rounded for the mm:ss badge.
+ * `status` is the server-side pipeline state (probing/encoding/published/...) — drives the
+ * "Processing"/"Ready" badge + open-gating on the My Videos screen. Blank for the VOD catalog
+ * (which only ever returns playable titles).
+ */
 data class VideoSummary(
     val id: String,
     val title: String,
     val thumbnailUrl: String?,
     val durationSec: Int?,
-)
+    val status: String = "",
+) {
+    /** True while the asset is still being prepared server-side (no playable manifest yet). */
+    val isProcessing: Boolean get() = status.isNotBlank() && status in VideoDetail.PROCESSING_STATUSES
+}
 
 /** AND-189 — one cursor-paged page of summaries. `cursor` is null/absent on the terminal page. */
 data class VideoPage(
@@ -98,6 +107,7 @@ fun VideoListItemDto.toSummary(): VideoSummary = VideoSummary(
     title = title,
     thumbnailUrl = thumbnailUrl?.takeIf { it.isNotBlank() },
     durationSec = durationSeconds?.takeIf { it > 0 }?.roundToInt(),
+    status = status,
 )
 
 fun VideoListResponseDto.toDomain(): VideoPage = VideoPage(

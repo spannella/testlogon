@@ -42,6 +42,9 @@ fun NavGraphBuilder.videosLibraryDestination(navController: NavHostController) {
             onOpenVideo = { id ->
                 navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
             },
+            onUploadVideo = {
+                navController.navigate(VideoUploadDest.ROUTE) { launchSingleTop = true }
+            },
             onBack = { navController.popBackStack() },
         )
     }

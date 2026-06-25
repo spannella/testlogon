@@ -5,6 +5,7 @@ import com.testlogon.android.core.network.groups.GroupCampaignDto
 import com.testlogon.android.core.network.groups.GroupCampaignListResponse
 import com.testlogon.android.core.network.groups.GroupCampaignStatsDto
 import com.testlogon.android.core.network.groups.GroupCreateCampaignIn
+import com.testlogon.android.core.network.groups.GroupCreateIn
 import com.testlogon.android.core.network.groups.GroupCreateFundraiserIn
 import com.testlogon.android.core.network.groups.GroupFundraiserDto
 import com.testlogon.android.core.network.groups.GroupFundraiserListResponse
@@ -51,6 +52,7 @@ class FakeGroupsApi(
     val createFundraiserCalls = mutableListOf<Pair<String, GroupCreateFundraiserIn>>()
     val createCampaignCalls = mutableListOf<Pair<String, GroupCreateCampaignIn>>()
     val updateGroupCalls = mutableListOf<Pair<String, GroupUpdateIn>>()
+    val createGroupBodies = mutableListOf<GroupCreateIn>()
 
     private fun maybeThrow() {
         throwHttp?.let { status ->
@@ -68,6 +70,12 @@ class FakeGroupsApi(
     override suspend fun listMyGroups(): GroupListResponse {
         maybeThrow()
         return groupsEnvelope
+    }
+
+    override suspend fun createGroup(body: GroupCreateIn): UserGroupDto {
+        createGroupBodies += body
+        maybeThrow()
+        return groupDetail
     }
 
     override suspend fun getGroup(groupId: String): UserGroupDto {

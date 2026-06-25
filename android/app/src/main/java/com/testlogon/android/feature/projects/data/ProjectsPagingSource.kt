@@ -3,6 +3,8 @@ package com.testlogon.android.feature.projects.data
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import com.testlogon.android.core.model.projects.Project
+import com.squareup.moshi.JsonDataException
+import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.network.projects.ProjectsApi
 import kotlinx.coroutines.CancellationException
 import retrofit2.HttpException
@@ -37,6 +39,12 @@ class ProjectsPagingSource(
     } catch (e: CancellationException) {
         throw e
     } catch (e: HttpException) {
+        LoadResult.Error(e)
+    } catch (e: JsonEncodingException) {
+        // Malformed / contract-drifted response body (e.g. a missing required key) must surface as a
+        // retryable error STATE, not an uncaught throw that crashes the Projects screen on open.
+        LoadResult.Error(e)
+    } catch (e: JsonDataException) {
         LoadResult.Error(e)
     } catch (e: IOException) {
         LoadResult.Error(e)

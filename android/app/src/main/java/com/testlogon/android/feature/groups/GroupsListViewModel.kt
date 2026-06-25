@@ -7,9 +7,12 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.groups.Group
 import com.testlogon.android.feature.groups.data.GroupsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -29,6 +32,14 @@ class GroupsListViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<GroupsListUiState>(GroupsListUiState.Loading)
     val uiState: StateFlow<GroupsListUiState> = _uiState.asStateFlow()
+
+    /** The create-group dialog sub-state (independent of the list surface). */
+    private val _createState = MutableStateFlow(CreateGroupFormState())
+    val createState: StateFlow<CreateGroupFormState> = _createState.asStateFlow()
+
+    /** One-shot: emits the new group's id on a successful create so the screen can navigate into it. */
+    private val _created = Channel<String>(Channel.BUFFERED)
+    val created = _created.receiveAsFlow()
 
     init {
         load()
@@ -84,7 +95,76 @@ class GroupsListViewModel @Inject constructor(
     private fun networkError(): ApiError =
         ApiError(status = ApiError.STATUS_NETWORK, message = OFFLINE_FALLBACK)
 
+    // ---- Create-group form ----
+
+    /** Opens the create-group dialog (fresh, clearing any prior draft/errors). */
+    fun openCreate() {
+        _createState.value = CreateGroupFormState(visible = true)
+    }
+
+    /** Dismisses the create-group dialog (drops the draft). */
+    fun dismissCreate() {
+        _createState.value = CreateGroupFormState(visible = false)
+    }
+
+    fun onCreateNameChange(value: String) =
+        _createState.update { it.copy(name = value, nameError = null, submitError = null) }
+
+    fun onCreateDescriptionChange(value: String) =
+        _createState.update { it.copy(description = value, submitError = null) }
+
+    fun onCreateVisibilityChange(isPublic: Boolean) =
+        _createState.update { it.copy(isPublic = isPublic, submitError = null) }
+
+    /**
+     * Submits the create-group form. Guarded by [CreateGroupFormState.isValid] + a re-entrancy flag. On
+     * success: closes the dialog, emits the new group id (one-shot) so the screen navigates into it, and
+     * reloads the list. On failure: keeps the dialog open with a retryable error.
+     */
+    fun submitCreate() {
+        val form = _createState.value
+        if (!form.isValid || form.submitting) return
+        _createState.update { it.copy(submitting = true, nameError = null, submitError = null) }
+        viewModelScope.launch {
+            val result = repository.createGroup(
+                name = form.name.trim(),
+                description = form.description.trim().takeIf { it.isNotBlank() },
+                visibility = if (form.isPublic) VISIBILITY_PUBLIC else VISIBILITY_PRIVATE,
+                topic = null,
+            )
+            when (result) {
+                is ApiResult.Success -> {
+                    _createState.value = CreateGroupFormState(visible = false)
+                    _created.send(result.data.id)
+                    load()
+                }
+                is ApiResult.Failure ->
+                    _createState.update { it.copy(submitting = false, submitError = result.error.message) }
+                is ApiResult.NetworkError ->
+                    _createState.update { it.copy(submitting = false, submitError = OFFLINE_FALLBACK) }
+            }
+        }
+    }
+
     private companion object {
         const val OFFLINE_FALLBACK = "Couldn't reach the server. Pull down to retry."
+        const val VISIBILITY_PUBLIC = "public"
+        const val VISIBILITY_PRIVATE = "private"
     }
+}
+
+/**
+ * The create-group dialog sub-state. [isValid] enforces the server's 3..100 char name. `isPublic` toggles
+ * the public/private visibility; description is optional.
+ */
+data class CreateGroupFormState(
+    val visible: Boolean = false,
+    val name: String = "",
+    val description: String = "",
+    val isPublic: Boolean = true,
+    val submitting: Boolean = false,
+    val nameError: String? = null,
+    val submitError: String? = null,
+) {
+    val isValid: Boolean get() = name.trim().length in 3..100
 }

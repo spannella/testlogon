@@ -17,12 +17,16 @@ import com.testlogon.android.core.network.syndicates.MemberEarningsOut
 import com.testlogon.android.core.network.syndicates.OpenLicensingContentListResponse
 import com.testlogon.android.core.network.syndicates.SplitConfigOut
 import com.testlogon.android.core.network.syndicates.SyndicateApi
+import com.testlogon.android.core.network.syndicates.SyndicateCreateOut
+import com.testlogon.android.core.network.syndicates.SyndicateCreateIn
+import com.testlogon.android.core.network.syndicates.SyndicateListItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateFeedOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegisterIn
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegistrationOut
 import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryOut
 import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.feature.syndicates.data.SyndicateRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,6 +74,19 @@ class FakeSyndicateApi(
     val licensingContentSyndicateIds = mutableListOf<String>()
     val registerSyndicateIds = mutableListOf<String>()
     val registerBodies = mutableListOf<SyndicateOpenLicensingRegisterIn>()
+
+    var myList: () -> List<SyndicateListItemDto> = { emptyList() }
+    var createSyndicateOut: () -> SyndicateCreateOut = {
+        SyndicateCreateOut(syndicateId = "syn_new", name = "New")
+    }
+    val createSyndicateBodies = mutableListOf<SyndicateCreateIn>()
+
+    override suspend fun listMySyndicates(): List<SyndicateListItemDto> = myList()
+
+    override suspend fun createSyndicate(body: SyndicateCreateIn): SyndicateCreateOut {
+        createSyndicateBodies += body
+        return createSyndicateOut()
+    }
 
     override suspend fun getProfile(syndicateId: String): SyndicateProfileOut {
         profileSyndicateIds += syndicateId
@@ -177,6 +194,24 @@ class FakeSyndicateRepo(
     var registerCallCount = 0
     val registeredContentIds = mutableListOf<String>()
     val registeredContentTypes = mutableListOf<LicensingContentType>()
+
+    var listResult: ApiResult<List<SyndicateListItem>> = ApiResult.Success(emptyList())
+    var createResult: ApiResult<SyndicateListItem> =
+        ApiResult.Success(SyndicateListItem(id = "syn_new", name = "New", role = "admin"))
+    var listCallCount = 0
+    var createCallCount = 0
+    val createArgs = mutableListOf<Pair<String, String?>>()
+
+    override suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>> {
+        listCallCount++
+        return listResult
+    }
+
+    override suspend fun createSyndicate(name: String, description: String?): ApiResult<SyndicateListItem> {
+        createCallCount++
+        createArgs += name to description
+        return createResult
+    }
 
     override suspend fun getOverview(syndicateId: String): ApiResult<SyndicateOverview> {
         overviewCallCount++

@@ -7,6 +7,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.syndicates.ui.OpenLicensingRoute
+import com.testlogon.android.feature.syndicates.ui.SyndicateListRoute
 import com.testlogon.android.feature.syndicates.ui.SyndicateOverviewRoute
 
 /**
@@ -19,6 +20,11 @@ import com.testlogon.android.feature.syndicates.ui.SyndicateOverviewRoute
  * AND-357 - the open-licensing sub-surface ([SyndicateOpenLicensingDest]) is reachable from this overview
  * (a TopAppBar action). join / propose / payout remain downstream / OUT OF SCOPE.
  */
+/** Batch-7 - the "my syndicates" list route (the More-hub landing; a Create FAB opens the create form). */
+data object SyndicateListDest {
+    const val ROUTE = "syndicates/list"
+}
+
 data object SyndicateOverviewDest {
     const val ARG_SYNDICATE_ID = "syndicateId"
     const val ROUTE = "syndicate/{$ARG_SYNDICATE_ID}"
@@ -49,6 +55,14 @@ data object SyndicateOpenLicensingDest {
  * the authenticated graph (one shared nav graph; NOT forked).
  */
 fun NavGraphBuilder.syndicateDestinations(navController: NavHostController) {
+    composable(SyndicateListDest.ROUTE) {
+        SyndicateListRoute(
+            onBack = { navController.popBackStack() },
+            onOpenSyndicate = { syndicateId ->
+                navController.navigate(SyndicateOverviewDest.build(syndicateId)) { launchSingleTop = true }
+            },
+        )
+    }
     composable(
         route = SyndicateOverviewDest.ROUTE,
         arguments = listOf(

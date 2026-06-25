@@ -13,6 +13,7 @@ import com.testlogon.android.core.model.groups.GroupFundraiser
 import com.testlogon.android.core.model.groups.TreasuryBalance
 import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.core.network.groups.GroupCreateIn
 import com.testlogon.android.core.network.groups.GroupInviteIn
 import com.testlogon.android.core.network.groups.GroupUpdateRoleIn
 import com.testlogon.android.core.network.groups.GroupCreateCampaignIn
@@ -44,6 +45,17 @@ interface GroupsRepository {
 
     /** GET the caller's groups (ENVELOPE {groups} -> mapped). Idempotent GET. */
     suspend fun listMyGroups(): ApiResult<List<Group>>
+
+    /**
+     * POST a new social group. On success returns the created [Group] (the creator is admin). A 422/4xx
+     * surfaces as a Failure carrying the status; transport failures -> NetworkError.
+     */
+    suspend fun createGroup(
+        name: String,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group>
 
     /** GET one group's detail (mapped). Idempotent GET. */
     suspend fun getGroup(groupId: String): ApiResult<Group>
@@ -118,6 +130,24 @@ class GroupsRepositoryImpl @Inject constructor(
 
     override suspend fun listMyGroups(): ApiResult<List<Group>> = withContext(Dispatchers.IO) {
         call { groupsApi.listMyGroups().groups.map { it.toDomain() } }
+    }
+
+    override suspend fun createGroup(
+        name: String,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group> = withContext(Dispatchers.IO) {
+        call {
+            groupsApi.createGroup(
+                GroupCreateIn(
+                    name = name,
+                    description = description?.takeIf { it.isNotBlank() },
+                    visibility = visibility,
+                    topic = topic?.takeIf { it.isNotBlank() },
+                ),
+            ).toDomain()
+        }
     }
 
     override suspend fun getGroup(groupId: String): ApiResult<Group> = withContext(Dispatchers.IO) {

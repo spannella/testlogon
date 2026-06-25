@@ -2,6 +2,7 @@ package com.testlogon.android.core.network.syndicates
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -23,6 +24,22 @@ import retrofit2.http.Query
  * query (with a `page` fallback for index-paged backends). The open-licensing list is NOT paged.
  */
 interface SyndicateApi {
+
+    /**
+     * Batch-7 - GET the syndicates the caller belongs to. The wire is a BARE ARRAY (not an envelope) of
+     * {syndicate_id, syndicate_name, role, joined_at} rows.
+     */
+    @GET("ui/syndicates")
+    suspend fun listMySyndicates(): List<SyndicateListItemDto>
+
+    /**
+     * Batch-7 - POST a new syndicate (the creator becomes admin). Returns the SyndicateOut create shape
+     * (syndicate_id + name). 201 on success; a 422 carries field detail. The X-CSRF-Token is attached by
+     * the shared authenticated client interceptor.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/syndicates")
+    suspend fun createSyndicate(@Body body: SyndicateCreateIn): SyndicateCreateOut
 
     /** GET the syndicate overview / profile (name, member_count, admin_user_id, currency, is_member). */
     @GET("ui/syndicates/{syndicateId}")

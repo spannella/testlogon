@@ -21,6 +21,9 @@ import javax.inject.Singleton
 @JsonClass(generateAdapter = true)
 data class CurrentUserDto(
     @Json(name = "user_sub") val userSub: String? = null,
+    // B-SUP (batch 7): /ui/me now also carries the caller's support/admin role signal.
+    @Json(name = "role") val role: String? = null,
+    @Json(name = "is_admin") val isAdmin: Boolean? = null,
 )
 
 interface CurrentUserApi {
@@ -36,6 +39,9 @@ class CurrentUserRepository @Inject constructor(
     @Volatile
     private var cached: String? = null
 
+    @Volatile
+    private var cachedAdmin: Boolean? = null
+
     /** The signed-in user's `user_sub`, cached after the first successful lookup. */
     suspend fun currentUserSub(): ApiResult<String> = withContext(Dispatchers.IO) {
         cached?.let { return@withContext ApiResult.Success(it) }
@@ -49,6 +55,28 @@ class CurrentUserRepository @Inject constructor(
                     com.testlogon.android.core.model.ApiError(status = 0, message = "Couldn't resolve your account."),
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Failure(errorParser.from(e))
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    /**
+     * B-SUP (batch 7): the caller's admin status, resolved from `GET /ui/me.is_admin` (with a `role`
+     * fallback of `admin`/`root`). Cached after the first successful lookup. Used by the Support surface to
+     * branch the USER help experience vs the ADMIN helpdesk/moderation queue. On any failure this returns a
+     * Failure so the caller can degrade to the (safe) USER view.
+     */
+    suspend fun isAdmin(): ApiResult<Boolean> = withContext(Dispatchers.IO) {
+        cachedAdmin?.let { return@withContext ApiResult.Success(it) }
+        try {
+            val me = api.me()
+            val admin = me.isAdmin ?: (me.role?.lowercase() in setOf("admin", "root"))
+            cachedAdmin = admin
+            ApiResult.Success(admin)
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpException) {

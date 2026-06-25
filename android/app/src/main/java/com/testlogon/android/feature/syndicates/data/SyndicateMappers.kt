@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SplitMode
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
@@ -13,6 +14,8 @@ import com.testlogon.android.core.network.syndicates.SplitConfigOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingContentOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegistrationOut
 import com.testlogon.android.core.network.syndicates.SyndicatePostOut
+import com.testlogon.android.core.network.syndicates.SyndicateCreateOut
+import com.testlogon.android.core.network.syndicates.SyndicateListItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryLedgerEntryOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryOut
@@ -31,6 +34,21 @@ import java.util.Locale
  */
 
 private const val FALLBACK_CURRENCY = "USD"
+
+/** Batch-7 - maps a syndicate list-row DTO to the domain [SyndicateListItem] (id = syndicate_id). */
+fun SyndicateListItemDto.toDomain(): SyndicateListItem = SyndicateListItem(
+    id = syndicateId,
+    name = syndicateName.orEmpty(),
+    role = role,
+    joinedAt = joinedAt,
+)
+
+/** Batch-7 - maps a create receipt to a [SyndicateListItem] (creator is admin) for immediate nav. */
+fun SyndicateCreateOut.toListItem(): SyndicateListItem = SyndicateListItem(
+    id = syndicateId,
+    name = name.orEmpty(),
+    role = "admin",
+)
 
 /**
  * Maps the profile DTO to the domain [SyndicateOverview]. [currentUserId] is the viewer's own user id, used

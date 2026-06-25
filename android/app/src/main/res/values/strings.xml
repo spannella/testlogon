@@ -402,6 +402,9 @@
     <string name="videos_library_error">Couldn\'t load videos. Try again.</string>
     <string name="videos_append_error">Couldn\'t load more</string>
     <string name="video_untitled">Untitled</string>
+    <string name="videos_action_refresh">Refresh</string>
+    <string name="videos_upload_action">Upload video</string>
+    <string name="videos_status_processing">Processing</string>
 
     <!-- AND-190: video detail + player -->
     <string name="video_detail_like">Like</string>
@@ -3114,6 +3117,14 @@
     <string name="groups_role_moderator">Moderator</string>
     <string name="groups_role_member">Member</string>
     <string name="groups_role_unknown">Unknown</string>
+    <!-- Batch-7: create-group flow -->
+    <string name="groups_create_title">Create group</string>
+    <string name="groups_create_name_label">Group name</string>
+    <string name="groups_create_description_label">Description (optional)</string>
+    <string name="groups_create_visibility_public">Public</string>
+    <string name="groups_create_visibility_private">Private</string>
+    <string name="groups_create_submit">Create</string>
+    <string name="groups_create_cancel">Cancel</string>
     <!-- AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split) -->
     <string name="more_entry_syndicates">Syndicates</string>
     <string name="syndicate_overview_title">Syndicate</string>
@@ -3148,6 +3159,17 @@
     <string name="syndicate_bps_format">%1$d bps</string>
     <string name="syndicate_not_member_title">You are not in a syndicate yet</string>
     <string name="syndicate_not_member_body">Syndicates you join will appear here.</string>
+    <!-- Batch-7: syndicate list + create flow -->
+    <string name="syndicates_list_title">Syndicates</string>
+    <string name="syndicates_list_empty_title">No syndicates yet</string>
+    <string name="syndicates_list_empty_body">Create a syndicate to get started.</string>
+    <string name="syndicates_list_error">Couldn\'t load your syndicates.</string>
+    <string name="syndicate_create_title">Create syndicate</string>
+    <string name="syndicate_create_name_label">Syndicate name</string>
+    <string name="syndicate_create_description_label">Description (optional)</string>
+    <string name="syndicate_create_submit">Create</string>
+    <string name="syndicate_create_cancel">Cancel</string>
+    <string name="syndicate_role_label">%1$s</string>
 
     <!-- AND-357: syndicate open-licensing sub-screen (list + register) -->
     <string name="syndicate_open_licensing_action">Open licensing</string>
@@ -3387,6 +3409,7 @@
 
     <!-- AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). -->
     <string name="more_entry_tickets">Support tickets</string>
+    <string name="more_entry_support">Help &amp; support</string>
     <string name="tickets_back">Back</string>
     <string name="tickets_spaces_title">Ticket spaces</string>
     <string name="tickets_spaces_empty_title">No ticket spaces yet</string>
@@ -3624,6 +3647,40 @@
     <string name="webhooks_create_events_label">Events</string>
     <string name="webhooks_create_events_unavailable">Event types are unavailable right now. Try again later.</string>
     <string name="webhooks_create_submit">Create</string>
+
+    <!-- B-KYC (batch 7): identity verification (More -> Account / Security). -->
+    <string name="more_entry_kyc">Identity verification</string>
+
+    <!-- B-APIKEY (batch 7): developer API keys (More -> Account / Security). -->
+    <string name="more_entry_api_keys">API keys</string>
+    <string name="api_keys_back">Back</string>
+    <string name="api_keys_list_title">API keys</string>
+    <string name="api_keys_empty_title">No API keys yet</string>
+    <string name="api_keys_empty_body">Create an API key to access the platform programmatically. The secret is shown only once.</string>
+    <string name="api_keys_create_cta">Create API key</string>
+    <string name="api_keys_create_title">Create API key</string>
+    <string name="api_keys_unnamed">Unnamed key</string>
+    <string name="api_keys_revoke">Revoke</string>
+    <string name="api_keys_no_expiry">No expiry</string>
+    <string name="api_keys_created">Created %1$s</string>
+    <string name="api_keys_expires">Expires %1$s</string>
+    <string name="api_keys_created_expires">Created %1$s · expires %2$s</string>
+    <string name="api_keys_scopes_prefix">Scopes: %1$s</string>
+    <string name="api_keys_create_label_label">Label</string>
+    <string name="api_keys_create_label_placeholder">My integration</string>
+    <string name="api_keys_create_label_hint">A name to help you recognise this key.</string>
+    <string name="api_keys_create_scopes_label">Scopes (optional)</string>
+    <string name="api_keys_create_scopes_placeholder">read, write</string>
+    <string name="api_keys_create_scopes_hint">Comma- or space-separated. Leave blank for the default scopes.</string>
+    <string name="api_keys_create_expires_label">Expires in days (optional)</string>
+    <string name="api_keys_create_expires_placeholder">90</string>
+    <string name="api_keys_create_expires_hint">Leave blank for a key with no expiry.</string>
+    <string name="api_keys_create_submit">Create key</string>
+    <string name="api_keys_secret_title">Copy your API key now</string>
+    <string name="api_keys_secret_warning">This is the only time the full secret is shown. Store it securely. You will not be able to see it again.</string>
+    <string name="api_keys_secret_copy">Copy</string>
+    <string name="api_keys_secret_copied">Copied to clipboard</string>
+    <string name="api_keys_secret_done">Done</string>
 
     <!-- AND-399 Analytics dashboards (read): account-wide KPI tiles + charts + breakdowns. -->
     <string name="more_entry_analytics_dashboard">Analytics</string>

@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.VideoCall
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +27,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -47,7 +55,12 @@ object VideosScreenTestTags {
     const val GRID = "videos_grid"
     const val APPEND_FOOTER = "videos_append_footer"
     const val APPEND_RETRY = "videos_append_retry"
+    const val REFRESH = "videos_refresh"
+    const val UPLOAD_FAB = "videos_upload_fab"
 }
+
+/** Client-side poll cadence used to refresh the list while any video is still processing. */
+private const val PROCESSING_POLL_MILLIS = 5_000L
 
 /**
  * AND-189 — route-level Videos library. Collects the paged videos and renders [VideosScreen]. Tapping
@@ -56,6 +69,7 @@ object VideosScreenTestTags {
 @Composable
 fun VideosRoute(
     onOpenVideo: (videoId: String) -> Unit,
+    onUploadVideo: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: VideosViewModel = hiltViewModel(),
@@ -64,6 +78,7 @@ fun VideosRoute(
     VideosScreen(
         items = items,
         onOpenVideo = onOpenVideo,
+        onUploadVideo = onUploadVideo,
         onRefresh = { items.refresh() },
         onBack = onBack,
         modifier = modifier,
@@ -74,10 +89,25 @@ fun VideosRoute(
 fun VideosScreen(
     items: LazyPagingItems<VideoSummary>,
     onOpenVideo: (videoId: String) -> Unit,
+    onUploadVideo: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Auto-poll: while any loaded video is still processing, refresh the list on a cadence so a
+    // dev-published / finished-encoding video flips from "Processing" to "Ready" without the user
+    // having to leave + re-enter. Stops as soon as nothing is processing.
+    val hasProcessing by remember(items) {
+        derivedStateOf {
+            (0 until items.itemCount).any { items.peek(it)?.isProcessing == true }
+        }
+    }
+    LaunchedEffect(hasProcessing) {
+        while (hasProcessing) {
+            delay(PROCESSING_POLL_MILLIS)
+            if (items.loadState.refresh !is LoadState.Loading) onRefresh()
+        }
+    }
     Scaffold(
         modifier = modifier.testTag(VideosScreenTestTags.SCREEN),
         topBar = {
@@ -91,6 +121,25 @@ fun VideosScreen(
                         )
                     }
                 },
+                actions = {
+                    IconButton(
+                        onClick = onRefresh,
+                        modifier = Modifier.testTag(VideosScreenTestTags.REFRESH),
+                    ) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = stringResource(R.string.videos_action_refresh),
+                        )
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = onUploadVideo,
+                icon = { Icon(Icons.Filled.VideoCall, contentDescription = null) },
+                text = { Text(stringResource(R.string.videos_upload_action)) },
+                modifier = Modifier.testTag(VideosScreenTestTags.UPLOAD_FAB),
             )
         },
     ) { padding ->
@@ -136,11 +185,15 @@ private fun VideoGrid(
         items(count = items.itemCount, key = { index -> items.peek(index)?.id ?: index }) { index ->
             val video = items[index]
             if (video != null) {
+                val processing = video.isProcessing
+                val processingLabel = stringResource(R.string.videos_status_processing)
                 VideoTile(
                     title = video.title,
                     thumbnailUrl = video.thumbnailUrl,
                     durationSec = video.durationSec,
-                    onClick = { onOpenVideo(video.id) },
+                    statusBadge = if (processing) processingLabel else null,
+                    // A still-processing video has no playable manifest yet; don't open it.
+                    onClick = { if (!processing) onOpenVideo(video.id) },
                 )
             }
         }

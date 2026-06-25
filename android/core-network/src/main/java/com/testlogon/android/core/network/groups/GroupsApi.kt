@@ -33,6 +33,14 @@ interface GroupsApi {
     @GET("ui/groups")
     suspend fun listMyGroups(): GroupListResponse
 
+    /**
+     * POST a new social group. Returns the created group as a UserGroupDto detail object
+     * (group_id + my_role="admin" for the creator). 201 on success; a 422 carries field detail.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/groups")
+    suspend fun createGroup(@Body body: GroupCreateIn): UserGroupDto
+
     /** GET one group's detail (same UserGroupDto shape as a list row). */
     @GET("ui/groups/{groupId}")
     suspend fun getGroup(@Path("groupId") groupId: String): UserGroupDto

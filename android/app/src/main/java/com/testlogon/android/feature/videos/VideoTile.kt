@@ -31,6 +31,7 @@ object VideoTileTestTags {
     const val THUMBNAIL = "video_tile_thumbnail"
     const val TITLE = "video_tile_title"
     const val DURATION = "video_tile_duration"
+    const val STATUS = "video_tile_status"
 }
 
 /**
@@ -46,6 +47,7 @@ fun VideoTile(
     durationSec: Int?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    statusBadge: String? = null,
 ) {
     val durationBadge = VideoDurationFormat.badge(durationSec)
     Column(
@@ -54,7 +56,9 @@ fun VideoTile(
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .testTag(VideoTileTestTags.TILE)
-            .clearAndSetSemantics { contentDescription = title },
+            .clearAndSetSemantics {
+                contentDescription = if (statusBadge != null) "$title, $statusBadge" else title
+            },
     ) {
         Box(
             modifier = Modifier
@@ -72,6 +76,20 @@ fun VideoTile(
                     .aspectRatio(16f / 9f)
                     .testTag(VideoTileTestTags.THUMBNAIL),
             )
+            if (statusBadge != null) {
+                Text(
+                    text = statusBadge,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.92f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .testTag(VideoTileTestTags.STATUS),
+                )
+            }
             if (durationBadge != null) {
                 Text(
                     text = durationBadge,

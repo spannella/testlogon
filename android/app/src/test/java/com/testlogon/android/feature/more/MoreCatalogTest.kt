@@ -71,6 +71,7 @@ class MoreCatalogTest {
             "billing_config",
             "bulk_payouts",
             "helpdesk_queue",
+            "helpdesk_dashboard",
         )
         val resolver = MoreAvailabilityResolver(RouteRegistry())
         val entries = MoreCatalog().entries

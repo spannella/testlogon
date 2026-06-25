@@ -19,7 +19,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.collectLatest
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.testlogon.android.R
@@ -54,6 +64,11 @@ import com.testlogon.android.core.ui.state.OfflineBanner
 object GroupsListTestTags {
     const val SCREEN = "groups_list_screen"
     const val ROW_PREFIX = "group_row_"
+    const val CREATE_FAB = "groups_create_fab"
+    const val CREATE_DIALOG = "groups_create_dialog"
+    const val CREATE_NAME = "groups_create_name"
+    const val CREATE_DESCRIPTION = "groups_create_description"
+    const val CREATE_SUBMIT = "groups_create_submit"
 }
 
 /** AND-355 - route-level groups list entry (reachable from the More hub). */
@@ -64,12 +79,23 @@ fun GroupsListRoute(
     viewModel: GroupsListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val createState by viewModel.createState.collectAsStateWithLifecycle()
+    LaunchedEffect(viewModel) {
+        viewModel.created.collectLatest { groupId -> onOpenGroup(groupId) }
+    }
     GroupsListScreen(
         state = state,
+        createState = createState,
         onBack = onBack,
         onRetry = viewModel::load,
         onRefresh = viewModel::refresh,
         onOpenGroup = onOpenGroup,
+        onOpenCreate = viewModel::openCreate,
+        onDismissCreate = viewModel::dismissCreate,
+        onCreateNameChange = viewModel::onCreateNameChange,
+        onCreateDescriptionChange = viewModel::onCreateDescriptionChange,
+        onCreateVisibilityChange = viewModel::onCreateVisibilityChange,
+        onSubmitCreate = viewModel::submitCreate,
     )
 }
 
@@ -77,10 +103,17 @@ fun GroupsListRoute(
 @Composable
 fun GroupsListScreen(
     state: GroupsListUiState,
+    createState: CreateGroupFormState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     onOpenGroup: (String) -> Unit,
+    onOpenCreate: () -> Unit,
+    onDismissCreate: () -> Unit,
+    onCreateNameChange: (String) -> Unit,
+    onCreateDescriptionChange: (String) -> Unit,
+    onCreateVisibilityChange: (Boolean) -> Unit,
+    onSubmitCreate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -97,6 +130,14 @@ fun GroupsListScreen(
                     }
                 },
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = onOpenCreate,
+                modifier = Modifier.testTag(GroupsListTestTags.CREATE_FAB),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.groups_create_title))
+            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -122,6 +163,90 @@ fun GroupsListScreen(
             }
         }
     }
+
+    if (createState.visible) {
+        CreateGroupDialog(
+            form = createState,
+            onNameChange = onCreateNameChange,
+            onDescriptionChange = onCreateDescriptionChange,
+            onVisibilityChange = onCreateVisibilityChange,
+            onSubmit = onSubmitCreate,
+            onDismiss = onDismissCreate,
+        )
+    }
+}
+
+/** AND-B7 - the create-group dialog (name + description + public/private). */
+@Composable
+private fun CreateGroupDialog(
+    form: CreateGroupFormState,
+    onNameChange: (String) -> Unit,
+    onDescriptionChange: (String) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        modifier = Modifier.testTag(GroupsListTestTags.CREATE_DIALOG),
+        onDismissRequest = { if (!form.submitting) onDismiss() },
+        title = { Text(stringResource(R.string.groups_create_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = form.name,
+                    onValueChange = onNameChange,
+                    singleLine = true,
+                    isError = form.nameError != null,
+                    label = { Text(stringResource(R.string.groups_create_name_label)) },
+                    modifier = Modifier.fillMaxWidth().testTag(GroupsListTestTags.CREATE_NAME),
+                )
+                OutlinedTextField(
+                    value = form.description,
+                    onValueChange = onDescriptionChange,
+                    label = { Text(stringResource(R.string.groups_create_description_label)) },
+                    modifier = Modifier.fillMaxWidth().testTag(GroupsListTestTags.CREATE_DESCRIPTION),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = form.isPublic,
+                        onClick = { onVisibilityChange(true) },
+                        label = { Text(stringResource(R.string.groups_create_visibility_public)) },
+                    )
+                    FilterChip(
+                        selected = !form.isPublic,
+                        onClick = { onVisibilityChange(false) },
+                        label = { Text(stringResource(R.string.groups_create_visibility_private)) },
+                    )
+                }
+                val err = form.submitError
+                if (err != null) {
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onSubmit,
+                enabled = form.isValid && !form.submitting,
+                modifier = Modifier.testTag(GroupsListTestTags.CREATE_SUBMIT),
+            ) {
+                if (form.submitting) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(stringResource(R.string.groups_create_submit))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !form.submitting) {
+                Text(stringResource(R.string.groups_create_cancel))
+            }
+        },
+    )
 }
 
 @Composable
