@@ -407,7 +407,8 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   const [editRichDoc, setEditRichDoc] = useState<RichDoc | null>((comment.body_rich as RichDoc | undefined) ?? null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
-  const authorProfilePath = resolveCanonicalProfilePath({ userId: comment.author_id, displayName: comment.author_id });
+  const commentAuthorName = comment.author_display_name || comment.author_id;
+  const authorProfilePath = resolveCanonicalProfilePath({ userId: comment.author_id, displayName: commentAuthorName });
   const [reportOpen, setReportOpen] = useState(false);
   const [reportServerError, setReportServerError] = useState<string | null>(null);
 
@@ -514,12 +515,12 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
       <div className="group flex gap-2">
         <a
           href={authorProfilePath ?? "#"}
-          aria-label={`Open ${comment.author_id} profile`}
+          aria-label={`Open ${commentAuthorName} profile`}
           className="shrink-0 rounded-full hover:opacity-90"
         >
           <Avatar className="h-6 w-6 shrink-0">
             <AvatarFallback className="text-[10px]">
-              {comment.author_id.slice(0, 2).toUpperCase()}
+              {commentAuthorName.slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
         </a>
@@ -527,10 +528,10 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
           <div className="flex items-baseline gap-1.5">
             <a
               href={authorProfilePath ?? "#"}
-              aria-label={`Open ${comment.author_id} profile`}
+              aria-label={`Open ${commentAuthorName} profile`}
               className="text-xs font-medium hover:underline"
             >
-              {comment.author_id}
+              {commentAuthorName}
             </a>
             <span className="text-[10px] text-muted-foreground">
               {new Date(comment.created_at).toLocaleDateString()}

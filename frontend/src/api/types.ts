@@ -2602,6 +2602,8 @@ export interface FeedComment {
   comment_id: string;
   post_id: string;
   author_id: string;
+  /** Resolved author display name (server falls back to author_id). */
+  author_display_name?: string;
   body: string;
   body_plain?: string;
   body_markdown?: string;

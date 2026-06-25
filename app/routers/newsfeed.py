@@ -2437,6 +2437,7 @@ def _comment_to_dict(it: Dict[str, Any], viewer_id: Optional[str] = None) -> Dic
         "comment_id": it["comment_id"],
         "post_id": it["post_id"],
         "author_id": it.get("user_id", ""),
+        "author_display_name": _resolve_author_display_name(it.get("user_id", "")),
         "created_at": it.get("created_at", ""),
         "updated_at": it.get("updated_at"),
         "deleted": bool(it.get("deleted")),

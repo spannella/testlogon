@@ -668,6 +668,8 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
             className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setShowComments((o) => !o)}
             disabled={isOfflinePost}
+            aria-label={showComments ? "Hide comments" : "Show comments"}
+            aria-expanded={showComments}
           >
             <MessageCircle className="h-4 w-4" />
             <span>{post.comment_count}</span>
