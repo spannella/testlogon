@@ -1100,6 +1100,17 @@ def list_files(
             key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()),
             reverse=not scan_forward,
         )
+    # Defensive de-dup by path: a duplicate folder node must never reach the client's path-keyed list
+    # (Compose LazyColumn crashes with "key already used"). Keep first occurrence, preserve order.
+    _seen_paths: set = set()
+    _deduped: list = []
+    for _it in out:
+        _k = str(_it.get("path") or "")
+        if _k and _k in _seen_paths:
+            continue
+        _seen_paths.add(_k)
+        _deduped.append(_it)
+    out = _deduped
     next_payload_ddb = {"mode": "ddb", "key": next_cursor} if next_cursor else None
     return {"path": folder, "items": out, "cursor": _encode_cursor(next_payload_ddb)}
 
@@ -2681,6 +2692,38 @@ def move_fs_node(
         node_type=result.get("type"),
         **_file_audit_fields(file_path=str(result.get("src") or norm_path(src, is_folder=None)), owner=user),
         **_storage_audit_fields_for_move(src, dst),
+    )
+    return {"ok": True, **result}
+
+
+@router.post("/copy")
+def copy_fs_node(
+    src: str = Body(..., embed=True),
+    dst: str = Body(..., embed=True),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    from app.services.filemanager import copy_node as _copy_node
+    _enforce_sftp_mount_flags_for_path(src, operation="write")
+    _enforce_sftp_mount_flags_for_path(dst, operation="write")
+    _enforce_sftp_mount_status_for_path(src, owner=user, operation="write")
+    _enforce_sftp_mount_status_for_path(dst, owner=user, operation="write")
+    src_provider = resolve_storage_provider(user, src)
+    dst_provider = resolve_storage_provider(user, dst)
+    if src_provider.backend != dst_provider.backend:
+        raise HTTPException(status_code=400, detail={"code": "cross_backend_copy_not_supported", "message": "copying between native and mounted paths is not supported"})
+    if src_provider.backend == "sftp":
+        raise HTTPException(status_code=400, detail={"code": "copy_not_supported_for_mount", "message": "copy is only supported for native storage"})
+    result = _copy_node(user, src, dst)
+    audit_event(
+        "filemgr_node_copied",
+        user,
+        req,
+        outcome="success",
+        src=result.get("src"),
+        dst=result.get("dst"),
+        node_type=result.get("type"),
+        **_file_audit_fields(file_path=str(result.get("dst") or norm_path(dst, is_folder=None)), owner=user),
     )
     return {"ok": True, **result}
 

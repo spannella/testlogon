@@ -1823,7 +1823,15 @@ async def update_event(
     meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     item = _load_event(calendar_id, event_id)
     raw_recurrence = body.recurrence_rule if body.recurrence_rule is not None else item.get("recurrence_rule")
-    recurrence_rule = RecurrenceRule(**raw_recurrence) if raw_recurrence else None
+    # B-CAL #9: raw_recurrence may already be a RecurrenceRule model (when supplied on
+    # the update body) or a stored dict (when inherited from the existing item). Handle
+    # both so updating an event's recurrence no longer 500s.
+    if raw_recurrence is None:
+        recurrence_rule = None
+    elif isinstance(raw_recurrence, RecurrenceRule):
+        recurrence_rule = raw_recurrence
+    else:
+        recurrence_rule = RecurrenceRule(**raw_recurrence)
     payload = EventCreateIn(
         name=body.name if body.name is not None else item["name"],
         description=body.description if body.description is not None else item.get("description", ""),

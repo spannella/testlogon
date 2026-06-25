@@ -79,11 +79,17 @@ def fcm_send(token: str, title: str, body: str, data: Optional[Dict[str, str]] =
         return False
     import requests
     url = f"https://fcm.googleapis.com/v1/projects/{S.fcm_project_id}/messages:send"
+    # FCM data values must be strings. The Android app's FOREGROUND path parses title/body/entity_id/
+    # kind from `data` (PushPayloadParser), so mirror them here even though they also ride in the
+    # `notification` block (which only the system tray uses while the app is backgrounded).
+    merged = {str(k): str(v) for k, v in (data or {}).items() if v is not None}
+    merged.setdefault("title", title)
+    merged.setdefault("body", body)
     msg = {
         "message": {
             "token": token,
             "notification": {"title": title[:60], "body": body[:180]},
-            "data": data or {},
+            "data": merged,
         }
     }
     try:
@@ -279,6 +285,35 @@ def _alert_url(alert_type: str, alert_id: str) -> str:
         "rate_limited": "/alerts",
     }
     return type_urls.get(alert_type, "/alerts")
+
+
+def send_message_push(user_sub: str, title: str, body: str, conversation_id: str, message_id: str) -> None:
+    """Push a new chat message to a recipient's registered devices (FCM for native, web-push for web)."""
+    if not S.push_enabled:
+        return
+    try:
+        r = T.push_devices.query(KeyConditionExpression=Key("user_sub").eq(user_sub), Limit=50)
+        for it in r.get("Items", [])[:25]:
+            tok = it.get("token", "")
+            platform = it.get("platform", "")
+            if not tok:
+                continue
+            data = {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "type": "message",
+                "kind": "message",
+                "entity_id": conversation_id,
+                "title": title,
+                "body": body,
+                "deep_link": f"/messages/{conversation_id}",
+            }
+            if platform in ("android", "ios"):
+                fcm_send(tok, title, body, data)
+            elif platform == "web" and S.web_push_enabled:
+                web_push_send(tok, title, body, url=f"/messages/{conversation_id}", tag="message")
+    except Exception as exc:
+        logger.warning("send_message_push failed for %s: %s", user_sub, exc)
 
 
 def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, alert_id: str) -> None:

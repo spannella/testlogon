@@ -2293,6 +2293,12 @@ class CreateFileMessageIn(BaseModel):
     preview: Optional[LinkPreviewIn] = None
     consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
     signature_packet_id: Optional[str] = Field(default=None, max_length=128)
+    # Gating options (parity with image messages): disappearing / view-once / locked PPV / scheduled send.
+    view_once: bool = False
+    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)
+    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    lock_description: Optional[str] = Field(default=None, max_length=200)
+    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
 
     @model_validator(mode="after")
     def _validate_consumption_policy(self):
@@ -2322,10 +2328,28 @@ class LotteryConfigIn(BaseModel):
     outcomes: List[LotteryOutcomeIn] = Field(default_factory=list)
 
 
+class LotteryMessageImageIn(BaseModel):
+    bucket: Optional[str] = Field(default=None, max_length=200)
+    key: str = Field(min_length=1, max_length=500)
+    content_type: Optional[str] = Field(default=None, max_length=100)
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class LotteryMessageImageOut(BaseModel):
+    bucket: str
+    key: str
+    content_type: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
 class CreateLotteryMessageIn(BaseModel):
     message_type: Literal["lottery_dm"] = "lottery_dm"
     conversation_id: str = Field(min_length=1, max_length=128)
     lottery_config: LotteryConfigIn
+    # Optional cover/header image for the lottery message (bucket/key like image messages).
+    image: Optional[LotteryMessageImageIn] = None
 
 
 class LotteryOutcomeOut(BaseModel):
@@ -2358,6 +2382,7 @@ class LotteryMessageOut(BaseModel):
     lock_state: Literal["locked", "unlocked"]
     lottery_config: LotteryConfigOut
     selected_outcome: Optional[LotterySelectedOutcomeOut] = None
+    image: Optional[LotteryMessageImageOut] = None
     idempotent: bool = False
     created_at: int
 
@@ -3225,8 +3250,9 @@ def _lottery_message_item(
     sender_id: str,
     created_at: int,
     persisted_cfg: Mapping[str, Any],
+    image: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
-    return {
+    item: dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": message_id,
         "sender_id": sender_id,
@@ -3241,6 +3267,9 @@ def _lottery_message_item(
         },
         "reactions": {},
     }
+    if image and image.get("key"):
+        item["image"] = {k: v for k, v in dict(image).items() if v is not None}
+    return item
 
 
 def _encode_gallery_index_cursor(sort_key: str) -> str:
@@ -4261,7 +4290,13 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         reactions_counts=counts if counts else None,
         my_reactions=mine if mine else None,
         is_encrypted=bool(merged_item.get("is_encrypted")),
-        encryption=merged_item.get("encryption"),
+        # BK-A: gate the encryption envelope behind the same content_hidden
+        # rule as text/image/file. A locked+encrypted message must NOT leak its
+        # ciphertext/envelope (salt/iv/ciphertext_b64) until the recipient unlocks
+        # (pays); is_encrypted/locked/lock_price_cents still surface so the client
+        # knows what it is looking at. After unlock the (still-encrypted) envelope
+        # is returned and the client decrypts with the passphrase.
+        encryption=(None if content_hidden else merged_item.get("encryption")),
         consumption_policy=policy,
         media_kind=media_kind,
         consumption_state=consumption_state,
@@ -5645,6 +5680,26 @@ def _fanout_new_message_event(
         payload=enriched_payload,
         respect_mute=respect_mute,
     )
+
+    # Push notifications to each recipient (best-effort; never blocks the send/fanout).
+    try:
+        from app.services.push import send_message_push
+        _mid = str(message_item.get("message_id") or "")
+        _kind = message_item.get("kind") or "text"
+        _body = (message_item.get("text") or "").strip()
+        if message_item.get("is_encrypted"):
+            _body = "\U0001F512 Encrypted message"
+        elif not _body:
+            _body = {"image": "\U0001F4F7 Photo", "voice_message": "\U0001F3A4 Voice message",
+                     "file": "\U0001F4CE File"}.get(_kind, "New message")
+        _title = sender_id.split("@")[0] if "@" in sender_id else sender_id
+        _resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        for _p in _resp.get("Items", []):
+            _pid = _p.get("user_id")
+            if _pid and _pid != sender_id:
+                send_message_push(_pid, _title, _body, conversation_id, _mid)
+    except Exception as _exc:
+        logger.warning("message push fanout failed: %s", _exc)
 
 
 def _reaction_summaries(message_item: dict, viewer_user_id: str) -> tuple[Dict[str, int], List[str]]:
@@ -10828,6 +10883,15 @@ def create_file_message(
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
+    # Scheduled send (parity with image messages)
+    deliver_at_file: Optional[int] = None
+    is_scheduled_file = False
+    if inp.send_at is not None:
+        if inp.send_at <= now_ts() + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_file = inp.send_at
+        is_scheduled_file = True
+
     path = norm_path(inp.path, is_folder=False)
     node = get_node(user_id, path)
     if node.get("type") != "file":
@@ -10864,6 +10928,22 @@ def create_file_message(
     }
     if preview:
         item["preview"] = preview
+    # Gating options (parity with image messages)
+    file_expires_at = None
+    if inp.expires_in_seconds:
+        _file_expiry_base = deliver_at_file if is_scheduled_file else ts
+        file_expires_at = _file_expiry_base + inp.expires_in_seconds
+        item["expires_at"] = file_expires_at
+    if inp.view_once:
+        item["view_once"] = True
+    if inp.lock_price_cents:
+        item["lock_price_cents"] = inp.lock_price_cents
+        item["unlocked_by"] = {}
+        if inp.lock_description:
+            item["lock_description"] = inp.lock_description
+    if is_scheduled_file:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_file
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
         item["ttl"] = ttl
@@ -10921,6 +11001,14 @@ def create_file_message(
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        expires_at=file_expires_at,
+        view_once=inp.view_once,
+        locked=bool(inp.lock_price_cents),
+        lock_price_cents=inp.lock_price_cents,
+        lock_description=inp.lock_description,
+        is_unlocked=True,
+        scheduled=is_scheduled_file,
+        deliver_at=deliver_at_file,
     )
     message = _apply_message_receipts(message, item, resp.get("Items", []))
     audit_event(
@@ -13219,6 +13307,53 @@ def fetch_events(
     return {"events": items, "next_after": items[-1]["event_id"] if items else after}
 
 
+@router.get("/events/poll")
+def events_poll(
+    after: Optional[str] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    request: Request = None,
+    x_request_id: Optional[str] = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Reliable JSON poll of the per-user event queue; a backstop for the flaky long-lived SSE.
+
+    The Android realtime client (SseMessagingEventStream) polls this ~every 600ms and dedups events
+    client-side, so we return the newest `limit` events (or those strictly after `after` when given),
+    each projected exactly as the /events/stream generator projects them.
+    """
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="stream_events",
+        request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
+    )
+    if after:
+        raw_events = _ddb_fetch_events(user_id, after, limit)
+    else:
+        resp = tbl_events.query(
+            KeyConditionExpression=Key("user_id").eq(user_id),
+            Limit=limit,
+            ScanIndexForward=False,
+        )
+        raw_events = list(reversed(resp.get("Items", [])))
+    events = []
+    for ev in raw_events:
+        pe = _project_event_for_user(ev, user_id)
+        # Flatten message:new to the shape the Android SseEnvelopeParser expects: it reads
+        # message_id/sender_id/text/kind/created_at from the TOP level, not from payload.message.
+        if str(pe.get("type")) == "message:new" and isinstance(pe.get("payload"), dict):
+            msg = pe["payload"].get("message")
+            if isinstance(msg, dict):
+                pe = dict(pe)
+                pe["message_id"] = msg.get("message_id") or pe.get("message_id")
+                pe["conversation_id"] = msg.get("conversation_id") or pe.get("conversation_id")
+                pe["sender_id"] = msg.get("sender_id") or pe.get("sender_id")
+                pe["text"] = msg.get("text")
+                pe["kind"] = msg.get("kind") or "text"
+                pe["created_at"] = msg.get("created_at")
+        events.append(pe)
+    return {"events": events}
+
+
 @router.get("/events/stream")
 async def events_stream(
     after: Optional[str] = None,
@@ -13294,6 +13429,17 @@ def create_lottery_message(
         )
 
     ts = now_ts()
+    # Optional message-level cover image (bucket/key like image messages).
+    lottery_image: Optional[Dict[str, Any]] = None
+    if payload.image is not None:
+        _img_bucket = (payload.image.bucket or S3_BUCKET_IMAGES)
+        lottery_image = {
+            "bucket": _img_bucket,
+            "key": payload.image.key,
+            "content_type": payload.image.content_type,
+            "width": payload.image.width,
+            "height": payload.image.height,
+        }
     normalized_idempotency_key = (idempotency_key or "").strip()
     if len(normalized_idempotency_key) > 128:
         record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
@@ -13470,6 +13616,7 @@ def create_lottery_message(
         sender_id=user_id,
         created_at=ts,
         persisted_cfg=persisted_cfg,
+        image=lottery_image,
     )
     try:
         tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
@@ -13519,6 +13666,17 @@ def create_lottery_message(
             ],
         ),
         selected_outcome=None,
+        image=(
+            LotteryMessageImageOut(
+                bucket=str(lottery_image.get("bucket") or ""),
+                key=str(lottery_image.get("key") or ""),
+                content_type=lottery_image.get("content_type"),
+                width=lottery_image.get("width"),
+                height=lottery_image.get("height"),
+            )
+            if lottery_image
+            else None
+        ),
         idempotent=False,
         created_at=ts,
     )
@@ -13804,20 +13962,114 @@ def cancel_scheduled_message(
     return {"ok": True, "message_id": message_id}
 
 
+class RescheduleMessageIn(BaseModel):
+    # Both optional: edit text, reschedule the delivery time, or both.
+    text: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
+    send_at: Optional[int] = None  # new Unix delivery timestamp (>= now+5s)
+
+
+@router.patch(
+    "/conversations/{conversation_id}/messages/{message_id}/schedule",
+    response_model=MessageOut,
+)
+def reschedule_scheduled_message(
+    conversation_id: str,
+    message_id: str,
+    inp: RescheduleMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Edit the text and/or reschedule a still-pending scheduled message.
+
+    Only the sender can edit, and only while the message is still in
+    ``status == "scheduled"`` (not yet delivered). At least one of ``text`` /
+    ``send_at`` must be supplied.
+    """
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("sender_id") != user_id:
+        raise HTTPException(403, "Only the sender can edit a scheduled message")
+    if msg.get("status") != "scheduled":
+        raise HTTPException(400, "Message is not scheduled")
+    if inp.text is None and inp.send_at is None:
+        raise HTTPException(400, "Provide text and/or send_at to update")
+    if inp.text is not None and msg.get("kind") != "text":
+        raise HTTPException(400, "Only text scheduled messages support text edits")
+
+    set_parts: List[str] = []
+    expr_names: Dict[str, str] = {}
+    expr_vals: Dict[str, Any] = {}
+    ts = now_ts()
+
+    if inp.text is not None:
+        set_parts.append("#t = :text")
+        expr_names["#t"] = "text"
+        expr_vals[":text"] = inp.text
+
+    new_deliver_at = None
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        new_deliver_at = inp.send_at
+        set_parts.append("deliver_at = :da")
+        expr_vals[":da"] = new_deliver_at
+        # If an expiry timer was based on the old delivery time, re-base it.
+        if msg.get("expires_at") and msg.get("_expires_in_seconds"):
+            set_parts.append("expires_at = :ea")
+            expr_vals[":ea"] = new_deliver_at + int(msg["_expires_in_seconds"])
+
+    update_expr = "SET " + ", ".join(set_parts)
+    kwargs: Dict[str, Any] = {
+        "Key": {"conversation_id": conversation_id, "message_id": message_id},
+        "UpdateExpression": update_expr,
+        "ExpressionAttributeValues": expr_vals,
+    }
+    if expr_names:
+        kwargs["ExpressionAttributeNames"] = expr_names
+    tbl_msgs.update_item(**kwargs)
+
+    updated = _get_message_or_404(conversation_id, message_id)
+    audit_event(
+        "messaging_scheduled_message_edited",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+    )
+    return _message_out_from_item(updated, user_id)
+
+
 def _deliver_scheduled_message(item: dict) -> None:
-    """Promote a scheduled message to delivered status."""
+    """Promote a scheduled message to delivered status.
+
+    B-SCHED FIX: list_messages fetches a single DynamoDB page ordered by the
+    random message_id range key then re-sorts that page by created_at. A
+    scheduled message keeps its schedule-time random message_id; if that id ranks
+    outside the first page the just-delivered message never appears in the thread
+    even though it was promoted (user sees "scheduled messages dont send"). We
+    re-key the row under a fresh message_id with a current created_at so it
+    behaves like a freshly-sent message, and the delivery event below carries the
+    re-keyed item so the live poll/SSE path renders it immediately.
+    """
     conversation_id = item["conversation_id"]
-    message_id = item["message_id"]
+    old_message_id = item["message_id"]
     user_id = item["sender_id"]
     ts = now_ts()
 
-    # Remove scheduled status
-    tbl_msgs.update_item(
-        Key={"conversation_id": conversation_id, "message_id": message_id},
-        UpdateExpression="REMOVE #s, deliver_at SET created_at = :ts",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":ts": ts},
+    # message_id is the table range key, so re-key via put(new)+delete(old).
+    message_id = "m_" + new_id()
+    new_item = dict(item)
+    new_item["message_id"] = message_id
+    new_item["created_at"] = ts
+    new_item.pop("status", None)
+    new_item.pop("deliver_at", None)
+    tbl_msgs.put_item(Item=new_item)
+    tbl_msgs.delete_item(
+        Key={"conversation_id": conversation_id, "message_id": old_message_id}
     )
+    # Downstream code references the new id / item.
+    item = new_item
 
     # Write deferred tip billing now that the message is actually delivered.
     # (Billing was intentionally skipped at schedule time so that cancelling
@@ -13888,7 +14140,7 @@ def _deliver_scheduled_message(item: dict) -> None:
     delivered_item.pop("deliver_at", None)
     delivered_item["created_at"] = ts
     emit_messaging_archive_event(
-        event_id=f"msg_scheduled_delivery_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_id=f"msg_scheduled_delivery_{message_id}_{ts}",
         event_ts=ts,
         tenant_id="default",
         conversation_id=conversation_id,
@@ -13998,6 +14250,30 @@ async def _messaging_background_loop() -> None:
             )
             for item in resp.get("Items", []):
                 try:
+                    # BK-B: a LOCKED message that the recipient has UNLOCKED (paid)
+                    # must NOT expire -- they bought permanent access. Clear its
+                    # expires_at so the sweep never re-triggers. A locked message
+                    # that was NEVER unlocked still expires normally below.
+                    if item.get("lock_price_cents") and (item.get("unlocked_by") or {}):
+                        try:
+                            tbl_msgs.update_item(
+                                Key={
+                                    "conversation_id": item["conversation_id"],
+                                    "message_id": item["message_id"],
+                                },
+                                UpdateExpression="REMOVE expires_at",
+                            )
+                            logger.info(
+                                "Skipped expiry for unlocked locked message %s in conversation %s",
+                                item.get("message_id"), item.get("conversation_id"),
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "Failed to clear expiry on unlocked locked message %s: %s",
+                                item.get("message_id"), exc,
+                            )
+                        _processed += 1
+                        continue
                     tbl_msgs.update_item(
                         Key={
                             "conversation_id": item["conversation_id"],

@@ -21,3 +21,6 @@ frontend/e2e/demo/
 frontend/public/demo/
 .claire/
 docs/suitecrm/testlogon/
+
+# In-place edit backups from parallel agent sessions
+*.bak_*

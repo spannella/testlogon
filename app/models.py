@@ -1741,6 +1741,16 @@ class AddCardReq(BaseModel):
     cvc: str
     cardholder_name: Optional[str] = None
 
+class AddBankReq(BaseModel):
+    # BK-C: dev/test path to add a FAKE US bank (checking/savings) account
+    # directly from routing + account numbers (no Stripe.js / Financial
+    # Connections). Works against stripe-mock in DEV_MODE.
+    routing_number: str = Field(min_length=9, max_length=9)
+    account_number: str = Field(min_length=4, max_length=17)
+    account_holder_type: str = Field(default="individual", pattern="^(individual|company)$")
+    account_type: str = Field(default="checking", pattern="^(checking|savings)$")
+    account_holder_name: Optional[str] = Field(default=None, max_length=200)
+
 class AddChargeReq(BaseModel):
     amount_cents: int = Field(ge=1)
     state: str = Field(pattern="^(pending|settled)$")

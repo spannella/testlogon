@@ -171,6 +171,11 @@ def follow_user(req: FollowRequest, session=Depends(require_ui_session)):
         if msg == "rate_limited":
             raise HTTPException(status_code=429, detail="Too many follow actions. Try again in a minute.")
         raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        from app.services.activity_feed import record_social_interaction
+        record_social_interaction(recipient_id=req.target_user_id, actor_id=user_id, kind="follow", target_type="user", target_id=req.target_user_id)
+    except Exception:
+        pass
     return result
 
 
