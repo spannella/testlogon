@@ -92,4 +92,10 @@ for path, data, ct in files:
     r = alice.post(f"{BASE}/v1/fs/upload", params={"path": path}, files={"file": (path.split("/")[-1], data, ct)})
     log(r, f"upload {path}")
 
+print("== FILE SHARE LINKS (alice) ==")
+for path, exp, dl in [("/Documents/proposal.txt", 48, 3), ("/Photos/cover.png", 24, 1)]:
+    log(alice.post(f"{BASE}/ui/files/share-links",
+                   json={"file_node_id": path, "expiry_hours": exp, "max_downloads": dl}),
+        f"share link {path}")
+
 print("done.")
