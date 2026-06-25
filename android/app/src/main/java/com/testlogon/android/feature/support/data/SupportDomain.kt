@@ -16,6 +16,7 @@ enum class SupportTicketStatus(val wire: String) {
     WAITING_ON_USER("waiting_on_user"),
     DONE("done"),
     REOPENED("reopened"),
+    CANCELLED("cancelled"),
     UNKNOWN("");
 
     companion object {
@@ -39,6 +40,9 @@ data class SupportTicket(
 ) {
     val isAssigned: Boolean get() = !assignedAdminSub.isNullOrBlank()
     val lastMessagePreview: String? get() = messages.lastOrNull()?.body
+    /** B8 #15 — a terminal ticket (resolved/cancelled) hides the user close/cancel action. */
+    val isTerminal: Boolean
+        get() = status == SupportTicketStatus.DONE || status == SupportTicketStatus.CANCELLED
 }
 
 data class SupportTicketMessage(

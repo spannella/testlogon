@@ -36,6 +36,9 @@ data class ApiKeyDto(
     @Json(name = "expires_at") val expiresAt: Long? = null,
     @Json(name = "prefix") val prefix: String? = null,
     @Json(name = "revoked") val revoked: Boolean = false,
+    // Batch 8 (#18): the list endpoint also carries each key's IP allow/deny rules (CIDRs).
+    @Json(name = "allow_cidrs") val allowCidrs: List<String> = emptyList(),
+    @Json(name = "deny_cidrs") val denyCidrs: List<String> = emptyList(),
 )
 
 /** Envelope for GET ui/api_keys (the body is {"keys": [...]}). */
@@ -70,4 +73,36 @@ data class CreateApiKeyRequest(
 /** Request body for POST ui/api_keys/revoke. */
 data class RevokeApiKeyRequest(
     @Json(name = "key_id") val keyId: String,
+)
+
+/**
+ * Batch 8 (#17): request body for PATCH ui/api_keys/{key_id}/scopes (also accepts a `scopes` alias server-side).
+ * Replaces the full capability set for the key (require_fresh_mfa gated).
+ */
+data class SetScopesRequest(
+    @Json(name = "key_id") val keyId: String,
+    @Json(name = "capabilities") val capabilities: List<String> = emptyList(),
+)
+
+/** Response of the scopes set/patch: { ok, capabilities, ... }. */
+data class SetScopesResultDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "capabilities") val capabilities: List<String> = emptyList(),
+)
+
+/**
+ * Batch 8 (#18): request body for POST ui/api_keys/ip_rules. SET/REPLACE semantics - the lists fully replace
+ * the key's current allow/deny CIDRs (require_fresh_mfa gated).
+ */
+data class SetIpRulesRequest(
+    @Json(name = "key_id") val keyId: String,
+    @Json(name = "allow_cidrs") val allowCidrs: List<String> = emptyList(),
+    @Json(name = "deny_cidrs") val denyCidrs: List<String> = emptyList(),
+)
+
+/** Response of POST ui/api_keys/ip_rules: { ok, allow_cidrs, deny_cidrs }. */
+data class SetIpRulesResultDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "allow_cidrs") val allowCidrs: List<String> = emptyList(),
+    @Json(name = "deny_cidrs") val denyCidrs: List<String> = emptyList(),
 )

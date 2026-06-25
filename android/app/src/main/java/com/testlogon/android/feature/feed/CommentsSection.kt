@@ -116,7 +116,7 @@ fun CommentsSection(
     // #24 — system photo picker for image comments.
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetContent(),
-    ) { uri -> if (uri != null) viewModel.uploadAndSendImageComment(uri) }
+    ) { uri -> if (uri != null) viewModel.uploadAndStageImage(uri) }
 
     // #25 — keep the VM's own-post flag in sync so it can gate tipping.
     androidx.compose.runtime.LaunchedEffect(isOwnPost) { viewModel.setOwnPost(isOwnPost) }
@@ -174,6 +174,8 @@ fun CommentsSection(
             },
             onOpenMediaPicker = viewModel::openMediaPicker,
             onPickImage = { imagePicker.launch("image/*") },
+            onClearStagedImage = viewModel::clearStagedImage,
+            onRemoveEditImage = viewModel::removeEditImage,
             onCancelReply = viewModel::cancelReply,
             onCancelEdit = {
                 draft = ""
@@ -347,6 +349,7 @@ private fun CommentRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // #4 — a comment can carry an image AND text together; render the media (if any) then the text.
         val mediaUrl = comment.gifUrl ?: comment.stickerUrl ?: comment.imageUrl
         if (mediaUrl != null) {
             val cd = when {
@@ -362,7 +365,9 @@ private fun CommentRow(
                     .heightIn(max = if (comment.imageUrl != null) 220.dp else 140.dp)
                     .clip(RoundedCornerShape(12.dp)),
             )
-        } else {
+        }
+        // Body text shows on plain text comments AND on text+image comments (gif/sticker carry no body).
+        if (comment.body.isNotBlank()) {
             val bodyText = if (comment.updatedAtEpochSeconds != null) {
                 comment.body + " " + stringResource(R.string.comments_edited)
             } else {
@@ -518,6 +523,8 @@ private fun CommentComposer(
     onSend: () -> Unit,
     onOpenMediaPicker: () -> Unit,
     onPickImage: () -> Unit,
+    onClearStagedImage: () -> Unit = {},
+    onRemoveEditImage: () -> Unit = {},
     onCancelReply: () -> Unit,
     onCancelEdit: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -552,8 +559,26 @@ private fun CommentComposer(
                 }
             }
         }
+        // #4 — staged image preview (compose a text+image comment); tap X to drop it before sending.
+        if (!state.isEditing && state.pendingImageUrl != null) {
+            ComposerImagePreview(
+                url = state.pendingImageUrl,
+                contentDescription = "Attached image to send",
+                onRemove = onClearStagedImage,
+                tag = "comments_staged_image",
+            )
+        }
+        // #5 — while editing, show the comment current image with a remove control.
+        if (state.isEditing && state.editImageUrl != null) {
+            ComposerImagePreview(
+                url = state.editImageUrl,
+                contentDescription = "Comment image (editing)",
+                onRemove = onRemoveEditImage,
+                tag = "comments_edit_image",
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // GIF / sticker + image pickers (kept out of edit mode, where only the body is editable).
+            // GIF / sticker picker is text-comment only (not while editing).
             if (!state.isEditing) {
                 IconButton(
                     onClick = onOpenMediaPicker,
@@ -565,22 +590,22 @@ private fun CommentComposer(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 }
-                // #24 — attach an uploaded image as a comment.
-                if (imageUploading) {
-                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    }
-                } else {
-                    IconButton(
-                        onClick = onPickImage,
-                        modifier = Modifier.size(48.dp).testTag("comments_image_button"),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Image,
-                            contentDescription = "Attach a photo",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
+            }
+            // #4/#5 — attach (or, in edit mode, REPLACE) an uploaded image. Available in both modes.
+            if (imageUploading) {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                }
+            } else {
+                IconButton(
+                    onClick = onPickImage,
+                    modifier = Modifier.size(48.dp).testTag("comments_image_button"),
+                ) {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = if (state.isEditing) "Replace photo" else "Attach a photo",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
             OutlinedTextField(
@@ -606,6 +631,37 @@ private fun CommentComposer(
                     tint = if (state.canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+/** #4/#5 — small staged/edit image thumbnail with a remove (X) control for the composer. */
+@Composable
+private fun ComposerImagePreview(
+    url: String,
+    contentDescription: String,
+    onRemove: () -> Unit,
+    tag: String,
+) {
+    Box(modifier = Modifier.padding(vertical = 4.dp)) {
+        AsyncImage(
+            model = url,
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(96.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .testTag(tag),
+        )
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).size(32.dp).testTag(tag + "_remove"),
+        ) {
+            Icon(
+                Icons.Outlined.Close,
+                contentDescription = "Remove image",
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }

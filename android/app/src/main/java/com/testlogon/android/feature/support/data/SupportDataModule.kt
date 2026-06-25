@@ -1,6 +1,7 @@
 package com.testlogon.android.feature.support.data
 
 import com.testlogon.android.core.network.support.SupportApi
+import com.testlogon.android.core.network.support.SupportLiveChatApi
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -16,6 +17,11 @@ object SupportApiModule {
     @Provides
     @Singleton
     fun provideSupportApi(retrofit: Retrofit): SupportApi = retrofit.create(SupportApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideSupportLiveChatApi(retrofit: Retrofit): SupportLiveChatApi =
+        retrofit.create(SupportLiveChatApi::class.java)
 }
 
 @Module
@@ -24,4 +30,8 @@ abstract class SupportDataModule {
     @Binds
     @Singleton
     abstract fun bindSupportRepository(impl: SupportRepositoryImpl): SupportRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSupportLiveChatRepository(impl: SupportLiveChatRepositoryImpl): SupportLiveChatRepository
 }

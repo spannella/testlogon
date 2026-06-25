@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.PostComposeRepository
 import com.testlogon.android.data.feed.PostVisibility
+import com.testlogon.android.data.videos.VideoUploadRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +23,16 @@ data class EditPostUiState(
     val visibility: PostVisibility = PostVisibility.FOLLOWERS,
     /** Currently-attached photo urls (already-uploaded). Empty REMOVES all photos on save. */
     val imageUrls: List<String> = emptyList(),
+    /** #3 — the currently-attached video id (null = none). Mutually exclusive with photos. */
+    val videoId: String? = null,
+    /** #3 — a poster/source url for showing the attached video in the editor (server playable url). */
+    val videoPlaybackUrl: String? = null,
+    val videoThumbnailUrl: String? = null,
+    /** #3 — local content uri of a just-picked (replacement) video, shown while it uploads. */
+    val videoLocalUri: String? = null,
+    /** #3 — true once the user added/replaced/removed the video this session (so save sends it). */
+    val videoChanged: Boolean = false,
+    val uploadingVideo: Boolean = false,
     /** Unlock price in dollars as typed; blank = the post is free/unlocked on save. */
     val lockPriceInput: String = "",
     val uploadingMedia: Boolean = false,
@@ -31,8 +42,8 @@ data class EditPostUiState(
     val saved: Boolean = false,
 ) {
     val canSave: Boolean
-        get() = (body.isNotBlank() || imageUrls.isNotEmpty()) &&
-            !submitting && !loading && !uploadingMedia
+        get() = (body.isNotBlank() || imageUrls.isNotEmpty() || videoId != null) &&
+            !submitting && !loading && !uploadingMedia && !uploadingVideo
 }
 
 /**
@@ -45,6 +56,7 @@ data class EditPostUiState(
 class EditPostViewModel @Inject constructor(
     private val compose: PostComposeRepository,
     private val feedRefreshBus: FeedRefreshBus,
+    private val videoUploads: VideoUploadRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(EditPostUiState())
@@ -64,6 +76,7 @@ class EditPostViewModel @Inject constructor(
                         ?.takeIf { dto.locked && it > 0 }
                         ?.let { centsToDollars(it) }
                         .orEmpty()
+                    val vid = dto.video
                     _state.update {
                         it.copy(
                             loading = false,
@@ -71,6 +84,17 @@ class EditPostViewModel @Inject constructor(
                             visibility = visibilityFromWire(dto.visibility),
                             imageUrls = dto.imageUrls.orEmpty(),
                             lockPriceInput = priceInput,
+                            videoId = vid?.videoId,
+                            videoPlaybackUrl = vid?.let { v ->
+                                v.hlsManifestUrl?.let { base ->
+                                    val tok = v.playbackToken?.takeIf { t -> t.isNotBlank() }
+                                    if (tok == null) base
+                                    else base + (if (base.contains('?')) "&" else "?") + "token=" + tok
+                                }
+                            },
+                            videoThumbnailUrl = vid?.thumbnailUrl,
+                            videoLocalUri = null,
+                            videoChanged = false,
                         )
                     }
                 }
@@ -86,6 +110,28 @@ class EditPostViewModel @Inject constructor(
     fun onVisibilityChange(v: PostVisibility) = _state.update { it.copy(visibility = v) }
     fun onLockPriceChange(text: String) = _state.update { it.copy(lockPriceInput = text, error = null) }
     fun removeImage(url: String) = _state.update { it.copy(imageUrls = it.imageUrls - url) }
+
+    /** #3 — remove the attached video on save. */
+    fun removeVideo() = _state.update {
+        it.copy(videoId = null, videoPlaybackUrl = null, videoThumbnailUrl = null, videoLocalUri = null, videoChanged = true)
+    }
+
+    /** #3 — pick a (replacement) video; upload it to the VOD pipeline and attach its video_id. Picking
+     *  a video clears any attached photos (the backend treats them as mutually exclusive). */
+    fun onVideoPicked(uri: android.net.Uri?) {
+        if (uri == null) return
+        _state.update { it.copy(uploadingVideo = true, videoLocalUri = uri.toString(), error = null) }
+        viewModelScope.launch {
+            val title = _state.value.body.trim().take(80).ifBlank { "Video post" }
+            when (val r = videoUploads.upload(uri, title = title, description = "")) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(uploadingVideo = false, videoId = r.data, imageUrls = emptyList(), videoChanged = true)
+                }
+                is ApiResult.Failure -> _state.update { it.copy(uploadingVideo = false, videoLocalUri = null, error = r.error.message) }
+                is ApiResult.NetworkError -> _state.update { it.copy(uploadingVideo = false, videoLocalUri = null, error = "Video upload failed.") }
+            }
+        }
+    }
 
     /** Upload picked images and append their urls (reuses the compose upload path). */
     fun onImagesPicked(uris: List<android.net.Uri>) {
@@ -117,6 +163,8 @@ class EditPostViewModel @Inject constructor(
                 visibility = s.visibility,
                 imageUrls = s.imageUrls,
                 unlockPriceCents = cents,
+                videoChanged = s.videoChanged,
+                videoId = s.videoId,
             )
             when (r) {
                 is ApiResult.Success -> {

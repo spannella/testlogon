@@ -65,4 +65,7 @@ data class VideoDto(
     @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
     @Json(name = "duration_seconds") val durationSeconds: Long? = null,
     @Json(name = "hls_manifest_url") val hlsManifestUrl: String? = null,
+    // #2 — short-lived playback token; appended to the manifest url ("?token=") for the player
+    // (mirrors the messaging VideoShare / web VideoPlayerPage). Null in dev (mock-S3 ignores it).
+    @Json(name = "playback_token") val playbackToken: String? = null,
 )

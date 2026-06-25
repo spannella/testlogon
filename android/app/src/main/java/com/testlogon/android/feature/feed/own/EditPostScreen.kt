@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -55,6 +56,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.testlogon.android.data.feed.PostVisibility
+import com.testlogon.android.data.messaging.MessageMedia
+import com.testlogon.android.feature.messaging.media.VideoClipBubble
 
 /**
  * FD1 / FD-EDIT — edit an owned post's TEXT, PHOTOS, AUDIENCE (visibility) and PAID-LOCK. Loads the
@@ -74,6 +77,10 @@ fun EditPostRoute(
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(5),
     ) { uris -> viewModel.onImagesPicked(uris) }
+    // #3 — single-video picker (VOD upload -> video_id). Picking a video replaces any attached one.
+    val pickVideo = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> viewModel.onVideoPicked(uri) }
 
     EditPostScreen(
         state = state,
@@ -85,6 +92,10 @@ fun EditPostRoute(
             pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
         onRemoveImage = viewModel::removeImage,
+        onAddVideo = {
+            pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+        },
+        onRemoveVideo = viewModel::removeVideo,
         onSave = viewModel::save,
     )
 }
@@ -102,6 +113,8 @@ fun EditPostScreen(
     onLockPriceChange: (String) -> Unit,
     onAddPhotos: () -> Unit,
     onRemoveImage: (String) -> Unit,
+    onAddVideo: () -> Unit = {},
+    onRemoveVideo: () -> Unit = {},
     onSave: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
@@ -188,6 +201,43 @@ fun EditPostScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // #3 — VIDEO: show the attached video (playable) + add/replace/remove. Hidden while photos
+            // are attached (the backend treats video and photos as mutually exclusive); the Add-video
+            // button itself stays available and clears photos when used.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onAddVideo,
+                    enabled = !state.uploadingVideo,
+                    modifier = Modifier.testTag("edit_add_video"),
+                ) {
+                    Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text(
+                        if (state.videoId != null) "Replace video" else "Add video",
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+                if (state.uploadingVideo) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                }
+            }
+            val videoSource = state.videoPlaybackUrl ?: state.videoLocalUri
+            if (videoSource != null) {
+                Box(modifier = Modifier.fillMaxWidth().testTag("edit_video_preview")) {
+                    VideoClipBubble(
+                        media = MessageMedia.VideoClip(
+                            playbackUrl = state.videoPlaybackUrl,
+                            localUri = state.videoLocalUri,
+                            uploadProgress = if (state.uploadingVideo) 0.5f else null,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    RemoveBadge(
+                        onClick = onRemoveVideo,
+                        modifier = Modifier.align(Alignment.TopEnd).testTag("edit_video_remove"),
+                    )
                 }
             }
 

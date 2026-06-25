@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.collectLatest
 object GroupDetailTestTags {
     const val SCREEN = "group_detail_screen"
     const val LEAVE = "group_leave"
+    const val FEED = "group_detail_feed"
     const val MEMBERS = "group_detail_members"
     const val TREASURY = "group_detail_treasury"
     const val FUNDRAISING = "group_detail_fundraising"
@@ -62,6 +63,7 @@ object GroupDetailTestTags {
 fun GroupDetailRoute(
     onBack: () -> Unit,
     onLeft: (String) -> Unit,
+    onOpenFeed: (String) -> Unit,
     onOpenMembers: (String) -> Unit,
     onOpenTreasury: (String) -> Unit,
     onOpenFundraising: (String) -> Unit,
@@ -82,6 +84,7 @@ fun GroupDetailRoute(
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onLeave = viewModel::leave,
+        onOpenFeed = { onOpenFeed(viewModel.groupId) },
         onOpenMembers = { onOpenMembers(viewModel.groupId) },
         onOpenTreasury = { onOpenTreasury(viewModel.groupId) },
         onOpenFundraising = { onOpenFundraising(viewModel.groupId) },
@@ -97,6 +100,7 @@ fun GroupDetailScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onLeave: () -> Unit,
+    onOpenFeed: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenTreasury: () -> Unit,
     onOpenFundraising: () -> Unit,
@@ -135,6 +139,7 @@ fun GroupDetailScreen(
                 GroupDetailContent(
                     state = state,
                     onLeave = onLeave,
+                    onOpenFeed = onOpenFeed,
                     onOpenMembers = onOpenMembers,
                     onOpenTreasury = onOpenTreasury,
                     onOpenFundraising = onOpenFundraising,
@@ -150,6 +155,7 @@ fun GroupDetailScreen(
 private fun GroupDetailContent(
     state: GroupDetailUiState.Content,
     onLeave: () -> Unit,
+    onOpenFeed: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenTreasury: () -> Unit,
     onOpenFundraising: () -> Unit,
@@ -184,6 +190,14 @@ private fun GroupDetailContent(
                 text = stringResource(R.string.groups_member_count, count),
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+        Button(
+            onClick = onOpenFeed,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(GroupDetailTestTags.FEED),
+        ) {
+            Text(text = stringResource(R.string.group_feed_open))
         }
         OutlinedButton(
             onClick = onOpenMembers,

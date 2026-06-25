@@ -66,6 +66,13 @@ data class CreatePostResp(
 data class EditPostReq(
     val body: String,
     @Json(name = "image_urls") val imageUrls: List<String>? = null,
+    /**
+     * #3 — the attached VOD video. The backend treats video_id and image_urls as mutually exclusive,
+     * so callers send exactly one. Per the B-POST edit contract: a value SETS/replaces the video, an
+     * empty string CLEARS it (we always include the key on a video-aware edit so the backend's
+     * model_fields_set sees it).
+     */
+    @Json(name = "video_id") val videoId: String? = null,
     @Json(name = "visibility") val visibility: String? = null,
     @Json(name = "lock_type") val lockType: String? = null,
     @Json(name = "unlock_price_cents") val unlockPriceCents: Long? = null,
@@ -86,6 +93,8 @@ data class EditablePostDto(
     @Json(name = "locked") val locked: Boolean = false,
     @Json(name = "lock_type") val lockType: String? = null,
     @Json(name = "unlock_price_cents") val unlockPriceCents: Long? = null,
+    /** #3 — the currently-attached video (owner GET is un-redacted), so the edit screen can show it. */
+    @Json(name = "video") val video: VideoDto? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -158,7 +167,7 @@ class PostComposeRepository @Inject constructor(
             CreatePostReq(
                 body = body,
                 visibility = visibility.wire,
-                lockType = if (unlockPriceCents != null) "price" else null,
+                lockType = if (unlockPriceCents != null) "fixed_price" else null,
                 unlockPriceCents = unlockPriceCents,
                 publishAt = publishAtEpochSeconds,
                 scheduleTimezone = tz,
@@ -187,12 +196,22 @@ class PostComposeRepository @Inject constructor(
         visibility: PostVisibility,
         imageUrls: List<String>,
         unlockPriceCents: Long?,
+        // #3 — when [videoChanged] is true the post's video attachment is being set/replaced/removed:
+        // [videoId] non-null SETS that video (and images are cleared — the backend treats video_id and
+        // image_urls as mutually exclusive), [videoId] null CLEARS the video (and images are sent).
+        videoChanged: Boolean = false,
+        videoId: String? = null,
     ): ApiResult<Unit> = call {
+        val attachingVideo = videoChanged && videoId != null
         api.editPost(
             postId,
             EditPostReq(
                 body = body.trim(),
-                imageUrls = imageUrls,
+                // Mutually exclusive: never send image_urls alongside a video_id.
+                imageUrls = if (attachingVideo) null else imageUrls,
+                // Include the key only when the video changed so the backend's model_fields_set picks it
+                // up; "" clears, a value sets/replaces.
+                videoId = if (videoChanged) (videoId ?: "") else null,
                 visibility = visibility.wire,
                 lockType = if (unlockPriceCents != null) "fixed_price" else "none",
                 unlockPriceCents = if (unlockPriceCents != null) unlockPriceCents else 0L,

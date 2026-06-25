@@ -26,6 +26,8 @@ sealed interface GroupMembersUiState {
         /** Pending invites (status == "invited"). */
         val pending: List<GroupMember>,
         val viewerRole: GroupRole,
+        /** The viewer's own user_id, so the screen can mark their row "(You)". */
+        val viewerUserId: String? = null,
         /** True when the viewer may invite / change-role / remove (viewerRole.canManage). */
         val canManage: Boolean,
         /** The member currently being mutated (role-change / remove), or null when idle. */

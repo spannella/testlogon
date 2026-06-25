@@ -9,6 +9,7 @@ import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.testlogon.android.feature.groups.GroupAdsRoute
 import com.testlogon.android.feature.groups.GroupDetailRoute
+import com.testlogon.android.feature.groups.GroupFeedRoute
 import com.testlogon.android.feature.groups.GroupFundraisingRoute
 import com.testlogon.android.feature.groups.GroupMembersRoute
 import com.testlogon.android.feature.groups.GroupSettingsRoute
@@ -39,6 +40,14 @@ data object GroupMembersDest {
     const val ROUTE = "groups/members/{$ARG_GROUP_ID}"
 
     fun build(groupId: String): String = "groups/members/${Uri.encode(groupId)}"
+}
+
+/** Batch-8 (#11) - the group feed route (carries the {groupId} nav arg). */
+data object GroupFeedDest {
+    const val ARG_GROUP_ID = "groupId"
+    const val ROUTE = "groups/{$ARG_GROUP_ID}/feed"
+
+    fun build(groupId: String): String = "groups/${Uri.encode(groupId)}/feed"
 }
 
 /** AND-355 (sub-pages) - the group treasury route (carries the {groupId} nav arg). */
@@ -96,6 +105,9 @@ fun NavGraphBuilder.groupsDestinations(navController: NavHostController) {
             GroupDetailRoute(
                 onBack = { navController.popBackStack() },
                 onLeft = { navController.popBackStack() },
+                onOpenFeed = { groupId ->
+                    navController.navigate(GroupFeedDest.build(groupId)) { launchSingleTop = true }
+                },
                 onOpenMembers = { groupId ->
                     navController.navigate(GroupMembersDest.build(groupId)) { launchSingleTop = true }
                 },
@@ -118,6 +130,12 @@ fun NavGraphBuilder.groupsDestinations(navController: NavHostController) {
             arguments = listOf(navArgument(GroupMembersDest.ARG_GROUP_ID) { type = NavType.StringType }),
         ) {
             GroupMembersRoute(onBack = { navController.popBackStack() })
+        }
+        composable(
+            route = GroupFeedDest.ROUTE,
+            arguments = listOf(navArgument(GroupFeedDest.ARG_GROUP_ID) { type = NavType.StringType }),
+        ) {
+            GroupFeedRoute(onBack = { navController.popBackStack() })
         }
         composable(
             route = GroupTreasuryDest.ROUTE,

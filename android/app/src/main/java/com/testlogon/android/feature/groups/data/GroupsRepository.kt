@@ -3,7 +3,11 @@ package com.testlogon.android.feature.groups.data
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.model.ApiResult
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
 import com.testlogon.android.core.model.groups.Group
+import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
 import com.testlogon.android.core.model.groups.Contributor
@@ -14,6 +18,7 @@ import com.testlogon.android.core.model.groups.TreasuryBalance
 import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.groups.GroupCreateIn
+import com.testlogon.android.core.network.groups.GroupPostCreateIn
 import com.testlogon.android.core.network.groups.GroupInviteIn
 import com.testlogon.android.core.network.groups.GroupUpdateRoleIn
 import com.testlogon.android.core.network.groups.GroupCreateCampaignIn
@@ -22,6 +27,7 @@ import com.testlogon.android.core.network.groups.GroupUpdateIn
 import com.testlogon.android.core.network.groups.GroupsApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import retrofit2.Response
@@ -62,6 +68,14 @@ interface GroupsRepository {
 
     /** GET one group's member roster (ENVELOPE {members,count} -> mapped). Idempotent GET. */
     suspend fun listMembers(groupId: String): ApiResult<List<GroupMember>>
+
+    // ---- Batch-8 (#11): group feed ----
+
+    /** A cold [PagingData] stream of the group's reverse-chronological feed; re-collect to refresh. */
+    fun groupFeedPager(groupId: String): Flow<PagingData<GroupFeedPost>>
+
+    /** POST a new text post to the group feed. On success returns the created [GroupFeedPost]. */
+    suspend fun createGroupPost(groupId: String, text: String): ApiResult<GroupFeedPost>
 
     /** POST an invite (the invitee becomes status="invited" - a PENDING entry). 200/empty -> Success(Unit). */
     suspend fun invite(groupId: String, userId: String): ApiResult<Unit>
@@ -157,6 +171,17 @@ class GroupsRepositoryImpl @Inject constructor(
     override suspend fun listMembers(groupId: String): ApiResult<List<GroupMember>> =
         withContext(Dispatchers.IO) {
             call { groupsApi.listMembers(groupId).members.map { it.toDomain() } }
+        }
+
+    override fun groupFeedPager(groupId: String): Flow<PagingData<GroupFeedPost>> =
+        Pager(
+            config = PagingConfig(pageSize = 20, initialLoadSize = 20, prefetchDistance = 6, enablePlaceholders = false),
+            pagingSourceFactory = { GroupFeedPagingSource(groupsApi, groupId) },
+        ).flow
+
+    override suspend fun createGroupPost(groupId: String, text: String): ApiResult<GroupFeedPost> =
+        withContext(Dispatchers.IO) {
+            call { groupsApi.createGroupPost(groupId, GroupPostCreateIn(text = text)).toDomain() }
         }
 
     override suspend fun invite(groupId: String, userId: String): ApiResult<Unit> =

@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.support.SupportApi
 import com.testlogon.android.core.network.support.SupportAssignTicketReq
+import com.testlogon.android.core.network.support.SupportCloseTicketReq
 import com.testlogon.android.core.network.support.SupportCreateTicketReq
 import com.testlogon.android.core.network.support.SupportTicketMessageReq
 import com.testlogon.android.core.network.support.SupportTicketStatusReq
@@ -36,6 +37,8 @@ interface SupportRepository {
     suspend fun addMessage(ticketId: String, body: String): ApiResult<SupportTicket>
     suspend fun setStatus(ticketId: String, status: String): ApiResult<SupportTicket>
     suspend fun assign(ticketId: String, assigneeAdminSub: String): ApiResult<SupportTicket>
+    /** B8 #15 — owner close/cancel of one's OWN ticket. action = "close" (->done) | "cancel" (->cancelled). */
+    suspend fun closeTicket(ticketId: String, action: String): ApiResult<SupportTicket>
     suspend fun adminSummary(): ApiResult<SupportAdminSummary>
 
     companion object {
@@ -45,6 +48,8 @@ interface SupportRepository {
         const val DESCRIPTION_MAX = 4000
         const val REPLY_MIN = 1
         const val REPLY_MAX = 4000
+        const val ACTION_CLOSE = "close"
+        const val ACTION_CANCEL = "cancel"
     }
 }
 
@@ -81,6 +86,9 @@ class SupportRepositoryImpl @Inject constructor(
 
     override suspend fun assign(ticketId: String, assigneeAdminSub: String) =
         io { api.assign(ticketId, SupportAssignTicketReq(assigneeAdminSub.trim())).ticket.toDomain() }
+
+    override suspend fun closeTicket(ticketId: String, action: String) =
+        io { api.closeTicket(ticketId, SupportCloseTicketReq(action)).ticket.toDomain() }
 
     override suspend fun adminSummary() =
         io { api.adminSummary().summary.toDomain() }

@@ -6,6 +6,8 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.apikeys.ApiKeysApi
 import com.testlogon.android.core.network.apikeys.CreateApiKeyRequest
 import com.testlogon.android.core.network.apikeys.RevokeApiKeyRequest
+import com.testlogon.android.core.network.apikeys.SetIpRulesRequest
+import com.testlogon.android.core.network.apikeys.SetScopesRequest
 import com.testlogon.android.core.network.error.ApiErrorParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +41,25 @@ interface ApiKeysRepository {
 
     /** POST a revoke for the given key id. On success the key is dropped from the in-memory snapshot. */
     suspend fun revoke(keyId: String): ApiResult<Unit>
+
+    /** Returns the cached key (from the last [list]) by id, or null. No network call. */
+    fun cached(keyId: String): ApiKey?
+
+    /**
+     * Batch 8 (#17): PATCH a key's full capability set. On success the cached row's capabilities are updated
+     * (the server may expand implied capabilities, so the authoritative returned list is written through).
+     */
+    suspend fun setCapabilities(keyId: String, capabilities: List<String>): ApiResult<List<String>>
+
+    /**
+     * Batch 8 (#18): POST a key's full IP allow/deny CIDR lists (SET/replace). On success the cached row's
+     * allow/deny lists are updated to the server-normalised values.
+     */
+    suspend fun setIpRules(
+        keyId: String,
+        allowCidrs: List<String>,
+        denyCidrs: List<String>,
+    ): ApiResult<Pair<List<String>, List<String>>>
 }
 
 @Singleton
@@ -114,6 +135,47 @@ class DefaultApiKeysRepository @Inject constructor(
             }
             result
         }
+
+    override fun cached(keyId: String): ApiKey? = cache?.firstOrNull { it.id == keyId }
+
+    override suspend fun setCapabilities(
+        keyId: String,
+        capabilities: List<String>,
+    ): ApiResult<List<String>> =
+        withContext(Dispatchers.IO) {
+            val result = call {
+                api.setScopes(keyId, SetScopesRequest(keyId = keyId, capabilities = capabilities)).capabilities
+            }
+            if (result is ApiResult.Success) {
+                updateCached(keyId) { it.copy(capabilities = result.data) }
+            }
+            result
+        }
+
+    override suspend fun setIpRules(
+        keyId: String,
+        allowCidrs: List<String>,
+        denyCidrs: List<String>,
+    ): ApiResult<Pair<List<String>, List<String>>> =
+        withContext(Dispatchers.IO) {
+            val result = call {
+                val out = api.setIpRules(
+                    SetIpRulesRequest(keyId = keyId, allowCidrs = allowCidrs, denyCidrs = denyCidrs),
+                )
+                out.allowCidrs to out.denyCidrs
+            }
+            if (result is ApiResult.Success) {
+                updateCached(keyId) {
+                    it.copy(allowCidrs = result.data.first, denyCidrs = result.data.second)
+                }
+            }
+            result
+        }
+
+    /** Patches the cached row for [keyId] (if present) so detail/list reflect a mutation without a re-fetch. */
+    private fun updateCached(keyId: String, transform: (ApiKey) -> ApiKey) {
+        cache = cache?.map { if (it.id == keyId) transform(it) else it }
+    }
 
     /**
      * Folds a block into [ApiResult]. HTTP errors -> Failure (preserving the status so 401 surfaces for the VM's

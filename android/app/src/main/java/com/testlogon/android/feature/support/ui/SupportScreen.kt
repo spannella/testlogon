@@ -2,7 +2,9 @@
 
 package com.testlogon.android.feature.support.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,12 +14,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -29,14 +35,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.feature.support.data.SupportTicket
 
@@ -51,9 +63,30 @@ fun SupportRoute(
     onBack: () -> Unit,
     onOpenTicket: (ticketId: String, isAdmin: Boolean) -> Unit,
     onCreateTicket: () -> Unit,
+    onOpenConversation: (conversationId: String) -> Unit,
     viewModel: SupportHomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // B8 #14 — refresh "My tickets" whenever the landing resumes (returning from create / detail-close).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.onResumed()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    // B8 #13 — one-shot: when a live chat is opened/created, drop into the messaging thread for it.
+    LaunchedEffect(state.liveChat.openConversationId) {
+        val cid = state.liveChat.openConversationId
+        if (cid != null) {
+            viewModel.consumeOpenConversation()
+            onOpenConversation(cid)
+        }
+    }
+
     when (state.role) {
         SupportRole.Resolving -> ResolvingScaffold(onBack)
         SupportRole.Admin -> SupportAdminScreen(
@@ -66,6 +99,7 @@ fun SupportRoute(
             onRetry = viewModel::loadMyTickets,
             onOpenTicket = { onOpenTicket(it, false) },
             onCreateTicket = onCreateTicket,
+            onStartLiveChat = viewModel::startLiveChat,
         )
     }
 }
@@ -103,6 +137,7 @@ private fun SupportUserScreen(
     onRetry: () -> Unit,
     onOpenTicket: (String) -> Unit,
     onCreateTicket: () -> Unit,
+    onStartLiveChat: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.testTag(SupportTestTags.USER_SCREEN),
@@ -128,11 +163,24 @@ private fun SupportUserScreen(
         ) {
             item {
                 Text(
-                    "Need a hand? Browse the help center or open a support ticket and our team will reply here.",
+                    "Need a hand? Chat with our support team in real time, browse the help center, or open a ticket and we'll reply here.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(12.dp))
+                LiveChatCard(
+                    state = state.liveChat,
+                    onClick = onStartLiveChat,
+                )
+                if (state.liveChat.startError != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        state.liveChat.startError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
                 Text("Quick help", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             }
             items(faqLinks, key = { it.first }) { (q, _) ->
@@ -167,6 +215,69 @@ private fun SupportUserScreen(
                     items(state.tickets, key = { it.ticketId }) { t ->
                         TicketRow(t, showOwner = false, onClick = { onOpenTicket(t.ticketId) })
                     }
+            }
+        }
+    }
+}
+
+/**
+ * B8 #13 — the live-agent chat entry. Shows agent availability honestly: "Agents online" when at least one
+ * is available (an instant live chat), otherwise "Start a chat — we'll reply as soon as an agent is free"
+ * (the conversation queues server-side and the agent answers when online). Always tappable.
+ */
+@Composable
+private fun LiveChatCard(state: LiveChatUiState, onClick: () -> Unit) {
+    val avail = state.availability
+    val online = avail?.anyAvailable == true
+    val subtitle = when {
+        state.startingChat -> "Starting your chat..."
+        online -> "Agents are online now - start a live chat"
+        avail != null -> "No agents online right now - start a chat and we'll reply as soon as one is free"
+        else -> "Message our support team in real time"
+    }
+    Card(
+        onClick = onClick,
+        enabled = !state.startingChat,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        modifier = Modifier.fillMaxWidth().testTag(SupportTestTags.LIVE_CHAT_CARD),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (state.startingChat) {
+                CircularProgressIndicator(Modifier.height(24.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(
+                    Icons.AutoMirrored.Outlined.Chat,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Chat with support",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                    if (online) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
             }
         }
     }

@@ -30,6 +30,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -67,8 +68,11 @@ object TierStatusTestTags {
     const val MAX = "kyc_tier_max"
     const val HISTORY = "kyc_tier_history"
     const val ELIGIBLE = "kyc_tier_eligible"
+    const val BEGIN = "kyc_tier_begin"
 
     fun requirement(key: String): String = "kyc_tier_requirement_$key"
+
+    fun requirementAction(key: String): String = "kyc_tier_requirement_action_$key"
 }
 
 /**
@@ -82,6 +86,7 @@ fun TierStatusRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenCase: (caseId: String) -> Unit = {},
+    onStartRequirement: (key: String) -> Unit = {},
     viewModel: TierStatusViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -107,6 +112,7 @@ fun TierStatusRoute(
         onEvaluate = viewModel::onEvaluate,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::onRetry,
+        onStartRequirement = onStartRequirement,
         modifier = modifier,
     )
 }
@@ -119,6 +125,7 @@ fun TierStatusScreen(
     onEvaluate: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
+    onStartRequirement: (key: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -149,6 +156,7 @@ fun TierStatusScreen(
                     state = state,
                     onEvaluate = onEvaluate,
                     onRefresh = onRefresh,
+                    onStartRequirement = onStartRequirement,
                 )
             }
         }
@@ -160,6 +168,7 @@ private fun TierStatusContent(
     state: TierUiState.Content,
     onEvaluate: () -> Unit,
     onRefresh: () -> Unit,
+    onStartRequirement: (key: String) -> Unit,
 ) {
     PullToRefreshBox(
         isRefreshing = state.refreshing,
@@ -183,9 +192,18 @@ private fun TierStatusContent(
                 if (state.eligibleForTarget) {
                     item(key = "eligible") { EligibilityBanner(state.target) }
                 }
+                // A clear, always-present primary CTA so the first verification view is never a dead end:
+                // it carries the user into the actual verification steps (the next unmet requirement, or the
+                // document/case flow when none of the requirements map to a screen).
+                item(key = "begin") {
+                    BeginVerificationButton(
+                        requirements = state.requirements,
+                        onStart = onStartRequirement,
+                    )
+                }
                 item(key = "req_header") { RequirementsHeader(state.target) }
                 items(state.requirements, key = { it.key }) { requirement ->
-                    RequirementRow(requirement)
+                    RequirementRow(requirement, onStartRequirement)
                 }
                 item(key = "evaluate") { EvaluateBar(state.evaluating, onEvaluate) }
             }
@@ -277,7 +295,7 @@ private fun RequirementsHeader(target: Tier?) {
 }
 
 @Composable
-private fun RequirementRow(requirement: Requirement) {
+private fun RequirementRow(requirement: Requirement, onStartRequirement: (key: String) -> Unit) {
     val label = requirementLabelRes(requirement.key)
         ?.let { stringResource(it) }
         ?: requirement.key
@@ -309,8 +327,43 @@ private fun RequirementRow(requirement: Requirement) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.clearAndSetSemantics { contentDescription = "$label, $stateCd" },
+            modifier = Modifier
+                .weight(1f)
+                .clearAndSetSemantics { contentDescription = "$label, $stateCd" },
         )
+        // Each UNMET requirement carries its own actionable CTA -> the relevant verification step.
+        if (!requirement.met) {
+            TextButton(
+                onClick = { onStartRequirement(requirement.key) },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag(TierStatusTestTags.requirementAction(requirement.key)),
+            ) {
+                Text(stringResource(R.string.kyc_tier_req_action))
+            }
+        }
+    }
+}
+
+/**
+ * The primary "Begin verification" CTA. It targets the first UNMET requirement (so the user always has a real
+ * next step from this first screen); if everything is met it falls back to a generic verification entry (the
+ * empty key routes to the document/case flow at the nav layer).
+ */
+@Composable
+private fun BeginVerificationButton(
+    requirements: List<Requirement>,
+    onStart: (key: String) -> Unit,
+) {
+    val firstUnmet = requirements.firstOrNull { !it.met }?.key.orEmpty()
+    Button(
+        onClick = { onStart(firstUnmet) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .testTag(TierStatusTestTags.BEGIN),
+    ) {
+        Text(stringResource(R.string.kyc_tier_begin_verification))
     }
 }
 

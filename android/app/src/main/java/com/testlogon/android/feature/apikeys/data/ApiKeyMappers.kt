@@ -20,6 +20,8 @@ fun ApiKeyDto.toDomain(): ApiKey = ApiKey(
     lastUsedAt = lastUsedAt?.takeIf { it > 0 },
     expiresAt = expiresAt?.takeIf { it > 0 },
     prefix = prefix.orEmpty(),
+    allowCidrs = allowCidrs,
+    denyCidrs = denyCidrs,
 )
 
 /** Maps the create-result DTO to the domain [CreatedApiKey] (carries the one-time secret). */

@@ -1,8 +1,10 @@
 package com.testlogon.android.feature.groups.data
 
 import com.testlogon.android.core.model.groups.Group
+import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
+import com.testlogon.android.core.network.groups.GroupFeedPostDto
 import com.testlogon.android.core.network.groups.GroupMemberDto
 import com.testlogon.android.core.network.groups.UserGroupDto
 
@@ -37,7 +39,32 @@ fun GroupMemberDto.toDomain(): GroupMember = GroupMember(
     userId = userId,
     role = GroupRole.from(role),
     status = status.orEmpty(),
-    displayName = displayName,
+    // Batch-8 (#10): the owner/admin row arrives with an EMPTY display_name from the backend; coerce a
+    // blank value to null so the UI falls back to the user_id instead of rendering an empty, "missing" row.
+    displayName = displayName?.takeIf { it.isNotBlank() },
     joinedAt = joinedAt,
     promotedAt = promotedAt,
 )
+
+/**
+ * Batch-8 (#11) - maps a [GroupFeedPostDto] to the domain [GroupFeedPost]. A post is "locked" when it has a
+ * positive unlock price AND the wire says the viewer has not unlocked it (text comes back null in that case).
+ */
+fun GroupFeedPostDto.toDomain(): GroupFeedPost {
+    val price = unlockPriceCents
+    val isUnlocked = unlocked ?: true
+    return GroupFeedPost(
+        postId = postId,
+        authorId = userId,
+        authorName = userDisplayName?.takeIf { it.isNotBlank() } ?: userId,
+        authorAvatarUrl = userAvatarUrl,
+        text = text,
+        imageUrl = imageUrl,
+        pinned = pinned ?: false,
+        locked = price != null && price > 0 && !isUnlocked,
+        unlockPriceCents = price,
+        tipTotalCents = tipTotalCents ?: 0,
+        commentCount = commentCount ?: 0,
+        createdAt = createdAt ?: 0,
+    )
+}

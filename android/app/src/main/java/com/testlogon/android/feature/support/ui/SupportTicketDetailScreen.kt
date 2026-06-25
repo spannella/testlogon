@@ -20,7 +20,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -33,6 +38,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -55,11 +63,61 @@ fun SupportTicketDetailRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val ticket = state.ticket
 
+    // B8 #15 — owner close/cancel confirmation. null = no dialog; "close"/"cancel" = pending action.
+    var pendingAction by remember { mutableStateOf<String?>(null) }
+    pendingAction?.let { action ->
+        val isCancel = action == "cancel"
+        AlertDialog(
+            onDismissRequest = { pendingAction = null },
+            title = { Text(if (isCancel) "Cancel this ticket?" else "Close this ticket?") },
+            text = {
+                Text(
+                    if (isCancel) {
+                        "Cancelling marks this request as withdrawn. You can always open a new ticket later."
+                    } else {
+                        "Closing marks this ticket as resolved. You can reopen it by replying if you still need help."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingAction = null
+                    viewModel.closeTicket(action)
+                }) { Text(if (isCancel) "Cancel ticket" else "Close ticket") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAction = null }) { Text("Keep open") }
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
             androidx.compose.material3.TopAppBar(
                 title = { Text(ticket?.subject?.ifBlank { "Ticket" } ?: "Ticket") },
                 navigationIcon = { BackButton(onBack) },
+                actions = {
+                    if (state.canClose) {
+                        var menuOpen by remember { mutableStateOf(false) }
+                        IconButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.testTag(SupportTestTags.DETAIL_CLOSE),
+                        ) {
+                            Icon(Icons.Outlined.MoreVert, contentDescription = "Ticket actions")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Close ticket (resolved)") },
+                                onClick = { menuOpen = false; pendingAction = "close" },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Cancel ticket") },
+                                onClick = { menuOpen = false; pendingAction = "cancel" },
+                                modifier = Modifier.testTag(SupportTestTags.DETAIL_CANCEL),
+                            )
+                        }
+                    }
+                },
             )
         },
         bottomBar = {

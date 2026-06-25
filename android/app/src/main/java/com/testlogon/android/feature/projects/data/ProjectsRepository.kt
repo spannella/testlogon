@@ -12,6 +12,7 @@ import com.testlogon.android.core.model.projects.ProviderCallbackParams
 import com.testlogon.android.core.model.projects.ProviderStart
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.projects.ProjectProviders
+import com.testlogon.android.core.network.projects.ProjectCreateIn
 import com.testlogon.android.core.network.projects.ProjectsApi
 import com.testlogon.android.core.network.projects.ProviderOAuthCallbackIn
 import kotlinx.coroutines.CancellationException
@@ -47,6 +48,16 @@ interface ProjectsRepository {
 
     /** GET one project's detail ({ project, files[], cursor }), mapped to the domain project. Idempotent. */
     suspend fun getProjectDetail(projectId: String): ApiResult<Project>
+
+    /**
+     * Batch-8 (#9) - POST a new project. On success returns the created [Project] (the caller is the owner);
+     * a 4xx/422 surfaces as Failure carrying the status; transport failures -> NetworkError. NON-idempotent.
+     */
+    suspend fun createProject(
+        name: String,
+        description: String?,
+        tags: List<String>,
+    ): ApiResult<Project>
 
     /**
      * POST the account-scoped Drive OAuth START - returns the authorization URL + state. NON-idempotent (no
@@ -93,6 +104,22 @@ class ProjectsRepositoryImpl @Inject constructor(
         withContext(Dispatchers.IO) {
             call { api.getProjectDetail(projectId).project.toDomain() }
         }
+
+    override suspend fun createProject(
+        name: String,
+        description: String?,
+        tags: List<String>,
+    ): ApiResult<Project> = withContext(Dispatchers.IO) {
+        call {
+            api.createProject(
+                ProjectCreateIn(
+                    name = name,
+                    description = description?.takeIf { it.isNotBlank() },
+                    tags = tags,
+                ),
+            ).toDomain()
+        }
+    }
 
     override suspend fun startGoogleDrive(): ApiResult<ProviderStart> =
         withContext(Dispatchers.IO) {

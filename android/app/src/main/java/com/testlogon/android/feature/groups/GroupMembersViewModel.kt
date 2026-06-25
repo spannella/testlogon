@@ -72,6 +72,7 @@ class GroupMembersViewModel @Inject constructor(
             members = active,
             pending = pending,
             viewerRole = viewerRole,
+            viewerUserId = viewerUserId,
             canManage = viewerRole.canManage,
         )
     }

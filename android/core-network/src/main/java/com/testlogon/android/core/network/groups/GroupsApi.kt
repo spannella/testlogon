@@ -49,6 +49,27 @@ interface GroupsApi {
     @GET("ui/groups/{groupId}/members")
     suspend fun listMembers(@Path("groupId") groupId: String): GroupMembersResponse
 
+    // ---- Batch-8 (#11): group feed (GROUP-002) ----
+
+    /**
+     * POST a new group feed post. 201 -> the created GroupFeedPostDto. The shared authenticated client
+     * attaches the session cookie + X-CSRF-Token.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/groups/{groupId}/posts")
+    suspend fun createGroupPost(
+        @Path("groupId") groupId: String,
+        @Body body: GroupPostCreateIn,
+    ): GroupFeedPostDto
+
+    /** GET one reverse-chronological page of the group feed. ENVELOPE {posts, cursor, has_more}. */
+    @GET("ui/groups/{groupId}/feed")
+    suspend fun getGroupFeed(
+        @Path("groupId") groupId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int = 20,
+    ): GroupFeedResponse
+
     /**
      * POST an invite (the invitee becomes status="invited" - a PENDING entry, not an active member).
      * Typed as Response<Unit> so the repo succeeds by isSuccessful regardless of body.

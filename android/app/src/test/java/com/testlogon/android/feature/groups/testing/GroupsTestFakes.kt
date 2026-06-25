@@ -7,6 +7,8 @@ import com.testlogon.android.core.model.groups.Contributor
 import com.testlogon.android.core.model.groups.Group
 import com.testlogon.android.core.model.groups.GroupCampaign
 import com.testlogon.android.core.model.groups.GroupCampaignStats
+import androidx.paging.PagingData
+import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.core.model.groups.GroupFundraiser
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
@@ -14,9 +16,11 @@ import com.testlogon.android.core.model.groups.TreasuryBalance
 import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.feature.groups.data.GroupsRepository
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * AND-355 - shared in-memory fakes for the groups ViewModel tests. Mutating calls RECORD their args BEFORE
@@ -74,6 +78,18 @@ class FakeGroupsRepo(
         membersCallCount++
         val after = membersAfterInvite
         return if (after != null && membersCallCount > 1) after else membersResult
+    }
+
+    var groupFeedResult: ApiResult<GroupFeedPost> =
+        ApiResult.Success(GroupFeedPost(postId = "p1", authorId = "u1", authorName = "u1"))
+    val createGroupPostArgs = mutableListOf<Pair<String, String>>()
+
+    override fun groupFeedPager(groupId: String): Flow<PagingData<GroupFeedPost>> =
+        flowOf(PagingData.empty())
+
+    override suspend fun createGroupPost(groupId: String, text: String): ApiResult<GroupFeedPost> {
+        createGroupPostArgs += groupId to text
+        return groupFeedResult
     }
 
     override suspend fun invite(groupId: String, userId: String): ApiResult<Unit> {

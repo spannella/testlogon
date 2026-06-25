@@ -36,6 +36,33 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import coil.compose.rememberAsyncImagePainter
+import coil.decode.VideoFrameDecoder
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 
 @Composable
 fun VideoUploadRoute(
@@ -123,6 +150,16 @@ fun VideoUploadScreen(
                 Text("Browse files", modifier = Modifier.padding(start = 8.dp))
             }
 
+            // #7 — once a video is picked, show a PLAYABLE local preview of the selected content URI
+            // (poster frame decoded by Coil's VideoFrameDecoder, tap-to-play a lifecycle-scoped
+            // ExoPlayer) so the user confirms the right clip before/while it uploads — not just a name.
+            state.pickedUri?.let { picked ->
+                LocalVideoPreview(
+                    uri = picked,
+                    modifier = Modifier.fillMaxWidth().testTag("video_upload_preview"),
+                )
+            }
+
             OutlinedTextField(
                 value = state.title,
                 onValueChange = onTitleChange,
@@ -170,3 +207,81 @@ private fun displayNameOf(context: android.content.Context, uri: android.net.Uri
             null,
         )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
     }.getOrNull() ?: uri.lastPathSegment
+
+
+/**
+ * #7 — a self-contained PLAYABLE preview of a picked (content://) video URI. Shows a poster frame
+ * (Coil [VideoFrameDecoder], first keyframe) over a black backdrop with a play overlay; tapping plays
+ * the local clip inline in a lifecycle-scoped [ExoPlayer] that is RELEASED on disposal (never an eager
+ * singleton). No network: it plays the picked content URI directly, so the user can confirm the right
+ * file before/while it uploads.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun LocalVideoPreview(
+    uri: String,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    var playing by remember(uri) { mutableStateOf(false) }
+    val posterPainter = rememberAsyncImagePainter(
+        model = ImageRequest.Builder(context)
+            .data(uri)
+            .videoFrameMillis(0L)
+            .decoderFactory(VideoFrameDecoder.Factory())
+            .crossfade(true)
+            .build(),
+    )
+    Box(
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (playing) {
+            val player = remember(uri) {
+                ExoPlayer.Builder(context).build().apply {
+                    setMediaItem(MediaItem.fromUri(Uri.parse(uri)))
+                    prepare()
+                    playWhenReady = true
+                }
+            }
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner, player) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_PAUSE -> player.pause()
+                        Lifecycle.Event.ON_STOP -> player.playWhenReady = false
+                        else -> Unit
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                    player.release()
+                }
+            }
+            AndroidView(
+                factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
+                modifier = Modifier.fillMaxSize().testTag("video_upload_preview_player"),
+            )
+        } else {
+            Image(
+                painter = posterPainter,
+                contentDescription = "Selected video preview",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().testTag("video_upload_preview_poster"),
+            )
+            Icon(
+                Icons.Filled.PlayCircle,
+                contentDescription = "Play preview",
+                tint = Color.White,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clickable { playing = true }
+                    .testTag("video_upload_preview_play"),
+            )
+        }
+    }
+}

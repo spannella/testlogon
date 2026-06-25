@@ -70,6 +70,17 @@ interface SupportApi {
     /** ADMIN-only: the queue summary (counts by status, unassigned, stale). 403 for users. */
     @GET("tickets/admin/summary")
     suspend fun adminSummary(): SupportAdminSummaryEnvelope
+
+    /**
+     * B8 B-SUP2 #15: the ticket OWNER (or an admin) closes/cancels their OWN ticket. action=close -> status
+     * "done"; action=cancel -> status "cancelled". Distinct from the admin-only POST /tickets/{id}/status
+     * (which 403s for a normal user). Returns the WHOLE updated ticket ({ticket} envelope).
+     */
+    @POST("tickets/{ticketId}/close")
+    suspend fun closeTicket(
+        @Path("ticketId") ticketId: String,
+        @Body body: SupportCloseTicketReq,
+    ): SupportTicketEnvelope
 }
 
 // ------------------------------- request bodies -------------------------------
@@ -94,6 +105,12 @@ data class SupportTicketStatusReq(
 @JsonClass(generateAdapter = true)
 data class SupportAssignTicketReq(
     @Json(name = "assignee_admin_sub") val assigneeAdminSub: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class SupportCloseTicketReq(
+    /** "close" -> done, "cancel" -> cancelled. */
+    @Json(name = "action") val action: String,
 )
 
 // ------------------------------- response DTOs --------------------------------

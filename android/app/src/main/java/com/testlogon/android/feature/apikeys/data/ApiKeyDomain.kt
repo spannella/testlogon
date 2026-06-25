@@ -17,6 +17,9 @@ data class ApiKey(
     val lastUsedAt: Long?,
     val expiresAt: Long?,
     val prefix: String,
+    // Batch 8 (#18): per-key IP allow/deny CIDR rules (from the list endpoint).
+    val allowCidrs: List<String> = emptyList(),
+    val denyCidrs: List<String> = emptyList(),
 )
 
 /**

@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 import com.testlogon.android.feature.support.ui.CreateTicketRoute
 import com.testlogon.android.feature.support.ui.SupportRoute
 import com.testlogon.android.feature.support.ui.SupportTicketDetailRoute
@@ -42,6 +43,11 @@ fun NavGraphBuilder.supportDestinations(navController: NavHostController) {
             },
             onCreateTicket = {
                 navController.navigate(SupportCreateTicketDest.ROUTE) { launchSingleTop = true }
+            },
+            // B8 #13 — a live-agent helpdesk_bridge conversation opens in the shared messaging thread UI
+            // (registered by messagingGraph in the same authenticated NavHost).
+            onOpenConversation = { conversationId ->
+                navController.navigate(MessagingRoutes.thread(conversationId)) { launchSingleTop = true }
             },
         )
     }

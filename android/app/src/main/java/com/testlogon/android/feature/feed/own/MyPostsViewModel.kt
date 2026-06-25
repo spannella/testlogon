@@ -10,6 +10,7 @@ import androidx.paging.filter
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.feed.FeedPost
+import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.FeedRepository
 import com.testlogon.android.data.feed.PostComposeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -54,6 +55,7 @@ class MyPostsViewModel @Inject constructor(
     private val currentUser: CurrentUserRepository,
     private val compose: PostComposeRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
+    private val feedRefreshBus: FeedRefreshBus,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MyPostsUiState())
@@ -92,6 +94,11 @@ class MyPostsViewModel @Inject constructor(
 
     init {
         resolve()
+        // #1 — re-page "Your posts" the moment the composer/edit screen signals a publish/edit landed.
+        // ON_RESUME is a backstop; this guarantees a newly published VIDEO post prepends immediately.
+        viewModelScope.launch {
+            feedRefreshBus.refreshes.collect { refresh() }
+        }
     }
 
     fun resolve() {

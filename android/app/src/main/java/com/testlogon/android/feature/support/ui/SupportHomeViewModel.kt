@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.CurrentUserRepository
+import com.testlogon.android.feature.support.data.HelpdeskAvailability
+import com.testlogon.android.feature.support.data.SupportLiveChatRepository
 import com.testlogon.android.feature.support.data.SupportRepository
 import com.testlogon.android.feature.support.data.SupportTicket
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,12 +31,27 @@ data class SupportHomeUiState(
     val ticketsLoading: Boolean = false,
     val tickets: List<SupportTicket> = emptyList(),
     val ticketsError: String? = null,
+    // B8 #13 — live-agent chat
+    val liveChat: LiveChatUiState = LiveChatUiState(),
+)
+
+/**
+ * B8 #13 — customer-side live-agent chat state. [availability] is best-effort (null while unknown / on a
+ * benign failure — the entry is still tappable and the chat queues). [startingChat] guards the create call;
+ * [openConversationId] is a one-shot nav signal consumed by the screen.
+ */
+data class LiveChatUiState(
+    val availability: HelpdeskAvailability? = null,
+    val startingChat: Boolean = false,
+    val startError: String? = null,
+    val openConversationId: String? = null,
 )
 
 @HiltViewModel
 class SupportHomeViewModel @Inject constructor(
     private val currentUser: CurrentUserRepository,
     private val repository: SupportRepository,
+    private val liveChatRepository: SupportLiveChatRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SupportHomeUiState())
@@ -55,6 +72,7 @@ class SupportHomeViewModel @Inject constructor(
             } else {
                 _uiState.value = _uiState.value.copy(role = SupportRole.User)
                 loadMyTickets()
+                loadLiveChatAvailability()
             }
         }
     }
@@ -78,5 +96,57 @@ class SupportHomeViewModel @Inject constructor(
                     )
             }
         }
+    }
+
+    /**
+     * B8 #14 — re-pull "My tickets" when the Support landing resumes (e.g. returning from create-ticket or
+     * from a ticket detail where the user closed/cancelled it) so the list reflects the latest state without
+     * a manual refresh. No-op while still resolving the role or in the admin surface.
+     */
+    fun onResumed() {
+        if (_uiState.value.role == SupportRole.User) {
+            loadMyTickets()
+            loadLiveChatAvailability()
+        }
+    }
+
+    /** B8 #13 — best-effort agent availability for the live-chat entry. */
+    fun loadLiveChatAvailability() {
+        viewModelScope.launch {
+            val avail = when (val r = liveChatRepository.availability()) {
+                is ApiResult.Success -> r.data
+                else -> null // benign: leave the entry tappable, the chat will queue
+            }
+            _uiState.value = _uiState.value.copy(
+                liveChat = _uiState.value.liveChat.copy(availability = avail),
+            )
+        }
+    }
+
+    /** B8 #13 — open (create-or-resume) a live-agent chat, then signal the screen to navigate to its thread. */
+    fun startLiveChat() {
+        if (_uiState.value.liveChat.startingChat) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                liveChat = _uiState.value.liveChat.copy(startingChat = true, startError = null),
+            )
+            val lc = when (val r = liveChatRepository.startLiveChat()) {
+                is ApiResult.Success ->
+                    _uiState.value.liveChat.copy(startingChat = false, openConversationId = r.data)
+                is ApiResult.Failure ->
+                    _uiState.value.liveChat.copy(startingChat = false, startError = r.error.message)
+                is ApiResult.NetworkError ->
+                    _uiState.value.liveChat.copy(startingChat = false, startError = "You appear to be offline.")
+            }
+            _uiState.value = _uiState.value.copy(liveChat = lc)
+        }
+    }
+
+    fun consumeOpenConversation() {
+        _uiState.value = _uiState.value.copy(liveChat = _uiState.value.liveChat.copy(openConversationId = null))
+    }
+
+    fun clearLiveChatError() {
+        _uiState.value = _uiState.value.copy(liveChat = _uiState.value.liveChat.copy(startError = null))
     }
 }

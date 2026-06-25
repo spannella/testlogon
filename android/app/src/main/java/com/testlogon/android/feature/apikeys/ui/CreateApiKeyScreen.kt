@@ -4,6 +4,8 @@ package com.testlogon.android.feature.apikeys.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -13,9 +15,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.feature.apikeys.data.ApiKeyCapabilities
 
 /** B-APIKEY (batch 7) - stable testTags for the create-API-key screen. */
 object CreateApiKeyTestTags {
@@ -45,6 +51,9 @@ object CreateApiKeyTestTags {
     const val SCOPES_FIELD = "api_keys_create_scopes"
     const val EXPIRES_FIELD = "api_keys_create_expires"
     const val SUBMIT = "api_keys_create_submit"
+
+    /** Per-capability chip tag (batch 8 #17). */
+    fun capability(id: String) = "api_keys_cap_${id.replace(':', '_')}"
 }
 
 /**
@@ -73,7 +82,7 @@ fun CreateApiKeyRoute(
         form = form,
         onBack = onBack,
         onLabelChange = viewModel::onLabelChange,
-        onCapabilitiesChange = viewModel::onCapabilitiesChange,
+        onToggleCapability = viewModel::onToggleCapability,
         onExpiresChange = viewModel::onExpiresChange,
         onSubmit = viewModel::submit,
     )
@@ -85,7 +94,7 @@ fun CreateApiKeyScreen(
     form: CreateApiKeyForm,
     onBack: () -> Unit,
     onLabelChange: (String) -> Unit,
-    onCapabilitiesChange: (String) -> Unit,
+    onToggleCapability: (String) -> Unit,
     onExpiresChange: (String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -133,14 +142,9 @@ fun CreateApiKeyScreen(
                     .then(if (labelError != null) Modifier.semantics { error(labelError) } else Modifier),
             )
 
-            OutlinedTextField(
-                value = form.capabilityInput,
-                onValueChange = onCapabilitiesChange,
-                label = { Text(stringResource(R.string.api_keys_create_scopes_label)) },
-                placeholder = { Text(stringResource(R.string.api_keys_create_scopes_placeholder)) },
-                singleLine = true,
-                supportingText = { Text(stringResource(R.string.api_keys_create_scopes_hint)) },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            CapabilityMultiSelect(
+                selected = form.selectedCapabilities,
+                onToggle = onToggleCapability,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(CreateApiKeyTestTags.SCOPES_FIELD),
@@ -178,6 +182,61 @@ fun CreateApiKeyScreen(
                     CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.heightIn(max = 20.dp))
                 } else {
                     Text(stringResource(R.string.api_keys_create_submit))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Batch 8 (#17) - labelled multi-select of the canonical capability catalog, grouped by product area, rendered
+ * as toggleable [FilterChip]s. Selecting nothing -> the backend applies its default scopes.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun CapabilityMultiSelect(
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = stringResource(R.string.api_keys_create_scopes_label),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            text = stringResource(R.string.api_keys_create_scopes_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        ApiKeyCapabilities.GROUPED.forEach { (group, caps) ->
+            Text(
+                text = group,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                caps.forEach { cap ->
+                    val isSelected = cap.id in selected
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onToggle(cap.id) },
+                        label = { Text(cap.action) },
+                        leadingIcon = if (isSelected) {
+                            {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.heightIn(max = 18.dp),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        colors = FilterChipDefaults.filterChipColors(),
+                        modifier = Modifier.testTag(CreateApiKeyTestTags.capability(cap.id)),
+                    )
                 }
             }
         }

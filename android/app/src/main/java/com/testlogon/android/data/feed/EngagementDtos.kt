@@ -84,10 +84,18 @@ data class TipRequest(
     @Json(name = "currency") val currency: String = "USD",
 )
 
-/** PATCH /posts/{post_id}/comments/{comment_id} request — edit an own comment's body. */
+/**
+ * PATCH /posts/{post_id}/comments/{comment_id} request — edit an own comment's body and/or image (#5).
+ *
+ * Per the backend B-COMMENT2 edit contract: OMIT [imageUrl] (null) to KEEP the existing image
+ * (default Moshi serializeNulls=false drops the key), send an empty string "" to REMOVE the image,
+ * or a new URL to REPLACE it.
+ */
 @JsonClass(generateAdapter = true)
 data class EditCommentRequest(
     @Json(name = "body") val body: String,
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "image_alt_text") val imageAltText: String? = null,
 )
 
 // ---- Hide / not-interested ----

@@ -167,10 +167,19 @@ class FakeCommentsRepository(
         return ApiResult.Success(pagesByCursor[cursor] ?: CommentPage(emptyList(), null))
     }
 
-    override suspend fun addComment(postId: String, body: String, parentId: String?): ApiResult<Comment> {
+    val addImageWithTextCalls = mutableListOf<String?>()
+    override suspend fun addComment(
+        postId: String,
+        body: String,
+        parentId: String?,
+        imageUrl: String?,
+        imageAltText: String?,
+    ): ApiResult<Comment> {
         addCalls += Triple(postId, body, parentId)
+        addImageWithTextCalls += imageUrl
         return addResult ?: ApiResult.Success(
-            comment(id = "srv_${addCalls.size}", postId = postId, body = body, parentId = parentId),
+            comment(id = "srv_${addCalls.size}", postId = postId, body = body, parentId = parentId)
+                .copy(imageUrl = imageUrl),
         )
     }
 
@@ -240,8 +249,16 @@ class FakeCommentsRepository(
         return ApiResult.Success(Unit)
     }
 
-    override suspend fun editComment(postId: String, commentId: String, body: String): ApiResult<Comment> {
+    val editImageCalls = mutableListOf<String?>()
+    override suspend fun editComment(
+        postId: String,
+        commentId: String,
+        body: String,
+        imageUrl: String?,
+        imageAltText: String?,
+    ): ApiResult<Comment> {
         editCalls += Triple(postId, commentId, body)
+        editImageCalls += imageUrl
         return addResult ?: ApiResult.Success(
             comment(id = commentId, postId = postId, body = body),
         )

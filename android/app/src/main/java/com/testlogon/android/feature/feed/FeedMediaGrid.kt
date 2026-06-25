@@ -33,6 +33,8 @@ import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import com.testlogon.android.data.feed.Media
 import com.testlogon.android.data.feed.MediaType
+import com.testlogon.android.data.messaging.MessageMedia
+import com.testlogon.android.feature.messaging.media.VideoClipBubble
 
 /** Stable test tags for feed media (AND-103). */
 object FeedMediaTestTags {
@@ -64,6 +66,23 @@ fun FeedMediaGrid(
     onItemClick: (index: Int) -> Unit = {},
 ) {
     if (media.isEmpty()) return
+
+    // #2 — a post whose only media is a video plays INLINE (reusing the messaging VideoClipBubble:
+    // VideoFrameDecoder poster + lifecycle-scoped ExoPlayer + full-screen). The grid's static
+    // thumbnail cell cannot play and, in dev, the "thumbnail" url is the raw MP4 object (so it
+    // rendered as a broken image) — this replaces that with a real player.
+    val singleVideo = media.singleOrNull()?.takeIf { it.type == MediaType.VIDEO && it.playbackUrl != null }
+    if (singleVideo != null) {
+        VideoClipBubble(
+            media = MessageMedia.VideoClip(
+                playbackUrl = singleVideo.playbackUrl,
+                durationSeconds = singleVideo.durationSeconds?.toInt(),
+            ),
+            modifier = modifier.fillMaxWidth().testTag(FeedMediaTestTags.GRID),
+        )
+        return
+    }
+
     val spacing = 4.dp
     Column(
         modifier = modifier.fillMaxWidth().testTag(FeedMediaTestTags.GRID),

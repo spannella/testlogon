@@ -31,19 +31,47 @@ sealed interface ApiKeysListUiState {
 }
 
 /**
- * B-APIKEY (batch 7) - the create-screen form state. [canSubmit] is derived (a non-blank [label]); [labelError]
- * is the inline field error; [submitError] is the form-level error. [capabilityInput] is a free-text
- * comma/space-separated capability list (empty -> the backend applies its default scopes).
+ * B-APIKEY (batch 7; batch 8 #17) - the create-screen form state. [canSubmit] is derived (a non-blank [label]);
+ * [labelError] is the inline field error; [submitError] is the form-level error. [selectedCapabilities] is the
+ * multi-select set of canonical capability ids (empty -> the backend applies its default scopes); the screen
+ * renders a labelled chip per [ApiKeyCapabilities.ALL] entry instead of a free-text field.
  */
 data class CreateApiKeyForm(
     val label: String = "",
-    val capabilityInput: String = "",
+    val selectedCapabilities: Set<String> = emptySet(),
     val expiresInDays: String = "",
     val submitting: Boolean = false,
     val labelError: String? = null,
     val submitError: String? = null,
     val canSubmit: Boolean = false,
 )
+
+/**
+ * Batch 8 (#17, #18) - UI state for the API-key DETAIL screen (capability editing + IP-rule management).
+ *
+ * [capabilities] is the server's authoritative current set; [editedCapabilities] is the in-progress selection
+ * (the Save button is enabled only when [capabilitiesDirty]). [allowCidrs]/[denyCidrs] are the live IP rules (each
+ * add/edit/remove POSTs the full replacement list, so they always reflect the server). [savingCapabilities] /
+ * [savingIpRules] gate their respective sections during a round-trip.
+ */
+data class ApiKeyDetailUiState(
+    val keyId: String,
+    val label: String = "",
+    val prefix: String = "",
+    val loading: Boolean = false,
+    val loadError: String? = null,
+    val capabilities: List<String> = emptyList(),
+    val editedCapabilities: Set<String> = emptySet(),
+    val savingCapabilities: Boolean = false,
+    val capabilityError: String? = null,
+    val allowCidrs: List<String> = emptyList(),
+    val denyCidrs: List<String> = emptyList(),
+    val savingIpRules: Boolean = false,
+    val ipRuleError: String? = null,
+) {
+    /** True when the edited capability selection differs from the saved set. */
+    val capabilitiesDirty: Boolean get() = editedCapabilities != capabilities.toSet()
+}
 
 /**
  * B-APIKEY (batch 7) - one-shot effects shared by the API-keys ViewModels.

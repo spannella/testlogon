@@ -52,6 +52,7 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.StaleBanner
 import com.testlogon.android.feature.apikeys.data.ApiKey
+import com.testlogon.android.feature.apikeys.data.ApiKeyCapabilities
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -79,6 +80,7 @@ object ApiKeysListTestTags {
 fun ApiKeysListRoute(
     onBack: () -> Unit,
     onCreate: () -> Unit,
+    onOpenKey: (String) -> Unit,
     onNavigateToLogin: () -> Unit,
     newSecret: String? = null,
     onSecretConsumed: () -> Unit = {},
@@ -108,6 +110,7 @@ fun ApiKeysListRoute(
         onRefresh = viewModel::refresh,
         onRetry = viewModel::onRetry,
         onCreate = onCreate,
+        onOpenKey = onOpenKey,
         onRevoke = viewModel::revoke,
         onDismissSecret = viewModel::dismissNewSecret,
     )
@@ -121,6 +124,7 @@ fun ApiKeysListScreen(
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onCreate: () -> Unit,
+    onOpenKey: (String) -> Unit,
     onRevoke: (String) -> Unit,
     onDismissSecret: () -> Unit,
     modifier: Modifier = Modifier,
@@ -180,7 +184,7 @@ fun ApiKeysListScreen(
                     )
 
                 is ApiKeysListUiState.Content ->
-                    ApiKeysContent(state = state, onRetry = onRetry, onRevoke = onRevoke)
+                    ApiKeysContent(state = state, onRetry = onRetry, onOpenKey = onOpenKey, onRevoke = onRevoke)
             }
         }
     }
@@ -195,6 +199,7 @@ fun ApiKeysListScreen(
 private fun ApiKeysContent(
     state: ApiKeysListUiState.Content,
     onRetry: () -> Unit,
+    onOpenKey: (String) -> Unit,
     onRevoke: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -216,6 +221,7 @@ private fun ApiKeysContent(
                 ApiKeyRow(
                     key = key,
                     revoking = state.revokingId == key.id,
+                    onOpen = { onOpenKey(key.id) },
                     onRevoke = { onRevoke(key.id) },
                 )
             }
@@ -227,9 +233,11 @@ private fun ApiKeysContent(
 private fun ApiKeyRow(
     key: ApiKey,
     revoking: Boolean,
+    onOpen: () -> Unit,
     onRevoke: () -> Unit,
 ) {
     Card(
+        onClick = onOpen,
         modifier = Modifier
             .fillMaxWidth()
             .testTag(ApiKeysListTestTags.row(key.id)),
@@ -260,11 +268,22 @@ private fun ApiKeyRow(
                 )
                 if (key.capabilities.isNotEmpty()) {
                     Text(
-                        text = stringResource(R.string.api_keys_scopes_prefix, key.capabilities.joinToString(", ")),
+                        text = stringResource(
+                            R.string.api_keys_scopes_prefix,
+                            key.capabilities.joinToString(", ") { ApiKeyCapabilities.label(it) },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                val ipCount = key.allowCidrs.size + key.denyCidrs.size
+                if (ipCount > 0) {
+                    Text(
+                        text = stringResource(R.string.api_keys_ip_rules_count, ipCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

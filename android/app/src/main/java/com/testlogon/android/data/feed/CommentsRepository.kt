@@ -39,6 +39,9 @@ interface CommentsRepository {
         postId: String,
         body: String,
         parentId: String? = null,
+        /** #4 — optional uploaded image URL to attach alongside the text (text+image comment). */
+        imageUrl: String? = null,
+        imageAltText: String? = null,
     ): ApiResult<Comment>
 
     /** Post a GIF comment (kind="gif"). */
@@ -80,7 +83,17 @@ interface CommentsRepository {
 
     suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit>
 
-    suspend fun editComment(postId: String, commentId: String, body: String): ApiResult<Comment>
+    /**
+     * Edit an own comment. #5 — [imageUrl] follows the B-COMMENT2 edit contract: null = KEEP the
+     * current image, "" (empty) = REMOVE it, a URL = REPLACE it.
+     */
+    suspend fun editComment(
+        postId: String,
+        commentId: String,
+        body: String,
+        imageUrl: String? = null,
+        imageAltText: String? = null,
+    ): ApiResult<Comment>
 
     /** Capability flag for threaded replies (backend accepts parent_comment_id). */
     val repliesSupported: Boolean
@@ -111,10 +124,24 @@ class CommentsRepositoryImpl @Inject constructor(
         postId: String,
         body: String,
         parentId: String?,
+        imageUrl: String?,
+        imageAltText: String?,
     ): ApiResult<Comment> = withContext(io) {
         val me = authStateStore.userSub.first()
+        // #4 — when an image is attached the backend (B-COMMENT2) validates it on a kind="text" comment,
+        // so text+image ride together; a plain text comment keeps kind null.
+        val kind = if (imageUrl != null) "text" else null
         apiCall {
-            api.addComment(postId, CreateCommentRequest(body = body, parentCommentId = parentId))
+            api.addComment(
+                postId,
+                CreateCommentRequest(
+                    body = body,
+                    parentCommentId = parentId,
+                    kind = kind,
+                    imageUrl = imageUrl,
+                    imageAltText = imageAltText,
+                ),
+            )
         }.map { it.toDomain(me) }
     }
 
@@ -201,9 +228,17 @@ class CommentsRepositoryImpl @Inject constructor(
         postId: String,
         commentId: String,
         body: String,
+        imageUrl: String?,
+        imageAltText: String?,
     ): ApiResult<Comment> = withContext(io) {
         val me = authStateStore.userSub.first()
-        apiCall { api.editComment(postId, commentId, EditCommentRequest(body = body)) }.map { it.toDomain(me) }
+        apiCall {
+            api.editComment(
+                postId,
+                commentId,
+                EditCommentRequest(body = body, imageUrl = imageUrl, imageAltText = imageAltText),
+            )
+        }.map { it.toDomain(me) }
     }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {

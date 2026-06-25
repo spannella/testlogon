@@ -2,7 +2,9 @@ package com.testlogon.android.core.network.apikeys
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.Path
 
 /**
  * B-APIKEY (batch 7) - Retrofit interface for the developer API-keys management surface. Transport only; the
@@ -34,4 +36,21 @@ interface ApiKeysApi {
     /** POST a revoke. Returns {"ok":true}. NON-idempotent. May require fresh MFA (401). */
     @POST("ui/api_keys/revoke")
     suspend fun revoke(@Body body: RevokeApiKeyRequest)
+
+    /**
+     * Batch 8 (#17): PATCH a key's capabilities (full SET/replace). The path key_id must equal the body key_id.
+     * Returns { ok, capabilities }. NON-idempotent in spirit but safe to retry; may require fresh MFA (401).
+     */
+    @PATCH("ui/api_keys/{key_id}/scopes")
+    suspend fun setScopes(
+        @Path("key_id") keyId: String,
+        @Body body: SetScopesRequest,
+    ): SetScopesResultDto
+
+    /**
+     * Batch 8 (#18): POST a key's IP rules (full SET/replace of allow + deny CIDR lists).
+     * Returns { ok, allow_cidrs, deny_cidrs }. May require fresh MFA (401).
+     */
+    @POST("ui/api_keys/ip_rules")
+    suspend fun setIpRules(@Body body: SetIpRulesRequest): SetIpRulesResultDto
 }

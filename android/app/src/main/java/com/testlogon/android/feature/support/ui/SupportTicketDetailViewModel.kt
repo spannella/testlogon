@@ -28,9 +28,15 @@ data class SupportTicketDetailUiState(
     val actionError: String? = null,
     val actionInFlight: Boolean = false,
     val isAdmin: Boolean = false,
+    // B8 #15 — owner close/cancel
+    val closing: Boolean = false,
 ) {
     val canSend: Boolean
         get() = reply.trim().length in SupportRepository.REPLY_MIN..SupportRepository.REPLY_MAX && !sending
+
+    /** B8 #15 — a USER may close/cancel their own ticket while it is not already terminal. */
+    val canClose: Boolean
+        get() = !isAdmin && ticket != null && !ticket.isTerminal && !closing && !actionInFlight
 }
 
 @HiltViewModel
@@ -97,6 +103,27 @@ class SupportTicketDetailViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(actionInFlight = false, actionError = r.error.message)
                 is ApiResult.NetworkError ->
                     _uiState.value = _uiState.value.copy(actionInFlight = false, actionError = "You appear to be offline.")
+            }
+        }
+    }
+
+    /**
+     * B8 #15 — the OWNER closes ("close" -> done) or cancels ("cancel" -> cancelled) their own ticket via
+     * POST /tickets/{id}/close. The returned ticket carries the new terminal status so the detail reflects
+     * it immediately; the Support landing re-pulls on resume so the list updates too.
+     */
+    fun closeTicket(action: String) {
+        val s = _uiState.value
+        if (s.isAdmin || s.ticket == null || s.ticket.isTerminal || s.closing) return
+        viewModelScope.launch {
+            _uiState.value = s.copy(closing = true, actionError = null)
+            when (val r = repository.closeTicket(ticketId, action)) {
+                is ApiResult.Success ->
+                    _uiState.value = _uiState.value.copy(closing = false, ticket = r.data)
+                is ApiResult.Failure ->
+                    _uiState.value = _uiState.value.copy(closing = false, actionError = r.error.message)
+                is ApiResult.NetworkError ->
+                    _uiState.value = _uiState.value.copy(closing = false, actionError = "You appear to be offline.")
             }
         }
     }

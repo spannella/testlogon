@@ -35,6 +35,9 @@ object SupportTestTags {
     const val DETAIL_REPLY = "support_detail_reply"
     const val DETAIL_SEND = "support_detail_send"
     const val ADMIN_FORBIDDEN = "support_admin_forbidden"
+    const val LIVE_CHAT_CARD = "support_live_chat_card"
+    const val DETAIL_CLOSE = "support_detail_close"
+    const val DETAIL_CANCEL = "support_detail_cancel"
 }
 
 /** Human label for a ticket status. */
@@ -44,6 +47,7 @@ fun SupportTicketStatus.label(): String = when (this) {
     SupportTicketStatus.WAITING_ON_USER -> "Waiting on you"
     SupportTicketStatus.DONE -> "Resolved"
     SupportTicketStatus.REOPENED -> "Reopened"
+    SupportTicketStatus.CANCELLED -> "Cancelled"
     SupportTicketStatus.UNKNOWN -> "Status"
 }
 
@@ -64,6 +68,7 @@ fun StatusChip(status: SupportTicketStatus, modifier: Modifier = Modifier) {
         SupportTicketStatus.WAITING_ON_USER -> MaterialTheme.colorScheme.secondaryContainer
         SupportTicketStatus.DONE -> MaterialTheme.colorScheme.surfaceVariant
         SupportTicketStatus.REOPENED -> MaterialTheme.colorScheme.errorContainer
+        SupportTicketStatus.CANCELLED -> MaterialTheme.colorScheme.surfaceVariant
         SupportTicketStatus.UNKNOWN -> MaterialTheme.colorScheme.surfaceVariant
     }
     AssistChip(

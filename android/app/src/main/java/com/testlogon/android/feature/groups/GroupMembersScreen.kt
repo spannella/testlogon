@@ -236,6 +236,13 @@ private fun MemberRow(
     onRemove: (userId: String) -> Unit,
 ) {
     val isMutating = state.mutatingUserId == member.userId
+    val isSelf = state.viewerUserId != null && member.userId == state.viewerUserId
+    val baseName = member.displayName ?: member.userId
+    val displayName = if (isSelf) {
+        "$baseName (${stringResource(R.string.groups_member_you)})"
+    } else {
+        baseName
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -244,7 +251,7 @@ private fun MemberRow(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            text = member.displayName ?: member.userId,
+            text = displayName,
             style = MaterialTheme.typography.bodyLarge,
         )
         if (state.canManage) {

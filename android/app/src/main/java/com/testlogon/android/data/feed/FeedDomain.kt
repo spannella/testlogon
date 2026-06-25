@@ -52,6 +52,12 @@ data class Media(
     val thumbnailUrl: String? = null,
     /** Video length in seconds; null for images / unknown. */
     val durationSeconds: Long? = null,
+    /**
+     * #2 — the ready-to-play video URL (hls_manifest_url with the short-lived playback token already
+     * appended, "?token=..."). Non-null only for a playable VIDEO item; the feed video cell builds an
+     * ExoPlayer source from this. Null for images / a video missing a manifest.
+     */
+    val playbackUrl: String? = null,
 )
 
 enum class LockType { FIXED_PRICE, TIP_LOTTERY, UNKNOWN }
@@ -132,6 +138,13 @@ internal fun PostDto.toMedia(): List<Media> {
             url = v.hlsManifestUrl ?: v.thumbnailUrl,
             thumbnailUrl = v.thumbnailUrl,
             durationSeconds = v.durationSeconds,
+            // #2 — append the short-lived playback token to the manifest (web/messaging parity:
+            // "${url}?token=${token}", "&" if a query already exists). Mock-S3 ignores the query
+            // in dev (token is null), so this is the raw object url the player can fetch directly.
+            playbackUrl = v.hlsManifestUrl?.let { base ->
+                val tok = v.playbackToken?.takeIf { it.isNotBlank() }
+                if (tok == null) base else base + (if (base.contains('?')) "&" else "?") + "token=" + tok
+            },
         )
     }
     return if (videoItem != null) images + videoItem else images

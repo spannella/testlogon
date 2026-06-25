@@ -2,6 +2,7 @@ package com.testlogon.android.core.network.projects
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -30,6 +31,15 @@ interface ProjectsApi {
         @Query("cursor") cursor: String? = null,
         @Query("limit") limit: Int = 20,
     ): ProjectListEnvelope
+
+    /**
+     * Batch-8 (#9) - POST a new project. Body { name (1..120), description?, tags[] } -> the created bare
+     * ProjectOut. NON-idempotent (the global GET-only retry intentionally excludes it). The shared
+     * authenticated client attaches the session cookie + X-CSRF-Token.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("v1/projects")
+    suspend fun createProject(@Body body: ProjectCreateIn): ProjectOut
 
     /** GET one project (bare ProjectOut). Idempotent. */
     @GET("v1/projects/{projectId}")

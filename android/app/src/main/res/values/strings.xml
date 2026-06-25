@@ -2484,6 +2484,9 @@
     <string name="kyc_tier_updated_at">Updated %1$s</string>
     <string name="kyc_tier_requirements_header">Requirements for %1$s</string>
     <string name="kyc_tier_check_eligibility">Check eligibility</string>
+    <!-- Batch 8 (#16): interactive verification CTAs on the tier-status (first) screen -->
+    <string name="kyc_tier_begin_verification">Begin verification</string>
+    <string name="kyc_tier_req_action">Continue</string>
     <string name="kyc_tier_eligible">You meet the requirements for %1$s. Check eligibility to advance.</string>
     <string name="kyc_tier_max_reached">You\'ve reached the highest verification level.</string>
     <string name="kyc_tier_promoted">You\'ve advanced to %1$s.</string>
@@ -3108,6 +3111,18 @@
     <string name="groups_section_pending">Pending invites</string>
     <string name="groups_members_empty_title">No members yet</string>
     <string name="groups_members_empty_body">This group has no members yet.</string>
+    <string name="groups_member_you">You</string>
+    <string name="group_feed_open">Group feed</string>
+    <string name="group_feed_title">Group feed</string>
+    <string name="group_feed_back">Back</string>
+    <string name="group_feed_empty_title">No posts yet</string>
+    <string name="group_feed_empty_body">Be the first to post in this group.</string>
+    <string name="group_feed_error">Couldn\'t load the feed. Pull down to retry.</string>
+    <string name="group_feed_compose_hint">Share something with the group...</string>
+    <string name="group_feed_compose_send">Post</string>
+    <string name="group_feed_compose_sending">Posting...</string>
+    <string name="group_feed_locked">Locked post</string>
+    <string name="group_feed_pinned">Pinned</string>
     <string name="groups_invite">Invite</string>
     <string name="groups_invite_user_id_label">User ID</string>
     <string name="groups_remove">Remove</string>
@@ -3456,6 +3471,12 @@
     <string name="projects_offline_banner">You\'re offline. Showing saved project.</string>
     <string name="projects_updated">Updated %1$s</string>
     <string name="projects_created">Created %1$s</string>
+    <string name="projects_create_title">New project</string>
+    <string name="projects_create_name_label">Project name</string>
+    <string name="projects_create_description_label">Description (optional)</string>
+    <string name="projects_create_tags_label">Tags (comma-separated, optional)</string>
+    <string name="projects_create_submit">Create</string>
+    <string name="projects_create_cancel">Cancel</string>
     <string name="project_detail_title">Project</string>
     <string name="project_connect_drive">Connect Google Drive</string>
     <string name="project_drive_connected">Google Drive connected</string>
@@ -3669,12 +3690,27 @@
     <string name="api_keys_create_label_label">Label</string>
     <string name="api_keys_create_label_placeholder">My integration</string>
     <string name="api_keys_create_label_hint">A name to help you recognise this key.</string>
-    <string name="api_keys_create_scopes_label">Scopes (optional)</string>
+    <string name="api_keys_create_scopes_label">Capabilities (optional)</string>
     <string name="api_keys_create_scopes_placeholder">read, write</string>
-    <string name="api_keys_create_scopes_hint">Comma- or space-separated. Leave blank for the default scopes.</string>
+    <string name="api_keys_create_scopes_hint">Select the capabilities this key may use. Leave all unselected for the default scopes.</string>
     <string name="api_keys_create_expires_label">Expires in days (optional)</string>
     <string name="api_keys_create_expires_placeholder">90</string>
     <string name="api_keys_create_expires_hint">Leave blank for a key with no expiry.</string>
+    <!-- Batch 8 (#17/#18): API-key detail (capabilities + IP rules) -->
+    <string name="api_keys_caps_title">Capabilities</string>
+    <string name="api_keys_caps_save">Save capabilities</string>
+    <string name="api_keys_ip_allow_title">Allowed IP ranges</string>
+    <string name="api_keys_ip_allow_hint">Only these CIDR ranges may use this key (empty = any).</string>
+    <string name="api_keys_ip_deny_title">Blocked IP ranges</string>
+    <string name="api_keys_ip_deny_hint">These CIDR ranges are always blocked.</string>
+    <string name="api_keys_ip_none">None set.</string>
+    <string name="api_keys_ip_add">Add IP range</string>
+    <string name="api_keys_ip_edit">Edit IP range</string>
+    <string name="api_keys_ip_remove">Remove IP range</string>
+    <string name="api_keys_ip_dialog_title">IP range (CIDR)</string>
+    <string name="api_keys_ip_dialog_label">CIDR</string>
+    <string name="api_keys_ip_dialog_save">Save</string>
+    <string name="api_keys_ip_rules_count">%1$d IP rule(s)</string>
     <string name="api_keys_create_submit">Create key</string>
     <string name="api_keys_secret_title">Copy your API key now</string>
     <string name="api_keys_secret_warning">This is the only time the full secret is shown. Store it securely. You will not be able to see it again.</string>

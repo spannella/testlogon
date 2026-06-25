@@ -37,8 +37,16 @@ data class ComposerState(
     val sending: Boolean = false,
     /** Non-null while editing an existing comment (its id); send() then PATCHes instead of POSTs. */
     val editingId: String? = null,
+    /** #4 — uploaded image URL staged to send ALONGSIDE the text (a text+image comment). */
+    val pendingImageUrl: String? = null,
+    /** #5 — while editing, the image shown: existing image, a replaced URL, or null after removal. */
+    val editImageUrl: String? = null,
+    /** #5 — true once the image was changed while editing (replaced/removed) so PATCH sends it. */
+    val editImageDirty: Boolean = false,
 ) {
-    val canSend: Boolean get() = text.isNotBlank() && !sending
+    /** Can send with text OR a staged/edited image, and not mid-send. */
+    val canSend: Boolean
+        get() = !sending && (text.isNotBlank() || pendingImageUrl != null || (isEditing && editImageUrl != null))
     val isEditing: Boolean get() = editingId != null
 }
 
@@ -343,21 +351,21 @@ class CommentsViewModel @Inject constructor(
     val imageUploading: StateFlow<Boolean> = _imageUploading.asStateFlow()
 
     /**
-     * Pick-to-send for an image comment: uploads [uri] via POST /uploads/image, then posts a kind=image
-     * comment with the returned platform URL. Optimistic + reconciled like text comments.
+     * #4/#5 — pick an image, upload it via POST /uploads/image, and STAGE the returned platform URL on
+     * the composer (instead of sending immediately). Normal mode: rides with the text on the next
+     * send() (text+image comment). Edit mode: REPLACES the comment image.
      */
-    fun uploadAndSendImageComment(uri: android.net.Uri) {
+    fun uploadAndStageImage(uri: android.net.Uri) {
         if (_imageUploading.value) return
-        val parentId = _composer.value.replyTo?.id?.takeIf { repliesSupported }
-        _composer.update { it.copy(replyTo = null) }
         _imageUploading.value = true
         viewModelScope.launch {
             when (val up = imageUploader.uploadImage(uri)) {
                 is ApiResult.Success -> {
                     _imageUploading.value = false
-                    val localKey = UUID.randomUUID().toString()
-                    pending.update { listOf(richOptimistic(localKey, parentId, imageUrl = up.data)) + it }
-                    handleSendResult(localKey, parentId, repository.addImageComment(postId, up.data, null, parentId))
+                    _composer.update {
+                        if (it.isEditing) it.copy(editImageUrl = up.data, editImageDirty = true)
+                        else it.copy(pendingImageUrl = up.data)
+                    }
                 }
                 is ApiResult.Failure -> {
                     _imageUploading.value = false
@@ -371,26 +379,50 @@ class CommentsViewModel @Inject constructor(
         }
     }
 
-    /** Enter edit mode for an own comment: prefill the composer with its body. */
+    /** #4 — drop the staged (not-yet-sent) image before sending a text+image comment. */
+    fun clearStagedImage() {
+        _composer.update { it.copy(pendingImageUrl = null) }
+    }
+
+    /** #5 — remove the image from the comment being edited (PATCH then sends an empty image_url). */
+    fun removeEditImage() {
+        _composer.update { it.copy(editImageUrl = null, editImageDirty = true) }
+    }
+
+    /** Enter edit mode for an own comment: prefill the body and existing image (#5). */
     fun startEdit(comment: Comment) {
         if (!comment.canEdit) return
-        _composer.update { it.copy(text = comment.body, editingId = comment.id, replyTo = null) }
+        _composer.update {
+            it.copy(
+                text = comment.body,
+                editingId = comment.id,
+                replyTo = null,
+                pendingImageUrl = null,
+                editImageUrl = comment.imageUrl,
+                editImageDirty = false,
+            )
+        }
     }
 
     fun cancelEdit() {
-        _composer.update { it.copy(text = "", editingId = null) }
+        _composer.update { it.copy(text = "", editingId = null, editImageUrl = null, editImageDirty = false) }
     }
 
     fun send() {
         val current = _composer.value
         val body = current.text.trim()
-        if (body.isEmpty() || current.sending) return
+        val stagedImage = current.pendingImageUrl
+        // Allow text alone, image alone, or text+image (#4).
+        if (current.sending) return
         // Edit path: PATCH the existing comment, then refresh the page.
         val editingId = current.editingId
         if (editingId != null) {
+            // #5 — only send image_url when the user touched it: empty removes, a URL replaces, null keeps.
+            val imageArg = if (current.editImageDirty) current.editImageUrl.orEmpty() else null
+            if (body.isEmpty() && current.editImageUrl == null) return
             _composer.value = ComposerState()
             viewModelScope.launch {
-                when (val r = repository.editComment(postId, editingId, body)) {
+                when (val r = repository.editComment(postId, editingId, body, imageArg)) {
                     is ApiResult.Success -> _refreshSignal.value = _refreshSignal.value + 1L
                     is ApiResult.Failure -> _effects.trySend(CommentsEffect.ShowError(r.error.message))
                     is ApiResult.NetworkError -> _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
@@ -398,6 +430,7 @@ class CommentsViewModel @Inject constructor(
             }
             return
         }
+        if (body.isEmpty() && stagedImage == null) return
         val parentId = current.replyTo?.id?.takeIf { repliesSupported }
         val localKey = UUID.randomUUID().toString()
         val optimistic = Comment(
@@ -408,19 +441,20 @@ class CommentsViewModel @Inject constructor(
             body = body,
             createdAtEpochSeconds = System.currentTimeMillis() / 1000L,
             updatedAtEpochSeconds = null,
+            imageUrl = stagedImage,
             canDelete = true,
             pending = true,
             localKey = localKey,
         )
         pending.update { listOf(optimistic) + it }
-        _composer.value = ComposerState() // clear text + reply, keep sending=false (button stays usable)
-        postComment(localKey, body, parentId, isReply = parentId != null)
+        _composer.value = ComposerState() // clear text + reply + staged image, keep sending=false
+        postComment(localKey, body, parentId, isReply = parentId != null, imageUrl = stagedImage)
     }
 
     fun retry(localKey: String) {
         val entry = pending.value.firstOrNull { it.localKey == localKey } ?: return
         pending.update { list -> list.map { if (it.localKey == localKey) it.copy(pending = true, failed = false) else it } }
-        postComment(localKey, entry.body, entry.parentId, isReply = entry.parentId != null)
+        postComment(localKey, entry.body, entry.parentId, isReply = entry.parentId != null, imageUrl = entry.imageUrl)
     }
 
     fun discard(localKey: String) {
@@ -441,9 +475,9 @@ class CommentsViewModel @Inject constructor(
         }
     }
 
-    private fun postComment(localKey: String, body: String, parentId: String?, isReply: Boolean) {
+    private fun postComment(localKey: String, body: String, parentId: String?, isReply: Boolean, imageUrl: String? = null) {
         viewModelScope.launch {
-            when (val result = repository.addComment(postId, body, parentId)) {
+            when (val result = repository.addComment(postId, body, parentId, imageUrl)) {
                 is ApiResult.Success -> {
                     pending.update { list -> list.filterNot { it.localKey == localKey } }
                     if (!isReply) _effects.trySend(CommentsEffect.CommentCountChanged(+1))

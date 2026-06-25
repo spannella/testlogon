@@ -1,11 +1,16 @@
 package com.testlogon.android.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.composable
+import androidx.navigation.navArgument
 import com.testlogon.android.core.model.LogoutReason
+import com.testlogon.android.feature.apikeys.ui.ApiKeyDetailRoute
+import com.testlogon.android.feature.apikeys.ui.ApiKeyDetailViewModel
 import com.testlogon.android.feature.apikeys.ui.ApiKeysListRoute
 import com.testlogon.android.feature.apikeys.ui.CreateApiKeyRoute
 
@@ -31,6 +36,13 @@ data object ApiKeyCreateDest {
     const val ROUTE = "api_keys/create"
 }
 
+/** Batch 8 (#17, #18): the per-key detail destination (capability editing + IP-rule management). */
+data object ApiKeyDetailDest {
+    const val ROUTE = "api_keys/{keyId}"
+
+    fun build(keyId: String): String = "api_keys/${Uri.encode(keyId)}"
+}
+
 /** B-APIKEY (batch 7) - registers the API-keys list + create destinations in the authenticated graph. */
 fun NavGraphBuilder.apiKeysDestinations(navController: NavHostController) {
     composable(route = ApiKeysListDest.ROUTE) { backStackEntry ->
@@ -43,6 +55,9 @@ fun NavGraphBuilder.apiKeysDestinations(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             onCreate = {
                 navController.navigate(ApiKeyCreateDest.ROUTE) { launchSingleTop = true }
+            },
+            onOpenKey = { keyId ->
+                navController.navigate(ApiKeyDetailDest.build(keyId)) { launchSingleTop = true }
             },
             onNavigateToLogin = { navController.navigateToApiKeysReauth() },
             newSecret = newSecret,
@@ -57,6 +72,17 @@ fun NavGraphBuilder.apiKeysDestinations(navController: NavHostController) {
                     ?.savedStateHandle?.set(ApiKeysListDest.RESULT_NEW_SECRET, secret)
                 navController.popBackStack()
             },
+            onNavigateToLogin = { navController.navigateToApiKeysReauth() },
+        )
+    }
+    composable(
+        route = ApiKeyDetailDest.ROUTE,
+        arguments = listOf(
+            navArgument(ApiKeyDetailViewModel.ARG_KEY_ID) { type = NavType.StringType },
+        ),
+    ) {
+        ApiKeyDetailRoute(
+            onBack = { navController.popBackStack() },
             onNavigateToLogin = { navController.navigateToApiKeysReauth() },
         )
     }

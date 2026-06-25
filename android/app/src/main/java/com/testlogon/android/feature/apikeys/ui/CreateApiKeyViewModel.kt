@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.feature.apikeys.data.ApiKeyCapabilities
 import com.testlogon.android.feature.apikeys.data.ApiKeysRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -18,9 +19,9 @@ import javax.inject.Inject
 /**
  * B-APIKEY (batch 7) - drives the [CreateApiKeyForm] for the create screen.
  *
- * [onLabelChange] / [onCapabilitiesChange] / [onExpiresChange] update the form and re-derive [canSubmit] (FR: a
- * non-blank label). [submit] guards against double-submit, parses the optional comma/space-separated capability
- * list + the optional expiry-days, POSTs the create (NON-idempotent -> NO auto-retry), and on success emits
+ * [onLabelChange] / [onToggleCapability] / [onExpiresChange] update the form and re-derive [canSubmit] (FR: a
+ * non-blank label). [submit] guards against double-submit, collects the selected canonical capabilities + the
+ * optional expiry-days, POSTs the create (NON-idempotent -> NO auto-retry), and on success emits
  * [ApiKeysEffect.CreateSucceeded] (carrying the one-time secret) so the screen pops back and the list shows it
  * once. A 422 whose loc tail is `label` maps to the inline [CreateApiKeyForm.labelError]; other failures
  * populate [CreateApiKeyForm.submitError] (a 401 "Fresh MFA required" surfaces here verbatim so the user knows to
@@ -42,8 +43,14 @@ class CreateApiKeyViewModel @Inject constructor(
         _form.value = recompute(_form.value.copy(label = value, labelError = null, submitError = null))
     }
 
-    fun onCapabilitiesChange(value: String) {
-        _form.value = _form.value.copy(capabilityInput = value, submitError = null)
+    fun onToggleCapability(id: String) {
+        val current = _form.value
+        val next = if (id in current.selectedCapabilities) {
+            current.selectedCapabilities - id
+        } else {
+            current.selectedCapabilities + id
+        }
+        _form.value = current.copy(selectedCapabilities = next, submitError = null)
     }
 
     fun onExpiresChange(value: String) {
@@ -56,7 +63,8 @@ class CreateApiKeyViewModel @Inject constructor(
         if (current.submitting || !current.canSubmit) return
         _form.value = current.copy(submitting = true, submitError = null, labelError = null)
         viewModelScope.launch {
-            val capabilities = parseCapabilities(current.capabilityInput)
+            // Canonical order (matches the catalog) for a stable request payload.
+            val capabilities = ApiKeyCapabilities.ALL.map { it.id }.filter { it in current.selectedCapabilities }
             val expires = current.expiresInDays.toIntOrNull()?.takeIf { it > 0 }
             when (val result = repo.create(current.label.trim(), capabilities, expires)) {
                 is ApiResult.Success -> {
@@ -91,12 +99,5 @@ class CreateApiKeyViewModel @Inject constructor(
         private const val HTTP_UNAUTHORIZED = 401
         private const val FIELD_LABEL = "label"
         private const val OFFLINE_FALLBACK = "Couldn't reach the server. Try again."
-
-        /** Splits a free-text capability list on commas / whitespace into a clean, de-duplicated list. */
-        fun parseCapabilities(raw: String): List<String> =
-            raw.split(',', ' ', '\n', '\t')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .distinct()
     }
 }
