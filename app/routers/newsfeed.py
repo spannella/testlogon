@@ -5736,7 +5736,15 @@ def view_for_you_feed(
     started = time.perf_counter()
 
     def _chronological_fallback(source: str):
-        chrono = view_feed(limit=limit, cursor=cursor, user_id=user_id)
+        # view_feed is a FastAPI route handler: its author_id/q/from/to/has_media
+        # params carry Query(...) defaults that are only resolved when called over
+        # HTTP. Calling it as a plain function must pass them explicitly as None,
+        # else the unresolved Query FieldInfo leaks into _normalize_author_filter_or_400
+        # and 400s ("invalid_author_id").
+        chrono = view_feed(
+            limit=limit, cursor=cursor, author_id=None, q=None,
+            from_ts=None, to_ts=None, has_media=None, user_id=user_id,
+        )
         chrono = dict(chrono)
         chrono["source"] = source
         record_newsfeed_recsys_request(mode="for_you", source=source)
