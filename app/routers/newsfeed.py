@@ -1414,7 +1414,10 @@ class CreatePostRequest(ContentFieldsMixin):
     tags: List[str] = Field(default_factory=list)
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
-    lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
+    # B8 B-LOCK: accept "price"/"none" aliases so a fixed-price locked post created
+    # by the app (which sent "price") or an explicit unlock ("none") validates; the
+    # value is normalized to the canonical fixed_price/tip_lottery/None below.
+    lock_type: Optional[Literal["fixed_price", "tip_lottery", "price", "none"]] = None
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     unlock_limit: Optional[int] = Field(default=None, ge=1)
     lottery_tip_cents: Optional[int] = Field(default=None, ge=1)
@@ -1754,11 +1757,22 @@ class CreateCommentRequest(ContentFieldsMixin):
                 raise ValueError("image_url is required for image comments")
             # Enforce platform upload path or https origin.
             self.image_url = _validate_comment_image_url(self.image_url)
+        # B8 B-COMMENT2: a text comment MAY also carry an image (text+image
+        # together). Validate the attached image_url like an image comment.
+        if self.kind == "text" and (self.image_url or "").strip():
+            self.image_url = _validate_comment_image_url(self.image_url)
         return self
 
 
 class EditCommentRequest(ContentFieldsMixin):
     expected_version: int = Field(default=1, ge=1)
+    # B8 B-COMMENT2: a text comment's attached image is editable. Omit a field to
+    # KEEP the current value; send image_url="" (or null) to REMOVE the image;
+    # send a new image_url to REPLACE it. image_url is validated like a create.
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_alt_text: Optional[str] = Field(default=None, max_length=256)
+    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
+    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
 
 
 class CommentResponse(BaseModel):
@@ -2312,6 +2326,7 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     return {
         "post_id": post_id,
         "author_id": post.get("user_id", ""),
+        "author_display_name": _resolve_author_display_name(post.get("user_id", "")),
         "created_at": post.get("created_at", ""),
         "published_at": published_at,
         "status": status,
@@ -3553,6 +3568,13 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
             )
 
     requested_lock_type = req.lock_type
+    # B8 B-LOCK: normalize client lock_type aliases. "price" == "fixed_price";
+    # "none" (explicit unlock) is treated like an absent lock_type so a price
+    # alone still infers a fixed_price lock (matches the EDIT path semantics).
+    if requested_lock_type == "price":
+        requested_lock_type = "fixed_price"
+    elif requested_lock_type == "none":
+        requested_lock_type = None
     unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
     has_lottery_fields = any(
         value is not None
@@ -4408,6 +4430,24 @@ def _post_fadt_display_name(user_sub: str) -> str:
     except Exception:
         pass
     return user_sub
+
+
+# Short-TTL memo so resolving an author's display name for every post in a feed
+# page doesn't issue an N+1 profile lookup (authors repeat across posts; names
+# rarely change). Falls back to the raw sub on miss.
+_author_display_name_cache: Dict[str, "tuple[float, str]"] = {}
+
+
+def _resolve_author_display_name(user_sub: str) -> str:
+    if not user_sub:
+        return ""
+    now = time.time()
+    hit = _author_display_name_cache.get(user_sub)
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    name = _post_fadt_display_name(user_sub)
+    _author_display_name_cache[user_sub] = (now, name)
+    return name
 
 
 def _post_fadt_meta_out(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -6286,8 +6326,9 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         raise HTTPException(status_code=403, detail="Not your comment")
     if target.get("deleted"):
         raise HTTPException(status_code=409, detail="Comment deleted")
-    # Media comments (gif/sticker/image) cannot be edited via the text editor
-    # (mirrors the frontend isMediaComment guard and the gif/sticker precedent).
+    # Pure media comments (gif/sticker, or an image-ONLY comment) cannot be
+    # edited via the text editor (mirrors the frontend isMediaComment guard).
+    # A text comment that also carries an image IS editable (text+image).
     if target.get("kind", "text") in ("gif", "sticker", "image"):
         raise HTTPException(status_code=400, detail="Media comments cannot be edited")
 
@@ -6296,11 +6337,32 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
 
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric("edit_comment", surface="comment", body_format=content.get("body_format", "plain"))
+    _fields_set = getattr(req, "model_fields_set", set())
+    _set_extra = ""
+    _remove_extra = []
+    _img_vals = {}
+    # B8 B-COMMENT2: image is editable on a text comment. Omitted => keep;
+    # empty/None => remove; a value => validate + replace.
+    if "image_url" in _fields_set:
+        _img_raw = (req.image_url or "").strip()
+        if _img_raw:
+            _img_vals[":img"] = _validate_comment_image_url(_img_raw)
+            _img_vals[":imgalt"] = req.image_alt_text
+            _img_vals[":imgw"] = req.image_width
+            _img_vals[":imgh"] = req.image_height
+            _set_extra = ", image_url = :img, image_alt_text = :imgalt, image_width = :imgw, image_height = :imgh"
+        else:
+            _remove_extra = ["image_url", "image_alt_text", "image_width", "image_height"]
+    _update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv" + _set_extra
+    if _remove_extra:
+        _update_expr += " REMOVE " + ", ".join(_remove_extra)
+    _expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)}
+    _expr_vals.update(_img_vals)
     updated = ddb_update_item(
         key=key,
-        update_expr="SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv",
+        update_expr=_update_expr,
         expr_names={"#body": "body"},
-        expr_vals={":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)},
+        expr_vals=_expr_vals,
         condition_expr="version = :ev",
     )
 

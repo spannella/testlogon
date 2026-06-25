@@ -2366,6 +2366,8 @@ export interface ImageVariant {
 export interface FeedPost {
   post_id: string;
   author_id: string;
+  /** Resolved author display name (server falls back to author_id). */
+  author_display_name?: string;
   // ADS-013: sponsored content / FTC disclosure (set server-side, immutable)
   sponsored_by?: string | null;
   deal_id?: string | null;
