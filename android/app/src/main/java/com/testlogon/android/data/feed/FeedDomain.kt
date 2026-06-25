@@ -24,6 +24,8 @@ data class FeedPost(
     val likeCount: Int,
     val commentCount: Int,
     val likedByMe: Boolean,
+    /** #20 — full emoji reaction tallies (empty when none); distinct from the like toggle. */
+    val reactions: List<ReactionTally> = emptyList(),
     /** Never null at domain level; derived from the flat lock fields. */
     val paywall: Paywall,
     /** AND-179 — embedded poll, or null when the post carries no poll_data. */
@@ -88,6 +90,7 @@ internal fun PostDto.toDomain(): FeedPost {
         likeCount = likeCount,
         commentCount = commentCount,
         likedByMe = likedByMe,
+        reactions = reactionTallies(reactionsCounts, myReactions),
         paywall = paywall,
         // Polls are content, not protected media: only surface when the post is not locked.
         poll = if (locked) null else toPoll(),

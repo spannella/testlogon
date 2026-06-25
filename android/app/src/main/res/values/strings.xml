@@ -586,6 +586,20 @@
     <string name="calendar_deleted">Event deleted</string>
     <string name="calendar_save_failed">Couldn\'t save the event. Try again.</string>
     <string name="calendar_delete_failed">Couldn\'t delete the event. Try again.</string>
+    <!-- #12 weekly BYDAY multi-select (2-letter day toggles) -->
+    <string name="calendar_repeat_on_days">Repeat on</string>
+    <string name="calendar_byday_mo">Mo</string>
+    <string name="calendar_byday_tu">Tu</string>
+    <string name="calendar_byday_we">We</string>
+    <string name="calendar_byday_th">Th</string>
+    <string name="calendar_byday_fr">Fr</string>
+    <string name="calendar_byday_sa">Sa</string>
+    <string name="calendar_byday_su">Su</string>
+    <!-- #13 delete-a-recurring-event choices -->
+    <string name="calendar_delete_recurring_title">Delete recurring event</string>
+    <string name="calendar_delete_this">This event only</string>
+    <string name="calendar_delete_following">This and following events</string>
+    <string name="calendar_delete_all">All events</string>
     <string name="calendar_name_required">Enter a title</string>
     <string name="calendar_day_no_events">No events on this day. Long-press to add one.</string>
     <string name="calendar_nav_previous">Previous</string>
@@ -688,6 +702,7 @@
     <string name="action_cancel">Cancel</string>
     <string name="msg_action_pin">Pin</string>
     <string name="msg_action_reply">Reply</string>
+    <string name="msg_action_save_to_phone">Save to phone</string>
     <string name="msg_action_unpin">Unpin</string>
     <string name="msg_action_edit">Edit</string>
     <string name="msg_action_edit_history">Edit history</string>
@@ -702,6 +717,16 @@
     <string name="msg_pinned_indicator">Pinned</string>
     <string name="msg_edited_label">edited</string>
     <string name="msg_pins_title">Pinned messages</string>
+    <!-- #8 scheduled-messages manager -->
+    <string name="msg_scheduled_title">Scheduled messages</string>
+    <string name="msg_scheduled_empty">No scheduled messages.</string>
+    <string name="msg_scheduled_empty_hint">Compose a message, set a send time in options, and it will appear here until it is delivered.</string>
+    <string name="msg_scheduled_edit">Edit</string>
+    <string name="msg_scheduled_remove">Remove</string>
+    <string name="msg_scheduled_remove_cd">Remove scheduled message</string>
+    <string name="msg_scheduled_edit_title">Edit scheduled message</string>
+    <string name="msg_scheduled_send_time">Send time</string>
+    <string name="msg_scheduled_save">Save</string>
     <string name="msg_pins_empty">No pinned messages</string>
     <string name="msg_pins_media">Attachment</string>
     <string name="msg_edit_history_title">Edit history</string>

@@ -3,6 +3,7 @@ package com.testlogon.android.feature.feed.compose
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.PostComposeRepository
 import com.testlogon.android.data.feed.PostVisibility
 import com.testlogon.android.data.videos.VideoUploadRepository
@@ -44,6 +45,7 @@ data class ComposePostUiState(
 class ComposePostViewModel @Inject constructor(
     private val repository: PostComposeRepository,
     private val videoUploads: VideoUploadRepository,
+    private val feedRefreshBus: FeedRefreshBus,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ComposePostUiState())
@@ -94,7 +96,11 @@ class ComposePostViewModel @Inject constructor(
         viewModelScope.launch {
             val cents = parseDollarsToCents(s.lockPriceInput)
             when (val r = repository.createPost(s.body.trim(), s.visibility, cents, s.publishAtEpochSeconds, s.imageUrls, s.videoId)) {
-                is ApiResult.Success -> _state.update { it.copy(submitting = false, posted = true) }
+                is ApiResult.Success -> {
+                    // #18a — make the just-published post appear in the main feed immediately.
+                    feedRefreshBus.signal()
+                    _state.update { it.copy(submitting = false, posted = true) }
+                }
                 is ApiResult.Failure -> _state.update { it.copy(submitting = false, error = r.error.message) }
                 is ApiResult.NetworkError -> _state.update { it.copy(submitting = false, error = "You're offline. Try again.") }
             }

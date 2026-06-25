@@ -18,9 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.Gif
+import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,6 +98,8 @@ object CommentsTestTags {
 fun CommentsSection(
     onCommentCountChanged: (delta: Int) -> Unit,
     modifier: Modifier = Modifier,
+    // #25 — when true the viewer authored the post; tipping is hidden (you can't tip your own content).
+    isOwnPost: Boolean = false,
     viewModel: CommentsViewModel = hiltViewModel(),
 ) {
     val comments = viewModel.comments.collectAsLazyPagingItems()
@@ -104,8 +108,18 @@ fun CommentsSection(
     val refreshSignal by viewModel.refreshSignal.collectAsStateWithLifecycle()
     val picker by viewModel.picker.collectAsStateWithLifecycle()
     val tip by viewModel.tip.collectAsStateWithLifecycle()
+    val reactionOverrides by viewModel.reactionOverrides.collectAsStateWithLifecycle()
+    val imageUploading by viewModel.imageUploading.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Comment?>(null) }
+
+    // #24 — system photo picker for image comments.
+    val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.uploadAndSendImageComment(uri) }
+
+    // #25 — keep the VM's own-post flag in sync so it can gate tipping.
+    androidx.compose.runtime.LaunchedEffect(isOwnPost) { viewModel.setOwnPost(isOwnPost) }
 
     // Reconcile: when an add/delete succeeds the VM bumps refreshSignal; re-fetch the server page.
     androidx.compose.runtime.LaunchedEffect(refreshSignal) {
@@ -129,6 +143,8 @@ fun CommentsSection(
         CommentsList(
             comments = comments,
             repliesSupported = viewModel.repliesSupported,
+            isOwnPost = isOwnPost,
+            reactionOverrides = reactionOverrides,
             onReply = viewModel::startReply,
             onRetry = viewModel::retry,
             onDiscard = viewModel::discard,
@@ -138,6 +154,7 @@ fun CommentsSection(
                 viewModel.startEdit(c)
             },
             onTip = viewModel::openTip,
+            onToggleReaction = viewModel::toggleCommentReaction,
             authorNames = authorNames,
             onEnsureAuthorName = viewModel::resolveAuthor,
         )
@@ -146,6 +163,7 @@ fun CommentsSection(
         CommentComposer(
             state = composer,
             draft = draft,
+            imageUploading = imageUploading,
             onBodyChange = {
                 draft = it
                 viewModel.onBodyChange(it)
@@ -155,6 +173,7 @@ fun CommentsSection(
                 draft = ""
             },
             onOpenMediaPicker = viewModel::openMediaPicker,
+            onPickImage = { imagePicker.launch("image/*") },
             onCancelReply = viewModel::cancelReply,
             onCancelEdit = {
                 draft = ""
@@ -205,12 +224,15 @@ fun CommentsSection(
 private fun CommentsList(
     comments: LazyPagingItems<Comment>,
     repliesSupported: Boolean,
+    isOwnPost: Boolean,
+    reactionOverrides: Map<String, List<com.testlogon.android.data.feed.ReactionTally>>,
     onReply: (Comment) -> Unit,
     onEdit: (Comment) -> Unit,
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
     onTip: (Comment) -> Unit,
+    onToggleReaction: (Comment, String) -> Unit,
     authorNames: Map<String, String>,
     onEnsureAuthorName: (authorId: String) -> Unit,
 ) {
@@ -239,17 +261,21 @@ private fun CommentsList(
         else -> Column(Modifier.fillMaxWidth()) {
             for (index in 0 until comments.itemCount) {
                 val comment = comments[index] ?: continue
+                // #23 — overlay any optimistic/server-confirmed reaction tally for this comment id.
+                val effective = reactionOverrides[comment.id]?.let { comment.copy(reactions = it) } ?: comment
                 CommentRow(
-                    comment = comment,
+                    comment = effective,
                     authorName = authorNames[comment.authorId],
                     onEnsureAuthorName = onEnsureAuthorName,
                     repliesSupported = repliesSupported,
+                    isOwnPost = isOwnPost,
                     onReply = onReply,
                     onEdit = onEdit,
                     onRetry = onRetry,
                     onDiscard = onDiscard,
                     onDelete = onDelete,
                     onTip = onTip,
+                    onToggleReaction = onToggleReaction,
                     modifier = Modifier.testTag(CommentsTestTags.row(comment.localKey)),
                 )
             }
@@ -276,14 +302,17 @@ private fun CommentRow(
     authorName: String?,
     onEnsureAuthorName: (authorId: String) -> Unit,
     repliesSupported: Boolean,
+    isOwnPost: Boolean,
     onReply: (Comment) -> Unit,
     onEdit: (Comment) -> Unit,
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
     onTip: (Comment) -> Unit,
+    onToggleReaction: (Comment, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var reactionPickerOpen by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(comment.authorId) {
         if (comment.authorId.isNotBlank()) onEnsureAuthorName(comment.authorId)
     }
@@ -318,14 +347,19 @@ private fun CommentRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        val mediaUrl = comment.gifUrl ?: comment.stickerUrl
+        val mediaUrl = comment.gifUrl ?: comment.stickerUrl ?: comment.imageUrl
         if (mediaUrl != null) {
+            val cd = when {
+                comment.gifUrl != null -> "GIF comment"
+                comment.stickerUrl != null -> "Sticker comment"
+                else -> "Image comment"
+            }
             AsyncImage(
                 model = mediaUrl,
-                contentDescription = if (comment.gifUrl != null) "GIF comment" else "Sticker comment",
+                contentDescription = cd,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
-                    .heightIn(max = 140.dp)
+                    .heightIn(max = if (comment.imageUrl != null) 220.dp else 140.dp)
                     .clip(RoundedCornerShape(12.dp)),
             )
         } else {
@@ -358,8 +392,23 @@ private fun CommentRow(
                     Text(stringResource(R.string.comments_reply_action))
                 }
             }
-            // Tip another member's comment (creator monetization).
-            if (!comment.canDelete && !comment.pending && !comment.failed) {
+            // #23 — react affordance (opens the curated emoji picker for this comment).
+            if (!comment.pending && !comment.failed) {
+                TextButton(
+                    onClick = { reactionPickerOpen = !reactionPickerOpen },
+                    modifier = Modifier.testTag("comment_react"),
+                ) {
+                    Icon(
+                        Icons.Outlined.AddReaction,
+                        contentDescription = "React to comment",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // Tip another member's comment (creator monetization). #25 — hidden on your own post
+            // (you can't tip yourself) and on your own comment.
+            if (!comment.canDelete && !isOwnPost && !comment.pending && !comment.failed) {
                 TextButton(onClick = { onTip(comment) }, modifier = Modifier.testTag(CommentsTestTags.TIP)) {
                     Icon(
                         Icons.Filled.AttachMoney,
@@ -395,6 +444,68 @@ private fun CommentRow(
                 }
             }
         }
+
+        // #23 — curated emoji picker (toggled by the React affordance above).
+        if (reactionPickerOpen) {
+            CommentEmojiPicker(
+                selected = comment.reactions.filter { it.reactedByMe }.map { it.emoji }.toSet(),
+                onPick = { emoji ->
+                    onToggleReaction(comment, emoji)
+                    reactionPickerOpen = false
+                },
+            )
+        }
+        // #23 — under-comment reaction chips (emoji + count; tap to toggle).
+        if (comment.reactions.isNotEmpty()) {
+            CommentReactionChips(
+                reactions = comment.reactions,
+                onToggle = { emoji -> onToggleReaction(comment, emoji) },
+            )
+        }
+    }
+}
+
+/** #23 — short curated reaction emoji row for a comment (matches the post reaction bar). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CommentEmojiPicker(
+    selected: Set<String>,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("comment_emoji_picker"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        com.testlogon.android.data.feed.REACTION_EMOJIS.forEach { emoji ->
+            androidx.compose.material3.FilterChip(
+                selected = emoji in selected,
+                onClick = { onPick(emoji) },
+                label = { Text(emoji) },
+            )
+        }
+    }
+}
+
+/** #23 — under-comment reaction chip row. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun CommentReactionChips(
+    reactions: List<com.testlogon.android.data.feed.ReactionTally>,
+    onToggle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.padding(top = 2.dp).testTag("comment_reaction_chips"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        reactions.forEach { r ->
+            androidx.compose.material3.FilterChip(
+                selected = r.reactedByMe,
+                onClick = { onToggle(r.emoji) },
+                label = { Text("${r.emoji} ${r.count}") },
+            )
+        }
     }
 }
 
@@ -402,13 +513,18 @@ private fun CommentRow(
 private fun CommentComposer(
     state: ComposerState,
     draft: String,
+    imageUploading: Boolean,
     onBodyChange: (String) -> Unit,
     onSend: () -> Unit,
     onOpenMediaPicker: () -> Unit,
+    onPickImage: () -> Unit,
     onCancelReply: () -> Unit,
     onCancelEdit: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // #21 — let the composer dismiss the soft keyboard / clear focus after sending.
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     Column(modifier = modifier.fillMaxWidth().padding(8.dp)) {
         if (state.isEditing) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -437,7 +553,7 @@ private fun CommentComposer(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // GIF / sticker picker (kept out of edit mode, where only the body is editable).
+            // GIF / sticker + image pickers (kept out of edit mode, where only the body is editable).
             if (!state.isEditing) {
                 IconButton(
                     onClick = onOpenMediaPicker,
@@ -449,6 +565,23 @@ private fun CommentComposer(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 }
+                // #24 — attach an uploaded image as a comment.
+                if (imageUploading) {
+                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    }
+                } else {
+                    IconButton(
+                        onClick = onPickImage,
+                        modifier = Modifier.size(48.dp).testTag("comments_image_button"),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Image,
+                            contentDescription = "Attach a photo",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
             OutlinedTextField(
                 value = draft,
@@ -458,7 +591,12 @@ private fun CommentComposer(
                 maxLines = 4,
             )
             IconButton(
-                onClick = onSend,
+                onClick = {
+                    onSend()
+                    // #21 — close the keyboard after a send so it never traps focus.
+                    keyboardController?.hide()
+                    focusManager.clearFocus(force = true)
+                },
                 enabled = state.canSend,
                 modifier = Modifier.size(48.dp).testTag(CommentsTestTags.SEND),
             ) {

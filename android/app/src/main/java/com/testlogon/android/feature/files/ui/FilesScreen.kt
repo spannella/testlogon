@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sort
@@ -72,6 +74,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -98,6 +101,7 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 import com.testlogon.android.R
 import com.testlogon.android.core.model.files.FileNode
 import com.testlogon.android.core.model.files.FileNodeType
@@ -965,7 +969,10 @@ private fun FileRow(
     ) {
         // #6 - image files show a real Coil thumbnail (authed loader -> /v1/fs/thumbnail); on a missing
         // loader or a load error this falls back to the generic type icon.
-        if (imageLoader != null && isImageNode(node)) {
+        // #9 - VIDEO files show a first-frame thumbnail (Coil VideoFrameDecoder over the raw bytes of
+        // /v1/fs/download) with a small play glyph overlay; same error -> generic-icon fallback.
+        val isVideo = isVideoNode(node)
+        if (imageLoader != null && (isImageNode(node) || isVideo)) {
             var thumbFailed by remember(node.path) { mutableStateOf(false) }
             if (thumbFailed) {
                 Icon(
@@ -975,20 +982,37 @@ private fun FileRow(
                     modifier = Modifier.size(40.dp),
                 )
             } else {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(thumbnailUrl(node))
-                        .crossfade(true)
-                        .build(),
-                    imageLoader = imageLoader,
-                    contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    onState = { st -> if (st is AsyncImagePainter.State.Error) thumbFailed = true },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .testTag(FilesTestTags.thumbnail(node)),
-                )
+                Box(modifier = Modifier.size(40.dp)) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(if (isVideo) videoThumbnailUrl(node) else thumbnailUrl(node))
+                            .crossfade(true)
+                            .apply { if (isVideo) videoFrameMillis(0L) }
+                            .build(),
+                        imageLoader = imageLoader,
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        onState = { st -> if (st is AsyncImagePainter.State.Error) thumbFailed = true },
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clip(RoundedCornerShape(6.dp))
+                            .testTag(FilesTestTags.thumbnail(node)),
+                    )
+                    // #9 - play glyph overlay so a video thumbnail reads as a video, not a still image.
+                    if (isVideo) {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .padding(2.dp),
+                        )
+                    }
+                }
             }
         } else {
             Icon(
@@ -1402,6 +1426,30 @@ private fun isImageNode(node: FileNode): Boolean {
     return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") ||
         name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".bmp") ||
         name.endsWith(".heic") || name.endsWith(".heif")
+}
+
+/** #9 - true when [node] is a video file, by preview-kind / content-type / filename extension. */
+private fun isVideoNode(node: FileNode): Boolean {
+    if (node.type == FileNodeType.FOLDER) return false
+    val family = (node.previewKind ?: node.contentType.orEmpty()).lowercase()
+    if (family.startsWith("video")) return true
+    val name = node.name.lowercase()
+    return name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".m4v") ||
+        name.endsWith(".webm") || name.endsWith(".mkv") || name.endsWith(".3gp") ||
+        name.endsWith(".avi")
+}
+
+/**
+ * #9 - the list-thumbnail source for a VIDEO [node]. Prefers a server-supplied poster image (a still,
+ * fast); otherwise the raw video bytes from the authed `/v1/fs/download` endpoint, which Coil's
+ * VideoFrameDecoder turns into a first-frame thumbnail. The url is server-RELATIVE so the authed
+ * loader's RelativeUrlMapper resolves it against API_BASE_URL. (`/v1/fs/preview` 415s for video, so we
+ * use the download endpoint, which streams the bytes with the real video content-type.)
+ */
+private fun videoThumbnailUrl(node: FileNode): String {
+    node.posterUrl?.takeIf { it.isNotBlank() }?.let { return it }
+    val encoded = java.net.URLEncoder.encode(node.path, "UTF-8")
+    return "/v1/fs/download?path=$encoded"
 }
 
 /**

@@ -141,6 +141,26 @@ interface MessagingRepository {
     suspend fun revokeMessage(conversationId: String, messageId: String): ApiResult<Message>
 
     /**
+     * #8 — list the caller's still-pending scheduled messages in [conversationId] (sorted by due time
+     * ascending). Read-through, not cached (the manager refetches each time it opens).
+     */
+    suspend fun listScheduledMessages(conversationId: String): ApiResult<List<ScheduledMessage>>
+
+    /**
+     * #8 — reschedule / edit a still-pending scheduled message. Pass [text] and/or [sendAtEpochSeconds]
+     * (at least one); returns the updated [ScheduledMessage]. Caller maps 400/403 to a user message.
+     */
+    suspend fun rescheduleMessage(
+        conversationId: String,
+        messageId: String,
+        text: String? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<ScheduledMessage>
+
+    /** #8 — cancel/delete a still-pending scheduled message before it delivers. */
+    suspend fun cancelScheduledMessage(conversationId: String, messageId: String): ApiResult<Unit>
+
+    /**
      * AND-140 — hide/unhide a message FOR ME (server-backed). Applies the local hide flag
      * optimistically, POSTs/DELETEs …/hide, and rolls back on error. The hide flag is set via a
      * targeted column update so an unrelated MessageOut upsert never clobbers it.
@@ -1036,6 +1056,45 @@ class MessagingRepositoryImpl @Inject constructor(
                 ApiResult.Success(message)
             }
             is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun listScheduledMessages(
+        conversationId: String,
+    ): ApiResult<List<ScheduledMessage>> = withContext(io) {
+        when (val r = apiCall { api.listScheduledMessages(conversationId) }) {
+            is ApiResult.Success ->
+                ApiResult.Success(r.data.map { it.toScheduledDomain() }.sortedBy { it.deliverAtEpochSeconds })
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun rescheduleMessage(
+        conversationId: String,
+        messageId: String,
+        text: String?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<ScheduledMessage> = withContext(io) {
+        val req = RescheduleMessageReq(text = text, sendAt = sendAtEpochSeconds)
+        when (val r = apiCall { api.rescheduleMessage(conversationId, messageId, req) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.toScheduledDomain())
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun cancelScheduledMessage(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Unit> = withContext(io) {
+        when (val r = apiCall { api.cancelScheduledMessage(conversationId, messageId) }) {
+            // Body is {ok,message_id}; we only need the 200 (close the raw stream).
+            is ApiResult.Success -> { runCatching { r.data.close() }; ApiResult.Success(Unit) }
+            is ApiResult.Failure ->
+                // 404 == already gone (delivered or cancelled elsewhere) -> treat as success.
+                if (r.error.status == HTTP_NOT_FOUND) ApiResult.Success(Unit) else r
             is ApiResult.NetworkError -> r
         }
     }

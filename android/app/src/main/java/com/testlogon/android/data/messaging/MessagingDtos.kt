@@ -137,6 +137,10 @@ data class MessageDto(
     @Json(name = "is_encrypted") val isEncrypted: Boolean? = null,
     /** MSG — client-side encryption envelope echoed back by the server on an encrypted message. */
     val encryption: MessageEncryptionEnvelopeDto? = null,
+    /** #8 — true while this message is a still-pending scheduled (not-yet-delivered) send. */
+    val scheduled: Boolean? = null,
+    /** #8 — epoch SECONDS the scheduled message is due to be delivered (null when not scheduled). */
+    @Json(name = "deliver_at") val deliverAt: Long? = null,
 )
 
 /** MessageOut.image (MessageImage). All inner fields are optional per the free-form schema. */
@@ -216,6 +220,17 @@ data class SendTextMessageReq(
     @Json(name = "send_at") val sendAt: Long? = null,
     @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
     val encryption: MessageEncryptionEnvelopeDto? = null,
+)
+
+/**
+ * #8 PATCH .../messages/{message_id}/schedule body = RescheduleMessageIn. At least one of [text] /
+ * [sendAt] must be set (both default absent so Moshi omits unset fields); [sendAt] is epoch seconds
+ * and must be >= now+5s server-side; [text] edits text-kind scheduled messages only.
+ */
+@JsonClass(generateAdapter = true)
+data class RescheduleMessageReq(
+    val text: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
 )
 
 /**

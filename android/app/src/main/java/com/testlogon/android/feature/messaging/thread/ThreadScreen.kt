@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@file:OptIn(
+    androidx.compose.ui.ExperimentalComposeUiApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
 package com.testlogon.android.feature.messaging.thread
 
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -8,12 +11,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.Row
@@ -21,8 +27,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +40,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,6 +52,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.EditCalendar
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.FolderShared
@@ -145,6 +159,14 @@ object ThreadTestTags {
     const val TOMBSTONE = "thread_tombstone"
     const val OPEN_PINS = "thread_open_pins"
     const val DISCARD_DRAFT = "thread_discard_draft"
+
+    /** #8 — scheduled-messages manager. */
+    const val OPEN_SCHEDULED = "thread_open_scheduled"
+    const val SCHEDULED_SHEET = "thread_scheduled_sheet"
+    const val SCHEDULED_ITEM = "thread_scheduled_item"
+    const val SCHEDULED_EDIT = "thread_scheduled_edit"
+    const val SCHEDULED_REMOVE = "thread_scheduled_remove"
+    const val SCHEDULED_EDIT_SAVE = "thread_scheduled_edit_save"
 
     /** AND-158/159 — open group details/settings. */
     const val OPEN_GROUP_DETAILS = "thread_open_group_details"
@@ -397,6 +419,7 @@ fun ThreadRoute(
         onDiscardDraft = viewModel::onDiscardDraft,
         searchActive = searchUi.active,
         onOpenSearch = viewModel::onOpenSearch,
+        onOpenScheduled = viewModel::openScheduledManager,
         searchBar = {
             ThreadSearchBar(
                 state = searchUi,
@@ -511,6 +534,32 @@ fun ThreadRoute(
                 TextButton(onClick = viewModel::dismissViewOnce, modifier = Modifier.testTag("thread_view_once_close")) { Text("Close") }
             },
         )
+    }
+
+    // #8 — scheduled-messages manager (list pending scheduled sends; edit/remove each).
+    if (state.scheduledManager.visible) {
+        ScheduledMessagesSheet(
+            state = state.scheduledManager,
+            onEdit = viewModel::openScheduledEdit,
+            onRemove = viewModel::cancelScheduledMessage,
+            onDismiss = viewModel::closeScheduledManager,
+        )
+        LaunchedEffect(state.scheduledManager.error) {
+            state.scheduledManager.error?.let {
+                snackbarHostState.showSnackbar(it)
+                viewModel.onScheduledManagerErrorShown()
+            }
+        }
+        // #8 — inline edit dialog (text + send time) for one scheduled message.
+        state.scheduledManager.editing?.let { editing ->
+            ScheduledEditDialog(
+                editing = editing,
+                onTextChange = viewModel::onScheduledEditTextChange,
+                onTimeChange = viewModel::onScheduledEditTimeChange,
+                onSave = viewModel::saveScheduledEdit,
+                onDismiss = viewModel::closeScheduledEdit,
+            )
+        }
     }
 }
 
@@ -778,6 +827,7 @@ fun ThreadScreen(
     // AND-151 — in-conversation search: when [searchActive] the search bar replaces the app bar.
     searchActive: Boolean = false,
     onOpenSearch: () -> Unit = {},
+    onOpenScheduled: () -> Unit = {},
     onPlaceCall: (String) -> Unit = {},
     searchBar: @Composable () -> Unit = {},
     snackbarHostState: androidx.compose.material3.SnackbarHostState =
@@ -786,6 +836,18 @@ fun ThreadScreen(
 ) {
     // AND-140 — the message whose long-press action sheet is open (null = closed).
     var actionTarget by remember { mutableStateOf<ThreadMessageUi?>(null) }
+    // #3 KEYBOARD DISMISS — clear the composer's focus + hide the IME without leaving the thread.
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val imeVisible = androidx.compose.foundation.layout.WindowInsets.isImeVisible
+    val dismissKeyboard = {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+    }
+    // #3 — a back-press first dismisses the keyboard (when it's up) instead of leaving the conversation.
+    androidx.activity.compose.BackHandler(enabled = imeVisible && !searchActive) {
+        dismissKeyboard()
+    }
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
@@ -885,6 +947,16 @@ fun ThreadScreen(
                             contentDescription = stringResource(R.string.msg_pins_title),
                         )
                     }
+                    // #8 — open the scheduled-messages manager (pending scheduled sends).
+                    IconButton(
+                        onClick = onOpenScheduled,
+                        modifier = Modifier.testTag(ThreadTestTags.OPEN_SCHEDULED),
+                    ) {
+                        Icon(
+                            Icons.Filled.Schedule,
+                            contentDescription = stringResource(R.string.msg_scheduled_title),
+                        )
+                    }
                     // AND-141 — discard the current draft (enabled only when a draft exists).
                     if (state.hasDraft) {
                         IconButton(
@@ -950,7 +1022,37 @@ fun ThreadScreen(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                // #3 KEYBOARD DISMISS — observe taps in the INITIAL pass so we see them BEFORE the child
+                // LazyColumn's scroll gesture (which otherwise swallows a plain detectTapGestures on the
+                // list). We never CONSUME the event, so scrolling + bubble clicks keep working; we only
+                // hide the IME when the gesture is a clean tap (down→up, no real drag) and the IME is up.
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial,
+                        )
+                        var moved = false
+                        val slop = viewConfiguration.touchSlop
+                        while (true) {
+                            val event = awaitPointerEvent(
+                                pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial,
+                            )
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                                ?: event.changes.firstOrNull() ?: break
+                            if ((change.position - down.position).getDistance() > slop) moved = true
+                            if (change.changedToUpIgnoreConsumed() || !change.pressed) {
+                                if (!moved) dismissKeyboard()
+                                break
+                            }
+                        }
+                    }
+                },
+        ) {
             when {
                 state.isLoadingInitial && state.messages.isEmpty() -> LoadingState()
                 state.errorMessage != null && state.messages.isEmpty() ->
@@ -1373,8 +1475,14 @@ private fun MessageBubble(
         val lockedNotUnlocked = !message.isOwn &&
             (message.media as? MessageMedia.Paid)?.monetization?.unlocked == false
         val isEncryptedImage = !lockedNotUnlocked && message.isEncrypted && message.media is MessageMedia.Image
+        // #6 — an encrypted VIDEO (kind="video" -> MessageMedia.VideoClip) must get the same encrypted
+        // teaser treatment as an encrypted image, not fall through to a normal playable clip. Recipient
+        // only; the sender sees their own clip with an "Encrypted" badge (computed below).
+        val isEncryptedVideo = !lockedNotUnlocked && message.isEncrypted &&
+            !message.isOwn && message.media is MessageMedia.VideoClip
         val showEncryptedLocked = !lockedNotUnlocked &&
-            message.isEncrypted && !message.isOwn && message.decryptedText == null && !isEncryptedImage
+            message.isEncrypted && !message.isOwn && message.decryptedText == null &&
+            !isEncryptedImage && !isEncryptedVideo
         val showViewOnceHidden = !lockedNotUnlocked && message.viewOnce && !message.isOwn && !message.consumed
         val showListenOnceConsumed = !lockedNotUnlocked &&
             (message.media as? MessageMedia.Voice)?.consumptionPolicy == "listen_once" &&
@@ -1386,6 +1494,16 @@ private fun MessageBubble(
                 hint = "Tap to view",
                 onClick = onOpenEncrypted,
                 testTag = "thread_encrypted_image",
+            )
+        } else if (isEncryptedVideo) {
+            // #6 — encrypted video recipient: show the encrypted/enter-passphrase teaser (mirrors the
+            // encrypted-image teaser). Tapping prompts for the passphrase like other encrypted content.
+            GatedTeaserBubble(
+                icon = Icons.Filled.Lock,
+                label = "Encrypted video",
+                hint = "Tap to unlock",
+                onClick = onOpenEncrypted,
+                testTag = "thread_encrypted_video",
             )
         } else if (showEncryptedLocked) {
             GatedTeaserBubble(
@@ -1438,6 +1556,22 @@ private fun MessageBubble(
                 modifier = Modifier
                     .width(240.dp)
                     .clip(RoundedCornerShape(12.dp)),
+                // #5/#6 — the SENDER's own gated video maps to a plain VideoClip (the media IS present
+                // for them / unlocked viewers), so no recipient teaser/paywall renders. Surface the gate
+                // as a corner badge — "Locked $X" / "Encrypted" / "View once" / "Disappears" — exactly
+                // like ImageBubble, so they can see they sent it gated.
+                badge = if (message.isOwn) {
+                    when {
+                        message.lockPriceCents != null ->
+                            "Locked ${formatMoney(message.lockPriceCents, message.lockCurrency)}"
+                        message.isEncrypted -> "Encrypted"
+                        message.viewOnce -> "View once"
+                        message.expiresAtEpochSeconds != null -> "Disappears"
+                        else -> null
+                    }
+                } else {
+                    null
+                },
             )
             is MessageMedia.File -> FileMessageBubble(
                 file = media,
@@ -2191,4 +2325,179 @@ private fun MessageComposer(
             }
         }
     }
+}
+
+// ============================================================================================
+// #8 SCHEDULED MESSAGES MANAGER
+// ============================================================================================
+
+/** #8 - format an epoch-seconds due time for the manager rows / edit field. */
+private fun formatScheduledTime(epochSeconds: Long): String =
+    SimpleDateFormat("MMM d, yyyy 'at' h:mm a", Locale.getDefault()).format(Date(epochSeconds * 1000L))
+
+/**
+ * #8 - bottom sheet listing the caller's pending scheduled messages. Each row shows the body/preview
+ * and the due time with Edit + Remove actions. Empty/loading states handled inline.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScheduledMessagesSheet(
+    state: ScheduledManagerUiState,
+    onEdit: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .testTag(ThreadTestTags.SCHEDULED_SHEET),
+        ) {
+            Text(
+                text = stringResource(R.string.msg_scheduled_title),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Spacer(Modifier.height(12.dp))
+            when {
+                state.loading && state.items.isEmpty() -> {
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                state.isEmpty -> {
+                    Text(
+                        text = stringResource(R.string.msg_scheduled_empty),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.msg_scheduled_empty_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+                else -> {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                        items(state.items, key = { it.id }) { item ->
+                            ScheduledMessageRow(
+                                item = item,
+                                onEdit = { onEdit(item.id) },
+                                onRemove = { onRemove(item.id) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+    }
+}
+
+/** #8 - one row in the scheduled-messages manager. */
+@Composable
+private fun ScheduledMessageRow(
+    item: com.testlogon.android.data.messaging.ScheduledMessage,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .testTag(ThreadTestTags.SCHEDULED_ITEM),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Schedule,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = formatScheduledTime(item.deliverAtEpochSeconds),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = item.displayText,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = onEdit,
+                    modifier = Modifier.testTag(ThreadTestTags.SCHEDULED_EDIT),
+                ) { Text(stringResource(R.string.msg_scheduled_edit)) }
+                Spacer(Modifier.width(4.dp))
+                TextButton(
+                    onClick = onRemove,
+                    modifier = Modifier.testTag(ThreadTestTags.SCHEDULED_REMOVE),
+                ) {
+                    Text(
+                        text = stringResource(R.string.msg_scheduled_remove),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** #8 - edit dialog for one scheduled message: change the body (text-kind) and/or the send time. */
+@Composable
+private fun ScheduledEditDialog(
+    editing: ScheduledEditState,
+    onTextChange: (String) -> Unit,
+    onTimeChange: (Long) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.msg_scheduled_edit_title)) },
+        text = {
+            Column(modifier = Modifier.testTag(ThreadTestTags.SCHEDULED_EDIT)) {
+                if (editing.textEditable) {
+                    OutlinedTextField(
+                        value = editing.draftText,
+                        onValueChange = onTextChange,
+                        modifier = Modifier.fillMaxWidth().testTag("thread_scheduled_edit_text"),
+                        label = { Text(stringResource(R.string.msg_scheduled_edit)) },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+                Text(
+                    text = stringResource(R.string.msg_scheduled_send_time),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Spacer(Modifier.height(4.dp))
+                com.testlogon.android.feature.common.DateTimePickerField(
+                    selectedEpochSeconds = editing.draftDeliverAtEpochSeconds,
+                    onPicked = onTimeChange,
+                    testTag = "thread_scheduled_edit_time",
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onSave,
+                enabled = !editing.saving,
+                modifier = Modifier.testTag(ThreadTestTags.SCHEDULED_EDIT_SAVE),
+            ) { Text(stringResource(R.string.msg_scheduled_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
 }

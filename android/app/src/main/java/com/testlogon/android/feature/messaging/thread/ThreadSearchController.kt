@@ -33,7 +33,7 @@ data class ThreadSearchUiState(
     val active: Boolean = false,
     val query: String = "",
     val phase: SearchPhase = SearchPhase.Idle,
-    /** ordered oldest->newest, one entry per occurrence. */
+    /** ordered MOST-RECENT first (#11), one entry per occurrence. */
     val matches: List<MessageSearchMatch> = emptyList(),
     /** index into [matches]; -1 == none. */
     val activeIndex: Int = -1,

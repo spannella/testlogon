@@ -4,6 +4,7 @@ import android.content.Context
 import coil.ImageLoader
 import coil.decode.ImageDecoderDecoder
 import coil.decode.GifDecoder
+import coil.decode.VideoFrameDecoder
 import coil.map.Mapper
 import coil.request.Options
 import com.testlogon.android.BuildConfig
@@ -53,6 +54,9 @@ object FilesImageLoaderModule {
             } else {
                 add(GifDecoder.Factory())
             }
+            // #9 - decode a first-frame thumbnail for VIDEO files (the file row requests
+            // /v1/fs/download for a video node; this decoder pulls a frame via MediaMetadataRetriever).
+            add(VideoFrameDecoder.Factory())
         }
         .build()
 

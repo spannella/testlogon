@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -79,7 +80,10 @@ fun ThreadSearchBar(
     onPickMatch: (MessageSearchMatch) -> Unit = {},
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        // #10 — the search bar REPLACES the TopAppBar as the Scaffold topBar. A TopAppBar consumes the
+        // status-bar inset automatically; a bare Surface does NOT, so the field floated up under the
+        // status bar (looked "too high"). statusBarsPadding() drops it to where the app bar sat.
+        modifier = modifier.fillMaxWidth().statusBarsPadding(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp,
         shadowElevation = 3.dp,
@@ -150,7 +154,7 @@ fun ThreadSearchBar(
                 }
             }
 
-            // #17 — filtered results list (one row per matching message, oldest->newest). Tap to jump.
+            // #17 — filtered results list (one row per matching message, MOST-RECENT first). Tap to jump.
             if (state.hasMatches) {
                 HorizontalDivider()
                 // De-duplicate to one row per message (a message can match more than once).

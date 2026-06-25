@@ -11,6 +11,8 @@ import androidx.paging.insertHeaderItem
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.feed.Comment
 import com.testlogon.android.data.feed.CommentsRepository
+import com.testlogon.android.data.feed.reactedByMe
+import com.testlogon.android.data.feed.toggledReaction
 import com.testlogon.android.data.messaging.GifResult
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.StickerUi
@@ -82,6 +84,7 @@ class CommentsViewModel @Inject constructor(
     private val repository: CommentsRepository,
     private val stickerCatalog: MessagingRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
+    private val imageUploader: com.testlogon.android.data.feed.CommentImageUploader,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -96,6 +99,22 @@ class CommentsViewModel @Inject constructor(
     }
 
     val repliesSupported: Boolean get() = repository.repliesSupported
+
+    /**
+     * #25 — true when the viewer authored the post these comments belong to. Set by the host once the
+     * post loads; tipping is then hidden on this post (you can't tip your own content). Drives [showTip].
+     */
+    private val _isOwnPost = MutableStateFlow(false)
+    val isOwnPost: StateFlow<Boolean> = _isOwnPost.asStateFlow()
+
+    fun setOwnPost(own: Boolean) {
+        _isOwnPost.value = own
+    }
+
+    /** #23 — server-confirmed reaction overrides keyed by comment id, layered over the paged comments. */
+    private val _reactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.ReactionTally>>>(emptyMap())
+    val reactionOverrides: StateFlow<Map<String, List<com.testlogon.android.data.feed.ReactionTally>>> =
+        _reactionOverrides.asStateFlow()
 
     private val pending = MutableStateFlow<List<Comment>>(emptyList())
 
@@ -220,7 +239,13 @@ class CommentsViewModel @Inject constructor(
         }
     }
 
-    private fun richOptimistic(localKey: String, parentId: String?, gifUrl: String? = null, stickerUrl: String? = null) =
+    private fun richOptimistic(
+        localKey: String,
+        parentId: String?,
+        gifUrl: String? = null,
+        stickerUrl: String? = null,
+        imageUrl: String? = null,
+    ) =
         Comment(
             id = localKey,
             postId = postId,
@@ -231,6 +256,7 @@ class CommentsViewModel @Inject constructor(
             updatedAtEpochSeconds = null,
             gifUrl = gifUrl,
             stickerUrl = stickerUrl,
+            imageUrl = imageUrl,
             canDelete = true,
             pending = true,
             localKey = localKey,
@@ -275,6 +301,70 @@ class CommentsViewModel @Inject constructor(
                 }
                 is ApiResult.NetworkError -> {
                     _tip.update { it.copy(submitting = false) }
+                    _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
+                }
+            }
+        }
+    }
+
+    // ---- Comment emoji reactions (#23) ----
+
+    /**
+     * Optimistically toggle [emoji] on [comment], then call the server. The optimistic tally is stored
+     * in [_reactionOverrides] (keyed by the server comment id) so it survives a paging refresh; on
+     * failure it rolls back to the pre-toggle tally.
+     */
+    fun toggleCommentReaction(comment: Comment, emoji: String) {
+        val id = comment.id
+        if (comment.pending || comment.failed || id.isBlank()) return
+        val before = _reactionOverrides.value[id] ?: comment.reactions
+        val after = before.toggledReaction(emoji)
+        val add = after.reactedByMe(emoji)
+        _reactionOverrides.update { it + (id to after) }
+        viewModelScope.launch {
+            when (val r = repository.setCommentReaction(postId, id, emoji, add)) {
+                is ApiResult.Success -> Unit
+                is ApiResult.Failure -> {
+                    _reactionOverrides.update { it + (id to before) }
+                    _effects.trySend(CommentsEffect.ShowError(r.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    _reactionOverrides.update { it + (id to before) }
+                    _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
+                }
+            }
+        }
+    }
+
+    // ---- Image comments (#24) ----
+
+    /** True while a picked image is uploading (drives a composer progress affordance). */
+    private val _imageUploading = MutableStateFlow(false)
+    val imageUploading: StateFlow<Boolean> = _imageUploading.asStateFlow()
+
+    /**
+     * Pick-to-send for an image comment: uploads [uri] via POST /uploads/image, then posts a kind=image
+     * comment with the returned platform URL. Optimistic + reconciled like text comments.
+     */
+    fun uploadAndSendImageComment(uri: android.net.Uri) {
+        if (_imageUploading.value) return
+        val parentId = _composer.value.replyTo?.id?.takeIf { repliesSupported }
+        _composer.update { it.copy(replyTo = null) }
+        _imageUploading.value = true
+        viewModelScope.launch {
+            when (val up = imageUploader.uploadImage(uri)) {
+                is ApiResult.Success -> {
+                    _imageUploading.value = false
+                    val localKey = UUID.randomUUID().toString()
+                    pending.update { listOf(richOptimistic(localKey, parentId, imageUrl = up.data)) + it }
+                    handleSendResult(localKey, parentId, repository.addImageComment(postId, up.data, null, parentId))
+                }
+                is ApiResult.Failure -> {
+                    _imageUploading.value = false
+                    _effects.trySend(CommentsEffect.ShowError(up.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    _imageUploading.value = false
                     _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
                 }
             }

@@ -40,6 +40,9 @@ data class PostDto(
     @Json(name = "like_count") val likeCount: Int = 0,
     @Json(name = "comment_count") val commentCount: Int = 0,
     @Json(name = "liked_by_me") val likedByMe: Boolean = false,
+    // #20 — full emoji reactions (distinct from like). Per-emoji counts + the viewer's own reactions.
+    @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
+    @Json(name = "my_reactions") val myReactions: List<String>? = null,
     // --- flat lock / paywall fields (mirror FeedPost) ---
     @Json(name = "locked") val locked: Boolean = false,
     @Json(name = "unlocked") val unlocked: Boolean = false,

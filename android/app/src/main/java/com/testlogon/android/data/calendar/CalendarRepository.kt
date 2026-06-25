@@ -62,6 +62,16 @@ interface CalendarRepository {
 
     /** SC19 — delete an event. */
     suspend fun deleteEvent(calendarId: String, eventId: String): ApiResult<Unit>
+
+    /**
+     * #13 ("This event only") — excludes a single occurrence of a recurring series by adding its UTC
+     * start ([occurrenceStartUtc], ISO-8601) to the event's exdates. Series + rule are kept intact.
+     */
+    suspend fun excludeOccurrence(
+        calendarId: String,
+        eventId: String,
+        occurrenceStartUtc: String,
+    ): ApiResult<CalendarEvent>
 }
 
 @Singleton
@@ -146,6 +156,14 @@ class CalendarRepositoryImpl @Inject constructor(
         withContext(io) {
             call { api.deleteEvent(calendarId, eventId) }.map { }
         }
+
+    override suspend fun excludeOccurrence(
+        calendarId: String,
+        eventId: String,
+        occurrenceStartUtc: String,
+    ): ApiResult<CalendarEvent> = withContext(io) {
+        call { api.excludeOccurrence(calendarId, eventId, occurrenceStartUtc) }.map { it.toDomain() }
+    }
 
     /**
      * Folds a single call into [ApiResult]. HTTP errors -> Failure (via [ApiErrorParser]); transport

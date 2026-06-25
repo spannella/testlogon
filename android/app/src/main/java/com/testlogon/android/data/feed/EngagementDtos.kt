@@ -39,10 +39,16 @@ data class CommentDto(
     @Json(name = "updated_at") val updatedAt: String? = null,
     @Json(name = "deleted") val deleted: Boolean = false,
     @Json(name = "tip_total_cents") val tipTotalCents: Int = 0,
-    // Rich-comment payloads (kind "gif" / "sticker"); absent on plain text comments.
+    // Rich-comment payloads (kind "gif" / "sticker" / "image"); absent on plain text comments.
     @Json(name = "kind") val kind: String? = null,
     @Json(name = "gif_url") val gifUrl: String? = null,
     @Json(name = "sticker_url") val stickerUrl: String? = null,
+    // #24 — user-uploaded image comments (kind == "image").
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "image_alt_text") val imageAltText: String? = null,
+    // #23 — emoji reactions on comments (mirrors post reactions; legacy comments lack these).
+    @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
+    @Json(name = "my_reactions") val myReactions: List<String>? = null,
 )
 
 /**
@@ -60,6 +66,15 @@ data class CreateCommentRequest(
     @Json(name = "sticker_collection_id") val stickerCollectionId: String? = null,
     @Json(name = "sticker_url") val stickerUrl: String? = null,
     @Json(name = "sticker_alt_text") val stickerAltText: String? = null,
+    // #24 — image comment (kind="image"); image_url must be a platform upload URL or https.
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "image_alt_text") val imageAltText: String? = null,
+)
+
+/** POST /posts/{id}/reactions and /posts/{id}/comments/{cid}/reactions request — a single emoji. */
+@JsonClass(generateAdapter = true)
+data class ReactionRequest(
+    @Json(name = "emoji") val emoji: String,
 )
 
 /** POST /posts/{post_id}/comments/{comment_id}/tip request — amount in integer cents. */

@@ -3,6 +3,7 @@ package com.testlogon.android.feature.feed.own
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.PostComposeRepository
 import com.testlogon.android.data.feed.PostVisibility
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -43,6 +44,7 @@ data class EditPostUiState(
 @HiltViewModel
 class EditPostViewModel @Inject constructor(
     private val compose: PostComposeRepository,
+    private val feedRefreshBus: FeedRefreshBus,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(EditPostUiState())
@@ -117,7 +119,11 @@ class EditPostViewModel @Inject constructor(
                 unlockPriceCents = cents,
             )
             when (r) {
-                is ApiResult.Success -> _state.update { it.copy(submitting = false, saved = true) }
+                is ApiResult.Success -> {
+                    // #18b — replace the edited post IN PLACE in the main feed (not just My Posts).
+                    feedRefreshBus.signal()
+                    _state.update { it.copy(submitting = false, saved = true) }
+                }
                 is ApiResult.Failure -> _state.update { it.copy(submitting = false, error = r.error.message) }
                 is ApiResult.NetworkError -> _state.update { it.copy(submitting = false, error = "You're offline. Try again.") }
             }

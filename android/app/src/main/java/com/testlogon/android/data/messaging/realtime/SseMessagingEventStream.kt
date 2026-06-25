@@ -5,9 +5,15 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.shareIn
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
@@ -53,7 +59,25 @@ class SseMessagingEventStream @Inject constructor(
 
     private val backoff = SseBackoffPolicy()
 
-    override fun events(): Flow<MessagingStreamEvent> = callbackFlow {
+    // #4 PERF — there are FOUR independent collectors of events() (Thread/ConversationList
+    // ViewModels + Presence + CallSignaling). Each collector of the cold callbackFlow below
+    // spawned its OWN events/poll worker (600ms, ~16KB body, 0.5-1s each), so up to 4 poll
+    // floods ran at once and SATURATED the OkHttp dispatcher (5 conns/host) — that is why the
+    // conversation-info GET (and everything else) queued behind the flood and felt slow.
+    // shareIn() fans ONE long-lived upstream (one SSE + one poll worker) out to all collectors
+    // and tears it down 5s after the last unsubscribes (so a backgrounded app stops polling).
+    private val shareScope = CoroutineScope(SupervisorJob())
+    private val shared: SharedFlow<MessagingStreamEvent> by lazy {
+        rawStream().shareIn(
+            scope = shareScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000, replayExpirationMillis = 0),
+            replay = 0,
+        )
+    }
+
+    override fun events(): Flow<MessagingStreamEvent> = shared
+
+    private fun rawStream(): Flow<MessagingStreamEvent> = callbackFlow {
         var attempt = 0
         var running = true
         // AND-143 — retained across reconnects so we replay `Last-Event-ID` and floor the next

@@ -68,4 +68,9 @@ abstract class FeedDataModule {
     @Binds
     @Singleton
     abstract fun bindPollRepository(impl: PollRepositoryImpl): PollRepository
+
+    /** #24 — image-upload seam used by the comments VM (delegates to the post-compose repo). */
+    @Binds
+    @Singleton
+    abstract fun bindCommentImageUploader(impl: PostComposeRepository): CommentImageUploader
 }

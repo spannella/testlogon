@@ -25,7 +25,7 @@ data class MessageSearchMatch(
     val start: Int,
     /** char offset (exclusive) of the hit end. */
     val end: Int,
-    /** epoch SECONDS, from MessageOut.created_at. Drives oldest->newest ordering. */
+    /** epoch SECONDS, from MessageOut.created_at. Drives MOST-RECENT-first ordering (#11). */
     val createdAtEpochSeconds: Long,
     /** the message body (for snippet rendering). */
     val text: String,
@@ -49,7 +49,7 @@ data class MessageSearchResultItem(
  * AND-151 — flattens search hits (MessageOut[]) into an ordered list of [MessageSearchMatch]. Each
  * returned message is expanded into one row per local occurrence of [query] in its `text`. Messages
  * with null/blank text, or whose local matcher finds no occurrence (server tokenization may diverge),
- * are dropped. Sorted oldest->newest by created_at, then by occurrenceIndex (stable cursor order).
+ * are dropped. Sorted MOST-RECENT first (created_at descending), then by occurrenceIndex (stable cursor order).
  */
 internal fun List<MessageDto>.toSearchMatches(query: String): List<MessageSearchMatch> =
     asSequence()
@@ -71,7 +71,9 @@ internal fun List<MessageDto>.toSearchMatches(query: String): List<MessageSearch
             }
         }
         .sortedWith(
-            compareBy<MessageSearchMatch> { it.createdAtEpochSeconds }
+            // #11 — results ordered MOST-RECENT first down to oldest (descending created_at);
+            // ties (same timestamp) stay stable by messageId, occurrences within a message ascending.
+            compareByDescending<MessageSearchMatch> { it.createdAtEpochSeconds }
                 .thenBy { it.messageId }
                 .thenBy { it.occurrenceIndex },
         )

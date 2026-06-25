@@ -99,6 +99,22 @@ class FakeCalendarRepository : CalendarRepository {
         return deleteResult
     }
 
+    var excludeResult: ApiResult<CalendarEvent> = ApiResult.Success(sampleEvent("evt_1"))
+    var lastExcludeOccurrenceUtc: String? = null
+    var excludeCalls = 0
+
+    override suspend fun excludeOccurrence(
+        calendarId: String,
+        eventId: String,
+        occurrenceStartUtc: String,
+    ): ApiResult<CalendarEvent> {
+        excludeCalls++
+        lastEventCalendarId = calendarId
+        lastEventId = eventId
+        lastExcludeOccurrenceUtc = occurrenceStartUtc
+        return excludeResult
+    }
+
     companion object {
         fun sampleCalendar(id: String = "cal_55") = Calendar(
             calendarId = id, name = "Team", timezone = "UTC", ownerUserId = "usr_1",

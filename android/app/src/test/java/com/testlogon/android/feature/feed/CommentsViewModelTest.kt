@@ -25,6 +25,7 @@ class CommentsViewModelTest {
             repo,
             com.testlogon.android.feature.messaging.FakeMessagingRepository(),
             fakeDisplayNameResolver(),
+            FakeCommentImageUploader(),
             SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to "post_1")),
         )
 

@@ -11,6 +11,7 @@ import com.testlogon.android.data.calendar.EventCreateReqDto
 import com.testlogon.android.data.calendar.Recurrence
 import com.testlogon.android.data.calendar.RecurrenceFreq
 import com.testlogon.android.data.calendar.RecurrenceRuleDto
+import com.testlogon.android.data.calendar.parseInstantOrNull
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -131,11 +132,19 @@ class CalendarViewModel @Inject constructor(
         }
     }
 
-    /** Opens the long-press action sheet for an event. */
-    fun openEventActions(calendarId: String, eventId: String, title: String) {
+    /** Opens the long-press action sheet for an event ([occurrenceStartMillis] = the tapped instance). */
+    fun openEventActions(calendarId: String, eventId: String, title: String, occurrenceStartMillis: Long) {
+        val master = eventCache["$calendarId|$eventId"]
+        val recurring = master?.recurrence?.freq?.let { it != RecurrenceFreq.UNKNOWN } ?: false
         _state.update {
             (it as? CalendarUiState.Content)?.copy(
-                actionSheet = EventActionSheet(calendarId, eventId, title),
+                actionSheet = EventActionSheet(
+                    calendarId = calendarId,
+                    eventId = eventId,
+                    title = title,
+                    occurrenceStartUtc = Instant.ofEpochMilli(occurrenceStartMillis).toString(),
+                    recurring = recurring,
+                ),
             ) ?: it
         }
     }
@@ -172,6 +181,9 @@ class CalendarViewModel @Inject constructor(
                     recurrenceFreq = master?.recurrence?.freq?.takeIf { f -> f != RecurrenceFreq.UNKNOWN },
                     recurrenceInterval = master?.recurrence?.interval?.coerceAtLeast(1) ?: 1,
                     recurrenceCount = master?.recurrence?.count,
+                    // #12 - prefill BYDAY (normalized to upper-case ISO codes) for weekly multi-day rules.
+                    recurrenceByDay = master?.recurrence?.byDay
+                        ?.map { it.uppercase() }?.filter { it in ISO_BYDAY }.orEmpty(),
                 ),
                 actionSheet = null,
             ) ?: it
@@ -220,10 +232,118 @@ class CalendarViewModel @Inject constructor(
         }
     }
 
+    // ---- #13 recurring-delete choices ----
+
+    /**
+     * #13 - opens the "delete a recurring event" choice dialog. [occurrenceStartUtc] is the tapped
+     * occurrence's ISO-8601 UTC start; an empty value (the editor path) is resolved from the open editor.
+     */
+    fun requestDeleteEvent(
+        calendarId: String,
+        eventId: String,
+        title: String,
+        occurrenceStartUtc: String,
+    ) {
+        val content = _state.value as? CalendarUiState.Content ?: return
+        val occStart = occurrenceStartUtc.ifBlank { editorOccurrenceStartUtc(content.editor) }
+            ?: editorOccurrenceStartUtc(content.editor).orEmpty()
+        _state.update {
+            (it as? CalendarUiState.Content)?.copy(
+                actionSheet = null,
+                editor = null,
+                recurringDelete = RecurringDeletePrompt(
+                    calendarId = calendarId,
+                    eventId = eventId,
+                    title = title,
+                    occurrenceStartUtc = occStart,
+                ),
+            ) ?: it
+        }
+    }
+
+    fun dismissRecurringDelete() {
+        _state.update { (it as? CalendarUiState.Content)?.copy(recurringDelete = null) ?: it }
+    }
+
+    /** #13 "This event only" - EXDATE the tapped occurrence (series + rule untouched). */
+    fun deleteThisOccurrence() {
+        val prompt = (_state.value as? CalendarUiState.Content)?.recurringDelete ?: return
+        _state.update { (it as? CalendarUiState.Content)?.copy(recurringDelete = null) ?: it }
+        viewModelScope.launch {
+            val result = repository.excludeOccurrence(
+                prompt.calendarId,
+                prompt.eventId,
+                prompt.occurrenceStartUtc,
+            )
+            when (result) {
+                is ApiResult.Success -> { _messages.send(MSG_DELETED); load() }
+                is ApiResult.Failure, is ApiResult.NetworkError -> _messages.send(MSG_DELETE_FAILED)
+            }
+        }
+    }
+
+    /**
+     * #13 "This and following" - sets the series UNTIL to one minute before the tapped occurrence so it
+     * and every later instance drop off (the earlier instances stay). PATCHes only the recurrence rule.
+     */
+    fun deleteThisAndFollowing() {
+        val prompt = (_state.value as? CalendarUiState.Content)?.recurringDelete ?: return
+        val master = eventCache["${prompt.calendarId}|${prompt.eventId}"]
+        val rec = master?.recurrence
+        if (rec == null || rec.freq == RecurrenceFreq.UNKNOWN) {
+            // No usable rule to bound -> fall back to deleting the whole series.
+            deleteSeries()
+            return
+        }
+        val occMillis = parseInstantOrNull(prompt.occurrenceStartUtc)?.toEpochMilli()
+        if (occMillis == null) { deleteSeries(); return }
+        val untilIso = Instant.ofEpochMilli(occMillis - CalendarMath.MILLIS_PER_MINUTE).toString()
+        val byday = rec.byDay.map { it.uppercase() }.filter { it in ISO_BYDAY }.takeIf { it.isNotEmpty() }
+        val body = EventCreateReqDto(
+            recurrenceRule = RecurrenceRuleDto(
+                freq = rec.freq.name,
+                interval = rec.interval.coerceAtLeast(1),
+                count = rec.count?.takeIf { it > 0 },
+                byday = if (rec.freq == RecurrenceFreq.WEEKLY) byday else null,
+                untilUtc = untilIso,
+            ),
+        )
+        _state.update { (it as? CalendarUiState.Content)?.copy(recurringDelete = null) ?: it }
+        viewModelScope.launch {
+            when (repository.updateEvent(prompt.calendarId, prompt.eventId, body)) {
+                is ApiResult.Success -> { _messages.send(MSG_DELETED); load() }
+                is ApiResult.Failure, is ApiResult.NetworkError -> _messages.send(MSG_DELETE_FAILED)
+            }
+        }
+    }
+
+    /** #13 "All events" - delete the whole series. */
+    fun deleteSeries() {
+        val prompt = (_state.value as? CalendarUiState.Content)?.recurringDelete ?: return
+        deleteEvent(prompt.calendarId, prompt.eventId)
+    }
+
+    /** Resolves the ISO-8601 UTC start of the occurrence the editor is editing (for the editor delete). */
+    private fun editorOccurrenceStartUtc(editor: EventEditorState?): String? {
+        if (editor == null) return null
+        return if (editor.allDay) {
+            // Midnight UTC of the all-day date is a stable EXDATE key for an all-day occurrence.
+            Instant.ofEpochMilli(editor.epochDay * CalendarMath.MILLIS_PER_DAY).toString()
+        } else {
+            val tz = editor.timezone.ifBlank { deviceZoneId }
+            val offset = zoneOffsetMinutesForDay(tz, editor.epochDay)
+            Instant.ofEpochMilli(localDateTimeToUtcMillis(editor.epochDay, editor.startTime, offset)).toString()
+        }
+    }
+
     /** Deletes the event from the action sheet (or editor), then reloads. */
     fun deleteEvent(calendarId: String, eventId: String) {
         _state.update {
-            (it as? CalendarUiState.Content)?.copy(actionSheet = null, editor = null) ?: it
+            (it as? CalendarUiState.Content)?.copy(
+                actionSheet = null,
+                editor = null,
+                recurringDelete = null,
+            ) ?: it
         }
         viewModelScope.launch {
             when (repository.deleteEvent(calendarId, eventId)) {
@@ -274,10 +394,17 @@ class CalendarViewModel @Inject constructor(
     private fun buildRecurrenceDto(ed: EventEditorState): RecurrenceRuleDto? {
         val freq = ed.recurrenceFreq ?: return null
         if (freq == RecurrenceFreq.UNKNOWN) return null
+        // #12 - BYDAY is only meaningful for WEEKLY; empty -> omit (backend defaults to the start day).
+        val byday = if (freq == RecurrenceFreq.WEEKLY) {
+            ed.recurrenceByDay.filter { it in ISO_BYDAY }.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
         return RecurrenceRuleDto(
             freq = freq.name,
             interval = ed.recurrenceInterval.coerceAtLeast(1),
             count = ed.recurrenceCount?.takeIf { it > 0 },
+            byday = byday,
         )
     }
 
@@ -343,7 +470,10 @@ class CalendarViewModel @Inject constructor(
         val expanded = merged.flatMap {
             RecurrenceExpander.expand(it, expandStart, expandEnd, offsetMinutes)
         }
+        // #12 - de-dup occurrences by (calendar|event|start) so a series that resolves the same instant
+        // twice (e.g. anchor day also matching a BYDAY) can't produce a duplicate LazyColumn key.
         val slotted = expanded.map { it.toSlotted(displayZoneId) }
+            .distinctBy { "${it.calendarId}|${it.eventId}|${it.startMillis}|${it.allDayEpochDay}" }
         slottedCache = slotted
 
         val monthDays = EventSlotter.toDaySlots(slotted, monthRange, offsetMinutes)
@@ -502,6 +632,9 @@ class CalendarViewModel @Inject constructor(
 
         // Mon..Sun (week starts Monday, matching CalendarMath.weekStartIso default of 1).
         val WEEKDAY_HEADERS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+        // #12 - valid RFC-5545 BYDAY weekday codes (Mon..Sun) for the WEEKLY multi-select.
+        val ISO_BYDAY = listOf("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 
         // A small, common IANA-zone set for the editor timezone picker (device zone is prepended).
         val COMMON_ZONES = listOf(

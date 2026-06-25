@@ -125,12 +125,21 @@ enum class PostVisibility(val wire: String, val label: String) {
     SUBSCRIBERS("subscribers", "Subscribers"),
 }
 
+/**
+ * #24 — narrow seam for uploading a picked image and getting back its platform URL, so callers that
+ * only need image upload (e.g. the comments VM) can depend on this instead of the whole compose repo
+ * and unit tests can fake it without an Android Context.
+ */
+interface CommentImageUploader {
+    suspend fun uploadImage(uri: Uri): ApiResult<String>
+}
+
 @Singleton
 class PostComposeRepository @Inject constructor(
     private val api: PostComposeApi,
     private val errorParser: ApiErrorParser,
     @ApplicationContext private val context: Context,
-) {
+) : CommentImageUploader {
     suspend fun createPost(
         body: String,
         visibility: PostVisibility,
@@ -204,7 +213,7 @@ class PostComposeRepository @Inject constructor(
     }
 
     /** Upload a picked image; returns its url for [createPost]'s image_urls. */
-    suspend fun uploadImage(uri: Uri): ApiResult<String> = withContext(Dispatchers.IO) {
+    override suspend fun uploadImage(uri: Uri): ApiResult<String> = withContext(Dispatchers.IO) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: return@withContext ApiResult.NetworkError(IOException("Could not read the selected image"))
         uploadImageBytes(bytes, "image.jpg")

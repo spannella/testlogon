@@ -467,6 +467,39 @@ interface MessagingApi {
         @Path("messageId") messageId: String,
     ): MessageDto
 
+    /**
+     * #8 SCHEDULED MESSAGES — list the caller's still-pending scheduled (not-yet-delivered) messages
+     * in a conversation. Server filters to the caller's own status=="scheduled" rows, sorted by
+     * deliver_at. Returns a bare array of MessageOut (each carries deliver_at). Idempotent GET.
+     */
+    @GET("messaging/conversations/{id}/messages/scheduled")
+    suspend fun listScheduledMessages(
+        @Path("id") id: String,
+    ): List<MessageDto>
+
+    /**
+     * #8 SCHEDULED MESSAGES — reschedule / edit a still-pending scheduled message. At least one of
+     * text / send_at is required; send_at must be >= now+5s; text edits apply to text-kind only.
+     * Returns the updated MessageOut. 403 if not the sender, 400 if no longer scheduled. Non-idempotent.
+     */
+    @Headers("Content-Type: application/json")
+    @PATCH("messaging/conversations/{id}/messages/{messageId}/schedule")
+    suspend fun rescheduleMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: RescheduleMessageReq,
+    ): MessageDto
+
+    /**
+     * #8 SCHEDULED MESSAGES — cancel/delete a still-pending scheduled message before it delivers.
+     * Returns {ok:true, message_id}. Non-idempotent.
+     */
+    @DELETE("messaging/conversations/{id}/messages/{messageId}/schedule")
+    suspend fun cancelScheduledMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): ResponseBody
+
     /** AND-140 — hide a message FOR ME (server-backed). Returns MessageControlActionOut. Non-idempotent. */
     @POST("messaging/conversations/{id}/messages/{messageId}/hide")
     suspend fun hideMessage(

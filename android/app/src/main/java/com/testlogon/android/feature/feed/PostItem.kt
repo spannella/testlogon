@@ -10,7 +10,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,6 +64,8 @@ fun PostItem(
     // (e.g. in pure-render preview/test contexts that don't wire engagement).
     showActionBar: Boolean = true,
     onLikeToggle: (FeedPost) -> Unit = {},
+    // #20 — toggle an emoji reaction on this post.
+    onToggleReaction: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onCommentClick: (FeedPost) -> Unit = {},
     onHide: (FeedPost) -> Unit = {},
     onNotInterested: (FeedPost) -> Unit = {},
@@ -143,6 +150,8 @@ fun PostItem(
                     onTip = { onTip(post) },
                     showTip = showTip,
                     onEdit = onEdit?.let { edit -> { edit(post) } },
+                    reactions = post.reactions,
+                    onToggleReaction = { emoji -> onToggleReaction(post, emoji) },
                 )
             }
         }
@@ -192,12 +201,31 @@ private fun PostAuthorHeader(
             }
         }
         if (isLocked) {
-            Text(
-                text = "Locked",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // #19 — a prominent lock chip so a tip-/price-locked post reads as locked at a glance.
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                shape = RoundedCornerShape(50),
                 modifier = Modifier.testTag(PostItemTestTags.LOCKED_BADGE),
-            )
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Lock,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(12.dp),
+                    )
+                    Text(
+                        text = "Locked",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
+            }
         }
     }
 }

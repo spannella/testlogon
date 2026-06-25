@@ -614,6 +614,130 @@ class ThreadViewModel @Inject constructor(
         _state.update { it.copy(composer = it.composer.copy(options = MessageOptions()), messageOptionsVisible = false) }
     }
 
+    // ---- #8 Scheduled-messages manager (list / edit / remove pending scheduled sends) ----
+
+    /** Open the scheduled-messages manager and (re)load the pending list. */
+    fun openScheduledManager() {
+        _state.update { it.copy(scheduledManager = it.scheduledManager.copy(visible = true)) }
+        refreshScheduledMessages()
+    }
+
+    fun closeScheduledManager() {
+        _state.update { it.copy(scheduledManager = ScheduledManagerUiState()) }
+    }
+
+    fun onScheduledManagerErrorShown() {
+        _state.update { it.copy(scheduledManager = it.scheduledManager.copy(error = null)) }
+    }
+
+    /** Re-fetch the caller's pending scheduled messages for this conversation. */
+    fun refreshScheduledMessages() {
+        _state.update { it.copy(scheduledManager = it.scheduledManager.copy(loading = true)) }
+        viewModelScope.launch {
+            when (val r = repository.listScheduledMessages(conversationId)) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(loading = false, items = r.data))
+                }
+                is ApiResult.Failure -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(loading = false, error = "Couldn't load scheduled messages."))
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(loading = false, error = "You're offline. Try again."))
+                }
+            }
+        }
+    }
+
+    /** Open the edit dialog for a scheduled message (prefills its current body + due time). */
+    fun openScheduledEdit(messageId: String) {
+        val item = _state.value.scheduledManager.items.firstOrNull { it.id == messageId } ?: return
+        _state.update {
+            it.copy(
+                scheduledManager = it.scheduledManager.copy(
+                    editing = ScheduledEditState(
+                        messageId = item.id,
+                        textEditable = item.isTextEditable,
+                        draftText = item.text,
+                        draftDeliverAtEpochSeconds = item.deliverAtEpochSeconds,
+                    ),
+                ),
+            )
+        }
+    }
+
+    fun closeScheduledEdit() {
+        _state.update { it.copy(scheduledManager = it.scheduledManager.copy(editing = null)) }
+    }
+
+    fun onScheduledEditTextChange(text: String) {
+        _state.update {
+            val e = it.scheduledManager.editing ?: return@update it
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftText = text)))
+        }
+    }
+
+    fun onScheduledEditTimeChange(epochSeconds: Long) {
+        _state.update {
+            val e = it.scheduledManager.editing ?: return@update it
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftDeliverAtEpochSeconds = epochSeconds)))
+        }
+    }
+
+    /** Commit the edit dialog: PATCH the new text/time, then refresh the list. */
+    fun saveScheduledEdit() {
+        val editing = _state.value.scheduledManager.editing ?: return
+        // Server requires send_at >= now+5s; clamp to a small safe margin.
+        val minSendAt = (System.currentTimeMillis() / 1000L) + 10L
+        val sendAt = maxOf(editing.draftDeliverAtEpochSeconds, minSendAt)
+        val text = if (editing.textEditable) editing.draftText.trim().ifBlank { null } else null
+        _state.update {
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(saving = true)))
+        }
+        viewModelScope.launch {
+            when (val r = repository.rescheduleMessage(conversationId, editing.messageId, text = text, sendAtEpochSeconds = sendAt)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(scheduledManager = it.scheduledManager.copy(editing = null)) }
+                    refreshScheduledMessages()
+                }
+                is ApiResult.Failure -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(
+                        editing = editing.copy(saving = false),
+                        error = "Couldn't update the scheduled message.",
+                    ))
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(
+                        editing = editing.copy(saving = false),
+                        error = "You're offline. Try again.",
+                    ))
+                }
+            }
+        }
+    }
+
+    /** Cancel/remove a pending scheduled message, then refresh the list. */
+    fun cancelScheduledMessage(messageId: String) {
+        viewModelScope.launch {
+            when (val r = repository.cancelScheduledMessage(conversationId, messageId)) {
+                is ApiResult.Success -> {
+                    // Optimistically drop it, then refetch to be authoritative.
+                    _state.update {
+                        it.copy(scheduledManager = it.scheduledManager.copy(
+                            items = it.scheduledManager.items.filterNot { m -> m.id == messageId },
+                        ))
+                    }
+                    refreshScheduledMessages()
+                }
+                is ApiResult.Failure -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(error = "Couldn't remove the scheduled message."))
+                }
+                is ApiResult.NetworkError -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(error = "You're offline. Try again."))
+                }
+            }
+        }
+    }
+
     private fun startReply(messageId: String) {
         val msg = _state.value.messages.firstOrNull { it.key == messageId } ?: return
         if (msg.isTombstone) return

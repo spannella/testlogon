@@ -84,6 +84,35 @@ data class ThreadUiState(
     val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
     /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
     val viewOnceViewer: ViewOnceViewerState = ViewOnceViewerState(),
+    /** #8 — scheduled-messages manager (list + edit/remove of pending scheduled sends). */
+    val scheduledManager: ScheduledManagerUiState = ScheduledManagerUiState(),
+)
+
+/**
+ * #8 — state for the scheduled-messages manager bottom sheet. [visible] gates the sheet; [items]
+ * are the caller's still-pending scheduled messages (sorted by due time). [editing] is non-null
+ * while the inline edit dialog for one item is open.
+ */
+data class ScheduledManagerUiState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    /** One-shot inline error (load/edit/cancel failure), cleared after shown. */
+    val error: String? = null,
+    val items: List<com.testlogon.android.data.messaging.ScheduledMessage> = emptyList(),
+    /** Non-null while the edit dialog for a specific scheduled message is open. */
+    val editing: ScheduledEditState? = null,
+) {
+    val isEmpty: Boolean get() = !loading && items.isEmpty()
+}
+
+/** #8 — edit-dialog state for one scheduled message (draft text + draft due time). */
+data class ScheduledEditState(
+    val messageId: String,
+    /** Whether the body text can be edited (text-kind only). */
+    val textEditable: Boolean,
+    val draftText: String,
+    val draftDeliverAtEpochSeconds: Long,
+    val saving: Boolean = false,
 )
 
 /** MSG — passphrase-unlock dialog state for an encrypted message. */

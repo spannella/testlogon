@@ -59,8 +59,24 @@ interface CommentsRepository {
         parentId: String? = null,
     ): ApiResult<Comment>
 
+    /** Post an image comment (kind="image"); [imageUrl] must be a platform upload or https URL. #24 */
+    suspend fun addImageComment(
+        postId: String,
+        imageUrl: String,
+        altText: String? = null,
+        parentId: String? = null,
+    ): ApiResult<Comment>
+
     /** Tip a comment (amount in integer cents). 2xx ack. */
     suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit>
+
+    /** #23 — toggle an emoji reaction on a comment. [add] true => react, false => unreact. 2xx ack. */
+    suspend fun setCommentReaction(
+        postId: String,
+        commentId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit>
 
     suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit>
 
@@ -142,8 +158,41 @@ class CommentsRepositoryImpl @Inject constructor(
         }.map { it.toDomain(me) }
     }
 
+    override suspend fun addImageComment(
+        postId: String,
+        imageUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall {
+            api.addComment(
+                postId,
+                CreateCommentRequest(
+                    body = "",
+                    parentCommentId = parentId,
+                    kind = "image",
+                    imageUrl = imageUrl,
+                    imageAltText = altText,
+                ),
+            )
+        }.map { it.toDomain(me) }
+    }
+
     override suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit> =
         withContext(io) { ackCall { api.tipComment(postId, commentId, TipRequest(amountCents = amountCents)) } }
+
+    override suspend fun setCommentReaction(
+        postId: String,
+        commentId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit> = withContext(io) {
+        ackCall {
+            if (add) api.reactComment(postId, commentId, ReactionRequest(emoji))
+            else api.unreactComment(postId, commentId, ReactionRequest(emoji))
+        }
+    }
 
     override suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit> =
         withContext(io) { ackCall { api.deleteComment(postId, commentId) } }

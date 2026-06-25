@@ -6,6 +6,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -127,6 +129,11 @@ fun CalendarRoute(
         onEditorDismiss = viewModel::dismissEditor,
         onEditEvent = viewModel::openEditEvent,
         onDeleteEvent = viewModel::deleteEvent,
+        onRequestDelete = viewModel::requestDeleteEvent,
+        onDeleteThisOccurrence = viewModel::deleteThisOccurrence,
+        onDeleteThisAndFollowing = viewModel::deleteThisAndFollowing,
+        onDeleteAllEvents = viewModel::deleteSeries,
+        onDismissRecurringDelete = viewModel::dismissRecurringDelete,
         onDismissActions = viewModel::dismissEventActions,
         modifier = modifier,
     )
@@ -138,7 +145,7 @@ fun CalendarScreen(
     snackbarHostState: androidx.compose.material3.SnackbarHostState,
     onBack: () -> Unit,
     onEventClick: (calendarId: String, eventId: String) -> Unit,
-    onEventLongClick: (calendarId: String, eventId: String, title: String) -> Unit,
+    onEventLongClick: (calendarId: String, eventId: String, title: String, occurrenceStartMillis: Long) -> Unit,
     onSetMode: (CalendarViewMode) -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -152,6 +159,12 @@ fun CalendarScreen(
     onEditorDismiss: () -> Unit,
     onEditEvent: (calendarId: String, eventId: String) -> Unit,
     onDeleteEvent: (calendarId: String, eventId: String) -> Unit,
+    // #13 - delete-flow: opens the choice dialog for a recurring event (else deletes directly).
+    onRequestDelete: (calendarId: String, eventId: String, title: String, occurrenceStartUtc: String) -> Unit,
+    onDeleteThisOccurrence: () -> Unit,
+    onDeleteThisAndFollowing: () -> Unit,
+    onDeleteAllEvents: () -> Unit,
+    onDismissRecurringDelete: () -> Unit,
     onDismissActions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -214,7 +227,15 @@ fun CalendarScreen(
             onSave = onEditorSave,
             onDismiss = onEditorDismiss,
             onDelete = { ed ->
-                if (ed.eventId != null) onDeleteEvent(ed.calendarId, ed.eventId)
+                // #13 - a recurring event prompts the choice dialog (the VM derives the edited
+                // occurrence's start from the editor); a one-off deletes directly.
+                if (ed.eventId != null) {
+                    if (ed.recurrenceFreq != null && ed.recurrenceFreq != RecurrenceFreq.UNKNOWN) {
+                        onRequestDelete(ed.calendarId, ed.eventId, ed.name, "")
+                    } else {
+                        onDeleteEvent(ed.calendarId, ed.eventId)
+                    }
+                }
             },
         )
     }
@@ -224,8 +245,27 @@ fun CalendarScreen(
         EventActionSheetUi(
             sheet = sheet,
             onEdit = { onEditEvent(sheet.calendarId, sheet.eventId) },
-            onDelete = { onDeleteEvent(sheet.calendarId, sheet.eventId) },
+            onDelete = {
+                // #13 - recurring -> choice dialog (with the long-pressed occurrence); one-off -> direct.
+                if (sheet.recurring) {
+                    onRequestDelete(sheet.calendarId, sheet.eventId, sheet.title, sheet.occurrenceStartUtc)
+                } else {
+                    onDeleteEvent(sheet.calendarId, sheet.eventId)
+                }
+            },
             onDismiss = onDismissActions,
+        )
+    }
+
+    // #13 - the "delete a recurring event" choice dialog.
+    val recurringDelete = content?.recurringDelete
+    if (recurringDelete != null) {
+        RecurringDeleteDialog(
+            prompt = recurringDelete,
+            onThisOnly = onDeleteThisOccurrence,
+            onThisAndFollowing = onDeleteThisAndFollowing,
+            onAll = onDeleteAllEvents,
+            onDismiss = onDismissRecurringDelete,
         )
     }
 }
@@ -290,7 +330,7 @@ private fun NavRow(
 private fun CalendarContent(
     content: CalendarUiState.Content,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
     onOpenDay: (Long) -> Unit,
     onAddOnDay: (Long) -> Unit,
 ) {
@@ -342,7 +382,7 @@ private fun MonthView(
     onOpenDay: (Long) -> Unit,
     onAddOnDay: (Long) -> Unit,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().testTag(CalendarTestTags.MONTH_GRID)) {
         Row(Modifier.fillMaxWidth()) {
@@ -382,7 +422,7 @@ private fun MonthDayCell(
     onOpenDay: (Long) -> Unit,
     onAddOnDay: (Long) -> Unit,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
 ) {
     val ymd = CalendarMath.fromEpochDay(day.epochDay)
     Column(
@@ -424,7 +464,7 @@ private fun MonthDayCell(
                     .padding(vertical = 1.dp)
                     .combinedClickable(
                         onClick = { onEventClick(event.calendarId, event.eventId) },
-                        onLongClick = { onEventLongClick(event.calendarId, event.eventId, event.title) },
+                        onLongClick = { onEventLongClick(event.calendarId, event.eventId, event.title, event.startMillis) },
                     )
                     .testTag(CalendarTestTags.event(event.eventId)),
             ) {
@@ -454,7 +494,7 @@ private fun WeekGridView(
     zoneId: String,
     isEmpty: Boolean,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
 ) {
     if (grid == null || isEmpty) {
         CalendarEmpty()
@@ -469,7 +509,9 @@ private fun WeekGridView(
             item {
                 Text(stringResource(R.string.calendar_all_day), style = MaterialTheme.typography.titleSmall)
             }
-            items(grid.allDayLane, key = { "allday_${it.eventId}" }) { event ->
+            // #12 - a recurring series yields multiple occurrences sharing one eventId; key by
+            // eventId + occurrence start so LazyColumn keys stay unique (else IllegalArgumentException).
+            items(grid.allDayLane, key = { "allday_${it.eventId}_${it.startMillis}" }) { event ->
                 EventRow(event = event, zoneId = zoneId, onEventClick = onEventClick, onEventLongClick = onEventLongClick)
             }
         }
@@ -478,7 +520,7 @@ private fun WeekGridView(
                 item(key = "hdr_${column.epochDay}") {
                     DayHeader(column.epochDay)
                 }
-                items(column.blocks, key = { "blk_${it.event.eventId}" }) { block ->
+                items(column.blocks, key = { "blk_${it.event.eventId}_${it.event.startMillis}" }) { block ->
                     EventRow(event = block.event, zoneId = zoneId, onEventClick = onEventClick, onEventLongClick = onEventLongClick)
                 }
             }
@@ -493,7 +535,7 @@ private fun DayView(
     zoneId: String,
     onAddOnDay: (Long) -> Unit,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
 ) {
     if (events.isEmpty()) {
         Column(
@@ -518,7 +560,7 @@ private fun DayView(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(events, key = { "day_${it.eventId}" }) { event ->
+        items(events, key = { "day_${it.eventId}_${it.startMillis}" }) { event ->
             EventRow(event = event, zoneId = zoneId, onEventClick = onEventClick, onEventLongClick = onEventLongClick)
         }
     }
@@ -529,7 +571,7 @@ private fun AgendaList(
     days: List<DaySlots>,
     zoneId: String,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
 ) {
     LazyColumn(
         Modifier.fillMaxSize().testTag(CalendarTestTags.AGENDA_LIST),
@@ -538,7 +580,7 @@ private fun AgendaList(
     ) {
         days.forEach { day ->
             item(key = "hdr_${day.epochDay}") { DayHeader(day.epochDay) }
-            items(day.events, key = { "ev_${day.epochDay}_${it.eventId}" }) { event ->
+            items(day.events, key = { "ev_${day.epochDay}_${it.eventId}_${it.startMillis}" }) { event ->
                 EventRow(event = event, zoneId = zoneId, onEventClick = onEventClick, onEventLongClick = onEventLongClick)
             }
         }
@@ -556,7 +598,7 @@ private fun EventRow(
     event: SlottedEvent,
     zoneId: String,
     onEventClick: (String, String) -> Unit,
-    onEventLongClick: (String, String, String) -> Unit,
+    onEventLongClick: (String, String, String, Long) -> Unit,
 ) {
     val time = if (event.isAllDay) {
         stringResource(R.string.calendar_all_day)
@@ -569,7 +611,7 @@ private fun EventRow(
             .fillMaxWidth()
             .combinedClickable(
                 onClick = { onEventClick(event.calendarId, event.eventId) },
-                onLongClick = { onEventLongClick(event.calendarId, event.eventId, event.title) },
+                onLongClick = { onEventLongClick(event.calendarId, event.eventId, event.title, event.startMillis) },
             )
             .testTag(CalendarTestTags.event(event.eventId)),
     ) {
@@ -632,7 +674,12 @@ private fun EventEditorDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // #12 - the form grew (timezone + recurrence + weekly BYDAY chips), so scroll the content
+            // to keep every field reachable inside the AlertDialog's capped height.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 Text(
                     text = CalendarDateFormat.formatAllDay(editor.epochDay),
                     style = MaterialTheme.typography.labelMedium,
@@ -784,7 +831,110 @@ private fun RecurrenceField(
                 modifier = Modifier.weight(1f).testTag("calendar_field_repeat_count"),
             )
         }
+        // #12 - WEEKLY BYDAY multi-select (e.g. Mo/We/Fr). Empty = use the start day's weekday.
+        if (editor.recurrenceFreq == RecurrenceFreq.WEEKLY) {
+            WeeklyByDaySelector(selected = editor.recurrenceByDay, onChange = onChange)
+        }
     }
+}
+
+/** #12 - the Mo..Su BYDAY toggle row for WEEKLY recurrence. */
+@Composable
+private fun WeeklyByDaySelector(
+    selected: List<String>,
+    onChange: (((EventEditorState) -> EventEditorState) -> Unit),
+) {
+    val days = listOf(
+        "MO" to R.string.calendar_byday_mo,
+        "TU" to R.string.calendar_byday_tu,
+        "WE" to R.string.calendar_byday_we,
+        "TH" to R.string.calendar_byday_th,
+        "FR" to R.string.calendar_byday_fr,
+        "SA" to R.string.calendar_byday_sa,
+        "SU" to R.string.calendar_byday_su,
+    )
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            stringResource(R.string.calendar_repeat_on_days),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().testTag("calendar_field_byday"),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            days.forEach { (code, label) ->
+                val isOn = code in selected
+                FilterChip(
+                    selected = isOn,
+                    onClick = {
+                        onChange { ed ->
+                            val next = if (isOn) ed.recurrenceByDay - code else ed.recurrenceByDay + code
+                            ed.copy(recurrenceByDay = next)
+                        }
+                    },
+                    label = { Text(stringResource(label)) },
+                    modifier = Modifier.testTag("calendar_byday_$code"),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * #13 - choice dialog shown when deleting a RECURRING event: this occurrence only (EXDATE), this and
+ * all following (sets the series UNTIL to before this occurrence), or the whole series.
+ */
+@Composable
+private fun RecurringDeleteDialog(
+    prompt: RecurringDeletePrompt,
+    onThisOnly: () -> Unit,
+    onThisAndFollowing: () -> Unit,
+    onAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("calendar_recurring_delete"),
+        title = { Text(stringResource(R.string.calendar_delete_recurring_title)) },
+        text = {
+            Column {
+                Text(
+                    prompt.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.calendar_delete_this)) },
+                    modifier = Modifier
+                        .clickable(onClick = onThisOnly)
+                        .testTag("calendar_delete_this"),
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.calendar_delete_following)) },
+                    modifier = Modifier
+                        .clickable(onClick = onThisAndFollowing)
+                        .testTag("calendar_delete_following"),
+                )
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            stringResource(R.string.calendar_delete_all),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    },
+                    modifier = Modifier
+                        .clickable(onClick = onAll)
+                        .testTag("calendar_delete_all"),
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.calendar_cancel)) }
+        },
+    )
 }
 
 @Composable

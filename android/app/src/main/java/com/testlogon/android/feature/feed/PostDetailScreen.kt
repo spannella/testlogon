@@ -50,6 +50,7 @@ fun PostDetailRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val authorNames by viewModel.authorNames.collectAsStateWithLifecycle()
+    val isOwnPost by viewModel.isOwnPost.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
@@ -68,7 +69,9 @@ fun PostDetailRoute(
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
         onLikeToggle = { viewModel.onLikeToggle() },
+        onToggleReaction = { emoji -> viewModel.onToggleReaction(emoji) },
         onCommentCountChanged = viewModel::onCommentCountChanged,
+        isOwnPost = isOwnPost,
         modifier = modifier,
     )
 }
@@ -86,9 +89,12 @@ fun PostDetailScreen(
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onLikeToggle: () -> Unit = {},
+    onToggleReaction: (emoji: String) -> Unit = {},
     onCommentCountChanged: (delta: Int) -> Unit = {},
+    // #25 — viewer authored this post => hide tipping in the comments.
+    isOwnPost: Boolean = false,
     commentsContent: (@Composable (onCommentCountChanged: (Int) -> Unit) -> Unit)? = {
-        CommentsSection(onCommentCountChanged = it)
+        CommentsSection(onCommentCountChanged = it, isOwnPost = isOwnPost)
     },
 ) {
     Scaffold(
@@ -144,6 +150,9 @@ fun PostDetailScreen(
                             onAuthorClick = onAuthorClick,
                             onLinkClick = onLinkClick,
                             onLikeToggle = { onLikeToggle() },
+                            onToggleReaction = { _, emoji -> onToggleReaction(emoji) },
+                            // #25 — can't tip your own post.
+                            showTip = !isOwnPost,
                             // Comment icon on detail is a no-op (the section is already below).
                             onCommentClick = {},
                         )

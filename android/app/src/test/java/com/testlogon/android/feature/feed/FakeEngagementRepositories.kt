@@ -37,6 +37,13 @@ class FakeEngagementRepository(
         gate?.await()
         return result(postId, liked, desiredCount)
     }
+
+    val reactionCalls = mutableListOf<Triple<String, String, Boolean>>()
+
+    override suspend fun setReaction(postId: String, emoji: String, add: Boolean): ApiResult<Unit> {
+        reactionCalls += Triple(postId, emoji, add)
+        return ApiResult.Success(Unit)
+    }
 }
 
 /**
@@ -203,8 +210,33 @@ class FakeCommentsRepository(
         )
     }
 
+    val imageCalls = mutableListOf<Pair<String, String>>()
+    val commentReactionCalls = mutableListOf<Triple<String, String, Boolean>>()
+
+    override suspend fun addImageComment(
+        postId: String,
+        imageUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> {
+        imageCalls += postId to imageUrl
+        return addResult ?: ApiResult.Success(
+            comment(id = "srv_img_${imageCalls.size}", postId = postId, body = imageUrl, parentId = parentId),
+        )
+    }
+
     override suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit> {
         tipCalls += Triple(postId, commentId, amountCents)
+        return ApiResult.Success(Unit)
+    }
+
+    override suspend fun setCommentReaction(
+        postId: String,
+        commentId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit> {
+        commentReactionCalls += Triple(commentId, emoji, add)
         return ApiResult.Success(Unit)
     }
 
@@ -269,3 +301,25 @@ class FakeProfileRepository : com.testlogon.android.data.profile.ProfileReposito
  */
 fun fakeDisplayNameResolver() =
     com.testlogon.android.data.profile.DisplayNameResolver(FakeProfileRepository())
+
+/** #24 — no-op [com.testlogon.android.data.feed.CommentImageUploader] for the comments VM test. */
+class FakeCommentImageUploader(
+    var result: ApiResult<String> = ApiResult.Success("/uploads/object?s3_key=test"),
+) : com.testlogon.android.data.feed.CommentImageUploader {
+    val calls = mutableListOf<android.net.Uri>()
+    override suspend fun uploadImage(uri: android.net.Uri): ApiResult<String> {
+        calls += uri
+        return result
+    }
+}
+
+/** #25 — real [com.testlogon.android.data.feed.CurrentUserRepository] over a canned `user_sub`. */
+fun fakeCurrentUserRepository(sub: String? = "me") =
+    com.testlogon.android.data.feed.CurrentUserRepository(
+        api = object : com.testlogon.android.data.feed.CurrentUserApi {
+            override suspend fun me() = com.testlogon.android.data.feed.CurrentUserDto(userSub = sub)
+        },
+        errorParser = com.testlogon.android.core.network.error.ApiErrorParser(
+            com.squareup.moshi.Moshi.Builder().build(),
+        ),
+    )

@@ -84,6 +84,19 @@ interface CalendarApi {
         @Path("calendarId") calendarId: String,
         @Path("eventId") eventId: String,
     ): OkRespDto
+
+    /**
+     * #13 ("This event only") - excludes a single occurrence of a recurring event by appending its UTC
+     * start to the event's `exdates_utc` (the master series + recurrence rule are untouched). Returns
+     * the updated master EventOut. [occurrenceStart] is the ISO-8601 UTC start of the tapped instance
+     * (Retrofit URL-encodes the ':' in the path segment; FastAPI decodes it back).
+     */
+    @POST("ui/calendars/{calendarId}/events/{eventId}/occurrences/{occurrenceStart}/exclude")
+    suspend fun excludeOccurrence(
+        @Path("calendarId") calendarId: String,
+        @Path("eventId") eventId: String,
+        @Path("occurrenceStart") occurrenceStart: String,
+    ): CalendarEventDto
 }
 
 /**

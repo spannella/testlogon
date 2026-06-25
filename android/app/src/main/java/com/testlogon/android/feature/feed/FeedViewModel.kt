@@ -11,6 +11,7 @@ import androidx.paging.map
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
 import com.testlogon.android.data.feed.FeedPost
+import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.FeedRepository
 import com.testlogon.android.data.feed.LikeState
 import com.testlogon.android.data.feed.Poll
@@ -20,6 +21,8 @@ import com.testlogon.android.data.feed.PostActionsRepository
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
 import com.testlogon.android.data.feed.applyVote
+import com.testlogon.android.data.feed.reactedByMe
+import com.testlogon.android.data.feed.toggledReaction
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -60,6 +63,7 @@ class FeedViewModel @Inject constructor(
     private val polls: PollRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     private val currentUser: CurrentUserRepository,
+    private val feedRefreshBus: FeedRefreshBus,
 ) : ViewModel() {
 
     /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
@@ -78,6 +82,11 @@ class FeedViewModel @Inject constructor(
             val r = currentUser.currentUserSub()
             if (r is ApiResult.Success) _currentUserSub.value = r.data
         }
+        // #18 — re-page the feed from the head whenever a post is published (#18a) or edited (#18b),
+        // so the main feed is a shared source of truth that updates in place without a restart.
+        viewModelScope.launch {
+            feedRefreshBus.refreshes.collect { refresh() }
+        }
     }
 
     /** Kick off (cached) resolution of an author's display name; UI reads it from [authorNames]. */
@@ -89,6 +98,10 @@ class FeedViewModel @Inject constructor(
 
     private val likeOverrides = MutableStateFlow<Map<String, LikeState>>(emptyMap())
     private val likeJobs = mutableMapOf<String, Job>()
+
+    // #20 — optimistic emoji-reaction overlay (post id -> tallies), applied like the like overlay.
+    private val reactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.ReactionTally>>>(emptyMap())
+    private val reactionJobs = mutableMapOf<String, Job>()
 
     // AND-176 — per-post bookmark toggle serialization (last-write-wins).
     private val bookmarkJobs = mutableMapOf<String, Job>()
@@ -113,10 +126,13 @@ class FeedViewModel @Inject constructor(
             .cachedIn(viewModelScope)
 
     val items: Flow<PagingData<FeedPost>> =
-        combine(pager, likeOverrides, actions.suppressed) { data, overrides, suppressed ->
+        combine(pager, likeOverrides, actions.suppressed, reactionOverrides) { data, overrides, suppressed, reactions ->
             data
                 .filter { it.id !in suppressed }
-                .map { post -> overrides[post.id]?.let { post.applyLike(it) } ?: post }
+                .map { post ->
+                    val withLike = overrides[post.id]?.let { post.applyLike(it) } ?: post
+                    reactions[post.id]?.let { withLike.copy(reactions = it) } ?: withLike
+                }
         }
 
     /** AND-176 — reactive set of saved post ids (drives the per-post bookmark icon). */
@@ -168,6 +184,35 @@ class FeedViewModel @Inject constructor(
     private fun rollbackLike(postId: String, before: LikeState, message: String) {
         likeOverrides.update { it + (postId to before) }
         _events.trySend(FeedEvent.ShowError(message))
+    }
+
+    // ---- #20: emoji reactions (distinct from like) ----
+
+    fun onToggleReaction(post: FeedPost, emoji: String) {
+        val before = reactionOverrides.value[post.id] ?: post.reactions
+        val after = before.toggledReaction(emoji)
+        val add = after.reactedByMe(emoji)
+        reactionOverrides.update { it + (post.id to after) }
+        reactionJobs.remove(post.id)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                when (val r = engagement.setReaction(post.id, emoji, add)) {
+                    is ApiResult.Success -> Unit
+                    is ApiResult.Failure -> {
+                        reactionOverrides.update { it + (post.id to before) }
+                        _events.trySend(FeedEvent.ShowError(r.error.message))
+                    }
+                    is ApiResult.NetworkError -> {
+                        reactionOverrides.update { it + (post.id to before) }
+                        _events.trySend(FeedEvent.ShowError(OFFLINE_LIKE_MESSAGE))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // superseded by a newer tap
+            }
+        }
+        reactionJobs[post.id] = job
+        job.invokeOnCompletion { if (reactionJobs[post.id] === job) reactionJobs.remove(post.id) }
     }
 
     // ---- AND-175: hide / not-interested ----

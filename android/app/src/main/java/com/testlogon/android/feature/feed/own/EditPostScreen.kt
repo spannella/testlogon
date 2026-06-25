@@ -5,6 +5,9 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +41,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -98,8 +104,15 @@ fun EditPostScreen(
     onRemoveImage: (String) -> Unit,
     onSave: () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
     Scaffold(
-        modifier = Modifier.testTag("edit_post_screen"),
+        // #17 — tap anywhere outside the text field to clear focus / dismiss the keyboard.
+        modifier = Modifier
+            .testTag("edit_post_screen")
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { focusManager.clearFocus() },
         topBar = {
             TopAppBar(
                 title = { Text("Edit post") },
@@ -138,6 +151,8 @@ fun EditPostScreen(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp).testTag("edit_post_body"),
                 placeholder = { Text("Update your post…") },
                 minLines = 4,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
             )
 
             // Photos / attachments.

@@ -1,10 +1,13 @@
 package com.testlogon.android.feature.messaging.media
 
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
@@ -26,6 +29,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +58,7 @@ import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import com.testlogon.android.R
 import com.testlogon.android.data.messaging.MessageMedia
+import kotlinx.coroutines.launch
 
 /** Stable testTags for the inline video player (AND-131). */
 object InlineVideoTestTags {
@@ -215,6 +220,7 @@ object VideoClipTestTags {
     const val PLAYER = "video_clip_player"
     const val VIEWER = "video_clip_viewer"
     const val VIEWER_CLOSE = "video_clip_viewer_close"
+    const val VIEWER_SAVE = "video_clip_viewer_save"
 }
 
 /**
@@ -231,6 +237,10 @@ object VideoClipTestTags {
 fun VideoClipBubble(
     media: MessageMedia.VideoClip,
     modifier: Modifier = Modifier,
+    // #5/#6 — an optional gating tag rendered as a corner badge over the poster (mirrors ImageBubble's
+    // `badge`): the SENDER's own locked/encrypted/view-once/expiring video shows e.g. "Locked $5.00",
+    // "Encrypted", "View once" or "Disappears" so they can tell at a glance that they gated the clip.
+    badge: String? = null,
 ) {
     val source = media.playbackUrl ?: media.localUri
     val uploading = media.uploadProgress != null && media.uploadProgress < 1f
@@ -271,6 +281,26 @@ fun VideoClipBubble(
                 autoPlay = true,
                 modifier = Modifier.fillMaxSize().testTag(VideoClipTestTags.PLAYER),
             )
+            // #1 — keep full-screen reachable DURING inline playback. Before this, once you tapped the
+            // inline play glyph the only controls were ExoPlayer's transport bar (no expand), so you
+            // could no longer go full-screen. This overlay expand button stays available while playing.
+            val fsLabel = stringResource(R.string.video_play)
+            IconButton(
+                onClick = { fullScreen = true },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(36.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), androidx.compose.foundation.shape.CircleShape)
+                    .testTag(VideoClipTestTags.FULLSCREEN),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Fullscreen,
+                    contentDescription = "Play full screen",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp).semantics { contentDescription = fsLabel },
+                )
+            }
         } else {
             // Poster: a video frame decoded from the (remote or local) source via VideoFrameDecoder,
             // painted over a black backdrop so the bubble is NEVER blank (RG20) — even while the frame
@@ -313,6 +343,21 @@ fun VideoClipBubble(
                         .semantics { role = Role.Button; contentDescription = "Play full screen" }
                         .testTag(VideoClipTestTags.FULLSCREEN),
                 )
+            }
+        }
+        // #5/#6 — gating tag for the SENDER's own gated video (locked/encrypted/view-once/expiring),
+        // mirroring ImageBubble's badge so a video reads the same as a gated image. Shown over the
+        // poster AND during playback (top-start, clear of the top-end expand control).
+        if (badge != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("video_clip_badge"),
+            ) {
+                Text(badge, color = Color.White, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -369,6 +414,9 @@ private fun ClipExoPlayer(
 @OptIn(UnstableApi::class)
 @Composable
 private fun FullScreenVideoViewer(url: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf(false) }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -390,7 +438,76 @@ private fun FullScreenVideoViewer(url: String, onDismiss: () -> Unit) {
             ) {
                 Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
             }
+            // #2 — DOWNLOAD/save-to-device control in the full-screen player (mirrors the image viewer's
+            // save action). Streams the clip bytes to MediaStore Movies/TestLogon (no runtime perm on
+            // API29+). Disabled while a save is in flight.
+            IconButton(
+                enabled = !saving,
+                onClick = {
+                    saving = true
+                    scope.launch {
+                        val ok = saveVideoToGallery(context, url)
+                        Toast.makeText(
+                            context,
+                            if (ok) "Saved to Movies" else "Couldn't save video",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        saving = false
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .testTag(VideoClipTestTags.VIEWER_SAVE),
+            ) {
+                Icon(Icons.Filled.Download, contentDescription = "Save to phone", tint = Color.White)
+            }
         }
     }
 }
+
+/**
+ * #2 — saves a (remote or server-relative) video clip url to the device gallery (MediaStore
+ * Movies/TestLogon). On API29+ no runtime permission is needed (scoped storage + IS_PENDING). A
+ * server-relative "/mock/s3/..." url is resolved against the API base the SAME way ExoPlayer does.
+ * Best-effort; returns false on any failure. Self-contained (no VM/repo), like saveImageToGallery.
+ */
+internal suspend fun saveVideoToGallery(context: android.content.Context, url: String): Boolean =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val resolved = if (url.startsWith("/")) BuildConfig.API_BASE_URL.trimEnd('/') + url else url
+            val name = "TestLogon_" + resolved.substringAfterLast('/').substringBefore('?')
+                .ifBlank { "video" }
+                .let { if (it.endsWith(".mp4", true) || it.endsWith(".mov", true) || it.endsWith(".webm", true)) it else "$it.mp4" }
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_MOVIES + "/TestLogon")
+                    put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
+                }
+            }
+            val resolver = context.contentResolver
+            val itemUri = resolver.insert(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return@runCatching false
+            val conn = (java.net.URL(resolved).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 15000
+                readTimeout = 30000
+            }
+            try {
+                conn.inputStream.use { input ->
+                    resolver.openOutputStream(itemUri)?.use { out -> input.copyTo(out) }
+                        ?: return@runCatching false
+                }
+            } finally {
+                conn.disconnect()
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(android.provider.MediaStore.Video.Media.IS_PENDING, 0)
+                resolver.update(itemUri, values, null, null)
+            }
+            true
+        }.getOrDefault(false)
+    }
 

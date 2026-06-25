@@ -14,6 +14,56 @@ data class LikeState(
     val likeCount: Int,
 )
 
+// ---- Reactions (#20 / #23) — full emoji reactions on posts AND comments. ----
+
+/** Curated reaction emoji bar; MUST match the backend allowlist (newsfeed ALLOWED_REACTION_EMOJIS). */
+val REACTION_EMOJIS: List<String> = listOf("👍", "❤️", "😂", "🔥", "😮")
+
+/** One emoji's reaction tally + whether the viewer picked it. */
+data class ReactionTally(
+    val emoji: String,
+    val count: Int,
+    val reactedByMe: Boolean,
+)
+
+/**
+ * Builds the display chip list (only non-zero counts, ordered by [REACTION_EMOJIS]) from the wire
+ * `reactions_counts` + `my_reactions`.
+ */
+internal fun reactionTallies(
+    counts: Map<String, Int>?,
+    mine: List<String>?,
+): List<ReactionTally> {
+    if (counts.isNullOrEmpty()) return emptyList()
+    val mineSet = mine.orEmpty().toSet()
+    return REACTION_EMOJIS.mapNotNull { e ->
+        val c = counts[e] ?: 0
+        if (c > 0) ReactionTally(emoji = e, count = c, reactedByMe = e in mineSet) else null
+    }
+}
+
+/** Apply an optimistic toggle of [emoji] to a tally list (used before the server confirms). */
+fun List<ReactionTally>.toggledReaction(emoji: String): List<ReactionTally> {
+    val existing = firstOrNull { it.emoji == emoji }
+    val out = toMutableList()
+    if (existing != null && existing.reactedByMe) {
+        // Remove my reaction.
+        val newCount = (existing.count - 1).coerceAtLeast(0)
+        if (newCount == 0) out.removeAll { it.emoji == emoji }
+        else out[out.indexOfFirst { it.emoji == emoji }] = existing.copy(count = newCount, reactedByMe = false)
+    } else if (existing != null) {
+        out[out.indexOfFirst { it.emoji == emoji }] = existing.copy(count = existing.count + 1, reactedByMe = true)
+    } else {
+        out.add(ReactionTally(emoji = emoji, count = 1, reactedByMe = true))
+    }
+    // Keep canonical order.
+    return REACTION_EMOJIS.mapNotNull { e -> out.firstOrNull { it.emoji == e } }
+}
+
+/** Whether the viewer currently reacts with [emoji] in this tally list. */
+fun List<ReactionTally>.reactedByMe(emoji: String): Boolean =
+    firstOrNull { it.emoji == emoji }?.reactedByMe == true
+
 // ---- Comments (AND-174) ----
 
 /** A single post comment as consumed by the feature layer. */
@@ -39,6 +89,10 @@ data class Comment(
     val gifUrl: String? = null,
     /** Remote sticker image url when this is a sticker comment (kind == "sticker"). */
     val stickerUrl: String? = null,
+    /** Uploaded image url when this is an image comment (kind == "image"). #24 */
+    val imageUrl: String? = null,
+    /** #23 — emoji reaction tallies for this comment (empty when none). */
+    val reactions: List<ReactionTally> = emptyList(),
     // ---- client-only optimistic flags ----
     /** DERIVED: authorId == current user id (no server field). */
     val canDelete: Boolean = false,
@@ -79,6 +133,8 @@ internal fun CommentDto.toDomain(currentUserId: String?): Comment = Comment(
     tipTotalCents = tipTotalCents,
     gifUrl = gifUrl,
     stickerUrl = stickerUrl,
+    imageUrl = imageUrl,
+    reactions = reactionTallies(reactionsCounts, myReactions),
     canDelete = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     canEdit = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     localKey = commentId,

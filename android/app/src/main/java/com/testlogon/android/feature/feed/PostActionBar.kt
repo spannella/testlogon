@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -51,6 +53,9 @@ import com.testlogon.android.R
 /** Stable test tags for the post action bar (AND-173 / AND-174 / AND-175). */
 object PostActionTestTags {
     const val LIKE = "post_like"
+    const val REACT = "post_react"
+    const val EMOJI_PICKER = "post_emoji_picker"
+    const val REACTION_CHIPS = "post_reaction_chips"
     const val COMMENT = "post_comment"
     const val OVERFLOW = "post_overflow"
     const val MENU_HIDE = "post_menu_hide"
@@ -87,21 +92,98 @@ fun PostActionBar(
     onTip: () -> Unit = {},
     // FD12 — when non-null, the overflow menu shows an Edit item (own posts only).
     onEdit: (() -> Unit)? = null,
+    // #20 — full emoji reactions (distinct from the like toggle).
+    reactions: List<com.testlogon.android.data.feed.ReactionTally> = emptyList(),
+    onToggleReaction: (String) -> Unit = {},
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    var reactionPickerOpen by remember { mutableStateOf(false) }
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            LikeButton(liked = liked, likeCount = likeCount, onToggle = onLikeToggle)
+            // #20 — open the curated emoji reaction picker.
+            ReactButton(onClick = { reactionPickerOpen = !reactionPickerOpen })
+            CommentButton(commentCount = commentCount, onClick = onCommentClick)
+            if (showTip) {
+                TipButton(onClick = onTip)
+            }
+            BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
+            ShareButton(onClick = onShare)
+            Box(modifier = Modifier.weight(1f))
+            PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit)
+        }
+        // #20 — curated emoji picker (toggled by the React button).
+        if (reactionPickerOpen) {
+            PostEmojiPicker(
+                selected = reactions.filter { it.reactedByMe }.map { it.emoji }.toSet(),
+                onPick = {
+                    onToggleReaction(it)
+                    reactionPickerOpen = false
+                },
+            )
+        }
+        // #20 — under-post reaction chips (emoji + count; tap to toggle).
+        if (reactions.isNotEmpty()) {
+            PostReactionChips(reactions = reactions, onToggle = onToggleReaction)
+        }
+    }
+}
+
+@Composable
+private fun ReactButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onClick, modifier = modifier.size(48.dp).testTag(PostActionTestTags.REACT)) {
+        Icon(
+            imageVector = Icons.Outlined.AddReaction,
+            contentDescription = "React",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** #20 — curated reaction emoji row for a post (matches the comment reaction bar). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PostEmojiPicker(
+    selected: Set<String>,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp).testTag(PostActionTestTags.EMOJI_PICKER),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        com.testlogon.android.data.feed.REACTION_EMOJIS.forEach { emoji ->
+            androidx.compose.material3.FilterChip(
+                selected = emoji in selected,
+                onClick = { onPick(emoji) },
+                label = { Text(emoji) },
+            )
+        }
+    }
+}
+
+/** #20 — under-post reaction chip row. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PostReactionChips(
+    reactions: List<com.testlogon.android.data.feed.ReactionTally>,
+    onToggle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(start = 8.dp, top = 2.dp, bottom = 4.dp).testTag(PostActionTestTags.REACTION_CHIPS),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        LikeButton(liked = liked, likeCount = likeCount, onToggle = onLikeToggle)
-        CommentButton(commentCount = commentCount, onClick = onCommentClick)
-        if (showTip) {
-            TipButton(onClick = onTip)
+        reactions.forEach { r ->
+            androidx.compose.material3.FilterChip(
+                selected = r.reactedByMe,
+                onClick = { onToggle(r.emoji) },
+                label = { Text("${r.emoji} ${r.count}") },
+            )
         }
-        BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
-        ShareButton(onClick = onShare)
-        Box(modifier = Modifier.weight(1f))
-        PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit)
     }
 }
 

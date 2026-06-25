@@ -31,6 +31,8 @@ sealed interface CalendarUiState {
         val editor: EventEditorState? = null,
         /** Non-null while the long-press event action sheet is open. */
         val actionSheet: EventActionSheet? = null,
+        /** #13 - non-null while the "delete a recurring event" choice dialog is open. */
+        val recurringDelete: RecurringDeletePrompt? = null,
     ) : CalendarUiState
 
     data class Error(
@@ -63,6 +65,11 @@ data class EventEditorState(
     val recurrenceInterval: Int = 1,
     /** Optional "ends after N occurrences"; null = no end. */
     val recurrenceCount: Int? = null,
+    /**
+     * #12 - WEEKLY BYDAY weekday selection (ISO codes MO,TU,WE,TH,FR,SA,SU). Empty = "use the start
+     * day" (the backend defaults BYDAY to the series start weekday). Only meaningful when freq=WEEKLY.
+     */
+    val recurrenceByDay: List<String> = emptyList(),
     val saving: Boolean = false,
     val nameError: Boolean = false,
 ) {
@@ -77,4 +84,21 @@ data class EventActionSheet(
     val calendarId: String,
     val eventId: String,
     val title: String,
+    /** #13 - ISO-8601 UTC start of the long-pressed occurrence (for the recurring-delete choices). */
+    val occurrenceStartUtc: String,
+    /** #13 - true when the underlying event has a recurrence rule (gates the delete-choice dialog). */
+    val recurring: Boolean = false,
+)
+
+/**
+ * #13 - the "delete a recurring event" choice prompt. Carries the tapped occurrence's UTC start
+ * (ISO-8601) so the VM can EXDATE just this occurrence or set the series UNTIL to before it. Only shown
+ * for events that actually recur; a non-recurring event deletes directly.
+ */
+data class RecurringDeletePrompt(
+    val calendarId: String,
+    val eventId: String,
+    val title: String,
+    /** ISO-8601 UTC start of the tapped occurrence (the EXDATE key / the UNTIL boundary). */
+    val occurrenceStartUtc: String,
 )

@@ -43,10 +43,13 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import coil.imageLoader
 import com.testlogon.android.R
 import com.testlogon.android.data.messaging.MessageEdit
+import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.Reaction
 import com.testlogon.android.data.messaging.Reactor
+import kotlinx.coroutines.launch
 
 /** AND-140 — test tags for the message-action UI (used by Compose UI tests). */
 object MessageActionTestTags {
@@ -82,6 +85,9 @@ fun MessageActionsSheet(
     onAction: (ThreadAction) -> Unit,
     onTip: (String) -> Unit,
     onDismiss: () -> Unit,
+    // #2 — save an image/video message to the device gallery; null when the message has no saveable
+    // media (only image/video clips are offered). Reuses the image save-to-phone path.
+    onSaveMedia: ((ThreadMessageUi) -> Unit)? = null,
 ) {
     // AND-164 — destructive/mutating actions are suppressed entirely when the message is on legal hold.
     val allowed = message.allowedActions()
@@ -113,6 +119,16 @@ fun MessageActionsSheet(
                     label = stringResource(R.string.msg_action_reply),
                     tag = "msg_action_reply",
                 ) { onAction(ThreadAction.Reply(message.key)); onDismiss() }
+            }
+
+            // #2 — Download/save-to-phone for an image or (unlocked/own) video message. Gated content
+            // that hasn't been revealed (still a Paid/teaser bubble) has no saveable media, so the row
+            // only appears once the media is actually present in the bubble.
+            if (onSaveMedia != null && !message.isTombstone && message.hasSaveableMedia()) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_save_to_phone),
+                    tag = "msg_action_save_media",
+                ) { onSaveMedia(message); onDismiss() }
             }
 
             if (MessageAction.PIN in allowed) {
@@ -419,6 +435,10 @@ fun MessageActionsHost(
 ) {
     var pendingDelete by remember { mutableStateOf<String?>(null) }
     var pendingRevoke by remember { mutableStateOf<String?>(null) }
+    // #2 — save-to-phone is self-contained here (no VM/repo): saves the image via the shared Coil loader
+    // and the video by streaming its url, both to MediaStore, exactly like the full-screen viewers.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val saveScope = androidx.compose.runtime.rememberCoroutineScope()
 
     target?.let { msg ->
         MessageActionsSheet(
@@ -432,6 +452,29 @@ fun MessageActionsHost(
             },
             onTip = onTip,
             onDismiss = onCloseSheet,
+            onSaveMedia = { m ->
+                val media = m.media
+                saveScope.launch {
+                    val ok = when (media) {
+                        is com.testlogon.android.data.messaging.MessageMedia.Image ->
+                            media.url?.let {
+                                com.testlogon.android.feature.messaging.media.saveImageToGallery(
+                                    context, it, context.imageLoader,
+                                )
+                            } ?: false
+                        is com.testlogon.android.data.messaging.MessageMedia.VideoClip ->
+                            media.playbackUrl?.let {
+                                com.testlogon.android.feature.messaging.media.saveVideoToGallery(context, it)
+                            } ?: false
+                        else -> false
+                    }
+                    android.widget.Toast.makeText(
+                        context,
+                        if (ok) "Saved to phone" else "Couldn't save",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
         )
     }
 
@@ -476,6 +519,17 @@ private fun CenterLoader() {
     Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
         CircularProgressIndicator(Modifier.sizeIn(maxWidth = 32.dp, maxHeight = 32.dp))
     }
+}
+
+/**
+ * #2 — true when the message currently has saveable media in the bubble: a displayable image (url
+ * present) or a playable video clip (playbackUrl present). A still-locked/encrypted/view-once teaser
+ * has no resolved media url, so the Save row is correctly hidden until the content is revealed.
+ */
+internal fun ThreadMessageUi.hasSaveableMedia(): Boolean = when (val m = media) {
+    is MessageMedia.Image -> !m.url.isNullOrBlank()
+    is MessageMedia.VideoClip -> !m.playbackUrl.isNullOrBlank()
+    else -> false
 }
 
 /** AND-140 — tombstone bubble text for a deleted/revoked message. */

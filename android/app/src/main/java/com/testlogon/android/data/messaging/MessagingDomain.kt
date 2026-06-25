@@ -307,6 +307,42 @@ data class MessageEncryption(
     val ciphertextB64: String?,
 )
 
+/**
+ * #8 — a single still-pending scheduled message in the scheduled-messages manager. Lightweight on
+ * purpose (only what the manager list/edit needs); separate from [Message] which models a delivered
+ * thread row. [text] is the editable body (blank for non-text kinds, which are display-only here).
+ */
+data class ScheduledMessage(
+    /** Server message id (always present for a persisted scheduled row). */
+    val id: String,
+    val conversationId: String,
+    /** Message discriminator ("text" | "image" | ... ); only "text" is editable server-side. */
+    val kind: String,
+    /** Body for text scheduled messages; may be blank for media kinds. */
+    val text: String,
+    /** Server-rendered one-line preview (used when [text] is blank, e.g. media kinds). */
+    val preview: String,
+    /** Epoch SECONDS the message is due to be delivered. */
+    val deliverAtEpochSeconds: Long,
+) {
+    /** True when the body can be edited (text-kind only, matching the server constraint). */
+    val isTextEditable: Boolean get() = kind == "text"
+    /** What the manager row shows: the body, else the preview, else a kind fallback. */
+    val displayText: String
+        get() = text.ifBlank { preview.ifBlank { kind.replaceFirstChar { it.uppercase() } } }
+}
+
+/** #8 — map a scheduled MessageOut to the manager's [ScheduledMessage]. */
+internal fun MessageDto.toScheduledDomain(): ScheduledMessage = ScheduledMessage(
+    id = messageId,
+    conversationId = conversationId,
+    kind = kind,
+    text = text.orEmpty(),
+    preview = preview.orEmpty(),
+    // Fall back to created_at if the server ever omits deliver_at on a scheduled row.
+    deliverAtEpochSeconds = deliverAt ?: createdAt,
+)
+
 /** A single message in a conversation, merged from history + the local outbox at render time. */
 data class Message(
     /** Server message id; null until a send is acked (outbox rows have no server id yet). */

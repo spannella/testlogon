@@ -183,7 +183,7 @@ fun FullScreenImageViewer(
  * the on-screen image) and writes the bitmap to the device gallery. MediaStore on API 29+ needs no
  * runtime permission; pre-29 falls back to the same insert (best-effort).
  */
-private suspend fun saveImageToGallery(context: Context, url: String, loader: ImageLoader): Boolean = withContext(Dispatchers.IO) {
+internal suspend fun saveImageToGallery(context: Context, url: String, loader: ImageLoader): Boolean = withContext(Dispatchers.IO) {
     runCatching {
         val request = ImageRequest.Builder(context).data(url).allowHardware(false).build()
         val result = loader.execute(request)
