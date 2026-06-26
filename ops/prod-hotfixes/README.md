@@ -122,3 +122,31 @@ app-side Paging error handling), Groups create (POST /ui/groups), Syndicates cre
 Already-correct server-side (no change, verified): group members include owner + group feed
 (group_feed.py, POST/GET /ui/groups/{id}/posts|feed), helpdesk user live-chat (routing_mode
 helpdesk_bridge), ticket-create returns the ticket, KYC start flow (the #16 break was app-side UI).
+
+## Batch-9 additions (2026-06-26)
+
+All regenerated vs each file's pristine .bak (comprehensive per-file capture):
+- `app_routers_messaging.py.patch` — B-MULTIMEDIA (gallery media_kind), B-SCHED2 (#20 hide scheduled
+  from live thread for everyone until deliver_at; send_at_local+send_at_tz on all scheduled creates;
+  PATCH schedule edits media+tz), B-COUNTDOWN (reveal_text/image/media revealed at target, absolute
+  target_datetime_local+target_tz), B-HELP2 #13 (refuse live chat when no agents).
+- `app_services_filemanager.py.patch` — B-DUPFILE (#30): `_b9_unique_upload_path` suffixes
+  "(1)/(2)" on duplicate message-upload filenames (presign + web upload + register).
+- `app_services_messaging_lottery_store.py.patch` — B-LOTTERY2: preserve plural per-option media.
+- `app_routers_newsfeed.py.patch` — B-FEEDMEDIA (#2 multi-media post fields, #3 locked tag fields),
+  B-LOTTERY2 message-level text + media-only validation + multi-media options (#23/#24).
+- `app_routers_group_feed.py.patch` + `app_services_group_feed.py.patch` — B-GRPFULL (#11) full
+  group newsfeed: multimedia posts + comments.
+- `app_routers_tickets.py.patch` + `app_services_tickets.py.patch` — B-HELP2 (#14 ticket+reply
+  images, #16 reject replies on closed/cancelled, #17 owner reopen).
+- `app_routers_kyc_tiers.py.patch` — B-KYC3 (#18) email-verify + phone-verify flow.
+- `app_models.py.patch` — additive model fields for the above.
+
+HONEST GAPS (no fake success):
+- #26 PDF server thumbnail NOT implemented (prod has no pdftoppm/mutool/gs/imagemagick nor a python
+  PDF lib) — app renders PDFs client-side via android.graphics.pdf.PdfRenderer. thumbnail stays null.
+- #33 Go Live: broadcast CONTROL plane is real, but the active provider is `local` with NO media
+  server (no RTMP/WHIP ingest, no HLS origin). Real streaming needs ops: deploy a media server
+  (MediaMTX / AWS MediaLive+MediaPackage+CloudFront) + an app RTMP/WebRTC publisher. NOT a hotfix.
+- #7 image-comment POSTING (no public comment-image presign) + #12 syndicate comments/multi-media —
+  reported, need backend endpoints.

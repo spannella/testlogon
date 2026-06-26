@@ -1,5 +1,5 @@
 --- app/models.py.bak_bkc_1782229906	2026-06-23 15:51:46.965931320 +0000
-+++ app/models.py	2026-06-25 13:42:28.869164633 +0000
++++ app/models.py	2026-06-26 01:28:16.020048704 +0000
 @@ -1741,6 +1741,16 @@
      cvc: str
      cardholder_name: Optional[str] = None
@@ -34,3 +34,13 @@
      created_at: int = 0
      updated_at: int = 0
      members: List[SyndicateMemberOut] = Field(default_factory=list)
+@@ -5905,6 +5920,9 @@
+     text: str = Field(..., min_length=1, max_length=10000)
+     body_format: Literal["plain", "markdown", "richtext"] = "plain"
+     image_url: Optional[str] = Field(default=None, max_length=2048)
++    # B9 B-GRPFULL #11: full-newsfeed media parity (multi-image + single video).
++    image_urls: Optional[List[str]] = Field(default=None, max_length=10)
++    video_id: Optional[str] = Field(default=None, max_length=64)
+     audience: Literal["public", "members_only"] = "public"
+     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+ 

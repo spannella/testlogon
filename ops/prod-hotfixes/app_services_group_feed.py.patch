@@ -1,0 +1,170 @@
+--- app/services/group_feed.py.bak_b9_1782437251	2026-06-07 22:30:28.644059959 +0000
++++ app/services/group_feed.py	2026-06-26 01:27:31.561376699 +0000
+@@ -72,6 +72,8 @@
+     image_url: str | None = None,
+     audience: str = "public",
+     unlock_price_cents: int | None = None,
++    image_urls: list | None = None,
++    video_id: str | None = None,
+ ) -> Dict[str, Any]:
+     # Verify group exists and is active
+     group = get_group(group_id)
+@@ -99,6 +101,8 @@
+         "text": text,
+         "body_format": body_format,
+         "image_url": image_url,
++        "image_urls": list(image_urls) if image_urls else ([image_url] if image_url else []),
++        "video_id": video_id,
+         "group_id": group_id,
+         "audience": audience,
+         "pinned": False,
+@@ -476,6 +480,8 @@
+         "text": text,
+         "body_format": post.get("body_format", "plain"),
+         "image_url": post.get("image_url"),
++        "image_urls": list(post.get("image_urls") or ([post["image_url"]] if post.get("image_url") else [])),
++        "video_id": post.get("video_id"),
+         "group_id": post.get("group_id", ""),
+         "audience": post.get("audience", "public"),
+         "pinned": bool(post.get("pinned")),
+@@ -490,3 +496,140 @@
+         "created_at": int(post.get("created_at", 0)),
+         "updated_at": int(post["updated_at"]) if post.get("updated_at") else None,
+     }
++
++
++# ── Group post comments (B9 B-GRPFULL #11: full-newsfeed parity) ───────────────
++
++def _pk_post_comments(post_id: str) -> str:
++    return f"GROUPPOSTCOMMENTS#{post_id}"
++
++
++def _new_comment_id() -> str:
++    return f"gc_{uuid.uuid4().hex[:12]}"
++
++
++def add_group_comment(
++    *,
++    group_id: str,
++    post_id: str,
++    user_id: str,
++    text: str | None = None,
++    image_url: str | None = None,
++    parent_comment_id: str | None = None,
++) -> Dict[str, Any]:
++    """Add a comment (text and/or single image, optional threaded reply) to a group post.
++
++    Requires active group membership. ``parent_comment_id`` enables one level of
++    reply threading (mirrors the newsfeed comment contract)."""
++    group = get_group(group_id)
++    if not group:
++        raise ValueError("Group not found")
++    if group.get("status") == "dissolved":
++        raise ValueError("This group has been dissolved")
++    if not _is_member(group_id, user_id):
++        raise PermissionError("Not a member of this group")
++
++    tbl = _get_app_table()
++    post = _get_post(tbl, post_id)
++    if not post or post.get("group_id") != group_id:
++        raise ValueError("Post not found")
++
++    if not (text and text.strip()) and not (image_url and image_url.strip()):
++        raise ValueError("Comment must include text or an image")
++
++    ts = now_ts()
++    comment_id = _new_comment_id()
++    item: Dict[str, Any] = {
++        "pk": _pk_post_comments(post_id),
++        "sk": f"{ts}#{comment_id}",
++        "comment_id": comment_id,
++        "post_id": post_id,
++        "group_id": group_id,
++        "user_id": user_id,
++        "text": (text or "").strip() or None,
++        "image_url": (image_url or "").strip() or None,
++        "parent_comment_id": parent_comment_id,
++        "created_at": ts,
++    }
++    item = {k: v for k, v in item.items() if v is not None}
++    tbl.put_item(Item=item)
++
++    # bump comment_count on the post
++    try:
++        tbl.update_item(
++            Key={"pk": _pk_post(post_id), "sk": _sk_post()},
++            UpdateExpression="SET comment_count = if_not_exists(comment_count, :z) + :one, updated_at = :ts",
++            ExpressionAttributeValues={":z": 0, ":one": 1, ":ts": ts},
++        )
++    except Exception:
++        logger.exception("group_feed.comment_count_bump_failed post_id=%s", post_id)
++
++    return _comment_out(item)
++
++
++def list_group_comments(
++    *,
++    group_id: str,
++    post_id: str,
++    viewer_id: str | None = None,
++    cursor: str | None = None,
++    limit: int = 20,
++) -> Dict[str, Any]:
++    """List comments for a group post oldest-first; returns {comments, next_cursor}."""
++    tbl = _get_app_table()
++    post = _get_post(tbl, post_id)
++    if not post or post.get("group_id") != group_id:
++        raise ValueError("Post not found")
++
++    kwargs: Dict[str, Any] = {
++        "KeyConditionExpression": Key("pk").eq(_pk_post_comments(post_id)),
++        "Limit": max(1, min(int(limit), 100)),
++        "ScanIndexForward": True,
++    }
++    if cursor:
++        kwargs["ExclusiveStartKey"] = {"pk": _pk_post_comments(post_id), "sk": cursor}
++    resp = tbl.query(**kwargs)
++    items = resp.get("Items", [])
++    next_key = resp.get("LastEvaluatedKey")
++    next_cursor = next_key.get("sk") if next_key else None
++    return {
++        "comments": [_comment_out(it) for it in items],
++        "next_cursor": next_cursor,
++    }
++
++
++def delete_group_comment(*, group_id: str, post_id: str, comment_id: str, user_id: str) -> Dict[str, Any]:
++    """Delete a group post comment (author or group admin/mod)."""
++    tbl = _get_app_table()
++    resp = tbl.query(KeyConditionExpression=Key("pk").eq(_pk_post_comments(post_id)))
++    target = next((it for it in resp.get("Items", []) if it.get("comment_id") == comment_id), None)
++    if not target:
++        raise ValueError("Comment not found")
++    role = _get_member_role(group_id, user_id)
++    if target.get("user_id") != user_id and role not in ("admin", "moderator"):
++        raise PermissionError("Not authorized to delete this comment")
++    tbl.delete_item(Key={"pk": target["pk"], "sk": target["sk"]})
++    try:
++        tbl.update_item(
++            Key={"pk": _pk_post(post_id), "sk": _sk_post()},
++            UpdateExpression="SET comment_count = if_not_exists(comment_count, :z) - :one",
++            ConditionExpression="comment_count > :z",
++            ExpressionAttributeValues={":z": 0, ":one": 1},
++        )
++    except Exception:
++        pass
++    return {"ok": True, "comment_id": comment_id}
++
++
++def _comment_out(it: Dict[str, Any]) -> Dict[str, Any]:
++    return {
++        "comment_id": it.get("comment_id", ""),
++        "post_id": it.get("post_id", ""),
++        "group_id": it.get("group_id", ""),
++        "user_id": it.get("user_id", ""),
++        "user_display_name": it.get("user_id", ""),
++        "text": it.get("text"),
++        "image_url": it.get("image_url"),
++        "parent_comment_id": it.get("parent_comment_id"),
++        "created_at": int(it.get("created_at", 0)),
++    }

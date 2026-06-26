@@ -1,0 +1,21 @@
+--- app/services/messaging_lottery_store.py.bak_b9lotA_1782436180	2026-06-26 01:09:40.997762845 +0000
++++ app/services/messaging_lottery_store.py	2026-06-26 01:09:40.998347459 +0000
+@@ -60,6 +60,9 @@
+                 f"outcome[{idx}] payload_type is invalid",
+                 issues=[{"field": f"lottery_config.outcomes[{idx}].payload_type", "code": "invalid-payload-type"}],
+             )
++        # B-LOTTERY2 #24: a media outcome may carry a list of assets.
++        _media_assets = raw.get("media_assets")
++        _media_asset_ids = raw.get("media_asset_ids")
+         item = {
+             "outcome_id": str(raw.get("outcome_id") or "").strip(),
+             "display_label": str(raw.get("display_label") or "").strip() or None,
+@@ -68,6 +71,8 @@
+             "text_content": str(raw.get("text_content") or "").strip() or None,
+             "media_asset_id": str(raw.get("media_asset_id") or "").strip() or None,
+             "media_metadata": dict(raw.get("media_metadata") or {}) if isinstance(raw.get("media_metadata"), Mapping) else None,
++            "media_assets": list(_media_assets) if isinstance(_media_assets, (list, tuple)) else None,
++            "media_asset_ids": list(_media_asset_ids) if isinstance(_media_asset_ids, (list, tuple)) else None,
+         }
+         if not item["outcome_id"]:
+             raise LotteryConfigValidationError(

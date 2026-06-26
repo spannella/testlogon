@@ -1,9 +1,63 @@
 --- app/services/tickets.py.bak_b8supclose_1782395154	2026-06-25 13:45:54.858642711 +0000
-+++ app/services/tickets.py	2026-06-25 13:46:08.363085002 +0000
-@@ -1408,5 +1408,63 @@
++++ app/services/tickets.py	2026-06-26 01:32:03.813416456 +0000
+@@ -503,6 +503,7 @@
+         priority: str | None = None,        # CAS-003
+         contact_id: str | None = None,      # CAS-005
+         account_id: str | None = None,      # CAS-005
++        image_url: str | None = None,       # B9 B-HELP2 #14
+     ) -> dict[str, Any]:
+         ts = now_ts()
+         # TKB-001: board_id is an alias for space_id (same physical attribute).
+@@ -601,6 +602,7 @@
+             "sender_sub": owner_sub,
+             "sender_role": "user",
+             "body": description,
++            "image_url": image_url,
+             "created_at": ts,
+             "email_alert_queued_for": [],
+         })
+@@ -671,6 +673,7 @@
+                 "sender_sub": item.get("sender_sub", ""),
+                 "sender_role": item.get("sender_role", "user"),
+                 "body": item.get("body", ""),
++                "image_url": item.get("image_url"),
+                 "created_at": int(item.get("created_at", 0) or 0),
+                 "email_alert_queued_for": item.get("email_alert_queued_for", []),
+             } for item in messages],
+@@ -1152,11 +1155,19 @@
          })
          return self.get_ticket(ticket_id)
  
+-    def add_message(self, *, ticket_id: str, sender_sub: str, sender_role: str, body: str, email_targets: list[str]) -> dict[str, Any] | None:
++    def add_message(self, *, ticket_id: str, sender_sub: str, sender_role: str, body: str, email_targets: list[str], image_url: str | None = None) -> dict[str, Any] | None:
+         ts = now_ts()
+         cur = self.get_ticket(ticket_id)
+         if not cur:
+             return None
++        # B9 B-HELP2 #16: a closed (done) or cancelled ticket REJECTS new replies.
++        # The owner must explicitly reopen it first (see reopen_ticket / POST .../reopen).
++        if cur.get("status") in ("done", "cancelled"):
++            raise TicketStateError({
++                "code": "ticket_closed_no_reply",
++                "current_status": cur.get("status"),
++                "message": "This ticket is closed; reopen it before replying.",
++            })
+         next_status = _next_status_for_message(sender_role=sender_role, current_status=cur.get("status", "open"))
+         message_id = f"msg_{uuid.uuid4().hex[:12]}"
+         self._table.put_item(Item={
+@@ -1168,6 +1179,7 @@
+             "sender_sub": sender_sub,
+             "sender_role": sender_role,
+             "body": body,
++            "image_url": image_url,
+             "created_at": ts,
+             "email_alert_queued_for": email_targets,
+         })
+@@ -1407,6 +1419,117 @@
+             "created_at": ts,
+         })
+         return self.get_ticket(ticket_id)
++
 +    def owner_close_ticket(self, *, ticket_id: str, actor_sub: str, terminal_status: str) -> dict[str, Any] | None:
 +        """B8 B-SUP2 #15: let a ticket OWNER close ("done") or cancel
 +        ("cancelled") their own ticket from any non-terminal state, bypassing the
@@ -62,5 +116,58 @@
 +        })
 +        return self.get_ticket(ticket_id)
 +
++    def reopen_ticket(self, *, ticket_id: str, actor_sub: str) -> dict[str, Any] | None:
++        """B9 B-HELP2 #17: reopen a closed (done) or cancelled ticket back to "open".
++        Owner-authorized (enforced by the caller). No-op (returns current) if the
++        ticket is already in a non-terminal state."""
++        ts = now_ts()
++        cur = self.get_ticket(ticket_id)
++        if not cur:
++            return None
++        if cur.get("status") not in ("done", "cancelled"):
++            # already open / in-progress: nothing to reopen.
++            return cur
++
++        def _values(_cur: dict[str, Any]) -> dict[str, Any]:
++            assigned = _cur.get("assigned_admin_sub")
++            space_id = _cur.get("space_id")
++            return {
++                ":status": "open",
++                ":assigned_admin_sub": assigned,
++                ":assigned_to_sub": _cur.get("assigned_to_sub"),
++                ":assigned_by": _cur.get("assigned_by"),
++                ":assigned_at": _cur.get("assigned_at"),
++                ":updated_at": ts,
++                ":last_message_at": _cur.get("updated_at", ts),
++                ":last_message_by_role": "user",
++                ":gsi2pk": _status_index_pk("open"),
++                ":gsi2sk": _updated_index_sk(ts, ticket_id),
++                ":gsi3pk": _assignee_index_pk(assigned or "unassigned"),
++                ":gsi3sk": _updated_index_sk(ts, ticket_id),
++                ":gsi1sk": _updated_index_sk(ts, ticket_id),
++                ":gsi_space_pk": _space_index_pk(space_id) if space_id else None,
++                ":gsi_space_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
++                ":gsi_space_status_pk": _space_status_index_pk(space_id, "open") if space_id else None,
++                ":gsi_space_status_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
++                ":gsi_space_assignee_pk": _space_assignee_index_pk(space_id, _cur.get("assigned_to_sub") or "unassigned") if space_id else None,
++                ":gsi_space_assignee_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
++            }
++
++        updated = self._apply_header_update_once(ticket_id=ticket_id, build_values=_values)
++        if not updated:
++            return None
++        self._table.put_item(Item={
++            "pk": _ticket_pk(ticket_id),
++            "sk": _act_sk(ts, f"act_{uuid.uuid4().hex[:12]}"),
++            "entity_type": "ticket_activity",
++            "ticket_id": ticket_id,
++            "activity_id": f"act_{uuid.uuid4().hex[:12]}",
++            "activity_type": "ticket_reopened",
++            "actor_sub": actor_sub,
++            "status": "open",
++            "created_at": ts,
++        })
++        return self.get_ticket(ticket_id)
+ 
  
  STORE = TicketStore()

@@ -1,0 +1,106 @@
+--- app/routers/kyc_tiers.py.bak_b9kycverify_1782437639	2026-05-31 03:14:02.858743159 +0000
++++ app/routers/kyc_tiers.py	2026-06-26 01:35:34.033635130 +0000
+@@ -44,6 +44,103 @@
+     return auto_evaluate_tier(ctx["user_sub"], request=request)
+ 
+ 
++# ── B9 B-KYC3 #18: email + phone verification flow ──────────────────
++# Tier-1 requires email_verified + phone_verified on the user row, but no flow
++# existed to SET them. These endpoints provide a code-based verify flow. In
++# dev_mode the code is returned in the response body so the app can complete the
++# flow end-to-end without an inbox/SMS gateway. In real prod the code is withheld
++# and would be delivered by the email/SMS pipeline.
++
++import random as _kyc_random
++import time as _kyc_time
++from app.core.settings import S as _KYC_S
++from app.core.tables import T as _KYC_T
++
++_KYC_CODE_TTL_SECONDS = 600
++
++
++class KycVerifyEmailStartIn(BaseModel):
++    email: str | None = Field(default=None, max_length=320)
++
++
++class KycVerifyPhoneStartIn(BaseModel):
++    phone: str = Field(min_length=4, max_length=32)
++
++
++class KycVerifyConfirmIn(BaseModel):
++    code: str = Field(min_length=4, max_length=10)
++
++
++def _kyc_gen_code() -> str:
++    return f"{_kyc_random.randint(0, 999999):06d}"
++
++
++def _kyc_set_pending(user_sub: str, channel: str, code: str, target: str) -> None:
++    now = int(_kyc_time.time())
++    _KYC_T.users.update_item(
++        Key={"user_sub": user_sub},
++        UpdateExpression="SET #attr = :payload",
++        ExpressionAttributeNames={"#attr": f"kyc_verify_{channel}"},
++        ExpressionAttributeValues={
++            ":payload": {"code": code, "target": target, "expires_at": now + _KYC_CODE_TTL_SECONDS}
++        },
++    )
++
++
++def _kyc_confirm(user_sub: str, channel: str, code: str) -> dict:
++    item = _KYC_T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
++    pending = item.get(f"kyc_verify_{channel}") or {}
++    if not pending:
++        raise HTTPException(400, {"code": "no_pending_verification", "message": f"No pending {channel} verification; start one first."})
++    if int(pending.get("expires_at", 0)) < int(_kyc_time.time()):
++        raise HTTPException(400, {"code": "verification_code_expired", "message": "Verification code expired; request a new one."})
++    if str(pending.get("code")) != str(code).strip():
++        raise HTTPException(400, {"code": "verification_code_invalid", "message": "Incorrect verification code."})
++    flag = "email_verified" if channel == "email" else "phone_verified"
++    set_attr = "email" if channel == "email" else "phone"
++    _KYC_T.users.update_item(
++        Key={"user_sub": user_sub},
++        UpdateExpression="SET #flag = :t, #setattr = :tgt REMOVE #pending",
++        ExpressionAttributeNames={"#flag": flag, "#setattr": set_attr, "#pending": f"kyc_verify_{channel}"},
++        ExpressionAttributeValues={":t": True, ":tgt": pending.get("target", "")},
++    )
++    return {"ok": True, "channel": channel, flag: True}
++
++
++@router.post("/me/verify/email/start")
++async def start_email_verification(body: KycVerifyEmailStartIn, ctx: dict = Depends(require_ui_session)):
++    user_sub = ctx["user_sub"]
++    target = (body.email or user_sub or "").strip()
++    code = _kyc_gen_code()
++    _kyc_set_pending(user_sub, "email", code, target)
++    resp = {"ok": True, "channel": "email", "target": target, "expires_in_seconds": _KYC_CODE_TTL_SECONDS}
++    if _KYC_S.dev_mode:
++        resp["dev_code"] = code  # dev convenience only
++    return resp
++
++
++@router.post("/me/verify/email/confirm")
++async def confirm_email_verification(body: KycVerifyConfirmIn, ctx: dict = Depends(require_ui_session)):
++    return _kyc_confirm(ctx["user_sub"], "email", body.code)
++
++
++@router.post("/me/verify/phone/start")
++async def start_phone_verification(body: KycVerifyPhoneStartIn, ctx: dict = Depends(require_ui_session)):
++    user_sub = ctx["user_sub"]
++    target = body.phone.strip()
++    code = _kyc_gen_code()
++    _kyc_set_pending(user_sub, "phone", code, target)
++    resp = {"ok": True, "channel": "phone", "target": target, "expires_in_seconds": _KYC_CODE_TTL_SECONDS}
++    if _KYC_S.dev_mode:
++        resp["dev_code"] = code
++    return resp
++
++
++@router.post("/me/verify/phone/confirm")
++async def confirm_phone_verification(body: KycVerifyConfirmIn, ctx: dict = Depends(require_ui_session)):
++    return _kyc_confirm(ctx["user_sub"], "phone", body.code)
++
++
+ # ── Admin endpoints ─────────────────────────────────────────────────
+ 
+ @router.get("/admin/{user_sub}")
