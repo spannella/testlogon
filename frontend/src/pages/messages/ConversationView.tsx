@@ -24,6 +24,7 @@ import {
   markRead,
   claimHelpdeskConversation,
   transferHelpdeskConversation,
+  listHelpdeskGroupAgents,
   createCallInvite,
   acceptCallInvite,
   declineCallInvite,
@@ -699,6 +700,16 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to transfer conversation"),
   });
 
+  // HMH-007: fellow agents in this helpdesk group, for the transfer picker.
+  const transferGroupId = conversation.routing_group_id ?? "";
+  const transferAgentsQuery = useQuery({
+    queryKey: ["helpdesk-group-agents", transferGroupId],
+    queryFn: () => listHelpdeskGroupAgents(transferGroupId),
+    enabled: transferDialogOpen && !!transferGroupId,
+    staleTime: 30_000,
+  });
+  const transferAgents = (transferAgentsQuery.data ?? []).filter((a) => !a.is_self);
+
   // ── Conversation title / header ────────────────────────────────
 
   const title = conversation.title
@@ -1273,14 +1284,25 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           />
           {transferDialogOpen && (
             <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs">
-              <input
-                type="text"
-                placeholder="Target agent user ID"
+              <select
                 value={transferTarget}
                 onChange={(e) => setTransferTarget(e.target.value)}
                 className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
-                aria-label="Transfer to agent ID"
-              />
+                aria-label="Transfer to agent"
+              >
+                <option value="">
+                  {transferAgentsQuery.isLoading
+                    ? "Loading agents…"
+                    : transferAgents.length === 0
+                      ? "No other agents available"
+                      : "Select an agent…"}
+                </option>
+                {transferAgents.map((a) => (
+                  <option key={a.user_id} value={a.user_id}>
+                    {a.display_name}{a.online ? " · online" : " · offline"}
+                  </option>
+                ))}
+              </select>
               <Button
                 size="sm"
                 variant="default"

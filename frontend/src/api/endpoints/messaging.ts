@@ -1042,6 +1042,21 @@ export async function transferHelpdeskConversation(
   });
 }
 
+export interface HelpdeskGroupAgent {
+  user_id: string;
+  display_name: string;
+  online: boolean;
+  is_self: boolean;
+}
+
+/** HMH-007: list a helpdesk group's agents (membership-gated) for the transfer picker. */
+export async function listHelpdeskGroupAgents(groupId: string): Promise<HelpdeskGroupAgent[]> {
+  const res = await api.get<{ agents: HelpdeskGroupAgent[] }>(
+    `/messaging/helpdesk/groups/${encodeURIComponent(groupId)}/agents`,
+  );
+  return res.agents ?? [];
+}
+
 export async function getHelpdeskQueue(groupId: string, state?: string): Promise<Conversation[]> {
   const params: Record<string, string> = { group_id: groupId };
   if (state) params.state = state;

@@ -9,6 +9,11 @@ import json
 import logging
 import os
 import hashlib
+from datetime import datetime as _dt_b9, timezone as _tz_b9
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo_b9
+except Exception:  # pragma: no cover
+    _ZoneInfo_b9 = None
 import hmac
 import re
 import threading
@@ -1273,6 +1278,10 @@ HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_E
 # creation (skipping the queue). Default off — flag-off behavior is identical to
 # the historical alert-only fanout path.
 HELPDESK_AUTO_ROUTE_ENABLED = os.getenv("HELPDESK_AUTO_ROUTE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# B9 B-HELP2 #13: when on (default), refuse to create a helpdesk_bridge chat if NO
+# agents are available, so the customer gets a clean "try later" instead of a chat
+# that silently sits unanswered. Disable to fall back to the queue-and-notice path.
+HELPDESK_REFUSE_WHEN_NO_AGENTS = os.getenv("HELPDESK_REFUSE_WHEN_NO_AGENTS", "1").strip().lower() in {"1", "true", "yes", "on"}
 # HMH-006: when on, a going-offline agent's assigned conversation is auto-reassigned
 # to another available group member instead of dropping back to awaiting_agent.
 HELPDESK_AUTO_REASSIGN_ENABLED = os.getenv("HELPDESK_AUTO_REASSIGN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -1878,6 +1887,9 @@ class SendTextMessageIn(BaseModel):
     preview: Optional[LinkPreviewIn] = None
     encryption: Optional[MessageEncryptionEnvelope] = None
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
@@ -1909,6 +1921,7 @@ class SendTextMessageIn(BaseModel):
 
     @model_validator(mode="after")
     def _validate_shape(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
         if self.encryption and self.text:
             raise PydanticCustomError(
                 "message_text_encryption_conflict",
@@ -1966,10 +1979,18 @@ class CreateImageMessageIn(BaseModel):
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
     encryption: Optional[MessageEncryptionEnvelope] = None
     # Blurred preview for locked images — small pixelated thumbnail shown before unlock
     preview_bucket: Optional[str] = Field(default=None, max_length=200)
     preview_key: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _b9_resolve_sched(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
+        return self
 
 
 class PresignVoiceMessageRequest(BaseModel):
@@ -2030,11 +2051,15 @@ class CreateGalleryMessageIn(BaseModel):
     lock_description: Optional[str] = Field(default=None, max_length=500)
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=2592000)
     send_at: Optional[int] = None
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def validate_gallery(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
         if len(self.free_images) > 20:
             raise ValueError("free_images may not exceed 20 items")
         if len(self.locked_images) > 30:
@@ -2123,7 +2148,14 @@ class SubmitAvailabilityIn(BaseModel):
 class SendCountdownMessageIn(BaseModel):
     """Request model for sending a countdown message (MSG-010)."""
     title: str = Field(min_length=1, max_length=200)
-    target_datetime: int = Field(description="UTC Unix timestamp of the target event")
+    target_datetime: Optional[int] = Field(default=None, description="UTC Unix timestamp of the target event")
+    # B-COUNTDOWN #32: absolute end as wall-clock + IANA tz (parity with scheduling).
+    target_datetime_local: Optional[str] = Field(default=None, max_length=40, description="'YYYY-MM-DDTHH:MM[:SS]' wall-clock end")
+    target_tz: Optional[str] = Field(default=None, max_length=64, description="IANA timezone for target_datetime_local")
+    # B-COUNTDOWN #31: optional payload revealed when the countdown completes.
+    reveal_text: Optional[str] = Field(default=None, max_length=4000)
+    reveal_image: Optional[GalleryImageItemIn] = None
+    reveal_media: Optional[List[GalleryImageItemIn]] = Field(default=None, description="image+video items revealed at completion")
     associated_event_type: str = Field(
         default="custom",
         pattern=r"^(broadcast|call|calendar|custom)$",
@@ -2133,6 +2165,13 @@ class SendCountdownMessageIn(BaseModel):
 
     @model_validator(mode="after")
     def _validate_countdown(self):
+        # #32: resolve a wall-clock+tz end into target_datetime when provided.
+        if self.target_datetime is None and self.target_datetime_local:
+            self.target_datetime = _b9_resolve_send_at(
+                None, self.target_datetime_local, self.target_tz
+            )
+        if self.target_datetime is None:
+            raise ValueError("target_datetime or target_datetime_local is required")
         if self.target_datetime <= now_ts():
             raise ValueError("target_datetime must be in the future")
         if self.associated_event_type != "custom" and not self.associated_event_id:
@@ -2299,9 +2338,13 @@ class CreateFileMessageIn(BaseModel):
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     lock_description: Optional[str] = Field(default=None, max_length=200)
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _validate_consumption_policy(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
         if self.consumption_policy == "view_once" and self.kind != "video":
             raise PydanticCustomError(
                 "invalid_media_kind_for_policy",
@@ -2320,7 +2363,22 @@ class LotteryOutcomeIn(BaseModel):
     weight_bps: int = Field(ge=1, le=10_000)
     payload_type: Literal["text", "image", "video"]
     text_content: Optional[str] = Field(default=None, max_length=4000)
+    # B-LOTTERY2 #24: a single outcome may carry MULTIPLE media assets
+    # (mixed images + videos). media_asset_id stays for single-asset
+    # back-compat; media_asset_ids is the new plural form. When both are
+    # given, media_asset_id is treated as the first element.
     media_asset_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    media_asset_ids: Optional[List[str]] = Field(default=None, max_length=20)
+
+    @model_validator(mode="after")
+    def _b9_merge_media(self):
+        ids = list(self.media_asset_ids or [])
+        if self.media_asset_id and self.media_asset_id not in ids:
+            ids = [self.media_asset_id] + ids
+        if ids:
+            self.media_asset_ids = ids
+            self.media_asset_id = ids[0]
+        return self
 
 
 class LotteryConfigIn(BaseModel):
@@ -2350,6 +2408,21 @@ class CreateLotteryMessageIn(BaseModel):
     lottery_config: LotteryConfigIn
     # Optional cover/header image for the lottery message (bucket/key like image messages).
     image: Optional[LotteryMessageImageIn] = None
+    # B-LOTTERY2 #23: optional message-level cover text shown before unlock.
+    text: Optional[str] = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _b9_require_text_or_cover(self):
+        outcomes = list(self.lottery_config.outcomes or [])
+        any_outcome_text = any((o.text_content or "").strip() for o in outcomes)
+        has_cover = bool((self.text or "").strip()) or (self.image is not None)
+        # #23: media-only options (no per-outcome text) require a lottery
+        # text or a cover image so the message is not blank before unlock.
+        if outcomes and not any_outcome_text and not has_cover:
+            raise ValueError(
+                "lottery text or a cover image is required when options have no text"
+            )
+        return self
 
 
 class LotteryOutcomeOut(BaseModel):
@@ -2360,6 +2433,9 @@ class LotteryOutcomeOut(BaseModel):
     text_content: Optional[str] = None
     media_asset_id: Optional[str] = None
     media_metadata: Optional[Dict[str, Any]] = None
+    # B-LOTTERY2 #24: full list of media assets when an outcome has >1.
+    media_assets: Optional[List[Dict[str, Any]]] = None
+    media_asset_ids: Optional[List[str]] = None
 
 
 class LotteryConfigOut(BaseModel):
@@ -2492,6 +2568,8 @@ class MessageOut(BaseModel):
     target_datetime: Optional[int] = None
     associated_event_type: Optional[str] = None
     associated_event_id: Optional[str] = None
+    # B-COUNTDOWN #31: payload (text + mixed media) revealed at completion.
+    countdown_reveal: Optional[Dict[str, Any]] = None
     # GIF message fields (MSG-008)
     gif_url: Optional[str] = None
     gif_alt_text: Optional[str] = None
@@ -2771,6 +2849,49 @@ MESSAGE_CONTROLS_ERROR_RESPONSES = {
 
 def now_ts() -> int:
     return int(time.time())
+
+
+# ---- Backend-A batch-9 helpers ------------------------------------------------
+def _b9_resolve_send_at(send_at, send_at_local=None, send_at_tz=None):
+    """Resolve an effective absolute Unix `send_at` from either an absolute
+    epoch (`send_at`) OR a wall-clock local datetime + IANA timezone
+    (`send_at_local` = 'YYYY-MM-DDTHH:MM[:SS]', `send_at_tz` = e.g.
+    'America/New_York'). Absolute `send_at` wins when both are given. Returns
+    int epoch seconds or None when nothing scheduled. Raises HTTPException 400
+    on a bad timezone / unparseable wall-clock."""
+    if send_at is not None:
+        return int(send_at)
+    if not send_at_local:
+        return None
+    tzname = (send_at_tz or "UTC").strip() or "UTC"
+    if _ZoneInfo_b9 is None:
+        raise HTTPException(400, "timezone scheduling unavailable on this server")
+    try:
+        tz = _tz_b9.utc if tzname.upper() == "UTC" else _ZoneInfo_b9(tzname)
+    except Exception:
+        raise HTTPException(400, f"invalid timezone: {tzname}")
+    raw = str(send_at_local).strip().replace("Z", "")
+    fmts = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
+    parsed = None
+    for f in fmts:
+        try:
+            parsed = _dt_b9.strptime(raw, f)
+            break
+        except Exception:
+            continue
+    if parsed is None:
+        raise HTTPException(400, "send_at_local must be 'YYYY-MM-DDTHH:MM[:SS]'")
+    return int(parsed.replace(tzinfo=tz).timestamp())
+
+def _b9_model_resolve_send_at(send_at, send_at_local, send_at_tz):
+    """Validator-safe wrapper around _b9_resolve_send_at (raises ValueError)."""
+    if send_at is not None or not send_at_local:
+        return send_at
+    try:
+        return _b9_resolve_send_at(None, send_at_local, send_at_tz)
+    except HTTPException as exc:
+        raise ValueError(str(getattr(exc, "detail", "invalid timezone schedule")))
+
 
 
 def new_id() -> str:
@@ -3543,8 +3664,11 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
         return False
     if message_item.get("moderation_hidden") or message_item.get("moderation_removed_at"):
         return False
-    # Scheduled messages are only visible to the sender until delivered
-    if message_item.get("status") == "scheduled" and message_item.get("sender_id") != user_id:
+    # B-SCHED2 #20: a scheduled message is HIDDEN from the thread for EVERYONE
+    # (including its own sender) until the background loop delivers it at
+    # deliver_at. Senders manage pending sends via the dedicated
+    # GET .../messages/scheduled endpoint, never the live thread.
+    if message_item.get("status") == "scheduled":
         return False
     return user_id not in deleted_for
 
@@ -3879,6 +4003,12 @@ def _is_view_once_consumed(item: dict, viewer_user_id: str) -> bool:
 def _project_gallery_image(img_dict: dict) -> dict:
     """Project a gallery image item dict to a response dict with URL added in dev mode."""
     out = dict(img_dict)
+    # B-MULTIMEDIA #25/#27: a gallery message may carry MIXED media -- both
+    # images AND videos, and more than one video -- in a single message. Each
+    # item already stores its own content_type; surface an explicit media_kind
+    # ("image"|"video") discriminator so clients render mixed lists correctly.
+    _ct = str(out.get("content_type") or "").lower()
+    out["media_kind"] = "video" if _ct.startswith("video/") else "image"
     if S.dev_mode:
         from urllib.parse import quote as _gi_quote
         bucket = out.get("bucket", "")
@@ -4207,6 +4337,18 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             countdown_target_out = int(merged_item["target_datetime"])
         countdown_event_type_out = merged_item.get("associated_event_type")
         countdown_event_id_out = merged_item.get("associated_event_id")
+        # B-COUNTDOWN #31: reveal the stashed payload only once the
+        # countdown has completed (now >= target_datetime).
+        _cd_rev = merged_item.get("countdown_reveal")
+        if isinstance(_cd_rev, dict) and countdown_target_out is not None and now_ts() >= countdown_target_out:
+            _rev_out = {}
+            if _cd_rev.get("text"):
+                _rev_out["text"] = _cd_rev.get("text")
+            if _cd_rev.get("media"):
+                _rev_out["media"] = [_project_gallery_image(dict(x)) for x in _cd_rev.get("media")]
+            if _rev_out:
+                _rev_out["revealed"] = True
+                merged_item["_countdown_reveal_out"] = _rev_out
 
     # GIF / Sticker message projection (MSG-008)
     gif_url_out: Optional[str] = None
@@ -4260,6 +4402,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         target_datetime=countdown_target_out,
         associated_event_type=countdown_event_type_out,
         associated_event_id=countdown_event_id_out,
+        countdown_reveal=merged_item.get("_countdown_reveal_out"),
         gif_url=gif_url_out,
         gif_alt_text=gif_alt_text_out,
         gif_width=gif_width_out,
@@ -6110,6 +6253,22 @@ def start_conversation(
                     "message": "helpdesk bridge mode is not enabled for this group/tenant",
                 },
             )
+        # B9 B-HELP2 #13: do NOT create a helpdesk conversation when no agents are
+        # available. Refuse cleanly (409) so the client can show a "no agents online,
+        # try again later" message instead of stranding the user in a dead chat.
+        if HELPDESK_REFUSE_WHEN_NO_AGENTS:
+            available_now = count_available_agents(group_id, created_at)
+            if available_now <= 0:
+                record_helpdesk_no_agents_notice("creation_refused")
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "helpdesk_no_agents_available",
+                        "message": "No helpdesk agents are available right now. Please try again later.",
+                        "any_available": False,
+                        "available_agent_count": 0,
+                    },
+                )
         participant_ids = [user_id, _helpdesk_virtual_participant_id(group_id)]
     else:
         participant_ids = list(dict.fromkeys([user_id] + inp.participant_ids))
@@ -6960,6 +7119,53 @@ def get_helpdesk_availability(
     return {"available_agent_count": count, "any_available": count > 0}
 
 
+@router.get("/helpdesk/groups/{group_id}/agents")
+def list_helpdesk_group_agents(
+    group_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-007 support: list a helpdesk group's agents so an assigned agent can
+    pick a transfer target. Membership-gated — only agents in the group may see
+    fellow agents (the customer-facing /availability endpoint deliberately
+    exposes counts only, never identities). Each agent carries display_name +
+    online status; is_self lets the client exclude the current agent.
+    """
+    if not _is_helpdesk_group_member(group_id, user_id):
+        raise HTTPException(status_code=403, detail="not a member of this helpdesk group")
+    ts = now_ts()
+    agents = []
+    for uid in _resolve_helpdesk_group_members(group_id):
+        agents.append({
+            "user_id": uid,
+            "display_name": _helpdesk_agent_display_name(uid),
+            "online": _is_user_online_available(uid, ts),
+            "is_self": uid == user_id,
+        })
+    return {"agents": agents}
+
+
+def _helpdesk_agent_display_name(user_sub: str) -> str:
+    """Resolve an agent's friendly name. The profile row may carry display_name
+    at the top level (e2e/seeded rows) or nested via get_profile_identity; try
+    both, then fall back to the sub."""
+    try:
+        from app.core.tables import T as _T
+        item = _T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+        name = (item.get("display_name") or item.get("name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    try:
+        ident = get_profile_identity(user_sub) or {}
+        name = (ident.get("display_name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return user_sub
+
+
 @router.get("/helpdesk/queue", response_model=List[ConversationOut])
 def get_helpdesk_queue(
     group_id: str = Query(..., max_length=128),
@@ -7530,7 +7736,48 @@ def list_messages(
         parts = []
 
     out: List[MessageOut] = []
-    last_key = {"conversation_id": conversation_id, "message_id": before} if before else None
+
+    # B-SCHED/ordering FIX: the table range key is a RANDOM message_id (m_<uuid>
+    # / sys_call_... / m_lottery_...), so "ScanIndexForward=False Limit=limit"
+    # returns the limit items with the highest message_ids -- NOT the most recent
+    # by created_at. Re-sorting only that page by created_at then meant a recently
+    # delivered message whose random id ranked low (e.g. a just-fired scheduled
+    # message, or any m_ id losing to sys_call_ ids) silently never appeared in
+    # the thread. For the default "load latest" view (no `before` cursor) we now
+    # page through the whole (bounded) conversation, sort by created_at desc, and
+    # return the most-recent `limit`. The legacy message_id `before` cursor path
+    # is preserved unchanged for backward compatibility.
+    if not before:
+        raw_items: List[Dict[str, Any]] = []
+        scan_kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
+        }
+        while True:
+            resp = tbl_msgs.query(**scan_kwargs)
+            raw_items.extend(resp.get("Items", []))
+            lek = resp.get("LastEvaluatedKey")
+            if not lek:
+                break
+            scan_kwargs["ExclusiveStartKey"] = lek
+
+        hidden_ids_all: set[str] = set()
+        if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED and raw_items:
+            hidden_ids_all = _load_hidden_message_ids_for_user(
+                conversation_id, user_id, [str(it.get("message_id") or "") for it in raw_items]
+            )
+
+        visible = [
+            m for m in raw_items
+            if m.get("message_id") not in hidden_ids_all and _filter_message_visible(m, user_id)
+        ]
+        visible.sort(key=lambda m: int(m.get("created_at", 0) or 0), reverse=True)
+        for m in visible[:limit]:
+            msg = _message_out_from_item(m, user_id)
+            out.append(_apply_message_receipts(msg, m, parts))
+        out.sort(key=lambda m: m.created_at, reverse=True)
+        return out
+
+    last_key = {"conversation_id": conversation_id, "message_id": before}
 
     while len(out) < limit:
         kwargs: Dict[str, Any] = {
@@ -10074,6 +10321,23 @@ def create_countdown_message(
         "target_datetime": inp.target_datetime,
         "associated_event_type": inp.associated_event_type,
     }
+    if inp.target_tz:
+        item["target_tz"] = inp.target_tz
+    # B-COUNTDOWN #31: stash an optional reveal payload (text + mixed media)
+    # revealed to clients once now_ts() >= target_datetime.
+    _cd_reveal = {}
+    if inp.reveal_text:
+        _cd_reveal["text"] = inp.reveal_text
+    _cd_media_in = list(inp.reveal_media or [])
+    if inp.reveal_image is not None:
+        _cd_media_in = [inp.reveal_image] + _cd_media_in
+    if _cd_media_in:
+        _cd_reveal["media"] = [
+            {k: v for k, v in img.model_dump().items() if v is not None}
+            for img in _cd_media_in
+        ]
+    if _cd_reveal:
+        item["countdown_reveal"] = _cd_reveal
     if inp.associated_event_id:
         item["associated_event_id"] = inp.associated_event_id
     if inp.reply_to_message_id:
@@ -13471,13 +13735,23 @@ def create_lottery_message(
         out.setdefault("outcome_id", f"o_{message_id}_{idx + 1}")
         payload_type = str(out.get("payload_type") or "")
         if payload_type in {"image", "video"}:
-            metadata = _resolve_and_validate_lottery_media_asset(
-                media_asset_id=str(out.get("media_asset_id") or ""),
-                conversation_id=payload.conversation_id,
-                owner_user_id=user_id,
-            )
-            out["media_asset_id"] = f"{metadata['bucket']}:{metadata['key']}"
-            out["media_metadata"] = metadata
+            # B-LOTTERY2 #24: resolve every media asset on the outcome.
+            _raw_ids = list(out.get("media_asset_ids") or [])
+            if not _raw_ids and out.get("media_asset_id"):
+                _raw_ids = [str(out.get("media_asset_id"))]
+            _resolved = []
+            for _aid in _raw_ids:
+                _md = _resolve_and_validate_lottery_media_asset(
+                    media_asset_id=str(_aid or ""),
+                    conversation_id=payload.conversation_id,
+                    owner_user_id=user_id,
+                )
+                _resolved.append({"media_asset_id": f"{_md['bucket']}:{_md['key']}", "media_metadata": _md})
+            if _resolved:
+                out["media_asset_id"] = _resolved[0]["media_asset_id"]
+                out["media_metadata"] = _resolved[0]["media_metadata"]
+                out["media_assets"] = _resolved
+                out["media_asset_ids"] = [r["media_asset_id"] for r in _resolved]
         normalized_outcomes.append(out)
     config_payload = {"version": payload.lottery_config.version, "outcomes": normalized_outcomes}
 
@@ -13618,6 +13892,8 @@ def create_lottery_message(
         persisted_cfg=persisted_cfg,
         image=lottery_image,
     )
+    if payload.text and (payload.text or "").strip():
+        message_item["text"] = payload.text.strip()  # #23 cover text
     try:
         tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
     except Exception as exc:
@@ -13661,6 +13937,8 @@ def create_lottery_message(
                     text_content=(str(out.get("text_content") or "") or None),
                     media_asset_id=(str(out.get("media_asset_id") or "") or None),
                     media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                    media_assets=(list(out.get("media_assets") or []) or None),
+                    media_asset_ids=(list(out.get("media_asset_ids") or []) or None),
                 )
                 for out in (persisted_cfg.get("outcomes") or [])
             ],
@@ -13879,6 +14157,8 @@ def get_lottery_message(
                     text_content=(str(out.get("text_content") or "") or None),
                     media_asset_id=(str(out.get("media_asset_id") or "") or None),
                     media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                    media_assets=(list(out.get("media_assets") or []) or None),
+                    media_asset_ids=(list(out.get("media_asset_ids") or []) or None),
                 )
                 for out in (cfg.get("outcomes") or [])
             ],
@@ -13963,9 +14243,23 @@ def cancel_scheduled_message(
 
 
 class RescheduleMessageIn(BaseModel):
-    # Both optional: edit text, reschedule the delivery time, or both.
+    # Edit text, reschedule the delivery time, change media, or any combo.
     text: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
     send_at: Optional[int] = None  # new Unix delivery timestamp (>= now+5s)
+    # B-SCHED2 #21: reschedule via wall-clock + IANA tz (alt to send_at).
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
+    # B-SCHED2 #22: editing a scheduled message may now also change its
+    # media. image: a single image asset (bucket/key/content_type) for an
+    # image message; file_path: a VFS path for a file/audio/video message;
+    # video_id: a VOD ref for a video_share message; gallery free/locked
+    # image lists for a gallery message. Only the field(s) matching the
+    # scheduled message kind are honored.
+    image: Optional[CreateImageMessageIn] = None
+    file_path: Optional[str] = Field(default=None, max_length=1000)
+    video_id: Optional[str] = Field(default=None, max_length=128)
+    free_images: Optional[List[GalleryImageItemIn]] = None
+    locked_images: Optional[List[GalleryImageItemIn]] = None
 
 
 @router.patch(
@@ -13991,10 +14285,14 @@ def reschedule_scheduled_message(
         raise HTTPException(403, "Only the sender can edit a scheduled message")
     if msg.get("status") != "scheduled":
         raise HTTPException(400, "Message is not scheduled")
-    if inp.text is None and inp.send_at is None:
-        raise HTTPException(400, "Provide text and/or send_at to update")
-    if inp.text is not None and msg.get("kind") != "text":
-        raise HTTPException(400, "Only text scheduled messages support text edits")
+    # B-SCHED2 #21: accept a wall-clock + tz reschedule.
+    _resolved_send_at = _b9_resolve_send_at(inp.send_at, inp.send_at_local, inp.send_at_tz)
+    _has_media_edit = any(v is not None for v in (inp.image, inp.file_path, inp.video_id, inp.free_images, inp.locked_images))
+    if inp.text is None and _resolved_send_at is None and not _has_media_edit:
+        raise HTTPException(400, "Provide text, send_at/send_at_local, and/or media to update")
+    _kind = msg.get("kind")
+    if inp.text is not None and _kind not in ("text", "image", "gallery", "file", "audio", "video", "file_share", "video_share"):
+        raise HTTPException(400, "This scheduled message kind does not support a text edit")
 
     set_parts: List[str] = []
     expr_names: Dict[str, str] = {}
@@ -14006,11 +14304,62 @@ def reschedule_scheduled_message(
         expr_names["#t"] = "text"
         expr_vals[":text"] = inp.text
 
+    # B-SCHED2 #22: media edits, matched to the scheduled message kind.
+    if inp.image is not None and _kind == "image":
+        _img = {"bucket": inp.image.bucket, "key": inp.image.key, "content_type": inp.image.content_type}
+        if inp.image.width is not None: _img["width"] = inp.image.width
+        if inp.image.height is not None: _img["height"] = inp.image.height
+        if inp.image.filename: _img["filename"] = inp.image.filename
+        set_parts.append("image = :img")
+        expr_vals[":img"] = _img
+    if inp.file_path is not None and _kind in ("file", "audio", "video"):
+        _fp = norm_path(inp.file_path, is_folder=False)
+        _fnode = get_node(user_id, _fp)
+        if _fnode.get("type") != "file":
+            raise HTTPException(400, "file_path must reference a file")
+        set_parts.append("#f = :file")
+        expr_names["#f"] = "file"
+        expr_vals[":file"] = {
+            "path": _fnode.get("path"), "name": _fnode.get("name"), "size": _fnode.get("size"),
+            "content_type": _fnode.get("content_type") or "application/octet-stream",
+            "thumbnail": _fnode.get("thumbnail"),
+        }
+    if inp.file_path is not None and _kind == "file_share":
+        _fp = norm_path(inp.file_path, is_folder=None)
+        _fnode = get_node(user_id, _fp)
+        set_parts.append("file_share = :fs")
+        expr_vals[":fs"] = {
+            "path": _fnode.get("path"), "name": _fnode.get("name"),
+            "size": int(_fnode["size"]) if _fnode.get("size") is not None else None,
+            "content_type": _fnode.get("content_type"), "permission": "read", "owner": user_id,
+            "is_encrypted": bool(_fnode.get("is_encrypted")),
+        }
+    if inp.video_id is not None and _kind == "video_share":
+        from app.services.video_metadata_store import get_video as _b9_get_vod
+        try:
+            _v = _b9_get_vod(inp.video_id)
+        except HTTPException:
+            raise HTTPException(404, "video not found")
+        set_parts.append("video_share = :vs")
+        expr_vals[":vs"] = {
+            "video_id": _v.id, "owner_user_id": _v.owner_user_id, "title": _v.title,
+            "thumbnail_url": _v.thumbnail_url, "visibility": _v.visibility,
+        }
+    if (inp.free_images is not None or inp.locked_images is not None) and _kind == "gallery":
+        def _b9_simg(i):
+            return {k: v for k, v in i.model_dump().items() if v is not None}
+        if inp.free_images is not None:
+            set_parts.append("free_images = :fi")
+            expr_vals[":fi"] = [_b9_simg(i) for i in inp.free_images]
+        if inp.locked_images is not None:
+            set_parts.append("locked_images = :li")
+            expr_vals[":li"] = [_b9_simg(i) for i in inp.locked_images]
+
     new_deliver_at = None
-    if inp.send_at is not None:
-        if inp.send_at <= ts + 5:
+    if _resolved_send_at is not None:
+        if _resolved_send_at <= ts + 5:
             raise HTTPException(400, "send_at must be at least 5 seconds in the future")
-        new_deliver_at = inp.send_at
+        new_deliver_at = _resolved_send_at
         set_parts.append("deliver_at = :da")
         expr_vals[":da"] = new_deliver_at
         # If an expiry timer was based on the old delivery time, re-base it.
