@@ -146,6 +146,9 @@ data class MessageEntity(
     // url derived from the selected outcome's media_asset_id; null for text-only/locked.
     val revealedMediaUrl: String? = null,
     val revealedMediaIsVideo: Boolean = false,
+    // #24 (DB schema v15) - the FULL revealed media list as "url|isVideo" records (one per line);
+    // null/blank for text-only or single-media lotteries that only set revealedMediaUrl.
+    val revealedMediaJson: String? = null,
     // MSG (DB schema v11) — find_datetime detail columns (the FindDateTime card needs the range/hours).
     val fadtFromDate: String? = null,
     val fadtToDate: String? = null,

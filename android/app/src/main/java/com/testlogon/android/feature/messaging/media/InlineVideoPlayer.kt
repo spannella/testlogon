@@ -467,6 +467,15 @@ private fun FullScreenVideoViewer(url: String, onDismiss: () -> Unit) {
 }
 
 /**
+ * #25/#27 — public full-screen player for a gallery VIDEO item (an object url). Reuses the same
+ * ExoPlayer-backed dialog as a video clip, so tapping a video tile inside a mixed gallery plays it.
+ */
+@Composable
+fun GalleryVideoViewer(url: String, onDismiss: () -> Unit) {
+    FullScreenVideoViewer(url = url, onDismiss = onDismiss)
+}
+
+/**
  * #2 — saves a (remote or server-relative) video clip url to the device gallery (MediaStore
  * Movies/TestLogon). On API29+ no runtime permission is needed (scoped storage + IS_PENDING). A
  * server-relative "/mock/s3/..." url is resolved against the API base the SAME way ExoPlayer does.

@@ -3,6 +3,20 @@
 package com.testlogon.android.feature.syndicates.ui
 
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.testlogon.android.core.model.syndicates.SyndicateMember
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +83,10 @@ object SyndicateOverviewTestTags {
     const val TAB_FEED = "syndicate_tab_feed"
     const val TAB_TREASURY = "syndicate_tab_treasury"
     const val TAB_SPLIT = "syndicate_tab_split"
+    const val TAB_MEMBERS = "syndicate_tab_members"
+    const val COMPOSE_INPUT = "syndicate_compose_input"
+    const val COMPOSE_SEND = "syndicate_compose_send"
+    const val COMPOSE_ATTACH = "syndicate_compose_attach"
     const val HEADER_NAME = "syndicate_header_name"
     const val ROLE_BADGE = "syndicate_role_badge"
     const val SPLIT_MISMATCH = "syndicate_split_mismatch"
@@ -82,7 +100,7 @@ object SyndicateOverviewTestTags {
 }
 
 /** The three overview tabs (read-only). */
-private enum class OverviewTab { FEED, TREASURY, SPLIT }
+private enum class OverviewTab { FEED, TREASURY, SPLIT, MEMBERS }
 
 /** AND-356 - route-level overview entry; collects the paged feed + ledger and the header state. */
 @Composable
@@ -94,10 +112,17 @@ fun SyndicateOverviewRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val feed = viewModel.feed.collectAsLazyPagingItems()
     val ledger = viewModel.ledger.collectAsLazyPagingItems()
+    val compose by viewModel.compose.collectAsStateWithLifecycle()
+    val members by viewModel.members.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(viewModel) {
+        viewModel.feedRefresh.collect { feed.refresh() }
+    }
     SyndicateOverviewScreen(
         state = state,
         feed = feed,
         ledger = ledger,
+        compose = compose,
+        members = members,
         onBack = onBack,
         onOpenLicensing = onOpenLicensing,
         onRetry = viewModel::onRetry,
@@ -106,6 +131,12 @@ fun SyndicateOverviewRoute(
             feed.refresh()
             ledger.refresh()
         },
+        onComposeTextChange = viewModel::onComposeTextChange,
+        onAttachImage = viewModel::attachImage,
+        onClearImage = viewModel::clearImage,
+        onSubmitPost = viewModel::submitPost,
+        onLoadMembers = { viewModel.loadMembers() },
+        onRetryMembers = { viewModel.loadMembers(force = true) },
     )
 }
 
@@ -115,10 +146,18 @@ fun SyndicateOverviewScreen(
     state: SyndicateOverviewUiState,
     feed: LazyPagingItems<SyndicateFeedItem>,
     ledger: LazyPagingItems<TreasuryEntry>,
+    compose: SyndicateComposeState = SyndicateComposeState(),
+    members: SyndicateMembersState = SyndicateMembersState(),
     onBack: () -> Unit,
     onOpenLicensing: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
+    onComposeTextChange: (String) -> Unit = {},
+    onAttachImage: (android.net.Uri) -> Unit = {},
+    onClearImage: () -> Unit = {},
+    onSubmitPost: () -> Unit = {},
+    onLoadMembers: () -> Unit = {},
+    onRetryMembers: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -175,7 +214,15 @@ fun SyndicateOverviewScreen(
                     state = state,
                     feed = feed,
                     ledger = ledger,
+                    compose = compose,
+                    members = members,
                     onRefresh = onRefresh,
+                    onComposeTextChange = onComposeTextChange,
+                    onAttachImage = onAttachImage,
+                    onClearImage = onClearImage,
+                    onSubmitPost = onSubmitPost,
+                    onLoadMembers = onLoadMembers,
+                    onRetryMembers = onRetryMembers,
                     modifier = Modifier.padding(padding),
                 )
         }
@@ -187,10 +234,21 @@ private fun ContentBody(
     state: SyndicateOverviewUiState.Content,
     feed: LazyPagingItems<SyndicateFeedItem>,
     ledger: LazyPagingItems<TreasuryEntry>,
+    compose: SyndicateComposeState,
+    members: SyndicateMembersState,
     onRefresh: () -> Unit,
+    onComposeTextChange: (String) -> Unit,
+    onAttachImage: (android.net.Uri) -> Unit,
+    onClearImage: () -> Unit,
+    onSubmitPost: () -> Unit,
+    onLoadMembers: () -> Unit,
+    onRetryMembers: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selected by rememberSaveable { mutableStateOf(OverviewTab.FEED.ordinal) }
+    androidx.compose.runtime.LaunchedEffect(selected) {
+        if (selected == OverviewTab.MEMBERS.ordinal) onLoadMembers()
+    }
     Column(modifier = modifier.fillMaxSize()) {
         if (state.isStale) {
             StaleRow()
@@ -215,12 +273,31 @@ private fun ContentBody(
                 text = { Text(stringResource(R.string.syndicate_tab_split)) },
                 modifier = Modifier.testTag(SyndicateOverviewTestTags.TAB_SPLIT),
             )
+            Tab(
+                selected = selected == OverviewTab.MEMBERS.ordinal,
+                onClick = { selected = OverviewTab.MEMBERS.ordinal },
+                text = { Text(stringResource(R.string.syndicate_tab_members)) },
+                modifier = Modifier.testTag(SyndicateOverviewTestTags.TAB_MEMBERS),
+            )
         }
         Box(modifier = Modifier.weight(1f)) {
             when (selected) {
-                OverviewTab.FEED.ordinal -> FeedTab(feed = feed, onRefresh = onRefresh)
+                OverviewTab.FEED.ordinal -> Column(modifier = Modifier.fillMaxSize()) {
+                    if (state.overview.isMember) {
+                        SyndicateComposeBox(
+                            state = compose,
+                            onTextChange = onComposeTextChange,
+                            onAttachImage = onAttachImage,
+                            onClearImage = onClearImage,
+                            onSubmit = onSubmitPost,
+                        )
+                        HorizontalDivider()
+                    }
+                    Box(modifier = Modifier.weight(1f)) { FeedTab(feed = feed, onRefresh = onRefresh) }
+                }
                 OverviewTab.TREASURY.ordinal -> TreasuryTab(state.treasury, ledger)
-                else -> RevenueSplitTab(state.split)
+                OverviewTab.SPLIT.ordinal -> RevenueSplitTab(state.split)
+                else -> MembersTab(members, onRetryMembers)
             }
         }
     }
@@ -626,4 +703,117 @@ private fun relativeTime(epochSeconds: Long, nowMs: Long = System.currentTimeMil
         nowMs,
         DateUtils.MINUTE_IN_MILLIS,
     ).toString()
+}
+
+// ---- Batch-9 (#12): feed composer (group parity) ----
+
+@Composable
+private fun SyndicateComposeBox(
+    state: SyndicateComposeState,
+    onTextChange: (String) -> Unit,
+    onAttachImage: (android.net.Uri) -> Unit,
+    onClearImage: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) onAttachImage(uri) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = state.text,
+            onValueChange = onTextChange,
+            enabled = !state.sending,
+            label = { Text(stringResource(R.string.syndicate_compose_hint)) },
+            modifier = Modifier.fillMaxWidth().testTag(SyndicateOverviewTestTags.COMPOSE_INPUT),
+        )
+        val img = state.imageUrl
+        if (img != null) {
+            Box {
+                AsyncImage(
+                    model = img,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)),
+                )
+                IconButton(
+                    onClick = onClearImage,
+                    modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                ) {
+                    Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.syndicate_compose_remove_image))
+                }
+            }
+        }
+        val err = state.error
+        if (err != null) {
+            Text(text = err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            IconButton(
+                onClick = { imagePicker.launch("image/*") },
+                enabled = !state.uploadingImage && !state.sending,
+                modifier = Modifier.testTag(SyndicateOverviewTestTags.COMPOSE_ATTACH),
+            ) {
+                if (state.uploadingImage) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Image, contentDescription = stringResource(R.string.syndicate_compose_attach_image))
+                }
+            }
+            Box(modifier = Modifier.weight(1f))
+            Button(
+                onClick = onSubmit,
+                enabled = state.text.isNotBlank() && !state.sending,
+                modifier = Modifier.testTag(SyndicateOverviewTestTags.COMPOSE_SEND),
+            ) {
+                if (state.sending) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(stringResource(R.string.syndicate_compose_send))
+                }
+            }
+        }
+    }
+}
+
+// ---- Batch-9 (#12): members tab (group parity) ----
+
+@Composable
+private fun MembersTab(state: SyndicateMembersState, onRetry: () -> Unit) {
+    when {
+        state.loading && state.members.isEmpty() -> LoadingState()
+        state.error != null && state.members.isEmpty() ->
+            ErrorState(message = state.error, onRetry = onRetry)
+        state.loaded && state.members.isEmpty() ->
+            EmptyState(
+                title = stringResource(R.string.syndicate_members_empty_title),
+                body = stringResource(R.string.syndicate_members_empty_body),
+                imageVector = Icons.Outlined.People,
+            )
+        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(state.members, key = { it.userId }) { member ->
+                MemberRow(member)
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemberRow(member: SyndicateMember) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(text = member.displayName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        AssistChip(onClick = {}, enabled = false, label = { Text(member.role.replaceFirstChar { it.uppercase() }) })
+    }
 }

@@ -19,6 +19,9 @@ data class GroupPostCreateIn(
     @Json(name = "text") val text: String,
     @Json(name = "body_format") val bodyFormat: String = "plain",
     @Json(name = "image_url") val imageUrl: String? = null,
+    // Batch-9 (#11): full-newsfeed media parity - multiple images + a single VOD video.
+    @Json(name = "image_urls") val imageUrls: List<String>? = null,
+    @Json(name = "video_id") val videoId: String? = null,
     @Json(name = "audience") val audience: String = "public",
     @Json(name = "unlock_price_cents") val unlockPriceCents: Int? = null,
 )
@@ -35,6 +38,8 @@ data class GroupFeedPostDto(
     @Json(name = "text") val text: String? = null,
     @Json(name = "body_format") val bodyFormat: String? = null,
     @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "image_urls") val imageUrls: List<String>? = null,
+    @Json(name = "video_id") val videoId: String? = null,
     @Json(name = "group_id") val groupId: String? = null,
     @Json(name = "audience") val audience: String? = null,
     @Json(name = "pinned") val pinned: Boolean? = false,

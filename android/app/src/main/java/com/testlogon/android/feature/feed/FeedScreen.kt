@@ -475,6 +475,8 @@ private fun FeedList(
                     onShare = onShare,
                     onTip = onTip,
                     showTip = !(currentUserSub != null && item.authorId == currentUserSub),
+                    // #3 — show the priced "Locked · $X" badge on the viewer's own locked posts.
+                    isOwnPost = currentUserSub != null && item.authorId == currentUserSub,
                     onEdit = if (currentUserSub != null && item.authorId == currentUserSub) {
                         { post -> onEditPost(post.id) }
                     } else null,

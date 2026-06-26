@@ -112,6 +112,9 @@ fun ComposePostRoute(
     )
 }
 
+// #2 — accept count + max so callers can express "video added" without a separate flag.
+private const val MAX_POST_VIDEOS = 10
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComposePostScreen(
@@ -124,7 +127,7 @@ fun ComposePostScreen(
     onAddPhotos: () -> Unit,
     onAddVideo: () -> Unit,
     onRemoveImage: (String) -> Unit,
-    onRemoveVideo: () -> Unit,
+    onRemoveVideo: (String) -> Unit,
     onPost: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
@@ -177,12 +180,13 @@ fun ComposePostScreen(
                     Text("Add photos", modifier = Modifier.padding(start = 6.dp))
                 }
                 OutlinedButton(
+                    // #2 — allow attaching MULTIPLE videos (up to the cap), alongside any photos.
                     onClick = onAddVideo,
-                    enabled = !state.uploadingVideo && state.videoId == null,
+                    enabled = state.videos.size < MAX_POST_VIDEOS,
                     modifier = Modifier.testTag("compose_add_video"),
                 ) {
                     Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("Add video", modifier = Modifier.padding(start = 6.dp))
+                    Text(if (state.videos.isEmpty()) "Add video" else "Add another", modifier = Modifier.padding(start = 6.dp))
                 }
                 if (state.uploadingMedia || state.uploadingVideo) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp))
@@ -216,64 +220,28 @@ fun ComposePostScreen(
                 }
             }
 
-            // FD20 — attached-video preview: a REAL first-frame thumbnail (Coil VideoFrameDecoder on
-            // the picked local clip) with a working play button that opens a local full-screen player,
-            // plus a remove "x". Shows as soon as a clip is picked (during + after the VOD upload).
-            val videoLocal = state.videoLocalUri
-            if (videoLocal != null) {
-                var previewPlaying by androidx.compose.runtime.remember(videoLocal) {
-                    androidx.compose.runtime.mutableStateOf(false)
-                }
-                Box(modifier = Modifier.size(width = 140.dp, height = 96.dp).testTag("compose_video_preview")) {
-                    val ctx = LocalContext.current
-                    val framePainter = rememberAsyncImagePainter(
-                        model = ImageRequest.Builder(ctx)
-                            .data(videoLocal)
-                            .videoFrameMillis(0L)
-                            .decoderFactory(VideoFrameDecoder.Factory())
-                            .crossfade(true)
-                            .build(),
-                    )
-                    Image(
-                        painter = framePainter,
-                        contentDescription = "Video preview",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.Black)
-                            .testTag("compose_video_thumb"),
-                    )
-                    // Working play button -> local full-screen playback.
-                    Icon(
-                        Icons.Filled.PlayArrow,
-                        contentDescription = "Play video",
-                        tint = Color.White,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(40.dp)
-                            .clickable { previewPlaying = true }
-                            .testTag("compose_video_play"),
-                    )
-                    if (state.uploadingVideo) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).size(18.dp),
-                            color = Color.White,
+            // #2 / FD20 — attached-video previews: one REAL first-frame thumbnail per picked clip (Coil
+            // VideoFrameDecoder), each with a working local-playback play button + a remove "x". Multiple
+            // videos may be attached (and coexist with photos). Shows as soon as each clip is picked.
+            if (state.videos.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("compose_video_previews"),
+                ) {
+                    items(state.videos, key = { it.localUri }) { v ->
+                        LocalVideoPreviewCell(
+                            localUri = v.localUri,
+                            uploading = v.uploading,
+                            onRemove = { onRemoveVideo(v.localUri) },
+                            testTag = "compose_video_preview",
                         )
                     }
-                    RemoveBadge(
-                        onClick = onRemoveVideo,
-                        modifier = Modifier.align(Alignment.TopEnd).testTag("compose_video_remove"),
-                    )
                 }
                 Text(
                     if (state.uploadingVideo) "Uploading video…" else "Video attached",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                if (previewPlaying) {
-                    ComposeVideoPreviewPlayer(uri = videoLocal, onDismiss = { previewPlaying = false })
-                }
             }
 
             Text("Who can see this", style = MaterialTheme.typography.labelLarge)
@@ -321,45 +289,6 @@ fun ComposePostScreen(
                 }
             }
             Box(Modifier.fillMaxWidth().height(8.dp))
-        }
-    }
-}
-
-/**
- * FD20 — a local full-screen player for the picked (not-yet-uploaded) composer video, so the
- * "play" button actually plays. Lifecycle-scoped ExoPlayer, released on dismiss.
- */
-@OptIn(UnstableApi::class)
-@Composable
-private fun ComposeVideoPreviewPlayer(uri: String, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            val ctx = LocalContext.current
-            val player = remember(uri) {
-                ExoPlayer.Builder(ctx).build().apply {
-                    setMediaItem(MediaItem.fromUri(uri)); prepare(); playWhenReady = true
-                }
-            }
-            val owner = LocalLifecycleOwner.current
-            DisposableEffect(owner, player) {
-                val obs = LifecycleEventObserver { _, e ->
-                    when (e) {
-                        Lifecycle.Event.ON_PAUSE -> player.pause()
-                        Lifecycle.Event.ON_STOP -> player.playWhenReady = false
-                        else -> Unit
-                    }
-                }
-                owner.lifecycle.addObserver(obs)
-                onDispose { owner.lifecycle.removeObserver(obs); player.release() }
-            }
-            AndroidView(
-                factory = { c -> PlayerView(c).apply { this.player = player; useController = true } },
-                modifier = Modifier.fillMaxSize().testTag("compose_video_fullscreen"),
-            )
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-            ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
         }
     }
 }

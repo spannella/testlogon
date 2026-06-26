@@ -116,6 +116,8 @@ data class MessageDto(
     @Json(name = "target_datetime") val targetDatetime: Long? = null,
     @Json(name = "associated_event_type") val associatedEventType: String? = null,
     @Json(name = "associated_event_id") val associatedEventId: String? = null,
+    /** #31 (B-COUNTDOWN) — present (with revealed=true) ONLY once the countdown target has passed. */
+    @Json(name = "countdown_reveal") val countdownReveal: CountdownRevealDto? = null,
     /** AND-138 — present on kind="calendar_event"/"calendar_share" (nested attachment objects). */
     @Json(name = "calendar_event") val calendarEvent: CalendarEventAttachmentDto? = null,
     @Json(name = "calendar_share") val calendarShare: CalendarShareAttachmentDto? = null,
@@ -141,6 +143,24 @@ data class MessageDto(
     val scheduled: Boolean? = null,
     /** #8 — epoch SECONDS the scheduled message is due to be delivered (null when not scheduled). */
     @Json(name = "deliver_at") val deliverAt: Long? = null,
+)
+
+/** #31 — countdown reveal payload (revealed once the target passes). media[] may mix images + videos. */
+@JsonClass(generateAdapter = true)
+data class CountdownRevealDto(
+    val text: String? = null,
+    val media: List<CountdownRevealMediaDto>? = null,
+    val revealed: Boolean = false,
+)
+
+/** #31 — one revealed media item (media_kind = "image"|"video"; url is directly displayable/playable). */
+@JsonClass(generateAdapter = true)
+data class CountdownRevealMediaDto(
+    val url: String? = null,
+    @Json(name = "media_kind") val mediaKind: String? = null,
+    val bucket: String? = null,
+    val key: String? = null,
+    @Json(name = "content_type") val contentType: String? = null,
 )
 
 /** MessageOut.image (MessageImage). All inner fields are optional per the free-form schema. */
@@ -231,6 +251,15 @@ data class SendTextMessageReq(
 data class RescheduleMessageReq(
     val text: String? = null,
     @Json(name = "send_at") val sendAt: Long? = null,
+    // #21 — timezone-aware reschedule: send_at wins; otherwise server resolves send_at_local in send_at_tz.
+    @Json(name = "send_at_local") val sendAtLocal: String? = null,
+    @Json(name = "send_at_tz") val sendAtTz: String? = null,
+    // #22 (B-SCHED2 edit contract) — replace media on a still-pending scheduled message.
+    val image: MessageImageDto? = null,
+    @Json(name = "file_path") val filePath: String? = null,
+    @Json(name = "video_id") val videoId: String? = null,
+    @Json(name = "free_images") val freeImages: List<GalleryImageDto>? = null,
+    @Json(name = "locked_images") val lockedImages: List<GalleryImageDto>? = null,
 )
 
 /**

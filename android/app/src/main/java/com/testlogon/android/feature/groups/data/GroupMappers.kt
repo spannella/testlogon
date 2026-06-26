@@ -1,9 +1,11 @@
 package com.testlogon.android.feature.groups.data
 
 import com.testlogon.android.core.model.groups.Group
+import com.testlogon.android.core.model.groups.GroupComment
 import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
+import com.testlogon.android.core.network.groups.GroupCommentDto
 import com.testlogon.android.core.network.groups.GroupFeedPostDto
 import com.testlogon.android.core.network.groups.GroupMemberDto
 import com.testlogon.android.core.network.groups.UserGroupDto
@@ -60,6 +62,8 @@ fun GroupFeedPostDto.toDomain(): GroupFeedPost {
         authorAvatarUrl = userAvatarUrl,
         text = text,
         imageUrl = imageUrl,
+        imageUrls = imageUrls ?: (imageUrl?.let { listOf(it) } ?: emptyList()),
+        videoId = videoId,
         pinned = pinned ?: false,
         locked = price != null && price > 0 && !isUnlocked,
         unlockPriceCents = price,
@@ -68,3 +72,18 @@ fun GroupFeedPostDto.toDomain(): GroupFeedPost {
         createdAt = createdAt ?: 0,
     )
 }
+
+/**
+ * Batch-9 (#11) - maps a [GroupCommentDto] to the domain [GroupComment]. A blank display name falls back to
+ * the user id (the backend currently echoes the user_id as the display name).
+ */
+fun GroupCommentDto.toDomain(): GroupComment = GroupComment(
+    commentId = commentId,
+    postId = postId.orEmpty(),
+    authorId = userId,
+    authorName = userDisplayName?.takeIf { it.isNotBlank() } ?: userId,
+    text = text,
+    imageUrl = imageUrl,
+    parentCommentId = parentCommentId,
+    createdAt = createdAt ?: 0,
+)

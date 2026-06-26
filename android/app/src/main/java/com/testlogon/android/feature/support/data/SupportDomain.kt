@@ -45,12 +45,16 @@ data class SupportTicket(
         get() = status == SupportTicketStatus.DONE || status == SupportTicketStatus.CANCELLED
 }
 
+
+
 data class SupportTicketMessage(
     val messageId: String,
     val senderSub: String,
     val senderRole: String,
     val body: String,
     val createdAt: Long,
+    /** Helpdesk #14 — an image attached to this message (rendered in the thread), or null. */
+    val imageUrl: String? = null,
 ) {
     val isFromAdmin: Boolean get() = senderRole.equals("admin", ignoreCase = true)
 }
@@ -68,6 +72,7 @@ fun SupportTicketMessageDto.toDomain(): SupportTicketMessage = SupportTicketMess
     senderRole = senderRole.orEmpty(),
     body = body.orEmpty(),
     createdAt = createdAt ?: 0L,
+    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
 )
 
 fun SupportTicketDto.toDomain(): SupportTicket = SupportTicket(

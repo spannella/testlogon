@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SplitMode
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateMember
 import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
@@ -13,6 +14,7 @@ import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.core.network.syndicates.SplitConfigOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingContentOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegistrationOut
+import com.testlogon.android.core.network.syndicates.SyndicateMemberDto
 import com.testlogon.android.core.network.syndicates.SyndicatePostOut
 import com.testlogon.android.core.network.syndicates.SyndicateCreateOut
 import com.testlogon.android.core.network.syndicates.SyndicateListItemDto
@@ -130,4 +132,12 @@ fun SyndicateOpenLicensingContentOut.toDomain(): OpenLicensingContent = OpenLice
 fun SyndicateOpenLicensingRegistrationOut.toDomain(): RegistrationResult = RegistrationResult(
     contentId = contentId,
     licensesCreated = licensesCreated ?: 0,
+)
+
+/** Batch-9 (#12) - maps a [SyndicateMemberDto] to the domain [SyndicateMember]. */
+fun SyndicateMemberDto.toDomain(): SyndicateMember = SyndicateMember(
+    userId = userId,
+    displayName = displayName?.takeIf { it.isNotBlank() } ?: userId,
+    role = role?.takeIf { it.isNotBlank() } ?: "member",
+    joinedAt = joinedAt ?: 0,
 )

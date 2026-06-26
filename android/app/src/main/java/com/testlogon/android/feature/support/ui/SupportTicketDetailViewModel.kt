@@ -1,9 +1,11 @@
 package com.testlogon.android.feature.support.ui
 
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.feed.CommentImageUploader
 import com.testlogon.android.feature.support.data.SupportRepository
 import com.testlogon.android.feature.support.data.SupportTicket
 import com.testlogon.android.navigation.SupportTicketDetailDest
@@ -30,18 +32,39 @@ data class SupportTicketDetailUiState(
     val isAdmin: Boolean = false,
     // B8 #15 — owner close/cancel
     val closing: Boolean = false,
+    // Helpdesk #14 — an optional attached image on the reply (uploaded to a URL before send).
+    val stagedImageUrl: String? = null,
+    val uploadingImage: Boolean = false,
+    // Helpdesk #17 — owner reopen of a terminal ticket.
+    val reopening: Boolean = false,
 ) {
+    /**
+     * Helpdesk #16 — a USER cannot reply to a terminal (resolved/cancelled) ticket; an ADMIN always can.
+     * (The server also rejects it with ticket_closed_no_reply.)
+     */
+    val canReply: Boolean
+        get() = ticket != null && (isAdmin || !ticket.isTerminal)
+
+    /** A reply needs text OR an attached image; bounded text length per the API. */
     val canSend: Boolean
-        get() = reply.trim().length in SupportRepository.REPLY_MIN..SupportRepository.REPLY_MAX && !sending
+        get() = canReply &&
+            !sending &&
+            !uploadingImage &&
+            (stagedImageUrl != null || reply.trim().length in SupportRepository.REPLY_MIN..SupportRepository.REPLY_MAX)
 
     /** B8 #15 — a USER may close/cancel their own ticket while it is not already terminal. */
     val canClose: Boolean
         get() = !isAdmin && ticket != null && !ticket.isTerminal && !closing && !actionInFlight
+
+    /** Helpdesk #17 — a USER may reopen their OWN terminal ticket. */
+    val canReopen: Boolean
+        get() = !isAdmin && ticket != null && ticket.isTerminal && !reopening && !actionInFlight
 }
 
 @HiltViewModel
 class SupportTicketDetailViewModel @Inject constructor(
     private val repository: SupportRepository,
+    private val imageUploader: CommentImageUploader,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -75,14 +98,32 @@ class SupportTicketDetailViewModel @Inject constructor(
 
     fun onReplyChange(v: String) { _uiState.value = _uiState.value.copy(reply = v) }
 
+    /** Helpdesk #14 — upload a picked image and stage its URL for the next reply. */
+    fun stageImage(uri: Uri) {
+        if (_uiState.value.uploadingImage) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(uploadingImage = true, actionError = null)
+            when (val r = imageUploader.uploadImage(uri)) {
+                is ApiResult.Success ->
+                    _uiState.value = _uiState.value.copy(uploadingImage = false, stagedImageUrl = r.data)
+                is ApiResult.Failure ->
+                    _uiState.value = _uiState.value.copy(uploadingImage = false, actionError = r.error.message)
+                is ApiResult.NetworkError ->
+                    _uiState.value = _uiState.value.copy(uploadingImage = false, actionError = "You appear to be offline.")
+            }
+        }
+    }
+
+    fun clearStagedImage() { _uiState.value = _uiState.value.copy(stagedImageUrl = null) }
+
     fun sendReply() {
         val s = _uiState.value
         if (!s.canSend) return
         viewModelScope.launch {
             _uiState.value = s.copy(sending = true, actionError = null)
-            when (val r = repository.addMessage(ticketId, s.reply)) {
+            when (val r = repository.addMessage(ticketId, s.reply, s.stagedImageUrl)) {
                 is ApiResult.Success ->
-                    _uiState.value = _uiState.value.copy(sending = false, reply = "", ticket = r.data)
+                    _uiState.value = _uiState.value.copy(sending = false, reply = "", stagedImageUrl = null, ticket = r.data)
                 is ApiResult.Failure ->
                     _uiState.value = _uiState.value.copy(sending = false, actionError = r.error.message)
                 is ApiResult.NetworkError ->
@@ -124,6 +165,27 @@ class SupportTicketDetailViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(closing = false, actionError = r.error.message)
                 is ApiResult.NetworkError ->
                     _uiState.value = _uiState.value.copy(closing = false, actionError = "You appear to be offline.")
+            }
+        }
+    }
+
+    /**
+     * Helpdesk #17 — the OWNER reopens their closed/cancelled ticket via POST /tickets/{id}/reopen. The
+     * returned ticket comes back as "open" so the reply composer reappears immediately; the Support landing
+     * re-pulls on resume so the list status updates too.
+     */
+    fun reopenTicket() {
+        val s = _uiState.value
+        if (s.isAdmin || s.ticket == null || !s.ticket.isTerminal || s.reopening) return
+        viewModelScope.launch {
+            _uiState.value = s.copy(reopening = true, actionError = null)
+            when (val r = repository.reopenTicket(ticketId)) {
+                is ApiResult.Success ->
+                    _uiState.value = _uiState.value.copy(reopening = false, ticket = r.data)
+                is ApiResult.Failure ->
+                    _uiState.value = _uiState.value.copy(reopening = false, actionError = r.error.message)
+                is ApiResult.NetworkError ->
+                    _uiState.value = _uiState.value.copy(reopening = false, actionError = "You appear to be offline.")
             }
         }
     }

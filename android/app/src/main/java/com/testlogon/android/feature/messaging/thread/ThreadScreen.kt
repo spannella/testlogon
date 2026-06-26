@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
@@ -170,6 +171,9 @@ object ThreadTestTags {
 
     /** AND-158/159 — open group details/settings. */
     const val OPEN_GROUP_DETAILS = "thread_open_group_details"
+
+    /** #19 — the single "+" that opens the conversation-actions dropdown menu. */
+    const val TOPBAR_MENU = "thread_topbar_menu"
 }
 
 /** AND-123 — route-level thread, reached from the conversation list. */
@@ -214,31 +218,19 @@ fun ThreadRoute(
         }
     }
 
-    // MV1 — ONE unified media picker (no storage permission). Accepts BOTH images and videos in a
-    // single PickMultipleVisualMedia(ImageAndVideo) flow, then routes the result: picked images go to
-    // image/gallery staging (one image -> image message, several -> ONE gallery message) and a picked
-    // video goes to short-video staging. (Multi-image still works; a video is staged singly.)
+    // #25/#27/#28 — ONE unified media picker (no storage permission). Accepts BOTH images and videos in
+    // a single PickMultipleVisualMedia(ImageAndVideo) flow and STAGES every pick (a photo+video MIX, and
+    // multiple videos, are allowed) MERGED with anything already staged, so reopening the picker and
+    // selecting more ADDS to the selection rather than wiping it (the system picker can't pre-select).
     val pickMedia = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(20),
     ) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        val (videos, images) = uris.partition { uri ->
-            context.contentResolver.getType(uri)?.startsWith("video/") == true
+        val items = uris.map { uri ->
+            val isVideo = context.contentResolver.getType(uri)?.startsWith("video/") == true
+            uri.toString() to isVideo
         }
-        when {
-            // Prefer images when both are present (a gallery message); stage a single video otherwise.
-            images.isNotEmpty() -> viewModel.onImagesPicked(images)
-            else -> {
-                val uri = videos.first()
-                val size = runCatching {
-                    context.contentResolver.query(uri, null, null, null, null)?.use { c ->
-                        val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                        if (c.moveToFirst() && idx >= 0 && !c.isNull(idx)) c.getLong(idx) else 0L
-                    } ?: 0L
-                }.getOrDefault(0L)
-                viewModel.onVideoPicked(uri, size)
-            }
-        }
+        viewModel.onMediaPicked(items)
     }
 
     // AND-132 — system document picker (OpenDocument, wildcard MIME; no storage permission needed).
@@ -369,10 +361,14 @@ fun ThreadRoute(
         onDismissCountdownPicker = viewModel::onDismissCountdownPicker,
         onCountdownTitleChange = viewModel::onCountdownTitleChange,
         onCountdownTargetChange = viewModel::onCountdownTargetChange,
+        onCountdownTimeZoneChange = viewModel::onCountdownTimeZoneChange,
+        onCountdownRevealTextChange = viewModel::onCountdownRevealTextChange,
+        onCountdownPickRevealImage = viewModel::onCountdownPickRevealImage,
+        onCountdownRemoveRevealImage = viewModel::onCountdownRemoveRevealImage,
         onSendCountdown = viewModel::onSendCountdown,
         onAttachLottery = viewModel::onAttachLottery,
         onDismissLottery = viewModel::onDismissLotteryComposer,
-        onSendLottery = { outcomes, imageUri -> viewModel.onSendLottery(outcomes, imageUri) },
+        onSendLottery = { outcomes, imageUri, coverText -> viewModel.onSendLottery(outcomes, imageUri, coverText) },
         onAttachFindDateTime = viewModel::onAttachFindDateTime,
         onDismissFindDateTime = viewModel::onDismissFindDateTimeComposer,
         onSendFindDateTime = viewModel::onSendFindDateTime,
@@ -391,6 +387,7 @@ fun ThreadRoute(
         onClearMessageOptions = viewModel::clearMessageOptions,
         onRemoveStagedImage = viewModel::onRemoveStagedImage,
         onRemoveStagedVideo = viewModel::onRemoveStagedVideo,
+        onRemoveStagedFile = viewModel::onRemoveStagedFile,
         nowSeconds = rememberNowTicker(),
         onUnlock = viewModel::onUnlockClick,
         onTip = viewModel::onTipOpen,
@@ -468,6 +465,7 @@ fun ThreadRoute(
             onViewOnceChange = viewModel::setViewOnce,
             onLockPriceChange = viewModel::setLockPrice,
             onScheduleChange = viewModel::setScheduledAt,
+            onScheduleTzChange = viewModel::setScheduledTimeZone,
             onExpiresChange = viewModel::setExpiresIn,
             onEncryptedChange = viewModel::setEncrypted,
             onPassphraseChange = viewModel::setEncryptionPassphrase,
@@ -541,7 +539,7 @@ fun ThreadRoute(
         ScheduledMessagesSheet(
             state = state.scheduledManager,
             onEdit = viewModel::openScheduledEdit,
-            onRemove = viewModel::cancelScheduledMessage,
+            onRemove = viewModel::cancelScheduled,
             onDismiss = viewModel::closeScheduledManager,
         )
         LaunchedEffect(state.scheduledManager.error) {
@@ -556,6 +554,7 @@ fun ThreadRoute(
                 editing = editing,
                 onTextChange = viewModel::onScheduledEditTextChange,
                 onTimeChange = viewModel::onScheduledEditTimeChange,
+                onTimeZoneChange = viewModel::onScheduledEditTimeZoneChange,
                 onSave = viewModel::saveScheduledEdit,
                 onDismiss = viewModel::closeScheduledEdit,
             )
@@ -572,6 +571,7 @@ private fun MessageOptionsSheet(
     onViewOnceChange: (Boolean) -> Unit,
     onLockPriceChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
+    onScheduleTzChange: (String) -> Unit,
     onExpiresChange: (Long?) -> Unit,
     onEncryptedChange: (Boolean) -> Unit,
     onPassphraseChange: (String) -> Unit,
@@ -645,8 +645,14 @@ private fun MessageOptionsSheet(
                 placeholder = { Text("e.g. 4.99") },
                 singleLine = true,
             )
-            // Scheduled send — arbitrary date + time
+            // Scheduled send — arbitrary date + time + timezone (#21)
             Text("Schedule send", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
+            com.testlogon.android.feature.common.TimeZonePicker(
+                selectedZoneId = options.scheduledTimeZoneId,
+                onZoneChange = onScheduleTzChange,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                testTag = "thread_option_schedule_tz",
+            )
             Row(
                 Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -658,6 +664,7 @@ private fun MessageOptionsSheet(
                     modifier = Modifier.weight(1f),
                     placeholder = "Send now (tap to schedule)",
                     testTag = "thread_option_schedule",
+                    zoneId = options.scheduledTimeZoneId,
                 )
                 if (options.scheduledAtEpochSeconds != null) {
                     TextButton(onClick = { onScheduleChange(null) }) { Text("Clear") }
@@ -786,13 +793,17 @@ fun ThreadScreen(
     onDismissCountdownPicker: () -> Unit,
     onCountdownTitleChange: (String) -> Unit,
     onCountdownTargetChange: (Long?) -> Unit,
+    onCountdownTimeZoneChange: (String) -> Unit,
+    onCountdownRevealTextChange: (String) -> Unit,
+    onCountdownPickRevealImage: (String) -> Unit,
+    onCountdownRemoveRevealImage: () -> Unit,
     onSendCountdown: () -> Unit,
     // MSG: new in-app composers.
     onAttachLottery: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
     onRemoveStagedVideo: () -> Unit = {},
     onDismissLottery: () -> Unit = {},
-    onSendLottery: (List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>, String?) -> Unit = { _, _ -> },
+    onSendLottery: (List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>, String?, String?) -> Unit = { _, _, _ -> },
     onAttachFindDateTime: () -> Unit = {},
     onDismissFindDateTime: () -> Unit = {},
     onSendFindDateTime: (com.testlogon.android.data.messaging.FindDateTimeDraft) -> Unit = {},
@@ -809,6 +820,7 @@ fun ThreadScreen(
     onSendFileShare: (String) -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
+    onRemoveStagedFile: () -> Unit = {},
     nowSeconds: Long,
     onUnlock: (String) -> Unit,
     onTip: (String) -> Unit,
@@ -836,6 +848,8 @@ fun ThreadScreen(
 ) {
     // AND-140 — the message whose long-press action sheet is open (null = closed).
     var actionTarget by remember { mutableStateOf<ThreadMessageUi?>(null) }
+    // #25/#27 — the gallery VIDEO item currently open in the full-screen player (null = closed).
+    var galleryVideoUrl by remember { mutableStateOf<String?>(null) }
     // #3 KEYBOARD DISMISS — clear the composer's focus + hide the IME without leaving the thread.
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -899,73 +913,76 @@ fun ThreadScreen(
                     }
                 },
                 actions = {
-                    // AND-151 — open in-conversation search.
+                    // #19 — the top bar had FIVE separate action buttons (search / call / info / pins /
+                    // schedule, + a conditional discard-draft). They're now folded behind a SINGLE "+"
+                    // that opens a dropdown menu. Each entry keeps its original testTag so existing
+                    // on-device automation still finds it (as a menu item).
+                    var menuOpen by remember { mutableStateOf(false) }
                     IconButton(
-                        onClick = onOpenSearch,
-                        modifier = Modifier.testTag(ThreadSearchTestTags.OPEN),
+                        onClick = { menuOpen = true },
+                        modifier = Modifier.testTag(ThreadTestTags.TOPBAR_MENU),
                     ) {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = stringResource(R.string.search_in_conversation),
-                        )
+                        Icon(Icons.Filled.Add, contentDescription = "Conversation actions")
                     }
-                    // 1:1 video call — enabled once the DM peer is resolved.
-                    state.peerUserSub?.let { callee ->
-                        IconButton(
-                            onClick = {
-                                onPlaceCall(
-                                    com.testlogon.android.feature.call.nav.CallRoutes.outgoing(
-                                        conversationId = state.conversationId,
-                                        calleeUserId = callee,
-                                        mode = com.testlogon.android.data.call.CallMode.VIDEO.wire,
-                                        peerName = state.title.takeIf { it.isNotBlank() } ?: state.peerUserSub,
-                                    ),
-                                )
-                            },
-                            modifier = Modifier.testTag("thread_call_video"),
-                        ) {
-                            Icon(Icons.Filled.Call, contentDescription = "Video call")
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        modifier = Modifier.semantics { testTagsAsResourceId = true },
+                    ) {
+                        // AND-151 — in-conversation search.
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(R.string.search_in_conversation)) },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenSearch() },
+                            modifier = Modifier.testTag(ThreadSearchTestTags.OPEN),
+                        )
+                        // 1:1 video call — only when the DM peer is resolved.
+                        state.peerUserSub?.let { callee ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Video call") },
+                                leadingIcon = { Icon(Icons.Filled.Call, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onPlaceCall(
+                                        com.testlogon.android.feature.call.nav.CallRoutes.outgoing(
+                                            conversationId = state.conversationId,
+                                            calleeUserId = callee,
+                                            mode = com.testlogon.android.data.call.CallMode.VIDEO.wire,
+                                            peerName = state.title.takeIf { it.isNotBlank() } ?: state.peerUserSub,
+                                        ),
+                                    )
+                                },
+                                modifier = Modifier.testTag("thread_call_video"),
+                            )
                         }
-                    }
-                    // AND-158/159 — open group details (participants / settings).
-                    IconButton(
-                        onClick = onOpenGroupDetails,
-                        modifier = Modifier.testTag(ThreadTestTags.OPEN_GROUP_DETAILS),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Info,
-                            contentDescription = stringResource(R.string.group_details_cd),
+                        // AND-158/159 — group details (participants / settings).
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(R.string.group_details_cd)) },
+                            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenGroupDetails() },
+                            modifier = Modifier.testTag(ThreadTestTags.OPEN_GROUP_DETAILS),
                         )
-                    }
-                    // AND-140 — open the pinned-messages sheet.
-                    IconButton(
-                        onClick = { onAction(ThreadAction.OpenPinsList) },
-                        modifier = Modifier.testTag(ThreadTestTags.OPEN_PINS),
-                    ) {
-                        Icon(
-                            Icons.Filled.PushPin,
-                            contentDescription = stringResource(R.string.msg_pins_title),
+                        // AND-140 — pinned messages.
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(R.string.msg_pins_title)) },
+                            leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
+                            onClick = { menuOpen = false; onAction(ThreadAction.OpenPinsList) },
+                            modifier = Modifier.testTag(ThreadTestTags.OPEN_PINS),
                         )
-                    }
-                    // #8 — open the scheduled-messages manager (pending scheduled sends).
-                    IconButton(
-                        onClick = onOpenScheduled,
-                        modifier = Modifier.testTag(ThreadTestTags.OPEN_SCHEDULED),
-                    ) {
-                        Icon(
-                            Icons.Filled.Schedule,
-                            contentDescription = stringResource(R.string.msg_scheduled_title),
+                        // #8 — scheduled-messages manager.
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(R.string.msg_scheduled_title)) },
+                            leadingIcon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenScheduled() },
+                            modifier = Modifier.testTag(ThreadTestTags.OPEN_SCHEDULED),
                         )
-                    }
-                    // AND-141 — discard the current draft (enabled only when a draft exists).
-                    if (state.hasDraft) {
-                        IconButton(
-                            onClick = onDiscardDraft,
-                            modifier = Modifier.testTag(ThreadTestTags.DISCARD_DRAFT),
-                        ) {
-                            Icon(
-                                Icons.Filled.DeleteOutline,
-                                contentDescription = stringResource(R.string.draft_discard),
+                        // AND-141 — discard the current draft (only when one exists).
+                        if (state.hasDraft) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(stringResource(R.string.draft_discard)) },
+                                leadingIcon = { Icon(Icons.Filled.DeleteOutline, contentDescription = null) },
+                                onClick = { menuOpen = false; onDiscardDraft() },
+                                modifier = Modifier.testTag(ThreadTestTags.DISCARD_DRAFT),
                             )
                         }
                     }
@@ -1016,6 +1033,7 @@ fun ThreadScreen(
                         onClearMessageOptions = onClearMessageOptions,
                         onRemoveStagedImage = onRemoveStagedImage,
                         onRemoveStagedVideo = onRemoveStagedVideo,
+                        onRemoveStagedFile = onRemoveStagedFile,
                         onCancelReply = { onAction(ThreadAction.CancelReply) },
                     )
                 }
@@ -1071,6 +1089,7 @@ fun ThreadScreen(
                     voicePlayback = voicePlayback,
                     onRetrySend = onRetrySend,
                     onOpenImage = onOpenImage,
+                    onOpenGalleryVideo = { galleryVideoUrl = it },
                     onDownloadFile = onDownloadFile,
                     onToggleVoice = onToggleVoice,
                     onSeekVoice = onSeekVoice,
@@ -1099,6 +1118,14 @@ fun ThreadScreen(
         onJumpToPinned = onJumpToPinned,
         onCloseSheet = { actionTarget = null },
     )
+
+    // #25/#27 — full-screen player for a tapped gallery VIDEO item.
+    galleryVideoUrl?.let { url ->
+        com.testlogon.android.feature.messaging.media.GalleryVideoViewer(
+            url = url,
+            onDismiss = { galleryVideoUrl = null },
+        )
+    }
 
     if (state.videoPicker.visible) {
         VideoPickerSheet(
@@ -1135,6 +1162,10 @@ fun ThreadScreen(
             nowSeconds = nowSeconds,
             onTitleChange = onCountdownTitleChange,
             onTargetChange = onCountdownTargetChange,
+            onTimeZoneChange = onCountdownTimeZoneChange,
+            onRevealTextChange = onCountdownRevealTextChange,
+            onPickRevealImage = onCountdownPickRevealImage,
+            onRemoveRevealImage = onCountdownRemoveRevealImage,
             onSend = onSendCountdown,
             onDismiss = onDismissCountdownPicker,
         )
@@ -1240,6 +1271,7 @@ private fun ThreadList(
     voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
     onRetrySend: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onOpenGalleryVideo: (String) -> Unit = {},
     onDownloadFile: (ThreadMessageUi) -> Unit,
     onToggleVoice: (String, String?) -> Unit,
     onSeekVoice: (String, Float) -> Unit,
@@ -1291,6 +1323,7 @@ private fun ThreadList(
                     unlock = state.unlocks[message.key] ?: UnlockUiState(),
                     onRetry = { onRetrySend(message.key) },
                     onOpenImage = onOpenImage,
+                    onOpenGalleryVideo = onOpenGalleryVideo,
                     onDownloadFile = { onDownloadFile(message) },
                     onToggleVoice = onToggleVoice,
                     onSeekVoice = onSeekVoice,
@@ -1363,6 +1396,7 @@ private fun MessageBubble(
     unlock: UnlockUiState,
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
+    onOpenGalleryVideo: (String) -> Unit = {},
     onDownloadFile: () -> Unit,
     onToggleVoice: (String, String?) -> Unit,
     onSeekVoice: (String, Float) -> Unit,
@@ -1549,7 +1583,7 @@ private fun MessageBubble(
                     null
                 },
             )
-            is MessageMedia.Gallery -> GalleryBubble(media = media, onOpenImage = onOpenImage, onLongPress = onLongPress)
+            is MessageMedia.Gallery -> GalleryBubble(media = media, onOpenImage = onOpenImage, onOpenVideo = onOpenGalleryVideo, onLongPress = onLongPress)
             is MessageMedia.VideoShare -> VideoBubble(media = media)
             is MessageMedia.VideoClip -> VideoClipBubble(
                 media = media,
@@ -1817,6 +1851,7 @@ private fun dayLabel(epochSeconds: Long): String {
 private fun GalleryBubble(
     media: MessageMedia.Gallery,
     onOpenImage: (String) -> Unit,
+    onOpenVideo: (String) -> Unit = {},
     onLongPress: () -> Unit = {},
 ) {
     val images = media.images
@@ -1842,17 +1877,30 @@ private fun GalleryBubble(
                             .aspectRatio(1f)
                             .clip(RoundedCornerShape(6.dp))
                             .combinedClickable(
-                                onClick = { gi.url?.let(onOpenImage) },
+                                onClick = {
+                                    if (gi.isVideo) gi.url?.let(onOpenVideo) else gi.url?.let(onOpenImage)
+                                },
                                 onLongClick = onLongPress,
                             ),
                         contentAlignment = Alignment.Center,
                     ) {
                         AsyncImage(
-                            model = gi.url,
-                            contentDescription = "Gallery image",
+                            // #25/#27 — a video item shows its poster (preview frame) when present,
+                            // else its object url (Coil's VideoFrameDecoder grabs a frame).
+                            model = if (gi.isVideo) (gi.posterUrl ?: gi.url) else gi.url,
+                            contentDescription = if (gi.isVideo) "Gallery video" else "Gallery image",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize(),
                         )
+                        // #25/#27 — a video item gets a centered play glyph so it reads as playable.
+                        if (gi.isVideo) {
+                            Icon(
+                                Icons.Filled.PlayCircle,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.9f),
+                                modifier = Modifier.size(36.dp),
+                            )
+                        }
                         if (isLastShown && overflow > 0) {
                             Box(
                                 modifier = Modifier
@@ -2063,6 +2111,7 @@ private fun MessageComposer(
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
     onRemoveStagedVideo: () -> Unit = {},
+    onRemoveStagedFile: () -> Unit = {},
     onCancelReply: () -> Unit = {},
 ) {
     Surface(tonalElevation = 2.dp) {
@@ -2210,9 +2259,10 @@ private fun MessageComposer(
                     }
                 }
             }
-            // C5/C6 — staged image preview(s): a horizontal row of thumbnails, each with a remove 'x';
-            // the text field is the shared caption. Multiple images send as ONE gallery message.
-            if (composer.stagedImageUris.isNotEmpty()) {
+            // #25/#27/#28 — staged media preview: a horizontal row of thumbnails (photos AND videos,
+            // in pick order), each with a remove 'x'; video items get a play glyph. The text field is
+            // the shared caption. A mix / multiple items send as ONE gallery message.
+            if (composer.stagedMedia.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2221,14 +2271,22 @@ private fun MessageComposer(
                         .testTag("thread_staged_image"),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    composer.stagedImageUris.forEachIndexed { index, stagedUri ->
+                    composer.stagedMedia.forEachIndexed { index, staged ->
                         Box(modifier = Modifier.testTag("thread_staged_image_$index")) {
                             AsyncImage(
-                                model = stagedUri,
-                                contentDescription = "Staged image",
+                                model = staged.localUri,
+                                contentDescription = if (staged.isVideo) "Staged video" else "Staged image",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
                             )
+                            if (staged.isVideo) {
+                                Icon(
+                                    Icons.Filled.PlayCircle,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.align(Alignment.Center).size(28.dp),
+                                )
+                            }
                             IconButton(
                                 onClick = { onRemoveStagedImage(index) },
                                 modifier = Modifier
@@ -2237,39 +2295,40 @@ private fun MessageComposer(
                                     .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
                                     .testTag("thread_remove_staged_image_$index"),
                             ) {
-                                Icon(Icons.Filled.Close, contentDescription = "Remove image", tint = Color.White, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Filled.Close, contentDescription = "Remove", tint = Color.White, modifier = Modifier.size(16.dp))
                             }
                         }
                     }
                 }
             }
-            // C7 — staged short-video preview: a thumbnail (Coil decodes the first video frame) with a
-            // play glyph + remove 'x'.
-            composer.stagedVideoUri?.let { videoUri ->
-                Box(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp).testTag("thread_staged_video"),
+            // #29 — staged FILE preview: an icon + name + size with a remove 'x'; the text field is the
+            // caption and the message options apply before Send.
+            composer.stagedFile?.let { staged ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("thread_staged_file"),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    AsyncImage(
-                        model = videoUri,
-                        contentDescription = "Staged video",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)),
-                    )
                     Icon(
-                        Icons.Filled.Videocam,
+                        Icons.Filled.AttachFile,
                         contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.align(Alignment.Center).size(28.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Text(
+                        text = staged.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     )
                     IconButton(
-                        onClick = onRemoveStagedVideo,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(24.dp)
-                            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
-                            .testTag("thread_remove_staged_video"),
+                        onClick = onRemoveStagedFile,
+                        modifier = Modifier.size(28.dp).testTag("thread_remove_staged_file"),
                     ) {
-                        Icon(Icons.Filled.Close, contentDescription = "Remove video", tint = Color.White, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Filled.Close, contentDescription = "Remove file", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                     }
                 }
             }
@@ -2460,6 +2519,7 @@ private fun ScheduledEditDialog(
     editing: ScheduledEditState,
     onTextChange: (String) -> Unit,
     onTimeChange: (Long) -> Unit,
+    onTimeZoneChange: (String) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -2482,11 +2542,24 @@ private fun ScheduledEditDialog(
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Spacer(Modifier.height(4.dp))
+                // #21/#22 — timezone the new send time is interpreted in (defaults to device zone).
+                com.testlogon.android.feature.common.TimeZonePicker(
+                    selectedZoneId = editing.timeZoneId,
+                    onZoneChange = onTimeZoneChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    testTag = "thread_scheduled_edit_tz",
+                )
+                Spacer(Modifier.height(4.dp))
                 com.testlogon.android.feature.common.DateTimePickerField(
-                    selectedEpochSeconds = editing.draftDeliverAtEpochSeconds,
+                    selectedEpochSeconds = editing.draftDeliverAtEpochSeconds.takeIf { it > 0L },
                     onPicked = onTimeChange,
                     testTag = "thread_scheduled_edit_time",
+                    zoneId = editing.timeZoneId,
                 )
+                editing.error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                }
             }
         },
         confirmButton = {

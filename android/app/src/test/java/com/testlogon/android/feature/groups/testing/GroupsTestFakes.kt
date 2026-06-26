@@ -87,10 +87,42 @@ class FakeGroupsRepo(
     override fun groupFeedPager(groupId: String): Flow<PagingData<GroupFeedPost>> =
         flowOf(PagingData.empty())
 
-    override suspend fun createGroupPost(groupId: String, text: String): ApiResult<GroupFeedPost> {
+    override suspend fun createGroupPost(
+        groupId: String,
+        text: String,
+        imageUrls: List<String>,
+        videoId: String?,
+        unlockPriceCents: Int?,
+    ): ApiResult<GroupFeedPost> {
         createGroupPostArgs += groupId to text
         return groupFeedResult
     }
+
+    var listCommentsResult: ApiResult<com.testlogon.android.feature.groups.data.GroupCommentsPage> =
+        ApiResult.Success(com.testlogon.android.feature.groups.data.GroupCommentsPage(emptyList(), null))
+    var addCommentResult: ApiResult<com.testlogon.android.core.model.groups.GroupComment> =
+        ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not stubbed"))
+
+    override suspend fun listComments(
+        groupId: String,
+        postId: String,
+        cursor: String?,
+        limit: Int,
+    ): ApiResult<com.testlogon.android.feature.groups.data.GroupCommentsPage> = listCommentsResult
+
+    override suspend fun addComment(
+        groupId: String,
+        postId: String,
+        text: String?,
+        imageUrl: String?,
+        parentCommentId: String?,
+    ): ApiResult<com.testlogon.android.core.model.groups.GroupComment> = addCommentResult
+
+    override suspend fun deleteComment(
+        groupId: String,
+        postId: String,
+        commentId: String,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
 
     override suspend fun invite(groupId: String, userId: String): ApiResult<Unit> {
         inviteArgs += groupId to userId

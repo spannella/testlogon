@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -305,6 +305,14 @@ abstract class MessagingDatabase : RoomDatabase() {
             }
         }
 
+        // #24 - persist the FULL revealed lottery media list (image+video) so a multi-media reveal
+        // survives a Room round-trip / app restart (revealedMediaUrl kept as the first element).
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedMediaJson TEXT")
+            }
+        }
+
     }
 }
 
@@ -334,6 +342,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_11_12,
             MessagingDatabase.MIGRATION_12_13,
             MessagingDatabase.MIGRATION_13_14,
+            MessagingDatabase.MIGRATION_14_15,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

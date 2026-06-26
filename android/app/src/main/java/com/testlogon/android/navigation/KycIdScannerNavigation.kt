@@ -30,6 +30,15 @@ fun NavGraphBuilder.idScannerDestination(navController: NavHostController) {
             navArgument(IdScannerViewModel.ARG_CASE_ID) { type = NavType.StringType },
         ),
     ) {
-        IdScannerRoute(onDone = { navController.popBackStack() })
+        IdScannerRoute(
+            onDone = {
+                // Batch-9 (#18): when the scanner was launched from the KYC wizard, leave a result flag on the
+                // wizard's back-stack entry so it can advance to the DONE step. Harmless no-op otherwise.
+                navController.previousBackStackEntry
+                    ?.savedStateHandle
+                    ?.set(KycWizardDest.RESULT_ID_DONE, true)
+                navController.popBackStack()
+            },
+        )
     }
 }

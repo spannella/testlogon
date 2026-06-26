@@ -203,3 +203,11 @@ data class RegistrationResult(
     val contentId: String? = null,
     val licensesCreated: Int = 0,
 )
+
+/** Batch-9 (#12) - one syndicate member row. [joinedAt] is a Long epoch (relative-time at UI). */
+data class SyndicateMember(
+    val userId: String,
+    val displayName: String,
+    val role: String,
+    val joinedAt: Long = 0,
+)

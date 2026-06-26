@@ -13,6 +13,7 @@ import com.testlogon.android.data.messaging.CountdownDraft
 import com.testlogon.android.data.messaging.DownloadProgress
 import com.testlogon.android.data.messaging.GifResult
 import com.testlogon.android.data.messaging.GifSendPayload
+import com.testlogon.android.data.messaging.MediaItem
 import com.testlogon.android.data.messaging.MeetingPoll
 import com.testlogon.android.data.messaging.MeetingPollDraft
 import com.testlogon.android.data.messaging.Message
@@ -498,11 +499,15 @@ class ThreadViewModel @Inject constructor(
     fun onSend() {
         val composer = _state.value.composer
         val body = composer.draft.trim()
-        // C5/C6/C7 — staged media takes priority. Multiple images -> ONE gallery message; a single
-        // image -> an image message; a video -> an inline video message. Text is the caption.
-        val stagedImages = composer.stagedImageUris
-        val stagedVideo = composer.stagedVideoUri
-        if (stagedImages.isNotEmpty() || stagedVideo != null) {
+        // #25/#27/#28/#29 — staged media/file takes priority. The dispatch:
+        //   • a single staged FILE         -> a file message (with the typed caption + options)
+        //   • exactly one staged IMAGE     -> an image message
+        //   • exactly one staged VIDEO     -> an inline video message
+        //   • everything else (multiple,   -> ONE gallery message (mixed photos+videos supported)
+        //     or a photo+video mix)
+        val stagedMedia = composer.stagedMedia
+        val stagedFile = composer.stagedFile
+        if (stagedMedia.isNotEmpty() || stagedFile != null) {
             if (composer.overLimit) return
             val opts = composer.options
             val caption = body.ifBlank { null }
@@ -510,9 +515,14 @@ class ThreadViewModel @Inject constructor(
             _state.update { it.copy(composer = ComposerState(), hasDraft = false, draftSyncState = DraftSyncState.Idle) }
             draftSaver.tryEmit("")
             when {
-                stagedVideo != null -> sendStagedVideo(stagedVideo, caption, opts)
-                stagedImages.size == 1 -> sendStagedImage(stagedImages.first(), caption, opts)
-                else -> sendStagedGallery(stagedImages, caption, opts)
+                stagedFile != null -> sendStagedFile(stagedFile, opts)
+                stagedMedia.size == 1 && !stagedMedia.first().isVideo ->
+                    sendStagedImage(stagedMedia.first().localUri, caption, opts)
+                stagedMedia.size == 1 && stagedMedia.first().isVideo ->
+                    sendStagedVideo(stagedMedia.first().localUri, caption, opts)
+                // #25/#27 — multiple items and/or a photo+video mix go through the gallery endpoint,
+                // which accepts mixed free_images (each item carries its own content_type/media_kind).
+                else -> sendStagedGallery(stagedMedia, caption, opts)
             }
             viewModelScope.launch { draftRepository.clearDraft(conversationId) }
             return
@@ -604,6 +614,21 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /** #21 — change the timezone the scheduled wall-clock is interpreted in; clears any picked time
+     *  so the next pick is unambiguously interpreted in the new zone. */
+    fun setScheduledTimeZone(zoneId: String) {
+        _state.update {
+            it.copy(
+                composer = it.composer.copy(
+                    options = it.composer.options.copy(
+                        scheduledTimeZoneId = zoneId,
+                        scheduledAtEpochSeconds = null,
+                    ),
+                ),
+            )
+        }
+    }
+
     fun setExpiresIn(seconds: Long?) {
         _state.update {
             it.copy(composer = it.composer.copy(options = it.composer.options.copy(expiresInSeconds = seconds)))
@@ -614,9 +639,9 @@ class ThreadViewModel @Inject constructor(
         _state.update { it.copy(composer = it.composer.copy(options = MessageOptions()), messageOptionsVisible = false) }
     }
 
-    // ---- #8 Scheduled-messages manager (list / edit / remove pending scheduled sends) ----
+    // ---- #8/#21/#22: scheduled-messages manager ----
 
-    /** Open the scheduled-messages manager and (re)load the pending list. */
+    /** #8/#22 — open the manager and load the caller's still-pending scheduled messages. */
     fun openScheduledManager() {
         _state.update { it.copy(scheduledManager = it.scheduledManager.copy(visible = true)) }
         refreshScheduledMessages()
@@ -636,7 +661,7 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             when (val r = repository.listScheduledMessages(conversationId)) {
                 is ApiResult.Success -> _state.update {
-                    it.copy(scheduledManager = it.scheduledManager.copy(loading = false, items = r.data))
+                    it.copy(scheduledManager = it.scheduledManager.copy(loading = false, error = null, items = r.data))
                 }
                 is ApiResult.Failure -> _state.update {
                     it.copy(scheduledManager = it.scheduledManager.copy(loading = false, error = "Couldn't load scheduled messages."))
@@ -672,67 +697,61 @@ class ThreadViewModel @Inject constructor(
     fun onScheduledEditTextChange(text: String) {
         _state.update {
             val e = it.scheduledManager.editing ?: return@update it
-            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftText = text)))
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftText = text, error = null)))
         }
     }
 
+    /** #21/#32 — change the timezone the edit due-time is interpreted in; clears the picked time. */
+    fun onScheduledEditTimeZoneChange(zoneId: String) {
+        _state.update {
+            val e = it.scheduledManager.editing ?: return@update it
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(timeZoneId = zoneId, draftDeliverAtEpochSeconds = 0L, error = null)))
+        }
+    }
+
+    /** #22 — set the new due time (absolute epoch seconds, already interpreted in the edit timezone). */
     fun onScheduledEditTimeChange(epochSeconds: Long) {
         _state.update {
             val e = it.scheduledManager.editing ?: return@update it
-            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftDeliverAtEpochSeconds = epochSeconds)))
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftDeliverAtEpochSeconds = epochSeconds, error = null)))
         }
     }
 
     /** Commit the edit dialog: PATCH the new text/time, then refresh the list. */
     fun saveScheduledEdit() {
         val editing = _state.value.scheduledManager.editing ?: return
-        // Server requires send_at >= now+5s; clamp to a small safe margin.
-        val minSendAt = (System.currentTimeMillis() / 1000L) + 10L
-        val sendAt = maxOf(editing.draftDeliverAtEpochSeconds, minSendAt)
+        val pickedTime = editing.draftDeliverAtEpochSeconds.takeIf { it > 0L }
+        // Server requires send_at >= now+5s when a new time is sent.
+        if (pickedTime != null && pickedTime <= (System.currentTimeMillis() / 1000L) + 5L) {
+            _state.update {
+                it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(error = "Pick a time at least a minute from now.")))
+            }
+            return
+        }
         val text = if (editing.textEditable) editing.draftText.trim().ifBlank { null } else null
         _state.update {
-            it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(saving = true)))
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(saving = true, error = null)))
         }
         viewModelScope.launch {
-            when (val r = repository.rescheduleMessage(conversationId, editing.messageId, text = text, sendAtEpochSeconds = sendAt)) {
+            when (repository.rescheduleMessage(conversationId, editing.messageId, text = text, sendAtEpochSeconds = pickedTime)) {
                 is ApiResult.Success -> {
                     _state.update { it.copy(scheduledManager = it.scheduledManager.copy(editing = null)) }
                     refreshScheduledMessages()
                 }
-                is ApiResult.Failure -> _state.update {
-                    it.copy(scheduledManager = it.scheduledManager.copy(
-                        editing = editing.copy(saving = false),
-                        error = "Couldn't update the scheduled message.",
-                    ))
-                }
-                is ApiResult.NetworkError -> _state.update {
-                    it.copy(scheduledManager = it.scheduledManager.copy(
-                        editing = editing.copy(saving = false),
-                        error = "You're offline. Try again.",
-                    ))
+                else -> _state.update {
+                    it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(saving = false, error = "Couldn't update the scheduled message.")))
                 }
             }
         }
     }
 
-    /** Cancel/remove a pending scheduled message, then refresh the list. */
-    fun cancelScheduledMessage(messageId: String) {
+    /** #8 — cancel/remove a scheduled message before it delivers, then refresh. */
+    fun cancelScheduled(messageId: String) {
         viewModelScope.launch {
-            when (val r = repository.cancelScheduledMessage(conversationId, messageId)) {
-                is ApiResult.Success -> {
-                    // Optimistically drop it, then refetch to be authoritative.
-                    _state.update {
-                        it.copy(scheduledManager = it.scheduledManager.copy(
-                            items = it.scheduledManager.items.filterNot { m -> m.id == messageId },
-                        ))
-                    }
-                    refreshScheduledMessages()
-                }
-                is ApiResult.Failure -> _state.update {
+            when (repository.cancelScheduledMessage(conversationId, messageId)) {
+                is ApiResult.Success -> refreshScheduledMessages()
+                else -> _state.update {
                     it.copy(scheduledManager = it.scheduledManager.copy(error = "Couldn't remove the scheduled message."))
-                }
-                is ApiResult.NetworkError -> _state.update {
-                    it.copy(scheduledManager = it.scheduledManager.copy(error = "You're offline. Try again."))
                 }
             }
         }
@@ -768,9 +787,9 @@ class ThreadViewModel @Inject constructor(
                 // image/file optimistic kind, so check the draft maps before isImage/isFile).
                 galleryDrafts.containsKey(clientId) -> {
                     val draft = galleryDrafts[clientId] ?: return@launch
-                    repository.enqueueOptimisticGallery(conversationId, clientId, draft.uris.first(), draft.uris.size, clock())
-                    repository.sendGalleryOutbox(
-                        conversationId, clientId, draft.uris,
+                    repository.enqueueOptimisticGallery(conversationId, clientId, draft.media.first().localUri, draft.media.size, clock())
+                    repository.sendMixedGalleryOutbox(
+                        conversationId, clientId, draft.media,
                         caption = draft.caption,
                         expiresInSeconds = draft.options.expiresInSeconds,
                         sendAtEpochSeconds = draft.options.scheduledAtEpochSeconds,
@@ -836,9 +855,9 @@ class ThreadViewModel @Inject constructor(
     /** Tracks staged/sent image drafts by local clientId so a retry can re-run without re-picking. */
     private val imageDrafts = mutableMapOf<String, ImageDraft>()
 
-    /** C6 — a staged gallery (multi-image) draft, retained by clientId for retry. */
+    /** #25/#27 — a staged mixed-gallery (photos+videos) draft, retained by clientId for retry. */
     private data class GalleryDraft(
-        val uris: List<String>,
+        val media: List<MediaItem>,
         val caption: String?,
         val options: MessageOptions,
     )
@@ -855,44 +874,60 @@ class ThreadViewModel @Inject constructor(
      */
     fun onImagePicked(uri: Uri) = onImagesPicked(listOf(uri))
 
-    fun onImagesPicked(uris: List<Uri>) {
-        if (uris.isEmpty()) return
-        // Server caps free_images at 20; cap the pick to keep one message valid.
-        val capped = uris.take(20).map { it.toString() }
-        _state.update {
-            it.copy(composer = it.composer.copy(stagedImageUris = capped, stagedVideoUri = null))
+    fun onImagesPicked(uris: List<Uri>) =
+        onMediaPicked(uris.map { it.toString() to false })
+
+    /**
+     * #25/#27/#28 — STAGE picked media, MERGING with anything already staged so reopening the picker
+     * and choosing more ADDS to the selection (the system photo picker cannot pre-select, so we carry
+     * the prior selection ourselves). De-dupes by uri; caps the total to keep one gallery valid.
+     * [items] is a list of (localUri, isVideo).
+     */
+    fun onMediaPicked(items: List<Pair<String, Boolean>>) {
+        if (items.isEmpty()) return
+        _state.update { st ->
+            val existing = st.composer.stagedMedia
+            val existingUris = existing.map { it.localUri }.toHashSet()
+            val additions = items
+                .filter { (uri, _) -> uri !in existingUris }
+                .map { (uri, isVideo) -> StagedMedia(uri, isVideo) }
+            val merged = (existing + additions).take(ComposerState.MAX_STAGED_MEDIA)
+            // Staging media replaces any staged file (one attachment kind at a time).
+            st.copy(composer = st.composer.copy(stagedMedia = merged, stagedFile = null))
         }
         _events.trySend(ThreadEvent.ScrollToBottom)
     }
 
     /**
-     * C7 — STAGE a picked SHORT video. Guarded by [maxVideoBytes]; an oversized clip is rejected with
-     * an action error instead of staging. Staging a video clears any staged images.
+     * #27 — STAGE a picked SHORT video (merged with existing staged media). Guarded by [maxVideoBytes];
+     * an oversized clip is rejected with an action error instead of staging.
      */
     fun onVideoPicked(uri: Uri, sizeBytes: Long) {
         if (sizeBytes in 1..maxVideoBytes || sizeBytes == 0L) {
             // sizeBytes==0 means the picker didn't report a size; allow and let the upload guard catch it.
-            _state.update {
-                it.copy(composer = it.composer.copy(stagedVideoUri = uri.toString(), stagedImageUris = emptyList()))
-            }
-            _events.trySend(ThreadEvent.ScrollToBottom)
+            onMediaPicked(listOf(uri.toString() to true))
         } else {
             _state.update { it.copy(transientMessage = "That video is too large. Pick a clip under 50 MB.") }
         }
     }
 
-    /** C5/C6 — remove one staged image by index, or all when index < 0 (the x on a preview thumbnail). */
+    /** #28 — remove one staged media item by index, or all when index < 0 (the x on a preview thumb). */
     fun onRemoveStagedImage(index: Int = -1) {
         _state.update {
-            val current = it.composer.stagedImageUris
+            val current = it.composer.stagedMedia
             val next = if (index < 0) emptyList() else current.filterIndexed { i, _ -> i != index }
-            it.copy(composer = it.composer.copy(stagedImageUris = next))
+            it.copy(composer = it.composer.copy(stagedMedia = next))
         }
     }
 
-    /** C7 — remove the staged video. */
+    /** Back-compat alias — clears all staged media. */
     fun onRemoveStagedVideo() {
-        _state.update { it.copy(composer = it.composer.copy(stagedVideoUri = null)) }
+        _state.update { it.copy(composer = it.composer.copy(stagedMedia = emptyList())) }
+    }
+
+    /** #29 — remove the staged file. */
+    fun onRemoveStagedFile() {
+        _state.update { it.copy(composer = it.composer.copy(stagedFile = null)) }
     }
 
     /** C5 — actually send a single staged image with the current caption + armed options. */
@@ -914,17 +949,42 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
-    /** C6 — send multiple staged images as ONE gallery message. */
-    private fun sendStagedGallery(localUris: List<String>, caption: String?, opts: MessageOptions) {
+    /**
+     * #25/#27 — send multiple staged items (photos AND/OR videos, mixed) as ONE gallery message. Each
+     * item is uploaded via the messaging media presign and referenced in free_images with its own
+     * content_type; the server derives a per-item media_kind so the bubble renders a mixed grid.
+     */
+    private fun sendStagedGallery(items: List<StagedMedia>, caption: String?, opts: MessageOptions) {
         val clientId = UUID.randomUUID().toString()
-        galleryDrafts[clientId] = GalleryDraft(localUris, caption, opts)
+        val media = items.map { MediaItem(it.localUri, it.isVideo) }
+        galleryDrafts[clientId] = GalleryDraft(media, caption, opts)
         viewModelScope.launch {
-            repository.enqueueOptimisticGallery(conversationId, clientId, localUris.first(), localUris.size, clock())
+            repository.enqueueOptimisticGallery(conversationId, clientId, items.first().localUri, items.size, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
-            repository.sendGalleryOutbox(
-                conversationId, clientId, localUris,
+            repository.sendMixedGalleryOutbox(
+                conversationId, clientId, media,
                 caption = caption,
                 // Gallery create only supports expiry + schedule (no view-once/lock on the free path).
+                expiresInSeconds = opts.expiresInSeconds,
+                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+            )
+        }
+    }
+
+    /** #29 — actually send a staged file with the typed caption-time options. */
+    private fun sendStagedFile(file: StagedFile, opts: MessageOptions) {
+        val clientId = UUID.randomUUID().toString()
+        fileDrafts[clientId] = FileDraft(file.localUri, file.name, file.mime, opts)
+        viewModelScope.launch {
+            repository.enqueueOptimisticFile(
+                conversationId, clientId, file.localUri, file.name, file.sizeBytes, file.mime, clock(),
+            )
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            repository.sendFileOutbox(
+                conversationId, clientId, file.localUri, file.name, file.mime,
+                viewOnce = opts.viewOnce,
+                lockPriceCents = opts.lockPriceCents,
+                lockDescription = opts.lockDescription,
                 expiresInSeconds = opts.expiresInSeconds,
                 sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
             )
@@ -1012,40 +1072,36 @@ class ThreadViewModel @Inject constructor(
     /** Tracks picked files by clientId so a retry can re-run without re-picking. */
     private val fileDrafts = mutableMapOf<String, FileDraft>()
 
+    /**
+     * #29 — STAGE the picked file in the composer instead of sending on pick. The user can then type a
+     * caption (the text field) and toggle send-options before tapping Send, exactly like images. The
+     * actual send happens in [sendStagedFile] from [onSend]. Staging a file clears staged media (one
+     * attachment kind at a time).
+     */
     fun onFilePicked(uri: android.net.Uri, fileName: String, sizeBytes: Long, mimeType: String) {
-        val clientId = UUID.randomUUID().toString()
-        val localUri = uri.toString()
-        // C9 — apply any armed send-options (view-once / locked / expiring / scheduled) to this file,
-        // then clear them so they don't leak onto the next message (mirrors the text/image path).
-        val opts = _state.value.composer.options
-        fileDrafts[clientId] = FileDraft(localUri, fileName, mimeType, opts)
         _state.update {
-            it.copy(composer = it.composer.copy(options = MessageOptions()), messageOptionsVisible = false)
-        }
-        viewModelScope.launch {
-            repository.enqueueOptimisticFile(
-                conversationId, clientId, localUri, fileName, sizeBytes, mimeType, clock(),
-            )
-            _events.trySend(ThreadEvent.ScrollToBottom)
-            repository.sendFileOutbox(
-                conversationId, clientId, localUri, fileName, mimeType,
-                viewOnce = opts.viewOnce,
-                lockPriceCents = opts.lockPriceCents,
-                lockDescription = opts.lockDescription,
-                expiresInSeconds = opts.expiresInSeconds,
-                sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
+            it.copy(
+                composer = it.composer.copy(
+                    stagedFile = StagedFile(uri.toString(), fileName, sizeBytes, mimeType),
+                    stagedMedia = emptyList(),
+                ),
             )
         }
+        _events.trySend(ThreadEvent.ScrollToBottom)
     }
 
     /** AND-132 — download (grant -> consume? -> GET) a received file, tracking per-message progress. */
     fun onDownloadFile(message: ThreadMessageUi) {
         val messageId = message.key
         val file = message.media as? MessageMedia.File ?: return
+        // #26 — a PDF renders an IN-APP preview/viewer once downloaded, so we never auto-open it with an
+        // external app. Tapping a downloaded PDF is handled inside the bubble (the in-app viewer).
+        val isPdf = file.mimeType?.equals("application/pdf", ignoreCase = true) == true ||
+            file.fileName.endsWith(".pdf", ignoreCase = true)
         val existing = _state.value.downloads[messageId]
         if (existing is FileDownloadUi.Downloading) return
         if (existing is FileDownloadUi.Downloaded) {
-            _events.trySend(ThreadEvent.OpenFile(existing.localPath, file.mimeType))
+            if (!isPdf) _events.trySend(ThreadEvent.OpenFile(existing.localPath, file.mimeType))
             return
         }
         setDownload(messageId, FileDownloadUi.Downloading(0f))
@@ -1057,7 +1113,8 @@ class ThreadViewModel @Inject constructor(
                     is DownloadProgress.Downloading -> setDownload(messageId, FileDownloadUi.Downloading(progress.fraction))
                     is DownloadProgress.Done -> {
                         setDownload(messageId, FileDownloadUi.Downloaded(progress.file.absolutePath))
-                        _events.trySend(ThreadEvent.OpenFile(progress.file.absolutePath, file.mimeType))
+                        // PDFs: stay in-app (the bubble swaps to a preview thumbnail). Others open externally.
+                        if (!isPdf) _events.trySend(ThreadEvent.OpenFile(progress.file.absolutePath, file.mimeType))
                     }
                     is DownloadProgress.Failed ->
                         setDownload(messageId, FileDownloadUi.Failed("Download failed"))
@@ -1476,11 +1533,32 @@ class ThreadViewModel @Inject constructor(
         _state.update { it.copy(countdownPicker = it.countdownPicker.copy(title = title, error = null)) }
     }
 
-    /** [target] is UTC epoch seconds chosen in the picker (device zone -> UTC done in the UI). */
+    /** [target] is an absolute epoch-seconds instant chosen in the picker (interpreted in the picker tz). */
     fun onCountdownTargetChange(targetEpochSeconds: Long?) {
         _state.update {
             it.copy(countdownPicker = it.countdownPicker.copy(targetEpochSeconds = targetEpochSeconds, error = null))
         }
+    }
+
+    /** #32 — change the timezone the countdown target wall-clock is interpreted in; clears the picked time. */
+    fun onCountdownTimeZoneChange(zoneId: String) {
+        _state.update {
+            it.copy(countdownPicker = it.countdownPicker.copy(timeZoneId = zoneId, targetEpochSeconds = null, error = null))
+        }
+    }
+
+    /** #31 — set the optional reveal text. */
+    fun onCountdownRevealTextChange(text: String) {
+        _state.update { it.copy(countdownPicker = it.countdownPicker.copy(revealText = text, error = null)) }
+    }
+
+    /** #31 — pick / remove the optional reveal image (local uri; uploaded on send). */
+    fun onCountdownPickRevealImage(uri: String) {
+        _state.update { it.copy(countdownPicker = it.countdownPicker.copy(revealImageUri = uri, error = null)) }
+    }
+
+    fun onCountdownRemoveRevealImage() {
+        _state.update { it.copy(countdownPicker = it.countdownPicker.copy(revealImageUri = null)) }
     }
 
     fun onSendCountdown() {
@@ -1497,9 +1575,21 @@ class ThreadViewModel @Inject constructor(
             return
         }
         val clientId = UUID.randomUUID().toString()
-        val draft = CountdownDraft(title = title, targetEpochSeconds = target, associatedEventType = AssociatedEventType.CUSTOM)
-        _state.update { it.copy(countdownPicker = CountdownPickerState()) }
+        val revealText = picker.revealText.trim().ifEmpty { null }
+        val revealImageUri = picker.revealImageUri
+        // Mark sending while the (optional) reveal image uploads.
+        _state.update { it.copy(countdownPicker = it.countdownPicker.copy(sending = true, error = null)) }
         viewModelScope.launch {
+            // #31 — upload the optional reveal image first (reuses the conversation image transport).
+            val revealImage = revealImageUri?.let { repository.uploadLotteryImage(conversationId, it) }
+            val draft = CountdownDraft(
+                title = title,
+                targetEpochSeconds = target,
+                associatedEventType = AssociatedEventType.CUSTOM,
+                revealText = revealText,
+                revealImage = revealImage,
+            )
+            _state.update { it.copy(countdownPicker = CountdownPickerState()) }
             // Optimistic countdown bubble through the shared outbox (renders + ticks immediately).
             repository.enqueueOptimisticCountdown(conversationId, clientId, title, target, clock())
             _events.trySend(ThreadEvent.ScrollToBottom)
@@ -1519,6 +1609,7 @@ class ThreadViewModel @Inject constructor(
     fun onSendLottery(
         outcomes: List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>,
         imageUri: String? = null,
+        coverText: String? = null,
     ) {
         if (outcomes.size < 2) return
         _state.update { it.copy(lotteryComposerVisible = false) }
@@ -1529,24 +1620,32 @@ class ThreadViewModel @Inject constructor(
             // that option to text so the lottery still sends.
             val resolved = outcomes.map { o ->
                 val isMedia = (o.payloadType == "image" || o.payloadType == "video")
-                val localUri = o.mediaAssetId
-                if (isMedia && !localUri.isNullOrBlank()) {
-                    val assetId = repository.uploadLotteryOptionMedia(
-                        conversationId,
-                        localUri,
-                        isVideo = o.payloadType == "video",
-                    )
-                    if (assetId != null) {
-                        o.copy(mediaAssetId = assetId)
+                // #24 — upload EVERY picked media item on the option; keep only the ones that succeed.
+                val items = o.mediaItems.ifEmpty {
+                    listOfNotNull(o.mediaAssetId?.takeIf { it.isNotBlank() }
+                        ?.let { com.testlogon.android.data.messaging.LotteryOutcomeMediaItem(ref = it, isVideo = o.payloadType == "video") })
+                }
+                if (isMedia && items.isNotEmpty()) {
+                    val uploaded = items.mapNotNull { item ->
+                        repository.uploadLotteryOptionMedia(conversationId, item.ref, isVideo = item.isVideo)
+                            ?.let { it to item.isVideo }
+                    }
+                    if (uploaded.isNotEmpty()) {
+                        o.copy(
+                            payloadType = if (uploaded.first().second) "video" else "image",
+                            mediaAssetId = uploaded.first().first,
+                            mediaAssetIds = uploaded.map { it.first },
+                        )
                     } else {
-                        o.copy(payloadType = "text", mediaAssetId = null, text = o.text.ifBlank { "Prize" })
+                        // All uploads failed -> demote to text so the lottery still sends.
+                        o.copy(payloadType = "text", mediaAssetId = null, mediaAssetIds = null, mediaItems = emptyList(), text = o.text.ifBlank { "Prize" })
                     }
                 } else {
                     o
                 }
             }
             val imageRef = imageUri?.let { repository.uploadLotteryImage(conversationId, it) }
-            repository.sendLottery(conversationId, resolved, image = imageRef)
+            repository.sendLottery(conversationId, resolved, image = imageRef, text = coverText)
             _events.trySend(ThreadEvent.ScrollToBottom)
         }
     }

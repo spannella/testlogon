@@ -8,6 +8,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.feature.videos.VideosRoute
 import com.testlogon.android.feature.videos.detail.VideoDetailRoute
 import com.testlogon.android.feature.videos.detail.VideoDetailViewModel
@@ -37,8 +39,23 @@ data object VideoDetailDest {
 
 /** AND-189 — registers the videos library; its tiles open [VideoDetailDest]. */
 fun NavGraphBuilder.videosLibraryDestination(navController: NavHostController) {
-    composable(VideosLibraryDest.ROUTE) {
+    composable(VideosLibraryDest.ROUTE) { entry ->
+        val viewModel: com.testlogon.android.feature.videos.VideosViewModel =
+            androidx.hilt.navigation.compose.hiltViewModel()
+        // #5 — consume the upload result written by the upload screen: register the just-uploaded
+        // video as a pending tile + refresh, then clear the keys so it fires once.
+        val handle = entry.savedStateHandle
+        val uploadedId by handle.getStateFlow<String?>(VideoUploadResult.UPLOADED_ID, null)
+            .collectAsStateWithLifecycle()
+        androidx.compose.runtime.LaunchedEffect(uploadedId) {
+            val id = uploadedId ?: return@LaunchedEffect
+            val title = handle.get<String>(VideoUploadResult.UPLOADED_TITLE).orEmpty()
+            viewModel.onUploaded(id, title)
+            handle[VideoUploadResult.UPLOADED_ID] = null
+            handle[VideoUploadResult.UPLOADED_TITLE] = null
+        }
         VideosRoute(
+            viewModel = viewModel,
             onOpenVideo = { id ->
                 navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
             },

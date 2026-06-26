@@ -36,6 +36,9 @@ data class PostDto(
     @Json(name = "body_plain") val bodyPlain: String? = null,
     @Json(name = "image_urls") val imageUrls: List<String>? = null,
     @Json(name = "video") val video: VideoDto? = null,
+    // #2 (B-FEEDMEDIA) — the FULL ordered list of attached videos (mixed media: images AND videos may
+    // coexist). `video` stays as the first video for back-compat; this array is authoritative when present.
+    @Json(name = "videos") val videos: List<VideoDto>? = null,
     @Json(name = "tags") val tags: List<String>? = null,
     @Json(name = "like_count") val likeCount: Int = 0,
     @Json(name = "comment_count") val commentCount: Int = 0,

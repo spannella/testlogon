@@ -204,3 +204,18 @@ data class SyndicateOpenLicensingRegistrationOut(
     @Json(name = "syndicate_id") val syndicateId: String? = null,
     @Json(name = "licenses_created") val licensesCreated: Int? = 0,
 )
+
+/** Batch-9 (#12) - request body for POST ui/syndicates/feed/{id}. text 1..5000; image_url optional. */
+data class SyndicatePostCreateIn(
+    @Json(name = "text") val text: String,
+    @Json(name = "visibility") val visibility: String = "public",
+    @Json(name = "image_url") val imageUrl: String? = null,
+)
+
+/** Batch-9 (#12) - one syndicate member row (GET ui/syndicates/{id}/members, a bare array). */
+data class SyndicateMemberDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "display_name") val displayName: String? = null,
+    @Json(name = "role") val role: String? = null,
+    @Json(name = "joined_at") val joinedAt: Long? = 0,
+)

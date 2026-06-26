@@ -17,7 +17,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +52,7 @@ import com.testlogon.android.R
 import com.testlogon.android.data.messaging.CountdownLogic
 import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessageMonetization
+import com.testlogon.android.data.messaging.RevealedMediaItem
 import com.testlogon.android.feature.messaging.media.VideoClipBubble
 import com.testlogon.android.data.messaging.SharePermission
 import com.testlogon.android.data.messaging.UnlockType
@@ -61,6 +66,13 @@ import java.util.Locale
 object PaidMessageTestTags {
     const val COUNTDOWN_BUBBLE = "thread_countdown_bubble"
     const val COUNTDOWN_PICKER = "thread_countdown_picker"
+    const val COUNTDOWN_TITLE = "thread_countdown_title"
+    const val COUNTDOWN_SEND = "thread_countdown_send"
+    const val COUNTDOWN_REVEAL_TEXT = "thread_countdown_reveal_text"
+    const val COUNTDOWN_REVEAL_ADD_IMAGE = "thread_countdown_reveal_add_image"
+    const val COUNTDOWN_REVEAL_IMAGE_PREVIEW = "thread_countdown_reveal_image_preview"
+    const val COUNTDOWN_REVEAL_REMOVE_IMAGE = "thread_countdown_reveal_remove_image"
+    const val COUNTDOWN_REVEAL_BLOCK = "thread_countdown_reveal_block"
     const val CALENDAR_EVENT_BUBBLE = "thread_calendar_event_bubble"
     const val CALENDAR_SHARE_BUBBLE = "thread_calendar_share_bubble"
     const val LOCKED_BUBBLE = "thread_locked_bubble"
@@ -125,15 +137,60 @@ fun CountdownBubble(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // #31 — once the countdown completes the server surfaces the reveal payload; show it.
+            val reveal = media.reveal
+            if (done && reveal != null && !reveal.isEmpty) {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                Column(
+                    Modifier
+                        .padding(top = 8.dp)
+                        .testTag(PaidMessageTestTags.COUNTDOWN_REVEAL_BLOCK),
+                ) {
+                    Text(
+                        stringResource(R.string.countdown_reveal_revealed),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    reveal.text?.takeIf { it.isNotBlank() }?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    reveal.media.forEach { m ->
+                        if (m.isVideo) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        ctx.startActivity(
+                                            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(m.url))
+                                                .setDataAndType(android.net.Uri.parse(m.url), "video/*")
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(top = 6.dp),
+                            ) { Text(stringResource(R.string.countdown_reveal_play_video)) }
+                        } else {
+                            coil.compose.AsyncImage(
+                                model = m.url,
+                                contentDescription = stringResource(R.string.countdown_reveal_revealed),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier
+                                    .padding(top = 6.dp)
+                                    .size(160.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 /**
- * AND-137 — minimal countdown picker. Title field + a future-target chooser. To keep this minimal
- * (and avoid a full M3 date/time picker dependency dance), the target is offered as a few quick
- * presets (relative to now); the exact instant is computed as nowSeconds + offset. A full
- * DatePicker/TimePicker is a follow-up; the validation + send path is identical.
+ * AND-137 / #31 / #32 — countdown composer. Title + an EXACT date/time/timezone target (#32) + an
+ * OPTIONAL reveal payload (text and/or image, #31) that the recipient sees once the countdown hits
+ * zero. The reveal image is picked from the system photo picker (no storage permission) and uploaded
+ * on send by the ViewModel.
  */
 @Composable
 fun CountdownPickerSheet(
@@ -141,54 +198,105 @@ fun CountdownPickerSheet(
     nowSeconds: Long,
     onTitleChange: (String) -> Unit,
     onTargetChange: (Long?) -> Unit,
+    onTimeZoneChange: (String) -> Unit,
+    onRevealTextChange: (String) -> Unit,
+    onPickRevealImage: (String) -> Unit,
+    onRemoveRevealImage: () -> Unit,
     onSend: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) onPickRevealImage(uri.toString()) }
+
     ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(PaidMessageTestTags.COUNTDOWN_PICKER).semantics { testTagsAsResourceId = true }) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(16.dp)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+        ) {
             Text(stringResource(R.string.countdown_picker_title), style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = state.title,
                 onValueChange = onTitleChange,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag(PaidMessageTestTags.COUNTDOWN_TITLE),
                 placeholder = { Text(stringResource(R.string.countdown_title_hint)) },
                 singleLine = true,
                 isError = state.title.length > 200,
             )
+            // #32 — exact date/time + timezone (replaces the old 1h/1d/1w presets).
             Text(stringResource(R.string.countdown_pick_when), style = MaterialTheme.typography.labelMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                CountdownPreset(state, nowSeconds, hours = 1, label = stringResource(R.string.countdown_preset_1h), onTargetChange)
-                CountdownPreset(state, nowSeconds, hours = 24, label = stringResource(R.string.countdown_preset_1d), onTargetChange)
-                CountdownPreset(state, nowSeconds, hours = 24 * 7, label = stringResource(R.string.countdown_preset_1w), onTargetChange)
+            com.testlogon.android.feature.common.TimeZonePicker(
+                selectedZoneId = state.timeZoneId,
+                onZoneChange = onTimeZoneChange,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                testTag = "countdown_tz",
+            )
+            com.testlogon.android.feature.common.DateTimePickerField(
+                selectedEpochSeconds = state.targetEpochSeconds,
+                onPicked = { onTargetChange(it) },
+                modifier = Modifier.padding(top = 8.dp),
+                placeholder = stringResource(R.string.countdown_pick_datetime),
+                testTag = "countdown_datetime",
+                zoneId = state.timeZoneId,
+            )
+            // #31 — optional reveal text.
+            Text(
+                stringResource(R.string.countdown_reveal_label),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            OutlinedTextField(
+                value = state.revealText,
+                onValueChange = onRevealTextChange,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag(PaidMessageTestTags.COUNTDOWN_REVEAL_TEXT),
+                placeholder = { Text(stringResource(R.string.countdown_reveal_hint)) },
+            )
+            // #31 — optional reveal image.
+            val img = state.revealImageUri
+            if (img == null) {
+                OutlinedButton(
+                    onClick = {
+                        pickImage.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            ),
+                        )
+                    },
+                    modifier = Modifier.padding(top = 8.dp).testTag(PaidMessageTestTags.COUNTDOWN_REVEAL_ADD_IMAGE),
+                ) { Text(stringResource(R.string.countdown_reveal_add_image)) }
+            } else {
+                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    coil.compose.AsyncImage(
+                        model = img,
+                        contentDescription = stringResource(R.string.countdown_reveal_add_image),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .testTag(PaidMessageTestTags.COUNTDOWN_REVEAL_IMAGE_PREVIEW),
+                    )
+                    OutlinedButton(
+                        onClick = onRemoveRevealImage,
+                        modifier = Modifier.padding(start = 12.dp).testTag(PaidMessageTestTags.COUNTDOWN_REVEAL_REMOVE_IMAGE),
+                    ) { Text(stringResource(R.string.countdown_reveal_remove_image)) }
+                }
             }
             state.error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 8.dp))
             }
             Button(
                 onClick = onSend,
                 enabled = state.isSendEnabled,
-                modifier = Modifier.padding(top = 12.dp),
+                modifier = Modifier.padding(top = 12.dp).testTag(PaidMessageTestTags.COUNTDOWN_SEND),
             ) {
                 Text(stringResource(R.string.countdown_send))
             }
+            Box(Modifier.fillMaxWidth().heightIn(min = 16.dp))
         }
     }
-}
-
-@Composable
-private fun CountdownPreset(
-    state: CountdownPickerState,
-    nowSeconds: Long,
-    hours: Int,
-    label: String,
-    onTargetChange: (Long?) -> Unit,
-) {
-    val target = nowSeconds + hours * 3600L
-    FilterChip(
-        selected = state.targetEpochSeconds == target,
-        onClick = { onTargetChange(target) },
-        label = { Text(label) },
-    )
 }
 
 // ─── AND-138: calendar event / share ───
@@ -278,39 +386,52 @@ fun PaidMessageBubble(
     isEncrypted: Boolean = false,
 ) {
     if (monetization.unlocked) {
-        // #13 — a lottery can reveal an IMAGE or VIDEO outcome, not just text. Render the revealed media
-        // thumbnail (image inline, video as a tap-to-play poster) when present; else the revealed text.
-        val revealedMedia = monetization.revealedMediaUrl?.takeIf { it.isNotBlank() }
-        when {
-            revealedMedia != null && monetization.revealedMediaIsVideo -> {
-                VideoClipBubble(
-                    media = MessageMedia.VideoClip(playbackUrl = revealedMedia),
-                    modifier = modifier.widthIn(max = 280.dp).testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA),
-                )
-            }
-            revealedMedia != null -> {
-                AsyncImage(
-                    model = revealedMedia,
-                    contentDescription = stringResource(R.string.paid_unlocked),
-                    contentScale = ContentScale.Fit,
-                    modifier = modifier
-                        .widthIn(max = 280.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA),
-                )
-            }
-            else -> {
-                Surface(
-                    color = if (isOwn) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = modifier.widthIn(max = 280.dp),
-                ) {
-                    Text(
-                        text = monetization.revealedText?.takeIf { it.isNotBlank() }
-                            ?: stringResource(R.string.paid_unlocked),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
+        // #24 — a lottery outcome can reveal a LIST of images/videos (not just one), plus optional
+        // revealed text. Render each media item (image inline, video as a tap-to-play poster); fall
+        // back to the single revealedMediaUrl, then to the revealed text.
+        val revealedMediaList = monetization.revealedMedia.takeIf { it.isNotEmpty() }
+            ?: monetization.revealedMediaUrl?.takeIf { it.isNotBlank() }
+                ?.let { listOf(RevealedMediaItem(url = it, isVideo = monetization.revealedMediaIsVideo)) }
+                .orEmpty()
+        if (revealedMediaList.isNotEmpty()) {
+            Column(
+                modifier = modifier.widthIn(max = 280.dp).testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                val revealedCaption = monetization.revealedText?.takeIf { it.isNotBlank() }
+                if (revealedCaption != null) {
+                    Text(revealedCaption, style = MaterialTheme.typography.bodyMedium)
                 }
+                revealedMediaList.forEachIndexed { idx, item ->
+                    if (item.isVideo) {
+                        VideoClipBubble(
+                            media = MessageMedia.VideoClip(playbackUrl = item.url),
+                            modifier = Modifier.fillMaxWidth()
+                                .testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA + "_" + idx),
+                        )
+                    } else {
+                        AsyncImage(
+                            model = item.url,
+                            contentDescription = stringResource(R.string.paid_unlocked),
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .testTag(RichMessageTestTags.LOTTERY_REVEAL_MEDIA + "_" + idx),
+                        )
+                    }
+                }
+            }
+        } else {
+            Surface(
+                color = if (isOwn) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                modifier = modifier.widthIn(max = 280.dp),
+            ) {
+                Text(
+                    text = monetization.revealedText?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.paid_unlocked),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
             }
         }
         return

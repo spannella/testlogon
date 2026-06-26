@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.syndicates.ui
 
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,15 +10,19 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateMember
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
+import com.testlogon.android.data.feed.CommentImageUploader
 import com.testlogon.android.feature.syndicates.data.SyndicateRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -40,6 +45,7 @@ import javax.inject.Inject
 @HiltViewModel
 class SyndicateOverviewViewModel @Inject constructor(
     private val repository: SyndicateRepository,
+    private val imageUploader: CommentImageUploader,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -56,6 +62,67 @@ class SyndicateOverviewViewModel @Inject constructor(
     /** The treasury ledger (network Paging-3); cached so a tab switch does not re-fetch. */
     val ledger: Flow<PagingData<TreasuryEntry>> =
         repository.treasuryLedgerPager(syndicateId).cachedIn(viewModelScope)
+
+    // ---- Batch-9 (#12): feed composer (group parity) ----
+
+    private val _compose = MutableStateFlow(SyndicateComposeState())
+    val compose: StateFlow<SyndicateComposeState> = _compose.asStateFlow()
+
+    private val _feedRefresh = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.BUFFERED)
+    val feedRefresh = _feedRefresh.receiveAsFlow()
+
+    // ---- Batch-9 (#12): members tab (group parity) ----
+
+    private val _members = MutableStateFlow(SyndicateMembersState())
+    val members: StateFlow<SyndicateMembersState> = _members.asStateFlow()
+
+    fun onComposeTextChange(value: String) = _compose.update { it.copy(text = value, error = null) }
+
+    fun attachImage(uri: Uri) {
+        _compose.update { it.copy(uploadingImage = true, error = null) }
+        viewModelScope.launch {
+            when (val r = imageUploader.uploadImage(uri)) {
+                is ApiResult.Success -> _compose.update { it.copy(imageUrl = r.data, uploadingImage = false) }
+                is ApiResult.Failure -> _compose.update { it.copy(uploadingImage = false, error = r.error.message) }
+                is ApiResult.NetworkError -> _compose.update { it.copy(uploadingImage = false, error = OFFLINE_FALLBACK) }
+            }
+        }
+    }
+
+    fun clearImage() = _compose.update { it.copy(imageUrl = null) }
+
+    fun submitPost() {
+        val form = _compose.value
+        val text = form.text.trim()
+        if (text.isEmpty() || form.sending) return
+        _compose.update { it.copy(sending = true, error = null) }
+        viewModelScope.launch {
+            when (val r = repository.createPost(syndicateId, text, imageUrl = form.imageUrl)) {
+                is ApiResult.Success -> {
+                    _compose.value = SyndicateComposeState()
+                    _feedRefresh.send(Unit)
+                }
+                is ApiResult.Failure -> _compose.update { it.copy(sending = false, error = r.error.message) }
+                is ApiResult.NetworkError -> _compose.update { it.copy(sending = false, error = OFFLINE_FALLBACK) }
+            }
+        }
+    }
+
+    /** Lazily loads the member roster the first time the Members tab is shown (or on retry). */
+    fun loadMembers(force: Boolean = false) {
+        if (_members.value.loading) return
+        if (_members.value.loaded && !force) return
+        _members.update { it.copy(loading = true, error = null) }
+        viewModelScope.launch {
+            when (val r = repository.listMembers(syndicateId)) {
+                is ApiResult.Success -> _members.update {
+                    it.copy(members = r.data, loading = false, loaded = true, error = null)
+                }
+                is ApiResult.Failure -> _members.update { it.copy(loading = false, error = r.error.message) }
+                is ApiResult.NetworkError -> _members.update { it.copy(loading = false, error = OFFLINE_FALLBACK) }
+            }
+        }
+    }
 
     init {
         load()
@@ -139,3 +206,20 @@ class SyndicateOverviewViewModel @Inject constructor(
         private const val OFFLINE_FALLBACK = "Couldn't reach the server. Pull down to retry."
     }
 }
+
+/** Batch-9 (#12) - the syndicate feed composer state (text + optional single image). */
+data class SyndicateComposeState(
+    val text: String = "",
+    val imageUrl: String? = null,
+    val uploadingImage: Boolean = false,
+    val sending: Boolean = false,
+    val error: String? = null,
+)
+
+/** Batch-9 (#12) - the syndicate members tab state. */
+data class SyndicateMembersState(
+    val members: List<SyndicateMember> = emptyList(),
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+    val error: String? = null,
+)

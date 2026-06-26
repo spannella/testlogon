@@ -81,6 +81,16 @@ interface SupportApi {
         @Path("ticketId") ticketId: String,
         @Body body: SupportCloseTicketReq,
     ): SupportTicketEnvelope
+
+    /**
+     * Helpdesk #17 (B-HELP2): the ticket OWNER (or an admin) REOPENS a closed/cancelled ticket. The
+     * terminal status (done|cancelled) goes back to "open" so the owner can reply again. Empty POST body.
+     * Returns the WHOLE updated ticket ({ticket} envelope).
+     */
+    @POST("tickets/{ticketId}/reopen")
+    suspend fun reopenTicket(
+        @Path("ticketId") ticketId: String,
+    ): SupportTicketEnvelope
 }
 
 // ------------------------------- request bodies -------------------------------
@@ -90,11 +100,15 @@ data class SupportCreateTicketReq(
     @Json(name = "subject") val subject: String,
     @Json(name = "description") val description: String,
     @Json(name = "priority") val priority: String? = "medium",
+    /** Helpdesk #14 (B-HELP2): an optional image attached to the opening message. Omitted when null. */
+    @Json(name = "image_url") val imageUrl: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
 data class SupportTicketMessageReq(
     @Json(name = "body") val body: String,
+    /** Helpdesk #14 (B-HELP2): an optional image attached to this reply. Omitted when null. */
+    @Json(name = "image_url") val imageUrl: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -147,6 +161,8 @@ data class SupportTicketMessageDto(
     @Json(name = "sender_role") val senderRole: String? = null,
     @Json(name = "body") val body: String? = null,
     @Json(name = "created_at") val createdAt: Long? = null,
+    /** Helpdesk #14 (B-HELP2): an image attached to this message (rendered in the thread), or null. */
+    @Json(name = "image_url") val imageUrl: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

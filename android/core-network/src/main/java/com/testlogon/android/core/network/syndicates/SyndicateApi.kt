@@ -50,12 +50,34 @@ interface SyndicateApi {
      * first page); `page` is the integer-index fallback. Returns the {posts, is_member, next_cursor}
      * envelope.
      */
-    @GET("ui/syndicates/{syndicateId}/feed")
+    // Batch-9 (#12) FIX: the real READ route is under the FEED router prefix (ui/syndicates/feed/{id}),
+    // same prefix as create; the legacy ui/syndicates/{id}/feed path is unregistered (404). cursor+limit
+    // (no page) per the prod contract.
+    @GET("ui/syndicates/feed/{syndicateId}")
     suspend fun getFeed(
         @Path("syndicateId") syndicateId: String,
         @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int = 20,
         @Query("page") page: Int? = null,
     ): SyndicateFeedOut
+
+    /**
+     * Batch-9 (#12) - POST a new syndicate feed post (text + optional single image). 201 -> SyndicatePostOut.
+     * NOTE the create route is under the FEED router prefix (ui/syndicates/feed/{id}), distinct from the
+     * read route above (ui/syndicates/{id}/feed). The X-CSRF-Token is attached by the shared client.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/syndicates/feed/{syndicateId}")
+    suspend fun createPost(
+        @Path("syndicateId") syndicateId: String,
+        @Body body: SyndicatePostCreateIn,
+    ): SyndicatePostOut
+
+    /** Batch-9 (#12) - GET the syndicate member roster (BARE ARRAY of {user_id, display_name, role, joined_at}). */
+    @GET("ui/syndicates/{syndicateId}/members")
+    suspend fun listMembers(
+        @Path("syndicateId") syndicateId: String,
+    ): List<SyndicateMemberDto>
 
     /**
      * GET the treasury summary + the first (or cursor-anchored) ledger page. The ledger is carried inline

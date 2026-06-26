@@ -112,6 +112,10 @@ object RichMessageTestTags {
     const val LOTTERY_OUTCOME_MEDIA_PREVIEW = "thread_lottery_outcome_media_preview_"
     const val LOTTERY_OUTCOME_REMOVE_MEDIA = "thread_lottery_outcome_remove_media_"
     const val LOTTERY_REVEAL_MEDIA = "thread_lottery_reveal_media"
+    // #23 - inline validation error when a media-only lottery has no cover text/image.
+    const val LOTTERY_VALIDATION_ERROR = "thread_lottery_validation_error"
+    // #23 - optional message-level cover text (satisfies the "text or cover" requirement).
+    const val LOTTERY_COVER_TEXT = "thread_lottery_cover_text"
     const val LOTTERY_SEND = "thread_lottery_send"
 
     const val ATTACH_FADT = "thread_attach_find_datetime"

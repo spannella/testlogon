@@ -70,6 +70,34 @@ interface GroupsApi {
         @Query("limit") limit: Int = 20,
     ): GroupFeedResponse
 
+    // ---- Batch-9 (#11): group post comments (B-GRPFULL #11) ----
+
+    /** POST a comment (text and/or image, optional threaded reply) to a group post. 201 -> GroupCommentDto. */
+    @Headers("Content-Type: application/json")
+    @POST("ui/groups/{groupId}/posts/{postId}/comments")
+    suspend fun addGroupComment(
+        @Path("groupId") groupId: String,
+        @Path("postId") postId: String,
+        @Body body: GroupCommentCreateIn,
+    ): GroupCommentDto
+
+    /** GET one oldest-first page of a group post's comments. ENVELOPE {comments, next_cursor}. */
+    @GET("ui/groups/{groupId}/posts/{postId}/comments")
+    suspend fun getGroupComments(
+        @Path("groupId") groupId: String,
+        @Path("postId") postId: String,
+        @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int = 20,
+    ): GroupCommentListResponse
+
+    /** DELETE a group post comment (author or admin/mod). 200 -> success-by-isSuccessful. */
+    @DELETE("ui/groups/{groupId}/posts/{postId}/comments/{commentId}")
+    suspend fun deleteGroupComment(
+        @Path("groupId") groupId: String,
+        @Path("postId") postId: String,
+        @Path("commentId") commentId: String,
+    ): Response<Unit>
+
     /**
      * POST an invite (the invitee becomes status="invited" - a PENDING entry, not an active member).
      * Typed as Response<Unit> so the repo succeeds by isSuccessful regardless of body.

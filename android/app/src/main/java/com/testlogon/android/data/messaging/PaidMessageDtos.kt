@@ -36,10 +36,26 @@ import com.squareup.moshi.JsonClass
 @JsonClass(generateAdapter = true)
 data class SendCountdownMessageReq(
     @Json(name = "title") val title: String,
-    @Json(name = "target_datetime") val targetDatetime: Long,
+    // #32 — absolute target wins when set; otherwise the server resolves target_datetime_local in target_tz.
+    @Json(name = "target_datetime") val targetDatetime: Long? = null,
+    @Json(name = "target_datetime_local") val targetDatetimeLocal: String? = null,
+    @Json(name = "target_tz") val targetTz: String? = null,
     @Json(name = "associated_event_type") val associatedEventType: String = "custom",
     @Json(name = "associated_event_id") val associatedEventId: String? = null,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    // #31 (B-COUNTDOWN) — optional reveal payload surfaced once the countdown completes.
+    @Json(name = "reveal_text") val revealText: String? = null,
+    @Json(name = "reveal_image") val revealImage: CountdownRevealImageReq? = null,
+)
+
+/** #31 — a single reveal image ref attached to a countdown (mirrors LotteryMessageImageReq). `key` required. */
+@JsonClass(generateAdapter = true)
+data class CountdownRevealImageReq(
+    @Json(name = "bucket") val bucket: String? = null,
+    @Json(name = "key") val key: String,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "width") val width: Int? = null,
+    @Json(name = "height") val height: Int? = null,
 )
 
 // ─── AND-138: calendar-event / calendar-share attachments (nested on MessageOut) ───
@@ -130,6 +146,9 @@ data class LotteryOutcomeReq(
     // #13 — per-option media: an S3 key (or "bucket:key") under {conversation_id}/{owner}/ in the
     // image bucket, required when payload_type is "image"|"video" (Backend B-LOT contract).
     @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+    // #24 — a single outcome may carry MULTIPLE media assets (mixed images + videos). The server
+    // treats media_asset_id as the first element; media_asset_ids is the full list (B-LOTTERY2).
+    @Json(name = "media_asset_ids") val mediaAssetIds: List<String>? = null,
 )
 
 /** LotteryConfigIn — {version, outcomes[]}. */
@@ -150,6 +169,9 @@ data class CreateLotteryReq(
     @Json(name = "lottery_config") val lotteryConfig: LotteryConfigReq,
     // C10 — optional cover/header image on the lottery message (Backend B3).
     @Json(name = "image") val image: LotteryMessageImageReq? = null,
+    // #23 — optional message-level cover text shown before unlock (B-LOTTERY2). EITHER this or an
+    // image satisfies the server's text-or-cover requirement for media-only options.
+    @Json(name = "text") val text: String? = null,
 )
 
 /** C10 — LotteryMessageImageIn (Backend B3): message-level cover image ref. `key` required. */
@@ -220,6 +242,9 @@ data class LotterySelectedOutcomeDto(
     @Json(name = "payload_type") val payloadType: String = "text",
     @Json(name = "text_content") val textContent: String? = null,
     @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+    // #24 — the full list of revealed media assets when the winning outcome carries >1 image/video.
+    // media_asset_id stays as the first element for single-asset back-compat (B-LOTTERY2 reveal).
+    @Json(name = "media_asset_ids") val mediaAssetIds: List<String>? = null,
 )
 
 /**

@@ -53,6 +53,12 @@ import javax.inject.Singleton
  * Failures fold into [ApiResult.Failure] / [ApiResult.NetworkError]; CancellationException is
  * re-thrown, never swallowed. Message content is never logged.
  */
+/** #25/#27 — one staged media item for a mixed gallery send (a photo or a short video). */
+data class MediaItem(
+    val localUri: String,
+    val isVideo: Boolean,
+)
+
 interface MessagingRepository {
 
     /** Observable, sorted conversation inbox backed by the Room cache. */
@@ -306,6 +312,21 @@ interface MessagingRepository {
         sendAtEpochSeconds: Long? = null,
     ): ApiResult<Message>
 
+    /**
+     * #25/#27 — send a MIXED set of staged media (photos AND/OR videos) as ONE gallery message. Each
+     * [MediaItem] is uploaded via the messaging media presign (images are processed/compressed; videos
+     * stream raw) and referenced in free_images with its real content_type, so the server-derived
+     * per-item media_kind lets the bubble render a mixed photo+video grid.
+     */
+    suspend fun sendMixedGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        media: List<MediaItem>,
+        caption: String? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<Message>
+
     /** C7 — enqueue an optimistic short-video outbox row (renders a file/clip bubble + progress). */
     suspend fun enqueueOptimisticVideoClip(
         conversationId: String,
@@ -519,6 +540,7 @@ interface MessagingRepository {
         draft: CountdownDraft,
     ): ApiResult<Message>
 
+
     // ---- AND-139: tips / paid-unlockable / lottery ----
 
     /**
@@ -555,6 +577,7 @@ interface MessagingRepository {
         conversationId: String,
         outcomes: List<LotteryOutcomeDraft>,
         image: LotteryImageRef? = null,
+        text: String? = null,
     ): ApiResult<Message>
 
     /**
@@ -629,6 +652,17 @@ data class LotteryOutcomeDraft(
     val weightBps: Int? = null,
     val payloadType: String = "text",
     val mediaAssetId: String? = null,
+    // #24 — per-option media LIST. Before upload these are local content uris (with isVideo); the
+    // ViewModel uploads each and replaces them with the resolved "bucket:key" media_asset_ids.
+    val mediaItems: List<LotteryOutcomeMediaItem> = emptyList(),
+    val mediaAssetIds: List<String>? = null,
+)
+
+/** #24 — one picked/resolved media asset on a lottery outcome. [ref] is a local content uri before
+ *  upload, or a resolved "bucket:key" after. */
+data class LotteryOutcomeMediaItem(
+    val ref: String,
+    val isVideo: Boolean,
 )
 
 /** C10 — resolved upload result for a lottery cover image (Backend B3 image object fields). */
@@ -681,6 +715,10 @@ data class CountdownDraft(
     val targetEpochSeconds: Long,
     val associatedEventType: AssociatedEventType = AssociatedEventType.CUSTOM,
     val associatedEventId: String? = null,
+    /** #31 — optional text revealed when the countdown completes. */
+    val revealText: String? = null,
+    /** #31 — optional image revealed when the countdown completes (already uploaded). */
+    val revealImage: LotteryImageRef? = null,
 )
 
 /** AND-139 — the receipt returned by a successful tip. */
@@ -867,7 +905,9 @@ class MessagingRepositoryImpl @Inject constructor(
                 // Reconcile: persist the server message (stamped with our clientId for cleanup),
                 // then drop the optimistic outbox row.
                 val message = result.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -1469,7 +1509,9 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     ApiResult.Success(message)
                 }
@@ -1592,7 +1634,110 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    /**
+     * #25/#27 — presign + PUT a single SHORT video (raw bytes, NO processing) via the messaging media
+     * presign, returning a gallery item ref carrying the video content_type (the server derives
+     * media_kind="video" from it). Returns null on failure / oversize.
+     */
+    private suspend fun uploadGalleryVideo(
+        conversationId: String,
+        localUri: String,
+    ): GalleryImageItemReq? {
+        val uri = Uri.parse(localUri)
+        val info = uriMetadata.resolve(uri, fallbackMime = "video/mp4")
+        if (info.sizeBytes > 50L * 1024L * 1024L) return null
+        val resolvedName = info.displayName ?: "video.mp4"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = uri,
+                mimeType = info.mimeType,
+                category = "message",
+                sizeBytes = info.sizeBytes,
+                displayName = resolvedName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        return attachment?.let {
+            GalleryImageItemReq(
+                bucket = it.bucket,
+                key = it.key,
+                contentType = info.mimeType,
+                filename = resolvedName,
+                filesize = info.sizeBytes,
+            )
+        }
+    }
+
+    override suspend fun sendMixedGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        media: List<MediaItem>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            if (media.isEmpty()) return@withContext failImage(clientId, "No media selected.")
+            val total = media.size
+            val done = AtomicInteger(0)
+            // Upload every item concurrently (each is an independent presign + PUT); awaitAll preserves
+            // order so the gallery free_images keep the staged order.
+            val refs = coroutineScope {
+                media.map { item ->
+                    async {
+                        val ref = if (item.isVideo) {
+                            uploadGalleryVideo(conversationId, item.localUri)
+                        } else {
+                            uploadGalleryImage(conversationId, item.localUri)
+                        }
+                        if (ref != null) {
+                            outboxDao.updateUploadPercent(clientId, (done.incrementAndGet() * 100 / total))
+                        }
+                        ref
+                    }
+                }.awaitAll()
+            }
+            if (refs.any { it == null }) {
+                return@withContext failImage(clientId, "Couldn't upload one of the items.")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val readyRefs = refs as List<GalleryImageItemReq>
+            when (
+                val created = apiCall {
+                    api.createGalleryMessage(
+                        conversationId,
+                        CreateGalleryMessageReq(
+                            freeImages = readyRefs,
+                            text = caption?.takeIf { it.isNotBlank() },
+                            expiresInSeconds = expiresInSeconds,
+                            sendAt = sendAtEpochSeconds,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     ApiResult.Success(message)
                 }
@@ -1715,7 +1860,9 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     ApiResult.Success(message)
                 }
@@ -1875,7 +2022,9 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     ApiResult.Success(message)
                 }
@@ -2022,7 +2171,9 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     clip.delete()
                     ApiResult.Success(message)
@@ -2136,7 +2287,9 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     clip.delete()
                     ApiResult.Success(message)
@@ -2171,7 +2324,9 @@ class MessagingRepositoryImpl @Inject constructor(
         ) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -2198,7 +2353,9 @@ class MessagingRepositoryImpl @Inject constructor(
         ) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -2395,13 +2552,25 @@ class MessagingRepositoryImpl @Inject constructor(
                         targetDatetime = draft.targetEpochSeconds,
                         associatedEventType = draft.associatedEventType.wire(),
                         associatedEventId = draft.associatedEventId,
+                        revealText = draft.revealText?.takeIf { it.isNotBlank() },
+                        revealImage = draft.revealImage?.let {
+                            CountdownRevealImageReq(
+                                bucket = it.bucket,
+                                key = it.key,
+                                contentType = it.contentType,
+                                width = it.width,
+                                height = it.height,
+                            )
+                        },
                     ),
                 )
             }
         ) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -2436,9 +2605,11 @@ class MessagingRepositoryImpl @Inject constructor(
                 val selected = r.data.selectedOutcome
                 val payloadType = selected?.payloadType ?: "text"
                 val revealed = selected?.takeIf { payloadType == "text" }?.textContent
-                val revealedMediaUrl = selected
+                val revealedMediaList = selected
                     ?.takeIf { payloadType == "image" || payloadType == "video" }
-                    ?.let { deriveMediaAssetUrl(it.mediaAssetId) }
+                    ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, payloadType == "video") }
+                    ?: emptyList()
+                val revealedMediaUrl = revealedMediaList.firstOrNull()?.url
                 // Reconcile the cached row to unlocked + revealed text/media (server-authoritative).
                 val existing = messageDao.findById(messageId)?.toDomain()
                 if (existing != null) {
@@ -2450,6 +2621,7 @@ class MessagingRepositoryImpl @Inject constructor(
                                 revealedText = revealed,
                                 revealedMediaUrl = revealedMediaUrl,
                                 revealedMediaIsVideo = payloadType == "video",
+                                revealedMedia = revealedMediaList,
                             ),
                         ),
                     )
@@ -2575,6 +2747,7 @@ class MessagingRepositoryImpl @Inject constructor(
         conversationId: String,
         outcomes: List<LotteryOutcomeDraft>,
         image: LotteryImageRef?,
+        text: String?,
     ): ApiResult<Message> = withContext(io) {
         // Weights: use the sender-provided weight_bps when present (normalized to sum exactly 10000),
         // else split evenly. Any rounding remainder is added to the first outcome so the sum is 10000.
@@ -2593,13 +2766,18 @@ class MessagingRepositoryImpl @Inject constructor(
         val finalWeights = scaled.mapIndexed { i, w -> (w + if (i == 0) remainder else 0).coerceAtLeast(1) }
         val outcomeReqs = outcomes.mapIndexed { i, o ->
             val isMedia = o.payloadType == "image" || o.payloadType == "video"
+            // #24 — send the FULL list of resolved media assets (mediaAssetIds) for a media outcome;
+            // media_asset_id stays as the first element for single-asset back-compat.
+            val ids = o.mediaAssetIds?.filter { it.isNotBlank() }
+                ?: listOfNotNull(o.mediaAssetId?.takeIf { it.isNotBlank() })
             LotteryOutcomeReq(
                 displayLabel = o.label?.takeIf { it.isNotBlank() },
                 weightBps = finalWeights.getOrElse(i) { 10_000 / n },
                 payloadType = if (isMedia) o.payloadType else "text",
-                // text_content only for text outcomes; media_asset_id only for image/video outcomes.
+                // text_content only for text outcomes; media_asset_id(s) only for image/video outcomes.
                 textContent = if (isMedia) null else o.text,
-                mediaAssetId = if (isMedia) o.mediaAssetId else null,
+                mediaAssetId = if (isMedia) ids.firstOrNull() else null,
+                mediaAssetIds = if (isMedia && ids.isNotEmpty()) ids else null,
             )
         }
         val req = CreateLotteryReq(
@@ -2614,6 +2792,7 @@ class MessagingRepositoryImpl @Inject constructor(
                     height = it.height,
                 )
             },
+            text = text?.takeIf { it.isNotBlank() },
         )
         when (val r = apiCall { api.createLottery(req) }) {
             is ApiResult.Success -> {
@@ -2711,7 +2890,9 @@ class MessagingRepositoryImpl @Inject constructor(
         when (val r = apiCall { api.sendMessage(conversationId, req) }) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -2789,8 +2970,12 @@ class MessagingRepositoryImpl @Inject constructor(
                             revealedText = r.data.selectedOutcome?.takeIf { unlocked && (it.payloadType == "text") }?.textContent,
                             revealedMediaUrl = r.data.selectedOutcome
                                 ?.takeIf { unlocked && (it.payloadType == "image" || it.payloadType == "video") }
-                                ?.let { deriveMediaAssetUrl(it.mediaAssetId) },
+                                ?.let { deriveMediaAssetUrl(it.mediaAssetIds?.firstOrNull() ?: it.mediaAssetId) },
                             revealedMediaIsVideo = unlocked && (r.data.selectedOutcome?.payloadType == "video"),
+                            revealedMedia = r.data.selectedOutcome
+                                ?.takeIf { unlocked && (it.payloadType == "image" || it.payloadType == "video") }
+                                ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, it.payloadType == "video") }
+                                ?: emptyList(),
                         ),
                     ),
                 )
@@ -3028,6 +3213,8 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         // Number-13 - persist the revealed lottery option media url across a Room round-trip.
         revealedMediaUrl = paid?.revealedMediaUrl,
         revealedMediaIsVideo = paid?.revealedMediaIsVideo ?: false,
+        // #24 - persist the FULL revealed media list (image+video) so a multi-media reveal survives.
+        revealedMediaJson = paid?.revealedMedia?.takeIf { it.isNotEmpty() }?.let(::revealedMediaToJson),
         // MSG — find_datetime detail (the card needs date range + hours).
         fadtFromDate = fadt?.fromDate,
         fadtToDate = fadt?.toDate,
@@ -3097,6 +3284,21 @@ private const val GALLERY_RECORD_SEP = "\n"
 
 internal fun galleryToJson(images: List<MessageMedia.GalleryImage>): String =
     images.joinToString(GALLERY_RECORD_SEP) { "${it.url.orEmpty()}|${it.width ?: ""}|${it.height ?: ""}" }
+
+/** #24 - serialize the revealed lottery media list as "url|isVideo" records (one per line). */
+internal fun revealedMediaToJson(items: List<RevealedMediaItem>): String =
+    items.joinToString(GALLERY_RECORD_SEP) { "${it.url}|${if (it.isVideo) "1" else "0"}" }
+
+/** #24 - parse the revealed lottery media records back into [RevealedMediaItem]s. */
+internal fun revealedMediaFromJson(json: String?): List<RevealedMediaItem> {
+    if (json.isNullOrBlank()) return emptyList()
+    return json.split(GALLERY_RECORD_SEP).mapNotNull { line ->
+        if (line.isBlank()) return@mapNotNull null
+        val parts = line.split("|")
+        val url = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        RevealedMediaItem(url = url, isVideo = parts.getOrNull(1) == "1")
+    }
+}
 
 /** C6 — parse the gallery records back into [MessageMedia.GalleryImage]s; tolerates null/blank. */
 internal fun galleryFromJson(json: String?): List<MessageMedia.GalleryImage> {
@@ -3268,6 +3470,13 @@ internal fun MessageEntity.toDomain(): Message = Message(
                     revealedText = revealedText,
                     revealedMediaUrl = revealedMediaUrl,
                     revealedMediaIsVideo = revealedMediaIsVideo,
+                    // #24 - restore the full revealed media list; fall back to the singular url.
+                    revealedMedia = revealedMediaFromJson(revealedMediaJson).ifEmpty {
+                        listOfNotNull(
+                            revealedMediaUrl?.takeIf { it.isNotBlank() }
+                                ?.let { RevealedMediaItem(url = it, isVideo = revealedMediaIsVideo) },
+                        )
+                    },
                 ),
             )
         } else {

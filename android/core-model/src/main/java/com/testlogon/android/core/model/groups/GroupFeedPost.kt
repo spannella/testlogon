@@ -14,6 +14,10 @@ data class GroupFeedPost(
     val authorAvatarUrl: String? = null,
     val text: String? = null,
     val imageUrl: String? = null,
+    /** Batch-9 (#11): all attached image urls (multi-image newsfeed parity). */
+    val imageUrls: List<String> = emptyList(),
+    /** Batch-9 (#11): an attached VOD video id, if any. */
+    val videoId: String? = null,
     val pinned: Boolean = false,
     val locked: Boolean = false,
     val unlockPriceCents: Int? = null,

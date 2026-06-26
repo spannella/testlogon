@@ -94,7 +94,9 @@ fun NavGraphBuilder.groupsDestinations(navController: NavHostController) {
             GroupsListRoute(
                 onBack = { navController.popBackStack() },
                 onOpenGroup = { groupId ->
-                    navController.navigate(GroupDetailDest.build(groupId)) { launchSingleTop = true }
+                    // Batch-9 (#10): opening a group lands on the GROUP FEED first; the feed's gear
+                    // icon reaches the group hub (members / settings / treasury / etc.).
+                    navController.navigate(GroupFeedDest.build(groupId)) { launchSingleTop = true }
                 },
             )
         }
@@ -134,8 +136,14 @@ fun NavGraphBuilder.groupsDestinations(navController: NavHostController) {
         composable(
             route = GroupFeedDest.ROUTE,
             arguments = listOf(navArgument(GroupFeedDest.ARG_GROUP_ID) { type = NavType.StringType }),
-        ) {
-            GroupFeedRoute(onBack = { navController.popBackStack() })
+        ) { entry ->
+            val groupId = entry.arguments?.getString(GroupFeedDest.ARG_GROUP_ID).orEmpty()
+            GroupFeedRoute(
+                onBack = { navController.popBackStack() },
+                onOpenHub = {
+                    navController.navigate(GroupDetailDest.build(groupId)) { launchSingleTop = true }
+                },
+            )
         }
         composable(
             route = GroupTreasuryDest.ROUTE,

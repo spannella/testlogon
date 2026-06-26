@@ -172,6 +172,16 @@ private fun SupportUserScreen(
                     state = state.liveChat,
                     onClick = onStartLiveChat,
                 )
+                // Helpdesk #13 — clear "no agents available" message instead of opening an empty chat.
+                if (state.liveChat.noAgentsMessage != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        state.liveChat.noAgentsMessage,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag(SupportTestTags.NO_AGENTS),
+                    )
+                }
                 if (state.liveChat.startError != null) {
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -229,15 +239,18 @@ private fun SupportUserScreen(
 private fun LiveChatCard(state: LiveChatUiState, onClick: () -> Unit) {
     val avail = state.availability
     val online = avail?.anyAvailable == true
+    // Helpdesk #13 — when no agent is online the card is disabled (we do NOT open an empty chat); the
+    // subtitle says so and points the user at tickets.
+    val noneOnline = avail != null && !avail.anyAvailable
     val subtitle = when {
         state.startingChat -> "Starting your chat..."
         online -> "Agents are online now - start a live chat"
-        avail != null -> "No agents online right now - start a chat and we'll reply as soon as one is free"
+        noneOnline -> "No agents online right now - open a ticket below and we'll reply here"
         else -> "Message our support team in real time"
     }
     Card(
         onClick = onClick,
-        enabled = !state.startingChat,
+        enabled = !state.startingChat && !noneOnline,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
         modifier = Modifier.fillMaxWidth().testTag(SupportTestTags.LIVE_CHAT_CARD),
     ) {

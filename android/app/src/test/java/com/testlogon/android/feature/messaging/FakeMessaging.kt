@@ -866,6 +866,23 @@ class FakeMessagingRepository : MessagingRepository {
         return reconcile(clientId, countdownSendResult)
     }
 
+    override suspend fun listScheduledMessages(
+        conversationId: String,
+    ): ApiResult<List<com.testlogon.android.data.messaging.ScheduledMessage>> = ApiResult.Success(emptyList())
+
+    override suspend fun rescheduleMessage(
+        conversationId: String,
+        messageId: String,
+        text: String?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<com.testlogon.android.data.messaging.ScheduledMessage> =
+        ApiResult.Failure(ApiError(status = 400, message = "fake"))
+
+    override suspend fun cancelScheduledMessage(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
+
     override suspend fun unlockMessage(
         conversationId: String,
         messageId: String,
@@ -920,13 +937,17 @@ class FakeMessagingRepository : MessagingRepository {
         uploadLotteryImageCalls += conversationId to localUri
         return uploadLotteryImageResult
     }
+    /** #23 — cover text passed to the most recent sendLottery(). */
+    var lastLotteryText: String? = null
     override suspend fun sendLottery(
         conversationId: String,
         outcomes: List<com.testlogon.android.data.messaging.LotteryOutcomeDraft>,
         image: com.testlogon.android.data.messaging.LotteryImageRef?,
+        text: String?,
     ): ApiResult<Message> {
         lotteryCalls += conversationId to outcomes
         lastLotteryImage = image
+        lastLotteryText = text
         return lotteryResult
     }
 

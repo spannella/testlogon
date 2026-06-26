@@ -45,6 +45,12 @@ data class LiveChatUiState(
     val startingChat: Boolean = false,
     val startError: String? = null,
     val openConversationId: String? = null,
+    /**
+     * Helpdesk #13 — set when the user tried to start a live chat but NO agent is available (either the
+     * pre-check returned zero agents, or the server refused with helpdesk_no_agents_available). The UI shows
+     * a clear "no agents available" message and does NOT open an empty chat.
+     */
+    val noAgentsMessage: String? = null,
 )
 
 @HiltViewModel
@@ -123,18 +129,55 @@ class SupportHomeViewModel @Inject constructor(
         }
     }
 
-    /** B8 #13 — open (create-or-resume) a live-agent chat, then signal the screen to navigate to its thread. */
+    /**
+     * Helpdesk #13 — start a live-agent chat ONLY when an agent is available. We re-check availability right
+     * before opening (state may be stale), and if zero agents are available we DO NOT create a conversation;
+     * instead we surface a clear "no agents available" message. If the fresh check finds an agent we create
+     * the helpdesk_bridge conversation; the server also enforces this (409 helpdesk_no_agents_available) which
+     * we map to the same message so an empty chat is never opened.
+     */
     fun startLiveChat() {
         if (_uiState.value.liveChat.startingChat) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
-                liveChat = _uiState.value.liveChat.copy(startingChat = true, startError = null),
+                liveChat = _uiState.value.liveChat.copy(
+                    startingChat = true,
+                    startError = null,
+                    noAgentsMessage = null,
+                ),
             )
+
+            // 1) Fresh availability pre-check — refuse before creating a chat when nobody is online.
+            val fresh = when (val a = liveChatRepository.availability()) {
+                is ApiResult.Success -> a.data
+                else -> null // availability unknown -> fall through and let the server decide (it refuses if none)
+            }
+            if (fresh != null) {
+                _uiState.value = _uiState.value.copy(
+                    liveChat = _uiState.value.liveChat.copy(availability = fresh),
+                )
+                if (!fresh.anyAvailable) {
+                    _uiState.value = _uiState.value.copy(
+                        liveChat = _uiState.value.liveChat.copy(
+                            startingChat = false,
+                            noAgentsMessage = NO_AGENTS_MESSAGE,
+                        ),
+                    )
+                    return@launch
+                }
+            }
+
+            // 2) An agent is (or might be) available -> open the chat. The server refuses with
+            //    helpdesk_no_agents_available if it raced to empty; we map that to the no-agents message.
             val lc = when (val r = liveChatRepository.startLiveChat()) {
                 is ApiResult.Success ->
                     _uiState.value.liveChat.copy(startingChat = false, openConversationId = r.data)
                 is ApiResult.Failure ->
-                    _uiState.value.liveChat.copy(startingChat = false, startError = r.error.message)
+                    if (r.error.code == HELPDESK_NO_AGENTS_CODE || r.error.status == 409) {
+                        _uiState.value.liveChat.copy(startingChat = false, noAgentsMessage = NO_AGENTS_MESSAGE)
+                    } else {
+                        _uiState.value.liveChat.copy(startingChat = false, startError = r.error.message)
+                    }
                 is ApiResult.NetworkError ->
                     _uiState.value.liveChat.copy(startingChat = false, startError = "You appear to be offline.")
             }
@@ -147,6 +190,14 @@ class SupportHomeViewModel @Inject constructor(
     }
 
     fun clearLiveChatError() {
-        _uiState.value = _uiState.value.copy(liveChat = _uiState.value.liveChat.copy(startError = null))
+        _uiState.value = _uiState.value.copy(
+            liveChat = _uiState.value.liveChat.copy(startError = null, noAgentsMessage = null),
+        )
+    }
+
+    private companion object {
+        const val HELPDESK_NO_AGENTS_CODE = "helpdesk_no_agents_available"
+        const val NO_AGENTS_MESSAGE =
+            "No support agents are available right now. Please open a ticket and we'll reply here, or try live chat again later."
     }
 }

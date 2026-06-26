@@ -19,6 +19,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,35 +86,55 @@ fun FeedMediaGrid(
         return
     }
 
+    // #2 — for a MIXED/multi-media post (e.g. several videos + images), tapping a VIDEO cell that has a
+    // playable url opens an in-place full-screen player. (A single-video post already plays inline above;
+    // image taps still bubble to [onItemClick] so the host can open the post / a full-screen image viewer.)
+    var fullScreenVideoUrl by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val onCellClick: (Int) -> Unit = { index ->
+        val item = media.getOrNull(index)
+        if (item != null && item.type == MediaType.VIDEO && item.playbackUrl != null) {
+            fullScreenVideoUrl = item.playbackUrl
+        } else {
+            onItemClick(index)
+        }
+    }
+
     val spacing = 4.dp
     Column(
         modifier = modifier.fillMaxWidth().testTag(FeedMediaTestTags.GRID),
         verticalArrangement = Arrangement.spacedBy(spacing),
     ) {
         when (media.size) {
-            1 -> MediaCell(media[0], 0, media.size, Modifier.fillMaxWidth().aspectRatio(4f / 3f), onItemClick)
+            1 -> MediaCell(media[0], 0, media.size, Modifier.fillMaxWidth().aspectRatio(4f / 3f), onCellClick)
             2 -> Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                MediaCell(media[0], 0, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
-                MediaCell(media[1], 1, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
+                MediaCell(media[0], 0, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
+                MediaCell(media[1], 1, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
             }
             3 -> {
-                MediaCell(media[0], 0, media.size, Modifier.fillMaxWidth().aspectRatio(16f / 9f), onItemClick)
+                MediaCell(media[0], 0, media.size, Modifier.fillMaxWidth().aspectRatio(16f / 9f), onCellClick)
                 Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                    MediaCell(media[1], 1, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
-                    MediaCell(media[2], 2, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
+                    MediaCell(media[1], 1, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
+                    MediaCell(media[2], 2, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
                 }
             }
             else -> {
                 Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                    MediaCell(media[0], 0, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
-                    MediaCell(media[1], 1, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
+                    MediaCell(media[0], 0, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
+                    MediaCell(media[1], 1, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                    MediaCell(media[2], 2, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
-                    MediaCell(media[3], 3, media.size, Modifier.weight(1f).aspectRatio(1f), onItemClick)
+                    MediaCell(media[2], 2, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
+                    MediaCell(media[3], 3, media.size, Modifier.weight(1f).aspectRatio(1f), onCellClick)
                 }
             }
         }
+    }
+
+    fullScreenVideoUrl?.let { url ->
+        com.testlogon.android.feature.feed.compose.LocalVideoFullScreenPlayer(
+            uri = url,
+            onDismiss = { fullScreenVideoUrl = null },
+        )
     }
 }
 

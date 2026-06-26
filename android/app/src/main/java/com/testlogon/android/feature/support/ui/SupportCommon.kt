@@ -36,8 +36,13 @@ object SupportTestTags {
     const val DETAIL_SEND = "support_detail_send"
     const val ADMIN_FORBIDDEN = "support_admin_forbidden"
     const val LIVE_CHAT_CARD = "support_live_chat_card"
+    const val NO_AGENTS = "support_no_agents"
     const val DETAIL_CLOSE = "support_detail_close"
     const val DETAIL_CANCEL = "support_detail_cancel"
+    const val DETAIL_REOPEN = "support_detail_reopen"
+    const val DETAIL_ATTACH = "support_detail_attach"
+    const val CREATE_ATTACH = "support_create_attach"
+    const val REPLIES_CLOSED = "support_replies_closed"
 }
 
 /** Human label for a ticket status. */

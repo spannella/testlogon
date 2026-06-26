@@ -30,9 +30,23 @@ data class FeedPost(
     val paywall: Paywall,
     /** AND-179 — embedded poll, or null when the post carries no poll_data. */
     val poll: Poll? = null,
+    /**
+     * #3 (B-FEEDMEDIA) — the RAW lock state of the post, independent of whether THIS viewer can see the
+     * body. The server marks a locked post `locked:true` even for the author (who gets `unlocked:true` so
+     * they see their own content). This lets the author's own view of a locked post show a "Locked · $X"
+     * badge while still rendering the body. Non-null only when the post is monetized/locked; carries the
+     * unlock price in cents (null = locked with no fixed price, e.g. a tip-lottery).
+     */
+    val authorLock: AuthorLock? = null,
 ) {
     val isLocked: Boolean get() = paywall is Paywall.Locked
 }
+
+/** #3 — raw lock info used to badge a locked post on its AUTHOR's own (un-redacted) view. */
+data class AuthorLock(
+    val priceCents: Int?,
+    val lockType: LockType,
+)
 
 /** One page of feed posts + the opaque cursor for the next page (null = terminal). */
 data class FeedPage(
@@ -100,6 +114,21 @@ internal fun PostDto.toDomain(): FeedPost {
         paywall = paywall,
         // Polls are content, not protected media: only surface when the post is not locked.
         poll = if (locked) null else toPoll(),
+        // #3 — surface the raw lock (price + type) whenever the post itself is locked, even if THIS
+        // viewer sees it unlocked (the author, or a paid viewer). The UI shows the badge only on the
+        // author's own post.
+        authorLock = if (this.locked) {
+            AuthorLock(
+                priceCents = unlockPriceCents,
+                lockType = when (lockType) {
+                    "fixed_price" -> LockType.FIXED_PRICE
+                    "tip_lottery" -> LockType.TIP_LOTTERY
+                    else -> if ((unlockPriceCents ?: 0) > 0) LockType.FIXED_PRICE else LockType.UNKNOWN
+                },
+            )
+        } else {
+            null
+        },
     )
 }
 
@@ -126,12 +155,22 @@ internal fun PostDto.toPaywall(): Paywall {
     )
 }
 
-/** Builds [Media] from image_urls (IMAGE) + a single video (VIDEO keyed on video_id). */
+/**
+ * Builds [Media] from image_urls (IMAGE) + ALL attached videos (VIDEO keyed on video_id). #2
+ * (B-FEEDMEDIA): a post may carry MULTIPLE videos plus images (mixed media). The authoritative source is
+ * the `videos[]` array; the legacy single `video` is merged in (and de-duped by video_id) for back-compat
+ * with older posts/servers. Videos render after images, preserving the array order.
+ */
 internal fun PostDto.toMedia(): List<Media> {
     val images = imageUrls.orEmpty().mapNotNull { url ->
         url.takeIf { it.isNotBlank() }?.let { Media(id = it, type = MediaType.IMAGE, url = it) }
     }
-    val videoItem = video?.let { v ->
+    // Merge legacy single `video` first (it is `videos[0]` server-side), then the full array; de-dup.
+    val videoDtos = buildList {
+        video?.let { add(it) }
+        videos.orEmpty().forEach { add(it) }
+    }.distinctBy { it.videoId }
+    val videoItems = videoDtos.map { v ->
         Media(
             id = v.videoId,
             type = MediaType.VIDEO,
@@ -147,7 +186,7 @@ internal fun PostDto.toMedia(): List<Media> {
             },
         )
     }
-    return if (videoItem != null) images + videoItem else images
+    return images + videoItems
 }
 
 /**

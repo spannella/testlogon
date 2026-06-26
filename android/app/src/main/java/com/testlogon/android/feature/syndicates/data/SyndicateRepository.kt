@@ -10,6 +10,7 @@ import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
 import com.testlogon.android.core.model.syndicates.SyndicateListItem
+import com.testlogon.android.core.model.syndicates.SyndicateMember
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
@@ -17,6 +18,7 @@ import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.syndicates.SyndicateApi
 import com.testlogon.android.core.network.syndicates.SyndicateCreateIn
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegisterIn
+import com.testlogon.android.core.network.syndicates.SyndicatePostCreateIn
 import com.testlogon.android.data.auth.AuthStateStore
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
@@ -89,6 +91,16 @@ interface SyndicateRepository {
         contentId: String,
         contentType: LicensingContentType,
     ): ApiResult<RegistrationResult>
+
+    /** Batch-9 (#12) - POST a new syndicate feed post (text + optional single image). */
+    suspend fun createPost(
+        syndicateId: String,
+        text: String,
+        imageUrl: String? = null,
+    ): ApiResult<SyndicateFeedItem>
+
+    /** Batch-9 (#12) - GET the syndicate member roster (bare array -> mapped). */
+    suspend fun listMembers(syndicateId: String): ApiResult<List<SyndicateMember>>
 
     companion object {
         const val PAGE_SIZE = 20
@@ -168,6 +180,24 @@ class SyndicateRepositoryImpl @Inject constructor(
             ).toDomain()
         }
     }
+
+    override suspend fun createPost(
+        syndicateId: String,
+        text: String,
+        imageUrl: String?,
+    ): ApiResult<SyndicateFeedItem> = withContext(Dispatchers.IO) {
+        call {
+            api.createPost(
+                syndicateId,
+                SyndicatePostCreateIn(text = text, imageUrl = imageUrl?.takeIf { it.isNotBlank() }),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun listMembers(syndicateId: String): ApiResult<List<SyndicateMember>> =
+        withContext(Dispatchers.IO) {
+            call { api.listMembers(syndicateId).map { it.toDomain() } }
+        }
 
     private fun pagingConfig() = PagingConfig(
         pageSize = SyndicateRepository.PAGE_SIZE,

@@ -33,6 +33,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,12 +72,20 @@ import coil.request.videoFrameMillis
 @Composable
 fun VideoUploadRoute(
     onBack: () -> Unit,
+    // #5 — reports the newly uploaded video (id + title) so the gallery can show it IMMEDIATELY as a
+    // pending tile (even before the server finishes processing) instead of nothing until a manual
+    // refresh. Defaults to a no-op so existing callers that only pop still compile.
+    onUploaded: (videoId: String, title: String) -> Unit = { _, _ -> },
     viewModel: VideoUploadViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(state.uploadedVideoId) {
-        if (state.uploadedVideoId != null) onBack()
+        val id = state.uploadedVideoId
+        if (id != null) {
+            onUploaded(id, state.title)
+            onBack()
+        }
     }
     val pickVideo = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -127,8 +140,15 @@ fun VideoUploadScreen(
             )
         },
     ) { padding ->
+        val focusManager = LocalFocusManager.current
+        val keyboard = LocalSoftwareKeyboardController.current
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)
+                // #4 — tap anywhere outside a text field clears focus + hides the IME so the
+                // upload title/description boxes can be dismissed by clicking out.
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { focusManager.clearFocus(); keyboard?.hide() })
+                },
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             OutlinedButton(

@@ -44,6 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.testlogon.android.feature.player.VideoPlayerControlsConfig
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -111,14 +114,28 @@ fun VideoDetailRoute(
         }
     }
 
+    // #6 — fullscreen toggle for the VOD player. The SAME lifecycle-scoped controller (one ExoPlayer)
+    // is reused: when fullscreen is on we render the reused [VideoPlayer] in a full-screen Dialog and
+    // hide the inline surface, so playback position is preserved and there is never a second player.
+    var isFullscreen by remember { mutableStateOf(false) }
     VideoDetailScreen(
         state = state,
         playerContent = { playerModifier ->
             // Reuse the AND-166/168 player surface + controls; no second player, no eager ExoPlayer.
-            VideoPlayer(
-                controller = viewModel.controller,
-                modifier = playerModifier.testTag(VideoDetailTestTags.PLAYER),
-            )
+            // While fullscreen, the inline slot collapses to the poster backdrop (the Dialog owns the
+            // single PlayerView) so the one ExoPlayer is never bound to two surfaces at once.
+            if (!isFullscreen) {
+                VideoPlayer(
+                    controller = viewModel.controller,
+                    modifier = playerModifier.testTag(VideoDetailTestTags.PLAYER),
+                    isFullscreen = false,
+                    onFullscreenToggle = { isFullscreen = true },
+                )
+            } else {
+                androidx.compose.foundation.layout.Box(
+                    playerModifier.background(Color.Black).testTag(VideoDetailTestTags.PLAYER),
+                )
+            }
         },
         monetizationContent = {
             // AND-192/193 — gating affordances under the player. When the title is locked
@@ -152,6 +169,24 @@ fun VideoDetailRoute(
         onOpenVideo = onOpenVideo,
         modifier = modifier,
     )
+
+    // #6 — full-screen overlay reusing the SAME controller; dismiss returns to the inline surface.
+    if (isFullscreen) {
+        Dialog(
+            onDismissRequest = { isFullscreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                VideoPlayer(
+                    controller = viewModel.controller,
+                    modifier = Modifier.fillMaxSize().testTag("video_detail_fullscreen_player"),
+                    config = VideoPlayerControlsConfig(showFullscreen = true),
+                    isFullscreen = true,
+                    onFullscreenToggle = { isFullscreen = false },
+                )
+            }
+        }
+    }
 }
 
 @Composable

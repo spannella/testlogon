@@ -25,7 +25,12 @@ import javax.inject.Singleton
  * tickets; the admin-only writes 403). The repo simply folds into [ApiResult]; the ViewModels branch the UX.
  */
 interface SupportRepository {
-    suspend fun createTicket(subject: String, description: String, priority: String): ApiResult<SupportTicket>
+    suspend fun createTicket(
+        subject: String,
+        description: String,
+        priority: String,
+        imageUrl: String? = null,
+    ): ApiResult<SupportTicket>
     suspend fun listTickets(
         status: String? = null,
         priority: String? = null,
@@ -34,11 +39,13 @@ interface SupportRepository {
         limit: Int? = null,
     ): ApiResult<SupportTicketPage>
     suspend fun getTicket(ticketId: String): ApiResult<SupportTicket>
-    suspend fun addMessage(ticketId: String, body: String): ApiResult<SupportTicket>
+    suspend fun addMessage(ticketId: String, body: String, imageUrl: String? = null): ApiResult<SupportTicket>
     suspend fun setStatus(ticketId: String, status: String): ApiResult<SupportTicket>
     suspend fun assign(ticketId: String, assigneeAdminSub: String): ApiResult<SupportTicket>
     /** B8 #15 — owner close/cancel of one's OWN ticket. action = "close" (->done) | "cancel" (->cancelled). */
     suspend fun closeTicket(ticketId: String, action: String): ApiResult<SupportTicket>
+    /** Helpdesk #17 — owner reopens a closed/cancelled ticket back to "open". */
+    suspend fun reopenTicket(ticketId: String): ApiResult<SupportTicket>
     suspend fun adminSummary(): ApiResult<SupportAdminSummary>
 
     companion object {
@@ -61,8 +68,17 @@ class SupportRepositoryImpl @Inject constructor(
     private val errorParser: ApiErrorParser,
 ) : SupportRepository {
 
-    override suspend fun createTicket(subject: String, description: String, priority: String) =
-        io { api.createTicket(SupportCreateTicketReq(subject.trim(), description.trim(), priority)).ticket.toDomain() }
+    override suspend fun createTicket(subject: String, description: String, priority: String, imageUrl: String?) =
+        io {
+            api.createTicket(
+                SupportCreateTicketReq(
+                    subject = subject.trim(),
+                    description = description.trim(),
+                    priority = priority,
+                    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+                ),
+            ).ticket.toDomain()
+        }
 
     override suspend fun listTickets(
         status: String?,
@@ -78,8 +94,13 @@ class SupportRepositoryImpl @Inject constructor(
     override suspend fun getTicket(ticketId: String) =
         io { api.getTicket(ticketId).ticket.toDomain() }
 
-    override suspend fun addMessage(ticketId: String, body: String) =
-        io { api.addMessage(ticketId, SupportTicketMessageReq(body.trim())).ticket.toDomain() }
+    override suspend fun addMessage(ticketId: String, body: String, imageUrl: String?) =
+        io {
+            api.addMessage(
+                ticketId,
+                SupportTicketMessageReq(body.trim(), imageUrl?.takeIf { it.isNotBlank() }),
+            ).ticket.toDomain()
+        }
 
     override suspend fun setStatus(ticketId: String, status: String) =
         io { api.setStatus(ticketId, SupportTicketStatusReq(status)).ticket.toDomain() }
@@ -89,6 +110,9 @@ class SupportRepositoryImpl @Inject constructor(
 
     override suspend fun closeTicket(ticketId: String, action: String) =
         io { api.closeTicket(ticketId, SupportCloseTicketReq(action)).ticket.toDomain() }
+
+    override suspend fun reopenTicket(ticketId: String) =
+        io { api.reopenTicket(ticketId).ticket.toDomain() }
 
     override suspend fun adminSummary() =
         io { api.adminSummary().summary.toDomain() }

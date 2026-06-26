@@ -2,7 +2,10 @@
 
 package com.testlogon.android.feature.support.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,12 +13,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -23,13 +34,17 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.capitalize
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 
 /**
  * B-SUP (batch 7) - USER create-a-ticket form. POST /tickets {subject,description,priority}; on success it
@@ -42,6 +57,10 @@ fun CreateTicketRoute(
     viewModel: CreateTicketViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.stageImage(uri) }
 
     LaunchedEffect(state.createdTicketId) {
         val id = state.createdTicketId
@@ -92,6 +111,40 @@ fun CreateTicketRoute(
                         onClick = { viewModel.onPriorityChange(pr) },
                         label = { Text(pr.capitalize(Locale.current)) },
                     )
+                }
+            }
+            // Helpdesk #14 — attach an optional image to the opening message.
+            Text("Attachment", style = MaterialTheme.typography.labelLarge)
+            val staged = state.stagedImageUrl
+            if (staged != null) {
+                Box {
+                    AsyncImage(
+                        model = staged,
+                        contentDescription = "Attached image",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(96.dp).clip(RoundedCornerShape(8.dp)),
+                    )
+                    IconButton(
+                        onClick = viewModel::clearStagedImage,
+                        modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
+                    ) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Remove image")
+                    }
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { imagePicker.launch("image/*") },
+                    enabled = !state.uploadingImage && !state.submitting,
+                    modifier = Modifier.testTag(SupportTestTags.CREATE_ATTACH),
+                ) {
+                    if (state.uploadingImage) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.height(0.dp))
+                        Text("  Uploading...")
+                    } else {
+                        Icon(Icons.Outlined.Image, contentDescription = null)
+                        Text("  Add image")
+                    }
                 }
             }
             if (state.error != null) {

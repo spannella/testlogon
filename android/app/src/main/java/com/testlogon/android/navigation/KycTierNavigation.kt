@@ -32,17 +32,18 @@ fun NavGraphBuilder.kycTierDestination(navController: NavHostController) {
 }
 
 /**
- * Batch 8 (#16): maps a tier-requirement key to its verification action screen. Email/phone verification has no
- * dedicated in-app screen (done at registration / on the web), and the case-scoped steps (liveness/eIDV) need a
- * case id the tier screen does not carry, so those route to the document-capture flow which kicks off the case.
+ * Batch-9 (#18): maps a tier-requirement key to its verification action screen.
+ *
+ * The Tier-1 essentials (email verify, phone verify, government-ID upload, and the generic "Begin verification"
+ * empty key) all route into the new guided KYC WIZARD, which walks the user through email -> phone -> ID step by
+ * step with clear progress (replacing the old confusing jump straight to a bare document-capture screen).
+ * Proof-of-address keeps its dedicated residency screen.
  */
 private fun NavHostController.navigateForRequirement(key: String) {
     val route = when (key) {
         "proof_of_address" -> KycResidencyDest.build()
-        "kyc_case_approved", "business_kyc_approved", "api_access_approved", "verification_call",
-        "questionnaire_completed", "email_verified", "phone_verified",
-        -> KycDocumentCaptureDest.ROUTE
-        else -> KycDocumentCaptureDest.ROUTE
+        // email/phone/ID and the "" Begin-verification key -> the guided wizard.
+        else -> KycWizardDest.ROUTE
     }
     navigate(route)
 }

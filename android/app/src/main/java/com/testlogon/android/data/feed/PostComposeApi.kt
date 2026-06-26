@@ -48,6 +48,9 @@ data class CreatePostReq(
     @Json(name = "scheduled_at_local") val scheduledAtLocal: String? = null,
     @Json(name = "image_urls") val imageUrls: List<String>? = null,
     @Json(name = "video_id") val videoId: String? = null,
+    // #2 (B-FEEDMEDIA) — multiple videos in one post (mixed media: images AND videos coexist). The
+    // backend merges a legacy single video_id into video_ids[0]; we send the full list here.
+    @Json(name = "video_ids") val videoIds: List<String>? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -73,6 +76,10 @@ data class EditPostReq(
      * model_fields_set sees it).
      */
     @Json(name = "video_id") val videoId: String? = null,
+    // #2 (B-FEEDMEDIA) — replace the post's full set of videos (mixed media: photos AND videos coexist).
+    // Included on a video-aware edit so the backend's model_fields_set picks it up; an empty list clears
+    // all videos.
+    @Json(name = "video_ids") val videoIds: List<String>? = null,
     @Json(name = "visibility") val visibility: String? = null,
     @Json(name = "lock_type") val lockType: String? = null,
     @Json(name = "unlock_price_cents") val unlockPriceCents: Long? = null,
@@ -95,6 +102,8 @@ data class EditablePostDto(
     @Json(name = "unlock_price_cents") val unlockPriceCents: Long? = null,
     /** #3 — the currently-attached video (owner GET is un-redacted), so the edit screen can show it. */
     @Json(name = "video") val video: VideoDto? = null,
+    /** #2 — the full ordered list of attached videos (owner GET, un-redacted). */
+    @Json(name = "videos") val videos: List<VideoDto>? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -155,7 +164,9 @@ class PostComposeRepository @Inject constructor(
         unlockPriceCents: Long?,
         publishAtEpochSeconds: Long?,
         imageUrls: List<String> = emptyList(),
-        videoId: String? = null,
+        // #2 — 0..n attached video ids (mixed media). First id is also sent as the legacy video_id for
+        // back-compat with older servers; the new server reads video_ids.
+        videoIds: List<String> = emptyList(),
     ): ApiResult<Unit> = call {
         val tz = if (publishAtEpochSeconds != null) TimeZone.getDefault().id else null
         val localStr = publishAtEpochSeconds?.let {
@@ -173,7 +184,8 @@ class PostComposeRepository @Inject constructor(
                 scheduleTimezone = tz,
                 scheduledAtLocal = localStr,
                 imageUrls = imageUrls.ifEmpty { null },
-                videoId = videoId,
+                videoId = videoIds.firstOrNull(),
+                videoIds = videoIds.ifEmpty { null },
             ),
         )
         Unit
@@ -196,22 +208,21 @@ class PostComposeRepository @Inject constructor(
         visibility: PostVisibility,
         imageUrls: List<String>,
         unlockPriceCents: Long?,
-        // #3 — when [videoChanged] is true the post's video attachment is being set/replaced/removed:
-        // [videoId] non-null SETS that video (and images are cleared — the backend treats video_id and
-        // image_urls as mutually exclusive), [videoId] null CLEARS the video (and images are sent).
+        // #2 — when [videoChanged] is true the post's videos are being replaced wholesale with [videoIds]
+        // (mixed media: photos AND videos may now coexist, so images are always sent too). An empty
+        // [videoIds] clears all videos. When [videoChanged] is false the video keys are omitted entirely.
         videoChanged: Boolean = false,
-        videoId: String? = null,
+        videoIds: List<String> = emptyList(),
     ): ApiResult<Unit> = call {
-        val attachingVideo = videoChanged && videoId != null
         api.editPost(
             postId,
             EditPostReq(
                 body = body.trim(),
-                // Mutually exclusive: never send image_urls alongside a video_id.
-                imageUrls = if (attachingVideo) null else imageUrls,
-                // Include the key only when the video changed so the backend's model_fields_set picks it
-                // up; "" clears, a value sets/replaces.
-                videoId = if (videoChanged) (videoId ?: "") else null,
+                imageUrls = imageUrls,
+                // Include the keys only when videos changed so the backend's model_fields_set picks them
+                // up. Send both the legacy single key (first id, "" to clear) and the full list.
+                videoId = if (videoChanged) (videoIds.firstOrNull() ?: "") else null,
+                videoIds = if (videoChanged) videoIds else null,
                 visibility = visibility.wire,
                 lockType = if (unlockPriceCents != null) "fixed_price" else "none",
                 unlockPriceCents = if (unlockPriceCents != null) unlockPriceCents else 0L,

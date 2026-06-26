@@ -261,6 +261,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         guestAcceptDestination(navController)
         // AND-320: KYC tier status (current tier + target requirements checklist + Evaluate action).
         kycTierDestination(navController)
+        // Batch-9 (#18): guided KYC verification wizard (email -> phone -> ID -> done) replacing the
+        // confusing fragmented flow. Reached from the Tier-status "Begin verification" CTA.
+        kycWizardDestination(navController)
         // AND-321: KYC identity-document capture+upload (system camera / photo picker + inline base64 POST).
         kycDocumentCaptureDestination(navController)
         // AND-322: KYC guided ID capture+scan (validate-document + per-side upload + scan-document).

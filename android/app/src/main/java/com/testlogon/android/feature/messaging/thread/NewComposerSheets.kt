@@ -44,6 +44,7 @@ import com.testlogon.android.data.messaging.CalendarAccessUi
 import com.testlogon.android.data.messaging.CalendarEventUi
 import com.testlogon.android.data.messaging.FindDateTimeDraft
 import com.testlogon.android.data.messaging.LotteryOutcomeDraft
+import com.testlogon.android.data.messaging.LotteryOutcomeMediaItem
 import com.testlogon.android.data.messaging.MessageMedia
 
 /**
@@ -52,45 +53,56 @@ import com.testlogon.android.data.messaging.MessageMedia
  * picker). Each mirrors the existing ModalBottomSheet composer pattern (e.g. MeetingPollComposerSheet).
  */
 
-/** Lottery composer: 2-4 outcomes (label + revealed text); weights split evenly server-side. */
+/** Lottery composer: 2-4 outcomes; each outcome reveals text OR a list of images/videos. */
 @Composable
 fun LotteryComposerSheet(
-    onSend: (List<LotteryOutcomeDraft>, String?) -> Unit,
+    onSend: (List<LotteryOutcomeDraft>, String?, String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // #24 — one picked media asset on an outcome: a local content uri + its kind.
+    class MediaPick(val uri: String, val isVideo: Boolean)
     class OutcomeDraft(
         var label: String,
         var text: String,
         var weight: String = "1",
-        // #13 — per-option media: a picked local content uri + its type ("image"|"video"); null = text.
-        var mediaUri: String? = null,
-        var mediaType: String? = null,
+        // #24 — per-option media LIST (multiple images/videos allowed per outcome).
+        val media: androidx.compose.runtime.snapshots.SnapshotStateList<MediaPick> =
+            androidx.compose.runtime.mutableStateListOf(),
     )
     val outcomes = remember {
         mutableStateListOf(OutcomeDraft("", ""), OutcomeDraft("", ""))
     }
     // C10 — optional cover image picked from the system photo picker (no storage permission).
     var imageUri by remember { mutableStateOf<String?>(null) }
+    // #23 — optional message-level cover TEXT. With a cover image, EITHER satisfies the server's
+    // "lottery text or a cover image is required when options have no text" validation.
+    var coverText by rememberSaveable { mutableStateOf("") }
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) imageUri = uri.toString()
     }
     var version by remember { mutableStateOf(0) }
-    // #13 — per-option media pickers (reuse the same system PickVisualMedia picker as image messages).
+    // #24 — per-option media pickers (reuse the same system PickVisualMedia picker as image messages).
     var pickTargetIndex by remember { mutableStateOf(-1) }
     val pickOptionImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val idx = pickTargetIndex
         if (uri != null && idx in outcomes.indices) {
-            outcomes[idx].mediaUri = uri.toString(); outcomes[idx].mediaType = "image"; version++
+            outcomes[idx].media.add(MediaPick(uri.toString(), isVideo = false)); version++
         }
     }
     val pickOptionVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val idx = pickTargetIndex
         if (uri != null && idx in outcomes.indices) {
-            outcomes[idx].mediaUri = uri.toString(); outcomes[idx].mediaType = "video"; version++
+            outcomes[idx].media.add(MediaPick(uri.toString(), isVideo = true)); version++
         }
     }
-    // An outcome is valid if it has revealed text OR a picked media asset.
-    val valid = version >= 0 && outcomes.count { it.text.trim().isNotEmpty() || it.mediaUri != null } >= 2
+    // An outcome is valid if it has revealed text OR at least one picked media asset.
+    val filledOutcomes = version.let { outcomes.count { o -> o.text.trim().isNotEmpty() || o.media.isNotEmpty() } }
+    val anyOutcomeText = version.let { outcomes.any { it.text.trim().isNotEmpty() } }
+    val hasCover = coverText.trim().isNotEmpty() || imageUri != null
+    // #23 — media-only options (no per-outcome text) REQUIRE a lottery cover text or a cover image,
+    // mirroring the B-LOTTERY2 server validator so we never send a blank-before-unlock lottery.
+    val coverMissing = filledOutcomes >= 2 && !anyOutcomeText && !hasCover
+    val valid = filledOutcomes >= 2 && !coverMissing
     // Live probability = this outcome's weight / sum of all positive weights.
     val totalWeight = outcomes.fold(0f) { acc, o -> acc + (o.weight.toFloatOrNull()?.coerceAtLeast(0f) ?: 0f) }.coerceAtLeast(0.0001f)
 
@@ -103,6 +115,14 @@ fun LotteryComposerSheet(
                 "The recipient draws one random outcome to reveal.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // #23 — optional cover text (shown before unlock; satisfies the text-or-cover requirement).
+            OutlinedTextField(
+                value = coverText,
+                onValueChange = { coverText = it; version++ },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag(RichMessageTestTags.LOTTERY_COVER_TEXT),
+                placeholder = { Text("Cover text (optional)") },
+                singleLine = true,
             )
             // C10 — optional cover image.
             val curImage = imageUri
@@ -120,7 +140,7 @@ fun LotteryComposerSheet(
                         modifier = Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).testTag(RichMessageTestTags.LOTTERY_IMAGE_PREVIEW),
                     )
                     OutlinedButton(
-                        onClick = { imageUri = null },
+                        onClick = { imageUri = null; version++ },
                         modifier = Modifier.padding(start = 12.dp).testTag(RichMessageTestTags.LOTTERY_REMOVE_IMAGE),
                     ) { Text("Remove") }
                 }
@@ -134,50 +154,52 @@ fun LotteryComposerSheet(
                     placeholder = { Text("Label (optional)") },
                     singleLine = true,
                 )
-                // #13 — a media outcome reveals an image/video instead of text. Picking media hides the
-                // revealed-text field for that option.
-                val curMedia = o.mediaUri
-                if (curMedia == null) {
-                    OutlinedTextField(
-                        value = o.text,
-                        onValueChange = { o.text = it; version++ },
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag(RichMessageTestTags.LOTTERY_OUTCOME_TEXT + i),
-                        placeholder = { Text("Revealed text") },
-                    )
-                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                pickTargetIndex = i
-                                pickOptionImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            },
-                            modifier = Modifier.weight(1f).testTag(RichMessageTestTags.LOTTERY_OUTCOME_ADD_IMAGE + i),
-                        ) { Text("Image") }
-                        OutlinedButton(
-                            onClick = {
-                                pickTargetIndex = i
-                                pickOptionVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
-                            },
-                            modifier = Modifier.weight(1f).testTag(RichMessageTestTags.LOTTERY_OUTCOME_ADD_VIDEO + i),
-                        ) { Text("Video") }
-                    }
-                } else {
+                // #24 — an outcome may reveal revealed text AND/OR a LIST of images/videos. Show the
+                // text field plus add-image / add-video buttons; each pick appends to the media list.
+                OutlinedTextField(
+                    value = o.text,
+                    onValueChange = { o.text = it; version++ },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag(RichMessageTestTags.LOTTERY_OUTCOME_TEXT + i),
+                    placeholder = { Text("Revealed text (optional if media added)") },
+                )
+                // Existing picked media previews — each with an individual remove.
+                o.media.forEachIndexed { mIdx, m ->
                     Row(Modifier.padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         AsyncImage(
-                            model = curMedia,
-                            contentDescription = "Outcome ${i + 1} media",
+                            model = m.uri,
+                            contentDescription = "Outcome ${i + 1} media ${mIdx + 1}",
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).testTag(RichMessageTestTags.LOTTERY_OUTCOME_MEDIA_PREVIEW + i),
+                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
+                                .testTag(RichMessageTestTags.LOTTERY_OUTCOME_MEDIA_PREVIEW + i + "_" + mIdx),
                         )
                         Text(
-                            if (o.mediaType == "video") "Video prize" else "Image prize",
+                            if (m.isVideo) "Video prize" else "Image prize",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(start = 10.dp),
                         )
                         OutlinedButton(
-                            onClick = { o.mediaUri = null; o.mediaType = null; version++ },
-                            modifier = Modifier.padding(start = 10.dp).testTag(RichMessageTestTags.LOTTERY_OUTCOME_REMOVE_MEDIA + i),
+                            onClick = { if (mIdx in o.media.indices) { o.media.removeAt(mIdx); version++ } },
+                            modifier = Modifier.padding(start = 10.dp)
+                                .testTag(RichMessageTestTags.LOTTERY_OUTCOME_REMOVE_MEDIA + i + "_" + mIdx),
                         ) { Text("Remove") }
                     }
+                }
+                // Add-media buttons (always available so multiple assets can be added per option).
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            pickTargetIndex = i
+                            pickOptionImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        modifier = Modifier.weight(1f).testTag(RichMessageTestTags.LOTTERY_OUTCOME_ADD_IMAGE + i),
+                    ) { Text(if (o.media.isEmpty()) "Add image" else "Add another image") }
+                    OutlinedButton(
+                        onClick = {
+                            pickTargetIndex = i
+                            pickOptionVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        },
+                        modifier = Modifier.weight(1f).testTag(RichMessageTestTags.LOTTERY_OUTCOME_ADD_VIDEO + i),
+                    ) { Text(if (o.media.isEmpty()) "Add video" else "Add another video") }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     OutlinedTextField(
@@ -202,29 +224,44 @@ fun LotteryComposerSheet(
                     modifier = Modifier.padding(top = 8.dp).testTag(RichMessageTestTags.LOTTERY_ADD_OUTCOME),
                 ) { Text("Add outcome") }
             }
+            // #23 — inline validation error when media-only options lack a cover text/image.
+            if (coverMissing) {
+                Text(
+                    "Add a cover text or a cover image (your outcomes have no text).",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp).testTag(RichMessageTestTags.LOTTERY_VALIDATION_ERROR),
+                )
+            }
             Button(
                 onClick = {
                     onSend(
-                        outcomes.filter { it.text.trim().isNotEmpty() || it.mediaUri != null }
+                        outcomes.filter { it.text.trim().isNotEmpty() || it.media.isNotEmpty() }
                             .map {
                                 val w = it.weight.toFloatOrNull()?.coerceAtLeast(0f) ?: 0f
                                 // Convert the relative weight to basis points of the total.
                                 val bps = (w / totalWeight * 10_000f).toInt().coerceAtLeast(1)
-                                // #13 — a media outcome carries its picked LOCAL uri in mediaAssetId; the
-                                // ViewModel uploads it and swaps in the resolved "bucket:key" before send.
-                                if (it.mediaUri != null) {
+                                // #24 — a media outcome carries its picked LOCAL uris in mediaItems; the
+                                // ViewModel uploads each and swaps in the resolved "bucket:key" ids before send.
+                                if (it.media.isNotEmpty()) {
                                     LotteryOutcomeDraft(
                                         label = it.label.trim().ifEmpty { null },
                                         text = it.text.trim(),
                                         weightBps = bps,
-                                        payloadType = it.mediaType ?: "image",
-                                        mediaAssetId = it.mediaUri,
+                                        // payload_type follows the FIRST item (the server treats
+                                        // media_asset_id as the first element of media_asset_ids).
+                                        payloadType = if (it.media.first().isVideo) "video" else "image",
+                                        mediaAssetId = it.media.first().uri,
+                                        mediaItems = it.media.map { m ->
+                                            LotteryOutcomeMediaItem(ref = m.uri, isVideo = m.isVideo)
+                                        },
                                     )
                                 } else {
                                     LotteryOutcomeDraft(it.label.trim().ifEmpty { null }, it.text.trim(), weightBps = bps)
                                 }
                             },
                         imageUri,
+                        coverText.trim().ifEmpty { null },
                     )
                 },
                 enabled = valid,

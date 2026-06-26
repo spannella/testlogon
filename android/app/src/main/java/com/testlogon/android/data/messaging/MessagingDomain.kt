@@ -41,11 +41,15 @@ sealed interface MessageMedia {
         val images: List<GalleryImage>,
     ) : MessageMedia
 
-    /** C6 — one image inside a [Gallery]. */
+    /** C6 / #25 / #27 — one item inside a [Gallery] (a photo OR a short video). */
     data class GalleryImage(
         val url: String?,
         val width: Int? = null,
         val height: Int? = null,
+        /** #25/#27 — true when this gallery item is a video (renders a poster + play glyph). */
+        val isVideo: Boolean = false,
+        /** #25/#27 — a video item's poster (preview frame) url, when the server provides one. */
+        val posterUrl: String? = null,
     )
 
     /** Shared library video — inline HLS playback (AND-131). */
@@ -179,6 +183,8 @@ sealed interface MessageMedia {
         val targetEpochSeconds: Long,
         val associatedEventType: AssociatedEventType = AssociatedEventType.CUSTOM,
         val associatedEventId: String? = null,
+        /** #31 — reveal payload surfaced ONLY once the countdown completes (null until then). */
+        val reveal: CountdownReveal? = null,
     ) : MessageMedia
 
     /** AND-138 — an inline calendar event (render + add-to-calendar). No title/location/rsvp fields. */
@@ -216,6 +222,20 @@ sealed interface MessageMedia {
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
 enum class AssociatedEventType { BROADCAST, CALL, CALENDAR, CUSTOM, UNKNOWN }
 
+/** #31 — countdown reveal content (text and/or mixed image+video media), shown once the target passes. */
+data class CountdownReveal(
+    val text: String? = null,
+    val media: List<CountdownRevealMedia> = emptyList(),
+) {
+    val isEmpty: Boolean get() = text.isNullOrBlank() && media.isEmpty()
+}
+
+/** #31 — one revealed media item; [isVideo] selects player vs image rendering. */
+data class CountdownRevealMedia(
+    val url: String,
+    val isVideo: Boolean,
+)
+
 /** AND-138 — calendar-share permission ("read"|"write" on the wire). */
 enum class SharePermission { READ, WRITE, UNKNOWN }
 
@@ -236,9 +256,35 @@ data class MessageMonetization(
     val revealedText: String? = null,
     // #13 — revealed lottery option MEDIA after a draw: a server-relative object url derived from the
     // winning outcome's media_asset_id (image or video). Null for text-only or while locked.
+    // (Kept as the FIRST element for single-asset back-compat / Room round-trip.)
     val revealedMediaUrl: String? = null,
     val revealedMediaIsVideo: Boolean = false,
+    // #24 — the FULL list of revealed media assets when the winning outcome carries >1 image/video.
+    val revealedMedia: List<RevealedMediaItem> = emptyList(),
 )
+
+/** #24 — one revealed media asset (image or video) on the drawn lottery outcome. */
+data class RevealedMediaItem(
+    val url: String,
+    val isVideo: Boolean,
+)
+
+/**
+ * #24 — build the revealed media list for a drawn outcome. Prefers the plural media_asset_ids list
+ * (each resolved to a server-relative url); falls back to the single media_asset_id. The per-item
+ * isVideo follows the outcome payload_type (the server stores one payload_type per outcome).
+ */
+internal fun buildRevealedMedia(
+    mediaAssetIds: List<String>?,
+    mediaAssetId: String?,
+    isVideo: Boolean,
+): List<RevealedMediaItem> {
+    val ids = (mediaAssetIds?.takeIf { it.isNotEmpty() }
+        ?: listOfNotNull(mediaAssetId?.takeIf { it.isNotBlank() }))
+    return ids.mapNotNull { id ->
+        deriveMediaAssetUrl(id)?.let { RevealedMediaItem(url = it, isVideo = isVideo) }
+    }
+}
 
 /** AND-139 — fixed-price unlock vs server-resolved lottery unlock. */
 enum class UnlockType { FIXED, LOTTERY }
@@ -399,6 +445,10 @@ data class Message(
     val lockPriceCents: Long? = null,
     /** R2 — ISO-4217 currency for [lockPriceCents] (defaults to USD when the wire omits it). */
     val lockCurrency: String = "USD",
+    /** #20 — true while this is a still-pending scheduled (not-yet-delivered) message. */
+    val scheduled: Boolean = false,
+    /** #20 — epoch SECONDS the scheduled message is due to be delivered (0 when not scheduled). */
+    val deliverAtEpochSeconds: Long = 0L,
 )
 
 /** A conversation summary for the inbox list. */
@@ -487,6 +537,9 @@ internal fun MessageDto.toDomain(
                 ciphertextB64 = it.ciphertextB64,
             )
         },
+        // #20 — server marks still-pending scheduled sends; the thread hides these (managed separately).
+        scheduled = scheduled ?: false,
+        deliverAtEpochSeconds = deliverAt ?: 0L,
     )
 }
 
@@ -536,8 +589,14 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
     // C6 — gallery (multi-image) message. Sender + unlocked recipients get free_images here.
     kind == "gallery" && !freeImages.isNullOrEmpty() -> MessageMedia.Gallery(
         images = freeImages.map { gi ->
+            // #25/#27 — a mixed gallery carries photos AND videos. Prefer the server-derived media_kind;
+            // fall back to sniffing content_type so older payloads still render videos correctly.
+            val isVideo = gi.mediaKind?.equals("video", ignoreCase = true)
+                ?: gi.contentType?.startsWith("video/") == true
             MessageMedia.GalleryImage(
                 url = gi.url?.takeIf { it.isNotBlank() } ?: deriveS3Url(gi.bucket, gi.key),
+                isVideo = isVideo,
+                posterUrl = deriveS3Url(gi.previewBucket, gi.previewKey),
             )
         },
     )
@@ -598,6 +657,17 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         targetEpochSeconds = targetDatetime,
         associatedEventType = associatedEventType.toAssociatedEventType(),
         associatedEventId = associatedEventId,
+        // #31 — server only emits countdown_reveal once revealed (now >= target); map it through.
+        reveal = countdownReveal?.takeIf { it.revealed }?.let { rv ->
+            CountdownReveal(
+                text = rv.text?.takeIf { it.isNotBlank() },
+                media = rv.media.orEmpty().mapNotNull { m ->
+                    m.url?.takeIf { it.isNotBlank() }?.let { u ->
+                        CountdownRevealMedia(url = u, isVideo = (m.mediaKind == "video"))
+                    }
+                },
+            )
+        },
     )
     // AND-138 — calendar event / share (nested attachments).
     calendarEvent != null -> MessageMedia.CalendarEvent(
@@ -642,11 +712,16 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
                 unlocked = lot.lockState == "unlocked",
                 priceMinorUnits = null,
                 currency = tipCurrency ?: "USD",
-                teaser = lockDescription,
+                // #23 - the locked teaser shows the cover text (message text) when no separate
+                // lock_description is set, so a media-only lottery is never blank before unlock.
+                teaser = lockDescription?.takeIf { it.isNotBlank() } ?: text?.takeIf { it.isNotBlank() },
                 revealedText = revealed?.takeIf { it.payloadType == "text" }?.textContent,
                 revealedMediaUrl = revealed?.takeIf { it.payloadType == "image" || it.payloadType == "video" }
-                    ?.let { deriveMediaAssetUrl(it.mediaAssetId) },
+                    ?.let { deriveMediaAssetUrl(it.mediaAssetIds?.firstOrNull() ?: it.mediaAssetId) },
                 revealedMediaIsVideo = revealedIsVideo,
+                revealedMedia = revealed?.takeIf { it.payloadType == "image" || it.payloadType == "video" }
+                    ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, revealedIsVideo) }
+                    ?: emptyList(),
             ),
         )
     }

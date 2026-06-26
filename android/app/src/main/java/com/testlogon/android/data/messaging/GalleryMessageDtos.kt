@@ -37,13 +37,20 @@ data class CreateGalleryMessageReq(
     @Json(name = "send_at") val sendAt: Long? = null,
 )
 
-/** One image projected back on a kind="gallery" MessageOut (url is server-relative in dev). */
+/** One item projected back on a kind="gallery" MessageOut (url is server-relative in dev). */
 @JsonClass(generateAdapter = true)
 data class GalleryImageDto(
     @Json(name = "url") val url: String? = null,
     @Json(name = "bucket") val bucket: String? = null,
     @Json(name = "key") val key: String? = null,
     @Json(name = "content_type") val contentType: String? = null,
+    // #25/#27 — the server derives a per-item "media_kind" ("image"|"video") so a mixed gallery renders
+    // photos and videos distinctly. Fall back to sniffing content_type when absent.
+    @Json(name = "media_kind") val mediaKind: String? = null,
+    // #25/#27 — a video item also carries a poster (a server-generated preview frame) so the grid can
+    // show a still + play glyph without loading the whole clip.
+    @Json(name = "preview_bucket") val previewBucket: String? = null,
+    @Json(name = "preview_key") val previewKey: String? = null,
     // NOTE: width/height are intentionally omitted — the DDB thread-GET path serializes them as
     // STRINGS ("1") while the create response uses ints, which Moshi cannot coerce uniformly. The
     // gallery grid renders as fixed squares, so per-image dimensions are unnecessary.

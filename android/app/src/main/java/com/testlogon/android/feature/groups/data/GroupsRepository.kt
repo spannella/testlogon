@@ -7,6 +7,7 @@ import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import com.testlogon.android.core.model.groups.Group
+import com.testlogon.android.core.model.groups.GroupComment
 import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
@@ -18,6 +19,7 @@ import com.testlogon.android.core.model.groups.TreasuryBalance
 import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.groups.GroupCreateIn
+import com.testlogon.android.core.network.groups.GroupCommentCreateIn
 import com.testlogon.android.core.network.groups.GroupPostCreateIn
 import com.testlogon.android.core.network.groups.GroupInviteIn
 import com.testlogon.android.core.network.groups.GroupUpdateRoleIn
@@ -74,8 +76,37 @@ interface GroupsRepository {
     /** A cold [PagingData] stream of the group's reverse-chronological feed; re-collect to refresh. */
     fun groupFeedPager(groupId: String): Flow<PagingData<GroupFeedPost>>
 
-    /** POST a new text post to the group feed. On success returns the created [GroupFeedPost]. */
-    suspend fun createGroupPost(groupId: String, text: String): ApiResult<GroupFeedPost>
+    /**
+     * POST a new post to the group feed (full newsfeed parity: text + multiple images + a single video +
+     * an optional paid-lock price). On success returns the created [GroupFeedPost].
+     */
+    suspend fun createGroupPost(
+        groupId: String,
+        text: String,
+        imageUrls: List<String> = emptyList(),
+        videoId: String? = null,
+        unlockPriceCents: Int? = null,
+    ): ApiResult<GroupFeedPost>
+
+    /** GET one oldest-first page of a group post's comments (ENVELOPE {comments, next_cursor} -> mapped). */
+    suspend fun listComments(
+        groupId: String,
+        postId: String,
+        cursor: String? = null,
+        limit: Int = 50,
+    ): ApiResult<GroupCommentsPage>
+
+    /** POST a comment (text and/or image, optional threaded reply) to a group post. */
+    suspend fun addComment(
+        groupId: String,
+        postId: String,
+        text: String?,
+        imageUrl: String? = null,
+        parentCommentId: String? = null,
+    ): ApiResult<GroupComment>
+
+    /** DELETE a group post comment (author or admin/mod). 200 -> Success(Unit). */
+    suspend fun deleteComment(groupId: String, postId: String, commentId: String): ApiResult<Unit>
 
     /** POST an invite (the invitee becomes status="invited" - a PENDING entry). 200/empty -> Success(Unit). */
     suspend fun invite(groupId: String, userId: String): ApiResult<Unit>
@@ -179,10 +210,69 @@ class GroupsRepositoryImpl @Inject constructor(
             pagingSourceFactory = { GroupFeedPagingSource(groupsApi, groupId) },
         ).flow
 
-    override suspend fun createGroupPost(groupId: String, text: String): ApiResult<GroupFeedPost> =
-        withContext(Dispatchers.IO) {
-            call { groupsApi.createGroupPost(groupId, GroupPostCreateIn(text = text)).toDomain() }
+    override suspend fun createGroupPost(
+        groupId: String,
+        text: String,
+        imageUrls: List<String>,
+        videoId: String?,
+        unlockPriceCents: Int?,
+    ): ApiResult<GroupFeedPost> = withContext(Dispatchers.IO) {
+        call {
+            groupsApi.createGroupPost(
+                groupId,
+                GroupPostCreateIn(
+                    text = text,
+                    imageUrl = imageUrls.firstOrNull(),
+                    imageUrls = imageUrls.ifEmpty { null },
+                    videoId = videoId?.takeIf { it.isNotBlank() },
+                    unlockPriceCents = unlockPriceCents?.takeIf { it > 0 },
+                ),
+            ).toDomain()
         }
+    }
+
+    override suspend fun listComments(
+        groupId: String,
+        postId: String,
+        cursor: String?,
+        limit: Int,
+    ): ApiResult<GroupCommentsPage> = withContext(Dispatchers.IO) {
+        call {
+            val out = groupsApi.getGroupComments(groupId, postId, cursor = cursor, limit = limit)
+            GroupCommentsPage(
+                comments = out.comments.map { it.toDomain() },
+                nextCursor = out.nextCursor?.takeIf { it.isNotBlank() },
+            )
+        }
+    }
+
+    override suspend fun addComment(
+        groupId: String,
+        postId: String,
+        text: String?,
+        imageUrl: String?,
+        parentCommentId: String?,
+    ): ApiResult<GroupComment> = withContext(Dispatchers.IO) {
+        call {
+            groupsApi.addGroupComment(
+                groupId,
+                postId,
+                GroupCommentCreateIn(
+                    text = text?.takeIf { it.isNotBlank() },
+                    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+                    parentCommentId = parentCommentId,
+                ),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun deleteComment(
+        groupId: String,
+        postId: String,
+        commentId: String,
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        call { groupsApi.deleteGroupComment(groupId, postId, commentId).requireSuccess() }
+    }
 
     override suspend fun invite(groupId: String, userId: String): ApiResult<Unit> =
         withContext(Dispatchers.IO) {
@@ -329,3 +419,9 @@ class GroupsRepositoryImpl @Inject constructor(
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
     }
 }
+
+/** Batch-9 (#11) - one page of group post comments (mapped) + the opaque next cursor (null = end). */
+data class GroupCommentsPage(
+    val comments: List<GroupComment>,
+    val nextCursor: String?,
+)

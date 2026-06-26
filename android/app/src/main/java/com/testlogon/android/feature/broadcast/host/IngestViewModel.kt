@@ -93,11 +93,13 @@ class IngestViewModel @Inject constructor(
      * mediaUnavailable. A real engine would reach [GoLiveResult.Started] -> Connected.
      */
     private suspend fun goLive(inputId: String) {
-        when (broadcastPublisher.goLive(sessionId, inputId)) {
+        when (val result = broadcastPublisher.goLive(sessionId, inputId)) {
             GoLiveResult.Started ->
                 _uiState.update { it.copy(phase = IngestPhase.Connected) }
             is GoLiveResult.Failed ->
-                _uiState.update { it.copy(phase = IngestPhase.Failed, error = GO_LIVE_FAILED) }
+                _uiState.update {
+                    it.copy(phase = IngestPhase.Failed, error = humanizePublishFailure(result.reason))
+                }
             GoLiveResult.NotConfigured ->
                 _uiState.update {
                     it.copy(phase = IngestPhase.Unavailable, mediaUnavailable = true)
@@ -133,12 +135,28 @@ class IngestViewModel @Inject constructor(
             if (phase == IngestPhase.Failed) this else copy(phase = IngestPhase.Negotiating)
         PublishState.Live -> copy(phase = IngestPhase.Connected)
         is PublishState.Failed ->
-            copy(phase = IngestPhase.Failed, error = publishState.reason)
+            copy(phase = IngestPhase.Failed, error = humanizePublishFailure(publishState.reason))
         PublishState.Unavailable ->
             // The FLAGGED engine reports not-configured: surface the banner, but only once a start
             // attempt has been made (Idle/PreviewReady should not show the banner pre-emptively).
             if (phase == IngestPhase.Idle || phase == IngestPhase.PreviewReady) this
             else copy(phase = IngestPhase.Unavailable, mediaUnavailable = true)
+    }
+
+    /**
+     * Translates the [BroadcastPublisher] failure reason into a clear, honest, user-facing message.
+     *
+     * [com.testlogon.android.data.webrtc.RealBroadcastPublisher.REASON_SERVER_UNREACHABLE] means the live
+     * streaming media server (WHIP ingest) is not reachable: the host's camera preview is running locally
+     * but no stream reaches viewers — the streaming infrastructure is not deployed yet. We do NOT tear the
+     * preview down so the host still sees a real camera feed.
+     */
+    private fun humanizePublishFailure(reason: String): String = when (reason) {
+        com.testlogon.android.data.webrtc.RealBroadcastPublisher.REASON_SERVER_UNREACHABLE ->
+            SERVER_UNREACHABLE
+        com.testlogon.android.data.webrtc.RealBroadcastPublisher.REASON_WHIP_REJECTED ->
+            WHIP_REJECTED
+        else -> GO_LIVE_FAILED
     }
 
     companion object {
@@ -151,6 +169,16 @@ class IngestViewModel @Inject constructor(
         // Non-resource fallbacks (the screen prefers stringResource where it has a Context).
         private const val NO_SESSION = "No broadcast session is available."
         private const val GO_LIVE_FAILED = "Couldn't start your broadcast. Try again."
+
+        /**
+         * Honest copy for the no-infrastructure case: the WHIP ingest server is unreachable. The local
+         * camera preview keeps running; viewers cannot watch because live streaming is not deployed.
+         */
+        private const val SERVER_UNREACHABLE =
+            "Your camera preview is running, but the live streaming server can't be reached, " +
+                "so viewers can't watch yet. Live streaming isn't available on this server."
+        private const val WHIP_REJECTED =
+            "The live streaming server rejected the broadcast. Try again."
         private const val OFFLINE = "Couldn't reach the server. Try again."
     }
 }

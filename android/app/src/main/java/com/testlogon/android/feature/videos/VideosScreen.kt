@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
@@ -75,8 +76,11 @@ fun VideosRoute(
     viewModel: VideosViewModel = hiltViewModel(),
 ) {
     val items = viewModel.videos.collectAsLazyPagingItems()
+    val pending by viewModel.pending.collectAsStateWithLifecycle()
     VideosScreen(
         items = items,
+        pending = pending,
+        onReconcilePending = viewModel::reconcilePending,
         onOpenVideo = onOpenVideo,
         onUploadVideo = onUploadVideo,
         onRefresh = { items.refresh() },
@@ -93,6 +97,8 @@ fun VideosScreen(
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    pending: List<VideoSummary> = emptyList(),
+    onReconcilePending: (Set<String>) -> Unit = {},
 ) {
     // Auto-poll: while any loaded video is still processing, refresh the list on a cadence so a
     // dev-published / finished-encoding video flips from "Processing" to "Ready" without the user
@@ -107,6 +113,16 @@ fun VideosScreen(
             delay(PROCESSING_POLL_MILLIS)
             if (items.loadState.refresh !is LoadState.Loading) onRefresh()
         }
+    }
+    // #5 — once the real rows for any optimistic pending tiles arrive in the page, drop the
+    // placeholders so we don't show a duplicate. Recomputed as the page content changes.
+    val loadedIds by remember(items) {
+        derivedStateOf {
+            (0 until items.itemCount).mapNotNull { items.peek(it)?.id }.toSet()
+        }
+    }
+    LaunchedEffect(loadedIds, pending) {
+        if (pending.isNotEmpty()) onReconcilePending(loadedIds)
     }
     Scaffold(
         modifier = modifier.testTag(VideosScreenTestTags.SCREEN),
@@ -152,6 +168,10 @@ fun VideosScreen(
         ) {
             Box(Modifier.fillMaxSize()) {
                 when {
+                    // #5 — with optimistic pending tiles, always render the grid so the just-uploaded
+                    // video is visible even while the first page is (re)loading or empty.
+                    pending.isNotEmpty() -> VideoGrid(items = items, pending = pending, onOpenVideo = onOpenVideo)
+
                     refreshState is LoadState.Loading && items.itemCount == 0 -> LoadingState()
 
                     refreshState is LoadState.Error && items.itemCount == 0 -> {
@@ -163,7 +183,7 @@ fun VideosScreen(
                     refreshState is LoadState.NotLoading && items.itemCount == 0 ->
                         EmptyState(title = stringResource(R.string.videos_library_empty))
 
-                    else -> VideoGrid(items = items, onOpenVideo = onOpenVideo)
+                    else -> VideoGrid(items = items, pending = pending, onOpenVideo = onOpenVideo)
                 }
             }
         }
@@ -174,7 +194,16 @@ fun VideosScreen(
 private fun VideoGrid(
     items: LazyPagingItems<VideoSummary>,
     onOpenVideo: (videoId: String) -> Unit,
+    pending: List<VideoSummary> = emptyList(),
 ) {
+    // #5 — compute the pending tiles to show (those not yet in the page) in COMPOSABLE scope; the
+    // LazyGridScope content lambda is not @Composable, so remember/derivedStateOf must live here.
+    val pendingToShow by remember(items.itemCount, pending) {
+        derivedStateOf {
+            val pageIds = (0 until items.itemCount).mapNotNull { items.peek(it)?.id }.toSet()
+            pending.filter { it.id !in pageIds }
+        }
+    }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 160.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -182,6 +211,17 @@ private fun VideoGrid(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         modifier = Modifier.fillMaxSize().testTag(VideosScreenTestTags.GRID),
     ) {
+        // #5 — optimistic just-uploaded tiles (rendered as Processing) ahead of the paged content.
+        items(count = pendingToShow.size, key = { i -> "pending_" + pendingToShow[i].id }) { i ->
+            val v = pendingToShow[i]
+            VideoTile(
+                title = v.title,
+                thumbnailUrl = v.thumbnailUrl,
+                durationSec = v.durationSec,
+                statusBadge = stringResource(R.string.videos_status_processing),
+                onClick = {},
+            )
+        }
         items(count = items.itemCount, key = { index -> items.peek(index)?.id ?: index }) { index ->
             val video = items[index]
             if (video != null) {

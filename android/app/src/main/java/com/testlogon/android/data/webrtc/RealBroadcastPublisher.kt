@@ -117,9 +117,21 @@ class RealBroadcastPublisher @Inject constructor(
             withTimeoutOrNull(8000) { gathered.await() }
             val full = pc.localDescription ?: return fail("no local desc")
 
-            val answer = postWhip(whipUrl(sessionId), full.description) ?: return fail("whip")
-            if (!awaitSet { pc.setRemoteDescription(it, SessionDescription(SessionDescription.Type.ANSWER, answer)) }) {
-                return fail("setRemote")
+            when (val whip = postWhip(whipUrl(sessionId), full.description)) {
+                is WhipResult.Answer -> {
+                    if (!awaitSet {
+                            pc.setRemoteDescription(it, SessionDescription(SessionDescription.Type.ANSWER, whip.sdp))
+                        }
+                    ) {
+                        return fail(REASON_SET_REMOTE)
+                    }
+                }
+                // Honest partial: the live-streaming media server (MediaMTX WHIP ingest, :8889) is not
+                // deployed/reachable. The local camera + mic capture IS running (preview shows), but no
+                // stream reaches viewers. We DELIBERATELY do NOT stop() here so the host keeps a real
+                // local preview; the UI surfaces a clear "server not reachable" message.
+                WhipResult.Unreachable -> return fail(REASON_SERVER_UNREACHABLE)
+                is WhipResult.Rejected -> return fail(REASON_WHIP_REJECTED)
             }
             _state.value = PublishState.Live
             Log.d("TLBCAST", "published session=$sessionId")
@@ -143,7 +155,17 @@ class RealBroadcastPublisher @Inject constructor(
         return "http://$host:8889/$sessionId/whip"
     }
 
-    private suspend fun postWhip(url: String, offerSdp: String): String? = withContext(Dispatchers.IO) {
+    /** Outcome of the WHIP ingest POST, distinguishing "no server" from "server said no". */
+    private sealed interface WhipResult {
+        /** The media server returned an SDP answer; publishing can proceed. */
+        data class Answer(val sdp: String) : WhipResult
+        /** The WHIP endpoint could not be reached at all (connect/IO failure -> server not deployed). */
+        data object Unreachable : WhipResult
+        /** The server was reached but rejected the offer (non-2xx / empty body). */
+        data class Rejected(val code: Int) : WhipResult
+    }
+
+    private suspend fun postWhip(url: String, offerSdp: String): WhipResult = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url(url)
             .post(offerSdp.toRequestBody("application/sdp".toMediaType()))
@@ -151,11 +173,17 @@ class RealBroadcastPublisher @Inject constructor(
         try {
             whipClient.newCall(req).execute().use { resp ->
                 Log.d("TLBCAST", "whip POST $url -> ${resp.code}")
-                if (resp.isSuccessful) resp.body?.string() else null
+                val body = resp.body?.string()
+                if (resp.isSuccessful && !body.isNullOrBlank()) {
+                    WhipResult.Answer(body)
+                } else {
+                    WhipResult.Rejected(resp.code)
+                }
             }
         } catch (t: Throwable) {
-            Log.d("TLBCAST", "whip error ${t.javaClass.simpleName}")
-            null
+            // Connect/IO failure: the WHIP ingest server (MediaMTX :8889) is not deployed/reachable.
+            Log.d("TLBCAST", "whip unreachable ${t.javaClass.simpleName}")
+            WhipResult.Unreachable
         }
     }
 
@@ -217,6 +245,17 @@ class RealBroadcastPublisher @Inject constructor(
                 override fun onSetFailure(error: String?) {}
             })
         }
+
+    companion object {
+        /**
+         * The WHIP ingest media server (MediaMTX, :8889) could not be reached. The host's local camera
+         * preview keeps running, but the broadcast does not reach any viewer — the live-streaming
+         * infrastructure is not deployed. The UI maps this to a clear, honest message.
+         */
+        const val REASON_SERVER_UNREACHABLE = "server_unreachable"
+        const val REASON_WHIP_REJECTED = "whip_rejected"
+        const val REASON_SET_REMOTE = "set_remote"
+    }
 
     private suspend fun awaitSet(block: (SdpObserver) -> Unit): Boolean =
         suspendCancellableCoroutine { cont ->

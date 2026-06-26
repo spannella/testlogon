@@ -93,10 +93,25 @@ class FakeSyndicateApi(
         return profile()
     }
 
-    override suspend fun getFeed(syndicateId: String, cursor: String?, page: Int?): SyndicateFeedOut {
+    override suspend fun getFeed(syndicateId: String, cursor: String?, limit: Int, page: Int?): SyndicateFeedOut {
         feedSyndicateIds += syndicateId
         return feed()
     }
+
+    override suspend fun createPost(
+        syndicateId: String,
+        body: com.testlogon.android.core.network.syndicates.SyndicatePostCreateIn,
+    ): com.testlogon.android.core.network.syndicates.SyndicatePostOut =
+        com.testlogon.android.core.network.syndicates.SyndicatePostOut(
+            postId = "p_fake",
+            createdAt = 0,
+            text = body.text,
+            imageUrl = body.imageUrl,
+        )
+
+    override suspend fun listMembers(
+        syndicateId: String,
+    ): List<com.testlogon.android.core.network.syndicates.SyndicateMemberDto> = emptyList()
 
     override suspend fun getTreasury(syndicateId: String, cursor: String?, page: Int?): SyndicateTreasuryOut {
         treasurySyndicateIds += syndicateId
@@ -227,6 +242,25 @@ class FakeSyndicateRepo(
 
     override fun treasuryLedgerPager(syndicateId: String): Flow<PagingData<TreasuryEntry>> =
         flowOf(PagingData.empty())
+
+    override suspend fun createPost(
+        syndicateId: String,
+        text: String,
+        imageUrl: String?,
+    ): ApiResult<com.testlogon.android.core.model.syndicates.SyndicateFeedItem> =
+        ApiResult.Success(
+            com.testlogon.android.core.model.syndicates.SyndicateFeedItem(
+                postId = "p_fake",
+                createdAt = 0,
+                text = text,
+                imageUrl = imageUrl,
+            ),
+        )
+
+    override suspend fun listMembers(
+        syndicateId: String,
+    ): ApiResult<List<com.testlogon.android.core.model.syndicates.SyndicateMember>> =
+        ApiResult.Success(emptyList())
 
     override suspend fun getOpenLicensingContent(
         syndicateId: String,

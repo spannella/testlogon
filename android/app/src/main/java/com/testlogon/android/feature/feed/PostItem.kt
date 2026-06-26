@@ -76,6 +76,9 @@ fun PostItem(
     onTip: (FeedPost) -> Unit = {},
     // FD13 — hide the Tip action when this is the viewer's own post (can't tip yourself).
     showTip: Boolean = true,
+    // #3 — true when the viewer authored this post; surfaces the "Locked · $X" badge on the author's own
+    // (un-redacted) view of a locked post so they can see at a glance that it is monetized + for how much.
+    isOwnPost: Boolean = false,
     // FD12 — when non-null, an Edit item appears in the post overflow (own posts only).
     onEdit: ((FeedPost) -> Unit)? = null,
     // AND-177 — unlock flow state driving the paywall CTA.
@@ -101,6 +104,8 @@ fun PostItem(
                 authorPhotoUrl = authorPhotoUrl,
                 createdAtEpochSeconds = post.createdAtEpochSeconds,
                 isLocked = post.isLocked,
+                // #3 — the author's own locked post shows a priced badge (the body is visible to them).
+                ownerLock = if (isOwnPost) post.authorLock else null,
                 onClick = { onAuthorClick(post.authorId) },
             )
 
@@ -166,6 +171,8 @@ private fun PostAuthorHeader(
     authorPhotoUrl: String?,
     createdAtEpochSeconds: Long,
     isLocked: Boolean,
+    // #3 — non-null when the viewer authored this (locked) post: show a priced "Locked · $X" badge.
+    ownerLock: com.testlogon.android.data.feed.AuthorLock?,
     onClick: () -> Unit,
 ) {
     val label = authorName?.takeIf { it.isNotBlank() } ?: authorId
@@ -200,8 +207,15 @@ private fun PostAuthorHeader(
                 )
             }
         }
-        if (isLocked) {
-            // #19 — a prominent lock chip so a tip-/price-locked post reads as locked at a glance.
+        // #3 / #19 — a prominent lock chip. For the AUTHOR's own locked post the body is visible, so the
+        // chip carries the price ("Locked · $4.99") to make it clear the post is monetized + for how much;
+        // for a viewer who can't see the content it's the plain "Locked" chip.
+        val lockLabel = when {
+            ownerLock != null -> lockBadgeLabel(ownerLock)
+            isLocked -> "Locked"
+            else -> null
+        }
+        if (lockLabel != null) {
             Surface(
                 color = MaterialTheme.colorScheme.tertiaryContainer,
                 shape = RoundedCornerShape(50),
@@ -218,7 +232,7 @@ private fun PostAuthorHeader(
                         modifier = Modifier.size(12.dp),
                     )
                     Text(
-                        text = "Locked",
+                        text = lockLabel,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onTertiaryContainer,
                         fontWeight = FontWeight.SemiBold,
@@ -241,6 +255,26 @@ private fun PostBody(text: String, onLinkClick: (String) -> Unit) {
         style = MaterialTheme.typography.bodyLarge,
         modifier = Modifier.fillMaxWidth().testTag(PostItemTestTags.BODY),
     )
+}
+
+/**
+ * #3 — label for the author's lock badge. "Locked · $4.99" for a fixed price, "Locked · Tip lottery"
+ * for a lottery lock, otherwise just "Locked" (no fixed price / unknown).
+ */
+internal fun lockBadgeLabel(lock: com.testlogon.android.data.feed.AuthorLock): String {
+    val cents = lock.priceCents
+    return when {
+        cents != null && cents > 0 -> "Locked · " + formatCentsUsd(cents)
+        lock.lockType == com.testlogon.android.data.feed.LockType.TIP_LOTTERY -> "Locked · Tip lottery"
+        else -> "Locked"
+    }
+}
+
+/** Cents -> "$X.XX" (USD assumed; no currency field in the contract). */
+internal fun formatCentsUsd(cents: Int): String {
+    val whole = cents / 100
+    val frac = cents % 100
+    return "$" + whole + "." + frac.toString().padStart(2, '0')
 }
 
 /** First two non-blank chars of author_id, upper-cased (web parity: author_id.slice(0,2)). */

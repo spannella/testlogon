@@ -153,6 +153,8 @@ fun PostDetailScreen(
                             onToggleReaction = { _, emoji -> onToggleReaction(emoji) },
                             // #25 — can't tip your own post.
                             showTip = !isOwnPost,
+                            // #3 — author sees a priced "Locked · $X" badge on their own locked post.
+                            isOwnPost = isOwnPost,
                             // Comment icon on detail is a no-op (the section is already below).
                             onCommentClick = {},
                         )

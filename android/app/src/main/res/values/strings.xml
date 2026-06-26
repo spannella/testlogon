@@ -525,6 +525,14 @@
     <string name="countdown_done">Event reached</string>
     <string name="countdown_cd_remaining">Countdown: %1$s, %2$s remaining</string>
     <string name="countdown_cd_done">Countdown: %1$s, event reached</string>
+    <!-- #32 exact date/time/tz + #31 reveal payload -->
+    <string name="countdown_pick_datetime">Pick date &amp; time</string>
+    <string name="countdown_reveal_label">Reveal when it ends (optional)</string>
+    <string name="countdown_reveal_hint">Text revealed when the countdown completes</string>
+    <string name="countdown_reveal_add_image">Add reveal image</string>
+    <string name="countdown_reveal_remove_image">Remove</string>
+    <string name="countdown_reveal_revealed">Revealed</string>
+    <string name="countdown_reveal_play_video">Play revealed video</string>
 
     <!-- AND-138: calendar event / share -->
     <string name="calendar_event_label">Calendar event</string>
@@ -2569,6 +2577,34 @@
     <string name="idscan_restart">Start over</string>
     <string name="idscan_done">Done</string>
 
+    <!-- Batch-9 (#18): guided KYC verification wizard (email -> phone -> ID -> done) -->
+    <string name="kyc_wizard_title">Verify your identity</string>
+    <string name="kyc_wizard_step_of">Step %1$d of %2$d</string>
+    <string name="kyc_wizard_step_email">Email</string>
+    <string name="kyc_wizard_step_phone">Phone</string>
+    <string name="kyc_wizard_step_id">ID</string>
+    <string name="kyc_wizard_continue">Continue</string>
+    <string name="kyc_wizard_send_code">Send code</string>
+    <string name="kyc_wizard_resend_code">Resend code</string>
+    <string name="kyc_wizard_confirm_code">Confirm</string>
+    <string name="kyc_wizard_code_label">Verification code</string>
+    <string name="kyc_wizard_code_sent_to">We sent a code to %1$s. Enter it below.</string>
+    <string name="kyc_wizard_email_title">Verify your email</string>
+    <string name="kyc_wizard_email_body">We will email you a code to confirm this is your address.</string>
+    <string name="kyc_wizard_email_label">Email address (optional)</string>
+    <string name="kyc_wizard_email_verified">Your email is verified.</string>
+    <string name="kyc_wizard_phone_title">Verify your phone</string>
+    <string name="kyc_wizard_phone_body">We will text you a code to confirm your phone number.</string>
+    <string name="kyc_wizard_phone_label">Phone number</string>
+    <string name="kyc_wizard_phone_verified">Your phone is verified.</string>
+    <string name="kyc_wizard_id_title">Scan your ID</string>
+    <string name="kyc_wizard_id_body">Take clear photos of the front and back of a government ID. We will guide you through each side.</string>
+    <string name="kyc_wizard_id_start">Start ID capture</string>
+    <string name="kyc_wizard_id_done">Your ID was submitted.</string>
+    <string name="kyc_wizard_done_title">You are all set</string>
+    <string name="kyc_wizard_done_body">We are reviewing what you submitted. Your tier updates automatically when checks pass.</string>
+    <string name="kyc_wizard_finish">Done</string>
+
     <!-- AND-323: KYC facial comparison (selfie vs. ID, compared server-side) -->
     <string name="face_capture_prompt">Take a selfie to verify your identity</string>
     <string name="face_oval_hint">Center your face within the oval</string>
@@ -3123,6 +3159,13 @@
     <string name="group_feed_compose_sending">Posting...</string>
     <string name="group_feed_locked">Locked post</string>
     <string name="group_feed_pinned">Pinned</string>
+    <string name="group_feed_hub">Group options</string>
+    <string name="group_feed_attach_image">Attach image</string>
+    <string name="group_feed_remove_image">Remove image</string>
+    <string name="group_feed_locked_price">Locked - unlock for $%1$.2f</string>
+    <string name="group_feed_video">Video</string>
+    <string name="group_feed_comment">Comment</string>
+    <string name="group_feed_comments_count">%1$d comments</string>
     <string name="groups_invite">Invite</string>
     <string name="groups_invite_user_id_label">User ID</string>
     <string name="groups_remove">Remove</string>
@@ -3150,6 +3193,13 @@
     <string name="syndicate_tab_feed">Feed</string>
     <string name="syndicate_tab_treasury">Treasury</string>
     <string name="syndicate_tab_split">Revenue split</string>
+    <string name="syndicate_tab_members">Members</string>
+    <string name="syndicate_compose_hint">Share something with the syndicate...</string>
+    <string name="syndicate_compose_send">Post</string>
+    <string name="syndicate_compose_attach_image">Attach image</string>
+    <string name="syndicate_compose_remove_image">Remove image</string>
+    <string name="syndicate_members_empty_title">No members yet</string>
+    <string name="syndicate_members_empty_body">This syndicate has no members yet.</string>
     <string name="syndicate_stale_banner">Showing the last loaded data. Pull down to retry.</string>
     <string name="syndicate_author_unknown">Member</string>
     <string name="syndicate_post_image_cd">Post image</string>

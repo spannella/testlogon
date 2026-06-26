@@ -271,6 +271,8 @@ private fun MyPostRow(
             onPostClick = { onPostClick() },
             // Management view: hide the consumer engagement action bar.
             showActionBar = false,
+            // #3 — every post here is the viewer's own, so a locked one shows its priced badge.
+            isOwnPost = true,
         )
         Box(modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 4.dp)) {
             IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag(MyPostsTestTags.OVERFLOW)) {

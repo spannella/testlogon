@@ -105,14 +105,17 @@ data class ScheduledManagerUiState(
     val isEmpty: Boolean get() = !loading && items.isEmpty()
 }
 
-/** #8 — edit-dialog state for one scheduled message (draft text + draft due time). */
+/** #8/#21/#22 — edit-dialog state for one scheduled message (draft text + draft due time + timezone). */
 data class ScheduledEditState(
     val messageId: String,
     /** Whether the body text can be edited (text-kind only). */
     val textEditable: Boolean,
     val draftText: String,
     val draftDeliverAtEpochSeconds: Long,
+    /** #21 — IANA zone the draft due-time wall-clock is interpreted in (defaults to the device zone). */
+    val timeZoneId: String = java.util.TimeZone.getDefault().id,
     val saving: Boolean = false,
+    val error: String? = null,
 )
 
 /** MSG — passphrase-unlock dialog state for an encrypted message. */
@@ -242,10 +245,18 @@ data class CountdownPickerState(
     val title: String = "",
     /** Chosen target as UTC epoch seconds; null until a future date/time is picked. */
     val targetEpochSeconds: Long? = null,
+    /** #32 — IANA zone the chosen target wall-clock is interpreted in (defaults to the device zone). */
+    val timeZoneId: String = java.util.TimeZone.getDefault().id,
+    /** #31 — optional text revealed when the countdown completes. */
+    val revealText: String = "",
+    /** #31 — optional image (local uri) revealed when the countdown completes. */
+    val revealImageUri: String? = null,
+    /** #31 — true while the reveal image is uploading on send. */
+    val sending: Boolean = false,
     val error: String? = null,
 ) {
     val isSendEnabled: Boolean
-        get() = title.trim().length in 1..200 && targetEpochSeconds != null
+        get() = !sending && title.trim().length in 1..200 && targetEpochSeconds != null
 }
 
 /** AND-139 — per-message unlock progress. */
@@ -435,6 +446,25 @@ data class ReplyDraft(
     val senderLabel: String,
 )
 
+/**
+ * #25/#27/#28 — one picked-but-not-yet-sent media item (a photo OR a short video), held in the
+ * composer so the user can stage a MIX of photos and videos (and several videos) in ONE message and
+ * keep adding more before sending. [localUri] is the content uri; [isVideo] selects the render +
+ * upload path.
+ */
+data class StagedMedia(
+    val localUri: String,
+    val isVideo: Boolean,
+)
+
+/** #29 — a picked-but-not-yet-sent FILE (document), staged so the user adds text/options first. */
+data class StagedFile(
+    val localUri: String,
+    val name: String,
+    val sizeBytes: Long,
+    val mime: String,
+)
+
 data class ComposerState(
     val draft: String = "",
     val charCount: Int = 0,
@@ -443,14 +473,19 @@ data class ComposerState(
     /** Optional send-time message options (view-once / locked / scheduled). */
     val options: MessageOptions = MessageOptions(),
     /**
-     * C5/C6 — picked-but-not-yet-sent images (local uris). The text field becomes the caption. One
-     * image sends as an image message; multiple send as ONE gallery message.
+     * #25/#27/#28 — picked-but-not-yet-sent media (photos AND short videos, mixed + ordered). The text
+     * field becomes the caption. ONE image -> image message; ONE video -> inline video message; any
+     * other combination (multiple items, or a mix of photos+videos) -> ONE gallery message.
      */
-    val stagedImageUris: List<String> = emptyList(),
-    /** C7 — a picked-but-not-yet-sent SHORT video (local uri); sent inline as kind="video". */
-    val stagedVideoUri: String? = null,
+    val stagedMedia: List<StagedMedia> = emptyList(),
+    /** #29 — a picked-but-not-yet-sent file; sent with the typed caption + options on Send. */
+    val stagedFile: StagedFile? = null,
 ) {
-    val hasStagedMedia: Boolean get() = stagedImageUris.isNotEmpty() || stagedVideoUri != null
+    /** Back-compat accessors (the staged photos / a lone staged video) over [stagedMedia]. */
+    val stagedImageUris: List<String> get() = stagedMedia.filterNot { it.isVideo }.map { it.localUri }
+    val stagedVideoUris: List<String> get() = stagedMedia.filter { it.isVideo }.map { it.localUri }
+
+    val hasStagedMedia: Boolean get() = stagedMedia.isNotEmpty() || stagedFile != null
 
     val isSendEnabled: Boolean
         get() = (draft.isNotBlank() || hasStagedMedia) && !overLimit &&
@@ -459,6 +494,8 @@ data class ComposerState(
 
     companion object {
         const val MAX_LENGTH = 4000
+        /** Server caps a gallery at 20 free items; cap staged media to keep one message valid. */
+        const val MAX_STAGED_MEDIA = 20
     }
 }
 
@@ -478,6 +515,8 @@ data class MessageOptions(
     val lockDescription: String? = null,
     /** Deliver-at epoch SECONDS in the future; null = send now. */
     val scheduledAtEpochSeconds: Long? = null,
+    /** #21 — IANA zone the scheduled wall-clock is expressed in (defaults to the device zone). */
+    val scheduledTimeZoneId: String = java.util.TimeZone.getDefault().id,
     /** Self-destruct lifetime in seconds after delivery; null = never expires. */
     val expiresInSeconds: Long? = null,
 ) {

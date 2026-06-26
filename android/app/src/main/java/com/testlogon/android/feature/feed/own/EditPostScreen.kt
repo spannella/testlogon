@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -42,7 +43,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.Alignment
@@ -56,8 +59,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.testlogon.android.data.feed.PostVisibility
-import com.testlogon.android.data.messaging.MessageMedia
-import com.testlogon.android.feature.messaging.media.VideoClipBubble
+import com.testlogon.android.feature.feed.compose.LocalVideoFullScreenPlayer
+import com.testlogon.android.feature.feed.compose.LocalVideoPreviewCell
 
 /**
  * FD1 / FD-EDIT — edit an owned post's TEXT, PHOTOS, AUDIENCE (visibility) and PAID-LOCK. Loads the
@@ -100,6 +103,8 @@ fun EditPostRoute(
     )
 }
 
+private const val MAX_EDIT_VIDEOS = 10
+
 /** Visibility chips offered for an in-place edit (subscribers is not an editable target). */
 private val EDIT_VISIBILITY_OPTIONS = listOf(PostVisibility.PUBLIC, PostVisibility.FOLLOWERS)
 
@@ -114,7 +119,7 @@ fun EditPostScreen(
     onAddPhotos: () -> Unit,
     onRemoveImage: (String) -> Unit,
     onAddVideo: () -> Unit = {},
-    onRemoveVideo: () -> Unit = {},
+    onRemoveVideo: (String) -> Unit = {},
     onSave: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
@@ -204,18 +209,19 @@ fun EditPostScreen(
                 }
             }
 
-            // #3 — VIDEO: show the attached video (playable) + add/replace/remove. Hidden while photos
-            // are attached (the backend treats video and photos as mutually exclusive); the Add-video
-            // button itself stays available and clears photos when used.
+            // #1 / #2 — VIDEOS: show ALL attached videos (existing + just-picked), each playable, + add more
+            // / remove. Images AND videos may coexist (B-FEEDMEDIA). A just-picked replacement/addition
+            // previews + plays from its LOCAL content uri immediately (fixes #1: the old VideoClipBubble
+            // only played the server url, so a fresh pick showed the OLD video / no preview).
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onAddVideo,
-                    enabled = !state.uploadingVideo,
+                    enabled = !state.uploadingVideo && state.videos.size < MAX_EDIT_VIDEOS,
                     modifier = Modifier.testTag("edit_add_video"),
                 ) {
                     Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text(
-                        if (state.videoId != null) "Replace video" else "Add video",
+                        if (state.videos.isEmpty()) "Add video" else "Add another",
                         modifier = Modifier.padding(start = 6.dp),
                     )
                 }
@@ -223,21 +229,18 @@ fun EditPostScreen(
                     CircularProgressIndicator(modifier = Modifier.size(20.dp))
                 }
             }
-            val videoSource = state.videoPlaybackUrl ?: state.videoLocalUri
-            if (videoSource != null) {
-                Box(modifier = Modifier.fillMaxWidth().testTag("edit_video_preview")) {
-                    VideoClipBubble(
-                        media = MessageMedia.VideoClip(
-                            playbackUrl = state.videoPlaybackUrl,
-                            localUri = state.videoLocalUri,
-                            uploadProgress = if (state.uploadingVideo) 0.5f else null,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    RemoveBadge(
-                        onClick = onRemoveVideo,
-                        modifier = Modifier.align(Alignment.TopEnd).testTag("edit_video_remove"),
-                    )
+            if (state.videos.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("edit_video_previews"),
+                ) {
+                    items(state.videos, key = { it.localUri ?: it.videoId ?: it.hashCode().toString() }) { v ->
+                        val key = v.localUri ?: v.videoId.orEmpty()
+                        EditVideoPreviewCell(
+                            video = v,
+                            onRemove = { onRemoveVideo(key) },
+                        )
+                    }
                 }
             }
 
@@ -277,6 +280,58 @@ fun EditPostScreen(
             }
             Box(Modifier.fillMaxWidth().size(8.dp))
         }
+    }
+}
+
+/**
+ * #1 / #2 — one attached-video preview cell. A JUST-PICKED video (local content uri) previews + plays via
+ * the shared [LocalVideoPreviewCell] (ExoPlayer on the local uri — fixes #1). An EXISTING server video
+ * shows its poster thumbnail and plays full-screen from its playback url on tap.
+ */
+@Composable
+private fun EditVideoPreviewCell(video: EditVideo, onRemove: () -> Unit) {
+    val local = video.localUri
+    if (local != null) {
+        LocalVideoPreviewCell(
+            localUri = local,
+            uploading = video.uploading,
+            onRemove = onRemove,
+            testTag = "edit_video_preview",
+        )
+        return
+    }
+    // Existing server video: poster + play -> full-screen ExoPlayer on the server url.
+    var playing by remember(video.playbackUrl) { mutableStateOf(false) }
+    Box(modifier = Modifier.size(width = 140.dp, height = 96.dp).testTag("edit_video_preview")) {
+        AsyncImage(
+            model = video.thumbnailUrl ?: video.playbackUrl,
+            contentDescription = "Attached video",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.Black)
+                .testTag("edit_video_thumb"),
+        )
+        if (video.playbackUrl != null) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = "Play video",
+                tint = Color.White,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(40.dp)
+                    .clickable { playing = true }
+                    .testTag("edit_video_play"),
+            )
+        }
+        RemoveBadge(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).testTag("edit_video_remove"),
+        )
+    }
+    if (playing && video.playbackUrl != null) {
+        LocalVideoFullScreenPlayer(uri = video.playbackUrl, onDismiss = { playing = false })
     }
 }
 
