@@ -1,5 +1,5 @@
 --- app/routers/newsfeed.py.bak_social_1782303162	2026-06-24 12:12:42.561145380 +0000
-+++ app/routers/newsfeed.py	2026-06-26 01:29:41.503727819 +0000
++++ app/routers/newsfeed.py	2026-06-29 04:19:04.779878874 +0000
 @@ -20,7 +20,7 @@
  from botocore.exceptions import ClientError
  from boto3.dynamodb.types import TypeSerializer
@@ -9,7 +9,23 @@
  from starlette.responses import StreamingResponse
  
  from app.core.aws import ddb
-@@ -1413,8 +1413,15 @@
+@@ -1327,6 +1327,15 @@
+         # only and carry no body; exempt them from the text-content requirement.
+         if getattr(self, "post_kind", "text") not in (None, "text"):
+             return self
++        # HOTFIX: media posts/comments (image/video/file attached) may carry no text body.
++        if (
++            getattr(self, "image_urls", None)
++            or getattr(self, "image_url", None)
++            or getattr(self, "video_id", None)
++            or getattr(self, "video_ids", None)
++            or getattr(self, "file_paths", None)
++        ):
++            return self
+         has_legacy = bool((self.body or "").strip())
+         has_plain = bool((self.body_plain or "").strip())
+         has_markdown = bool((self.body_markdown or "").strip())
+@@ -1413,8 +1422,15 @@
      image_variants: Optional[List[Dict[str, Any]]] = Field(default=None)
      tags: List[str] = Field(default_factory=list)
      video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
@@ -26,7 +42,7 @@
      unlock_price_cents: Optional[int] = Field(default=None, ge=0)
      unlock_limit: Optional[int] = Field(default=None, ge=1)
      lottery_tip_cents: Optional[int] = Field(default=None, ge=1)
-@@ -1535,6 +1542,10 @@
+@@ -1535,6 +1551,10 @@
      like_count: int = 0
      comment_count: int = 0
      video: Optional[PostVideoEmbed] = None
@@ -37,7 +53,7 @@
      # ADS-005: creator ad adjacency control
      allow_ads_near: bool = True
      # ENGAGE-002: Poll fields
-@@ -1754,11 +1765,22 @@
+@@ -1754,11 +1774,22 @@
                  raise ValueError("image_url is required for image comments")
              # Enforce platform upload path or https origin.
              self.image_url = _validate_comment_image_url(self.image_url)
@@ -60,7 +76,7 @@
  
  
  class CommentResponse(BaseModel):
-@@ -1818,7 +1840,24 @@
+@@ -1818,7 +1849,24 @@
  
  class EditPostRequest(ContentFieldsMixin):
      image_urls: Optional[List[str]] = None
@@ -86,7 +102,7 @@
      publish_at: Optional[int] = Field(default=None, ge=0)
      schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
      scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
-@@ -2305,9 +2344,32 @@
+@@ -2305,9 +2353,32 @@
          except Exception:
              video_embed = None
  
@@ -119,7 +135,7 @@
          "created_at": post.get("created_at", ""),
          "published_at": published_at,
          "status": status,
-@@ -2325,6 +2387,8 @@
+@@ -2325,6 +2396,8 @@
          "image_urls": image_urls,
          "image_variants": list(post.get("image_variants") or []),
          "video": video_embed,
@@ -128,7 +144,7 @@
          "file_attachments": file_attachments,
          "visibility": post.get("visibility", "followers"),
          "locked": bool(post.get("locked")),
-@@ -2418,6 +2482,7 @@
+@@ -2418,6 +2491,7 @@
          "comment_id": it["comment_id"],
          "post_id": it["post_id"],
          "author_id": it.get("user_id", ""),
@@ -136,7 +152,7 @@
          "created_at": it.get("created_at", ""),
          "updated_at": it.get("updated_at"),
          "deleted": bool(it.get("deleted")),
-@@ -3549,6 +3614,13 @@
+@@ -3549,6 +3623,13 @@
              )
  
      requested_lock_type = req.lock_type
@@ -150,7 +166,7 @@
      unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
      has_lottery_fields = any(
          value is not None
-@@ -3638,20 +3710,34 @@
+@@ -3638,20 +3719,34 @@
  
      locked = lock_type is not None
  
@@ -198,7 +214,7 @@
  
      # --- ENGAGE-002: Poll/Survey validation ---
      req_post_type = getattr(req, "post_type", None) or "standard"
-@@ -3727,6 +3813,7 @@
+@@ -3727,6 +3822,7 @@
          "image_urls": req.image_urls,
          "image_variants": list(getattr(req, "image_variants", None) or []),
          "video_id": video_id,
@@ -206,7 +222,7 @@
          "visibility": req.visibility,
          "locked": locked,
          "lock_type": lock_type,
-@@ -3865,6 +3952,7 @@
+@@ -3865,6 +3961,7 @@
          image_urls=req.image_urls,
          tags=all_tags,
          video=None,
@@ -214,7 +230,7 @@
          visibility=req.visibility,
          locked=locked,
          lock_type=lock_type,
-@@ -4103,6 +4191,62 @@
+@@ -4103,6 +4200,62 @@
              expr_vals[":unlock_limit"] = req.unlock_limit
          else:
              remove_parts.append("unlock_limit")
@@ -277,7 +293,7 @@
      update_expr = f"SET {', '.join(set_parts)}"
      if remove_parts:
          update_expr = f"{update_expr} REMOVE {', '.join(remove_parts)}"
-@@ -4121,7 +4265,7 @@
+@@ -4121,7 +4274,7 @@
                      "TableName": APP_TABLE,
                      "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
                      "UpdateExpression": update_expr,
@@ -286,7 +302,7 @@
                      "ExpressionAttributeValues": _ddb_serialize_map(expr_vals_tx),
                      "ConditionExpression": condition_expr,
                  }
-@@ -4174,10 +4318,13 @@
+@@ -4174,10 +4327,13 @@
          updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {}
          record_newsfeed_schedule_operation(operation="edit", outcome="success")
      else:
@@ -301,7 +317,7 @@
              expr_vals=expr_vals,
          )
      return _post_to_dict(updated, viewer_id=user_id)
-@@ -4347,6 +4494,24 @@
+@@ -4347,6 +4503,24 @@
      return user_sub
  
  
@@ -326,7 +342,7 @@
  def _post_fadt_meta_out(meta: Dict[str, Any]) -> Dict[str, Any]:
      return {
          "poll_id": meta.get("poll_id"),
-@@ -4760,6 +4925,11 @@
+@@ -4760,6 +4934,11 @@
              logger.debug("analytics hook: like_post engagement", exc_info=True)
          # NRS-003: For-You engagement signal (no-op unless flag on).
          _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="like")
@@ -338,7 +354,7 @@
      except ClientError as exc:
          if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
              raise HTTPException(
-@@ -4852,6 +5022,11 @@
+@@ -4852,6 +5031,11 @@
              payment_method_id=req.payment_method_id,
              extra_meta={"post_id": post_id},
          ))
@@ -350,7 +366,7 @@
  
      # GAP-0026: Best-effort license revenue split for tipped post.
      # Wrapped in try/except so a split failure never breaks the tip transaction.
-@@ -5663,7 +5838,15 @@
+@@ -5663,7 +5847,15 @@
      started = time.perf_counter()
  
      def _chronological_fallback(source: str):
@@ -367,7 +383,7 @@
          chrono = dict(chrono)
          chrono["source"] = source
          record_newsfeed_recsys_request(mode="for_you", source=source)
-@@ -6041,6 +6224,11 @@
+@@ -6041,6 +6233,11 @@
              notif_type="comment_on_post",
              payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
          )
@@ -379,7 +395,7 @@
          # GAP-0355: also emit a social alert (alerts table + bell badge).
          # Best-effort: never break comment creation.
          try:
-@@ -6200,8 +6388,9 @@
+@@ -6200,8 +6397,9 @@
          raise HTTPException(status_code=403, detail="Not your comment")
      if target.get("deleted"):
          raise HTTPException(status_code=409, detail="Comment deleted")
@@ -391,7 +407,7 @@
      if target.get("kind", "text") in ("gif", "sticker", "image"):
          raise HTTPException(status_code=400, detail="Media comments cannot be edited")
  
-@@ -6210,11 +6399,32 @@
+@@ -6210,11 +6408,32 @@
  
      content = _content_from_payload(req)
      _emit_newsfeed_content_metric("edit_comment", surface="comment", body_format=content.get("body_format", "plain"))

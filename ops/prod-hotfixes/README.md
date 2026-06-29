@@ -150,3 +150,13 @@ HONEST GAPS (no fake success):
   (MediaMTX / AWS MediaLive+MediaPackage+CloudFront) + an app RTMP/WebRTC publisher. NOT a hotfix.
 - #7 image-comment POSTING (no public comment-image presign) + #12 syndicate comments/multi-media —
   reported, need backend endpoints.
+
+## Hotfix 2026-06-29 — newsfeed media-only posts (regression triage)
+
+User reported "image/video upload not working for a newsfeed post". Root cause: `POST /posts`
+returned 422 because `ContentFieldsMixin.validate_content_fields` required a text body and only
+exempted gif/sticker comments + countdown posts — a post (or comment) carrying an image/video/file
+but no caption was rejected. Fix: exempt any payload that carries media
+(image_urls/image_url/video_id/video_ids/file_paths) from the text-body requirement.
+`app_routers_newsfeed.py.patch` regenerated to include it. (Server confirmed healthy; the actual
+uploads target local-uploads which exists; this was purely the post-create validation.)
