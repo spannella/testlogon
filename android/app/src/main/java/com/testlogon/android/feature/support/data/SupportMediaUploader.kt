@@ -123,21 +123,34 @@ class SupportMediaUploaderImpl @Inject constructor(
         if (!put.success) {
             throw IOException("Upload failed (HTTP ${put.httpStatus})")
         }
-        val node = filesApi.completeUpload(
-            CompleteUploadRequest(
-                path = presign.path,
-                key = presign.key,
-                ticket_id = presign.ticket_id,
-                content_type = ctype,
-            ),
-        ).toDomain()
+        // The bytes are already uploaded (PUT 2xx) and complete-upload runs server-side, but
+        // /v1/fs/complete-upload returns a MINIMAL envelope ({ok,path,size,content_type,...}) with no
+        // `name`/`type`, so decoding it into the full FileEntryDto throws JsonDataException at the Moshi
+        // response-body converter (on the OkHttp callback thread) - the helpdesk video/PDF attach crash.
+        // Mirror the Files UploadCoordinator: try the typed node, but never crash on the minimal body -
+        // fall back to the dest path + the resolved local metadata. (NullPointerException is the
+        // belt-and-braces twin of the JsonDataException fallback used elsewhere for this same endpoint.)
+        val node = try {
+            filesApi.completeUpload(
+                CompleteUploadRequest(
+                    path = presign.path,
+                    key = presign.key,
+                    ticket_id = presign.ticket_id,
+                    content_type = ctype,
+                ),
+            ).toDomain()
+        } catch (e: com.squareup.moshi.JsonDataException) {
+            null
+        } catch (e: NullPointerException) {
+            null
+        }
         SupportMediaItem(
             kind = SupportMediaKind.FILE_REF,
-            path = node.path.ifBlank { presign.path },
-            name = node.name.ifBlank { safeName },
-            contentType = node.contentType ?: ctype,
-            sizeBytes = node.sizeBytes ?: info.sizeBytes.takeIf { it > 0 },
-            thumbnail = node.posterUrl,
+            path = (node?.path?.ifBlank { presign.path }) ?: presign.path,
+            name = (node?.name?.ifBlank { safeName }) ?: safeName,
+            contentType = node?.contentType ?: ctype,
+            sizeBytes = node?.sizeBytes ?: info.sizeBytes.takeIf { it > 0 },
+            thumbnail = node?.posterUrl,
         )
     }
 

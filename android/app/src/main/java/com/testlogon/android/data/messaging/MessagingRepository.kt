@@ -90,6 +90,11 @@ interface MessagingRepository {
         lockDescription: String? = null,
         sendAtEpochSeconds: Long? = null,
         expiresInSeconds: Long? = null,
+        // #6 (B-COUNTDOWN3) — attach a countdown to this (any-kind) text message.
+        countdownTargetEpochSeconds: Long? = null,
+        countdownTitle: String? = null,
+        countdownRevealText: String? = null,
+        countdownRevealImage: LotteryImageRef? = null,
     ): ApiResult<Message>
 
     /** Apply an inbound realtime new-message event to the caches. */
@@ -127,8 +132,47 @@ interface MessagingRepository {
     /** AND-140 — pinned messages (resolves pin refs against the cache, fetching any miss). */
     suspend fun pinnedMessages(conversationId: String, cursor: String? = null): ApiResult<List<Message>>
 
-    /** AND-140 — edit a message body (PATCH field `text`); reconciles the cached row to EDITED. */
-    suspend fun editMessage(conversationId: String, messageId: String, text: String): ApiResult<Message>
+    /**
+     * AND-140 / B-MSGEDIT #5 — edit a message (PATCH .../messages/{mid}); reconciles the cached row.
+     *
+     * In addition to [text], full media control is supported: pass ONE media kind to add/replace it
+     * (promoting a text message), or [removeMedia]=true to strip all media back to text:
+     *  - [image]                          -> image message (descriptor from [uploadEditImage]).
+     *  - [freeImages]+[lockedImages]      -> gallery message (descriptors from [uploadEditImage]).
+     *  - [filePath]                       -> file message (server VFS path from [uploadEditFile]).
+     *  - [videoId]                        -> video_share message (a library video id).
+     * At least one of text/media/removeMedia must be meaningful. Encrypted messages still unsupported.
+     */
+    suspend fun editMessage(
+        conversationId: String,
+        messageId: String,
+        text: String? = null,
+        image: MessageImageDto? = null,
+        filePath: String? = null,
+        videoId: String? = null,
+        freeImages: List<GalleryImageDto>? = null,
+        lockedImages: List<GalleryImageDto>? = null,
+        removeMedia: Boolean = false,
+    ): ApiResult<Message>
+
+    /**
+     * B-MSGEDIT #5 — process + presign + PUT a picked image so it can be attached on [editMessage]
+     * (reuses the same conversation image-presign flow as the composer / scheduled-edit). Returns the
+     * uploaded image descriptor (bucket/key/size). Does NOT mutate the message itself.
+     */
+    suspend fun uploadEditImage(conversationId: String, localUri: String): ApiResult<MessageImageDto>
+
+    /**
+     * B-MSGEDIT #5 / #4 — drive a picked file through the fs upload (presign -> PUT -> complete) so it
+     * can be attached on [editMessage] / [rescheduleMessage]. Returns the server VFS path the
+     * complete-upload echoed back (the value `file_path` expects). Does NOT mutate the message itself.
+     */
+    suspend fun uploadEditFile(
+        conversationId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<String>
 
     /** AND-140 — edit history (newest-first; read-through, not persisted). */
     suspend fun editHistory(
@@ -165,6 +209,11 @@ interface MessagingRepository {
         // message is currently text-only the server promotes its kind to "image" so the photo is
         // honored. Pass the descriptor returned by [uploadRescheduleImage].
         image: MessageImageDto? = null,
+        // #4 (B-MSGEDIT) — attach/replace a FILE or a library VIDEO on a still-pending scheduled
+        // message (even an originally text-only one; the server promotes its kind on save). [filePath]
+        // is the server VFS path from [uploadEditFile]; [videoId] is a library video id.
+        filePath: String? = null,
+        videoId: String? = null,
     ): ApiResult<ScheduledMessage>
 
     /**
@@ -903,6 +952,10 @@ class MessagingRepositoryImpl @Inject constructor(
         lockDescription: String?,
         sendAtEpochSeconds: Long?,
         expiresInSeconds: Long?,
+        countdownTargetEpochSeconds: Long?,
+        countdownTitle: String?,
+        countdownRevealText: String?,
+        countdownRevealImage: LotteryImageRef?,
     ): ApiResult<Message> = withContext(io) {
         val req = SendTextMessageReq(
             text = text,
@@ -912,6 +965,19 @@ class MessagingRepositoryImpl @Inject constructor(
             lockDescription = lockDescription,
             sendAt = sendAtEpochSeconds,
             expiresInSeconds = expiresInSeconds,
+            // #6 (B-COUNTDOWN3) — countdown attached to this message (any kind).
+            countdownTargetDatetime = countdownTargetEpochSeconds,
+            countdownTitle = countdownTitle?.takeIf { it.isNotBlank() },
+            countdownRevealText = countdownRevealText?.takeIf { it.isNotBlank() },
+            countdownRevealImage = countdownRevealImage?.let {
+                CountdownRevealImageReq(
+                    bucket = it.bucket,
+                    key = it.key,
+                    contentType = it.contentType,
+                    width = it.width,
+                    height = it.height,
+                )
+            },
         )
         when (val result = apiCall { api.sendMessage(conversationId, req) }) {
             is ApiResult.Success -> {
@@ -1055,9 +1121,24 @@ class MessagingRepositoryImpl @Inject constructor(
     override suspend fun editMessage(
         conversationId: String,
         messageId: String,
-        text: String,
+        text: String?,
+        image: MessageImageDto?,
+        filePath: String?,
+        videoId: String?,
+        freeImages: List<GalleryImageDto>?,
+        lockedImages: List<GalleryImageDto>?,
+        removeMedia: Boolean,
     ): ApiResult<Message> = withContext(io) {
-        when (val r = apiCall { api.editMessage(conversationId, messageId, EditMessageIn(text)) }) {
+        val body = EditMessageIn(
+            text = text,
+            image = image,
+            filePath = filePath,
+            videoId = videoId,
+            freeImages = freeImages,
+            lockedImages = lockedImages,
+            removeMedia = removeMedia.takeIf { it },
+        )
+        when (val r = apiCall { api.editMessage(conversationId, messageId, body) }) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain()
                 reconcilePreservingLocalFlags(message)
@@ -1066,6 +1147,56 @@ class MessagingRepositoryImpl @Inject constructor(
             is ApiResult.Failure -> r
             is ApiResult.NetworkError -> r
         }
+    }
+
+    override suspend fun uploadEditImage(
+        conversationId: String,
+        localUri: String,
+    ): ApiResult<MessageImageDto> =
+        // Identical presign+PUT flow as the scheduled-edit photo attach; reuse it verbatim.
+        uploadRescheduleImage(conversationId, localUri)
+
+    override suspend fun uploadEditFile(
+        conversationId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<String> = withContext(io) {
+        val uri = Uri.parse(localUri)
+        val info = uriMetadata.resolve(uri, fallbackMime = mimeType)
+        val resolvedName = info.displayName ?: fileName
+        // Same VFS destination the file-message outbox uses; complete-upload echoes back the path.
+        val remotePath = "messages/$conversationId/$resolvedName"
+        var ref: com.testlogon.android.data.upload.AttachmentRef? = null
+        var uploadError: ApiError? = null
+        uploader.upload(
+            UploadRequest(
+                uri = uri,
+                mimeType = info.mimeType,
+                category = "message",
+                sizeBytes = info.sizeBytes,
+                displayName = resolvedName,
+                presignPath = "v1/fs/presign-upload",
+                confirmPath = "v1/fs/complete-upload",
+                remotePath = remotePath,
+            ),
+        ).collect { progress ->
+            when (progress) {
+                is UploadProgress.Succeeded -> ref = progress.attachment
+                is UploadProgress.Failed -> uploadError = ApiError(
+                    status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                    message = progress.error.message ?: "Upload failed",
+                )
+                UploadProgress.Cancelled ->
+                    uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                else -> Unit
+            }
+        }
+        val attachment = ref
+            ?: return@withContext ApiResult.Failure(
+                uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+            )
+        ApiResult.Success(attachment.remotePath ?: remotePath)
     }
 
     override suspend fun editHistory(
@@ -1130,8 +1261,16 @@ class MessagingRepositoryImpl @Inject constructor(
         text: String?,
         sendAtEpochSeconds: Long?,
         image: MessageImageDto?,
+        filePath: String?,
+        videoId: String?,
     ): ApiResult<ScheduledMessage> = withContext(io) {
-        val req = RescheduleMessageReq(text = text, sendAt = sendAtEpochSeconds, image = image)
+        val req = RescheduleMessageReq(
+            text = text,
+            sendAt = sendAtEpochSeconds,
+            image = image,
+            filePath = filePath,
+            videoId = videoId,
+        )
         when (val r = apiCall { api.rescheduleMessage(conversationId, messageId, req) }) {
             is ApiResult.Success -> ApiResult.Success(r.data.toScheduledDomain())
             is ApiResult.Failure -> r
@@ -3193,7 +3332,6 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
     val sticker = media as? MessageMedia.Sticker
     val poll = media as? MessageMedia.MeetingPoll
     val fadt = media as? MessageMedia.FindDateTime
-    val countdown = media as? MessageMedia.Countdown
     val calEvent = media as? MessageMedia.CalendarEvent
     val calShare = media as? MessageMedia.CalendarShare
     val paid = (media as? MessageMedia.Paid)?.monetization
@@ -3248,10 +3386,14 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         pollCreatorId = poll?.creatorId ?: fadt?.creatorId,
         pollStatus = poll?.status ?: fadt?.status,
         pollConfirmedSlotId = poll?.confirmedSlotId,
-        countdownTitle = countdown?.title,
-        countdownTargetEpochSeconds = countdown?.targetEpochSeconds,
-        countdownEventType = countdown?.associatedEventType?.wire(),
-        countdownEventId = countdown?.associatedEventId,
+        // #6 (B-COUNTDOWN3) — persist from the transient countdown attribute (a countdown can now
+        // ride any message kind; it is no longer a MessageMedia.Countdown). Reveal media is not cached.
+        countdownTitle = this.countdown?.title,
+        countdownTargetEpochSeconds = this.countdown?.targetEpochSeconds,
+        countdownEventType = null,
+        // #6 (B-COUNTDOWN3) — persist the reveal payload in the unused countdownEventId string column
+        // (no schema bump) so the live thread (which observes Room) shows the reveal at target.
+        countdownEventId = countdownRevealToBlob(this.countdown?.reveal),
         calEventId = calEvent?.eventId,
         calEventCalendarId = calEvent?.calendarId,
         calEventName = calEvent?.name,
@@ -3361,6 +3503,46 @@ internal fun galleryToJson(images: List<MessageMedia.GalleryImage>): String =
 /** #24 - serialize the revealed lottery media list as "url|isVideo" records (one per line). */
 internal fun revealedMediaToJson(items: List<RevealedMediaItem>): String =
     items.joinToString(GALLERY_RECORD_SEP) { "${it.url}|${if (it.isVideo) "1" else "0"}" }
+
+/**
+ * #6 (B-COUNTDOWN3) — serialize a countdown reveal payload into the (otherwise-unused) countdown
+ * string column so it survives the Room cache round-trip WITHOUT a schema bump. Records (sep="\n"):
+ *   T|<base64(text)>        — present only when reveal text is set
+ *   M|<url>|<isVideo 0/1>   — one per reveal media item
+ * Returns null for an empty/absent reveal so the column stays null for non-countdown rows.
+ */
+internal fun countdownRevealToBlob(reveal: com.testlogon.android.data.messaging.CountdownReveal?): String? {
+    if (reveal == null || reveal.isEmpty) return null
+    val recs = buildList {
+        reveal.text?.takeIf { it.isNotBlank() }?.let {
+            val b64 = android.util.Base64.encodeToString(it.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+            add("T|" + b64)
+        }
+        reveal.media.forEach { add("M|" + it.url + "|" + (if (it.isVideo) "1" else "0")) }
+    }
+    return recs.takeIf { it.isNotEmpty() }?.joinToString(GALLERY_RECORD_SEP)
+}
+
+/** #6 (B-COUNTDOWN3) — parse a persisted countdown reveal blob back into [CountdownReveal] (null if empty). */
+internal fun countdownRevealFromBlob(blob: String?): com.testlogon.android.data.messaging.CountdownReveal? {
+    if (blob.isNullOrBlank()) return null
+    var text: String? = null
+    val media = mutableListOf<com.testlogon.android.data.messaging.CountdownRevealMedia>()
+    blob.split(GALLERY_RECORD_SEP).forEach { line ->
+        if (line.isBlank()) return@forEach
+        val parts = line.split("|")
+        when (parts.getOrNull(0)) {
+            "T" -> parts.getOrNull(1)?.let {
+                text = runCatching { String(android.util.Base64.decode(it, android.util.Base64.NO_WRAP), Charsets.UTF_8) }.getOrNull()
+            }
+            "M" -> parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { url ->
+                media.add(com.testlogon.android.data.messaging.CountdownRevealMedia(url = url, isVideo = parts.getOrNull(2) == "1"))
+            }
+        }
+    }
+    val r = com.testlogon.android.data.messaging.CountdownReveal(text = text, media = media)
+    return r.takeIf { !it.isEmpty }
+}
 
 /** #24 - parse the revealed lottery media records back into [RevealedMediaItem]s. */
 internal fun revealedMediaFromJson(json: String?): List<RevealedMediaItem> {
@@ -3582,12 +3764,8 @@ internal fun MessageEntity.toDomain(): Message = Message(
             endHour = fadtEndHour,
             slotDurationMinutes = fadtSlotDurationMinutes,
         )
-                "countdown" -> MessageMedia.Countdown(
-            title = countdownTitle.orEmpty(),
-            targetEpochSeconds = countdownTargetEpochSeconds ?: 0L,
-            associatedEventType = countdownEventType.toAssociatedEventType(),
-            associatedEventId = countdownEventId,
-        )
+        // #6 (B-COUNTDOWN3) — a persisted countdown is restored as the transient Message.countdown
+        // attribute (below), not as a media kind, so it renders via the shared overlay path.
         "calendar_event" -> MessageMedia.CalendarEvent(
             eventId = calEventId.orEmpty(),
             calendarId = calEventCalendarId.orEmpty(),
@@ -3647,6 +3825,16 @@ internal fun MessageEntity.toDomain(): Message = Message(
             MessageMedia.None
         }
     },
+    // #6 (B-COUNTDOWN3) — restore a persisted countdown as the transient attribute. The reveal media
+    // is not persisted; once the row refetches from the wire the full reveal repopulates.
+    countdown = countdownTargetEpochSeconds?.let { tgt ->
+        com.testlogon.android.data.messaging.MessageCountdown(
+            targetEpochSeconds = tgt,
+            title = countdownTitle?.takeIf { it.isNotBlank() },
+            // #6 (B-COUNTDOWN3) — restore the reveal blob persisted in the countdownEventId column.
+            reveal = countdownRevealFromBlob(countdownEventId),
+        )
+    },
 )
 
 internal fun OutboxMessageEntity.toDomain(): Message = Message(
@@ -3694,12 +3882,18 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
             localUri = attachmentLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
         )
-        "countdown" -> MessageMedia.Countdown(
-            // Optimistic countdown: title in `text`, target epoch in voiceDurationSeconds (Double).
-            title = text,
-            targetEpochSeconds = (voiceDurationSeconds ?: 0.0).toLong(),
-            associatedEventType = AssociatedEventType.CUSTOM,
-        )
+        // #6 (B-COUNTDOWN3) — an optimistic countdown is carried by the transient attribute (below);
+        // the base text holds the message body (may be blank for a title-only countdown).
         else -> MessageMedia.None
+    },
+    // #6 — optimistic countdown attribute: title persisted in `text`, target epoch in the reused
+    // voiceDurationSeconds column. Title-only (no body) renders the headline in the overlay.
+    countdown = if (kind == "countdown") {
+        com.testlogon.android.data.messaging.MessageCountdown(
+            targetEpochSeconds = (voiceDurationSeconds ?: 0.0).toLong(),
+            title = text.takeIf { it.isNotBlank() },
+        )
+    } else {
+        null
     },
 )

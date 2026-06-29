@@ -51,6 +51,7 @@ class MediaCaptureViewModelTest {
             goLiveCalls++
             return result
         }
+        override suspend fun startPreview() {}
         override fun stop() { stopCalls++ }
     }
 

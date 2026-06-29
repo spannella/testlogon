@@ -108,6 +108,7 @@ class IngestViewModelTest {
         private val _state = MutableStateFlow(initial)
         override val state: StateFlow<PublishState> = _state.asStateFlow()
         override suspend fun goLive(sessionId: String, inputId: String): GoLiveResult = result
+        override suspend fun startPreview() {}
         override fun stop() { stopCalls++ }
     }
 

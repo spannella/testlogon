@@ -73,10 +73,24 @@ data class ConversationPinOut(
     @Json(name = "is_active") val isActive: Boolean = true,
 )
 
-/** PATCH .../messages/{mid} body = EditMessageIn. Required field is `text` (NOT `body`). */
+/**
+ * PATCH .../messages/{mid} body = EditMessageIn (B-MSGEDIT #5 — full media control on edit).
+ *
+ * The backend now accepts, in addition to [text], ONE media kind per edit — promoting a text
+ * message to an image / gallery / file / video_share — or [removeMedia] to strip all media back to
+ * text. Pass exactly one of [image] / [freeImages]+[lockedImages] / [filePath] / [videoId] (or none
+ * for a text-only edit; or [removeMedia]=true). [text] is now OPTIONAL (Moshi omits it when null) so
+ * a media-only edit is possible. Mirrors the scheduled-edit (RescheduleMessageReq) media shape.
+ */
 @JsonClass(generateAdapter = true)
 data class EditMessageIn(
-    val text: String,
+    val text: String? = null,
+    val image: MessageImageDto? = null,
+    @Json(name = "file_path") val filePath: String? = null,
+    @Json(name = "video_id") val videoId: String? = null,
+    @Json(name = "free_images") val freeImages: List<GalleryImageDto>? = null,
+    @Json(name = "locked_images") val lockedImages: List<GalleryImageDto>? = null,
+    @Json(name = "remove_media") val removeMedia: Boolean? = null,
 )
 
 /** GET .../hidden-messages -> HiddenMessagesPageOut: full MessageOut items, cursor-paginated. */

@@ -43,6 +43,9 @@ class HostControlViewModel @Inject constructor(
     private val repository: HostControlRepository,
     private val broadcastPublisher: BroadcastPublisher,
     savedState: SavedStateHandle,
+    // #7c — the real native-WebRTC renderer (RealVideoRenderer) so "Manage broadcast" can show a live
+    // self-view PIP of the host's own camera (the local track published by the ingest publisher).
+    val videoRenderer: com.testlogon.android.core.webrtc.ui.VideoRenderer,
 ) : ViewModel() {
 
     val sessionId: String = savedState.get<String>(ARG_SESSION_ID).orEmpty()

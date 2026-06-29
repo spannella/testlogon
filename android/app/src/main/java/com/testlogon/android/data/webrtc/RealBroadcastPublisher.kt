@@ -65,6 +65,30 @@ class RealBroadcastPublisher @Inject constructor(
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
+    private var videoTrack: VideoTrack? = null
+
+    /**
+     * #7a — open the front camera and publish the local video track to [CallMediaHolder] WITHOUT
+     * building a peer, so the host sees a real self-preview before tapping Go Live. Idempotent: if a
+     * track is already running (preview or live) it is reused. Runs on the IO/default thread; capture
+     * start is cheap and the WebRTC camera APIs are thread-safe for this usage.
+     */
+    override suspend fun startPreview() {
+        if (videoTrack != null) {
+            // Already previewing/publishing: make sure the holder points at the running track.
+            mediaHolder.localVideo.value = videoTrack
+            return
+        }
+        runCatching {
+            val vTrack = startCamera()
+            if (vTrack != null) {
+                vTrack.setEnabled(true)
+                mediaHolder.localVideo.value = vTrack
+                // NB: leave _state at Idle — a preview is NOT a publish. Moving it to Starting would make
+                // the Ingest VM fold to Negotiating and disable the "Go Live" button (#7a regression).
+            }
+        }.onFailure { Log.d("TLBCAST", "startPreview error ${it.javaClass.simpleName}") }
+    }
 
     override suspend fun goLive(sessionId: String, inputId: String): GoLiveResult {
         return try {
@@ -118,7 +142,9 @@ class RealBroadcastPublisher @Inject constructor(
             pc.addTrack(aTrack, listOf("bcast"))
             audioSource = aSrc
 
-            val vTrack = startCamera() ?: return fail("camera")
+            // Reuse a preview that is already running (#7a) so we don't re-open the camera; otherwise
+            // open it now. Either way the local track is published to the media holder for the preview.
+            val vTrack = videoTrack ?: startCamera() ?: return fail("camera")
             vTrack.setEnabled(true)
             mediaHolder.localVideo.value = vTrack
             pc.addTrack(vTrack, listOf("bcast"))
@@ -212,7 +238,9 @@ class RealBroadcastPublisher @Inject constructor(
         capturer = cap
         surfaceHelper = helper
         videoSource = source
-        return factory.createVideoTrack("bcast_video", source)
+        val track = factory.createVideoTrack("bcast_video", source)
+        videoTrack = track
+        return track
     }
 
     /**
@@ -245,7 +273,8 @@ class RealBroadcastPublisher @Inject constructor(
         runCatching { audioSource?.dispose() }
         runCatching { peer?.close() }
         runCatching { peer?.dispose() }
-        capturer = null; surfaceHelper = null; videoSource = null; audioSource = null; peer = null
+        runCatching { videoTrack?.dispose() }
+        capturer = null; surfaceHelper = null; videoSource = null; audioSource = null; peer = null; videoTrack = null
         mediaHolder.localVideo.value = null
     }
 

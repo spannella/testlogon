@@ -240,6 +240,12 @@ data class SendTextMessageReq(
     @Json(name = "send_at") val sendAt: Long? = null,
     @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
     val encryption: MessageEncryptionEnvelopeDto? = null,
+    // #6 (B-COUNTDOWN3) — attach a countdown to THIS (any-kind) message. target_datetime is UTC
+    // epoch seconds; the server reveals the optional payload once the target passes.
+    @Json(name = "countdown_target_datetime") val countdownTargetDatetime: Long? = null,
+    @Json(name = "countdown_title") val countdownTitle: String? = null,
+    @Json(name = "countdown_reveal_text") val countdownRevealText: String? = null,
+    @Json(name = "countdown_reveal_image") val countdownRevealImage: CountdownRevealImageReq? = null,
 )
 
 /**

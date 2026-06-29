@@ -236,6 +236,21 @@ data class CountdownRevealMedia(
     val isVideo: Boolean,
 )
 
+/**
+ * #6 (B-COUNTDOWN3) — a countdown attached as an OPTION to ANY message (text/image/video/file),
+ * surfaced in addition to whatever [MessageMedia] the message carries. The bubble overlays a live
+ * ticker and, once [targetEpochSeconds] passes, the [reveal] payload. Transient: derived from the
+ * wire flat fields on every fetch/realtime, never persisted to Room (re-derivable on refetch, like
+ * the receipt counts). Distinct from the legacy standalone [MessageMedia.Countdown].
+ */
+data class MessageCountdown(
+    val targetEpochSeconds: Long,
+    /** Optional headline shown above the ticker (the legacy standalone countdown's title). */
+    val title: String? = null,
+    /** Reveal payload surfaced ONLY once the target passes (server emits it then; null until). */
+    val reveal: CountdownReveal? = null,
+)
+
 /** AND-138 — calendar-share permission ("read"|"write" on the wire). */
 enum class SharePermission { READ, WRITE, UNKNOWN }
 
@@ -514,6 +529,12 @@ data class Message(
     val scheduled: Boolean = false,
     /** #20 — epoch SECONDS the scheduled message is due to be delivered (0 when not scheduled). */
     val deliverAtEpochSeconds: Long = 0L,
+    /**
+     * #6 (B-COUNTDOWN3) — an optional countdown attached to THIS message regardless of [kind]/[media]
+     * (text/image/video/file may all carry one). Transient (mapped from the wire flat fields; NOT
+     * Room-persisted — re-derived on every refetch, like the receipt counts).
+     */
+    val countdown: MessageCountdown? = null,
 )
 
 /** A conversation summary for the inbox list. */
@@ -605,6 +626,33 @@ internal fun MessageDto.toDomain(
         // #20 — server marks still-pending scheduled sends; the thread hides these (managed separately).
         scheduled = scheduled ?: false,
         deliverAtEpochSeconds = deliverAt ?: 0L,
+        // #6 (B-COUNTDOWN3) — a countdown can now ride ANY message (not just kind="countdown"):
+        // the server surfaces target_datetime + countdown_title + countdown_reveal on the message
+        // itself. Map it to the transient attribute whenever a target is present.
+        countdown = toMessageCountdown(),
+    )
+}
+
+/**
+ * #6 (B-COUNTDOWN3) — maps the flat wire countdown fields (target_datetime / countdown_title /
+ * countdown_reveal) onto the transient [MessageCountdown] for ANY message that carries a target.
+ * The reveal is mapped only once the server marks it revealed (now >= target). Pure / JVM-testable.
+ */
+internal fun MessageDto.toMessageCountdown(): MessageCountdown? {
+    val target = targetDatetime ?: return null
+    return MessageCountdown(
+        targetEpochSeconds = target,
+        title = countdownTitle?.takeIf { it.isNotBlank() },
+        reveal = countdownReveal?.takeIf { it.revealed }?.let { rv ->
+            CountdownReveal(
+                text = rv.text?.takeIf { it.isNotBlank() },
+                media = rv.media.orEmpty().mapNotNull { m ->
+                    m.url?.takeIf { it.isNotBlank() }?.let { u ->
+                        CountdownRevealMedia(url = u, isVideo = (m.mediaKind == "video"))
+                    }
+                },
+            )
+        }?.takeIf { !it.isEmpty },
     )
 }
 
@@ -716,24 +764,9 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         status = meetingPoll.status,
         confirmedSlotId = meetingPoll.confirmedSlotId,
     )
-    // AND-137 — countdown (flat title + target_datetime).
-    kind == "countdown" && countdownTitle != null && targetDatetime != null -> MessageMedia.Countdown(
-        title = countdownTitle,
-        targetEpochSeconds = targetDatetime,
-        associatedEventType = associatedEventType.toAssociatedEventType(),
-        associatedEventId = associatedEventId,
-        // #31 — server only emits countdown_reveal once revealed (now >= target); map it through.
-        reveal = countdownReveal?.takeIf { it.revealed }?.let { rv ->
-            CountdownReveal(
-                text = rv.text?.takeIf { it.isNotBlank() },
-                media = rv.media.orEmpty().mapNotNull { m ->
-                    m.url?.takeIf { it.isNotBlank() }?.let { u ->
-                        CountdownRevealMedia(url = u, isVideo = (m.mediaKind == "video"))
-                    }
-                },
-            )
-        },
-    )
+    // #6 (B-COUNTDOWN3) — a countdown is no longer its own media kind; it rides ANY message as the
+    // transient Message.countdown attribute (mapped in toMessageCountdown) and renders as an overlay.
+    // A standalone kind="countdown" message therefore carries no separate media here (falls through).
     // AND-138 — calendar event / share (nested attachments).
     calendarEvent != null -> MessageMedia.CalendarEvent(
         eventId = calendarEvent.eventId,

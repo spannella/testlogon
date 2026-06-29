@@ -31,6 +31,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
+import com.testlogon.android.feature.player.ActivityPipController
+import com.testlogon.android.feature.player.LocalPipController
 import com.testlogon.android.feature.health.HealthBannerHost
 import com.testlogon.android.navigation.AppNavHost
 import com.testlogon.android.navigation.applink.DeepLinkRouter
@@ -48,6 +52,14 @@ class MainActivity : FragmentActivity() {
     // Hoisted so onNewIntent can deliver warm/foreground deep links (AND-061, singleTask launchMode).
     // NavHostController so AND-108 push-tap routing can reuse the notification target extension.
     private var navController: NavHostController? = null
+
+    // #8 — Picture-in-Picture controller backed by THIS Activity (single-activity app). Video players
+    // call enterPip(); onUserLeaveHint auto-enters when a video is active. Lazily built in onCreate.
+    private val pipController by lazy { ActivityPipController(this) }
+
+    // #8 — observable PiP-mode flag the Compose tree reads (LocalPipController consumers can hide
+    // chrome in PiP). Updated by onPictureInPictureModeChanged.
+    private val inPipMode = mutableStateOf(false)
 
     // AND-108: a notification-tap deep link parsed from the launch/new intent, buffered until the
     // NavController is ready (cold start) and then routed exactly once. Survives the onCreate/first-
@@ -123,6 +135,7 @@ class MainActivity : FragmentActivity() {
                 // every tagged node by id. Recommended by Google for production UI automation; no
                 // runtime behaviour change beyond the semantics tree.
                 @OptIn(ExperimentalComposeUiApi::class)
+                CompositionLocalProvider(LocalPipController provides pipController) {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
@@ -144,8 +157,32 @@ class MainActivity : FragmentActivity() {
                         )
                     }
                 }
+                }
             }
         }
+    }
+
+    /**
+     * #8 — auto-enter PiP when the user leaves the app (Home press) while a video is actively playing.
+     * Players register their playing state via PipController.setVideoActive; this is the recommended
+     * "keep playing in a floating window" UX (no extra tap needed).
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (pipController.videoActive && pipController.isPipSupported) {
+            pipController.enterPip()
+        }
+    }
+
+    /**
+     * #8 — track PiP mode so the Compose tree can adapt (e.g. hide controls in the floating window).
+     */
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPipMode.value = isInPictureInPictureMode
     }
 
     /**

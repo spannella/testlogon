@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -131,6 +132,12 @@ fun LocalVideoFullScreenPlayer(uri: String, onDismiss: () -> Unit) {
                 }
             }
             val owner = LocalLifecycleOwner.current
+            // #8 — register feed video playback as the active video for system PiP auto-enter on Home.
+            val pip = com.testlogon.android.feature.player.LocalPipController.current
+            DisposableEffect(player) {
+                pip.setVideoActive(true)
+                onDispose { pip.setVideoActive(false) }
+            }
             DisposableEffect(owner, player) {
                 val obs = LifecycleEventObserver { _, e ->
                     when (e) {
@@ -150,6 +157,18 @@ fun LocalVideoFullScreenPlayer(uri: String, onDismiss: () -> Unit) {
                 onClick = onDismiss,
                 modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
             ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
+            if (pip.isPipSupported) {
+                IconButton(
+                    onClick = { pip.enterPip(16, 9) },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).testTag("feed_video_pip"),
+                ) {
+                    Icon(
+                        Icons.Filled.PictureInPictureAlt,
+                        contentDescription = "Picture-in-picture",
+                        tint = Color.White,
+                    )
+                }
+            }
         }
     }
 }

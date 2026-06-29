@@ -369,6 +369,7 @@ fun ThreadRoute(
         onCountdownPickRevealImage = viewModel::onCountdownPickRevealImage,
         onCountdownRemoveRevealImage = viewModel::onCountdownRemoveRevealImage,
         onSendCountdown = viewModel::onSendCountdown,
+        onAttachCountdownToMessage = viewModel::onAttachCountdownToMessage,
         onAttachLottery = viewModel::onAttachLottery,
         onDismissLottery = viewModel::onDismissLotteryComposer,
         onSendLottery = { outcomes, imageUri, coverText -> viewModel.onSendLottery(outcomes, imageUri, coverText) },
@@ -544,6 +545,20 @@ fun ThreadRoute(
     ) { uri ->
         if (uri != null) viewModel.onScheduledEditAttachImage(uri.toString())
     }
+    // #4 (B-MSGEDIT) — document picker for attaching a FILE to a scheduled message being edited.
+    val pickScheduledEditFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val info = resolveFileInfo(context, uri)
+            viewModel.onScheduledEditAttachFile(uri.toString(), info.first, info.third)
+        }
+    }
 
     // #8 — scheduled-messages manager (list pending scheduled sends; edit/remove each).
     if (state.scheduledManager.visible) {
@@ -575,8 +590,51 @@ fun ThreadRoute(
                     )
                 },
                 onRemovePhoto = viewModel::onScheduledEditRemoveImage,
+                // #4 (B-MSGEDIT) — attach a FILE or a library VIDEO to a scheduled message.
+                onPickFile = { pickScheduledEditFile.launch(arrayOf("*/*")) },
+                onPickVideo = viewModel::onOpenVideoPickerForScheduledEdit,
+                onRemoveAttachment = viewModel::onScheduledEditRemoveAttachment,
             )
         }
+    }
+
+    // #5 (B-MSGEDIT) — system pickers for the NORMAL message-edit dialog (photo / file). A picked
+    // item uploads immediately and stages onto the open edit dialog; video uses the library picker.
+    val pickEditPhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) viewModel.onEditAttachImage(uri.toString())
+    }
+    val pickEditFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val info = resolveFileInfo(context, uri)
+            viewModel.onEditAttachFile(uri.toString(), info.first, info.third)
+        }
+    }
+    // #5 — the rich edit dialog (text + add/replace/remove media). Rendered here (not in
+    // MessageActionsHost) so it can drive the system pickers above and the shared video picker.
+    state.actions.editing?.let { editTarget ->
+        EditMessageDialog(
+            target = editTarget,
+            onSubmit = { viewModel.onAction(ThreadAction.SubmitEdit(editTarget.messageId, it)) },
+            onCancel = { viewModel.onAction(ThreadAction.CancelEdit) },
+            onPickPhoto = {
+                pickEditPhoto.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            },
+            onPickFile = { pickEditFile.launch(arrayOf("*/*")) },
+            onPickVideo = viewModel::onOpenVideoPickerForEdit,
+            onClearStaged = viewModel::onEditClearStagedMedia,
+            onToggleRemoveMedia = viewModel::onEditToggleRemoveMedia,
+        )
     }
 }
 
@@ -817,6 +875,7 @@ fun ThreadScreen(
     onCountdownPickRevealImage: (String) -> Unit,
     onCountdownRemoveRevealImage: () -> Unit,
     onSendCountdown: () -> Unit,
+    onAttachCountdownToMessage: () -> Unit,
     // MSG: new in-app composers.
     onAttachLottery: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
@@ -1187,6 +1246,7 @@ fun ThreadScreen(
             onPickRevealImage = onCountdownPickRevealImage,
             onRemoveRevealImage = onCountdownRemoveRevealImage,
             onSend = onSendCountdown,
+            onAttach = onAttachCountdownToMessage,
             onDismiss = onDismissCountdownPicker,
         )
     }
@@ -1686,7 +1746,13 @@ private fun MessageBubble(
                     }
                 }
             }
-            MessageMedia.None -> Surface(
+            MessageMedia.None -> {
+              // #6 (B-COUNTDOWN3) — a countdown-only message (no real body, or body == title) shows
+              // ONLY the countdown overlay below; suppress the empty/duplicate base bubble.
+              val bodyText = (message.decryptedText ?: message.text).trim()
+              val countdownOnly = message.countdown != null && !message.isEncrypted &&
+                  (bodyText.isEmpty() || bodyText == message.countdown.title?.trim())
+              if (!countdownOnly) Surface(
                 color = bubbleColor,
                 contentColor = if (message.isOwn) {
                     MaterialTheme.colorScheme.onPrimaryContainer
@@ -1699,7 +1765,7 @@ private fun MessageBubble(
                     .widthIn(max = 280.dp)
                     .testTag(tag)
                     .semantics { stateDescription = stateDesc },
-            ) {
+              ) {
                 if (message.isEncrypted && message.decryptedText == null) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1725,6 +1791,7 @@ private fun MessageBubble(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                     )
                 }
+              }
             }
         }
         // #10 — a media message (file/image/gallery/video) may carry a text CAPTION. Render it just
@@ -1733,7 +1800,11 @@ private fun MessageBubble(
         run {
             val mediaWithCaption = message.media !is MessageMedia.None &&
                 message.media !is MessageMedia.Paid
-            val captionText = (message.decryptedText ?: message.text).trim()
+            // #6 — when a countdown overlay carries the same headline as the body (legacy standalone
+            // countdown), the title is shown by the overlay; don't ALSO render it as a caption.
+            val dupOfCountdownTitle = message.countdown?.title
+                ?.let { it.isNotBlank() && it.trim() == (message.decryptedText ?: message.text).trim() } == true
+            val captionText = if (dupOfCountdownTitle) "" else (message.decryptedText ?: message.text).trim()
             val gated = isEncryptedImage || isEncryptedVideo || showEncryptedLocked ||
                 showViewOnceHidden || showListenOnceConsumed || lockedNotUnlocked
             if (mediaWithCaption && captionText.isNotBlank() && !gated) {
@@ -1753,6 +1824,12 @@ private fun MessageBubble(
                     )
                 }
             }
+        }
+        // #6 (B-COUNTDOWN3) — a countdown can ride ANY message (text/image/video/file). Render it as an
+        // overlay strip below the bubble: it ticks live and FLIPS to the reveal at the target with no
+        // manual refresh. Gated/teaser bubbles still gate first; a still-locked message keeps no overlay.
+        message.countdown?.let { cd ->
+            CountdownOverlay(countdown = cd, isOwn = message.isOwn)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (message.isFailed) {
@@ -2571,6 +2648,9 @@ private fun ScheduledEditDialog(
     onDismiss: () -> Unit,
     onPickPhoto: () -> Unit,
     onRemovePhoto: () -> Unit,
+    onPickFile: () -> Unit = {},
+    onPickVideo: () -> Unit = {},
+    onRemoveAttachment: () -> Unit = {},
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2625,14 +2705,69 @@ private fun ScheduledEditDialog(
                                 }
                             }
                         }
+                        // #4 (B-MSGEDIT) — a staged FILE shows a labelled chip with a remove action.
+                        editing.draftFileName != null -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(28.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = editing.draftFileName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(
+                                    onClick = onRemoveAttachment,
+                                    modifier = Modifier.testTag("thread_scheduled_edit_file_remove"),
+                                ) {
+                                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_remove))
+                                }
+                            }
+                        }
+                        // #4 (B-MSGEDIT) — a staged library VIDEO shows a labelled chip with a remove action.
+                        editing.draftVideoId != null -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(28.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = editing.draftVideoTitle ?: stringResource(R.string.msg_edit_video_attached),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(
+                                    onClick = onRemoveAttachment,
+                                    modifier = Modifier.testTag("thread_scheduled_edit_video_remove"),
+                                ) {
+                                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_remove))
+                                }
+                            }
+                        }
                         else -> {
-                            TextButton(
-                                onClick = onPickPhoto,
-                                modifier = Modifier.testTag("thread_scheduled_edit_photo_add"),
-                            ) {
-                                Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.msg_scheduled_photo_add))
+                            // #4 (B-MSGEDIT) — add a photo / file / library video to the scheduled message.
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(
+                                    onClick = onPickPhoto,
+                                    modifier = Modifier.testTag("thread_scheduled_edit_photo_add"),
+                                ) {
+                                    Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(stringResource(R.string.msg_edit_add_photo))
+                                }
+                                TextButton(
+                                    onClick = onPickFile,
+                                    modifier = Modifier.testTag("thread_scheduled_edit_file_add"),
+                                ) {
+                                    Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(stringResource(R.string.msg_edit_add_file))
+                                }
+                                TextButton(
+                                    onClick = onPickVideo,
+                                    modifier = Modifier.testTag("thread_scheduled_edit_video_add"),
+                                ) {
+                                    Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(stringResource(R.string.msg_edit_add_video))
+                                }
                             }
                         }
                     }

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +112,12 @@ fun InlineVideoPlayer(
                 }
             }
 
+            // #8 — register inline HLS playback as the active video for system PiP auto-enter.
+            val pip = com.testlogon.android.feature.player.LocalPipController.current
+            DisposableEffect(player) {
+                pip.setVideoActive(true)
+                onDispose { pip.setVideoActive(false) }
+            }
             // Pause on ON_PAUSE; release on dispose / ON_STOP (lifecycle-scoped, not a singleton).
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner, player) {
@@ -389,6 +396,13 @@ private fun ClipExoPlayer(
             playWhenReady = autoPlay
         }
     }
+    // #8 — register this messaging video as the active video so pressing Home auto-enters system PiP
+    // (and offer an explicit PiP control below). Cleared on dispose.
+    val pip = com.testlogon.android.feature.player.LocalPipController.current
+    DisposableEffect(player) {
+        pip.setVideoActive(true)
+        onDispose { pip.setVideoActive(false) }
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
@@ -404,10 +418,29 @@ private fun ClipExoPlayer(
             player.release()
         }
     }
-    AndroidView(
-        factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
-        modifier = modifier,
-    )
+    Box(modifier = modifier, contentAlignment = Alignment.TopEnd) {
+        AndroidView(
+            factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (pip.isPipSupported) {
+            IconButton(
+                onClick = { pip.enterPip(16, 9) },
+                modifier = Modifier
+                    .padding(4.dp)
+                    .size(36.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), androidx.compose.foundation.shape.CircleShape)
+                    .testTag("video_clip_pip"),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PictureInPictureAlt,
+                    contentDescription = stringResource(R.string.player_pip),
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    }
 }
 
 /** MV2 — full-screen video player dialog for an uploaded clip. */

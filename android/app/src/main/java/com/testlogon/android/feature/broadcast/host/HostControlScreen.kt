@@ -55,6 +55,11 @@ import com.testlogon.android.data.broadcast.BroadcastSession
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
 import com.testlogon.android.data.broadcast.HealthLevel
 import com.testlogon.android.data.broadcast.HostHealthReport
+import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
+import com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
+import com.testlogon.android.core.webrtc.ui.VideoRenderer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
 import kotlinx.coroutines.delay
 import java.text.NumberFormat
 import java.time.Duration
@@ -102,6 +107,9 @@ object HostControlTestTags {
 
     /** AND-316 — opens the ad-break / ad-config surface. */
     const val MANAGE_ADS = "host_manage_ads"
+
+    /** #7c — the live self-view PIP of the host's own camera while managing. */
+    const val SELF_VIEW = "host_self_view"
 }
 
 /**
@@ -137,6 +145,7 @@ fun HostControlRoute(
     }
     HostControlScreen(
         state = state,
+        videoRenderer = viewModel.videoRenderer,
         onStart = viewModel::onStart,
         onStop = viewModel::onStop,
         onConfirmStop = viewModel::onConfirmStopDialog,
@@ -165,6 +174,9 @@ fun HostControlRoute(
 fun HostControlScreen(
     state: HostControlUiState,
     onStart: () -> Unit,
+    // #7c — the native-WebRTC renderer for the live self-view PIP. Defaulted to the placeholder so
+    // existing call sites / tests are unaffected.
+    videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
     onStop: () -> Unit,
     onConfirmStop: (Boolean) -> Unit,
     onResume: () -> Unit,
@@ -213,6 +225,18 @@ fun HostControlScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             StatusHeader(session = state.session)
+
+            // #7c — live self-view PIP of the host's own camera while managing the broadcast. Renders the
+            // running local track (published by the ingest preview/publisher) via the native renderer; the
+            // renderer paints its own placeholder when no track is present yet.
+            LocalVideoPreview(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .testTag(HostControlTestTags.SELF_VIEW),
+                hasTrack = true,
+                renderer = videoRenderer,
+            )
 
             HealthReportCard(
                 health = state.health,

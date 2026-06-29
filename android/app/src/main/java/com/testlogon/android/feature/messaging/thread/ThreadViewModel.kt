@@ -560,6 +560,11 @@ class ThreadViewModel @Inject constructor(
                     lockDescription = opts.lockDescription,
                     sendAtEpochSeconds = opts.scheduledAtEpochSeconds,
                     expiresInSeconds = opts.expiresInSeconds,
+                    // #6 (B-COUNTDOWN3) — attach a countdown to this text message when one was staged.
+                    countdownTargetEpochSeconds = opts.countdownTargetEpochSeconds,
+                    countdownTitle = opts.countdownTitle,
+                    countdownRevealText = opts.countdownRevealText,
+                    countdownRevealImage = opts.countdownRevealImage,
                 )
             }
             // AND-141 — clear the draft on a successful send.
@@ -687,8 +692,9 @@ class ThreadViewModel @Inject constructor(
                         textEditable = item.isTextEditable,
                         draftText = item.text,
                         draftDeliverAtEpochSeconds = item.deliverAtEpochSeconds,
-                        // #7 — a text-only scheduled message can be PROMOTED to a photo, and an
-                        // existing image message can have its photo replaced.
+                        // #7 / #4 (B-MSGEDIT) — a text-only scheduled message can be PROMOTED to a
+                        // photo / file / video, and an existing image message can have its photo
+                        // replaced. Offer the media affordances for text + image kinds.
                         canAttachImage = item.kind == "text" || item.kind == "image",
                     ),
                 ),
@@ -755,6 +761,57 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    private fun updateScheduledEditing(transform: (ScheduledEditState) -> ScheduledEditState) {
+        _state.update {
+            val e = it.scheduledManager.editing ?: return@update it
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = transform(e)))
+        }
+    }
+
+    /**
+     * #4 (B-MSGEDIT) — attach (or replace) a FILE on the scheduled message being edited. Uploads the
+     * picked file immediately (presign -> PUT -> complete) and stages the returned server VFS path so
+     * [saveScheduledEdit] sends it. A text-only scheduled message is promoted to a file server-side.
+     */
+    fun onScheduledEditAttachFile(localUri: String, fileName: String, mimeType: String) {
+        updateScheduledEditing {
+            it.copy(
+                attaching = true, draftFileName = fileName, draftFilePath = null,
+                draftImageLocalUri = null, draftImage = null, draftVideoId = null, draftVideoTitle = null,
+                error = null,
+            )
+        }
+        viewModelScope.launch {
+            when (val r = repository.uploadEditFile(conversationId, localUri, fileName, mimeType)) {
+                is ApiResult.Success -> updateScheduledEditing { it.copy(attaching = false, draftFilePath = r.data, error = null) }
+                else -> updateScheduledEditing {
+                    it.copy(attaching = false, draftFileName = null, draftFilePath = null, error = "Couldn't attach the file. Try again.")
+                }
+            }
+        }
+    }
+
+    /** #4 (B-MSGEDIT) — stage a library VIDEO on the scheduled message being edited (sent as video_id). */
+    fun onScheduledEditAttachVideo(videoId: String, title: String?) {
+        updateScheduledEditing {
+            it.copy(
+                draftVideoId = videoId, draftVideoTitle = title,
+                draftImageLocalUri = null, draftImage = null, draftFileName = null, draftFilePath = null,
+                attaching = false, error = null,
+            )
+        }
+    }
+
+    /** #4 — drop the staged file/video from the scheduled-message edit before saving. */
+    fun onScheduledEditRemoveAttachment() {
+        updateScheduledEditing {
+            it.copy(
+                draftFileName = null, draftFilePath = null, draftVideoId = null, draftVideoTitle = null,
+                draftImageLocalUri = null, draftImage = null, attaching = false, error = null,
+            )
+        }
+    }
+
     /** Commit the edit dialog: PATCH the new text/time, then refresh the list. */
     fun saveScheduledEdit() {
         val editing = _state.value.scheduledManager.editing ?: return
@@ -776,7 +833,17 @@ class ThreadViewModel @Inject constructor(
             it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(saving = true, error = null)))
         }
         viewModelScope.launch {
-            when (repository.rescheduleMessage(conversationId, editing.messageId, text = text, sendAtEpochSeconds = pickedTime, image = editing.draftImage)) {
+            when (
+                repository.rescheduleMessage(
+                    conversationId,
+                    editing.messageId,
+                    text = text,
+                    sendAtEpochSeconds = pickedTime,
+                    image = editing.draftImage,
+                    filePath = editing.draftFilePath,
+                    videoId = editing.draftVideoId,
+                )
+            ) {
                 is ApiResult.Success -> {
                     _state.update { it.copy(scheduledManager = it.scheduledManager.copy(editing = null)) }
                     refreshScheduledMessages()
@@ -1068,8 +1135,16 @@ class ThreadViewModel @Inject constructor(
 
     // ---- AND-131: video-share ----
 
-    fun onOpenVideoPicker() {
-        _state.update { it.copy(videoPicker = it.videoPicker.copy(visible = true, loading = true, errorMessage = null)) }
+    fun onOpenVideoPicker() = openVideoPicker(VideoPickMode.SHARE)
+
+    /** B-MSGEDIT #5 — open the library-video picker to stage a video on the message being edited. */
+    fun onOpenVideoPickerForEdit() = openVideoPicker(VideoPickMode.EDIT)
+
+    /** B-MSGEDIT #4 — open the library-video picker to stage a video on a scheduled message. */
+    fun onOpenVideoPickerForScheduledEdit() = openVideoPicker(VideoPickMode.SCHEDULED_EDIT)
+
+    private fun openVideoPicker(mode: VideoPickMode) {
+        _state.update { it.copy(videoPicker = it.videoPicker.copy(visible = true, loading = true, errorMessage = null, mode = mode)) }
         viewModelScope.launch {
             when (val result = repository.listShareableVideos()) {
                 is ApiResult.Success -> _state.update {
@@ -1097,10 +1172,17 @@ class ThreadViewModel @Inject constructor(
     }
 
     fun onShareVideo(videoId: String) {
+        val picker = _state.value.videoPicker
+        val title = picker.videos.firstOrNull { it.videoId == videoId }?.title
         _state.update { it.copy(videoPicker = VideoPickerState()) }
-        viewModelScope.launch {
-            repository.sendVideoShare(conversationId, videoId, caption = null)
-            _events.trySend(ThreadEvent.ScrollToBottom)
+        when (picker.mode) {
+            // B-MSGEDIT — route a pick to the open edit dialog instead of sending immediately.
+            VideoPickMode.EDIT -> onEditAttachVideo(videoId, title)
+            VideoPickMode.SCHEDULED_EDIT -> onScheduledEditAttachVideo(videoId, title)
+            VideoPickMode.SHARE -> viewModelScope.launch {
+                repository.sendVideoShare(conversationId, videoId, caption = null)
+                _events.trySend(ThreadEvent.ScrollToBottom)
+            }
         }
     }
 
@@ -1685,6 +1767,41 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /**
+     * #6 (B-COUNTDOWN3) — attach the picked countdown (target + optional title/reveal) to the NEXT
+     * message instead of sending a standalone countdown. The countdown then rides whatever the user
+     * sends next (text or staged image/video/file). The title is OPTIONAL here (the message body is
+     * the content); only a strictly-future target is required.
+     */
+    fun onAttachCountdownToMessage() {
+        val picker = _state.value.countdownPicker
+        val title = picker.title.trim().ifEmpty { null }
+        val target = picker.targetEpochSeconds
+        if (target == null || target <= clock()) {
+            _state.update { it.copy(countdownPicker = it.countdownPicker.copy(error = "Pick a future time")) }
+            return
+        }
+        val revealText = picker.revealText.trim().ifEmpty { null }
+        val revealImageUri = picker.revealImageUri
+        _state.update { it.copy(countdownPicker = it.countdownPicker.copy(sending = true, error = null)) }
+        viewModelScope.launch {
+            val revealImage = revealImageUri?.let { repository.uploadLotteryImage(conversationId, it) }
+            _state.update {
+                it.copy(
+                    countdownPicker = CountdownPickerState(),
+                    composer = it.composer.copy(
+                        options = it.composer.options.copy(
+                            countdownTargetEpochSeconds = target,
+                            countdownTitle = title,
+                            countdownRevealText = revealText,
+                            countdownRevealImage = revealImage,
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
     // ---- MSG: new in-app composers ----
 
     fun onAttachLottery() { _state.update { it.copy(lotteryComposerVisible = true) } }
@@ -2185,15 +2302,129 @@ class ThreadViewModel @Inject constructor(
     private fun startEdit(messageId: String) {
         val msg = _state.value.messages.firstOrNull { it.key == messageId } ?: return
         if (!msg.isOwn || msg.isTombstone) return
-        updateActions { it.copy(editing = EditTarget(messageId, msg.text)) }
+        updateActions {
+            it.copy(
+                editing = EditTarget(
+                    messageId = messageId,
+                    originalText = msg.text,
+                    hasMedia = msg.media != com.testlogon.android.data.messaging.MessageMedia.None,
+                ),
+            )
+        }
+    }
+
+    // ---- B-MSGEDIT #5: media control on the normal message edit ----
+
+    private fun updateEditing(transform: (EditTarget) -> EditTarget) {
+        updateActions { st -> st.editing?.let { st.copy(editing = transform(it)) } ?: st }
+    }
+
+    /** #5 — attach (or replace) a PHOTO on the message being edited; uploads immediately, stages it. */
+    fun onEditAttachImage(localUri: String) {
+        updateEditing {
+            it.copy(
+                attaching = true, draftImageLocalUri = localUri, draftImage = null,
+                draftFileName = null, draftFilePath = null, draftVideoId = null, draftVideoTitle = null,
+                removeMedia = false, error = null,
+            )
+        }
+        viewModelScope.launch {
+            when (val r = repository.uploadEditImage(conversationId, localUri)) {
+                is ApiResult.Success -> updateEditing { it.copy(attaching = false, draftImage = r.data, error = null) }
+                else -> updateEditing {
+                    it.copy(attaching = false, draftImageLocalUri = null, draftImage = null, error = "Couldn't attach the photo. Try again.")
+                }
+            }
+        }
+    }
+
+    /** #5 — attach (or replace) a FILE on the message being edited; uploads immediately, stages it. */
+    fun onEditAttachFile(localUri: String, fileName: String, mimeType: String) {
+        updateEditing {
+            it.copy(
+                attaching = true, draftFileName = fileName, draftFilePath = null,
+                draftImageLocalUri = null, draftImage = null, draftVideoId = null, draftVideoTitle = null,
+                removeMedia = false, error = null,
+            )
+        }
+        viewModelScope.launch {
+            when (val r = repository.uploadEditFile(conversationId, localUri, fileName, mimeType)) {
+                is ApiResult.Success -> updateEditing { it.copy(attaching = false, draftFilePath = r.data, error = null) }
+                else -> updateEditing {
+                    it.copy(attaching = false, draftFileName = null, draftFilePath = null, error = "Couldn't attach the file. Try again.")
+                }
+            }
+        }
+    }
+
+    /** #5 — stage a library VIDEO on the message being edited (no upload; sent as video_id on save). */
+    fun onEditAttachVideo(videoId: String, title: String?) {
+        updateEditing {
+            it.copy(
+                draftVideoId = videoId, draftVideoTitle = title,
+                draftImageLocalUri = null, draftImage = null, draftFileName = null, draftFilePath = null,
+                attaching = false, removeMedia = false, error = null,
+            )
+        }
+    }
+
+    /** #5 — drop any staged media (photo/file/video) from the edit before saving. */
+    fun onEditClearStagedMedia() {
+        updateEditing {
+            it.copy(
+                draftImageLocalUri = null, draftImage = null, draftFileName = null, draftFilePath = null,
+                draftVideoId = null, draftVideoTitle = null, attaching = false, error = null,
+            )
+        }
+    }
+
+    /** #5 — toggle "remove existing media" (strips media back to text on save). */
+    fun onEditToggleRemoveMedia() {
+        updateEditing {
+            val next = !it.removeMedia
+            it.copy(
+                removeMedia = next,
+                // Removing media is mutually exclusive with staging new media.
+                draftImageLocalUri = if (next) null else it.draftImageLocalUri,
+                draftImage = if (next) null else it.draftImage,
+                draftFileName = if (next) null else it.draftFileName,
+                draftFilePath = if (next) null else it.draftFilePath,
+                draftVideoId = if (next) null else it.draftVideoId,
+                draftVideoTitle = if (next) null else it.draftVideoTitle,
+                attaching = if (next) false else it.attaching,
+                error = null,
+            )
+        }
     }
 
     private fun submitEdit(messageId: String, body: String) {
+        val editing = _state.value.actions.editing
+        // #5 — don't save mid-upload (the descriptor/path isn't ready yet).
+        if (editing != null && editing.attaching) {
+            updateEditing { it.copy(error = "Wait for the attachment to finish.") }
+            return
+        }
         val trimmed = body.trim()
-        if (trimmed.isEmpty()) return
+        val newText = trimmed.ifBlank { null }
+        val image = editing?.draftImage
+        val filePath = editing?.draftFilePath
+        val videoId = editing?.draftVideoId
+        val removeMedia = editing?.removeMedia == true
+        // Require something to change: text, a staged media kind, or a media removal.
+        if (newText == null && image == null && filePath == null && videoId == null && !removeMedia) return
         updateActions { it.copy(editing = null) }
         viewModelScope.launch {
-            when (val r = repository.editMessage(conversationId, messageId, trimmed)) {
+            when (
+                val r = repository.editMessage(
+                    conversationId = conversationId,
+                    messageId = messageId,
+                    text = newText,
+                    image = image,
+                    filePath = filePath,
+                    videoId = videoId,
+                    removeMedia = removeMedia,
+                )
+            ) {
                 is ApiResult.Failure -> updateActions { it.copy(transientError = r.error.message) }
                 is ApiResult.NetworkError -> updateActions { it.copy(transientError = OFFLINE_MESSAGE) }
                 else -> Unit
@@ -2551,4 +2782,6 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     consumed = consumed,
     lockPriceCents = lockPriceCents,
     lockCurrency = lockCurrency,
+    // #6 (B-COUNTDOWN3) — pass the countdown attribute through so the bubble can overlay the ticker/reveal.
+    countdown = countdown,
 )

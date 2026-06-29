@@ -215,13 +215,33 @@ class FakeMessagingRepository : MessagingRepository {
     override suspend fun editMessage(
         conversationId: String,
         messageId: String,
-        text: String,
+        text: String?,
+        image: com.testlogon.android.data.messaging.MessageImageDto?,
+        filePath: String?,
+        videoId: String?,
+        freeImages: List<com.testlogon.android.data.messaging.GalleryImageDto>?,
+        lockedImages: List<com.testlogon.android.data.messaging.GalleryImageDto>?,
+        removeMedia: Boolean,
     ): ApiResult<Message> {
-        editCalls += messageId to text
+        editCalls += messageId to (text ?: "")
         val r = editResult
         if (r is ApiResult.Success) updateThread(messageId) { r.data }
         return r ?: failure()
     }
+
+    override suspend fun uploadEditImage(
+        conversationId: String,
+        localUri: String,
+    ): ApiResult<com.testlogon.android.data.messaging.MessageImageDto> =
+        ApiResult.Failure(ApiError(status = 400, message = "fake"))
+
+    override suspend fun uploadEditFile(
+        conversationId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<String> =
+        ApiResult.Failure(ApiError(status = 400, message = "fake"))
 
     override suspend fun editHistory(
         conversationId: String,
@@ -877,6 +897,8 @@ class FakeMessagingRepository : MessagingRepository {
         text: String?,
         sendAtEpochSeconds: Long?,
         image: com.testlogon.android.data.messaging.MessageImageDto?,
+        filePath: String?,
+        videoId: String?,
     ): ApiResult<com.testlogon.android.data.messaging.ScheduledMessage> =
         ApiResult.Failure(ApiError(status = 400, message = "fake"))
 

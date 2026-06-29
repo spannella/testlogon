@@ -63,6 +63,18 @@ class IngestViewModel @Inject constructor(
     }
 
     /**
+     * #7a — open the local camera preview so the host sees themselves BEFORE going live (CAMERA +
+     * RECORD_AUDIO assumed already granted by the screen). This only opens capture + publishes the
+     * local track to the shared media holder (no peer, no publish); the real renderer in the screen
+     * then shows the live self-view. With the FLAGGED stub publisher this is a no-op (placeholder).
+     */
+    fun startPreview() {
+        viewModelScope.launch {
+            broadcastPublisher.startPreview()
+        }
+    }
+
+    /**
      * The host tapped "Go Live" (CAMERA + RECORD_AUDIO assumed already granted by the screen). Creates the
      * primary ingest input, then drives the FLAGGED publisher.
      */

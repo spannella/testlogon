@@ -35,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.data.messaging.CountdownLogic
+import com.testlogon.android.data.messaging.MessageCountdown
 import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.MessageMonetization
 import com.testlogon.android.data.messaging.RevealedMediaItem
@@ -74,6 +76,9 @@ object PaidMessageTestTags {
     const val COUNTDOWN_REVEAL_IMAGE_PREVIEW = "thread_countdown_reveal_image_preview"
     const val COUNTDOWN_REVEAL_REMOVE_IMAGE = "thread_countdown_reveal_remove_image"
     const val COUNTDOWN_REVEAL_BLOCK = "thread_countdown_reveal_block"
+    // #6 (B-COUNTDOWN3) — countdown surfaced as an overlay strip on ANY message.
+    const val COUNTDOWN_OVERLAY = "thread_countdown_overlay"
+    const val COMPOSER_COUNTDOWN_OPTION = "thread_composer_countdown_option"
     const val CALENDAR_EVENT_BUBBLE = "thread_calendar_event_bubble"
     const val CALENDAR_SHARE_BUBBLE = "thread_calendar_share_bubble"
     const val LOCKED_BUBBLE = "thread_locked_bubble"
@@ -193,6 +198,126 @@ fun CountdownBubble(
 }
 
 /**
+ * #6 (B-COUNTDOWN3) — countdown OVERLAY strip rendered on ANY message that carries a countdown
+ * attribute (text/image/video/file), in addition to the message's own bubble. A lifecycle-scoped 1s
+ * ticker derives the remaining time from the device clock (never stored), so it self-corrects after
+ * backgrounding and FLIPS to the reveal at/after the target WITHOUT a manual refresh. Once done, the
+ * server-surfaced [MessageCountdown.reveal] (text and/or image/video) is shown inline.
+ */
+@Composable
+fun CountdownOverlay(
+    countdown: MessageCountdown,
+    isOwn: Boolean,
+    modifier: Modifier = Modifier,
+    nowProvider: () -> Long = { System.currentTimeMillis() / 1000L },
+) {
+    // One conflated 1s ticker; lifecycle-scoped collection pauses it below STARTED (no battery drain).
+    val now by remember(countdown.targetEpochSeconds) {
+        flow {
+            while (true) {
+                emit(nowProvider())
+                delay(1_000L)
+            }
+        }
+    }.collectAsStateWithLifecycle(initialValue = nowProvider())
+
+    val remaining = CountdownLogic.remainingSeconds(countdown.targetEpochSeconds, now)
+    val done = CountdownLogic.isDone(countdown.targetEpochSeconds, now)
+    val remainingText = CountdownLogic.format(remaining)
+    val title = countdown.title?.takeIf { it.isNotBlank() }
+
+    val cd = if (done) {
+        stringResource(R.string.countdown_cd_done, title ?: "")
+    } else {
+        stringResource(R.string.countdown_cd_remaining, title ?: "", CountdownLogic.accessibilityRemaining(remaining))
+    }
+
+    Surface(
+        color = if (isOwn) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 1.dp,
+        modifier = modifier
+            .widthIn(max = 280.dp)
+            .padding(top = 2.dp)
+            .testTag(PaidMessageTestTags.COUNTDOWN_OVERLAY)
+            .semantics { contentDescription = cd },
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Timer,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = title ?: stringResource(R.string.composer_add_countdown),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
+            // Compact, timestamp-style remaining-time line (small + muted) rather than a large timer.
+            Text(
+                text = if (done) {
+                    stringResource(R.string.countdown_done)
+                } else {
+                    stringResource(R.string.countdown_remaining_inline, remainingText)
+                },
+                style = if (done) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.labelSmall,
+                color = if (done) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            // Once the countdown completes the server surfaces the reveal payload; show it inline.
+            val reveal = countdown.reveal
+            if (done && reveal != null && !reveal.isEmpty) {
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                Column(
+                    Modifier
+                        .padding(top = 8.dp)
+                        .testTag(PaidMessageTestTags.COUNTDOWN_REVEAL_BLOCK),
+                ) {
+                    Text(
+                        stringResource(R.string.countdown_reveal_revealed),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    reveal.text?.takeIf { it.isNotBlank() }?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    reveal.media.forEach { m ->
+                        if (m.isVideo) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        ctx.startActivity(
+                                            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(m.url))
+                                                .setDataAndType(android.net.Uri.parse(m.url), "video/*")
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(top = 6.dp),
+                            ) { Text(stringResource(R.string.countdown_reveal_play_video)) }
+                        } else {
+                            coil.compose.AsyncImage(
+                                model = m.url,
+                                contentDescription = stringResource(R.string.countdown_reveal_revealed),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier
+                                    .padding(top = 6.dp)
+                                    .size(160.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * AND-137 / #31 / #32 — countdown composer. Title + an EXACT date/time/timezone target (#32) + an
  * OPTIONAL reveal payload (text and/or image, #31) that the recipient sees once the countdown hits
  * zero. The reveal image is picked from the system photo picker (no storage permission) and uploaded
@@ -209,6 +334,7 @@ fun CountdownPickerSheet(
     onPickRevealImage: (String) -> Unit,
     onRemoveRevealImage: () -> Unit,
     onSend: () -> Unit,
+    onAttach: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -299,6 +425,15 @@ fun CountdownPickerSheet(
                 modifier = Modifier.padding(top = 12.dp).testTag(PaidMessageTestTags.COUNTDOWN_SEND),
             ) {
                 Text(stringResource(R.string.countdown_send))
+            }
+            // #6 (B-COUNTDOWN3) — attach this countdown to the NEXT message (text / photo / video /
+            // file) instead of sending a standalone countdown. Title optional; needs a future time.
+            OutlinedButton(
+                onClick = onAttach,
+                enabled = !state.sending && state.targetEpochSeconds != null,
+                modifier = Modifier.padding(top = 8.dp).testTag(PaidMessageTestTags.COMPOSER_COUNTDOWN_OPTION),
+            ) {
+                Text(stringResource(R.string.countdown_attach_to_message))
             }
             Box(Modifier.fillMaxWidth().heightIn(min = 16.dp))
         }

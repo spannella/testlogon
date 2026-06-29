@@ -390,6 +390,7 @@
     <string name="player_rewind_10">Rewind 10 seconds</string>
     <string name="player_forward_10">Forward 10 seconds</string>
     <string name="player_fullscreen">Enter fullscreen</string>
+    <string name="player_pip">Picture-in-picture</string>
     <string name="player_exit_fullscreen">Exit fullscreen</string>
     <string name="player_retry">Retry</string>
     <string name="player_live_badge">LIVE</string>
@@ -521,6 +522,7 @@
     <string name="countdown_preset_1d">In 1 day</string>
     <string name="countdown_preset_1w">In 1 week</string>
     <string name="countdown_send">Send countdown</string>
+    <string name="countdown_attach_to_message">Attach to next message</string>
     <string name="countdown_remaining_inline">%1$s left</string>
     <string name="countdown_done">Event reached</string>
     <string name="countdown_cd_remaining">Countdown: %1$s, %2$s remaining</string>
@@ -759,6 +761,17 @@
     <string name="msg_edit_history_empty">No earlier versions</string>
     <string name="msg_edit_title">Edit message</string>
     <string name="msg_edit_save">Save</string>
+    <!-- B-MSGEDIT #5 — full media control on the normal message edit. -->
+    <string name="msg_edit_add_photo">Photo</string>
+    <string name="msg_edit_add_file">File</string>
+    <string name="msg_edit_add_video">Video</string>
+    <string name="msg_edit_remove_media">Remove media</string>
+    <string name="msg_edit_attaching">Attaching…</string>
+    <string name="msg_edit_photo_attached">Photo attached</string>
+    <string name="msg_edit_file_attached">File attached</string>
+    <string name="msg_edit_video_attached">Video attached</string>
+    <string name="msg_edit_media_will_be_removed">Media will be removed</string>
+    <string name="action_undo">Undo</string>
     <string name="msg_delete_title">Delete message?</string>
     <string name="msg_delete_body">This removes the message for you. Others can still see it.</string>
     <string name="msg_revoke_title">Unsend for everyone?</string>

@@ -36,6 +36,14 @@ interface BroadcastPublisher {
      */
     suspend fun goLive(sessionId: String, inputId: String): GoLiveResult
 
+    /**
+     * Open the local camera + mic capture and publish the local video track to the shared media holder
+     * WITHOUT building a peer / negotiating — so the host can SEE THEMSELVES before tapping Go Live
+     * (#7a). Idempotent: a second call while a preview/publish is already running is a no-op. The stub
+     * never opens hardware. A subsequent [goLive] reuses the running capture rather than re-opening it.
+     */
+    suspend fun startPreview()
+
     /** Stop publishing and release capture/peer. Idempotent. The stub is a no-op. */
     fun stop()
 }
@@ -91,6 +99,8 @@ class StubBroadcastPublisher @Inject constructor() : BroadcastPublisher {
 
     override suspend fun goLive(sessionId: String, inputId: String): GoLiveResult =
         GoLiveResult.NotConfigured
+
+    override suspend fun startPreview() { /* no-op: the stub never opens a camera */ }
 
     override fun stop() { /* no-op: nothing was ever started */ }
 }
