@@ -1,5 +1,5 @@
 --- app/models.py.bak_bkc_1782229906	2026-06-23 15:51:46.965931320 +0000
-+++ app/models.py	2026-06-26 01:28:16.020048704 +0000
++++ app/models.py	2026-06-29 14:13:10.693257489 +0000
 @@ -1741,6 +1741,16 @@
      cvc: str
      cardholder_name: Optional[str] = None
@@ -44,3 +44,44 @@
      audience: Literal["public", "members_only"] = "public"
      unlock_price_cents: Optional[int] = Field(default=None, ge=0)
  
+@@ -5915,12 +5933,37 @@
+             raise ValueError("Post text cannot be blank or whitespace-only")
+         return v
+ 
++    @staticmethod
++    def _validate_group_image_url(v: Optional[str]) -> Optional[str]:
++        # B11 B-GRPIMG: accept the SAME image URL forms a normal newsfeed post/comment
++        # does -- platform upload URLs (/uploads/object?s3_key=...), https absolute URLs,
++        # and dev mock-S3 (/mock/...). Reject plain http and other schemes.
++        if v is None:
++            return v
++        u = v.strip()
++        if not u:
++            return None
++        if u.startswith("//"):
++            raise ValueError("Invalid image URL format")
++        if u.startswith("/"):
++            if u.startswith("/uploads/object") or u.startswith("/mock/"):
++                return u
++            raise ValueError("Invalid image URL format")
++        if u.startswith("https://"):
++            return u
++        raise ValueError("Invalid image URL format")
++
+     @field_validator("image_url")
+     @classmethod
+     def validate_image_url(cls, v: Optional[str]) -> Optional[str]:
+-        if v is not None and not (v.startswith("http://") or v.startswith("https://") or v.startswith("/mock/")):
+-            raise ValueError("Invalid image URL format")
+-        return v
++        return cls._validate_group_image_url(v)
++
++    @field_validator("image_urls")
++    @classmethod
++    def validate_image_urls(cls, v: Optional[List[str]]) -> Optional[List[str]]:
++        if v is None:
++            return v
++        return [cls._validate_group_image_url(x) for x in v]
+ 
+ 
+ class GroupFeedPostOut(BaseModel):

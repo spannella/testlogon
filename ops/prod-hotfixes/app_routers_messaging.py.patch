@@ -1,5 +1,5 @@
 --- app/routers/messaging.py.bak_b2b3_1782197824	2026-06-23 06:57:04.160143190 +0000
-+++ app/routers/messaging.py	2026-06-29 08:54:38.346524140 +0000
++++ app/routers/messaging.py	2026-06-29 14:35:15.627507568 +0000
 @@ -9,6 +9,11 @@
  import logging
  import os
@@ -33,15 +33,44 @@
      tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
      tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
      expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
-@@ -1909,6 +1921,7 @@
+@@ -1895,6 +1907,18 @@
+         pattern=r"[A-Za-z0-9._:-]+",
+         description="Client-generated idempotency key. Same key = deduplicated send.",
+     )
++    # B11 B-COUNTDOWN3 (#6): OPTIONAL countdown on ANY message. When set, the
++    # message renders its normal content with a live countdown to
++    # countdown_target_datetime; once that time passes, the reveal payload
++    # (countdown_reveal_text / countdown_reveal_image / countdown_reveal_media)
++    # is surfaced exactly once (see _message_out_from_item + _sweep_countdown).
++    countdown_target_datetime: Optional[int] = Field(default=None, description="UTC Unix ts when the countdown completes")
++    countdown_target_datetime_local: Optional[str] = Field(default=None, max_length=40)
++    countdown_target_tz: Optional[str] = Field(default=None, max_length=64)
++    countdown_title: Optional[str] = Field(default=None, max_length=200)
++    countdown_reveal_text: Optional[str] = Field(default=None, max_length=4000)
++    countdown_reveal_image: Optional["GalleryImageItemIn"] = None
++    countdown_reveal_media: Optional[List["GalleryImageItemIn"]] = None
+ 
+     @model_validator(mode="before")
+     @classmethod
+@@ -1909,6 +1933,17 @@
  
      @model_validator(mode="after")
      def _validate_shape(self):
 +        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
++        # B11 B-COUNTDOWN3 (#6): resolve a wall-clock+tz countdown target.
++        if self.countdown_target_datetime is None and self.countdown_target_datetime_local:
++            self.countdown_target_datetime = _b9_resolve_send_at(
++                None, self.countdown_target_datetime_local, self.countdown_target_tz
++            )
++        if self.countdown_target_datetime is not None and self.countdown_target_datetime <= now_ts():
++            raise PydanticCustomError(
++                "countdown_target_past",
++                "countdown_target_datetime must be in the future",
++            )
          if self.encryption and self.text:
              raise PydanticCustomError(
                  "message_text_encryption_conflict",
-@@ -1966,11 +1979,19 @@
+@@ -1966,11 +2001,19 @@
      tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
      tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
      send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
@@ -61,7 +90,7 @@
  
  class PresignVoiceMessageRequest(BaseModel):
      content_type: str = Field(pattern=r"^audio/(webm|mp4|ogg|wav)")
-@@ -2030,11 +2051,15 @@
+@@ -2030,11 +2073,15 @@
      lock_description: Optional[str] = Field(default=None, max_length=500)
      expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=2592000)
      send_at: Optional[int] = None
@@ -77,7 +106,7 @@
          if len(self.free_images) > 20:
              raise ValueError("free_images may not exceed 20 items")
          if len(self.locked_images) > 30:
-@@ -2123,7 +2148,14 @@
+@@ -2123,7 +2170,14 @@
  class SendCountdownMessageIn(BaseModel):
      """Request model for sending a countdown message (MSG-010)."""
      title: str = Field(min_length=1, max_length=200)
@@ -93,7 +122,7 @@
      associated_event_type: str = Field(
          default="custom",
          pattern=r"^(broadcast|call|calendar|custom)$",
-@@ -2133,6 +2165,13 @@
+@@ -2133,6 +2187,13 @@
  
      @model_validator(mode="after")
      def _validate_countdown(self):
@@ -107,7 +136,7 @@
          if self.target_datetime <= now_ts():
              raise ValueError("target_datetime must be in the future")
          if self.associated_event_type != "custom" and not self.associated_event_id:
-@@ -2288,14 +2327,26 @@
+@@ -2288,14 +2349,26 @@
  class CreateFileMessageIn(BaseModel):
      path: str
      kind: Literal["file", "audio", "video"] = "file"
@@ -134,7 +163,7 @@
          if self.consumption_policy == "view_once" and self.kind != "video":
              raise PydanticCustomError(
                  "invalid_media_kind_for_policy",
-@@ -2314,7 +2365,22 @@
+@@ -2314,7 +2387,22 @@
      weight_bps: int = Field(ge=1, le=10_000)
      payload_type: Literal["text", "image", "video"]
      text_content: Optional[str] = Field(default=None, max_length=4000)
@@ -157,7 +186,7 @@
  
  
  class LotteryConfigIn(BaseModel):
-@@ -2322,10 +2388,43 @@
+@@ -2322,10 +2410,43 @@
      outcomes: List[LotteryOutcomeIn] = Field(default_factory=list)
  
  
@@ -201,7 +230,7 @@
  
  
  class LotteryOutcomeOut(BaseModel):
-@@ -2336,6 +2435,9 @@
+@@ -2336,6 +2457,9 @@
      text_content: Optional[str] = None
      media_asset_id: Optional[str] = None
      media_metadata: Optional[Dict[str, Any]] = None
@@ -211,7 +240,7 @@
  
  
  class LotteryConfigOut(BaseModel):
-@@ -2343,11 +2445,30 @@
+@@ -2343,11 +2467,30 @@
      outcomes: List[LotteryOutcomeOut]
  
  
@@ -242,7 +271,7 @@
  
  
  class LotteryMessageOut(BaseModel):
-@@ -2358,6 +2479,7 @@
+@@ -2358,6 +2501,7 @@
      lock_state: Literal["locked", "unlocked"]
      lottery_config: LotteryConfigOut
      selected_outcome: Optional[LotterySelectedOutcomeOut] = None
@@ -250,7 +279,29 @@
      idempotent: bool = False
      created_at: int
  
-@@ -2467,6 +2589,8 @@
+@@ -2370,8 +2514,20 @@
+ 
+ 
+ class EditMessageIn(BaseModel):
+-    text: str = Field(min_length=1, max_length=4000)
++    # B11 B-MSGEDIT (#5): text is now OPTIONAL so a delivered message can be
++    # edited to ADD / REPLACE / REMOVE media as well as (or instead of) its text.
++    text: Optional[str] = Field(default=None, max_length=4000)
+     body: Optional[str] = None
++    # B11 B-MSGEDIT (#5): media edits on a delivered (non-scheduled) message.
++    # Same shapes as the scheduled-edit / create models. Supplying a media field
++    # ADDS or REPLACES that media (promoting a text message to that kind);
++    # supplying remove_media=True strips media and reverts the message to text.
++    image: Optional["CreateImageMessageIn"] = None
++    file_path: Optional[str] = Field(default=None, max_length=1000)
++    video_id: Optional[str] = Field(default=None, max_length=128)
++    free_images: Optional[List["GalleryImageItemIn"]] = None
++    locked_images: Optional[List["GalleryImageItemIn"]] = None
++    remove_media: bool = False
+ 
+     @model_validator(mode="before")
+     @classmethod
+@@ -2467,6 +2623,8 @@
      target_datetime: Optional[int] = None
      associated_event_type: Optional[str] = None
      associated_event_id: Optional[str] = None
@@ -259,7 +310,7 @@
      # GIF message fields (MSG-008)
      gif_url: Optional[str] = None
      gif_alt_text: Optional[str] = None
-@@ -2748,6 +2872,49 @@
+@@ -2748,6 +2906,49 @@
      return int(time.time())
  
  
@@ -309,7 +360,7 @@
  def new_id() -> str:
      return uuid.uuid4().hex
  
-@@ -3225,8 +3392,9 @@
+@@ -3225,8 +3426,9 @@
      sender_id: str,
      created_at: int,
      persisted_cfg: Mapping[str, Any],
@@ -320,7 +371,7 @@
          "conversation_id": conversation_id,
          "message_id": message_id,
          "sender_id": sender_id,
-@@ -3241,6 +3409,9 @@
+@@ -3241,6 +3443,9 @@
          },
          "reactions": {},
      }
@@ -330,7 +381,7 @@
  
  
  def _encode_gallery_index_cursor(sort_key: str) -> str:
-@@ -3514,8 +3685,11 @@
+@@ -3514,8 +3719,11 @@
          return False
      if message_item.get("moderation_hidden") or message_item.get("moderation_removed_at"):
          return False
@@ -344,7 +395,7 @@
          return False
      return user_id not in deleted_for
  
-@@ -3850,6 +4024,12 @@
+@@ -3850,6 +4058,12 @@
  def _project_gallery_image(img_dict: dict) -> dict:
      """Project a gallery image item dict to a response dict with URL added in dev mode."""
      out = dict(img_dict)
@@ -357,7 +408,7 @@
      if S.dev_mode:
          from urllib.parse import quote as _gi_quote
          bucket = out.get("bucket", "")
-@@ -3875,7 +4055,57 @@
+@@ -3875,7 +4089,57 @@
          return {"message_type": "lottery_dm", "lock_state": "locked"}
  
      cfg = messaging_lottery_store.get_lottery_config(message_id=message_id) or {}
@@ -416,7 +467,7 @@
          message_id=message_id,
          recipient_id=viewer_user_id,
      )
-@@ -3905,6 +4135,8 @@
+@@ -3905,6 +4169,8 @@
              "text_content": (str(selected.get("text_content") or "") or None),
              "media_asset_id": (str(selected.get("media_asset_id") or "") or None),
              "media_metadata": (dict(selected.get("media_metadata") or {}) or None),
@@ -425,11 +476,37 @@
          },
      }
  
-@@ -4178,6 +4410,18 @@
+@@ -4167,17 +4433,41 @@
+             "callee_user_id": str(merged_item.get("callee_user_id") or ""),
+         }
+ 
+-    # Countdown message projection (MSG-010)
++    # Countdown projection.
++    # B11 B-COUNTDOWN3 (#6): a countdown is now an OPTION on ANY message --
++    # surface the countdown fields + reveal whenever the item carries a
++    # target_datetime, regardless of kind. The legacy standalone kind=="countdown"
++    # message keeps working through the same path.
+     countdown_title_out: Optional[str] = None
+     countdown_target_out: Optional[int] = None
+     countdown_event_type_out: Optional[str] = None
+     countdown_event_id_out: Optional[str] = None
+-    if merged_item.get("kind") == "countdown":
++    if merged_item.get("target_datetime") is not None:
+         countdown_title_out = merged_item.get("countdown_title")
+-        if merged_item.get("target_datetime") is not None:
++        try:
              countdown_target_out = int(merged_item["target_datetime"])
++        except (TypeError, ValueError):
++            countdown_target_out = None
          countdown_event_type_out = merged_item.get("associated_event_type")
          countdown_event_id_out = merged_item.get("associated_event_id")
-+        # B-COUNTDOWN #31: reveal the stashed payload only once the
++        # B11 #6: legacy standalone countdown messages stored the title in BOTH
++        # `text` and `countdown_title`, which the client rendered TWICE. When this
++        # is a standalone countdown whose base text just duplicates the title,
++        # suppress the base text so only the countdown widget shows it.
++        if merged_item.get("kind") == "countdown" and text and countdown_title_out and text == countdown_title_out:
++            text = None
++        # B-COUNTDOWN #31 / B11 #6: reveal the stashed payload only once the
 +        # countdown has completed (now >= target_datetime).
 +        _cd_rev = merged_item.get("countdown_reveal")
 +        if isinstance(_cd_rev, dict) and countdown_target_out is not None and now_ts() >= countdown_target_out:
@@ -444,7 +521,7 @@
  
      # GIF / Sticker message projection (MSG-008)
      gif_url_out: Optional[str] = None
-@@ -4231,6 +4475,7 @@
+@@ -4231,6 +4521,7 @@
          target_datetime=countdown_target_out,
          associated_event_type=countdown_event_type_out,
          associated_event_id=countdown_event_id_out,
@@ -452,7 +529,7 @@
          gif_url=gif_url_out,
          gif_alt_text=gif_alt_text_out,
          gif_width=gif_width_out,
-@@ -4261,7 +4506,13 @@
+@@ -4261,7 +4552,13 @@
          reactions_counts=counts if counts else None,
          my_reactions=mine if mine else None,
          is_encrypted=bool(merged_item.get("is_encrypted")),
@@ -467,7 +544,7 @@
          consumption_policy=policy,
          media_kind=media_kind,
          consumption_state=consumption_state,
-@@ -6075,6 +6326,22 @@
+@@ -6075,6 +6372,22 @@
                      "message": "helpdesk bridge mode is not enabled for this group/tenant",
                  },
              )
@@ -490,7 +567,7 @@
          participant_ids = [user_id, _helpdesk_virtual_participant_id(group_id)]
      else:
          participant_ids = list(dict.fromkeys([user_id] + inp.participant_ids))
-@@ -6925,6 +7192,53 @@
+@@ -6925,6 +7238,53 @@
      return {"available_agent_count": count, "any_available": count > 0}
  
  
@@ -544,7 +621,7 @@
  @router.get("/helpdesk/queue", response_model=List[ConversationOut])
  def get_helpdesk_queue(
      group_id: str = Query(..., max_length=128),
-@@ -7495,7 +7809,48 @@
+@@ -7495,7 +7855,48 @@
          parts = []
  
      out: List[MessageOut] = []
@@ -594,7 +671,48 @@
  
      while len(out) < limit:
          kwargs: Dict[str, Any] = {
-@@ -10039,6 +10394,23 @@
+@@ -8408,6 +8809,29 @@
+             link_preview = _fetch_link_preview(url)
+     if link_preview:
+         item["preview"] = link_preview
++
++    # B11 B-COUNTDOWN3 (#6): attach an optional countdown to this (any-kind)
++    # message. The message keeps its own kind="text" and its base text; the
++    # countdown overlays it and the reveal payload surfaces once target passes.
++    if inp.countdown_target_datetime is not None:
++        item["target_datetime"] = int(inp.countdown_target_datetime)
++        if inp.countdown_title:
++            item["countdown_title"] = inp.countdown_title
++        if inp.countdown_target_tz:
++            item["target_tz"] = inp.countdown_target_tz
++        _cd_reveal: Dict[str, Any] = {}
++        if inp.countdown_reveal_text:
++            _cd_reveal["text"] = inp.countdown_reveal_text
++        _cd_media_in = list(inp.countdown_reveal_media or [])
++        if inp.countdown_reveal_image is not None:
++            _cd_media_in = [inp.countdown_reveal_image] + _cd_media_in
++        if _cd_media_in:
++            _cd_reveal["media"] = [
++                {k: v for k, v in img.model_dump().items() if v is not None}
++                for img in _cd_media_in
++            ]
++        if _cd_reveal:
++            item["countdown_reveal"] = _cd_reveal
+     ttl = _message_retention_ttl(convo, ts)
+     if ttl:
+         item["ttl"] = ttl
+@@ -8488,6 +8912,10 @@
+         lock_price_cents=inp.lock_price_cents,
+         lock_description=inp.lock_description,
+         is_unlocked=True,  # sender always sees their own content
++        # B11 B-COUNTDOWN3 (#6): surface the per-message countdown on the
++        # immediate send response too (the read/realtime paths already do).
++        countdown_title=item.get("countdown_title"),
++        target_datetime=item.get("target_datetime"),
+     )
+     if not is_scheduled:
+         message = _apply_message_receipts(message, item, participants)
+@@ -10039,6 +10467,23 @@
          "target_datetime": inp.target_datetime,
          "associated_event_type": inp.associated_event_type,
      }
@@ -618,7 +736,7 @@
      if inp.associated_event_id:
          item["associated_event_id"] = inp.associated_event_id
      if inp.reply_to_message_id:
-@@ -10848,6 +11220,15 @@
+@@ -10848,6 +11293,15 @@
      _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
      _validate_reply_target(conversation_id, inp.reply_to_message_id)
  
@@ -634,7 +752,7 @@
      path = norm_path(inp.path, is_folder=False)
      node = get_node(user_id, path)
      if node.get("type") != "file":
-@@ -10882,8 +11263,27 @@
+@@ -10882,8 +11336,27 @@
          },
          "reactions": {},
      }
@@ -662,7 +780,7 @@
      ttl = _message_retention_ttl(convo, ts)
      if ttl:
          item["ttl"] = ttl
-@@ -10932,6 +11332,7 @@
+@@ -10932,6 +11405,7 @@
          sender_id=user_id,
          created_at=ts,
          kind=inp.kind,
@@ -670,7 +788,7 @@
          file=item["file"],
          preview=preview,
          reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
-@@ -10941,6 +11342,14 @@
+@@ -10941,6 +11415,14 @@
          consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
          media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
          consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
@@ -685,7 +803,203 @@
      )
      message = _apply_message_receipts(message, item, resp.get("Items", []))
      audit_event(
-@@ -13361,6 +13770,17 @@
+@@ -11574,8 +12056,6 @@
+     require_participant_active(user_id, conversation_id)
+ 
+     msg = _get_message_or_404(conversation_id, message_id)
+-    if msg.get("kind") != "text":
+-        raise HTTPException(400, "Only text messages can be edited")
+     if isinstance(msg, dict) and msg.get("revoked_at"):
+         raise HTTPException(400, "Cannot edit a revoked message")
+     if msg.get("sender_id") != user_id:
+@@ -11589,54 +12069,147 @@
+         if now_ts() - created_at > S.message_edit_window_seconds:
+             raise HTTPException(400, "Edit window has expired")
+ 
++    # B11 B-MSGEDIT (#5): a delivered message can be edited to add/replace/remove
++    # media as well as text. Editable kinds = text + the media-bearing kinds
++    # (mirrors the scheduled-edit endpoint). Other special kinds (lottery,
++    # calendar_event, meeting_poll, find_datetime, voice_message, ...) remain
++    # text/media-edit-ineligible and keep the legacy behavior.
++    _editable_media_kinds = ("text", "image", "gallery", "file", "audio", "video", "file_share", "video_share")
++    _kind = msg.get("kind")
++    _has_media_edit = any(v is not None for v in (inp.image, inp.file_path, inp.video_id, inp.free_images, inp.locked_images)) or inp.remove_media
++    if _kind not in _editable_media_kinds:
++        # Preserve the original guard for non-editable kinds.
++        raise HTTPException(400, "Only text and media messages can be edited")
++    if inp.text is None and not _has_media_edit:
++        raise HTTPException(400, "Provide text and/or media to update")
++
+     old_text = msg.get("text") or ""
+-    new_text = inp.text
+-    if new_text == old_text:
+-        return MessageOut(
+-            conversation_id=msg["conversation_id"],
+-            message_id=msg["message_id"],
+-            sender_id=msg["sender_id"],
+-            created_at=int(msg["created_at"]),
+-            kind=msg["kind"],
+-            text=old_text,
+-            reply_to_message_id=msg.get("reply_to_message_id"),
+-            forwarded_from=msg.get("forwarded_from"),
+-            forward_note=msg.get("forward_note"),
+-            edited_at=int(msg.get("edited_at", 0)) or None,
+-            edited_by=msg.get("edited_by"),
+-        )
++    new_text = old_text if inp.text is None else inp.text
+ 
+     ts = now_ts()
+ 
+-    tbl_edits.put_item(
+-        Item={
+-            "message_key": _message_key(conversation_id, message_id),
+-            "edited_at": str(ts),
+-            "edited_by": user_id,
+-            "old_text": old_text,
+-            "new_text": new_text,
+-            "ttl": ts + EDITS_TTL_SEC,
+-        }
+-    )
++    set_parts: List[str] = ["edited_at = :ts", "edited_by = :uid"]
++    remove_parts: List[str] = []
++    expr_names: Dict[str, str] = {}
++    expr_vals: Dict[str, Any] = {":ts": ts, ":uid": user_id}
++
++    # --- Media remove: strip media + revert to a plain text message ---------------
++    if inp.remove_media:
++        # Some media field names ("file") are DynamoDB reserved keywords, so the
++        # REMOVE clause must reference them via ExpressionAttributeNames.
++        for _i, _f in enumerate(("image", "file", "file_share", "video_share", "free_images", "locked_images", "preview_image")):
++            _ph = f"#rm{_i}"
++            expr_names[_ph] = _f
++            remove_parts.append(_ph)
++        _kind = "text"
++        set_parts.append("#k = :kind")
++        expr_names["#k"] = "kind"
++        expr_vals[":kind"] = _kind
++
++    # --- Media add/replace: promote a text message to the media kind --------------
++    if not inp.remove_media and _has_media_edit:
++        _media_kinds = [
++            ("image", inp.image is not None),
++            ("gallery", inp.free_images is not None or inp.locked_images is not None),
++            ("file", inp.file_path is not None),
++            ("video_share", inp.video_id is not None),
++        ]
++        _supplied = [k for k, present in _media_kinds if present]
++        if len(_supplied) > 1:
++            raise HTTPException(400, "Provide only one media kind per edit")
++        if _supplied and _kind == "text":
++            _kind = _supplied[0]
++            set_parts.append("#k = :kind")
++            expr_names["#k"] = "kind"
++            expr_vals[":kind"] = _kind
++
++        if inp.image is not None and _kind == "image":
++            _img = {"bucket": inp.image.bucket, "key": inp.image.key, "content_type": inp.image.content_type}
++            if inp.image.width is not None: _img["width"] = inp.image.width
++            if inp.image.height is not None: _img["height"] = inp.image.height
++            if inp.image.filename: _img["filename"] = inp.image.filename
++            set_parts.append("image = :img")
++            expr_vals[":img"] = _img
++        if inp.file_path is not None and _kind in ("file", "audio", "video"):
++            _fp = norm_path(inp.file_path, is_folder=False)
++            _fnode = get_node(user_id, _fp)
++            if _fnode.get("type") != "file":
++                raise HTTPException(400, "file_path must reference a file")
++            set_parts.append("#f = :file")
++            expr_names["#f"] = "file"
++            expr_vals[":file"] = {
++                "path": _fnode.get("path"), "name": _fnode.get("name"), "size": _fnode.get("size"),
++                "content_type": _fnode.get("content_type") or "application/octet-stream",
++                "thumbnail": _fnode.get("thumbnail"),
++            }
++        if inp.file_path is not None and _kind == "file_share":
++            _fp = norm_path(inp.file_path, is_folder=None)
++            _fnode = get_node(user_id, _fp)
++            set_parts.append("file_share = :fs")
++            expr_vals[":fs"] = {
++                "path": _fnode.get("path"), "name": _fnode.get("name"),
++                "size": int(_fnode["size"]) if _fnode.get("size") is not None else None,
++                "content_type": _fnode.get("content_type"), "permission": "read", "owner": user_id,
++                "is_encrypted": bool(_fnode.get("is_encrypted")),
++            }
++        if inp.video_id is not None and _kind == "video_share":
++            from app.services.video_metadata_store import get_video as _b11_get_vod
++            try:
++                _v = _b11_get_vod(inp.video_id)
++            except HTTPException:
++                raise HTTPException(404, "video not found")
++            set_parts.append("video_share = :vs")
++            expr_vals[":vs"] = {
++                "video_id": _v.id, "owner_user_id": _v.owner_user_id, "title": _v.title,
++                "thumbnail_url": _v.thumbnail_url, "visibility": _v.visibility,
++            }
++        if (inp.free_images is not None or inp.locked_images is not None) and _kind == "gallery":
++            def _b11_simg(i):
++                return {k: v for k, v in i.model_dump().items() if v is not None}
++            if inp.free_images is not None:
++                set_parts.append("free_images = :fi")
++                expr_vals[":fi"] = [_b11_simg(i) for i in inp.free_images]
++            if inp.locked_images is not None:
++                set_parts.append("locked_images = :li")
++                expr_vals[":li"] = [_b11_simg(i) for i in inp.locked_images]
++
++    # --- Text edit (also records edit history + reindexes search) -----------------
++    _text_changed = inp.text is not None and new_text != old_text
++    if inp.text is not None:
++        set_parts.append("#t = :text")
++        expr_names["#t"] = "text"
++        expr_vals[":text"] = new_text
++    if _text_changed:
++        tbl_edits.put_item(
++            Item={
++                "message_key": _message_key(conversation_id, message_id),
++                "edited_at": str(ts),
++                "edited_by": user_id,
++                "old_text": old_text,
++                "new_text": new_text,
++                "ttl": ts + EDITS_TTL_SEC,
++            }
++        )
+ 
++    update_expr = "SET " + ", ".join(set_parts)
++    if remove_parts:
++        update_expr += " REMOVE " + ", ".join(remove_parts)
++    _kwargs: Dict[str, Any] = {
++        "Key": {"conversation_id": conversation_id, "message_id": message_id},
++        "UpdateExpression": update_expr,
++        "ExpressionAttributeValues": expr_vals,
++        "ConditionExpression": "sender_id = :uid",
++    }
++    if expr_names:
++        _kwargs["ExpressionAttributeNames"] = expr_names
+     try:
+-        tbl_msgs.update_item(
+-            Key={"conversation_id": conversation_id, "message_id": message_id},
+-            UpdateExpression="SET #t = :text, edited_at = :ts, edited_by = :uid",
+-            ExpressionAttributeNames={"#t": "text"},
+-            ExpressionAttributeValues={
+-                ":text": new_text,
+-                ":ts": ts,
+-                ":uid": user_id,
+-                ":kind_text": "text",
+-            },
+-            ConditionExpression="sender_id = :uid AND kind = :kind_text",
+-        )
++        tbl_msgs.update_item(**_kwargs)
+     except Exception as e:
+         raise HTTPException(400, f"Edit failed: {str(e)}")
+ 
+-    remove_message_search(conversation_id, message_id, old_text)
+-    index_message_search(conversation_id, message_id, user_id, int(msg.get("created_at", ts)), new_text)
++    if _text_changed:
++        remove_message_search(conversation_id, message_id, old_text)
++        index_message_search(conversation_id, message_id, user_id, int(msg.get("created_at", ts)), new_text)
+ 
+     item = _get_message_or_404(conversation_id, message_id)
+     _sync_gallery_index_message(item)
+@@ -13361,6 +13934,17 @@
          )
  
      ts = now_ts()
@@ -703,7 +1017,7 @@
      normalized_idempotency_key = (idempotency_key or "").strip()
      if len(normalized_idempotency_key) > 128:
          record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
-@@ -13392,13 +13812,23 @@
+@@ -13392,13 +13976,23 @@
          out.setdefault("outcome_id", f"o_{message_id}_{idx + 1}")
          payload_type = str(out.get("payload_type") or "")
          if payload_type in {"image", "video"}:
@@ -734,7 +1048,7 @@
          normalized_outcomes.append(out)
      config_payload = {"version": payload.lottery_config.version, "outcomes": normalized_outcomes}
  
-@@ -13537,7 +13967,10 @@
+@@ -13537,7 +14131,10 @@
          sender_id=user_id,
          created_at=ts,
          persisted_cfg=persisted_cfg,
@@ -745,7 +1059,7 @@
      try:
          tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
      except Exception as exc:
-@@ -13581,11 +14014,24 @@
+@@ -13581,11 +14178,24 @@
                      text_content=(str(out.get("text_content") or "") or None),
                      media_asset_id=(str(out.get("media_asset_id") or "") or None),
                      media_metadata=(dict(out.get("media_metadata") or {}) or None),
@@ -770,7 +1084,7 @@
          idempotent=False,
          created_at=ts,
      )
-@@ -13678,6 +14124,8 @@
+@@ -13678,6 +14288,8 @@
                  payload_type=str(selected.get("payload_type") or "text"),
                  text_content=(str(selected.get("text_content") or "") or None),
                  media_asset_id=(str(selected.get("media_asset_id") or "") or None),
@@ -779,7 +1093,7 @@
              ),
              unlocked_at=unlocked_at,
          )
-@@ -13729,6 +14177,8 @@
+@@ -13729,6 +14341,8 @@
              payload_type=str(selected_payload.get("payload_type") or "text"),
              text_content=(str(selected_payload.get("text_content") or "") or None),
              media_asset_id=(str(selected_payload.get("media_asset_id") or "") or None),
@@ -788,7 +1102,7 @@
          ),
          unlocked_at=unlocked_at,
      )
-@@ -13788,6 +14238,8 @@
+@@ -13788,6 +14402,8 @@
                      text_content=(str(out.get("text_content") or "") or None),
                      media_asset_id=(str(out.get("media_asset_id") or "") or None),
                      media_metadata=(dict(out.get("media_metadata") or {}) or None),
@@ -797,7 +1111,7 @@
                  )
                  for out in (cfg.get("outcomes") or [])
              ],
-@@ -13871,20 +14323,203 @@
+@@ -13871,20 +14487,203 @@
      return {"ok": True, "message_id": message_id}
  
  
@@ -1009,7 +1323,7 @@
  
      # Write deferred tip billing now that the message is actually delivered.
      # (Billing was intentionally skipped at schedule time so that cancelling
-@@ -13930,7 +14565,17 @@
+@@ -13930,7 +14729,17 @@
          conversation_id=conversation_id,
          sender_id=user_id,
          message_item=item,
@@ -1028,7 +1342,7 @@
      )
      # Also notify the sender — fanout excludes them by default, but they need
      # to know their scheduled message was promoted so their chat view refreshes.
-@@ -13944,6 +14589,10 @@
+@@ -13944,6 +14753,10 @@
          "payload": {
              "conversation_id": conversation_id,
              "message_id": message_id,
@@ -1039,7 +1353,7 @@
              **({"thread_id": item.get(MESSAGE_FIELD_THREAD_ID)} if item.get(MESSAGE_FIELD_THREAD_ID) else {}),
              "notification_scope": "thread" if item.get(MESSAGE_FIELD_THREAD_ID) else "conversation",
          },
-@@ -14022,12 +14671,75 @@
+@@ -14022,12 +14835,77 @@
          logger.error("Expire stale invites loop error: %s", exc)
  
  
@@ -1056,10 +1370,12 @@
 +    ``countdown_reveal_emitted`` flag makes this idempotent (emit exactly once)."""
 +    now = now_ts()
 +    try:
++        # B11 B-COUNTDOWN3 (#6): match ANY message carrying a reveal payload and a
++        # passed target_datetime (a countdown is now an option on any message),
++        # not just the legacy standalone kind=="countdown".
 +        resp = tbl_msgs.scan(
 +            FilterExpression=(
-+                Attr("kind").eq("countdown")
-+                & Attr("countdown_reveal").exists()
++                Attr("countdown_reveal").exists()
 +                & Attr("target_datetime").lte(now)
 +                & Attr("countdown_reveal_emitted").ne(True)
 +            )
@@ -1116,7 +1432,7 @@
                     description="Delivers scheduled messages and expires timed-out messages")
  
      while True:
-@@ -14065,6 +14777,30 @@
+@@ -14065,6 +14943,30 @@
              )
              for item in resp.get("Items", []):
                  try:
@@ -1147,7 +1463,7 @@
                      tbl_msgs.update_item(
                          Key={
                              "conversation_id": item["conversation_id"],
-@@ -14102,6 +14838,13 @@
+@@ -14102,6 +15004,13 @@
          # C) Expire stale call invites (server-side ringing timeout backstop)
          await _expire_stale_invites()
  
@@ -1161,7 +1477,7 @@
          _dur = (_time.perf_counter() - _start) * 1000
          if _loop_error:
              report_error("scheduled_messages", "Loop iteration error")
-@@ -14109,7 +14852,7 @@
+@@ -14109,7 +15018,7 @@
              report_poll("scheduled_messages", items_processed=_processed,
                          items_failed=_failed, duration_ms=_dur)
  

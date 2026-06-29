@@ -1,0 +1,72 @@
+--- app/services/video_gallery.py.bak_b11vidreact_1782714666	2026-06-29 06:31:06.175104266 +0000
++++ app/services/video_gallery.py	2026-06-29 06:33:20.715552753 +0000
+@@ -258,6 +258,69 @@
+     return item is not None
+ 
+ 
++# Video-level Emoji Reactions (B-VIDSOCIAL2 parity)
++# Mirrors newsfeed-post / video-comment reactions: a nested map
++# reactions = {emoji: {user_id: True}} on the video_metadata row, so a VOD
++# "post" reaches feed parity (like + emoji reactions + comments + tips).
++
++ALLOWED_VIDEO_REACTION_EMOJIS = ("👍", "❤️", "😂", "🔥", "😮")
++
++
++def _video_reaction_summaries(reactions_map, viewer_id=None):
++    """Per-emoji counts plus the viewer's own reactions (mirrors video_comments)."""
++    counts: Dict[str, int] = {}
++    mine: list = []
++    for emoji, users in (reactions_map or {}).items():
++        if isinstance(users, dict) and users:
++            counts[emoji] = len(users)
++            if viewer_id and users.get(viewer_id):
++                mine.append(emoji)
++    return counts, mine
++
++
++def get_video_reactions(*, video_id: str, user_id=None) -> Dict[str, Any]:
++    """Return {reactions_counts, my_reactions} for a video."""
++    raw = T.video_metadata.get_item(Key={"video_id": video_id}).get("Item") or {}
++    counts, mine = _video_reaction_summaries(raw.get("reactions") or {}, user_id)
++    return {"reactions_counts": counts, "my_reactions": mine}
++
++
++def add_video_reaction(*, video_id: str, user_id: str, emoji: str) -> Dict[str, Any]:
++    """Add an emoji reaction to a video (nested-map storage on video_metadata)."""
++    raw = T.video_metadata.get_item(Key={"video_id": video_id}).get("Item") or {}
++    reactions = dict(raw.get("reactions") or {})
++    emoji_map = dict(reactions.get(emoji, {}))
++    emoji_map[user_id] = True
++    reactions[emoji] = emoji_map
++    T.video_metadata.update_item(
++        Key={"video_id": video_id},
++        UpdateExpression="SET reactions = :r",
++        ExpressionAttributeValues={":r": reactions},
++    )
++    counts, mine = _video_reaction_summaries(reactions, user_id)
++    return {"reactions_counts": counts, "my_reactions": mine}
++
++
++def remove_video_reaction(*, video_id: str, user_id: str, emoji: str) -> Dict[str, Any]:
++    """Remove an emoji reaction from a video."""
++    raw = T.video_metadata.get_item(Key={"video_id": video_id}).get("Item") or {}
++    reactions = dict(raw.get("reactions") or {})
++    if emoji in reactions:
++        emoji_map = dict(reactions[emoji])
++        emoji_map.pop(user_id, None)
++        if emoji_map:
++            reactions[emoji] = emoji_map
++        else:
++            del reactions[emoji]
++        T.video_metadata.update_item(
++            Key={"video_id": video_id},
++            UpdateExpression="SET reactions = :r",
++            ExpressionAttributeValues={":r": reactions},
++        )
++    counts, mine = _video_reaction_summaries(reactions, user_id)
++    return {"reactions_counts": counts, "my_reactions": mine}
++
++
+ # ─── Gallery Browsing ───────────────────────────────────────────────────────
+ 
+ 

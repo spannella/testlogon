@@ -184,3 +184,19 @@ Backend code hotfixes (regenerated vs each file's pristine .bak):
 - VERIFIED: on-device phone-camera WHIP publish -> conn=CONNECTED; HLS playback served real H264 bytes
   from outside AWS. CAVEAT: playback URL is cleartext :8888 (debug APK usesCleartextTraffic=true ok);
   for a RELEASE build, front HLS through Caddy as https and emit that base.
+
+## Batch-11 additions (2026-06-29)
+
+- `app_models.py.patch` — B-GRPIMG (#1): group-post image_url validator now accepts /uploads/object
+  + https + /mock (rejects plain http/scheme-relative/data:), matching normal posts; same validator
+  added to image_urls (multi-image).
+- `app_routers_messaging.py.patch` — B-MSGEDIT (#5): normal message edit now adds/replaces/removes
+  media (image/gallery/file/video_share) not just text (+ DynamoDB reserved-keyword `file` fix);
+  B-COUNTDOWN3 (#6): countdown is now an option on ANY message (countdown_target_datetime[_local+tz]
+  + reveal payload on the general send; reveal surfaces once now>=target, swept + emitted on realtime
+  for any message carrying target_datetime; fixed double-base-text on legacy standalone countdowns).
+- `app_routers_video_listing.py.patch` + `app_services_video_gallery.py.patch` — VOD social/reactions
+  (carried/extended from b10).
+
+No change needed (verified): ticket video/pdf attach (#2/#3 — backend accepts any content-type; the
+crash was app-side Moshi), Go Live manage/stop/playback (#7 — batch-10 infra).
