@@ -1,0 +1,19 @@
+--- app/services/tip_ledger.py.bak_b10_1782714110	2026-06-07 03:23:35.115421438 +0000
++++ app/services/tip_ledger.py	2026-06-29 06:21:50.529771390 +0000
+@@ -48,7 +48,7 @@
+     ):
+         if amount_cents <= 0:
+             raise ValueError("amount_cents must be > 0")
+-        if content_type not in ("message", "post", "comment", "broadcast"):
++        if content_type not in ("message", "post", "comment", "broadcast", "video"):
+             raise ValueError(f"Invalid content_type: {content_type}")
+         self.tipper_user_id = tipper_user_id
+         self.recipient_user_id = recipient_user_id
+@@ -68,6 +68,7 @@
+         "post": "Tip: post",
+         "comment": "Tip: comment",
+         "broadcast": "Tip: broadcast",
++        "video": "Tip: video",
+     }.get(content_type, f"Tip: {content_type}")
+ 
+ 

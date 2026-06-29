@@ -160,3 +160,27 @@ but no caption was rejected. Fix: exempt any payload that carries media
 (image_urls/image_url/video_id/video_ids/file_paths) from the text-body requirement.
 `app_routers_newsfeed.py.patch` regenerated to include it. (Server confirmed healthy; the actual
 uploads target local-uploads which exists; this was purely the post-create validation.)
+
+## Batch-10 additions (2026-06-29)
+
+Backend code hotfixes (regenerated vs each file's pristine .bak):
+- `app_services_broadcast_playback.py.patch` NEW — Go Live (#16): `mint_local_playback_url` emits
+  MediaMTX-native `{base}/{sessionId}/index.m3u8` when `BROADCAST_PLAYBACK_MEDIAMTX=1` (guarded; legacy path unchanged).
+- `app_routers_messaging.py.patch` — scheduled delivery timing + realtime emit on delivery (#6/#11) + edit-add-media (#7) + media_kind.
+- `app_routers_video_listing.py.patch` — VOD social parity reactions/comments/tips (#2).
+- `app_services_group_feed.py.patch` — group/feed unification bridge (#4: group posts surface in main feed + my-posts).
+- `app_routers_tickets.py.patch` + `app_services_tickets.py.patch` — helpdesk multi-image/video/file + file-manager refs (#5).
+- `app_services_messaging_lottery_store.py.patch` — lottery sender-view config/result (#15).
+- `app_services_tip_ledger.py.patch` — video tips (#2).
+
+### Go Live INFRA deployed on prod EC2 (i-08f937fc705ebea75, 18.222.237.167) — NOT code, ops state:
+- MediaMTX v1.19.2 (linux_amd64) at `/opt/mediamtx/` + `mediamtx.yml` (WHIP/WebRTC :8889, ICE/UDP :8189,
+  HLS :8888, API 127.0.0.1:9997, webrtcAdditionalHosts incl. tl-api.bitbazaar.cc, catch-all publisher path).
+  Config + systemd unit archived under `golive/` here.
+- systemd `mediamtx.service` (enabled, Restart=on-failure, survives reboot).
+- EC2 SG `sg-00ab51618117e537d` inbound opened: TCP 8889 (WHIP), UDP 8189 (WebRTC media), TCP 8888 (HLS).
+- `.env.local` broadcast block (archived `golive/env_broadcast_block.txt`): BROADCAST_PROVIDER=local,
+  BROADCAST_PLAYBACK_MEDIAMTX=1, BROADCAST_LOCAL_CACHE_PUBLIC_BASE_URL=http://tl-api.bitbazaar.cc:8888.
+- VERIFIED: on-device phone-camera WHIP publish -> conn=CONNECTED; HLS playback served real H264 bytes
+  from outside AWS. CAVEAT: playback URL is cleartext :8888 (debug APK usesCleartextTraffic=true ok);
+  for a RELEASE build, front HLS through Caddy as https and emit that base.

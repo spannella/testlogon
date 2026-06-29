@@ -1,0 +1,29 @@
+--- app/services/broadcast_playback.py.bak_b10golive_1782712525	2026-05-31 00:32:32.939371847 +0000
++++ app/services/broadcast_playback.py	2026-06-29 05:55:25.183430764 +0000
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import base64
++import os
+ import hashlib
+ import re
+ import time
+@@ -34,9 +35,17 @@
+     key = _validate_stream_key(stream_key)
+     ttl = int(ttl_seconds or S.broadcast_local_cache_token_ttl_seconds or 600)
+     expires_at = int(time.time()) + max(30, ttl)
++    base = S.broadcast_local_cache_public_base_url or "http://localhost:8090"
++    # GO-LIVE (B10): when a real MediaMTX media server backs playback, emit its native HLS URL
++    # ( {base}/{sessionKey}/index.m3u8 ) instead of the legacy nginx secure_link path. MediaMTX
++    # publishes the WHIP-ingested stream under a path named by the broadcast session id; viewers
++    # read the same path as HLS. Gated on BROADCAST_PLAYBACK_MEDIAMTX so behaviour is unchanged
++    # unless explicitly enabled.
++    if os.environ.get("BROADCAST_PLAYBACK_MEDIAMTX", "0") not in ("0", "false", "False", ""):
++        url = f"{base}/{key}/index.m3u8"
++        return LocalPlaybackUrl(url=url, expires_at=expires_at)
+     path = f"/hls/{key}/master.m3u8"
+     token_payload = f"{expires_at}{path} {S.broadcast_local_cache_token_secret or 'local-cache-secret'}"
+     md5_token = _b64url_md5(token_payload)
+-    base = S.broadcast_local_cache_public_base_url or "http://localhost:8090"
+     url = f"{base}{path}?md5={md5_token}&expires={expires_at}"
+     return LocalPlaybackUrl(url=url, expires_at=expires_at)

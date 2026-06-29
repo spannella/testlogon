@@ -1,35 +1,38 @@
 --- app/services/tickets.py.bak_b8supclose_1782395154	2026-06-25 13:45:54.858642711 +0000
-+++ app/services/tickets.py	2026-06-26 01:32:03.813416456 +0000
-@@ -503,6 +503,7 @@
++++ app/services/tickets.py	2026-06-29 06:15:18.880018703 +0000
+@@ -503,6 +503,8 @@
          priority: str | None = None,        # CAS-003
          contact_id: str | None = None,      # CAS-005
          account_id: str | None = None,      # CAS-005
 +        image_url: str | None = None,       # B9 B-HELP2 #14
++        media: list[dict[str, Any]] | None = None,  # B10 B-HELPMEDIA
      ) -> dict[str, Any]:
          ts = now_ts()
          # TKB-001: board_id is an alias for space_id (same physical attribute).
-@@ -601,6 +602,7 @@
+@@ -601,6 +603,8 @@
              "sender_sub": owner_sub,
              "sender_role": "user",
              "body": description,
 +            "image_url": image_url,
++            "media": list(media or []),  # B10 B-HELPMEDIA
              "created_at": ts,
              "email_alert_queued_for": [],
          })
-@@ -671,6 +673,7 @@
+@@ -671,6 +675,8 @@
                  "sender_sub": item.get("sender_sub", ""),
                  "sender_role": item.get("sender_role", "user"),
                  "body": item.get("body", ""),
 +                "image_url": item.get("image_url"),
++                "media": list(item.get("media", []) or []),  # B10 B-HELPMEDIA
                  "created_at": int(item.get("created_at", 0) or 0),
                  "email_alert_queued_for": item.get("email_alert_queued_for", []),
              } for item in messages],
-@@ -1152,11 +1155,19 @@
+@@ -1152,11 +1158,19 @@
          })
          return self.get_ticket(ticket_id)
  
 -    def add_message(self, *, ticket_id: str, sender_sub: str, sender_role: str, body: str, email_targets: list[str]) -> dict[str, Any] | None:
-+    def add_message(self, *, ticket_id: str, sender_sub: str, sender_role: str, body: str, email_targets: list[str], image_url: str | None = None) -> dict[str, Any] | None:
++    def add_message(self, *, ticket_id: str, sender_sub: str, sender_role: str, body: str, email_targets: list[str], image_url: str | None = None, media: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
          ts = now_ts()
          cur = self.get_ticket(ticket_id)
          if not cur:
@@ -45,15 +48,16 @@
          next_status = _next_status_for_message(sender_role=sender_role, current_status=cur.get("status", "open"))
          message_id = f"msg_{uuid.uuid4().hex[:12]}"
          self._table.put_item(Item={
-@@ -1168,6 +1179,7 @@
+@@ -1168,6 +1182,8 @@
              "sender_sub": sender_sub,
              "sender_role": sender_role,
              "body": body,
 +            "image_url": image_url,
++            "media": list(media or []),  # B10 B-HELPMEDIA
              "created_at": ts,
              "email_alert_queued_for": email_targets,
          })
-@@ -1407,6 +1419,117 @@
+@@ -1407,6 +1423,117 @@
              "created_at": ts,
          })
          return self.get_ticket(ticket_id)

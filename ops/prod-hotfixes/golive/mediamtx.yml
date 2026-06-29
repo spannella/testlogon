@@ -1,0 +1,31 @@
+# TestLogon Go Live media server (WHIP ingest -> HLS playback)
+logLevel: info
+logDestinations: [file]
+logFile: /opt/mediamtx/mediamtx.log
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+rtmp: no
+
+# WebRTC / WHIP ingest: app POSTs SDP offer to http://host:8889/<sessionId>/whip
+webrtc: yes
+webrtcAddress: :8889
+webrtcAdditionalHosts: [18.222.237.167, tl-api.bitbazaar.cc]
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+# HLS playback: viewers GET http://host:8888/<sessionId>/index.m3u8
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: fmp4
+hlsAllowOrigins: ['*']
+
+rtsp: no
+srt: no
+
+# Accept any dynamically-named path (sessionId), published by the WHIP client.
+paths:
+  all_others:
+    source: publisher
