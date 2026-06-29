@@ -1,12 +1,16 @@
 package com.testlogon.android.feature.feed.compose
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.groups.Group
 import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.PostComposeRepository
 import com.testlogon.android.data.feed.PostVisibility
 import com.testlogon.android.data.videos.VideoUploadRepository
+import com.testlogon.android.feature.groups.data.GroupsRepository
+import com.testlogon.android.navigation.ComposePostDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +36,17 @@ data class ComposePostUiState(
     val lockPriceInput: String = "",
     /** Arbitrary future publish time (epoch seconds); null = publish now. */
     val publishAtEpochSeconds: Long? = null,
+    /**
+     * #4 (B-GROUPUNIFY) — the audience this post is being shared to. `null` = the user's personal feed
+     * (POST /posts); a non-null [Group] routes the post to that group (POST /ui/groups/{id}/posts), which
+     * the backend bridges back into the unified feed + my-posts. This is the SAME composer either way —
+     * the group is just an audience choice.
+     */
+    val targetGroup: Group? = null,
+    /** The user's groups, offered as audience options. Empty until loaded (or if the user has none). */
+    val myGroups: List<Group> = emptyList(),
+    /** True when the target group was fixed by the caller (composing FROM a group feed) — not switchable. */
+    val groupLocked: Boolean = false,
     /** #2 — uploaded media to attach: image urls (0..n) + 0..n videos. Images AND videos may coexist. */
     val imageUrls: List<String> = emptyList(),
     /** #2 — the picked videos (each with its local uri + uploaded id + uploading flag). */
@@ -58,10 +73,48 @@ class ComposePostViewModel @Inject constructor(
     private val repository: PostComposeRepository,
     private val videoUploads: VideoUploadRepository,
     private val feedRefreshBus: FeedRefreshBus,
+    private val groupsRepository: GroupsRepository,
+    savedState: SavedStateHandle,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(ComposePostUiState())
+    /** Optional nav arg: compose directly into this group (locks the audience to it). */
+    private val fixedGroupId: String? =
+        savedState.get<String>(ComposePostDest.ARG_GROUP_ID)?.takeIf { it.isNotBlank() }
+
+    private val _state = MutableStateFlow(ComposePostUiState(groupLocked = fixedGroupId != null))
     val state: StateFlow<ComposePostUiState> = _state.asStateFlow()
+
+    init {
+        loadGroups()
+    }
+
+    /**
+     * #4 — load the user's groups so they can be chosen as the post audience. If a [fixedGroupId] nav arg
+     * was supplied (composing from a group feed) the matching group is pre-selected and locked.
+     */
+    private fun loadGroups() {
+        viewModelScope.launch {
+            when (val r = groupsRepository.listMyGroups()) {
+                is ApiResult.Success -> _state.update { s ->
+                    val fixed = fixedGroupId?.let { id -> r.data.firstOrNull { it.id == id } }
+                    s.copy(
+                        myGroups = r.data,
+                        // Keep a fixed group selected even if it is not in the list (still post to it).
+                        targetGroup = fixed ?: s.targetGroup
+                            ?: fixedGroupId?.let { Group(id = it, name = "this group") },
+                    )
+                }
+                // A failure to load groups is non-fatal — the user can still post to their feed.
+                is ApiResult.Failure, is ApiResult.NetworkError -> Unit
+            }
+        }
+    }
+
+    /** #4 — choose the post audience: null = personal feed, a [Group] = that group's feed. */
+    fun onTargetGroupChange(group: Group?) {
+        if (_state.value.groupLocked) return
+        _state.update { it.copy(targetGroup = group) }
+    }
 
     fun onBodyChange(text: String) = _state.update { it.copy(body = text, error = null) }
     fun onVisibilityChange(v: PostVisibility) = _state.update { it.copy(visibility = v) }
@@ -124,13 +177,33 @@ class ComposePostViewModel @Inject constructor(
         _state.update { it.copy(submitting = true, error = null) }
         viewModelScope.launch {
             val cents = parseDollarsToCents(s.lockPriceInput)
-            when (val r = repository.createPost(s.body.trim(), s.visibility, cents, s.publishAtEpochSeconds, s.imageUrls, s.uploadedVideoIds)) {
+            val group = s.targetGroup
+            // #4 (B-GROUPUNIFY) — a group audience posts to the group store (the backend bridges it into
+            // the unified feed + my-posts); the personal feed uses POST /posts. Same composer, same fields.
+            val result: ApiResult<Unit> = if (group != null) {
+                // The group endpoint requires a non-empty text (1..10000); an image/video-only post
+                // sends a single space (matching the existing group composer behavior).
+                when (val gr = groupsRepository.createGroupPost(
+                    groupId = group.id,
+                    text = s.body.trim().ifEmpty { " " },
+                    imageUrls = s.imageUrls,
+                    videoId = s.uploadedVideoIds.firstOrNull(),
+                    unlockPriceCents = cents?.toInt(),
+                )) {
+                    is ApiResult.Success -> ApiResult.Success(Unit)
+                    is ApiResult.Failure -> ApiResult.Failure(gr.error)
+                    is ApiResult.NetworkError -> ApiResult.NetworkError(gr.cause, gr.isTimeout)
+                }
+            } else {
+                repository.createPost(s.body.trim(), s.visibility, cents, s.publishAtEpochSeconds, s.imageUrls, s.uploadedVideoIds)
+            }
+            when (result) {
                 is ApiResult.Success -> {
                     // #18a — make the just-published post appear in the main feed immediately.
                     feedRefreshBus.signal()
                     _state.update { it.copy(submitting = false, posted = true) }
                 }
-                is ApiResult.Failure -> _state.update { it.copy(submitting = false, error = r.error.message) }
+                is ApiResult.Failure -> _state.update { it.copy(submitting = false, error = result.error.message) }
                 is ApiResult.NetworkError -> _state.update { it.copy(submitting = false, error = "You're offline. Try again.") }
             }
         }

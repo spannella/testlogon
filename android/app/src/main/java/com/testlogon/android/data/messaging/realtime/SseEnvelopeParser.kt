@@ -42,11 +42,25 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
             "conversation_updated" -> MessagingEvent.ConversationUpdated(conversationId)
             // AND-140 — reaction / edit / revoke mutations on an existing message. The web client
             // (useMessagingStream.ts) reads only conversation_id + message_id from these frames.
-            "message:reaction", "message:edited", "message:revoked" -> MessagingEvent.MessageMutated(
-                conversationId = conversationId ?: return null,
-                messageId = data["message_id"] as? String ?: return null,
-                kind = type.removePrefix("message:"),
-            )
+            // #14 (B-COUNTDOWN2) — "message:updated" is the backend's generic "this message changed,
+            // re-fetch it" event; the countdown-reveal sweep emits it (reason="countdown_revealed")
+            // once a countdown hits its target so connected clients re-render with the revealed
+            // text/media WITHOUT a manual refresh. Unlike the reaction/edit frames the message_id is
+            // carried inside `payload` (not at the top level) on this event, so read it from there
+            // as a fallback. Routed to the SAME MessageMutated re-fetch+reconcile path.
+            "message:reaction", "message:edited", "message:revoked", "message:updated" -> {
+                @Suppress("UNCHECKED_CAST")
+                val payload = data["payload"] as? Map<String, Any?>
+                MessagingEvent.MessageMutated(
+                    conversationId = conversationId
+                        ?: (payload?.get("conversation_id") as? String)
+                        ?: return null,
+                    messageId = (data["message_id"] as? String)
+                        ?: (payload?.get("message_id") as? String)
+                        ?: return null,
+                    kind = type.removePrefix("message:"),
+                )
+            }
             // AND-145 — single-user presence update: { user_id, online, last_seen_at } (epoch seconds).
             "presence:update" -> MessagingEvent.PresenceUpdate(
                 userId = data["user_id"] as? String ?: return null,

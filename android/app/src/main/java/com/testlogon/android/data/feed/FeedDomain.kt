@@ -24,6 +24,12 @@ data class FeedPost(
     val likeCount: Int,
     val commentCount: Int,
     val likedByMe: Boolean,
+    /**
+     * #4 (B-GROUPUNIFY) — the group this post was posted to, or null for a normal (personal) post. Group
+     * posts are bridged into the unified feed/my-posts server-side; this lets the UI badge them
+     * ("Posted in a group") so group + normal posts coexist in one list.
+     */
+    val groupId: String? = null,
     /** #20 — full emoji reaction tallies (empty when none); distinct from the like toggle. */
     val reactions: List<ReactionTally> = emptyList(),
     /** Never null at domain level; derived from the flat lock fields. */
@@ -110,6 +116,7 @@ internal fun PostDto.toDomain(): FeedPost {
         likeCount = likeCount,
         commentCount = commentCount,
         likedByMe = likedByMe,
+        groupId = groupId?.takeIf { it.isNotBlank() },
         reactions = reactionTallies(reactionsCounts, myReactions),
         paywall = paywall,
         // Polls are content, not protected media: only surface when the post is not locked.

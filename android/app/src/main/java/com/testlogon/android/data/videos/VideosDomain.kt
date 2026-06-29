@@ -58,6 +58,10 @@ data class VideoDetail(
     val purchaseAvailableOrFalse: Boolean = false,
     val subscriptionAvailableOrFalse: Boolean = false,
     val subscriptionUpsellOrFalse: Boolean = false,
+    // B-VIDSOCIAL2 — video-level emoji reactions (counts + the caller's own) + running tip total.
+    val reactions: Map<String, Int> = emptyMap(),
+    val myReactions: Set<String> = emptySet(),
+    val tipTotalCents: Int = 0,
 ) {
     /** True while the asset is still being prepared server-side; no manifest yet. */
     val isProcessing: Boolean get() = status in PROCESSING_STATUSES
@@ -146,4 +150,7 @@ fun VideoDetailDto.toDomain(): VideoDetail = VideoDetail(
     purchaseAvailableOrFalse = purchaseAvailable ?: false,
     subscriptionAvailableOrFalse = subscriptionAvailable ?: false,
     subscriptionUpsellOrFalse = subscriptionUpsell ?: false,
+    reactions = reactionsCounts.filterValues { it > 0 },
+    myReactions = myReactions.toSet(),
+    tipTotalCents = tipTotalCents,
 )

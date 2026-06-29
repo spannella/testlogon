@@ -547,6 +547,7 @@ class FakeMessagingRepository : MessagingRepository {
         localUri: String,
         fileName: String,
         mimeType: String,
+        caption: String?,
         viewOnce: Boolean,
         lockPriceCents: Long?,
         lockDescription: String?,
@@ -875,7 +876,14 @@ class FakeMessagingRepository : MessagingRepository {
         messageId: String,
         text: String?,
         sendAtEpochSeconds: Long?,
+        image: com.testlogon.android.data.messaging.MessageImageDto?,
     ): ApiResult<com.testlogon.android.data.messaging.ScheduledMessage> =
+        ApiResult.Failure(ApiError(status = 400, message = "fake"))
+
+    override suspend fun uploadRescheduleImage(
+        conversationId: String,
+        localUri: String,
+    ): ApiResult<com.testlogon.android.data.messaging.MessageImageDto> =
         ApiResult.Failure(ApiError(status = 400, message = "fake"))
 
     override suspend fun cancelScheduledMessage(

@@ -74,6 +74,9 @@ import coil.compose.rememberAsyncImagePainter
 import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import com.testlogon.android.core.model.groups.Group
 import com.testlogon.android.data.feed.PostVisibility
 import com.testlogon.android.feature.common.DateTimePickerField
 
@@ -98,6 +101,7 @@ fun ComposePostRoute(
         onBack = onBack,
         onBodyChange = viewModel::onBodyChange,
         onVisibilityChange = viewModel::onVisibilityChange,
+        onTargetGroupChange = viewModel::onTargetGroupChange,
         onLockPriceChange = viewModel::onLockPriceChange,
         onScheduleChange = viewModel::onScheduleChange,
         onAddPhotos = {
@@ -122,6 +126,7 @@ fun ComposePostScreen(
     onBack: () -> Unit,
     onBodyChange: (String) -> Unit,
     onVisibilityChange: (PostVisibility) -> Unit,
+    onTargetGroupChange: (Group?) -> Unit,
     onLockPriceChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
     onAddPhotos: () -> Unit,
@@ -244,15 +249,27 @@ fun ComposePostScreen(
                 )
             }
 
-            Text("Who can see this", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PostVisibility.entries.forEach { v ->
-                    FilterChip(
-                        selected = state.visibility == v,
-                        onClick = { onVisibilityChange(v) },
-                        label = { Text(v.label) },
-                        modifier = Modifier.testTag("compose_vis_${v.wire}"),
-                    )
+            // #4 (B-GROUPUNIFY) — audience: post to your personal feed OR to one of your groups (the
+            // SAME composer either way; the group is just the selected audience). Hidden as switchable
+            // when the audience was locked by the caller (composing from a group feed).
+            AudiencePicker(
+                state = state,
+                onTargetGroupChange = onTargetGroupChange,
+            )
+
+            // The public/followers/subscribers visibility only applies to a PERSONAL-feed post; a group
+            // post's visibility is the group's own audience model.
+            if (state.targetGroup == null) {
+                Text("Who can see this", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PostVisibility.entries.forEach { v ->
+                        FilterChip(
+                            selected = state.visibility == v,
+                            onClick = { onVisibilityChange(v) },
+                            label = { Text(v.label) },
+                            modifier = Modifier.testTag("compose_vis_${v.wire}"),
+                        )
+                    }
                 }
             }
 
@@ -289,6 +306,52 @@ fun ComposePostScreen(
                 }
             }
             Box(Modifier.fillMaxWidth().height(8.dp))
+        }
+    }
+}
+
+/**
+ * #4 (B-GROUPUNIFY) — audience selector: "Personal feed" plus a chip per group. Selecting a group routes
+ * the post to that group (which the backend bridges back into the unified feed). When the audience is
+ * locked (composing from inside a group) the selected group is shown read-only.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AudiencePicker(
+    state: ComposePostUiState,
+    onTargetGroupChange: (Group?) -> Unit,
+) {
+    if (state.groupLocked) {
+        Text("Posting to", style = MaterialTheme.typography.labelLarge)
+        FilterChip(
+            selected = true,
+            onClick = {},
+            enabled = false,
+            label = { Text("Group: ${state.targetGroup?.name ?: "this group"}") },
+            modifier = Modifier.testTag("compose_audience_locked"),
+        )
+        return
+    }
+    if (state.myGroups.isEmpty()) return
+    Text("Post to", style = MaterialTheme.typography.labelLarge)
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.testTag("compose_audience_picker"),
+    ) {
+        FilterChip(
+            selected = state.targetGroup == null,
+            onClick = { onTargetGroupChange(null) },
+            label = { Text("Personal feed") },
+            modifier = Modifier.testTag("compose_audience_personal"),
+        )
+        state.myGroups.forEach { g ->
+            FilterChip(
+                selected = state.targetGroup?.id == g.id,
+                onClick = { onTargetGroupChange(g) },
+                label = { Text(g.name) },
+                modifier = Modifier.testTag("compose_audience_group_${g.id}"),
+            )
         }
     }
 }

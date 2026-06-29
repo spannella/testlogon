@@ -102,6 +102,11 @@ data class SupportCreateTicketReq(
     @Json(name = "priority") val priority: String? = "medium",
     /** Helpdesk #14 (B-HELP2): an optional image attached to the opening message. Omitted when null. */
     @Json(name = "image_url") val imageUrl: String? = null,
+    /**
+     * B10 B-HELPMEDIA #5: an ordered LIST of media/attachments (like a newsfeed post) on the opening
+     * message: images + videos + uploaded files + file-manager file refs. Max 10. Omitted when empty.
+     */
+    @Json(name = "media") val media: List<SupportTicketMediaDto>? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -109,6 +114,31 @@ data class SupportTicketMessageReq(
     @Json(name = "body") val body: String,
     /** Helpdesk #14 (B-HELP2): an optional image attached to this reply. Omitted when null. */
     @Json(name = "image_url") val imageUrl: String? = null,
+    /** B10 B-HELPMEDIA #5: an ordered LIST of media/attachments on this reply (see create req). */
+    @Json(name = "media") val media: List<SupportTicketMediaDto>? = null,
+)
+
+/**
+ * B10 B-HELPMEDIA #5: one media/attachment item on a ticket or reply, mirroring the backend
+ * `TicketMediaIn` / projected media item. Used for BOTH the request (what the client sends) and the
+ * response (what the server echoes back per message). `kind` is one of:
+ *  - "image" / "video" / "file": an uploaded asset addressed by [url] (a platform upload URL).
+ *  - "file_ref": a file-manager VFS file addressed by [path] (the server resolves it to name /
+ *    content_type / size / thumbnail on read, so the response carries those fields).
+ * All non-kind fields are optional; the client sends only what it has, the server fills the rest.
+ */
+@JsonClass(generateAdapter = true)
+data class SupportTicketMediaDto(
+    @Json(name = "kind") val kind: String = "image",
+    @Json(name = "url") val url: String? = null,
+    @Json(name = "path") val path: String? = null,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "size_bytes") val sizeBytes: Long? = null,
+    @Json(name = "width") val width: Int? = null,
+    @Json(name = "height") val height: Int? = null,
+    /** Server-resolved (file_ref) preview/thumbnail URL, when present. */
+    @Json(name = "thumbnail") val thumbnail: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -163,6 +193,8 @@ data class SupportTicketMessageDto(
     @Json(name = "created_at") val createdAt: Long? = null,
     /** Helpdesk #14 (B-HELP2): an image attached to this message (rendered in the thread), or null. */
     @Json(name = "image_url") val imageUrl: String? = null,
+    /** B10 B-HELPMEDIA #5: the ordered media/attachment list projected back per message. */
+    @Json(name = "media") val media: List<SupportTicketMediaDto>? = null,
 )
 
 @JsonClass(generateAdapter = true)

@@ -114,6 +114,18 @@ data class ScheduledEditState(
     val draftDeliverAtEpochSeconds: Long,
     /** #21 — IANA zone the draft due-time wall-clock is interpreted in (defaults to the device zone). */
     val timeZoneId: String = java.util.TimeZone.getDefault().id,
+    /**
+     * #7 (B-SCHED3) — whether THIS scheduled message can have a photo attached. True for a text-only
+     * scheduled message (the server promotes it to an image kind) and for an existing image message
+     * (replace the photo). False for kinds that can't take a photo via this path (gallery/file/etc).
+     */
+    val canAttachImage: Boolean = false,
+    /** #7 — true while a picked photo is uploading (presign + PUT) before save. */
+    val attaching: Boolean = false,
+    /** #7 — local content:// uri of the picked photo (for the preview thumbnail), null = none staged. */
+    val draftImageLocalUri: String? = null,
+    /** #7 — the uploaded photo descriptor sent on save; non-null once the upload succeeds. */
+    val draftImage: com.testlogon.android.data.messaging.MessageImageDto? = null,
     val saving: Boolean = false,
     val error: String? = null,
 )

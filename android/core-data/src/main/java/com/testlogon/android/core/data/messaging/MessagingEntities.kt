@@ -159,6 +159,10 @@ data class MessageEntity(
     /** "locked" | "unlocked" for a lottery_dm message; null for non-lottery. */
     val lotteryLockState: String? = null,
     val lotterySelectedText: String? = null,
+    // #15 (DB schema v16) — the SENDER's full lottery sender-view (config + per-recipient results) as a
+    // compact JSON blob, so the sender's own detail survives a Room round-trip / app restart. Null for
+    // recipients and non-lottery messages.
+    val lotterySenderViewJson: String? = null,
     // MSG (DB schema v11) — client-side encryption: is_encrypted flag + the AES-GCM envelope fields so
     // the receiver renders a locked bubble and can decrypt on passphrase entry after a Room round-trip.
     val isEncrypted: Boolean = false,

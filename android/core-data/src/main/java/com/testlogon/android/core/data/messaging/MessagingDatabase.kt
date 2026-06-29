@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -313,6 +313,14 @@ abstract class MessagingDatabase : RoomDatabase() {
             }
         }
 
+        // #15 (B-LOTSENDER) — persist the SENDER's lottery sender-view (full config + per-recipient
+        // results) so the sender's own detail survives a Room round-trip / app restart.
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN lotterySenderViewJson TEXT")
+            }
+        }
+
     }
 }
 
@@ -343,6 +351,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_12_13,
             MessagingDatabase.MIGRATION_13_14,
             MessagingDatabase.MIGRATION_14_15,
+            MessagingDatabase.MIGRATION_15_16,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

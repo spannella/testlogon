@@ -50,6 +50,7 @@ class RealBroadcastPublisher @Inject constructor(
     private val eglBase: EglBase,
     private val settingsStore: SettingsStore,
     private val mediaHolder: CallMediaHolder,
+    private val iceServersProvider: IceServersProvider,
 ) : BroadcastPublisher {
 
     // A bare client: the WHIP POST goes to the media server, not the API, so it must NOT carry the
@@ -69,7 +70,19 @@ class RealBroadcastPublisher @Inject constructor(
         return try {
             _state.value = PublishState.Starting
             val gathered = CompletableDeferred<Unit>()
-            val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
+            // Phone -> public media server (MediaMTX on EC2) crosses NAT, so the offerer MUST gather a
+            // server-reflexive (srflx) candidate or ICE can never connect over the internet. With an empty
+            // ICE list the peer only gathers host (LAN) candidates -> publish silently fails off-LAN.
+            // IceServersProvider never throws and falls back to Google STUN (TurnFetchConfig.stunOnlyFallback)
+            // when the call-scoped TURN endpoint is unavailable for a broadcast session.
+            val iceServers = iceServersProvider.current(sessionId).map { s ->
+                PeerConnection.IceServer.builder(s.urls).apply {
+                    s.username?.let { setUsername(it) }
+                    s.credential?.let { setPassword(it) }
+                }.createIceServer()
+            }
+            Log.d("TLBCAST", "ice servers=${iceServers.size}")
+            val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
                 continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
             }

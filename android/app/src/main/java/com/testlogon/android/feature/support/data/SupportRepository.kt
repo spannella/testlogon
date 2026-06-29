@@ -8,6 +8,7 @@ import com.testlogon.android.core.network.support.SupportApi
 import com.testlogon.android.core.network.support.SupportAssignTicketReq
 import com.testlogon.android.core.network.support.SupportCloseTicketReq
 import com.testlogon.android.core.network.support.SupportCreateTicketReq
+import com.testlogon.android.core.network.support.SupportTicketMediaDto
 import com.testlogon.android.core.network.support.SupportTicketMessageReq
 import com.testlogon.android.core.network.support.SupportTicketStatusReq
 import kotlinx.coroutines.CancellationException
@@ -30,6 +31,7 @@ interface SupportRepository {
         description: String,
         priority: String,
         imageUrl: String? = null,
+        media: List<SupportMediaItem> = emptyList(),
     ): ApiResult<SupportTicket>
     suspend fun listTickets(
         status: String? = null,
@@ -39,7 +41,12 @@ interface SupportRepository {
         limit: Int? = null,
     ): ApiResult<SupportTicketPage>
     suspend fun getTicket(ticketId: String): ApiResult<SupportTicket>
-    suspend fun addMessage(ticketId: String, body: String, imageUrl: String? = null): ApiResult<SupportTicket>
+    suspend fun addMessage(
+        ticketId: String,
+        body: String,
+        imageUrl: String? = null,
+        media: List<SupportMediaItem> = emptyList(),
+    ): ApiResult<SupportTicket>
     suspend fun setStatus(ticketId: String, status: String): ApiResult<SupportTicket>
     suspend fun assign(ticketId: String, assigneeAdminSub: String): ApiResult<SupportTicket>
     /** B8 #15 — owner close/cancel of one's OWN ticket. action = "close" (->done) | "cancel" (->cancelled). */
@@ -68,7 +75,13 @@ class SupportRepositoryImpl @Inject constructor(
     private val errorParser: ApiErrorParser,
 ) : SupportRepository {
 
-    override suspend fun createTicket(subject: String, description: String, priority: String, imageUrl: String?) =
+    override suspend fun createTicket(
+        subject: String,
+        description: String,
+        priority: String,
+        imageUrl: String?,
+        media: List<SupportMediaItem>,
+    ) =
         io {
             api.createTicket(
                 SupportCreateTicketReq(
@@ -76,6 +89,7 @@ class SupportRepositoryImpl @Inject constructor(
                     description = description.trim(),
                     priority = priority,
                     imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+                    media = media.toWire(),
                 ),
             ).ticket.toDomain()
         }
@@ -94,11 +108,20 @@ class SupportRepositoryImpl @Inject constructor(
     override suspend fun getTicket(ticketId: String) =
         io { api.getTicket(ticketId).ticket.toDomain() }
 
-    override suspend fun addMessage(ticketId: String, body: String, imageUrl: String?) =
+    override suspend fun addMessage(
+        ticketId: String,
+        body: String,
+        imageUrl: String?,
+        media: List<SupportMediaItem>,
+    ) =
         io {
             api.addMessage(
                 ticketId,
-                SupportTicketMessageReq(body.trim(), imageUrl?.takeIf { it.isNotBlank() }),
+                SupportTicketMessageReq(
+                    body = body.trim(),
+                    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+                    media = media.toWire(),
+                ),
             ).ticket.toDomain()
         }
 
@@ -133,3 +156,23 @@ class SupportRepositoryImpl @Inject constructor(
         }
     }
 }
+
+
+/**
+ * B10 B-HELPMEDIA #5 - serialize the staged domain media to the wire DTO list the backend `media[]`
+ * field expects. file_ref items send `path`; uploaded image/video/file items send `url` (+ optional
+ * name / content_type / size / dimensions). An empty list serializes to null (field omitted).
+ */
+private fun List<SupportMediaItem>.toWire(): List<SupportTicketMediaDto>? =
+    if (isEmpty()) null else map { it.toWire() }
+
+private fun SupportMediaItem.toWire(): SupportTicketMediaDto = SupportTicketMediaDto(
+    kind = (if (kind == SupportMediaKind.UNKNOWN) SupportMediaKind.FILE else kind).wire,
+    url = url,
+    path = path,
+    name = name,
+    contentType = contentType,
+    sizeBytes = sizeBytes,
+    width = width,
+    height = height,
+)

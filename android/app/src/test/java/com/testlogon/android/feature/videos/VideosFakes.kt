@@ -54,6 +54,15 @@ class FakeVideosRepository : VideosRepository {
         return toggleResult
     }
 
+    var reactionResult: ApiResult<com.testlogon.android.data.videos.VideoReactionState> =
+        ApiResult.Success(com.testlogon.android.data.videos.VideoReactionState(emptyMap(), emptySet()))
+    var tipResult: ApiResult<com.testlogon.android.data.videos.VideoTipState> =
+        ApiResult.Success(com.testlogon.android.data.videos.VideoTipState(0, 0))
+
+    override suspend fun reactVideo(videoId: String, emoji: String) = reactionResult
+    override suspend fun unreactVideo(videoId: String, emoji: String) = reactionResult
+    override suspend fun tipVideo(videoId: String, amountCents: Int, paymentMethodId: String?) = tipResult
+
     override suspend fun checkAccess(videoId: String): ApiResult<VideoAccess> {
         accessCalls++
         return accessResult

@@ -88,6 +88,9 @@ fun MessageActionsSheet(
     // #2 — save an image/video message to the device gallery; null when the message has no saveable
     // media (only image/video clips are offered). Reuses the image save-to-phone path.
     onSaveMedia: ((ThreadMessageUi) -> Unit)? = null,
+    // #9 — download/save a FILE or PDF attachment to the phone's Downloads (download-if-needed then
+    // save-to-phone). Null hides the row.
+    onSaveFile: ((ThreadMessageUi) -> Unit)? = null,
 ) {
     // AND-164 — destructive/mutating actions are suppressed entirely when the message is on legal hold.
     val allowed = message.allowedActions()
@@ -129,6 +132,16 @@ fun MessageActionsSheet(
                     label = stringResource(R.string.msg_action_save_to_phone),
                     tag = "msg_action_save_media",
                 ) { onSaveMedia(message); onDismiss() }
+            }
+
+            // #9 — Download for a file/PDF attachment: saves to the phone's Downloads (download-if-needed).
+            if (onSaveFile != null && !message.isTombstone &&
+                message.media is MessageMedia.File && !message.isDownloadGated()
+            ) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_download),
+                    tag = "msg_action_download_file",
+                ) { onSaveFile(message); onDismiss() }
             }
 
             if (MessageAction.PIN in allowed) {
@@ -431,6 +444,7 @@ fun MessageActionsHost(
     onAction: (ThreadAction) -> Unit,
     onTip: (String) -> Unit,
     onJumpToPinned: (String) -> Unit,
+    onSaveFile: ((ThreadMessageUi) -> Unit)? = null,
     onCloseSheet: () -> Unit,
 ) {
     var pendingDelete by remember { mutableStateOf<String?>(null) }
@@ -452,6 +466,7 @@ fun MessageActionsHost(
             },
             onTip = onTip,
             onDismiss = onCloseSheet,
+            onSaveFile = onSaveFile,
             onSaveMedia = { m ->
                 val media = m.media
                 saveScope.launch {
@@ -530,6 +545,18 @@ internal fun ThreadMessageUi.hasSaveableMedia(): Boolean = when (val m = media) 
     is MessageMedia.Image -> !m.url.isNullOrBlank()
     is MessageMedia.VideoClip -> !m.playbackUrl.isNullOrBlank()
     else -> false
+}
+
+/**
+ * #9 — a file message is download-gated (no save offered yet) when it is still behind a paywall the
+ * viewer hasn't unlocked, or an unconsumed view-once. Own messages and already-available files are
+ * never gated.
+ */
+internal fun ThreadMessageUi.isDownloadGated(): Boolean {
+    if (isOwn) return false
+    if (lockPriceCents != null && (media as? MessageMedia.Paid)?.monetization?.unlocked == false) return true
+    if (viewOnce && !consumed) return true
+    return false
 }
 
 /** AND-140 — tombstone bubble text for a deleted/revoked message. */

@@ -113,9 +113,11 @@ fun CommentsSection(
     var draft by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Comment?>(null) }
 
-    // #24 — system photo picker for image comments.
+    // #24 / #3 — modern system Photo Picker (ImageOnly), matching the compose-post picker. In edit mode
+    // this REPLACES the comment image; cancelling returns null (no-op) so the previously-chosen image is
+    // KEPT (the edit preview stays visible the whole time — it never starts empty).
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) viewModel.uploadAndStageImage(uri) }
 
     // #25 — keep the VM's own-post flag in sync so it can gate tipping.
@@ -173,7 +175,13 @@ fun CommentsSection(
                 draft = ""
             },
             onOpenMediaPicker = viewModel::openMediaPicker,
-            onPickImage = { imagePicker.launch("image/*") },
+            onPickImage = {
+                imagePicker.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
+                    ),
+                )
+            },
             onClearStagedImage = viewModel::clearStagedImage,
             onRemoveEditImage = viewModel::removeEditImage,
             onCancelReply = viewModel::cancelReply,

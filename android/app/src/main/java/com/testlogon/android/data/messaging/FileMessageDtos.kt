@@ -28,6 +28,9 @@ import com.squareup.moshi.JsonClass
 data class CreateFileMessageReq(
     @Json(name = "path") val path: String,
     @Json(name = "kind") val kind: String = "file",
+    // #10 — a file message can carry a text caption (parity with image/gallery). The server persists
+    // and projects it back as MessageOut.text so the bubble renders it with the file.
+    @Json(name = "text") val text: String? = null,
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
     @Json(name = "duration_seconds") val durationSeconds: Int? = null,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,

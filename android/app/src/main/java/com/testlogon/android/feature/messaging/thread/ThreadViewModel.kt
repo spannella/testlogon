@@ -72,6 +72,9 @@ sealed interface ThreadEvent {
 
     /** AND-132 — open a downloaded file via FileProvider + ACTION_VIEW (UI launches the intent). */
     data class OpenFile(val localPath: String, val mimeType: String?) : ThreadEvent
+
+    /** #9 — show a transient toast (e.g. save-to-phone result). */
+    data class Toast(val message: String) : ThreadEvent
 }
 
 /**
@@ -515,7 +518,7 @@ class ThreadViewModel @Inject constructor(
             _state.update { it.copy(composer = ComposerState(), hasDraft = false, draftSyncState = DraftSyncState.Idle) }
             draftSaver.tryEmit("")
             when {
-                stagedFile != null -> sendStagedFile(stagedFile, opts)
+                stagedFile != null -> sendStagedFile(stagedFile, caption, opts)
                 stagedMedia.size == 1 && !stagedMedia.first().isVideo ->
                     sendStagedImage(stagedMedia.first().localUri, caption, opts)
                 stagedMedia.size == 1 && stagedMedia.first().isVideo ->
@@ -684,6 +687,9 @@ class ThreadViewModel @Inject constructor(
                         textEditable = item.isTextEditable,
                         draftText = item.text,
                         draftDeliverAtEpochSeconds = item.deliverAtEpochSeconds,
+                        // #7 — a text-only scheduled message can be PROMOTED to a photo, and an
+                        // existing image message can have its photo replaced.
+                        canAttachImage = item.kind == "text" || item.kind == "image",
                     ),
                 ),
             )
@@ -717,9 +723,46 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /**
+     * #7 (B-SCHED3) — attach (or replace) a photo on the scheduled message being edited. Uploads the
+     * picked image immediately (presign + PUT) and stages the returned descriptor so [saveScheduledEdit]
+     * sends it. A text-only scheduled message is promoted to an image server-side on save.
+     */
+    fun onScheduledEditAttachImage(localUri: String) {
+        val current = _state.value.scheduledManager.editing ?: return
+        _state.update {
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = current.copy(attaching = true, draftImageLocalUri = localUri, draftImage = null, error = null)))
+        }
+        viewModelScope.launch {
+            when (val r = repository.uploadRescheduleImage(conversationId, localUri)) {
+                is ApiResult.Success -> _state.update {
+                    val e = it.scheduledManager.editing ?: return@update it
+                    it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(attaching = false, draftImage = r.data, error = null)))
+                }
+                else -> _state.update {
+                    val e = it.scheduledManager.editing ?: return@update it
+                    it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(attaching = false, draftImageLocalUri = null, draftImage = null, error = "Couldn't attach the photo. Try again.")))
+                }
+            }
+        }
+    }
+
+    /** #7 — drop the staged photo from the scheduled-message edit before saving. */
+    fun onScheduledEditRemoveImage() {
+        _state.update {
+            val e = it.scheduledManager.editing ?: return@update it
+            it.copy(scheduledManager = it.scheduledManager.copy(editing = e.copy(draftImageLocalUri = null, draftImage = null, attaching = false, error = null)))
+        }
+    }
+
     /** Commit the edit dialog: PATCH the new text/time, then refresh the list. */
     fun saveScheduledEdit() {
         val editing = _state.value.scheduledManager.editing ?: return
+        // #7 — don't save mid-upload (the photo descriptor isn't ready yet).
+        if (editing.attaching) {
+            _state.update { it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(error = "Wait for the photo to finish attaching."))) }
+            return
+        }
         val pickedTime = editing.draftDeliverAtEpochSeconds.takeIf { it > 0L }
         // Server requires send_at >= now+5s when a new time is sent.
         if (pickedTime != null && pickedTime <= (System.currentTimeMillis() / 1000L) + 5L) {
@@ -733,7 +776,7 @@ class ThreadViewModel @Inject constructor(
             it.copy(scheduledManager = it.scheduledManager.copy(editing = editing.copy(saving = true, error = null)))
         }
         viewModelScope.launch {
-            when (repository.rescheduleMessage(conversationId, editing.messageId, text = text, sendAtEpochSeconds = pickedTime)) {
+            when (repository.rescheduleMessage(conversationId, editing.messageId, text = text, sendAtEpochSeconds = pickedTime, image = editing.draftImage)) {
                 is ApiResult.Success -> {
                     _state.update { it.copy(scheduledManager = it.scheduledManager.copy(editing = null)) }
                     refreshScheduledMessages()
@@ -828,6 +871,7 @@ class ThreadViewModel @Inject constructor(
                     )
                     repository.sendFileOutbox(
                         conversationId, clientId, draft.uri, draft.name, draft.mime,
+                        caption = draft.caption,
                         viewOnce = draft.options.viewOnce,
                         lockPriceCents = draft.options.lockPriceCents,
                         lockDescription = draft.options.lockDescription,
@@ -972,9 +1016,9 @@ class ThreadViewModel @Inject constructor(
     }
 
     /** #29 — actually send a staged file with the typed caption-time options. */
-    private fun sendStagedFile(file: StagedFile, opts: MessageOptions) {
+    private fun sendStagedFile(file: StagedFile, caption: String?, opts: MessageOptions) {
         val clientId = UUID.randomUUID().toString()
-        fileDrafts[clientId] = FileDraft(file.localUri, file.name, file.mime, opts)
+        fileDrafts[clientId] = FileDraft(file.localUri, file.name, file.mime, caption, opts)
         viewModelScope.launch {
             repository.enqueueOptimisticFile(
                 conversationId, clientId, file.localUri, file.name, file.sizeBytes, file.mime, clock(),
@@ -982,6 +1026,7 @@ class ThreadViewModel @Inject constructor(
             _events.trySend(ThreadEvent.ScrollToBottom)
             repository.sendFileOutbox(
                 conversationId, clientId, file.localUri, file.name, file.mime,
+                caption = caption,
                 viewOnce = opts.viewOnce,
                 lockPriceCents = opts.lockPriceCents,
                 lockDescription = opts.lockDescription,
@@ -1066,6 +1111,7 @@ class ThreadViewModel @Inject constructor(
         val uri: String,
         val name: String,
         val mime: String,
+        val caption: String?,
         val options: MessageOptions,
     )
 
@@ -1125,6 +1171,48 @@ class ThreadViewModel @Inject constructor(
 
     private fun setDownload(messageId: String, state: FileDownloadUi) {
         _state.update { it.copy(downloads = it.downloads + (messageId to state)) }
+    }
+
+    /**
+     * #9 — long-press "Download" / save a file or PDF to the phone's Downloads folder. Downloads the
+     * attachment to app cache first if needed (reusing the AND-132 grant/consume transport), then writes
+     * it to MediaStore Downloads via the shared save-to-phone helper. Emits a one-shot toast hint.
+     */
+    fun onSaveFileToPhone(message: ThreadMessageUi) {
+        val messageId = message.key
+        val file = message.media as? MessageMedia.File ?: return
+        viewModelScope.launch {
+            // Already downloaded? Save the cached copy directly.
+            val existing = _state.value.downloads[messageId]
+            val cachedPath = (existing as? FileDownloadUi.Downloaded)?.localPath
+            if (cachedPath != null) {
+                saveCachedFileToPhone(cachedPath, file)
+                return@launch
+            }
+            setDownload(messageId, FileDownloadUi.Downloading(0f))
+            repository.downloadAttachment(
+                conversationId, messageId, file.fileName, file.consumptionPolicy,
+            ).collect { progress ->
+                when (progress) {
+                    is DownloadProgress.Downloading -> setDownload(messageId, FileDownloadUi.Downloading(progress.fraction))
+                    is DownloadProgress.Done -> {
+                        setDownload(messageId, FileDownloadUi.Downloaded(progress.file.absolutePath))
+                        saveCachedFileToPhone(progress.file.absolutePath, file)
+                    }
+                    is DownloadProgress.Failed -> {
+                        setDownload(messageId, FileDownloadUi.Failed("Download failed"))
+                        _events.trySend(ThreadEvent.Toast("Couldn't download file"))
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun saveCachedFileToPhone(localPath: String, file: MessageMedia.File) {
+        val ok = com.testlogon.android.feature.messaging.media.saveFileToDownloads(
+            appContext, localPath, file.fileName, file.mimeType,
+        )
+        _events.trySend(ThreadEvent.Toast(if (ok) "Saved to Downloads" else "Couldn't save"))
     }
 
     // ---- AND-133: voice messages ----

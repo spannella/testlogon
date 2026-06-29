@@ -704,6 +704,16 @@
     <string name="paid_sender_locked_badge">%1$s to unlock</string>
     <string name="paid_sender_locked_lottery">Surprise unlock</string>
     <string name="paid_encrypted_indicator">Encrypted</string>
+    <!-- #15 (B-LOTSENDER) — sender-facing lottery detail (what you sent + who won what). -->
+    <string name="lottery_sender_show_details">View details (%1$d options, %2$d opened)</string>
+    <string name="lottery_sender_hide_details">Hide details</string>
+    <string name="lottery_sender_options_header">Options &amp; chances</string>
+    <string name="lottery_sender_option_n">Option %1$d</string>
+    <string name="lottery_sender_option_media">%1$d media item(s)</string>
+    <string name="lottery_sender_results_header">Results (%1$d opened)</string>
+    <string name="lottery_sender_results_empty">No one has opened this yet.</string>
+    <string name="lottery_sender_result_line">%1$s drew: %2$s</string>
+    <string name="lottery_sender_result_unknown">(opened)</string>
     <string name="tip_title">Send a tip</string>
     <string name="tip_custom_amount">Custom amount</string>
     <string name="tip_note">Note (optional)</string>
@@ -714,6 +724,7 @@
     <string name="msg_action_pin">Pin</string>
     <string name="msg_action_reply">Reply</string>
     <string name="msg_action_save_to_phone">Save to phone</string>
+    <string name="msg_action_download">Download</string>
     <string name="msg_action_unpin">Unpin</string>
     <string name="msg_action_edit">Edit</string>
     <string name="msg_action_edit_history">Edit history</string>
@@ -738,6 +749,10 @@
     <string name="msg_scheduled_edit_title">Edit scheduled message</string>
     <string name="msg_scheduled_send_time">Send time</string>
     <string name="msg_scheduled_save">Save</string>
+    <string name="msg_scheduled_photo_add">Add a photo</string>
+    <string name="msg_scheduled_photo_attaching">Attaching photo…</string>
+    <string name="msg_scheduled_photo_attached">Photo attached</string>
+    <string name="action_remove">Remove</string>
     <string name="msg_pins_empty">No pinned messages</string>
     <string name="msg_pins_media">Attachment</string>
     <string name="msg_edit_history_title">Edit history</string>

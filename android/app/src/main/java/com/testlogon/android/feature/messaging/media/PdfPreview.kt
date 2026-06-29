@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -31,6 +32,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -55,6 +59,7 @@ object PdfPreviewTestTags {
     const val THUMBNAIL = "thread_pdf_thumbnail"
     const val VIEWER = "thread_pdf_viewer"
     const val VIEWER_CLOSE = "thread_pdf_viewer_close"
+    const val VIEWER_DOWNLOAD = "thread_pdf_viewer_download"
     const val VIEWER_PAGE = "thread_pdf_viewer_page"
 }
 
@@ -147,10 +152,12 @@ fun PdfThumbnail(
  * PdfRenderer; each page renders lazily on first display.
  */
 @Composable
-fun PdfViewerDialog(localPath: String, onDismiss: () -> Unit) {
+fun PdfViewerDialog(localPath: String, fileName: String? = null, onDismiss: () -> Unit) {
     val pageCount by produceState(initialValue = 0, localPath) {
         value = pdfPageCount(localPath)
     }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -182,8 +189,78 @@ fun PdfViewerDialog(localPath: String, onDismiss: () -> Unit) {
             ) {
                 Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
             }
+            // #9 — a DOWNLOAD action saves the (already-downloaded) PDF to the phone's Downloads via
+            // MediaStore (no runtime permission on API29+); reuses the shared save-to-phone path.
+            IconButton(
+                onClick = {
+                    scope.launch {
+                        val ok = saveFileToDownloads(context, localPath, fileName, "application/pdf")
+                        android.widget.Toast.makeText(
+                            context,
+                            if (ok) "Saved to Downloads" else "Couldn't save",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .testTag(PdfPreviewTestTags.VIEWER_DOWNLOAD),
+            ) {
+                Icon(Icons.Filled.Download, contentDescription = "Download", tint = Color.White)
+            }
         }
     }
+}
+
+/**
+ * #9 — saves an already-downloaded local file to the device's public Downloads folder via MediaStore
+ * (Q+: scoped storage + IS_PENDING, no runtime permission; pre-Q: writes into the public Downloads
+ * dir). Best-effort; returns false on any failure. Self-contained (no VM/repo), mirroring the image/
+ * video save-to-gallery helpers.
+ */
+internal suspend fun saveFileToDownloads(
+    context: android.content.Context,
+    localPath: String,
+    fileName: String?,
+    mimeType: String?,
+): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+        val src = File(localPath)
+        if (!src.exists()) return@runCatching false
+        val name = (fileName?.takeIf { it.isNotBlank() } ?: src.name).let {
+            if (it.contains('.')) it else "$it.pdf"
+        }
+        val mime = mimeType ?: "application/octet-stream"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, mime)
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/TestLogon")
+                put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val itemUri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return@runCatching false
+            src.inputStream().use { input ->
+                resolver.openOutputStream(itemUri)?.use { out -> input.copyTo(out) }
+                    ?: return@runCatching false
+            }
+            values.clear()
+            values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(itemUri, values, null, null)
+            true
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = File(
+                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                "TestLogon",
+            ).apply { mkdirs() }
+            val dest = File(dir, name)
+            src.inputStream().use { input -> dest.outputStream().use { out -> input.copyTo(out) } }
+            true
+        }
+    }.getOrDefault(false)
 }
 
 @Composable

@@ -55,6 +55,14 @@ data object BroadcastCreateDest {
     fun build(profileId: String): String = "broadcast/create/${Uri.encode(profileId)}"
 }
 
+/**
+ * Default broadcast profile id used by the mobile host "Go Live" entry. The backend stores profile_id as an
+ * opaque grouping key and does not validate it (the session owner is the authenticated user via created_by),
+ * so a stable constant is sufficient to create + publish from the app.
+ */
+const val HOST_BROADCAST_PROFILE_ID = "mobile"
+
+
 /** AND-308 — the host ingest (camera/mic publish) destination, keyed by sessionId. */
 data object BroadcastIngestDest {
     const val ROUTE = "broadcast/ingest/{${IngestViewModel.ARG_SESSION_ID}}"
@@ -327,6 +335,14 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             onSessionClick = { sessionId, _ ->
                 navController.navigate(BroadcastViewerDest.build(sessionId)) { launchSingleTop = true }
+            },
+            // Host "Go Live": enter the real create -> ingest (camera/mic publish) flow. The backend treats
+            // profile_id as an opaque grouping key (the session is owned by the authenticated user via
+            // created_by), so a stable mobile profile id is sufficient to create + publish.
+            onGoLiveHost = {
+                navController.navigate(BroadcastCreateDest.build(HOST_BROADCAST_PROFILE_ID)) {
+                    launchSingleTop = true
+                }
             },
         )
     }

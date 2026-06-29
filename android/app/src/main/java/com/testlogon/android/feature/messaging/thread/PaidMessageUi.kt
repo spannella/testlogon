@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +80,11 @@ object PaidMessageTestTags {
     const val UNLOCK_BUTTON = "thread_unlock_button"
     const val TIP_SHEET = "thread_tip_sheet"
     const val ADD_TO_CALENDAR = "thread_add_to_calendar"
+    // #15 — sender-facing lottery detail (the sender sees what they sent + who won what).
+    const val LOTTERY_SENDER_DETAIL_TOGGLE = "thread_lottery_sender_detail_toggle"
+    const val LOTTERY_SENDER_DETAIL = "thread_lottery_sender_detail"
+    const val LOTTERY_SENDER_OUTCOME = "thread_lottery_sender_outcome_"
+    const val LOTTERY_SENDER_UNLOCK = "thread_lottery_sender_unlock_"
 }
 
 // ─── AND-137: countdown ───
@@ -525,6 +531,12 @@ fun PaidMessageBubble(
                         )
                     }
                 }
+                // #15 (B-LOTSENDER) — the sender is no longer blind to their own lottery: show the
+                // full config (every outcome + its win-chance) and, once recipients unlock, what each
+                // of them drew. Collapsed by default behind a toggle to keep the bubble compact.
+                monetization.lotterySenderView?.let { sv ->
+                    LotterySenderDetail(view = sv, modifier = Modifier.padding(top = 8.dp))
+                }
             } else {
                 Button(
                     onClick = onUnlock,
@@ -541,6 +553,118 @@ fun PaidMessageBubble(
                         CircularProgressIndicator(modifier = Modifier.size(16.dp))
                     } else {
                         Text(stringResource(R.string.paid_unlock))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * #15 (B-LOTSENDER) — sender-facing lottery detail. The sender sees the FULL config (each outcome's
+ * win-chance + content/media) plus, once recipients unlock, what RESULT each of them drew. Collapsed
+ * behind a toggle so the bubble stays compact until tapped. Pure render of [LotterySenderView].
+ */
+@Composable
+fun LotterySenderDetail(
+    view: com.testlogon.android.data.messaging.LotterySenderView,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val total = view.totalWeightBps.takeIf { it > 0 } ?: 10_000
+    val toggleLabel = if (expanded) {
+        stringResource(R.string.lottery_sender_hide_details)
+    } else {
+        stringResource(R.string.lottery_sender_show_details, view.outcomes.size, view.unlockCount)
+    }
+    Column(modifier = modifier.testTag(PaidMessageTestTags.LOTTERY_SENDER_DETAIL)) {
+        OutlinedButton(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.testTag(PaidMessageTestTags.LOTTERY_SENDER_DETAIL_TOGGLE),
+        ) { Text(toggleLabel) }
+        if (!expanded) return@Column
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.padding(top = 6.dp).widthIn(max = 280.dp),
+        ) {
+            Column(Modifier.padding(10.dp)) {
+                Text(
+                    stringResource(R.string.lottery_sender_options_header),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                view.outcomes.forEachIndexed { idx, o ->
+                    val pct = (o.weightBps.toDouble() / total.toDouble()) * 100.0
+                    val pctText = String.format(Locale.ROOT, "%.1f%%", pct)
+                    val label = o.displayLabel?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.lottery_sender_option_n, idx + 1)
+                    Column(Modifier.padding(top = 6.dp).testTag(PaidMessageTestTags.LOTTERY_SENDER_OUTCOME + idx)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                            Text(pctText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        o.textContent?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (o.media.isNotEmpty()) {
+                            Text(
+                                stringResource(R.string.lottery_sender_option_media, o.media.size),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.padding(top = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                o.media.take(4).forEach { m ->
+                                    if (!m.isVideo) {
+                                        AsyncImage(
+                                            model = m.url,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+                                        )
+                                    } else {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.size(40.dp),
+                                        ) { Box(Modifier.fillMaxWidth()) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Results: who unlocked + what they drew (only present once recipients unlock).
+                Text(
+                    stringResource(R.string.lottery_sender_results_header, view.unlockCount),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+                if (view.unlocks.isEmpty()) {
+                    Text(
+                        stringResource(R.string.lottery_sender_results_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                } else {
+                    view.unlocks.forEachIndexed { idx, u ->
+                        val drew = u.selectedOutcome?.displayLabel?.takeIf { it.isNotBlank() }
+                            ?: u.selectedOutcome?.textContent?.takeIf { it.isNotBlank() }
+                            ?: stringResource(R.string.lottery_sender_result_unknown)
+                        Text(
+                            stringResource(R.string.lottery_sender_result_line, u.recipientId, drew),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp).testTag(PaidMessageTestTags.LOTTERY_SENDER_UNLOCK + idx),
+                        )
                     }
                 }
             }

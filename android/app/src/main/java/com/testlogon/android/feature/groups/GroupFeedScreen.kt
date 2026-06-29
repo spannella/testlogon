@@ -88,6 +88,8 @@ object GroupFeedTestTags {
 fun GroupFeedRoute(
     onBack: () -> Unit,
     onOpenHub: () -> Unit,
+    // #4 (B-GROUPUNIFY) — open the SHARED newsfeed composer, locked to this group's audience.
+    onComposePost: () -> Unit = {},
     viewModel: GroupFeedViewModel = hiltViewModel(),
 ) {
     val posts = viewModel.posts.collectAsLazyPagingItems()
@@ -101,6 +103,7 @@ fun GroupFeedRoute(
         composeState = composeState,
         onBack = onBack,
         onOpenHub = onOpenHub,
+        onComposePost = onComposePost,
         onTextChange = viewModel::onTextChange,
         onAttachImage = viewModel::attachImage,
         onRemoveImage = viewModel::removeImage,
@@ -115,6 +118,7 @@ fun GroupFeedScreen(
     composeState: GroupComposeState,
     onBack: () -> Unit,
     onOpenHub: () -> Unit,
+    onComposePost: () -> Unit = {},
     onTextChange: (String) -> Unit,
     onAttachImage: (android.net.Uri) -> Unit,
     onRemoveImage: (String) -> Unit,
@@ -148,6 +152,17 @@ fun GroupFeedScreen(
                         )
                     }
                 },
+            )
+        },
+        floatingActionButton = {
+            // #4 (B-GROUPUNIFY) — post to this group via the SHARED newsfeed composer (same composer as
+            // a normal post; the group is the selected, locked audience). The inline quick-composer below
+            // remains for a fast text/image post.
+            androidx.compose.material3.ExtendedFloatingActionButton(
+                onClick = onComposePost,
+                icon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                text = { Text(stringResource(R.string.group_feed_compose_send)) },
+                modifier = Modifier.testTag("group_feed_compose_fab"),
             )
         },
     ) { padding ->

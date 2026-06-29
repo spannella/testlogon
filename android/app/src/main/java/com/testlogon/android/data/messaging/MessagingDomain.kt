@@ -261,6 +261,40 @@ data class MessageMonetization(
     val revealedMediaIsVideo: Boolean = false,
     // #24 — the FULL list of revealed media assets when the winning outcome carries >1 image/video.
     val revealedMedia: List<RevealedMediaItem> = emptyList(),
+    // #15 (B-LOTSENDER) — present only on the SENDER's own lottery message: the full config (all
+    // outcomes + weights) plus each recipient's drawn result. Null for recipients and non-lotteries.
+    val lotterySenderView: LotterySenderView? = null,
+)
+
+/**
+ * #15 — the SENDER-facing detail of their OWN lottery message: every configured outcome with its
+ * weight/label/payload, plus each recipient's unlock result (what they drew). Lets the sender see
+ * exactly what they sent and who won what, instead of a blind "locked" bubble.
+ */
+data class LotterySenderView(
+    val version: String,
+    val totalWeightBps: Int,
+    val outcomes: List<LotterySenderOutcome>,
+    val unlocks: List<LotterySenderUnlock>,
+) {
+    val unlockCount: Int get() = unlocks.size
+}
+
+/** #15 — one configured outcome in the sender view (weight + label + the option's content/media). */
+data class LotterySenderOutcome(
+    val outcomeId: String,
+    val displayLabel: String?,
+    val weightBps: Int,
+    val payloadType: String,
+    val textContent: String?,
+    val media: List<RevealedMediaItem>,
+)
+
+/** #15 — one recipient's unlock record in the sender view (who unlocked + the outcome they drew). */
+data class LotterySenderUnlock(
+    val recipientId: String,
+    val unlockedAtEpochSeconds: Long?,
+    val selectedOutcome: LotterySenderOutcome?,
 )
 
 /** #24 — one revealed media asset (image or video) on the drawn lottery outcome. */
@@ -284,6 +318,37 @@ internal fun buildRevealedMedia(
     return ids.mapNotNull { id ->
         deriveMediaAssetUrl(id)?.let { RevealedMediaItem(url = it, isVideo = isVideo) }
     }
+}
+
+/** #15 — map the wire sender-view lottery sub-object into the domain [LotterySenderView]. */
+internal fun LotteryAttachmentDto.toSenderView(): LotterySenderView = LotterySenderView(
+    version = version ?: "v1",
+    totalWeightBps = totalWeightBps ?: 10_000,
+    outcomes = (outcomes ?: emptyList()).map { it.toSenderOutcome() },
+    unlocks = (unlocks ?: emptyList()).map {
+        LotterySenderUnlock(
+            recipientId = it.recipientId,
+            unlockedAtEpochSeconds = it.unlockedAt,
+            selectedOutcome = it.selectedOutcome?.toSenderOutcome(),
+        )
+    },
+)
+
+/** #15 — map a wire sender-view outcome (full config) into the domain [LotterySenderOutcome]. */
+internal fun LotterySenderOutcomeDto.toSenderOutcome(): LotterySenderOutcome {
+    val isVideo = payloadType == "video"
+    return LotterySenderOutcome(
+        outcomeId = outcomeId,
+        displayLabel = displayLabel?.takeIf { it.isNotBlank() },
+        weightBps = weightBps,
+        payloadType = payloadType,
+        textContent = textContent?.takeIf { it.isNotBlank() },
+        media = if (payloadType == "image" || payloadType == "video") {
+            buildRevealedMedia(mediaAssetIds, mediaAssetId, isVideo)
+        } else {
+            emptyList()
+        },
+    )
 }
 
 /** AND-139 — fixed-price unlock vs server-resolved lottery unlock. */
@@ -706,6 +771,11 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         val lot = lottery!!
         val revealed = lot.selectedOutcome?.takeIf { lot.lockState == "unlocked" }
         val revealedIsVideo = revealed?.payloadType == "video"
+        // #15 — when the server hands us the SENDER projection ("sender_view") of our own lottery,
+        // map the full config + per-recipient results into the domain so the bubble can show what we
+        // sent + who won what (instead of a blind locked bubble). Recipients never see this block.
+        val senderView = lot.takeIf { it.lockState == "sender_view" || it.isSender == true }
+            ?.toSenderView()
         MessageMedia.Paid(
             MessageMonetization(
                 type = UnlockType.LOTTERY,
@@ -722,6 +792,7 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
                 revealedMedia = revealed?.takeIf { it.payloadType == "image" || it.payloadType == "video" }
                     ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, revealedIsVideo) }
                     ?: emptyList(),
+                lotterySenderView = senderView,
             ),
         )
     }

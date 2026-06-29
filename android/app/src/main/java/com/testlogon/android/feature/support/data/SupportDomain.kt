@@ -2,6 +2,7 @@ package com.testlogon.android.feature.support.data
 
 import com.testlogon.android.core.network.support.SupportAdminSummaryDto
 import com.testlogon.android.core.network.support.SupportTicketDto
+import com.testlogon.android.core.network.support.SupportTicketMediaDto
 import com.testlogon.android.core.network.support.SupportTicketMessageDto
 
 /**
@@ -47,6 +48,64 @@ data class SupportTicket(
 
 
 
+/**
+ * B10 B-HELPMEDIA #5 — the kind of one media/attachment item on a ticket message. UNKNOWN tolerates a
+ * server value the client doesn't model (rendered as a generic file row).
+ */
+enum class SupportMediaKind(val wire: String) {
+    IMAGE("image"),
+    VIDEO("video"),
+    FILE("file"),
+    FILE_REF("file_ref"),
+    UNKNOWN("");
+
+    companion object {
+        fun from(value: String?): SupportMediaKind =
+            entries.firstOrNull { it.wire == value } ?: UNKNOWN
+    }
+}
+
+/**
+ * B10 B-HELPMEDIA #5 — one rendered media/attachment on a ticket message. [url] is a platform upload URL
+ * (image/video/file); [path] is a file-manager VFS path (file_ref). The server resolves a file_ref's
+ * name / contentType / sizeBytes / thumbnail on read, so those are populated for both kinds where known.
+ */
+data class SupportMediaItem(
+    val kind: SupportMediaKind,
+    val url: String? = null,
+    val path: String? = null,
+    val name: String? = null,
+    val contentType: String? = null,
+    val sizeBytes: Long? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val thumbnail: String? = null,
+) {
+    /** True when this item should render as an inline image (an image upload or an image file_ref). */
+    val isImage: Boolean
+        get() = kind == SupportMediaKind.IMAGE ||
+            (contentType?.startsWith("image/") == true)
+
+    /** True when this item is a playable/openable video. */
+    val isVideo: Boolean
+        get() = kind == SupportMediaKind.VIDEO ||
+            (contentType?.startsWith("video/") == true)
+
+    /** A best-effort URL for displaying/opening this item (the upload URL, or a file_ref thumbnail). */
+    val displayUrl: String? get() = url ?: thumbnail
+
+    /** A human label for a file/video row (falls back to the trailing path segment, else a generic). */
+    val displayName: String
+        get() = name
+            ?: path?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: url?.substringAfterLast('/')?.substringBefore('?')?.takeIf { it.isNotBlank() }
+            ?: when {
+                isVideo -> "Video"
+                kind == SupportMediaKind.IMAGE -> "Image"
+                else -> "Attachment"
+            }
+}
+
 data class SupportTicketMessage(
     val messageId: String,
     val senderSub: String,
@@ -55,6 +114,8 @@ data class SupportTicketMessage(
     val createdAt: Long,
     /** Helpdesk #14 — an image attached to this message (rendered in the thread), or null. */
     val imageUrl: String? = null,
+    /** B10 B-HELPMEDIA #5 — the ordered media/attachment list on this message (may be empty). */
+    val media: List<SupportMediaItem> = emptyList(),
 ) {
     val isFromAdmin: Boolean get() = senderRole.equals("admin", ignoreCase = true)
 }
@@ -66,14 +127,38 @@ data class SupportAdminSummary(
     val totalCount: Int,
 )
 
-fun SupportTicketMessageDto.toDomain(): SupportTicketMessage = SupportTicketMessage(
-    messageId = messageId.orEmpty(),
-    senderSub = senderSub.orEmpty(),
-    senderRole = senderRole.orEmpty(),
-    body = body.orEmpty(),
-    createdAt = createdAt ?: 0L,
-    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+fun SupportTicketMediaDto.toDomain(): SupportMediaItem = SupportMediaItem(
+    kind = SupportMediaKind.from(kind),
+    url = url?.takeIf { it.isNotBlank() },
+    path = path?.takeIf { it.isNotBlank() },
+    name = name?.takeIf { it.isNotBlank() },
+    contentType = contentType?.takeIf { it.isNotBlank() },
+    sizeBytes = sizeBytes,
+    width = width,
+    height = height,
+    thumbnail = thumbnail?.takeIf { it.isNotBlank() },
 )
+
+fun SupportTicketMessageDto.toDomain(): SupportTicketMessage {
+    val legacyImage = imageUrl?.takeIf { it.isNotBlank() }
+    // B10 B-HELPMEDIA #5 — unify the legacy single image_url and the new media[] into ONE render list,
+    // de-duping the legacy image if it is already present as an image item in media[].
+    val items = (media.orEmpty()).map { it.toDomain() }
+    val mergedMedia = if (legacyImage != null && items.none { it.url == legacyImage }) {
+        listOf(SupportMediaItem(kind = SupportMediaKind.IMAGE, url = legacyImage)) + items
+    } else {
+        items
+    }
+    return SupportTicketMessage(
+        messageId = messageId.orEmpty(),
+        senderSub = senderSub.orEmpty(),
+        senderRole = senderRole.orEmpty(),
+        body = body.orEmpty(),
+        createdAt = createdAt ?: 0L,
+        imageUrl = legacyImage,
+        media = mergedMedia,
+    )
+}
 
 fun SupportTicketDto.toDomain(): SupportTicket = SupportTicket(
     ticketId = ticketId.orEmpty(),

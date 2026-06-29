@@ -34,4 +34,9 @@ abstract class SupportDataModule {
     @Binds
     @Singleton
     abstract fun bindSupportLiveChatRepository(impl: SupportLiveChatRepositoryImpl): SupportLiveChatRepository
+
+    /** B10 B-HELPMEDIA #5 - the ticket-media uploader (image / video / file / file-manager pick). */
+    @Binds
+    @Singleton
+    abstract fun bindSupportMediaUploader(impl: SupportMediaUploaderImpl): SupportMediaUploader
 }

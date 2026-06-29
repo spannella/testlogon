@@ -25,8 +25,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AssistChip
@@ -52,21 +50,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
 import com.testlogon.android.feature.support.data.SupportTicketMessage
 
 /**
  * B-SUP (batch 7) - one ticket: the messages thread + a reply composer (BOTH roles). For an ADMIN it also
- * shows the status controls (open/in_progress/waiting_on_user/done/reopened) wired to POST /tickets/{id}/status;
- * a USER never sees those controls (and the server would 403). The reply composer posts to /messages.
+ * shows the status controls wired to POST /tickets/{id}/status; a USER never sees those (the server 403s).
+ *
+ * B10 B-HELPMEDIA #5 - the reply composer can attach a LIST of images / videos / files (device pickers)
+ * AND files from the in-app file manager; each message renders its media inline in the thread.
  */
 @Composable
 fun SupportTicketDetailRoute(
@@ -77,12 +74,26 @@ fun SupportTicketDetailRoute(
     val ticket = state.ticket
     val keyboard = LocalSoftwareKeyboardController.current
 
-    // Helpdesk #14 — pick an image to attach to the next reply.
+    // B10 B-HELPMEDIA #5 - pickers for the reply attachments.
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
-    ) { uri -> if (uri != null) viewModel.stageImage(uri) }
+    ) { uri -> if (uri != null) viewModel.addImage(uri) }
+    val videoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.addVideo(uri) }
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.addFile(uri) }
 
-    // B8 #15 — owner close/cancel confirmation. null = no dialog; "close"/"cancel" = pending action.
+    var showFilePicker by remember { mutableStateOf(false) }
+    if (showFilePicker) {
+        FileManagerPickerDialog(
+            onDismiss = { showFilePicker = false },
+            onPick = { node -> showFilePicker = false; viewModel.addFileRef(node) },
+        )
+    }
+
+    // B8 #15 - owner close/cancel confirmation. null = no dialog; "close"/"cancel" = pending action.
     var pendingAction by remember { mutableStateOf<String?>(null) }
     pendingAction?.let { action ->
         val isCancel = action == "cancel"
@@ -136,7 +147,6 @@ fun SupportTicketDetailRoute(
                             )
                         }
                     } else if (state.canReopen) {
-                        // Helpdesk #17 — reopen action also in the top bar for discoverability.
                         IconButton(
                             onClick = viewModel::reopenTicket,
                             enabled = !state.reopening,
@@ -152,20 +162,15 @@ fun SupportTicketDetailRoute(
                 },
             )
         },
-        // Helpdesk #15 — the composer is a Scaffold bottomBar with imePadding() so it rides ABOVE the
-        // keyboard (was sitting too low / getting covered) and navigationBarsPadding() so it clears the nav
-        // bar when the IME is closed.
         bottomBar = {
             when {
                 ticket == null -> Unit
-                // Helpdesk #17 — terminal ticket owned by the user: no composer, offer Reopen instead.
                 !state.canReply && state.canReopen ->
                     ReopenBar(
                         reopening = state.reopening,
                         actionError = state.actionError,
                         onReopen = viewModel::reopenTicket,
                     )
-                // Helpdesk #16 — terminal ticket (and not reopenable, e.g. an admin view): no composer.
                 !state.canReply ->
                     Surface(tonalElevation = 2.dp) {
                         Text(
@@ -188,40 +193,26 @@ fun SupportTicketDetailRoute(
                                 .navigationBarsPadding()
                                 .padding(8.dp),
                         ) {
-                            // Helpdesk #14 — staged image preview above the input.
-                            val staged = state.stagedImageUrl
-                            if (staged != null) {
-                                Box(Modifier.padding(bottom = 6.dp)) {
-                                    AsyncImage(
-                                        model = staged,
-                                        contentDescription = "Attached image",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
-                                    )
-                                    IconButton(
-                                        onClick = viewModel::clearStagedImage,
-                                        modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
-                                    ) {
-                                        Icon(Icons.Outlined.Close, contentDescription = "Remove image")
-                                    }
-                                }
-                            }
+                            // B10 B-HELPMEDIA #5 - staged attachments strip above the input.
+                            StagedMediaStrip(
+                                media = state.media,
+                                onRemove = viewModel::removeMedia,
+                                modifier = Modifier.padding(bottom = 6.dp),
+                            )
+                            // B10 B-HELPMEDIA #5 - attach actions (image / video / file / Files).
+                            AttachmentActions(
+                                enabled = !state.sending && !state.mediaFull,
+                                onImage = { imagePicker.launch("image/*") },
+                                onVideo = { videoPicker.launch("video/*") },
+                                onFile = { filePicker.launch("*/*") },
+                                onFromFiles = { showFilePicker = true },
+                                modifier = Modifier.padding(bottom = 6.dp),
+                            )
                             Row(
                                 Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                IconButton(
-                                    onClick = { imagePicker.launch("image/*") },
-                                    enabled = !state.uploadingImage && !state.sending,
-                                    modifier = Modifier.testTag(SupportTestTags.DETAIL_ATTACH),
-                                ) {
-                                    if (state.uploadingImage) {
-                                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                                    } else {
-                                        Icon(Icons.Outlined.Image, contentDescription = "Attach image")
-                                    }
-                                }
                                 OutlinedTextField(
                                     value = state.reply,
                                     onValueChange = viewModel::onReplyChange,
@@ -230,7 +221,6 @@ fun SupportTicketDetailRoute(
                                     modifier = Modifier.weight(1f).testTag(SupportTestTags.DETAIL_REPLY),
                                 )
                                 IconButton(
-                                    // Helpdesk #15 — dismiss the IME on send so the user isn't stuck in the box.
                                     onClick = { keyboard?.hide(); viewModel.sendReply() },
                                     enabled = state.canSend,
                                     modifier = Modifier.testTag(SupportTestTags.DETAIL_SEND),
@@ -241,6 +231,14 @@ fun SupportTicketDetailRoute(
                                         Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
                                     }
                                 }
+                            }
+                            if (state.actionError != null) {
+                                Text(
+                                    state.actionError!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
                             }
                         }
                     }
@@ -298,10 +296,6 @@ fun SupportTicketDetailRoute(
     }
 }
 
-/**
- * Helpdesk #17 — shown in place of the reply composer for a terminal ticket owned by the user. Explains the
- * ticket is resolved/cancelled and offers a single Reopen action.
- */
 @Composable
 private fun ReopenBar(
     reopening: Boolean,
@@ -361,16 +355,10 @@ private fun MessageBubble(message: SupportTicketMessage) {
                     Spacer(Modifier.height(2.dp))
                     Text(message.body, style = MaterialTheme.typography.bodyMedium)
                 }
-                // Helpdesk #14 — render an attached image inline in the thread.
-                val img = message.imageUrl
-                if (img != null) {
+                // B10 B-HELPMEDIA #5 - render the full media list (images inline, videos/files as rows).
+                if (message.media.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
-                    AsyncImage(
-                        model = img,
-                        contentDescription = "Attached image",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(180.dp).clip(RoundedCornerShape(8.dp)),
-                    )
+                    MessageMediaList(message.media)
                 }
                 val rel = relativeTime(message.createdAt)
                 if (rel.isNotBlank()) {

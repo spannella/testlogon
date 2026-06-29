@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
@@ -62,6 +63,21 @@ import com.testlogon.android.feature.videos.purchase.PurchaseTierSheet
 import com.testlogon.android.feature.videos.purchase.PurchaseViewModel
 import com.testlogon.android.feature.vod.rental.VodRentalPanel
 import com.testlogon.android.feature.vod.rental.VodRentalViewModel
+import com.testlogon.android.feature.feed.TipSheet
+import com.testlogon.android.feature.feed.TipEffect
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Button
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.AddReaction
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 /** AND-190 — stable test tags. */
 object VideoDetailTestTags {
@@ -74,6 +90,9 @@ object VideoDetailTestTags {
     const val PLAYBACK_BLOCK = "video_detail_playback_block"
     const val POSTER = "video_detail_poster"
     const val RELATED = "video_detail_related"
+    const val TIP = "video_detail_tip"
+    const val REACT = "video_detail_react"
+    const val REACTION_CHIP = "video_detail_reaction_chip"
 }
 
 /**
@@ -89,10 +108,22 @@ fun VideoDetailRoute(
     viewModel: VideoDetailViewModel = hiltViewModel(),
     rentalViewModel: VodRentalViewModel = hiltViewModel(),
     purchaseViewModel: PurchaseViewModel = hiltViewModel(),
+    tipViewModel: VideoTipViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val rentalState by rentalViewModel.state.collectAsStateWithLifecycle()
     val purchaseState by purchaseViewModel.uiState.collectAsStateWithLifecycle()
+    val tipState by tipViewModel.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // B-VIDSOCIAL2 — surface tip snackbars + push the new running tip total into the detail header.
+    LaunchedEffect(tipViewModel) {
+        tipViewModel.effects.collect { e -> if (e is TipEffect.ShowSnackbar) snackbarHostState.showSnackbar(e.message) }
+    }
+    LaunchedEffect(tipViewModel) {
+        tipViewModel.tipTotals.collect { total -> viewModel.applyTipTotal(total) }
+    }
 
     // Hand the resolved HLS source to the reused player once it is available.
     LaunchedEffect(state.playbackUrl) {
@@ -166,8 +197,20 @@ fun VideoDetailRoute(
         onBack = onBack,
         onRetryDetail = viewModel::retryDetail,
         onToggleLike = viewModel::toggleLike,
+        onToggleReaction = viewModel::toggleReaction,
+        onTip = { state.detail?.id?.let { tipViewModel.open(it) } },
         onOpenVideo = onOpenVideo,
+        snackbarHostState = snackbarHostState,
         modifier = modifier,
+    )
+
+    // B-VIDSOCIAL2 — the reused feed tip sheet, pointed at the video tip endpoint.
+    TipSheet(
+        state = tipState,
+        onSelectPreset = tipViewModel::selectPreset,
+        onCustomAmount = tipViewModel::setCustomAmount,
+        onSend = tipViewModel::send,
+        onDismiss = tipViewModel::dismiss,
     )
 
     // #6 — full-screen overlay reusing the SAME controller; dismiss returns to the inline surface.
@@ -198,10 +241,14 @@ fun VideoDetailScreen(
     onToggleLike: () -> Unit,
     onOpenVideo: (videoId: String) -> Unit,
     modifier: Modifier = Modifier,
+    onToggleReaction: (emoji: String) -> Unit = {},
+    onTip: () -> Unit = {},
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     monetizationContent: @Composable () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(VideoDetailTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(state.detail?.title.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -234,6 +281,8 @@ fun VideoDetailScreen(
                     playerContent = playerContent,
                     monetizationContent = monetizationContent,
                     onToggleLike = onToggleLike,
+                    onToggleReaction = onToggleReaction,
+                    onTip = onTip,
                     onOpenVideo = onOpenVideo,
                 )
             }
@@ -247,6 +296,8 @@ private fun DetailContent(
     playerContent: @Composable (Modifier) -> Unit,
     monetizationContent: @Composable () -> Unit,
     onToggleLike: () -> Unit,
+    onToggleReaction: (emoji: String) -> Unit,
+    onTip: () -> Unit,
     onOpenVideo: (videoId: String) -> Unit,
 ) {
     val detail = state.detail ?: return
@@ -327,7 +378,33 @@ private fun DetailContent(
                 ) {
                     Icon(imageVector = Icons.Filled.Share, contentDescription = shareLabel)
                 }
+                // B-VIDSOCIAL2 — tip the creator (feed-post parity). Hidden on your own video.
+                if (!state.isMine) {
+                    IconButton(
+                        onClick = onTip,
+                        modifier = Modifier.testTag(VideoDetailTestTags.TIP),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AttachMoney,
+                            contentDescription = stringResource(R.string.tip_send),
+                        )
+                    }
+                }
+                if (state.tipTotalCents > 0) {
+                    Text(
+                        text = formatCents(state.tipTotalCents) + " tipped",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+
+            // B-VIDSOCIAL2 — video-level emoji reactions (feed-post parity).
+            VideoReactionsRow(
+                reactions = state.reactions,
+                myReactions = state.myReactions,
+                onToggleReaction = onToggleReaction,
+            )
 
             if (!detail.description.isNullOrBlank()) {
                 Text(
@@ -349,6 +426,72 @@ private fun DetailContent(
             VideoCommentsSection()
         }
     }
+}
+
+/**
+ * B-VIDSOCIAL2 — emoji reaction chips + an add-reaction picker for the video, mirroring the feed
+ * post / video-comment reaction row. Tapping a chip toggles that reaction; the picker adds a new one.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VideoReactionsRow(
+    reactions: Map<String, Int>,
+    myReactions: Set<String>,
+    onToggleReaction: (emoji: String) -> Unit,
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    val allowed = listOf("\uD83D\uDC4D", "\u2764\uFE0F", "\uD83D\uDE02", "\uD83D\uDD25", "\uD83D\uDE2E")
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        reactions.forEach { (emoji, count) ->
+            val mine = emoji in myReactions
+            Surface(
+                color = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .testTag(VideoDetailTestTags.REACTION_CHIP)
+                    .clickable { onToggleReaction(emoji) },
+            ) {
+                Text(
+                    text = "$emoji $count",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+        }
+        Box {
+            IconButton(
+                onClick = { showPicker = true },
+                modifier = Modifier.size(32.dp).testTag(VideoDetailTestTags.REACT),
+            ) {
+                Icon(
+                    Icons.Filled.AddReaction,
+                    contentDescription = "Add reaction",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            DropdownMenu(expanded = showPicker, onDismissRequest = { showPicker = false }) {
+                Row(Modifier.padding(horizontal = 4.dp)) {
+                    allowed.forEach { emoji ->
+                        androidx.compose.material3.TextButton(
+                            onClick = { showPicker = false; onToggleReaction(emoji) },
+                        ) { Text(emoji, style = MaterialTheme.typography.titleMedium) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Formats whole cents as a $-amount (e.g. 500 -> "$5.00"). */
+private fun formatCents(cents: Int): String {
+    val dollars = cents / 100
+    val rem = cents % 100
+    return "$" + dollars + "." + rem.toString().padStart(2, '0')
 }
 
 @Composable

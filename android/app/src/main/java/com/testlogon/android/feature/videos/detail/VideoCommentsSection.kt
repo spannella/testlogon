@@ -14,6 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddReaction
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.CircularProgressIndicator
@@ -70,6 +72,7 @@ import javax.inject.Inject
 class VideoCommentsViewModel @Inject constructor(
     private val repository: VideoCommentsRepository,
     private val displayNames: DisplayNameResolver,
+    private val imageUploader: com.testlogon.android.data.feed.CommentImageUploader,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -85,6 +88,9 @@ class VideoCommentsViewModel @Inject constructor(
         // The comment being edited (null = not editing) + the in-flight edit text.
         val editingId: String? = null,
         val editDraft: String = "",
+        // #2 feed-parity — an image staged to send ALONGSIDE the comment text, + its upload progress.
+        val pendingImageUrl: String? = null,
+        val imageUploading: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State())
@@ -105,6 +111,23 @@ class VideoCommentsViewModel @Inject constructor(
     }
 
     fun onDraft(text: String) { _state.update { it.copy(draft = text) } }
+
+    /** #2 feed-parity — pick + upload an image, then STAGE its URL to send with the comment. */
+    fun uploadAndStageImage(uri: android.net.Uri) {
+        if (_state.value.imageUploading) return
+        _state.update { it.copy(imageUploading = true) }
+        viewModelScope.launch {
+            val r = imageUploader.uploadImage(uri)
+            _state.update {
+                it.copy(
+                    imageUploading = false,
+                    pendingImageUrl = (r as? ApiResult.Success)?.data ?: it.pendingImageUrl,
+                )
+            }
+        }
+    }
+
+    fun clearStagedImage() { _state.update { it.copy(pendingImageUrl = null) } }
     fun resolveAuthor(id: String) { displayNames.resolve(id) }
 
     fun startReply(comment: VideoComment) {
@@ -123,11 +146,13 @@ class VideoCommentsViewModel @Inject constructor(
 
     fun send() {
         val text = _state.value.draft.trim()
-        if (text.isEmpty() || _state.value.sending) return
+        val image = _state.value.pendingImageUrl
+        // A comment may be text-only, image-only, or text+image (feed parity).
+        if ((text.isEmpty() && image == null) || _state.value.sending) return
         val parent = _state.value.replyingTo?.id
-        _state.update { it.copy(sending = true, draft = "", replyingTo = null) }
+        _state.update { it.copy(sending = true, draft = "", replyingTo = null, pendingImageUrl = null) }
         viewModelScope.launch {
-            val r = repository.add(videoId, text = text, parentCommentId = parent)
+            val r = repository.add(videoId, text = text.ifEmpty { null }, parentCommentId = parent, imageUrl = image)
             _state.update { it.copy(sending = false) }
             if (r is ApiResult.Success) load()
         }
@@ -257,11 +282,49 @@ fun VideoCommentsSection(
                 }
             }
         }
+        // #2 feed-parity — staged image preview (with remove) above the composer Row.
+        state.pendingImageUrl?.let { url ->
+            val model = remember(url) {
+                if (url.startsWith("/")) BuildConfig.API_BASE_URL.trimEnd('/') + url else url
+            }
+            Box(modifier = Modifier.padding(top = 8.dp)) {
+                AsyncImage(
+                    model = model,
+                    contentDescription = "Staged comment image",
+                    modifier = Modifier.size(96.dp).clip(RoundedCornerShape(8.dp)).testTag("video_comment_staged_image"),
+                )
+                IconButton(
+                    onClick = viewModel::clearStagedImage,
+                    modifier = Modifier.size(28.dp).testTag("video_comment_staged_clear"),
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Remove image", tint = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // #2 feed-parity — attach an image to the comment (system photo picker).
+            val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.GetContent(),
+            ) { uri -> if (uri != null) viewModel.uploadAndStageImage(uri) }
+            IconButton(
+                onClick = { imagePicker.launch("image/*") },
+                enabled = !state.imageUploading && state.pendingImageUrl == null,
+                modifier = Modifier.size(44.dp).testTag("video_comment_attach_image"),
+            ) {
+                if (state.imageUploading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = "Attach image",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             OutlinedTextField(
                 value = state.draft,
                 onValueChange = viewModel::onDraft,
@@ -271,13 +334,13 @@ fun VideoCommentsSection(
             )
             IconButton(
                 onClick = { focusManager.clearFocus(); keyboard?.hide(); viewModel.send() },
-                enabled = state.draft.isNotBlank() && !state.sending,
+                enabled = (state.draft.isNotBlank() || state.pendingImageUrl != null) && !state.sending,
                 modifier = Modifier.size(48.dp).testTag("video_comment_send"),
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.Send,
                     contentDescription = "Post comment",
-                    tint = if (state.draft.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (state.draft.isNotBlank() || state.pendingImageUrl != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

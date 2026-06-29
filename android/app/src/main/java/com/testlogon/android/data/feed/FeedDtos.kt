@@ -40,6 +40,10 @@ data class PostDto(
     // coexist). `video` stays as the first video for back-compat; this array is authoritative when present.
     @Json(name = "videos") val videos: List<VideoDto>? = null,
     @Json(name = "tags") val tags: List<String>? = null,
+    // #4 (B-GROUPUNIFY) — set when this post was authored to a GROUP audience. The backend bridges
+    // group posts into the unified feed/my-posts (GSI1 FEEDREF + GSI2 author) and projects group_id on
+    // them; null for a normal post. Lets the feed/my-posts surface a "Posted in <group>" chip.
+    @Json(name = "group_id") val groupId: String? = null,
     @Json(name = "like_count") val likeCount: Int = 0,
     @Json(name = "comment_count") val commentCount: Int = 0,
     @Json(name = "liked_by_me") val likedByMe: Boolean = false,

@@ -1,5 +1,6 @@
 package com.testlogon.android.data.videos
 
+import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -47,6 +48,34 @@ interface VideosApi {
 
     @POST("ui/videos/{video_id}/like")
     suspend fun toggleLike(@Path("video_id") videoId: String): LikeToggleDto
+
+    /**
+     * B-VIDSOCIAL2 (#2) — video-level emoji REACTIONS (feed-post parity). Mirrors the post/comment
+     * reactions contract: the body carries one allowed emoji and the response returns the updated
+     * per-emoji counts + the caller's own reactions.
+     */
+    @POST("ui/videos/{video_id}/reactions")
+    suspend fun reactVideo(
+        @Path("video_id") videoId: String,
+        @Body body: VideoReactionReq,
+    ): VideoReactionDto
+
+    @POST("ui/videos/{video_id}/unreact")
+    suspend fun unreactVideo(
+        @Path("video_id") videoId: String,
+        @Body body: VideoReactionReq,
+    ): VideoReactionDto
+
+    /**
+     * B-VIDSOCIAL2 (#2) — TIP the video's creator (feed-post parity; mirrors POST /posts/{id}/tip).
+     * amount_cents >= 1; payment_method_id is forwarded from the billing seam (blank in dev). The
+     * backend rejects self-tips (400) and non-published videos (403).
+     */
+    @POST("ui/videos/{video_id}/tip")
+    suspend fun tipVideo(
+        @Path("video_id") videoId: String,
+        @Body body: VideoTipReq,
+    ): VideoTipDto
 
     /**
      * AND-197 — the authoritative per-video access check.

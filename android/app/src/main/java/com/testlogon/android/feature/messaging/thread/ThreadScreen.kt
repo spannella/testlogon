@@ -281,6 +281,8 @@ fun ThreadRoute(
                 is ThreadEvent.ScrollToBottom -> listState.animateScrollToItem(0)
                 is ThreadEvent.OpenImageViewer -> imageViewer.open(event.url)
                 is ThreadEvent.OpenFile -> openDownloadedFile(context, event.localPath, event.mimeType)
+                is ThreadEvent.Toast ->
+                    android.widget.Toast.makeText(context, event.message, android.widget.Toast.LENGTH_SHORT).show()
                 is ThreadEvent.ScrollToMessage -> {
                     // AND-140 — jump-to-pinned: the list is reverseLayout, so map the key to its index.
                     val idx = state.messages.indexOfFirst { it.key == event.messageKey }
@@ -332,6 +334,7 @@ fun ThreadRoute(
         onPickVideo = viewModel::onShareVideo,
         onOpenImage = viewModel::onOpenImage,
         onDownloadFile = viewModel::onDownloadFile,
+        onSaveFile = viewModel::onSaveFileToPhone,
         onRecordVoice = {
             val granted = android.content.pm.PackageManager.PERMISSION_GRANTED ==
                 androidx.core.content.ContextCompat.checkSelfPermission(
@@ -534,6 +537,14 @@ fun ThreadRoute(
         )
     }
 
+    // #7 — dedicated photo picker for the scheduled-message EDIT dialog (images only; the server
+    // promotes a text-only scheduled message to an image when one is attached here).
+    val pickScheduledEditPhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) viewModel.onScheduledEditAttachImage(uri.toString())
+    }
+
     // #8 — scheduled-messages manager (list pending scheduled sends; edit/remove each).
     if (state.scheduledManager.visible) {
         ScheduledMessagesSheet(
@@ -557,6 +568,13 @@ fun ThreadRoute(
                 onTimeZoneChange = viewModel::onScheduledEditTimeZoneChange,
                 onSave = viewModel::saveScheduledEdit,
                 onDismiss = viewModel::closeScheduledEdit,
+                // #7 — attach/replace a photo (even on a text-only scheduled message).
+                onPickPhoto = {
+                    pickScheduledEditPhoto.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onRemovePhoto = viewModel::onScheduledEditRemoveImage,
             )
         }
     }
@@ -770,6 +788,7 @@ fun ThreadScreen(
     onPickVideo: (String) -> Unit,
     onOpenImage: (String) -> Unit,
     onDownloadFile: (ThreadMessageUi) -> Unit,
+    onSaveFile: (ThreadMessageUi) -> Unit = {},
     onRecordVoice: () -> Unit,
     onStopVoice: () -> Unit,
     onCancelVoice: () -> Unit,
@@ -1116,6 +1135,7 @@ fun ThreadScreen(
         onAction = onAction,
         onTip = onTip,
         onJumpToPinned = onJumpToPinned,
+        onSaveFile = onSaveFile,
         onCloseSheet = { actionTarget = null },
     )
 
@@ -1701,6 +1721,33 @@ private fun MessageBubble(
                 } else {
                     Text(
                         text = message.decryptedText ?: message.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    )
+                }
+            }
+        }
+        // #10 — a media message (file/image/gallery/video) may carry a text CAPTION. Render it just
+        // below the media bubble (not for the text-only `None` bubble, which already shows the body, nor
+        // for still-gated/teaser bubbles where `text` is a placeholder/ciphertext).
+        run {
+            val mediaWithCaption = message.media !is MessageMedia.None &&
+                message.media !is MessageMedia.Paid
+            val captionText = (message.decryptedText ?: message.text).trim()
+            val gated = isEncryptedImage || isEncryptedVideo || showEncryptedLocked ||
+                showViewOnceHidden || showListenOnceConsumed || lockedNotUnlocked
+            if (mediaWithCaption && captionText.isNotBlank() && !gated) {
+                Surface(
+                    color = bubbleColor,
+                    shape = bubbleShape(message.isOwn),
+                    tonalElevation = 1.dp,
+                    modifier = Modifier
+                        .widthIn(max = 280.dp)
+                        .padding(top = 2.dp)
+                        .testTag("thread_media_caption"),
+                ) {
+                    Text(
+                        text = captionText,
                         style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                     )
@@ -2522,6 +2569,8 @@ private fun ScheduledEditDialog(
     onTimeZoneChange: (String) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
+    onPickPhoto: () -> Unit,
+    onRemovePhoto: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2536,6 +2585,58 @@ private fun ScheduledEditDialog(
                         label = { Text(stringResource(R.string.msg_scheduled_edit)) },
                     )
                     Spacer(Modifier.height(12.dp))
+                }
+                // #7 (B-SCHED3) — attach (or replace) a PHOTO on a still-pending scheduled message.
+                // Offered even for a text-only message: the server promotes it to an image on save.
+                if (editing.canAttachImage) {
+                    when {
+                        editing.attaching -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = stringResource(R.string.msg_scheduled_photo_attaching),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        }
+                        editing.draftImageLocalUri != null -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                AsyncImage(
+                                    model = editing.draftImageLocalUri,
+                                    contentDescription = stringResource(R.string.msg_scheduled_photo_attached),
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .testTag("thread_scheduled_edit_photo_preview"),
+                                    contentScale = ContentScale.Crop,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = stringResource(R.string.msg_scheduled_photo_attached),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(
+                                    onClick = onRemovePhoto,
+                                    modifier = Modifier.testTag("thread_scheduled_edit_photo_remove"),
+                                ) {
+                                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_remove))
+                                }
+                            }
+                        }
+                        else -> {
+                            TextButton(
+                                onClick = onPickPhoto,
+                                modifier = Modifier.testTag("thread_scheduled_edit_photo_add"),
+                            ) {
+                                Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.msg_scheduled_photo_add))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
                 Text(
                     text = stringResource(R.string.msg_scheduled_send_time),
@@ -2565,7 +2666,7 @@ private fun ScheduledEditDialog(
         confirmButton = {
             TextButton(
                 onClick = onSave,
-                enabled = !editing.saving,
+                enabled = !editing.saving && !editing.attaching,
                 modifier = Modifier.testTag(ThreadTestTags.SCHEDULED_EDIT_SAVE),
             ) { Text(stringResource(R.string.msg_scheduled_save)) }
         },

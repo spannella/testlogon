@@ -9,6 +9,8 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.videos.VideoAccess
 import com.testlogon.android.data.videos.VideoDetail
 import com.testlogon.android.data.videos.VideoSummary
+import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.videos.VideoReactionState
 import com.testlogon.android.data.videos.VideosRepository
 import com.testlogon.android.feature.player.MediaSourceSpec
 import com.testlogon.android.feature.player.VideoPlayerController
@@ -35,7 +37,16 @@ data class VideoDetailUiState(
     val liked: Boolean = false,
     val related: List<VideoSummary> = emptyList(),
     val detailError: DetailError? = null,
+    // B-VIDSOCIAL2 - video-level emoji reactions (feed-post parity) + running tip total.
+    val reactions: Map<String, Int> = emptyMap(),
+    val myReactions: Set<String> = emptySet(),
+    val tipTotalCents: Int = 0,
+    // True when the current viewer owns this video (hide the tip action, like the feed does on own posts).
+    val isMine: Boolean = false,
 )
+
+/** The emoji reaction set the server allows on a video (mirrors ALLOWED_VIDEO_REACTION_EMOJIS). */
+val VIDEO_REACTIONS = listOf("\uD83D\uDC4D", "\u2764\uFE0F", "\uD83D\uDE02", "\uD83D\uDD25", "\uD83D\uDE2E")
 
 /** Why playback is unavailable even though detail loaded — drives a non-Retry message on the player. */
 enum class PlaybackBlock { PROCESSING, NO_SOURCE, FORBIDDEN }
@@ -56,6 +67,7 @@ class VideoDetailViewModel @Inject constructor(
     private val repository: VideosRepository,
     private val controllerProvider: VideoControllerProvider,
     private val authStateProvider: AuthStateProvider,
+    private val authStateStore: AuthStateStore,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -122,6 +134,37 @@ class VideoDetailViewModel @Inject constructor(
     }
 
     /**
+     * B-VIDSOCIAL2 - toggle an emoji reaction on the video itself (feed-post parity). Optimistic: the
+     * chip flips immediately and the server response (authoritative counts) reconciles it; on failure
+     * the optimistic change rolls back.
+     */
+    fun toggleReaction(emoji: String) {
+        val before = _uiState.value
+        val mineNow = emoji in before.myReactions
+        val newMine = before.myReactions.toMutableSet().apply { if (mineNow) remove(emoji) else add(emoji) }
+        val newCounts = before.reactions.toMutableMap().apply {
+            val c = (this[emoji] ?: 0) + if (mineNow) -1 else 1
+            if (c > 0) this[emoji] = c else remove(emoji)
+        }
+        _uiState.update { it.copy(reactions = newCounts, myReactions = newMine) }
+        viewModelScope.launch {
+            val r = if (mineNow) repository.unreactVideo(videoId, emoji)
+            else repository.reactVideo(videoId, emoji)
+            when (r) {
+                is ApiResult.Success -> _uiState.update {
+                    it.copy(reactions = r.data.reactions, myReactions = r.data.myReactions)
+                }
+                else -> _uiState.update { it.copy(reactions = before.reactions, myReactions = before.myReactions) }
+            }
+        }
+    }
+
+    /** Bumps the displayed running tip total after a successful tip (the sheet owns the charge flow). */
+    fun applyTipTotal(tipTotalCents: Int) {
+        _uiState.update { it.copy(tipTotalCents = tipTotalCents) }
+    }
+
+    /**
      * Idempotently hands the resolved HLS source to the reused player. Called from the screen once the
      * playback URL is available; safe to call repeatedly (prepares only once).
      */
@@ -152,6 +195,7 @@ class VideoDetailViewModel @Inject constructor(
             else -> null
         }
         val playable = if (granted && block == null) detail.playbackUrl else null
+        val me = authStateStore.userSub.value
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -160,6 +204,10 @@ class VideoDetailViewModel @Inject constructor(
                 playbackBlock = block,
                 entitlement = entitlement,
                 detailError = null,
+                reactions = detail.reactions,
+                myReactions = detail.myReactions,
+                tipTotalCents = detail.tipTotalCents,
+                isMine = me != null && me == detail.ownerUserId,
             )
         }
         loadLikeAndRelated()

@@ -43,6 +43,14 @@ object SupportTestTags {
     const val DETAIL_ATTACH = "support_detail_attach"
     const val CREATE_ATTACH = "support_create_attach"
     const val REPLIES_CLOSED = "support_replies_closed"
+    // B10 B-HELPMEDIA #5 - multi-media composer affordances + render.
+    const val ATTACH_IMAGE = "support_attach_image"
+    const val ATTACH_VIDEO = "support_attach_video"
+    const val ATTACH_FILE = "support_attach_file"
+    const val ATTACH_FROM_FILES = "support_attach_from_files"
+    const val STAGED_STRIP = "support_staged_strip"
+    const val FILE_PICKER_SEARCH = "support_file_picker_search"
+    const val FILE_PICKER_LIST = "support_file_picker_list"
 }
 
 /** Human label for a ticket status. */

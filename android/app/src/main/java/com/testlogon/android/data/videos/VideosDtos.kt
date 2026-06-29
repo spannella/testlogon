@@ -70,6 +70,10 @@ data class VideoDetailDto(
     @Json(name = "purchase_available") val purchaseAvailable: Boolean? = null,
     @Json(name = "subscription_available") val subscriptionAvailable: Boolean? = null,
     @Json(name = "subscription_upsell") val subscriptionUpsell: Boolean? = null,
+    // B-VIDSOCIAL2 — video-level reactions + running tip total (feed-post parity).
+    @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int> = emptyMap(),
+    @Json(name = "my_reactions") val myReactions: List<String> = emptyList(),
+    @Json(name = "tip_total_cents") val tipTotalCents: Int = 0,
 )
 
 /** SimilarVideosResponse = { videos: VideoListItem[]-ish }. Modelled defensively as a list. */
@@ -109,4 +113,36 @@ data class VodAccessDto(
 data class LikeToggleDto(
     @Json(name = "liked") val liked: Boolean = false,
     @Json(name = "like_count") val likeCount: Int = 0,
+)
+
+/** B-VIDSOCIAL2 — request body for a video reaction add/remove. */
+@JsonClass(generateAdapter = true)
+data class VideoReactionReq(
+    @Json(name = "emoji") val emoji: String,
+)
+
+/** B-VIDSOCIAL2 — VideoReactionOut = { video_id, reactions_counts, my_reactions }. */
+@JsonClass(generateAdapter = true)
+data class VideoReactionDto(
+    @Json(name = "video_id") val videoId: String = "",
+    @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int> = emptyMap(),
+    @Json(name = "my_reactions") val myReactions: List<String> = emptyList(),
+)
+
+/** B-VIDSOCIAL2 — request body for tipping a video's creator. */
+@JsonClass(generateAdapter = true)
+data class VideoTipReq(
+    @Json(name = "amount_cents") val amountCents: Int,
+    @Json(name = "currency") val currency: String = "usd",
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+/** B-VIDSOCIAL2 — VideoTipOut = { ok, video_id, amount_cents, currency, tip_total_cents }. */
+@JsonClass(generateAdapter = true)
+data class VideoTipDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "video_id") val videoId: String = "",
+    @Json(name = "amount_cents") val amountCents: Int = 0,
+    @Json(name = "currency") val currency: String = "usd",
+    @Json(name = "tip_total_cents") val tipTotalCents: Int = 0,
 )

@@ -5,7 +5,6 @@ package com.testlogon.android.feature.support.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,20 +12,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -34,21 +33,23 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.capitalize
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
 
 /**
- * B-SUP (batch 7) - USER create-a-ticket form. POST /tickets {subject,description,priority}; on success it
- * invokes [onCreated] with the new ticket id so the caller can open the thread.
+ * B-SUP (batch 7) - USER create-a-ticket form. POST /tickets {subject,description,priority,media[]}; on
+ * success it invokes [onCreated] with the new ticket id so the caller can open the thread.
+ *
+ * B10 B-HELPMEDIA #5 - the opening message can attach a LIST of images / videos / files (device pickers)
+ * AND files from the in-app file manager, like a newsfeed post.
  */
 @Composable
 fun CreateTicketRoute(
@@ -60,7 +61,21 @@ fun CreateTicketRoute(
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
-    ) { uri -> if (uri != null) viewModel.stageImage(uri) }
+    ) { uri -> if (uri != null) viewModel.addImage(uri) }
+    val videoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.addVideo(uri) }
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.addFile(uri) }
+
+    var showFilePicker by remember { mutableStateOf(false) }
+    if (showFilePicker) {
+        FileManagerPickerDialog(
+            onDismiss = { showFilePicker = false },
+            onPick = { node -> showFilePicker = false; viewModel.addFileRef(node) },
+        )
+    }
 
     LaunchedEffect(state.createdTicketId) {
         val id = state.createdTicketId
@@ -113,40 +128,25 @@ fun CreateTicketRoute(
                     )
                 }
             }
-            // Helpdesk #14 — attach an optional image to the opening message.
-            Text("Attachment", style = MaterialTheme.typography.labelLarge)
-            val staged = state.stagedImageUrl
-            if (staged != null) {
-                Box {
-                    AsyncImage(
-                        model = staged,
-                        contentDescription = "Attached image",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(96.dp).clip(RoundedCornerShape(8.dp)),
-                    )
-                    IconButton(
-                        onClick = viewModel::clearStagedImage,
-                        modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
-                    ) {
-                        Icon(Icons.Outlined.Close, contentDescription = "Remove image")
-                    }
-                }
-            } else {
-                OutlinedButton(
-                    onClick = { imagePicker.launch("image/*") },
-                    enabled = !state.uploadingImage && !state.submitting,
-                    modifier = Modifier.testTag(SupportTestTags.CREATE_ATTACH),
-                ) {
-                    if (state.uploadingImage) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.height(0.dp))
-                        Text("  Uploading...")
-                    } else {
-                        Icon(Icons.Outlined.Image, contentDescription = null)
-                        Text("  Add image")
-                    }
-                }
+
+            // B10 B-HELPMEDIA #5 - multi-media attachments.
+            Text("Attachments", style = MaterialTheme.typography.labelLarge)
+            AttachmentActions(
+                enabled = !state.submitting && !state.mediaFull,
+                onImage = { imagePicker.launch("image/*") },
+                onVideo = { videoPicker.launch("video/*") },
+                onFile = { filePicker.launch("*/*") },
+                onFromFiles = { showFilePicker = true },
+            )
+            StagedMediaStrip(media = state.media, onRemove = viewModel::removeMedia)
+            if (state.mediaFull) {
+                Text(
+                    "Attachment limit reached.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+
             if (state.error != null) {
                 Text(state.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
@@ -163,5 +163,50 @@ fun CreateTicketRoute(
                 }
             }
         }
+    }
+}
+
+/** The image / video / file / from-Files attach buttons shared by both composers. */
+@Composable
+fun AttachmentActions(
+    enabled: Boolean,
+    onImage: () -> Unit,
+    onVideo: () -> Unit,
+    onFile: () -> Unit,
+    onFromFiles: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AssistChip(
+            onClick = onImage,
+            enabled = enabled,
+            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null, modifier = Modifier.height(18.dp)) },
+            label = { Text("Image") },
+            modifier = Modifier.testTag(SupportTestTags.ATTACH_IMAGE),
+        )
+        AssistChip(
+            onClick = onVideo,
+            enabled = enabled,
+            leadingIcon = { Icon(Icons.Outlined.Videocam, contentDescription = null, modifier = Modifier.height(18.dp)) },
+            label = { Text("Video") },
+            modifier = Modifier.testTag(SupportTestTags.ATTACH_VIDEO),
+        )
+        AssistChip(
+            onClick = onFile,
+            enabled = enabled,
+            leadingIcon = {
+                Icon(Icons.AutoMirrored.Outlined.InsertDriveFile, contentDescription = null, modifier = Modifier.height(18.dp))
+            },
+            label = { Text("File") },
+            modifier = Modifier.testTag(SupportTestTags.ATTACH_FILE),
+        )
+        AssistChip(
+            onClick = onFromFiles,
+            enabled = enabled,
+            leadingIcon = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.height(18.dp)) },
+            label = { Text("Files") },
+            colors = AssistChipDefaults.assistChipColors(),
+            modifier = Modifier.testTag(SupportTestTags.ATTACH_FROM_FILES),
+        )
     }
 }

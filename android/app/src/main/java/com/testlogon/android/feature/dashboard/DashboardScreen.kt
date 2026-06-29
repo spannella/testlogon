@@ -286,7 +286,7 @@ private fun QuickActionsRow(
             testTag = DashboardTestTags.ACTION_POST,
             circleColor = scheme.primaryContainer,
             iconTint = scheme.onPrimaryContainer,
-            onClick = { onOpenRoute(ComposePostDest.ROUTE) },
+            onClick = { onOpenRoute(ComposePostDest.build()) },
             modifier = Modifier.weight(1f),
         )
         QuickActionItem(

@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VideoCall
@@ -125,7 +128,9 @@ fun VideosScreen(
         if (pending.isNotEmpty()) onReconcilePending(loadedIds)
     }
     Scaffold(
-        modifier = modifier.testTag(VideosScreenTestTags.SCREEN),
+        modifier = modifier
+            .padding(WindowInsets.statusBars.asPaddingValues())
+            .testTag(VideosScreenTestTags.SCREEN),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.videos_library_title)) },

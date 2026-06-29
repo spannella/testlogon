@@ -95,7 +95,7 @@ fun FileMessageBubble(
             )
         }
         if (viewerOpen) {
-            PdfViewerDialog(localPath = downloadedPath, onDismiss = { viewerOpen = false })
+            PdfViewerDialog(localPath = downloadedPath, fileName = file.fileName, onDismiss = { viewerOpen = false })
         }
         return
     }

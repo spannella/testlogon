@@ -143,6 +143,13 @@ fun NavGraphBuilder.groupsDestinations(navController: NavHostController) {
                 onOpenHub = {
                     navController.navigate(GroupDetailDest.build(groupId)) { launchSingleTop = true }
                 },
+                // #4 (B-GROUPUNIFY) — compose a group post with the SHARED newsfeed composer, audience
+                // locked to this group (the composer is registered in the outer authenticated graph).
+                onComposePost = {
+                    runCatching {
+                        navController.navigate(ComposePostDest.buildForGroup(groupId)) { launchSingleTop = true }
+                    }
+                },
             )
         }
         composable(

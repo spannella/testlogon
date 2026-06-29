@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.outlined.Group
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -108,6 +109,25 @@ fun PostItem(
                 ownerLock = if (isOwnPost) post.authorLock else null,
                 onClick = { onAuthorClick(post.authorId) },
             )
+
+            // #4 (B-GROUPUNIFY) — group posts are bridged into the unified feed + "Your posts"; badge them
+            // so it is clear they were shared to a group (vs the personal feed). The dedicated group feed
+            // is the same data filtered to one group_id.
+            if (post.groupId != null) {
+                androidx.compose.material3.AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    leadingIcon = {
+                        androidx.compose.material3.Icon(
+                            Icons.Outlined.Group,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                    label = { Text("Posted in a group") },
+                    modifier = Modifier.testTag("post_group_badge"),
+                )
+            }
 
             when (val paywall = post.paywall) {
                 is Paywall.Locked -> PaywallCard(

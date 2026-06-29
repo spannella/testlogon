@@ -32,7 +32,7 @@ fun NavGraphBuilder.myPostsDestination(navController: NavHostController) {
         val editedResult = savedStateHandle.getStateFlow(MyPostsDest.RESULT_EDITED, false)
         MyPostsRoute(
             onBack = { navController.popBackStack() },
-            onComposePost = { navController.navigate(ComposePostDest.ROUTE) },
+            onComposePost = { navController.navigate(ComposePostDest.build()) },
             onEditPost = { postId -> navController.navigate(EditPostDest.build(postId)) },
             onPostClick = { postId -> navController.navigate(PostDetailDest.build(postId)) },
             refreshSignal = editedResult,

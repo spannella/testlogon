@@ -273,10 +273,43 @@ data class LotteryMessageOutDto(
 /**
  * MessageOut.lottery (nested sub-object on a lottery_dm message). lock_state gates the locked teaser
  * vs the revealed outcome.
+ *
+ * #15 (B-LOTSENDER) — the SENDER's projection of their OWN lottery is distinct: lock_state is
+ * "sender_view" + is_sender=true and the object carries the FULL config (every outcome with its
+ * weight/label/payload) PLUS each recipient's unlock result. The recipient still only ever sees their
+ * own (post-unlock) outcome via [selectedOutcome]. All sender-only fields are nullable so a recipient
+ * frame (no sender block) decodes unchanged.
  */
 @JsonClass(generateAdapter = true)
 data class LotteryAttachmentDto(
     @Json(name = "message_type") val messageType: String = "lottery_dm",
     @Json(name = "lock_state") val lockState: String = "locked",
     @Json(name = "selected_outcome") val selectedOutcome: LotterySelectedOutcomeDto? = null,
+    // ── #15 sender-view fields (present only when lock_state == "sender_view") ──
+    @Json(name = "is_sender") val isSender: Boolean? = null,
+    @Json(name = "version") val version: String? = null,
+    @Json(name = "total_weight_bps") val totalWeightBps: Int? = null,
+    @Json(name = "outcomes") val outcomes: List<LotterySenderOutcomeDto>? = null,
+    @Json(name = "unlock_count") val unlockCount: Int? = null,
+    @Json(name = "unlocks") val unlocks: List<LotterySenderUnlockDto>? = null,
+)
+
+/** #15 — one configured lottery outcome as seen by the SENDER (full config, incl. weight + label). */
+@JsonClass(generateAdapter = true)
+data class LotterySenderOutcomeDto(
+    @Json(name = "outcome_id") val outcomeId: String = "",
+    @Json(name = "display_label") val displayLabel: String? = null,
+    @Json(name = "weight_bps") val weightBps: Int = 0,
+    @Json(name = "payload_type") val payloadType: String = "text",
+    @Json(name = "text_content") val textContent: String? = null,
+    @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+    @Json(name = "media_asset_ids") val mediaAssetIds: List<String>? = null,
+)
+
+/** #15 — one recipient's unlock record on the sender's lottery (who drew what). */
+@JsonClass(generateAdapter = true)
+data class LotterySenderUnlockDto(
+    @Json(name = "recipient_id") val recipientId: String = "",
+    @Json(name = "unlocked_at") val unlockedAt: Long? = null,
+    @Json(name = "selected_outcome") val selectedOutcome: LotterySenderOutcomeDto? = null,
 )

@@ -138,7 +138,7 @@ fun AuthedShellScreen(
             }
             composable(AuthedTab.FEED.route) {
                 com.testlogon.android.feature.feed.FeedRoute(
-                    onComposePost = { onOpenRoute(com.testlogon.android.navigation.ComposePostDest.ROUTE) },
+                    onComposePost = { onOpenRoute(com.testlogon.android.navigation.ComposePostDest.build()) },
                     onOpenDiscover = { tabNav.navigateToTab(AuthedTab.DISCOVER) },
                     // FD11 — a visible 'Your posts' entry straight from the feed top bar.
                     onOpenMyPosts = { onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE) },

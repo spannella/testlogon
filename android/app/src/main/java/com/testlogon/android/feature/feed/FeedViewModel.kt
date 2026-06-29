@@ -77,6 +77,12 @@ class FeedViewModel @Inject constructor(
     private val _currentUserSub = MutableStateFlow<String?>(null)
     val currentUserSub: StateFlow<String?> = _currentUserSub.asStateFlow()
 
+    // #18 — declared BEFORE init{}: the FeedRefreshBus is a replay=1 SharedFlow, so a refresh signalled
+    // before this VM subscribes (e.g. a post just published, incl. a group post) is delivered the instant
+    // init{} starts collecting. refresh() touches refreshTrigger, so it MUST already be initialized here
+    // or that replayed signal NPEs during construction (crashes the Feed tab on open).
+    private val refreshTrigger = MutableStateFlow(0L)
+
     init {
         viewModelScope.launch {
             val r = currentUser.currentUserSub()
@@ -93,8 +99,6 @@ class FeedViewModel @Inject constructor(
     fun resolveAuthor(authorId: String) {
         displayNames.resolve(authorId)
     }
-
-    private val refreshTrigger = MutableStateFlow(0L)
 
     private val likeOverrides = MutableStateFlow<Map<String, LikeState>>(emptyMap())
     private val likeJobs = mutableMapOf<String, Job>()

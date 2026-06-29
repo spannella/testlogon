@@ -161,7 +161,18 @@ interface MessagingRepository {
         messageId: String,
         text: String? = null,
         sendAtEpochSeconds: Long? = null,
+        // #7 (B-SCHED3) — attach/replace an image on a still-pending scheduled message. When the
+        // message is currently text-only the server promotes its kind to "image" so the photo is
+        // honored. Pass the descriptor returned by [uploadRescheduleImage].
+        image: MessageImageDto? = null,
     ): ApiResult<ScheduledMessage>
+
+    /**
+     * #7 (B-SCHED3) — process + presign + PUT a picked image so it can be attached to a scheduled
+     * message via [rescheduleMessage]. Returns the uploaded image descriptor (bucket/key/size), or a
+     * failure if processing/upload fails. Does NOT mutate the scheduled message itself.
+     */
+    suspend fun uploadRescheduleImage(conversationId: String, localUri: String): ApiResult<MessageImageDto>
 
     /** #8 — cancel/delete a still-pending scheduled message before it delivers. */
     suspend fun cancelScheduledMessage(conversationId: String, messageId: String): ApiResult<Unit>
@@ -386,6 +397,8 @@ interface MessagingRepository {
         localUri: String,
         fileName: String,
         mimeType: String,
+        // #10 — optional caption text sent alongside the file (kept with the message).
+        caption: String? = null,
         viewOnce: Boolean = false,
         lockPriceCents: Long? = null,
         lockDescription: String? = null,
@@ -1116,13 +1129,64 @@ class MessagingRepositoryImpl @Inject constructor(
         messageId: String,
         text: String?,
         sendAtEpochSeconds: Long?,
+        image: MessageImageDto?,
     ): ApiResult<ScheduledMessage> = withContext(io) {
-        val req = RescheduleMessageReq(text = text, sendAt = sendAtEpochSeconds)
+        val req = RescheduleMessageReq(text = text, sendAt = sendAtEpochSeconds, image = image)
         when (val r = apiCall { api.rescheduleMessage(conversationId, messageId, req) }) {
             is ApiResult.Success -> ApiResult.Success(r.data.toScheduledDomain())
             is ApiResult.Failure -> r
             is ApiResult.NetworkError -> r
         }
+    }
+
+    override suspend fun uploadRescheduleImage(
+        conversationId: String,
+        localUri: String,
+    ): ApiResult<MessageImageDto> = withContext(io) {
+        val processed = imageProcessor.process(Uri.parse(localUri))
+            ?: return@withContext ApiResult.Failure(
+                ApiError(status = ApiError.STATUS_PARSE, message = "Couldn't process this image."),
+            )
+        val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        var uploadError: ApiError? = null
+        uploader.upload(
+            UploadRequest(
+                uri = processed.uri,
+                mimeType = processed.mimeType,
+                category = "message",
+                sizeBytes = processed.byteSize,
+                displayName = fileName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            when (progress) {
+                is UploadProgress.Succeeded -> attachment = progress.attachment
+                is UploadProgress.Failed -> uploadError = ApiError(
+                    status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                    message = progress.error.message ?: "Upload failed",
+                )
+                UploadProgress.Cancelled ->
+                    uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                else -> Unit
+            }
+        }
+        val ref = attachment
+            ?: return@withContext ApiResult.Failure(
+                uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+            )
+        ApiResult.Success(
+            MessageImageDto(
+                bucket = ref.bucket,
+                key = ref.key,
+                contentType = ref.contentType,
+                width = processed.width,
+                height = processed.height,
+                filename = fileName,
+                filesize = processed.byteSize,
+            ),
+        )
     }
 
     override suspend fun cancelScheduledMessage(
@@ -1948,6 +2012,7 @@ class MessagingRepositoryImpl @Inject constructor(
         localUri: String,
         fileName: String,
         mimeType: String,
+        caption: String?,
         viewOnce: Boolean,
         lockPriceCents: Long?,
         lockDescription: String?,
@@ -2010,6 +2075,7 @@ class MessagingRepositoryImpl @Inject constructor(
                         CreateFileMessageReq(
                             path = serverPath,
                             kind = "file",
+                            text = caption?.takeIf { it.isNotBlank() },
                             consumptionPolicy = if (viewOnce) "view_once" else null,
                             viewOnce = viewOnce,
                             expiresInSeconds = expiresInSeconds,
@@ -3225,6 +3291,8 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         // these mirror it for clarity and a kind-based round-trip).
         lotteryLockState = paid?.takeIf { it.type == UnlockType.LOTTERY }?.let { if (it.unlocked) "unlocked" else "locked" },
         lotterySelectedText = paid?.takeIf { it.type == UnlockType.LOTTERY }?.revealedText,
+        // #15 — persist the sender's lottery sender-view (config + per-recipient results) as JSON.
+        lotterySenderViewJson = paid?.lotterySenderView?.let(::lotterySenderViewToJson),
         // MSG — client-side encryption flag + envelope.
         isEncrypted = isEncrypted,
         encVersion = encryption?.version,
@@ -3283,7 +3351,12 @@ internal fun waveformToJson(values: List<Float>): String =
 private const val GALLERY_RECORD_SEP = "\n"
 
 internal fun galleryToJson(images: List<MessageMedia.GalleryImage>): String =
-    images.joinToString(GALLERY_RECORD_SEP) { "${it.url.orEmpty()}|${it.width ?: ""}|${it.height ?: ""}" }
+    // #8/#12 — persist isVideo + posterUrl so a mixed gallery keeps each item's media kind across the
+    // Room cache round-trip (otherwise a cached video item reloads as an image). Format per record:
+    // url|width|height|isVideo(0/1)|posterUrl
+    images.joinToString(GALLERY_RECORD_SEP) {
+        "${it.url.orEmpty()}|${it.width ?: ""}|${it.height ?: ""}|${if (it.isVideo) "1" else "0"}|${it.posterUrl.orEmpty()}"
+    }
 
 /** #24 - serialize the revealed lottery media list as "url|isVideo" records (one per line). */
 internal fun revealedMediaToJson(items: List<RevealedMediaItem>): String =
@@ -3300,6 +3373,92 @@ internal fun revealedMediaFromJson(json: String?): List<RevealedMediaItem> {
     }
 }
 
+// #15 — sender-view (config + per-recipient results) Room serialization. Serialized as a small JSON
+// blob via a process-wide Moshi (these mappers are top-level extensions without the injected Moshi).
+// Codegen adapters keep this JVM-unit-test-safe (no reflective KotlinJsonAdapterFactory needed).
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvBlob(
+    val version: String,
+    val totalWeightBps: Int,
+    val outcomes: List<LsvOutcomeBlob>,
+    val unlocks: List<LsvUnlockBlob>,
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvOutcomeBlob(
+    val outcomeId: String,
+    val displayLabel: String? = null,
+    val weightBps: Int = 0,
+    val payloadType: String = "text",
+    val textContent: String? = null,
+    val media: List<LsvMediaBlob> = emptyList(),
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvMediaBlob(val url: String, val isVideo: Boolean = false)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvUnlockBlob(
+    val recipientId: String,
+    val unlockedAt: Long? = null,
+    val selectedOutcome: LsvOutcomeBlob? = null,
+)
+
+private val lsvMoshi: com.squareup.moshi.Moshi by lazy { com.squareup.moshi.Moshi.Builder().build() }
+private val lsvAdapter by lazy { lsvMoshi.adapter(LsvBlob::class.java) }
+
+private fun LotterySenderOutcome.toBlob(): LsvOutcomeBlob = LsvOutcomeBlob(
+    outcomeId = outcomeId,
+    displayLabel = displayLabel,
+    weightBps = weightBps,
+    payloadType = payloadType,
+    textContent = textContent,
+    media = media.map { LsvMediaBlob(url = it.url, isVideo = it.isVideo) },
+)
+
+private fun LsvOutcomeBlob.toDomain(): LotterySenderOutcome = LotterySenderOutcome(
+    outcomeId = outcomeId,
+    displayLabel = displayLabel?.takeIf { it.isNotBlank() },
+    weightBps = weightBps,
+    payloadType = payloadType.takeIf { it.isNotBlank() } ?: "text",
+    textContent = textContent?.takeIf { it.isNotBlank() },
+    media = media.map { RevealedMediaItem(url = it.url, isVideo = it.isVideo) },
+)
+
+/** #15 — serialize the lottery sender-view into a JSON blob for Room. */
+internal fun lotterySenderViewToJson(v: LotterySenderView): String = lsvAdapter.toJson(
+    LsvBlob(
+        version = v.version,
+        totalWeightBps = v.totalWeightBps,
+        outcomes = v.outcomes.map { it.toBlob() },
+        unlocks = v.unlocks.map {
+            LsvUnlockBlob(
+                recipientId = it.recipientId,
+                unlockedAt = it.unlockedAtEpochSeconds,
+                selectedOutcome = it.selectedOutcome?.toBlob(),
+            )
+        },
+    ),
+)
+
+/** #15 — parse the lottery sender-view back from its Room JSON blob; null on blank/unparseable. */
+internal fun lotterySenderViewFromJson(json: String?): LotterySenderView? {
+    if (json.isNullOrBlank()) return null
+    val blob = runCatching { lsvAdapter.fromJson(json) }.getOrNull() ?: return null
+    return LotterySenderView(
+        version = blob.version.takeIf { it.isNotBlank() } ?: "v1",
+        totalWeightBps = blob.totalWeightBps,
+        outcomes = blob.outcomes.map { it.toDomain() },
+        unlocks = blob.unlocks.map {
+            LotterySenderUnlock(
+                recipientId = it.recipientId,
+                unlockedAtEpochSeconds = it.unlockedAt,
+                selectedOutcome = it.selectedOutcome?.toDomain(),
+            )
+        },
+    )
+}
+
 /** C6 — parse the gallery records back into [MessageMedia.GalleryImage]s; tolerates null/blank. */
 internal fun galleryFromJson(json: String?): List<MessageMedia.GalleryImage> {
     if (json.isNullOrBlank()) return emptyList()
@@ -3311,6 +3470,9 @@ internal fun galleryFromJson(json: String?): List<MessageMedia.GalleryImage> {
             url = url,
             width = parts.getOrNull(1)?.toIntOrNull(),
             height = parts.getOrNull(2)?.toIntOrNull(),
+            // #8/#12 — restore the per-item media kind + poster (3-field legacy records -> image).
+            isVideo = parts.getOrNull(3) == "1",
+            posterUrl = parts.getOrNull(4)?.takeIf { it.isNotBlank() },
         )
     }
 }
@@ -3477,6 +3639,8 @@ internal fun MessageEntity.toDomain(): Message = Message(
                                 ?.let { RevealedMediaItem(url = it, isVideo = revealedMediaIsVideo) },
                         )
                     },
+                    // #15 - restore the sender's lottery sender-view (config + per-recipient results).
+                    lotterySenderView = lotterySenderViewFromJson(lotterySenderViewJson),
                 ),
             )
         } else {
