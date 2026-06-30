@@ -1,5 +1,5 @@
 --- app/services/filemanager.py.bak_r1_1782230504	2026-06-23 16:01:44.081855228 +0000
-+++ app/services/filemanager.py	2026-06-26 01:09:40.997612126 +0000
++++ app/services/filemanager.py	2026-06-30 14:05:54.311607006 +0000
 @@ -479,10 +479,17 @@
      started = time.perf_counter()
      tbl = _table()
@@ -104,7 +104,33 @@
          raise HTTPException(403, "upload ticket mismatch")
      ticket_expiry = _parse_iso(ticket.get("expires_at"))
      if not ticket_expiry or ticket_expiry <= datetime.now(timezone.utc):
-@@ -3324,29 +3366,26 @@
+@@ -2658,6 +2700,14 @@
+     try:
+         obj = _s3.get_object(Bucket=node["s3_bucket"], Key=node["s3_key"])
+     except ClientError as exc:
++        # B-FILECOPY/preview: a node can outlive its S3 object (e.g. a DEV backend
++        # restart wipes the in-process mock S3 but keeps DDB nodes). A missing
++        # object is a 404 (not a 500 server error) so callers/preview degrade
++        # gracefully instead of surfacing an opaque server error.
++        _err = str(exc.response.get("Error", {}).get("Code") or "")
++        _st = int((exc.response.get("ResponseMetadata", {}) or {}).get("HTTPStatusCode") or 0)
++        if _err in ("NoSuchKey", "NoSuchBucket", "404", "NotFound") or _st == 404:
++            raise HTTPException(404, "file content not found") from exc
+         raise HTTPException(500, f"s3 error: {exc}") from exc
+ 
+     tbl = _table()
+@@ -2689,6 +2739,10 @@
+     try:
+         obj = _s3.get_object(Bucket=thumb["bucket"], Key=thumb["key"])
+     except ClientError as exc:
++        _err = str(exc.response.get("Error", {}).get("Code") or "")
++        _st = int((exc.response.get("ResponseMetadata", {}) or {}).get("HTTPStatusCode") or 0)
++        if _err in ("NoSuchKey", "NoSuchBucket", "404", "NotFound") or _st == 404:
++            raise HTTPException(404, "thumbnail content not found") from exc
+         raise HTTPException(500, f"s3 error: {exc}") from exc
+     return {"node": node, "thumbnail": thumb, "object": obj}
+ 
+@@ -3324,29 +3378,26 @@
      if existing_new and allow_existing_dst:
          return "already_moved"
  
@@ -154,7 +180,7 @@
      _delete_token_entries(user, item)
      _put_token_entries(user, new_item)
      _move_shares(owner=user, old_path=old_path, new_path=target)
-@@ -3621,6 +3660,79 @@
+@@ -3621,6 +3672,83 @@
      return {"type": "file", "src": src_p, "dst": dst_p}
  
  
@@ -175,7 +201,11 @@
 +    dst_p = norm_path(dst, is_folder=False)
 +    dst_parent, dst_name = split_parent_name(dst_p)
 +    _ensure_folder_tree(user, dst_parent)
-+    require_not_exists(user, dst_p)
++    # B-FILECOPY: a copy into the SAME directory used to 409 (require_not_exists).
++    # Auto-suffix " (1)", " (2)", ... on collision (same as the b9 dup-filename
++    # upload fix) so a same-dir copy succeeds with a distinct sibling path.
++    dst_p = _b9_unique_upload_path(user, dst_p)
++    dst_parent, dst_name = split_parent_name(dst_p)
 +
 +    new_item = dict(node)
 +    new_item["path"] = dst_p

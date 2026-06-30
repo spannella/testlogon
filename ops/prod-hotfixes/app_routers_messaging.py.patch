@@ -1,5 +1,5 @@
 --- app/routers/messaging.py.bak_b2b3_1782197824	2026-06-23 06:57:04.160143190 +0000
-+++ app/routers/messaging.py	2026-06-29 14:35:15.627507568 +0000
++++ app/routers/messaging.py	2026-06-30 13:59:32.013445025 +0000
 @@ -9,6 +9,11 @@
  import logging
  import os
@@ -1048,7 +1048,18 @@
          normalized_outcomes.append(out)
      config_payload = {"version": payload.lottery_config.version, "outcomes": normalized_outcomes}
  
-@@ -13537,7 +14131,10 @@
+@@ -13500,6 +14094,10 @@
+                             text_content=(str(out.get("text_content") or "") or None),
+                             media_asset_id=(str(out.get("media_asset_id") or "") or None),
+                             media_metadata=(dict(out.get("media_metadata") or {}) or None),
++                            # B-LOT-MEDIA: idempotent replay must echo the same plural
++                            # media lists as the fresh-create branch (do not drop to 1).
++                            media_assets=(list(out.get("media_assets") or []) or None),
++                            media_asset_ids=(list(out.get("media_asset_ids") or []) or None),
+                         )
+                         for out in (existing_cfg.get("outcomes") or [])
+                     ],
+@@ -13537,7 +14135,10 @@
          sender_id=user_id,
          created_at=ts,
          persisted_cfg=persisted_cfg,
@@ -1059,7 +1070,7 @@
      try:
          tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
      except Exception as exc:
-@@ -13581,11 +14178,24 @@
+@@ -13581,11 +14182,24 @@
                      text_content=(str(out.get("text_content") or "") or None),
                      media_asset_id=(str(out.get("media_asset_id") or "") or None),
                      media_metadata=(dict(out.get("media_metadata") or {}) or None),
@@ -1084,7 +1095,7 @@
          idempotent=False,
          created_at=ts,
      )
-@@ -13678,6 +14288,8 @@
+@@ -13678,6 +14292,8 @@
                  payload_type=str(selected.get("payload_type") or "text"),
                  text_content=(str(selected.get("text_content") or "") or None),
                  media_asset_id=(str(selected.get("media_asset_id") or "") or None),
@@ -1093,7 +1104,7 @@
              ),
              unlocked_at=unlocked_at,
          )
-@@ -13729,6 +14341,8 @@
+@@ -13729,6 +14345,8 @@
              payload_type=str(selected_payload.get("payload_type") or "text"),
              text_content=(str(selected_payload.get("text_content") or "") or None),
              media_asset_id=(str(selected_payload.get("media_asset_id") or "") or None),
@@ -1102,7 +1113,18 @@
          ),
          unlocked_at=unlocked_at,
      )
-@@ -13788,6 +14402,8 @@
+@@ -13768,6 +14386,10 @@
+                 payload_type=str(selected.get("payload_type") or "text"),
+                 text_content=(str(selected.get("text_content") or "") or None),
+                 media_asset_id=(str(selected.get("media_asset_id") or "") or None),
++                # B-LOT-MEDIA: echo the FULL media list + real payload_type so a
++                # video/multi-asset winning outcome is not truncated to 1 image.
++                media_assets=_b9_selected_media_lists(selected)[0],
++                media_asset_ids=_b9_selected_media_lists(selected)[1],
+             )
+             lock_state = "unlocked"
+ 
+@@ -13788,6 +14410,8 @@
                      text_content=(str(out.get("text_content") or "") or None),
                      media_asset_id=(str(out.get("media_asset_id") or "") or None),
                      media_metadata=(dict(out.get("media_metadata") or {}) or None),
@@ -1111,7 +1133,7 @@
                  )
                  for out in (cfg.get("outcomes") or [])
              ],
-@@ -13871,20 +14487,203 @@
+@@ -13871,20 +14495,203 @@
      return {"ok": True, "message_id": message_id}
  
  
@@ -1323,7 +1345,7 @@
  
      # Write deferred tip billing now that the message is actually delivered.
      # (Billing was intentionally skipped at schedule time so that cancelling
-@@ -13930,7 +14729,17 @@
+@@ -13930,7 +14737,17 @@
          conversation_id=conversation_id,
          sender_id=user_id,
          message_item=item,
@@ -1342,7 +1364,7 @@
      )
      # Also notify the sender — fanout excludes them by default, but they need
      # to know their scheduled message was promoted so their chat view refreshes.
-@@ -13944,6 +14753,10 @@
+@@ -13944,6 +14761,10 @@
          "payload": {
              "conversation_id": conversation_id,
              "message_id": message_id,
@@ -1353,7 +1375,7 @@
              **({"thread_id": item.get(MESSAGE_FIELD_THREAD_ID)} if item.get(MESSAGE_FIELD_THREAD_ID) else {}),
              "notification_scope": "thread" if item.get(MESSAGE_FIELD_THREAD_ID) else "conversation",
          },
-@@ -14022,12 +14835,77 @@
+@@ -14022,12 +14843,77 @@
          logger.error("Expire stale invites loop error: %s", exc)
  
  
@@ -1432,7 +1454,7 @@
                     description="Delivers scheduled messages and expires timed-out messages")
  
      while True:
-@@ -14065,6 +14943,30 @@
+@@ -14065,6 +14951,30 @@
              )
              for item in resp.get("Items", []):
                  try:
@@ -1463,7 +1485,7 @@
                      tbl_msgs.update_item(
                          Key={
                              "conversation_id": item["conversation_id"],
-@@ -14102,6 +15004,13 @@
+@@ -14102,6 +15012,13 @@
          # C) Expire stale call invites (server-side ringing timeout backstop)
          await _expire_stale_invites()
  
@@ -1477,7 +1499,7 @@
          _dur = (_time.perf_counter() - _start) * 1000
          if _loop_error:
              report_error("scheduled_messages", "Loop iteration error")
-@@ -14109,7 +15018,7 @@
+@@ -14109,7 +15026,7 @@
              report_poll("scheduled_messages", items_processed=_processed,
                          items_failed=_failed, duration_ms=_dur)
  

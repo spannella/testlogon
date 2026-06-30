@@ -200,3 +200,17 @@ Backend code hotfixes (regenerated vs each file's pristine .bak):
 
 No change needed (verified): ticket video/pdf attach (#2/#3 — backend accepts any content-type; the
 crash was app-side Moshi), Go Live manage/stop/playback (#7 — batch-10 infra).
+
+## Batch-12 additions (2026-06-30) — regression fixes
+
+- `app_routers_messaging.py.patch` — B-LOT-MEDIA: lottery READ projections now include the full
+  media_assets/media_asset_ids per outcome (get_lottery_message.selected_outcome + the idempotent-
+  replay branch) so a per-option video / multi-media no longer collapses to one image on readback.
+- `app_routers_tickets.py.patch` — B-HELP-SHAPE: typed TicketMediaOut (size_bytes/width/height int),
+  TicketMessage.media: list[dict]->list[TicketMediaOut]. Fixes Decimal-in-untyped-dict serializing as
+  a JSON STRING which broke the app's Moshi parse -> emptied the whole ticket list + broke close/detail.
+- `app_services_filemanager.py.patch` — B-FILECOPY: same-dir copy auto-suffixes "(1)" (no more 409);
+  download/preview maps S3 NoSuchKey/NoSuchBucket -> 404 (was 500 for stale-object nodes).
+
+No backend change needed (verified): B-LOT-PRESIGN (images/presign already honors video content_type),
+B-SCHED-RT (delivered scheduled msg already re-keyed to fresh created_at + emitted on realtime).
