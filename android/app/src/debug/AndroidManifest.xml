@@ -7,5 +7,24 @@
             android:name="com.testlogon.android.HiltTestActivity"
             android:exported="false"
             android:theme="@style/Theme.TestLogon" />
+
+        <!-- TEST SEAM (debug only). Exposes bundled sample media as content:// URIs.
+             ${applicationId} -> com.testlogon.android, authority = ...testmedia. -->
+        <provider
+            android:name="com.testlogon.android.testseam.TestMediaProvider"
+            android:authorities="${applicationId}.testmedia"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <!-- TEST SEAM (debug only). Arms the picker interceptor from the host via adb broadcast.
+             exported so `adb shell am broadcast` can reach it. Harmless: arming is inert unless the
+             runtime gate debug.testlogon.testhooks==1 is set. -->
+        <receiver
+            android:name="com.testlogon.android.testseam.TestPickArmReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.testlogon.test.PICK" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

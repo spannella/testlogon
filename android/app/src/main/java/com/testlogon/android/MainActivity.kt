@@ -32,6 +32,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import com.testlogon.android.testseam.TestHooks
 import androidx.compose.runtime.mutableStateOf
 import com.testlogon.android.feature.player.ActivityPipController
 import com.testlogon.android.feature.player.LocalPipController
@@ -134,7 +137,12 @@ class MainActivity : FragmentActivity() {
                 // automation (Maestro feature-demo capture, instrumented device tests) can target
                 // every tagged node by id. Recommended by Google for production UI automation; no
                 // runtime behaviour change beyond the semantics tree.
+                // TEST SEAM (debug-only): if TestHooks supplies an intercepting
+                // ActivityResultRegistryOwner, provide it so every rememberLauncherForActivityResult
+                // (all media-pick sites) routes through it. Release/no-op -> null -> default owner.
+                val testRegistryOwner = TestHooks.registryOwner(this@MainActivity)
                 @OptIn(ExperimentalComposeUiApi::class)
+                val pipContent = @Composable {
                 CompositionLocalProvider(LocalPipController provides pipController) {
                 Surface(
                     modifier = Modifier
@@ -157,6 +165,14 @@ class MainActivity : FragmentActivity() {
                         )
                     }
                 }
+                }
+                }
+                if (testRegistryOwner != null) {
+                    CompositionLocalProvider(LocalActivityResultRegistryOwner provides testRegistryOwner) {
+                        pipContent()
+                    }
+                } else {
+                    pipContent()
                 }
             }
         }
