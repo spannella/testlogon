@@ -38,6 +38,12 @@ import com.testlogon.android.testseam.TestHooks
 import androidx.compose.runtime.mutableStateOf
 import com.testlogon.android.feature.player.ActivityPipController
 import com.testlogon.android.feature.player.LocalPipController
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.ui.PlayerView
+import androidx.media3.common.util.UnstableApi
 import com.testlogon.android.feature.health.HealthBannerHost
 import com.testlogon.android.navigation.AppNavHost
 import com.testlogon.android.navigation.applink.DeepLinkRouter
@@ -103,6 +109,7 @@ class MainActivity : FragmentActivity() {
 
     private val returnScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    @OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -149,6 +156,29 @@ class MainActivity : FragmentActivity() {
                         .fillMaxSize()
                         .semantics { testTagsAsResourceId = true },
                 ) {
+                    // FAIL #7/#8 — when the system puts us in Picture-in-Picture, collapse the WHOLE
+                    // Activity content to a video-ONLY surface bound to the currently-active player so
+                    // the floating window shows the VIDEO (not the messaging thread / news feed behind
+                    // an inline player). This mirrors the VOD detail player, whose PlayerView already
+                    // fills the window. Outside PiP we render the normal app shell.
+                    val activePlayer = pipController.pipPlayerState.value
+                    if (inPipMode.value && activePlayer != null) {
+                        Box(Modifier.fillMaxSize().background(Color.Black)) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { ctx ->
+                                    PlayerView(ctx).apply {
+                                        useController = false
+                                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                                        player = activePlayer
+                                    }
+                                },
+                                update = { it.player = activePlayer },
+                                onReset = { it.player = null },
+                                onRelease = { it.player = null },
+                            )
+                        }
+                    } else {
                     Column(Modifier.fillMaxSize()) {
                         // AND-042: a single global health banner above all app content.
                         HealthBannerHost(modifier = Modifier.fillMaxWidth())
@@ -163,6 +193,7 @@ class MainActivity : FragmentActivity() {
                                 routePendingNotificationDeepLink()
                             },
                         )
+                    }
                     }
                 }
                 }
@@ -199,6 +230,9 @@ class MainActivity : FragmentActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         inPipMode.value = isInPictureInPictureMode
+        // FAIL #7/#8 — release the stable PiP snapshot + latch when leaving PiP so normal disposal
+        // resumes; on enter, keep the snapshot captured at enterPip() time.
+        pipController.onPipModeChanged(isInPictureInPictureMode)
     }
 
     /**

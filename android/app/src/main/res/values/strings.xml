@@ -2838,6 +2838,8 @@
     <string name="kyc_cases_empty_title">No verification cases yet</string>
     <string name="kyc_cases_empty_body">Start identity verification to open your first case.</string>
     <string name="kyc_cases_start_verification">Start verification</string>
+    <string name="kyc_cases_continue_verification">Start / Continue verification</string>
+    <string name="kyc_cases_verify_prompt">Continue your identity verification</string>
     <string name="kyc_case_status_heading">Status</string>
     <string name="kyc_case_reason_codes_heading">Reasons</string>
     <string name="kyc_case_reverify">Re-verify</string>
@@ -2938,6 +2940,17 @@
     <string name="files_copy_banner">Copying “%1$s” — tap a folder, then Copy here</string>
     <string name="files_move_here">Move here</string>
     <string name="files_copy_here">Copy here</string>
+    <!-- B13 KYC/Files: CRUD outcome toasts so file ops (incl. same-dir copy) are never silent. -->
+    <string name="files_crud_copy_ok">File copied</string>
+    <string name="files_crud_copy_failed">Couldn\'t copy the file. Try again.</string>
+    <string name="files_crud_move_ok">File moved</string>
+    <string name="files_crud_move_failed">Couldn\'t move the file. Try again.</string>
+    <string name="files_crud_rename_ok">Renamed</string>
+    <string name="files_crud_rename_failed">Couldn\'t rename. Try again.</string>
+    <string name="files_crud_delete_ok">Deleted</string>
+    <string name="files_crud_delete_failed">Couldn\'t delete. Try again.</string>
+    <string name="files_crud_create_folder_ok">Folder created</string>
+    <string name="files_crud_create_folder_failed">Couldn\'t create the folder. Try again.</string>
     <string name="files_transfer_destination">Destination: %1$s</string>
     <string name="files_row_menu_cd">More actions for %1$s</string>
 

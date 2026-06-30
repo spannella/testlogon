@@ -115,23 +115,29 @@ fun InlineVideoPlayer(
             // #8 — register inline HLS playback as the active video for system PiP auto-enter.
             val pip = com.testlogon.android.feature.player.LocalPipController.current
             DisposableEffect(player) {
-                pip.setVideoActive(true)
-                onDispose { pip.setVideoActive(false) }
+                // FAIL #7/#8 — register THIS ExoPlayer so an auto-enter PiP (Home) collapses to the
+                // video, not the thread.
+                pip.setVideoActive(true, player, 16, 9)
+                onDispose { pip.setVideoActive(false, player) }
             }
             // Pause on ON_PAUSE; release on dispose / ON_STOP (lifecycle-scoped, not a singleton).
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner, player) {
                 val observer = LifecycleEventObserver { _, event ->
                     when (event) {
-                        Lifecycle.Event.ON_PAUSE -> player.pause()
-                        Lifecycle.Event.ON_STOP -> player.playWhenReady = false
+                        // FAIL #7/#8 — keep playing while entering/in PiP (the floating window IS the
+                        // video). pip.enteringPip is set before onPause fires on Home->PiP.
+                        Lifecycle.Event.ON_PAUSE -> if (!pip.isPipRetained(player)) player.pause()
+                        Lifecycle.Event.ON_STOP -> if (!pip.isPipRetained(player)) { player.playWhenReady = false }
                         else -> Unit
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose {
                     lifecycleOwner.lifecycle.removeObserver(observer)
-                    player.release()
+                    // FAIL #7/#8 — if this player is retained for the PiP window, the controller owns
+                    // its release (on PiP exit); releasing here would blank the floating video.
+                    if (pip.isPipRetained(player)) pip.deferPipRelease(player) else player.release()
                 }
             }
 
@@ -400,22 +406,27 @@ private fun ClipExoPlayer(
     // (and offer an explicit PiP control below). Cleared on dispose.
     val pip = com.testlogon.android.feature.player.LocalPipController.current
     DisposableEffect(player) {
-        pip.setVideoActive(true)
-        onDispose { pip.setVideoActive(false) }
+        // FAIL #7/#8 — register THIS player as the active PiP video so both the explicit PiP control
+        // below and an auto-enter on Home collapse the floating window to the VIDEO (not the
+        // messaging thread / news feed that hosts this inline player).
+        pip.setVideoActive(true, player, 16, 9)
+        onDispose { pip.setVideoActive(false, player) }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_PAUSE -> player.pause()
-                Lifecycle.Event.ON_STOP -> player.playWhenReady = false
+                // FAIL #7/#8 — keep playing while entering/in PiP.
+                Lifecycle.Event.ON_PAUSE -> if (!pip.isPipRetained(player)) player.pause()
+                Lifecycle.Event.ON_STOP -> if (!pip.isPipRetained(player)) { player.playWhenReady = false }
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            player.release()
+            // FAIL #7/#8 — skip release while this player is shown in PiP (controller releases on exit).
+            if (pip.isPipRetained(player)) pip.deferPipRelease(player) else player.release()
         }
     }
     Box(modifier = modifier, contentAlignment = Alignment.TopEnd) {
@@ -425,7 +436,7 @@ private fun ClipExoPlayer(
         )
         if (pip.isPipSupported) {
             IconButton(
-                onClick = { pip.enterPip(16, 9) },
+                onClick = { pip.enterPipWith(player, 16, 9) },
                 modifier = Modifier
                     .padding(4.dp)
                     .size(36.dp)

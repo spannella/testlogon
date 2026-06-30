@@ -113,8 +113,9 @@ fun VideoPlayer(
     // playing so the Activity can auto-enter PiP on Home; the PiP control enters on demand.
     val pipController = LocalPipController.current
     DisposableEffect(uiState.isPlaying) {
-        pipController.setVideoActive(uiState.isPlaying)
-        onDispose { pipController.setVideoActive(false) }
+        // FAIL #7/#8 — register the controller's player so PiP (auto or explicit) shows the video.
+        pipController.setVideoActive(uiState.isPlaying, controller.player())
+        onDispose { pipController.setVideoActive(false, controller.player()) }
     }
 
     // Pause on ON_STOP; unbind the surface on dispose (player release is the controller owner's job).
@@ -171,7 +172,7 @@ fun VideoPlayer(
                 onSkip = { controller.skipBy(it) },
                 onSeek = { controller.seekTo(it) },
                 onFullscreenToggle = { onFullscreenToggle(!isFullscreen) },
-                onEnterPip = { pipController.enterPip() },
+                onEnterPip = { pipController.enterPipWith(controller.player()) },
             )
         }
 

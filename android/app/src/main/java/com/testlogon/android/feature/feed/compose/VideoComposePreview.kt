@@ -135,19 +135,22 @@ fun LocalVideoFullScreenPlayer(uri: String, onDismiss: () -> Unit) {
             // #8 — register feed video playback as the active video for system PiP auto-enter on Home.
             val pip = com.testlogon.android.feature.player.LocalPipController.current
             DisposableEffect(player) {
-                pip.setVideoActive(true)
-                onDispose { pip.setVideoActive(false) }
+                // FAIL #8 — register THIS player so PiP (explicit control or Home auto-enter) shows
+                // the VIDEO, not the news feed behind this player.
+                pip.setVideoActive(true, player, 16, 9)
+                onDispose { pip.setVideoActive(false, player) }
             }
             DisposableEffect(owner, player) {
                 val obs = LifecycleEventObserver { _, e ->
                     when (e) {
-                        Lifecycle.Event.ON_PAUSE -> player.pause()
-                        Lifecycle.Event.ON_STOP -> player.playWhenReady = false
+                        // FAIL #8 — keep playing while entering/in PiP.
+                        Lifecycle.Event.ON_PAUSE -> if (!pip.isPipRetained(player)) player.pause()
+                        Lifecycle.Event.ON_STOP -> if (!pip.isPipRetained(player)) { player.playWhenReady = false }
                         else -> Unit
                     }
                 }
                 owner.lifecycle.addObserver(obs)
-                onDispose { owner.lifecycle.removeObserver(obs); player.release() }
+                onDispose { owner.lifecycle.removeObserver(obs); if (pip.isPipRetained(player)) pip.deferPipRelease(player) else player.release() }
             }
             AndroidView(
                 factory = { c -> PlayerView(c).apply { this.player = player; useController = true } },
@@ -159,7 +162,7 @@ fun LocalVideoFullScreenPlayer(uri: String, onDismiss: () -> Unit) {
             ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
             if (pip.isPipSupported) {
                 IconButton(
-                    onClick = { pip.enterPip(16, 9) },
+                    onClick = { pip.enterPipWith(player, 16, 9) },
                     modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).testTag("feed_video_pip"),
                 ) {
                     Icon(

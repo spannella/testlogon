@@ -278,8 +278,13 @@ fun FilesRoute(
             when (event) {
                 com.testlogon.android.feature.files.presentation.FilesEvent.NavigateUp -> onBack()
                 is com.testlogon.android.feature.files.presentation.FilesEvent.OpenFile -> onOpenFile(event.path)
-                // AND-337 - CRUD outcome events are surfaced by a later UI ticket; ignored here for now.
-                is com.testlogon.android.feature.files.presentation.FilesEvent.CrudMessage -> Unit
+                // B13 - surface CRUD outcomes (incl. same-dir copy) so file ops are never silent.
+                is com.testlogon.android.feature.files.presentation.FilesEvent.CrudMessage ->
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(crudMessageRes(event.kind, event.success)),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
             }
         }
     }
@@ -1143,6 +1148,29 @@ private fun SortOption(label: String, selected: Boolean, onClick: () -> Unit) {
             .heightIn(min = 48.dp)
             .clickable(onClick = onClick),
     )
+}
+
+/**
+ * B13 - maps a [CrudKind] + success flag to a localized toast string so every file op (create / rename /
+ * delete / move / COPY) gives the user clear feedback. Same-dir copy lands here as COPY+success once the
+ * backend auto-suffix ((1)) creates the duplicate.
+ */
+private fun crudMessageRes(
+    kind: com.testlogon.android.feature.files.presentation.CrudKind,
+    success: Boolean,
+): Int = when (kind) {
+    com.testlogon.android.feature.files.presentation.CrudKind.COPY ->
+        if (success) R.string.files_crud_copy_ok else R.string.files_crud_copy_failed
+    com.testlogon.android.feature.files.presentation.CrudKind.MOVE,
+    com.testlogon.android.feature.files.presentation.CrudKind.MOVE_BATCH ->
+        if (success) R.string.files_crud_move_ok else R.string.files_crud_move_failed
+    com.testlogon.android.feature.files.presentation.CrudKind.RENAME ->
+        if (success) R.string.files_crud_rename_ok else R.string.files_crud_rename_failed
+    com.testlogon.android.feature.files.presentation.CrudKind.DELETE,
+    com.testlogon.android.feature.files.presentation.CrudKind.DELETE_BATCH ->
+        if (success) R.string.files_crud_delete_ok else R.string.files_crud_delete_failed
+    com.testlogon.android.feature.files.presentation.CrudKind.CREATE_FOLDER ->
+        if (success) R.string.files_crud_create_folder_ok else R.string.files_crud_create_folder_failed
 }
 
 /** Relative-time copy from a nullable [Instant] (minSdk24-safe; not used in JVM unit tests). */

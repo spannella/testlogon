@@ -12,8 +12,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -40,6 +45,38 @@ class DashboardViewModel @Inject constructor(
     init {
         load(fromUser = false)
         loadViewer()
+        observeConnectivityRecovery()
+    }
+
+    /**
+     * FAIL-10 — clear a sticky offline banner on its own when connectivity returns.
+     *
+     * The offline/stale banner is reduced from a FAILED load and was only cleared by a subsequent
+     * SUCCESSFUL load; without this, going offline then back online left it latched until the user
+     * manually pulled-to-refresh (or restarted). Observing a transport/health "online" edge proved
+     * unreliable here (a short offline window may never flip the backend-health signal, and a per-VM
+     * connectivity callback did not always receive the edge), so instead, whenever we ENTER an offline
+     * surface we run a self-correcting low-frequency retry loop: re-attempt the load every
+     * [RECOVERY_RETRY_MS] until it succeeds (which clears isStale -> hides the banner) or the surface
+     * is no longer offline. The loop is cancelled/superseded by [collectLatest]-style restart on each
+     * offline-state change, so a transient that briefly fails then recovers self-heals, and a steady
+     * online state runs no loop at all.
+     */
+    private fun observeConnectivityRecovery() {
+        viewModelScope.launch {
+            uiState
+                .map { it.isShowingOffline }
+                .distinctUntilChanged()
+                .collectLatest { offline ->
+                    if (!offline) return@collectLatest
+                    // Retry until we leave the offline surface. collectLatest cancels this block the
+                    // moment offline flips false, and load()'s own de-dup guard ignores overlaps.
+                    while (isActive && _uiState.value.isShowingOffline) {
+                        delay(RECOVERY_RETRY_MS)
+                        if (!_uiState.value.isRefreshing) load(fromUser = false)
+                    }
+                }
+        }
     }
 
     /** ID15 - fetch the signed-in user's own profile for the greeting avatar (name + photo). */
@@ -93,10 +130,19 @@ class DashboardViewModel @Inject constructor(
     private companion object {
         const val OFFLINE_MESSAGE_FALLBACK =
             "Couldn't reach the server. Pull down to retry."
+        const val RECOVERY_RETRY_MS = 4_000L
     }
 }
 
 // ---- Pure reducers (dispatcher-free, unit-testable in isolation) ----
+
+/**
+ * True while the dashboard is showing an OFFLINE surface (stale cache banner or a hard Error
+ * with no cache). Empty is a successful-but-empty load and is intentionally NOT offline.
+ */
+internal val DashboardUiState.isShowingOffline: Boolean
+    get() = isStale || phase == DashboardUiState.Phase.Error
+
 
 internal fun DashboardUiState.startLoad(fromUser: Boolean): DashboardUiState {
     val hasContent = dashboard != null

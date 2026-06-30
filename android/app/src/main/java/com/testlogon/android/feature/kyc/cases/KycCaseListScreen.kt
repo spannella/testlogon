@@ -54,6 +54,9 @@ object KycCaseListTestTags {
     const val EMPTY = "kyc_case_empty"
     const val RETRY = "kyc_case_retry"
 
+    /** The always-visible "Start / Continue verification" CTA shown above the case list. */
+    const val START_VERIFICATION = "kyc_cases_start_verification"
+
     /** Per-case row tag, suffixed by the case id. */
     fun row(caseId: String): String = "kyc_case_row_$caseId"
 }
@@ -152,6 +155,9 @@ private fun ContentBody(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item(key = "start_verification_cta") {
+                StartVerificationCta(onStartVerification = onStartVerification)
+            }
             if (state.monitoring.active) {
                 item(key = "monitoring") {
                     MonitoringBanner(
@@ -171,6 +177,32 @@ private fun ContentBody(
             }
             items(state.cases, key = { it.caseId }) { case ->
                 CaseRow(case = case, onOpenCase = onOpenCase)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StartVerificationCta(onStartVerification: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(R.string.kyc_cases_verify_prompt),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Button(
+                onClick = onStartVerification,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(KycCaseListTestTags.START_VERIFICATION),
+            ) {
+                Text(stringResource(R.string.kyc_cases_continue_verification))
             }
         }
     }
@@ -288,9 +320,11 @@ private fun EmptyBody(monitoring: MonitoringState, onStartVerification: () -> Un
         )
         Button(
             onClick = onStartVerification,
-            modifier = Modifier.heightIn(min = 48.dp),
+            modifier = Modifier
+                .heightIn(min = 48.dp)
+                .testTag(KycCaseListTestTags.START_VERIFICATION),
         ) {
-            Text(stringResource(R.string.kyc_cases_start_verification))
+            Text(stringResource(R.string.kyc_cases_continue_verification))
         }
     }
 }

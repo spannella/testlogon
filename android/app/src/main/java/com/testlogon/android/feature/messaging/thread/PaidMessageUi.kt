@@ -35,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -765,11 +766,25 @@ fun LotterySenderDetail(
                                             modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
                                         )
                                     } else {
+                                        // FAIL-2: a video option asset shows a play-badged tile (was a
+                                        // blank box) so the sender can see the option carries a video.
                                         Surface(
                                             color = MaterialTheme.colorScheme.surfaceVariant,
                                             shape = RoundedCornerShape(8.dp),
                                             modifier = Modifier.size(40.dp),
-                                        ) { Box(Modifier.fillMaxWidth()) }
+                                        ) {
+                                            Box(
+                                                Modifier.fillMaxWidth(),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.PlayArrow,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(22.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }

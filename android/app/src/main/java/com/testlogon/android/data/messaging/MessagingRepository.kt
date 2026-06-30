@@ -2918,10 +2918,17 @@ class MessagingRepositoryImpl @Inject constructor(
         val sizeBytes: Long
         val name: String
         if (isVideo) {
+            // FAIL-1 fix: a video option MUST upload with its REAL byte size. Previously sizeBytes
+            // was hardcoded to 0L, so ProgressRequestBody.contentLength() declared Content-Length: 0
+            // while writeTo() streamed the full clip -> OkHttp threw a Content-Length mismatch on the
+            // PUT -> uploadLotteryOptionMedia returned null -> the ViewModel DEMOTED the option to
+            // text ("Prize"), dropping every video. Resolve the size/mime from the content uri the
+            // same way the working video-share path (sendVideoClipOutbox) does.
             uploadUri = Uri.parse(localUri)
-            mime = "video/mp4"
-            sizeBytes = 0L
-            name = uploadUri.lastPathSegment ?: "clip.mp4"
+            val info = uriMetadata.resolve(uploadUri, fallbackMime = "video/mp4")
+            mime = info.mimeType
+            sizeBytes = info.sizeBytes
+            name = info.displayName ?: uploadUri.lastPathSegment ?: "clip.mp4"
         } else {
             val processed = imageProcessor.process(Uri.parse(localUri)) ?: return@withContext null
             uploadUri = processed.uri

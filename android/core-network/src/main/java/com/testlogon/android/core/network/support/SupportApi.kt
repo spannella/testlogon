@@ -2,6 +2,8 @@ package com.testlogon.android.core.network.support
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.testlogon.android.core.network.json.LenientInt
+import com.testlogon.android.core.network.json.LenientLong
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -134,9 +136,9 @@ data class SupportTicketMediaDto(
     @Json(name = "path") val path: String? = null,
     @Json(name = "name") val name: String? = null,
     @Json(name = "content_type") val contentType: String? = null,
-    @Json(name = "size_bytes") val sizeBytes: Long? = null,
-    @Json(name = "width") val width: Int? = null,
-    @Json(name = "height") val height: Int? = null,
+    @LenientLong @Json(name = "size_bytes") val sizeBytes: Long? = null,
+    @LenientInt @Json(name = "width") val width: Int? = null,
+    @LenientInt @Json(name = "height") val height: Int? = null,
     /** Server-resolved (file_ref) preview/thumbnail URL, when present. */
     @Json(name = "thumbnail") val thumbnail: String? = null,
 )

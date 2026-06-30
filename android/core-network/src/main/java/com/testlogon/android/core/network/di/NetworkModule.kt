@@ -6,6 +6,7 @@ import com.testlogon.android.core.network.BuildConfig
 import com.testlogon.android.core.network.ads.AdAccountStatusAdapter
 import com.testlogon.android.core.network.ads.AdCampaignStatusAdapter
 import com.testlogon.android.core.network.json.BigDecimalAdapter
+import com.testlogon.android.core.network.json.LenientNumberAdapters
 import com.testlogon.android.core.network.kyc.KycCaseStatusAdapter
 import com.testlogon.android.core.network.kyc.KycFileTypeAdapter
 import com.testlogon.android.core.network.signing.PacketRoleAdapter
@@ -53,6 +54,10 @@ object NetworkModule {
         // AND-218: BigDecimal mapping for the purchases transaction `amount` (no built-in adapter).
         // Registered before the reflective factory so it wins for BigDecimal-typed fields.
         .add(BigDecimalAdapter)
+        // Helpdesk FAIL #3/#4 (B-HELP-SHAPE): lenient Long?/Int? for the support-ticket media
+        // numeric fields (size_bytes/width/height) so a stringified number never throws and empties
+        // the whole ticket list / breaks the close-ticket envelope. Registered before the reflective factory.
+        .add(LenientNumberAdapters)
         // AND-319: KYC enum token mapping (lenient -> UNKNOWN). Registered before the reflective
         // factory so they resolve for KycCaseStatus / KycFileType fields on the KYC DTOs.
         .add(KycCaseStatusAdapter)
