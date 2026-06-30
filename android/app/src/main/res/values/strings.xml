@@ -165,6 +165,12 @@
     <string name="settings_section_alerts_subtitle">Manage email and SMS alert targets</string>
     <string name="settings_section_media_title">Media</string>
     <string name="settings_section_media_subtitle">Call audio, video and quality</string>
+    <string name="settings_section_emojis_title">Custom emojis</string>
+    <string name="settings_section_emojis_subtitle">Upload and manage your personal emojis</string>
+    <string name="settings_section_geo_title">Geo-blocking</string>
+    <string name="settings_section_geo_subtitle">Region rules and dry-run check</string>
+    <string name="settings_section_call_rate_title">Call rate</string>
+    <string name="settings_section_call_rate_subtitle">Your per-minute paid-call rate</string>
     <string name="settings_section_appearance_title">Appearance</string>
     <string name="settings_section_appearance_subtitle">Theme and dynamic color</string>
     <!-- AND-114: in-app language picker entry -->
@@ -2474,6 +2480,30 @@
 
     <!-- AND-316 — host ad-break / ad-config surface -->
     <string name="host_control_manage_ads">Ads</string>
+    <string name="host_control_manage_qa">Live Q&amp;A</string>
+    <!-- Live Q&A host console (web LiveQaPage host view) -->
+    <string name="live_qa_host_title">Live Q&amp;A</string>
+    <string name="live_qa_host_back_cd">Back</string>
+    <string name="live_qa_host_mode_label">Q&amp;A mode</string>
+    <string name="live_qa_host_mode_on">Collecting audience questions.</string>
+    <string name="live_qa_host_mode_off">Turn on to collect audience questions.</string>
+    <string name="live_qa_host_disabled_title">Q&amp;A is off</string>
+    <string name="live_qa_host_disabled_body">Turn on Q&amp;A mode to collect questions from your audience.</string>
+    <string name="live_qa_host_empty_title">No questions</string>
+    <string name="live_qa_host_empty_body">Questions in this queue will appear here.</string>
+    <string name="live_qa_host_stats_title">Engagement</string>
+    <string name="live_qa_host_stats_line">%1$d total · %2$d pending · %3$d answered · %4$d featured</string>
+    <string name="live_qa_host_stats_line2">%1$d upvotes · %2$.0f%% answer rate</string>
+    <string name="live_qa_host_filter_pending">Pending</string>
+    <string name="live_qa_host_filter_featured">Featured</string>
+    <string name="live_qa_host_filter_answered">Answered</string>
+    <string name="live_qa_host_votes">%1$d</string>
+    <string name="live_qa_host_action_feature">Feature</string>
+    <string name="live_qa_host_action_answer">Mark answered</string>
+    <string name="live_qa_host_action_dismiss">Dismiss</string>
+    <string name="live_qa_host_action_pin">Pin</string>
+    <string name="live_qa_host_action_unpin">Unpin</string>
+    <string name="live_qa_host_action_remove">Remove</string>
     <string name="ads_title">Ads</string>
     <string name="ads_back_cd">Back</string>
     <string name="ads_error_title">Couldn\'t load ad settings</string>
@@ -3765,6 +3795,24 @@
 
     <!-- B-APIKEY (batch 7): developer API keys (More -> Account / Security). -->
     <string name="more_entry_api_keys">API keys</string>
+    <string name="more_entry_questionnaire_builder">Questionnaire builder</string>
+    <string name="more_entry_custom_emojis">Custom emojis</string>
+    <string name="more_entry_geo_rules">Geo-blocking</string>
+    <string name="more_entry_call_rate">Call rate</string>
+    <string name="more_entry_vod_rentals">My rentals</string>
+    <!-- VOD rentals ("My Rentals" list; web VodRentalsPage parity) -->
+    <string name="vod_rentals_title">My Rentals</string>
+    <string name="vod_rentals_back_cd">Back</string>
+    <string name="vod_rentals_empty_title">No rentals yet</string>
+    <string name="vod_rentals_empty_body">Rent a video to watch it within a limited window or once.</string>
+    <string name="vod_rentals_tier_rental">Rental</string>
+    <string name="vod_rentals_tier_view_once">View once</string>
+    <string name="vod_rentals_tier_price">%1$s · $%2$.2f</string>
+    <string name="vod_rentals_expires_in">Expires in %1$s</string>
+    <string name="vod_rentals_ready">Ready to play</string>
+    <string name="vod_rentals_views_left">%1$d view left</string>
+    <string name="vod_rentals_expired">Expired</string>
+    <string name="vod_rentals_watched">Watched</string>
     <string name="api_keys_back">Back</string>
     <string name="api_keys_list_title">API keys</string>
     <string name="api_keys_empty_title">No API keys yet</string>
@@ -4151,4 +4199,66 @@
     <string name="wallet_transactions_empty_title">No transactions yet</string>
     <string name="wallet_transactions_empty_body">Your wallet activity &#8212; deposits, charges, payouts and credits &#8212; will show up here.</string>
     <string name="wallet_transactions_default_reason">Transaction</string>
+    <!-- Web-parity: My Bundles (syndicate bundle subscriptions). -->
+    <string name="more_entry_my_bundles">My Bundles</string>
+    <string name="my_bundles_title">My Bundles</string>
+    <string name="my_bundles_back">Back</string>
+    <string name="my_bundles_empty_title">No active bundles</string>
+    <string name="my_bundles_empty_body">Browse syndicates to find bundles you can subscribe to.</string>
+    <string name="my_bundles_price">%1$s/%2$s</string>
+    <string name="my_bundles_period">Current period: %1$s &#8211; %2$s</string>
+    <string name="my_bundles_included_creators">Included creators</string>
+    <string name="my_bundles_cancel">Cancel</string>
+    <string name="my_bundles_cancel_title">Cancel bundle subscription</string>
+    <string name="my_bundles_cancel_body">Your access will continue until the end of your current period.</string>
+    <string name="my_bundles_cancel_body_dated">Your access will continue until the end of your current period (%1$s).</string>
+    <string name="my_bundles_cancel_confirm">Confirm cancel</string>
+    <string name="my_bundles_cancel_keep">Keep subscription</string>
+
+    <!-- Web-parity: syndicate-advertising campaign detail. -->
+    <string name="more_entry_syndicate_campaign">Syndicate Campaign</string>
+    <string name="campaign_detail_title">Campaign</string>
+    <string name="campaign_back">Back</string>
+    <string name="campaign_stat_impressions">Impressions</string>
+    <string name="campaign_stat_clicks">Clicks</string>
+    <string name="campaign_stat_ctr">CTR</string>
+    <string name="campaign_stat_spend">Spend</string>
+    <string name="campaign_section_daily">Daily analytics</string>
+    <string name="campaign_no_analytics">No analytics data yet.</string>
+    <string name="campaign_daily_impr">%1$d impr</string>
+    <string name="campaign_daily_clicks">%1$d clicks</string>
+    <string name="campaign_section_creative">Creative</string>
+    <string name="campaign_cta">CTA: %1$s &#8594; %2$s</string>
+    <string name="campaign_section_budget">Budget</string>
+    <string name="campaign_budget_spent_of">%1$s spent of %2$s</string>
+    <string name="campaign_budget_remaining">%1$s remaining</string>
+    <string name="campaign_add_budget_label">Add budget (USD)</string>
+    <string name="campaign_add_budget">Add budget</string>
+    <string name="campaign_pause">Pause</string>
+    <string name="campaign_resume">Resume</string>
+    <string name="campaign_cancel">Cancel</string>
+
+    <!-- Web-parity: delegation-API keys (/delegation-api). -->
+    <string name="more_entry_delegation_keys">Delegation API Keys</string>
+    <string name="delegation_keys_title">Delegation API Keys</string>
+    <string name="delegation_keys_back">Back</string>
+    <string name="delegation_keys_tab_mine">My API Keys</string>
+    <string name="delegation_keys_tab_creator">Keys For My Account</string>
+    <string name="delegation_keys_empty_mine">No API keys yet.</string>
+    <string name="delegation_keys_empty_creator">No keys are scoped to your account.</string>
+    <string name="delegation_keys_status_creator">%1$s &#8226; Creator: %2$s</string>
+    <string name="delegation_keys_meta">Prefix %1$s &#8226; %2$d calls &#8226; limit %3$d/min</string>
+    <string name="delegation_keys_revoke">Revoke key</string>
+    <string name="delegation_keys_create_title">Create delegation API key</string>
+    <string name="delegation_keys_create_label_field">Label</string>
+    <string name="delegation_keys_creator">Creator</string>
+    <string name="delegation_keys_select_creator">Select a managed creator</string>
+    <string name="delegation_keys_permissions">Permissions</string>
+    <string name="delegation_keys_create_submit">Create key</string>
+    <string name="delegation_keys_create_cancel">Cancel</string>
+    <string name="delegation_keys_secret_title">Copy your new API key now</string>
+    <string name="delegation_keys_secret_warning">This secret is shown once and cannot be retrieved again. Store it securely.</string>
+    <string name="delegation_keys_secret_copy">Copy</string>
+    <string name="delegation_keys_secret_copied">Copied</string>
+    <string name="delegation_keys_secret_done">Done</string>
 </resources>

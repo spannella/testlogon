@@ -107,6 +107,7 @@ object HostControlTestTags {
 
     /** AND-316 — opens the ad-break / ad-config surface. */
     const val MANAGE_ADS = "host_manage_ads"
+    const val MANAGE_QA = "host_manage_qa"
 
     /** #7c — the live self-view PIP of the host's own camera while managing. */
     const val SELF_VIEW = "host_self_view"
@@ -135,6 +136,7 @@ fun HostControlRoute(
     onPrivateShows: () -> Unit = {},
     // AND-316 — open the ad-break / ad-config surface for this session.
     onManageAds: () -> Unit = {},
+    onManageQa: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -160,6 +162,7 @@ fun HostControlRoute(
         onManageTips = onManageTips,
         onPrivateShows = onPrivateShows,
         onManageAds = onManageAds,
+        onManageQa = onManageQa,
         onBack = onBack,
     )
 }
@@ -199,6 +202,7 @@ fun HostControlScreen(
     onPrivateShows: () -> Unit = {},
     // AND-316 — open the ad-break / ad-config surface; defaulted so existing call sites/tests are unaffected.
     onManageAds: () -> Unit = {},
+    onManageQa: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -346,6 +350,18 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.MANAGE_ADS),
             ) {
                 Text(stringResource(R.string.host_control_manage_ads))
+            }
+
+            // Live Q&A host console: toggle Q&A mode, moderate the question queue (feature / answer /
+            // dismiss / pin / remove), view engagement stats.
+            OutlinedButton(
+                onClick = onManageQa,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_QA),
+            ) {
+                Text(stringResource(R.string.host_control_manage_qa))
             }
         }
     }

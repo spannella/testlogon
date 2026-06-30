@@ -24,6 +24,8 @@ import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
 import com.testlogon.android.feature.broadcast.moderation.ModerationLogRoute
 import com.testlogon.android.feature.broadcast.moderation.ModerationViewModel
 import com.testlogon.android.feature.broadcast.privateshow.PrivateShowRoute
+import com.testlogon.android.feature.broadcast.qna.LiveQaHostRoute
+import com.testlogon.android.feature.broadcast.qna.LiveQaHostViewModel
 import com.testlogon.android.feature.broadcast.privateshow.PrivateShowViewModel
 import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigRoute
 import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigViewModel
@@ -168,6 +170,13 @@ data object GuestAcceptDest {
     )
 }
 
+/** Live-QA HOST console destination (web LiveQaPage host view), keyed by sessionId. */
+data object BroadcastLiveQaHostDest {
+    const val ROUTE = "broadcast/{${LiveQaHostViewModel.ARG_SESSION_ID}}/live-qa"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/live-qa"
+}
+
 /** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
 fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
     composable(
@@ -252,6 +261,10 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onManageAds = {
                 navController.navigate(BroadcastAdsDest.build(sessionId)) { launchSingleTop = true }
             },
+            // Live Q&A host console (toggle mode + moderate the question queue).
+            onManageQa = {
+                navController.navigate(BroadcastLiveQaHostDest.build(sessionId)) { launchSingleTop = true }
+            },
         )
     }
     // AND-310 — the inputs-management destination (list inputs, activate/deactivate, promote to program).
@@ -329,6 +342,15 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         ),
     ) {
         AdControlRoute(onBack = { navController.popBackStack() })
+    }
+    // Live Q&A HOST console (toggle Q&A mode + moderate the question queue).
+    composable(
+        route = BroadcastLiveQaHostDest.ROUTE,
+        arguments = listOf(
+            navArgument(LiveQaHostViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        LiveQaHostRoute(onBack = { navController.popBackStack() })
     }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(

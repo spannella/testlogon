@@ -67,6 +67,9 @@ interface VodRentalRepository {
 
     /** The caller's rentals (GET list) for warm cache / "My rentals". */
     suspend fun list(): ApiResult<List<RentalAccess>>
+
+    /** The caller's rentals (GET list) as rich rows for the "My Rentals" screen (web VodRentalsPage parity). */
+    suspend fun listItems(): ApiResult<List<RentalListItem>>
 }
 
 /** Result of POST playback-complete. */
@@ -169,6 +172,10 @@ class VodRentalRepositoryImpl @Inject constructor(
 
     override suspend fun list(): ApiResult<List<RentalAccess>> = withContext(io) {
         call { api.list() }.map { resp -> resp.items.map { it.toAccess() } }
+    }
+
+    override suspend fun listItems(): ApiResult<List<RentalListItem>> = withContext(io) {
+        call { api.list() }.map { resp -> resp.items.map { it.toListItem() } }
     }
 
     // Idempotent-GET wrapper (NetworkError is retryable upstream by the caller / interceptor).

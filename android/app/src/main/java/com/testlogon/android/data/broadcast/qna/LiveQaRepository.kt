@@ -39,6 +39,32 @@ interface LiveQaRepository {
 
     /** voted=true -> POST .../vote; voted=false -> DELETE .../vote. Returns the updated question. */
     suspend fun setUpvote(sessionId: String, questionId: String, voted: Boolean): ApiResult<QaQuestion>
+
+    // ---- Host console (web LiveQaPage) ----
+
+    /** Enable / disable Q&A mode (host). Returns the new enabled state. */
+    suspend fun setMode(sessionId: String, enabled: Boolean): ApiResult<Boolean>
+
+    /** Host queue for [status] (pending / featured / answered / dismissed), votes desc. */
+    suspend fun hostQuestions(sessionId: String, status: String): ApiResult<List<QaHostQuestion>>
+
+    /** Q&A engagement stats (host/moderator). */
+    suspend fun stats(sessionId: String): ApiResult<QaStats>
+
+    /** Feature a question (host). */
+    suspend fun feature(sessionId: String, questionId: String): ApiResult<QaHostQuestion>
+
+    /** Mark a question answered (host). */
+    suspend fun answer(sessionId: String, questionId: String): ApiResult<QaHostQuestion>
+
+    /** Dismiss a question (host). */
+    suspend fun dismiss(sessionId: String, questionId: String): ApiResult<QaHostQuestion>
+
+    /** Pin / unpin a question (host). */
+    suspend fun pin(sessionId: String, questionId: String, pinned: Boolean): ApiResult<QaHostQuestion>
+
+    /** Remove (soft-delete) a question (host). Returns the removed question id. */
+    suspend fun remove(sessionId: String, questionId: String): ApiResult<String>
 }
 
 @Singleton
@@ -109,6 +135,77 @@ class LiveQaRepositoryImpl @Inject constructor(
             is ApiResult.NetworkError -> result
         }
     }
+
+    override suspend fun setMode(sessionId: String, enabled: Boolean): ApiResult<Boolean> =
+        withContext(io) {
+            when (val r = call { api.setMode(sessionId, SetModeDto(enabled)) }) {
+                is ApiResult.Success -> ApiResult.Success(r.data?.qaModeEnabled ?: enabled)
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    override suspend fun hostQuestions(
+        sessionId: String,
+        status: String,
+    ): ApiResult<List<QaHostQuestion>> = withContext(io) {
+        when (val r = call { api.getQuestions(sessionId, status = status, limit = LiveQaApi.DEFAULT_LIMIT) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data?.questions?.map { it.toHostDomain() } ?: emptyList())
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun stats(sessionId: String): ApiResult<QaStats> = withContext(io) {
+        when (val r = call { api.getStats(sessionId) }) {
+            is ApiResult.Success -> {
+                val data = r.data ?: return@withContext ApiResult.Failure(
+                    errorParser.fromThrowable(JsonDataException("empty stats body")),
+                )
+                ApiResult.Success(data.toDomain())
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun feature(sessionId: String, questionId: String): ApiResult<QaHostQuestion> =
+        hostAction { api.feature(sessionId, questionId) }
+
+    override suspend fun answer(sessionId: String, questionId: String): ApiResult<QaHostQuestion> =
+        hostAction { api.answer(sessionId, questionId) }
+
+    override suspend fun dismiss(sessionId: String, questionId: String): ApiResult<QaHostQuestion> =
+        hostAction { api.dismiss(sessionId, questionId) }
+
+    override suspend fun pin(
+        sessionId: String,
+        questionId: String,
+        pinned: Boolean,
+    ): ApiResult<QaHostQuestion> = hostAction { api.pin(sessionId, questionId, PinQuestionDto(pinned)) }
+
+    override suspend fun remove(sessionId: String, questionId: String): ApiResult<String> =
+        withContext(io) {
+            when (val r = call { api.remove(sessionId, questionId) }) {
+                is ApiResult.Success -> ApiResult.Success(r.data?.questionId ?: questionId)
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    private suspend fun hostAction(block: suspend () -> Response<QaQuestionDto>): ApiResult<QaHostQuestion> =
+        withContext(io) {
+            when (val r = call(block)) {
+                is ApiResult.Success -> {
+                    val data = r.data ?: return@withContext ApiResult.Failure(
+                        errorParser.fromThrowable(JsonDataException("empty host-action body")),
+                    )
+                    ApiResult.Success(data.toHostDomain())
+                }
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
 
     private suspend fun <T> call(block: suspend () -> Response<T>): ApiResult<T?> = try {
         val response = block()

@@ -58,6 +58,9 @@ object MoreRoutes {
     // AND-191: the public VOD catalog (browse on-demand titles).
     val VOD_CATALOG: String get() = VodCatalogDest.ROUTE
 
+    // "My Rentals": the viewer's time-limited rentals + view-once purchases. Web parity: vod/rentals.
+    val VOD_RENTALS: String get() = VodRentalsDest.ROUTE
+
     // AND-196: the clips vertical-pager feed.
     val CLIPS: String get() = ClipsFeedDest.ROUTE
 
@@ -183,6 +186,14 @@ object MoreRoutes {
     // JVM MoreCatalog integrity test stays Android-free).
     const val SYNDICATES = SyndicateListDest.ROUTE
 
+    // Web-parity: My Bundles (the caller's active syndicate bundle subscriptions + per-bundle cancel).
+    const val MY_BUNDLES = MyBundlesDest.ROUTE
+
+    // Web-parity: syndicate-advertising campaign DETAIL. No per-syndicate campaigns list this wave, so the
+    // hub opens a known sample syndicate+campaign id (plain constant, no Uri.encode, so the JVM MoreCatalog
+    // integrity test stays Android-free).
+    const val SYNDICATE_CAMPAIGN = CampaignDetailDest.STUB_ROUTE
+
     // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
     const val COLLABORATIONS = CollaborationsListDest.ROUTE
 
@@ -254,6 +265,23 @@ object MoreRoutes {
     // B-APIKEY (batch 7): developer API-keys management (list / create-shown-once / revoke).
     const val API_KEYS = ApiKeysListDest.ROUTE
 
+    // Web-parity: questionnaire BUILDER (creator authoring: drafts list -> create -> sections +
+    // questions of 9 types -> publish). Distinct from the respondent renderer.
+    const val QUESTIONNAIRE_BUILDER = QuestionnaireBuilderListDest.ROUTE
+
+    // Web-parity: delegation-API keys (/delegation-api) - DELEGATED-access keys (a tool acting on a
+    // creator's behalf), distinct from API_KEYS (personal developer keys).
+    const val DELEGATION_KEYS = DelegationKeysDest.ROUTE
+
+    // Settings: custom emojis (personal emoji manager). Web parity: settings/emojis.
+    val CUSTOM_EMOJIS: String get() = MainDest.SettingsEmojis.route
+
+    // Settings: geo-blocking rules (detected country + dry-run check). Web parity: settings/geo.
+    val GEO_RULES: String get() = MainDest.SettingsGeo.route
+
+    // Settings: call rate (paid-calls per-minute rate). Web parity: settings/call-rate.
+    val CALL_RATE: String get() = MainDest.SettingsCallRate.route
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -279,6 +307,7 @@ object MoreRoutes {
             ACHIEVEMENTS,
             VIDEOS,
             VOD_CATALOG,
+            VOD_RENTALS,
             CLIPS,
             CALENDAR,
             GOOGLE_CALENDAR,
@@ -320,6 +349,8 @@ object MoreRoutes {
             ORGS_MEMBERS,
             GROUPS,
             SYNDICATES,
+            MY_BUNDLES,
+            SYNDICATE_CAMPAIGN,
             COLLABORATIONS,
             SPONSORSHIPS,
             ADS_BILLING,
@@ -338,6 +369,11 @@ object MoreRoutes {
             PRIVACY_EXPORT,
             KYC,
             API_KEYS,
+            QUESTIONNAIRE_BUILDER,
+            DELEGATION_KEYS,
+            CUSTOM_EMOJIS,
+            GEO_RULES,
+            CALL_RATE,
             SETTINGS,
             HELP,
             ABOUT,

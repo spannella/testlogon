@@ -21,6 +21,9 @@ import com.testlogon.android.feature.settings.appearance.AppearanceSettingsRoute
 import com.testlogon.android.feature.settings.hub.SettingsHubRoute
 import com.testlogon.android.feature.settings.language.LanguagePickerRoute
 import com.testlogon.android.feature.settings.media.MediaPreferencesRoute
+import com.testlogon.android.feature.settings.callrate.CallRateRoute
+import com.testlogon.android.feature.settings.emojis.CustomEmojiRoute
+import com.testlogon.android.feature.settings.geo.GeoSettingsRoute
 import com.testlogon.android.feature.settings.misc.PrivacySettingsScreen
 import com.testlogon.android.feature.settings.misc.SecuritySettingsScreen
 import com.testlogon.android.feature.settings.notifications.NotificationPreferencesRoute
@@ -187,6 +190,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         trackingDestination(navController)
         // AND-219: purchase history list + search (rows open the AND-220 order detail).
         purchaseHistoryDestination(navController)
+        vodRentalsDestination(navController)
         // AND-224/AND-226: saved payment-methods management + add-card (FLAGGED stub card-entry seam).
         billingDestinations(navController)
         // PW18: Wallet transactions (ledger) history (BK3 GET /ui/billing/ledger + /ui/billing/wallet).
@@ -296,6 +300,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split tabs over /ui/syndicates/*).
         // Single screen keyed by {syndicateId}; write actions + open-licensing are downstream / OUT OF SCOPE.
         syndicateDestinations(navController)
+        // Web-parity: My Bundles (the caller's active syndicate bundle subscriptions + per-bundle cancel)
+        // over GET /ui/syndicates/my-bundles + the subscription cancel endpoint.
+        myBundlesDestinations(navController)
+        // Web-parity: syndicate-advertising campaign DETAIL (KPI + daily analytics + creative + budget; admin
+        // pause/resume/cancel + add-budget) over /ui/syndicates/advertising/{sid}/campaigns/{cid}*.
+        campaignDetailDestinations(navController)
         // AND-358: READ-ONLY collaborations (Paging-3 list -> detail with the two parties + status + the
         // revenue split over /ui/collaborations/*). Write actions are OUT OF SCOPE.
         collaborationsDestinations(navController)
@@ -317,6 +327,13 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // B-APIKEY (batch 7): developer API-keys management. List (label/prefix/created+expiry/scopes) with a
         // per-row revoke -> a create that shows the one-time secret exactly once. Backed by /ui/api_keys.
         apiKeysDestinations(navController)
+        // Web-parity: questionnaire BUILDER (creator authoring). Drafts list -> create -> per-draft
+        // editor (sections + 9 question types + publish) over /questionnaires/drafts*.
+        questionnaireBuilderDestinations(navController)
+        // Web-parity: delegation-API keys (/delegation-api) - the DELEGATED-access keys (a tool acting on a
+        // creator's behalf), distinct from the personal developer keys above. Two tabs (My Keys / Keys For
+        // My Account) + create-shown-once over /ui/delegation-api/*.
+        delegationKeysDestinations(navController)
         // AND-374: projects (paged list -> detail with the account-scoped Google Drive provider connect flow,
         // server-mediated OAuth via a Custom Tab + a testlogon://projects/.../callback return deep link).
         projectsDestinations(navController)
@@ -399,6 +416,15 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     }
     composable(MainDest.SettingsMedia.route) {
         MediaPreferencesRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsEmojis.route) {
+        CustomEmojiRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsGeo.route) {
+        GeoSettingsRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsCallRate.route) {
+        CallRateRoute(onBack = { navController.popBackStack() })
     }
     composable(MainDest.SettingsAppearance.route) {
         AppearanceSettingsRoute(onBack = { navController.popBackStack() })

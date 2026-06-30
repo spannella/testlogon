@@ -7,6 +7,7 @@ import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.Theaters
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Public
@@ -48,6 +50,7 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material.icons.outlined.SupervisorAccount
+import androidx.compose.material.icons.outlined.FactCheck
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material.icons.outlined.VpnKey
@@ -162,11 +165,29 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.STUDIO,
             section = MoreSection.APP,
         ),
+        // Web-parity: questionnaire BUILDER (creator authoring). Studio tool.
+        MoreEntry(
+            id = "questionnaire_builder",
+            labelRes = R.string.more_entry_questionnaire_builder,
+            icon = Icons.Outlined.FactCheck,
+            route = MoreRoutes.QUESTIONNAIRE_BUILDER,
+            hub = MoreHub.STUDIO,
+            section = MoreSection.APP,
+        ),
         MoreEntry(
             id = "vod_catalog",
             labelRes = R.string.more_entry_vod_catalog,
             icon = Icons.Outlined.Movie,
             route = MoreRoutes.VOD_CATALOG,
+            hub = MoreHub.STUDIO,
+            section = MoreSection.APP,
+        ),
+        // "My Rentals": the viewer's time-limited rentals + view-once purchases (web vod/rentals).
+        MoreEntry(
+            id = "vod_rentals",
+            labelRes = R.string.more_entry_vod_rentals,
+            icon = Icons.Outlined.Theaters,
+            route = MoreRoutes.VOD_RENTALS,
             hub = MoreHub.STUDIO,
             section = MoreSection.APP,
         ),
@@ -501,6 +522,25 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.COMMUNITY,
             section = MoreSection.ACCOUNT,
         ),
+        // Web-parity: the caller's active syndicate bundle subscriptions (My Bundles).
+        MoreEntry(
+            id = "my_bundles",
+            labelRes = R.string.more_entry_my_bundles,
+            icon = Icons.Outlined.CardMembership,
+            route = MoreRoutes.MY_BUNDLES,
+            hub = MoreHub.COMMUNITY,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Web-parity: syndicate-advertising campaign detail (KPI / analytics / budget controls). Opens a
+        // known sample syndicate+campaign id (no per-syndicate campaigns list this wave).
+        MoreEntry(
+            id = "syndicate_campaign",
+            labelRes = R.string.more_entry_syndicate_campaign,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.SYNDICATE_CAMPAIGN,
+            hub = MoreHub.COMMUNITY,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "collaborations",
             labelRes = R.string.more_entry_collaborations,
@@ -651,6 +691,43 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.API_KEYS,
             hub = MoreHub.ACCOUNT,
             section = MoreSection.SECURITY,
+        ),
+        // Web-parity: delegation-API keys (DELEGATED-access keys for tools acting on a creator's behalf;
+        // distinct from the personal developer API keys above).
+        MoreEntry(
+            id = "delegation_keys",
+            labelRes = R.string.more_entry_delegation_keys,
+            icon = Icons.Outlined.SupervisorAccount,
+            route = MoreRoutes.DELEGATION_KEYS,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.SECURITY,
+        ),
+        // Settings: custom emojis (Account / App). Discoverable entry.
+        MoreEntry(
+            id = "custom_emojis",
+            labelRes = R.string.more_entry_custom_emojis,
+            icon = Icons.Outlined.EmojiEmotions,
+            route = MoreRoutes.CUSTOM_EMOJIS,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.APP,
+        ),
+        // Settings: geo-blocking rules (Account / App). Discoverable entry.
+        MoreEntry(
+            id = "geo_rules",
+            labelRes = R.string.more_entry_geo_rules,
+            icon = Icons.Outlined.Public,
+            route = MoreRoutes.GEO_RULES,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.APP,
+        ),
+        // Settings: paid-call rate (Wallet / Account). Discoverable entry.
+        MoreEntry(
+            id = "call_rate",
+            labelRes = R.string.more_entry_call_rate,
+            icon = Icons.Outlined.Paid,
+            route = MoreRoutes.CALL_RATE,
+            hub = MoreHub.WALLET,
+            section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
             id = "sessions",

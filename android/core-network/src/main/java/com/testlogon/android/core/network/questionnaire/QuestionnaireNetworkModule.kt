@@ -16,6 +16,9 @@ import javax.inject.Singleton
  * QuestionnaireFieldFactory) are registered on the shared Moshi in NetworkModule.provideMoshi (BEFORE
  * the reflective KotlinJsonAdapterFactory) so the polymorphic field schema + answer union + question
  * type decode correctly. Mirrors the AND-339 SigningNetworkModule pattern.
+ *
+ * BUILDER ADDITION: also provides [QuestionnaireBuilderApi] (the creator-authoring drafts surface) from
+ * the same shared Retrofit - no new dependency / Retrofit instance.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -25,4 +28,9 @@ object QuestionnaireNetworkModule {
     @Singleton
     fun provideQuestionnaireApi(retrofit: Retrofit): QuestionnaireApi =
         retrofit.create(QuestionnaireApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideQuestionnaireBuilderApi(retrofit: Retrofit): QuestionnaireBuilderApi =
+        retrofit.create(QuestionnaireBuilderApi::class.java)
 }
