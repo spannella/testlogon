@@ -119,6 +119,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // with cancel/refund while active. Route reachable via navigateToBoost(postId); deeper post-detail /
         // composer-success CTA wiring is FLAGGED (see BoostNavigation) to avoid regressing those screens.
         boostDestination(navController)
+        // Web-parity boost MANAGEMENT: list (/ads/boost) + detail-by-boostId (/ads/boost/:boostId),
+        // reusing the existing boost network client + repository (no new network code).
+        boostManageDestinations(navController)
         // AND-367: ads-account billing read view (balance / lifetime-spend summary + billing-history ledger
         // + monthly invoice) + the DEPOSIT (add-funds) sheet. First MUTATING ads feature. Route reachable via
         // navigateToAdsBilling(accountId); the More-hub uses a sample account id (no ads-accounts list yet).
@@ -131,6 +134,15 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // (name/status/budget/spend). Route reachable via navigateToAdsCampaigns(accountId); the More-hub
         // uses a sample account id (no ads-accounts list yet).
         adsCampaignsDestination(navController)
+        // Web-parity ads STUDIO editors (targeting / scheduling / optimization). Each VM self-resolves
+        // the caller's first ad account then first campaign (no campaign-picker nav yet); routes reachable
+        // via navigateToAdTargeting / navigateToAdScheduling / navigateToAdOptimization.
+        adTargetingDestination(navController)
+        adSchedulingDestination(navController)
+        adOptimizationDestination(navController)
+        // Web-parity CONTENT AD-CONTROLS (per-content overrides + revenue share + ad-revenue
+        // transparency/breakdown). Caller-scoped; no nav arg.
+        contentAdControlsDestination(navController)
         // AND-400: READ-ONLY public SEO metadata inspector (seo/{resourceType}/{id}). Diagnostic preview
         // of the title / og / twitter / json-ld a crawler sees. Route reachable via navigateToSeo(type, id);
         // the More-hub uses a sample profile resource (no per-resource detail wiring this wave).

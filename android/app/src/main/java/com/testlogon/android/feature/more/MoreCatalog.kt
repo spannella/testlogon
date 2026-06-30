@@ -32,6 +32,8 @@ import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material.icons.outlined.Loyalty
 import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Hub
@@ -582,6 +584,51 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_ads_campaigns,
             icon = Icons.Outlined.Campaign,
             route = MoreRoutes.ADS_CAMPAIGNS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Web-parity: ad TARGETING editor (audience / dayparting-hours / geo / device, live estimate).
+        MoreEntry(
+            id = "ads_targeting",
+            labelRes = R.string.more_entry_ads_targeting,
+            icon = Icons.Outlined.Tune,
+            route = MoreRoutes.ADS_TARGETING,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Web-parity: ad SCHEDULING (dayparting grid + flights + pacing/eligibility).
+        MoreEntry(
+            id = "ads_scheduling",
+            labelRes = R.string.more_entry_ads_scheduling,
+            icon = Icons.Outlined.Schedule,
+            route = MoreRoutes.ADS_SCHEDULING,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Web-parity: ad OPTIMIZATION (recommendations apply/dismiss + auto-optimize + bid/budget).
+        MoreEntry(
+            id = "ads_optimization",
+            labelRes = R.string.more_entry_ads_optimization,
+            icon = Icons.Outlined.TrendingUp,
+            route = MoreRoutes.ADS_OPTIMIZATION,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Web-parity: CONTENT AD-CONTROLS (per-content ad overrides + revenue share + ad-revenue breakdown).
+        MoreEntry(
+            id = "content_ad_controls",
+            labelRes = R.string.more_entry_content_ad_controls,
+            icon = Icons.Outlined.Settings,
+            route = MoreRoutes.CONTENT_AD_CONTROLS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Web-parity: boost MANAGEMENT (your boosts list -> per-boost detail with cancel/refund).
+        MoreEntry(
+            id = "boosts",
+            labelRes = R.string.more_entry_boosts,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.BOOSTS,
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),

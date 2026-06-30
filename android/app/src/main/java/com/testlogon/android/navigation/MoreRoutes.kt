@@ -216,6 +216,19 @@ object MoreRoutes {
     // so the JVM MoreCatalog integrity test stays Android-free).
     const val ADS_CAMPAIGNS = AdsCampaignsDest.STUB_ROUTE
 
+    // Web-parity ads STUDIO editors. Each VM self-resolves the caller's first account then campaign
+    // (no campaign-picker nav yet), so the hub registers the plain route constants directly.
+    const val ADS_TARGETING = AdTargetingDest.ROUTE
+    const val ADS_SCHEDULING = AdSchedulingDest.ROUTE
+    const val ADS_OPTIMIZATION = AdOptimizationDest.ROUTE
+
+    // Web-parity CONTENT AD-CONTROLS (per-content overrides + revenue share + transparency). Caller-
+    // scoped; no nav arg, so the hub registers the plain route constant directly.
+    const val CONTENT_AD_CONTROLS = ContentAdControlsDest.ROUTE
+
+    // Web-parity boost MANAGEMENT: the boosts LIST (/ads/boost). Rows open the detail-by-boostId screen.
+    const val BOOSTS = BoostManageDest.LIST_ROUTE
+
     // AND-400: READ-ONLY public SEO metadata inspector (title / og / twitter / json-ld a crawler sees).
     // No per-resource detail surface wires it this wave, so the hub opens a known sample profile resource
     // (plain constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
@@ -356,6 +369,11 @@ object MoreRoutes {
             ADS_BILLING,
             AD_ANALYTICS,
             ADS_CAMPAIGNS,
+            ADS_TARGETING,
+            ADS_SCHEDULING,
+            ADS_OPTIMIZATION,
+            CONTENT_AD_CONTROLS,
+            BOOSTS,
             SEO,
             TICKETS,
             SUPPORT,

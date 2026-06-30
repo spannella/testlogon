@@ -3506,6 +3506,11 @@
     <string name="more_entry_ad_analytics">Ad analytics</string>
     <!-- AND-369: READ-ONLY ads-campaigns list -->
     <string name="more_entry_ads_campaigns">Ad campaigns</string>
+    <string name="more_entry_ads_targeting">Ad targeting</string>
+    <string name="more_entry_ads_scheduling">Ad scheduling</string>
+    <string name="more_entry_ads_optimization">Ad optimization</string>
+    <string name="more_entry_content_ad_controls">Content ad controls</string>
+    <string name="more_entry_boosts">Boosts</string>
     <string name="ads_campaigns_title">Ad campaigns</string>
     <string name="ads_campaigns_back">Back</string>
     <string name="ads_campaigns_name_unknown">Untitled campaign</string>
