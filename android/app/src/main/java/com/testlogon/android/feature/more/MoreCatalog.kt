@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Paid
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Theaters
 import androidx.compose.material.icons.outlined.Person
@@ -266,12 +267,69 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.SUPPORT,
         ),
         MoreEntry(
+            id = "agent_configs",
+            labelRes = R.string.more_entry_agent_configs,
+            icon = Icons.Outlined.SmartToy,
+            route = MoreRoutes.AGENT_CONFIGS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
             id = "licenses",
             labelRes = R.string.more_entry_licenses,
             icon = Icons.Outlined.Copyright,
             route = MoreRoutes.LICENSES,
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "stylist",
+            labelRes = R.string.more_entry_stylist,
+            icon = Icons.Outlined.Palette,
+            route = MoreRoutes.STYLIST,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "marketing",
+            labelRes = R.string.more_entry_marketing,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.MARKETING,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "costs",
+            labelRes = R.string.more_entry_costs,
+            icon = Icons.Outlined.AccountBalance,
+            route = MoreRoutes.COSTS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "compliance",
+            labelRes = R.string.more_entry_compliance,
+            icon = Icons.Outlined.Security,
+            route = MoreRoutes.COMPLIANCE,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "security",
+            labelRes = R.string.more_entry_security,
+            icon = Icons.Outlined.Security,
+            route = MoreRoutes.SECURITY,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SECURITY,
+        ),
+        MoreEntry(
+            id = "pm_ideas",
+            labelRes = R.string.more_entry_pm_ideas,
+            icon = Icons.Outlined.Lightbulb,
+            route = MoreRoutes.PM_IDEAS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
         ),
         MoreEntry(
             id = "watch_parties",

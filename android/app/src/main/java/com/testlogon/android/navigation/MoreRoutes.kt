@@ -152,6 +152,21 @@ object MoreRoutes {
     // Web-route parity batch.
     const val IDEAS = IdeasDest.ROUTE
     const val LICENSES = LicensesDest.ROUTE
+    const val AGENT_CONFIGS = AgentConfigsHubDest.ROUTE
+
+    // B4 web-parity: Stylist / UI-design agent (web /agents/stylist). require_ui_session (usable).
+    const val STYLIST = StylistOverviewDest.ROUTE
+
+    // B4 web-parity: Marketing content agent (web /agents/marketing). require_ui_session (usable).
+    const val MARKETING = MarketingDashboardDest.ROUTE
+    // B4 web-parity: Accountant/cost-tracking agent (web /agents/costs). require_ui_session (usable).
+    const val COSTS = CostOverviewDest.ROUTE
+    // B4 web-parity: Compliance agent (web /agents/compliance). require_ui_session (usable).
+    const val COMPLIANCE = ComplianceDest.ROUTE
+    // B4 web-parity: Security agent (web /agents/security == compliance page). require_ui_session (usable).
+    const val SECURITY = SecurityDest.ROUTE
+    // B4 web-parity: PM feature-idea triage (web /agents/pm/ideas). require_ui_session (usable).
+    const val PM_IDEAS = PmIdeasDest.ROUTE
     const val WATCH_PARTIES = WatchPartiesDest.LIST
     const val BOTS = BotsDest.LIST
 
@@ -342,6 +357,13 @@ object MoreRoutes {
             APPEALS,
             IDEAS,
             LICENSES,
+            AGENT_CONFIGS,
+            STYLIST,
+            MARKETING,
+            COSTS,
+            COMPLIANCE,
+            SECURITY,
+            PM_IDEAS,
             WATCH_PARTIES,
             BOTS,
             AFFILIATES,

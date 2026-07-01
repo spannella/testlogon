@@ -253,6 +253,17 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         appealsDestination(navController)
         ideasDestination(navController)
         licensesDestination(navController)
+        agentConfigDestinations(navController)
+        // B4 web-parity: Stylist / UI-design agent (overview + rules + review detail).
+        stylistDestinations(navController)
+        // B4 web-parity: Marketing content agent (dashboard + editor + calendar + engagement).
+        marketingDestinations(navController)
+        // B4 web-parity: Accountant/cost agent (overview + breakdown + budgets + alerts).
+        costsDestinations(navController)
+        // B4 web-parity: Compliance/Security agent (findings + audits + compliance + trends).
+        complianceDestinations(navController)
+        // B4 web-parity: PM feature-idea triage (pending/approved/rejected/archived).
+        pmIdeasDestinations(navController)
         watchPartiesDestinations(navController)
         botsDestinations(navController)
         // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + links list).
