@@ -154,6 +154,24 @@ object MoreRoutes {
     const val LICENSES = LicensesDest.ROUTE
     const val AGENT_CONFIGS = AgentConfigsHubDest.ROUTE
 
+    // AGENTS-BASICS web-parity: workers (list/detail/sessions + create). require_ui_session (usable).
+    val WORKERS: String get() = WorkersListDest.ROUTE
+    // AGENTS-BASICS web-parity: LLM provider keys (list/add/test/revoke). require_ui_session (usable).
+    val LLM_KEYS: String get() = LlmKeysListDest.ROUTE
+    // AGENTS-BASICS web-parity: fleet dashboard (status/capacity/bulk/templates). require_ui_session (usable).
+    val FLEET: String get() = FleetDashboardDest.ROUTE
+    // AGENTS-BASICS web-parity: agent-types dashboard/picker -> feeds the B4 type-config screens.
+    val AGENT_TYPES: String get() = AgentTypesDashboardDest.ROUTE
+
+    // AGENTS-BASICS web-parity: worker feedback queue (respond/skip). require_ui_session (usable).
+    val AGENT_FEEDBACK: String get() = AgentFeedbackDest.ROUTE
+    // AGENTS-BASICS web-parity: READ-ONLY agent pull-requests (list -> detail). require_ui_session (usable).
+    val AGENT_PRS: String get() = AgentPrsListDest.ROUTE
+    // AGENTS-BASICS web-parity: per-worker agent memory (worker picker -> identity/project/entries).
+    val AGENT_MEMORY: String get() = AgentMemoryPickerDest.ROUTE
+    // AGENTS-BASICS web-parity: doc-coverage dashboard (+ doc templates). require_ui_session (usable).
+    val DOC_COVERAGE: String get() = DocCoverageDest.ROUTE
+
     // B4 web-parity: Stylist / UI-design agent (web /agents/stylist). require_ui_session (usable).
     const val STYLIST = StylistOverviewDest.ROUTE
 
@@ -358,6 +376,14 @@ object MoreRoutes {
             IDEAS,
             LICENSES,
             AGENT_CONFIGS,
+            WORKERS,
+            LLM_KEYS,
+            FLEET,
+            AGENT_TYPES,
+            AGENT_FEEDBACK,
+            AGENT_PRS,
+            AGENT_MEMORY,
+            DOC_COVERAGE,
             STYLIST,
             MARKETING,
             COSTS,

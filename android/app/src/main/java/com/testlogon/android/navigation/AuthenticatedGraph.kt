@@ -254,6 +254,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         ideasDestination(navController)
         licensesDestination(navController)
         agentConfigDestinations(navController)
+        // AGENTS-BASICS web-parity: workers (list/detail/create) + LLM keys + fleet + agent-types picker.
+        agentsBasicsDestinations(navController)
         // B4 web-parity: Stylist / UI-design agent (overview + rules + review detail).
         stylistDestinations(navController)
         // B4 web-parity: Marketing content agent (dashboard + editor + calendar + engagement).

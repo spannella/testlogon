@@ -3980,6 +3980,14 @@
     <!-- web-route parity batch: ideas / licenses / watch-parties / bots -->
     <string name="more_entry_ideas">Ideas</string>
     <string name="more_entry_agent_configs">Agent Type Configs</string>
+    <string name="more_entry_workers">Agent Workers</string>
+    <string name="more_entry_llm_keys">LLM Keys</string>
+    <string name="more_entry_fleet">Agent Fleet</string>
+    <string name="more_entry_agent_types">Agent Types</string>
+    <string name="more_entry_agent_feedback">Agent Feedback</string>
+    <string name="more_entry_agent_prs">Agent PRs</string>
+    <string name="more_entry_agent_memory">Agent Memory</string>
+    <string name="more_entry_doc_coverage">Doc Coverage</string>
     <string name="ideas_title">Ideas</string>
     <string name="ideas_new">Submit an idea</string>
     <string name="ideas_untitled">Untitled idea</string>

@@ -21,6 +21,8 @@ import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.MergeType
 import androidx.compose.material.icons.outlined.Diversity3
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Sms
@@ -274,6 +276,70 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.SUPPORT,
             section = MoreSection.SUPPORT,
             operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "agent_types",
+            labelRes = R.string.more_entry_agent_types,
+            icon = Icons.Outlined.SmartToy,
+            route = MoreRoutes.AGENT_TYPES,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "workers",
+            labelRes = R.string.more_entry_workers,
+            icon = Icons.Outlined.Groups,
+            route = MoreRoutes.WORKERS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "llm_keys",
+            labelRes = R.string.more_entry_llm_keys,
+            icon = Icons.Outlined.VpnKey,
+            route = MoreRoutes.LLM_KEYS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "fleet",
+            labelRes = R.string.more_entry_fleet,
+            icon = Icons.Outlined.Hub,
+            route = MoreRoutes.FLEET,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "agent_feedback",
+            labelRes = R.string.more_entry_agent_feedback,
+            icon = Icons.Outlined.ChatBubbleOutline,
+            route = MoreRoutes.AGENT_FEEDBACK,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "agent_prs",
+            labelRes = R.string.more_entry_agent_prs,
+            icon = Icons.Outlined.MergeType,
+            route = MoreRoutes.AGENT_PRS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "agent_memory",
+            labelRes = R.string.more_entry_agent_memory,
+            icon = Icons.Outlined.Memory,
+            route = MoreRoutes.AGENT_MEMORY,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "doc_coverage",
+            labelRes = R.string.more_entry_doc_coverage,
+            icon = Icons.Outlined.Description,
+            route = MoreRoutes.DOC_COVERAGE,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
         ),
         MoreEntry(
             id = "licenses",
