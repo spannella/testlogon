@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Remote desktop</title>
+<style>
+  html, body { margin:0; padding:0; width:100vw; height:100vh; background:#0b0b0d; overflow:hidden; }
+  /* Use viewport units so the container has a real height even before the WebView reports a
+     document layout height (a Compose AndroidView can initially measure the document at 0). */
+  #screen { position:fixed; left:0; top:0; width:100vw; height:100vh; }
+  /* noVNC injects a <canvas> into #screen; force it to fill the viewport + fit so a native-res
+     framebuffer (e.g. 1024x768) is scaled to display instead of collapsing to 0 CSS size. */
+  #screen canvas {
+    display:block !important;
+    width:100vw !important;
+    height:100vh !important;
+    object-fit:contain;
+  }
+  #status {
+    position:fixed; left:0; right:0; top:0; z-index:10;
+    font:13px/1.4 -apple-system, Roboto, sans-serif; color:#e6e6ea;
+    background:rgba(20,20,26,0.86); padding:8px 12px; box-sizing:border-box;
+  }
+  #status.err { background:rgba(120,20,28,0.92); }
+  #status.ok  { background:rgba(18,80,40,0.90); }
+  #status.hide { display:none; }
+</style>
+</head>
+<body>
+<div id="status">Connecting...</div>
+<div id="screen"></div>
+<script type="module">
+  import RFB from './core/rfb.js';
+
+  const statusEl = document.getElementById('status');
+  const screenEl = document.getElementById('screen');
+
+  function post(kind, msg) {
+    try {
+      if (window.AndroidVnc && window.AndroidVnc.onStatus) window.AndroidVnc.onStatus(kind, msg || '');
+    } catch (e) {}
+  }
+  function setStatus(cls, text) {
+    statusEl.className = cls || '';
+    statusEl.textContent = text;
+  }
+
+  const params = new URLSearchParams(location.search);
+  const url = params.get('url');            // full ws(s):// url incl. ?token=...
+  const viewOnly = params.get('view_only') === '1';
+
+  if (!url) {
+    setStatus('err', 'No WebSocket URL supplied.');
+    post('error', 'no_url');
+  } else {
+    setStatus('', 'Connecting to remote desktop...');
+    post('connecting', url);
+    let rfb;
+    let connected = false;
+    try {
+      rfb = new RFB(screenEl, url, {});
+      rfb.viewOnly = viewOnly;
+      // CSS (#screen canvas) handles display scaling with object-fit:contain, so we let noVNC
+      // keep the canvas at native resolution and do not let scaleViewport zero it out.
+      rfb.scaleViewport = false;
+      rfb.clipViewport = false;
+      rfb.resizeSession = false;
+      rfb.background = '#0b0b0d';
+
+      function relayout() { /* CSS-driven now; no-op kept for the resize hook */ }
+
+      function diag() {
+        try {
+          const c = screenEl.querySelector('canvas');
+          if (!c) { post('diag', 'no-canvas'); return; }
+          const r = c.getBoundingClientRect();
+          let px = 'na';
+          try {
+            const ctx = c.getContext('2d');
+            const d = ctx.getImageData(Math.floor(c.width/2), Math.floor(c.height/2), 1, 1).data;
+            px = d[0] + ',' + d[1] + ',' + d[2];
+          } catch (e2) { px = 'noctx:' + e2.message; }
+          post('diag', 'canvas ' + c.width + 'x' + c.height + ' css ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' center=' + px);
+        } catch (e) { post('diag', 'err:' + e.message); }
+      }
+
+      rfb.addEventListener('connect', () => {
+        connected = true;
+        setStatus('ok', 'Connected');
+        post('connected', '');
+        // canvas may be created after ServerInit; re-fit a few times as frames arrive
+        setTimeout(relayout, 300);
+        setTimeout(relayout, 1200);
+        setTimeout(diag, 1500);
+        setTimeout(diag, 4000);
+        setTimeout(() => { if (statusEl.className === 'ok') setStatus('ok hide', 'Connected'); }, 2500);
+      });
+      rfb.addEventListener('disconnect', (e) => {
+        const clean = e && e.detail && e.detail.clean;
+        setStatus('err', clean ? 'Disconnected.' : 'Connection failed. The VNC bridge is unreachable from this device.');
+        post(clean ? 'disconnected' : 'error', clean ? 'clean' : 'bridge_unreachable');
+      });
+      rfb.addEventListener('securityfailure', (e) => {
+        const reason = (e && e.detail && e.detail.reason) || 'security failure';
+        setStatus('err', 'Auth/security failure: ' + reason);
+        post('error', 'security:' + reason);
+      });
+      rfb.addEventListener('credentialsrequired', () => {
+        setStatus('err', 'Server requires VNC credentials (not supplied by token).');
+        post('error', 'credentials_required');
+      });
+      rfb.addEventListener('desktopname', (e) => {
+        post('desktopname', (e && e.detail && e.detail.name) || '');
+      });
+      window.addEventListener('resize', relayout);
+    } catch (err) {
+      setStatus('err', 'Viewer init failed: ' + (err && err.message ? err.message : err));
+      post('error', 'init:' + (err && err.message ? err.message : String(err)));
+    }
+
+    // Watchdog: only fire if we never actually connected.
+    setTimeout(() => {
+      if (!connected && !statusEl.className.startsWith('err')) {
+        setStatus('err', 'Still connecting... the bridge may be unreachable from this device.');
+        post('timeout', '');
+      }
+    }, 12000);
+  }
+</script>
+</body>
+</html>

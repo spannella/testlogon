@@ -3,10 +3,12 @@
 package com.testlogon.android.feature.vnc
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,7 +19,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,7 +33,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -54,6 +58,10 @@ object RemoteDesktopTestTags {
     const val COPY_WS = "remotedesktop_copy_ws"
     const val FALLBACK = "remotedesktop_fallback"
     const val END = "remotedesktop_end"
+    const val OPEN_LIVE = "remotedesktop_open_live"
+    const val CLOSE_LIVE = "remotedesktop_close_live"
+    const val LIVE_STATUS = "remotedesktop_live_status"
+    const val UNREACHABLE = "remotedesktop_unreachable"
 }
 
 private val KNOWN_TARGETS = listOf("demo", "ops-admin")
@@ -141,7 +149,7 @@ private fun ConnectCard(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Outlined.DesktopWindows, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Text("Start a remote desktop session", style = MaterialTheme.typography.titleMedium)
             }
@@ -187,6 +195,13 @@ private fun SessionCard(
     onLoadFallback: () -> Unit,
     onEnd: () -> Unit,
 ) {
+    // Reachability gate: only attempt the live WebView viewer when the ws host could actually be
+    // reached from this device. Otherwise stay honest and show the connection-details fallback.
+    val verdict = remember(session.wsUrl) { VncReachability.assess(session.wsUrl) }
+    var liveOpen by remember(session.sessionId) { mutableStateOf(false) }
+    var liveStatus by remember(session.sessionId) { mutableStateOf(VncViewerStatus.Unknown) }
+    var liveDetail by remember(session.sessionId) { mutableStateOf("") }
+
     Card(modifier = Modifier.fillMaxWidth().testTag(RemoteDesktopTestTags.SESSION_CARD)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Session ready", style = MaterialTheme.typography.titleMedium)
@@ -204,19 +219,81 @@ private fun SessionCard(
 
             HorizontalDivider()
 
-            // HONEST real-vs-stub: the live noVNC RFB viewer is a desktop-browser surface, not mobile.
-            Row(verticalAlignment = androidx.compose.ui.Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Open the live view on desktop", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "The interactive screen streams over a noVNC WebSocket, which is not supported in the mobile app. " +
-                            "Use this session's connection details in a desktop VNC/noVNC client.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // ---- LIVE VIEW (real noVNC RFB over WebView) ----
+            if (liveOpen && verdict.reachable) {
+                Text("Live view", style = MaterialTheme.typography.titleSmall)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp),
+                ) {
+                    VncWebView(
+                        wsUrl = session.wsUrl,
+                        connectParams = session.connectParams,
+                        onStatusChanged = { s, d -> liveStatus = s; liveDetail = d },
                     )
                 }
+                val statusLine = when (liveStatus) {
+                    VncViewerStatus.Connecting -> "Connecting to the remote desktop..."
+                    VncViewerStatus.Connected -> "Connected."
+                    VncViewerStatus.Disconnected -> "Disconnected."
+                    VncViewerStatus.Timeout -> "Still connecting - the bridge may be unreachable."
+                    VncViewerStatus.Error -> "Connection failed: ${liveDetail.ifBlank { "bridge unreachable" }}"
+                    VncViewerStatus.Unknown -> "Starting viewer..."
+                }
+                Text(
+                    statusLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag(RemoteDesktopTestTags.LIVE_STATUS),
+                )
+                OutlinedButton(
+                    onClick = { liveOpen = false },
+                    modifier = Modifier.fillMaxWidth().testTag(RemoteDesktopTestTags.CLOSE_LIVE),
+                ) { Text("Close live view") }
+            } else if (verdict.reachable) {
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.DesktopWindows, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Open the live desktop", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Attach a live noVNC session over the brokered WebSocket, in-app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Button(
+                    onClick = { liveOpen = true },
+                    modifier = Modifier.fillMaxWidth().testTag(RemoteDesktopTestTags.OPEN_LIVE),
+                ) { Text("Open live view") }
+            } else {
+                // Honest infra-blocked state: the ws_url can't be reached from a phone.
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.testTag(RemoteDesktopTestTags.UNREACHABLE),
+                ) {
+                    Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Live view unavailable from this device", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            verdict.reason ?: "The VNC bridge is not reachable from this device.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Use the connection details below in a desktop VNC/noVNC client, or deploy a " +
+                                "public websockify gateway so the app can attach the live view.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
+
+            HorizontalDivider()
+
             Text("WebSocket:", style = MaterialTheme.typography.labelMedium)
             Text(session.wsUrl, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
             if (session.connectParams.isNotEmpty()) {
