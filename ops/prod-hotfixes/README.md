@@ -249,3 +249,25 @@ App-side companions to T2 (committed on android-impl, NOT prod): CallSignalingHu
 now forwards `caller_name` from the payload into the CallPushHandler map, and SignalPayloadDto
 + its toMap() now carry `caller_name`/`initial_mode` so the poll path (not just FCM) surfaces
 the resolved name.
+
+- `delegate_fullparity_messaging.patch` — **DELEGATE FULL-PARITY**: gives a delegate
+  holding `chat_respond` full send parity with normal messaging, attributed to the
+  CREATOR (`sender_id=creator`), tagged via-delegate + audited. Pure additive insert into
+  `app/routers/messaging.py` (after the existing delegate audit route): helpers
+  `_delegate_authorize` (chat_respond gate + creator-participant check + resolve
+  `[via @delegate]` tag / hide-from-recipients), `_delegate_tag_input` (bake the visible
+  via-tag into text/caption), `_delegate_stamp_and_audit` (stamp
+  `sent_by_delegate`/`delegate_display_name`/`delegate_tag` on the row + write the delegate
+  audit entry), plus delegate routes that REUSE the exact normal send handlers with
+  `user_id=creator` (no duplicated send/persist logic) and the exact normal input models:
+  `POST /messaging/delegate/{creator}/conversations/{cid}/messages/text` (SendTextMessageIn:
+  encryption/scheduled/view-once/locked/countdown/tip), `/images/presign`, `/messages/image`,
+  `/messages/gallery`, `/messages/video-share`, `/messages/file`, `/messages/countdown`,
+  `POST /messaging/delegate/{creator}/messages/lottery`,
+  `POST .../messages/{mid}/reactions` (react/unreact),
+  `PATCH .../messages/{mid}` (edit). The pre-existing text route
+  (`POST .../conversations/{cid}/messages`, DelegatedSendMessageIn) is untouched
+  (back-compat). Applies to prod source at the `messaging.py` delegate-routes offset
+  (~L16055); the android-impl branch backend diverges from prod, so this is a
+  re-appliable prod artifact, not a branch merge. Backup on prod:
+  `messaging.py.bak_deleg_1782935787`.
