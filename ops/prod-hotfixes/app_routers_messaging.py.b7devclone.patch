@@ -1,0 +1,31 @@
+diff --git a/app/routers/messaging.py b/app/routers/messaging.py
+index 40cfa97f..0aeded6f 100644
+--- a/app/routers/messaging.py
++++ b/app/routers/messaging.py
+@@ -8312,7 +8312,7 @@ def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id:
+         # In DEV_MODE, moto presigned URLs point to inaccessible AWS endpoints.
+         # Return a path-relative URL so the browser routes through the Vite proxy
+         # to the in-app mock S3 PUT handler (see s3_mock.py, mounted at /mock/s3).
+-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
++        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
+     else:
+         upload_url = s3.generate_presigned_url(
+             ClientMethod="put_object",
+@@ -8574,7 +8574,7 @@ def presign_voice_message(
+         ext = "wav"
+     s3_key = f"voice-messages/{conversation_id}/{msg_id}.{ext}"
+     if S.dev_mode:
+-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
++        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
+     else:
+         upload_url = s3.generate_presigned_url(
+             ClientMethod="put_object",
+@@ -8785,7 +8785,7 @@ def presign_voicemail(
+ 
+     from urllib.parse import quote as _vml_pq
+     if S.dev_mode:
+-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
++        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
+     else:
+         upload_url = s3.generate_presigned_url(
+             ClientMethod="put_object",

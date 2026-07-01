@@ -1,0 +1,16 @@
+diff --git a/app/services/sessions.py b/app/services/sessions.py
+index a87406c4..397a2065 100644
+--- a/app/services/sessions.py
++++ b/app/services/sessions.py
+@@ -372,7 +372,10 @@ async def require_ui_session(
+             session_id = None
+     session_cookie_name = getattr(S, "ui_session_cookie_name", "")
+     session_cookie = cookies.get(session_cookie_name) if session_cookie_name else None
+-    session_id = session_id or session_cookie or x_session_id
++    # x_session_id is the unresolved FastAPI Header sentinel when require_ui_session is invoked
++    # directly (e.g. filemanager._current_user) instead of via Depends; only honor a real string.
++    _hdr_sid = x_session_id if isinstance(x_session_id, str) else None
++    session_id = session_id or session_cookie or _hdr_sid
+     # DEV/local: the server-side session record can be momentarily unreadable right after login (or
+     # absent for a token-authenticated principal), which surfaced app-wide as spurious "session
+     # expired" / re-login loops. The principal is already authenticated (cookie/token decoded above),
