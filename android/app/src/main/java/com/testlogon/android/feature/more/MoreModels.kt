@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Diversity3
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.MovieCreation
 import androidx.compose.material.icons.outlined.Storefront
@@ -57,6 +58,7 @@ enum class MoreHub(
     INBOX(R.string.more_hub_inbox, Icons.Outlined.Inbox),
     ACCOUNT(R.string.more_hub_account, Icons.Outlined.ManageAccounts),
     SUPPORT(R.string.more_hub_support, Icons.Outlined.SupportAgent),
+    ADMIN(R.string.more_hub_admin, Icons.Outlined.AdminPanelSettings),
 }
 
 enum class MoreSection(@StringRes val titleRes: Int) {

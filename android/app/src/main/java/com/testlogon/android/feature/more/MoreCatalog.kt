@@ -11,6 +11,10 @@ import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
+import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.Balance
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.CreditCardOff
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.EditCalendar
@@ -136,6 +140,80 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.SUPPORT,
             // B-SUP (batch 7): this is the AGENT/admin dashboard - it must not be advertised to normal users
             // (it self-gates server-side via 403, but it was previously visible in the member More hub).
+            operatorOnly = true,
+        ),
+        // B5 admin queues (Admin hub) - hidden from members; revealed only for a confirmed admin
+        // (AdminVisibility from GET /ui/me.is_admin). The backend 403 stays authoritative.
+        MoreEntry(
+            id = "moderation_board",
+            labelRes = R.string.more_entry_moderation_board,
+            icon = Icons.Outlined.Gavel,
+            route = MoreRoutes.ADMIN_MODERATION,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "video_review",
+            labelRes = R.string.more_entry_video_review,
+            icon = Icons.Outlined.FactCheck,
+            route = MoreRoutes.ADMIN_VIDEO_REVIEW,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "dmca_admin",
+            labelRes = R.string.more_entry_dmca_admin,
+            icon = Icons.Outlined.Copyright,
+            route = MoreRoutes.ADMIN_DMCA,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "refund_admin",
+            labelRes = R.string.more_entry_refund_admin,
+            icon = Icons.Outlined.ReceiptLong,
+            route = MoreRoutes.ADMIN_REFUNDS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "dispute_admin",
+            labelRes = R.string.more_entry_dispute_admin,
+            icon = Icons.Outlined.Gavel,
+            route = MoreRoutes.ADMIN_DISPUTES,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "appeal_admin",
+            labelRes = R.string.more_entry_appeal_admin,
+            icon = Icons.Outlined.Balance,
+            route = MoreRoutes.ADMIN_APPEALS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "fraud_admin",
+            labelRes = R.string.more_entry_fraud_admin,
+            icon = Icons.Outlined.Shield,
+            route = MoreRoutes.ADMIN_FRAUD,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "incident_admin",
+            labelRes = R.string.more_entry_incident_admin,
+            icon = Icons.Outlined.CreditCardOff,
+            route = MoreRoutes.ADMIN_PAYMENT_INCIDENTS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
             operatorOnly = true,
         ),
         MoreEntry(

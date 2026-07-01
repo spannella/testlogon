@@ -63,6 +63,7 @@
     <string name="more_hub_inbox">Inbox</string>
     <string name="more_hub_account">Account &amp; Settings</string>
     <string name="more_hub_support">Support</string>
+    <string name="more_hub_admin">Admin</string>
     <string name="more_hub_item_count">%1$d items</string>
     <string name="more_hub_back">Back</string>
     <string name="more_entry_profile">Profile</string>
@@ -871,6 +872,14 @@
     <!-- More hub entries (AND-160 / AND-161) -->
     <string name="more_entry_mass_messages">Mass messages</string>
     <string name="more_entry_helpdesk_queue">Helpdesk queue</string>
+    <string name="more_entry_moderation_board">Moderation board</string>
+    <string name="more_entry_video_review">Video review</string>
+    <string name="more_entry_dmca_admin">DMCA claims</string>
+    <string name="more_entry_refund_admin">Refund requests</string>
+    <string name="more_entry_dispute_admin">Disputes</string>
+    <string name="more_entry_appeal_admin">Appeals review</string>
+    <string name="more_entry_fraud_admin">Fraud review</string>
+    <string name="more_entry_incident_admin">Payment incidents</string>
     <string name="more_entry_helpdesk_dashboard">Helpdesk dashboard</string>
 
     <!-- AND-295/296/297 — 1:1 calling -->

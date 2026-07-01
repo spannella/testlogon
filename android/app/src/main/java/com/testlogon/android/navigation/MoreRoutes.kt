@@ -287,6 +287,30 @@ object MoreRoutes {
     const val ADMIN_EMAIL_DASHBOARD = MessagingDashboardDest.EMAIL_ROUTE
     const val ADMIN_SMS_DASHBOARD = MessagingDashboardDest.SMS_ROUTE
 
+    // B5: admin content-moderation board (queue + ticket detail + claim/decision/resolve).
+    const val ADMIN_MODERATION = ModerationBoardDest.ROUTE
+
+    // B5: admin video-review queue (approve/reject).
+    const val ADMIN_VIDEO_REVIEW = VideoReviewDest.ROUTE
+
+    // B5: admin DMCA claims dashboard (claims queue + resolve).
+    const val ADMIN_DMCA = DmcaAdminDest.ROUTE
+
+    // B5: admin refund-requests queue (status filter + approve/reject).
+    const val ADMIN_REFUNDS = RefundAdminDest.ROUTE
+
+    // B5: admin billing-disputes queue (status filter + respond/resolve).
+    const val ADMIN_DISPUTES = DisputeAdminDest.ROUTE
+
+    // B5: admin appeals review queue (claim + decide).
+    const val ADMIN_APPEALS = AppealAdminDest.ROUTE
+
+    // B5: admin fraud-review queue (flags review + cases resolve).
+    const val ADMIN_FRAUD = FraudAdminDest.ROUTE
+
+    // B5: admin payment-incidents queue (status filter + submit-response).
+    const val ADMIN_PAYMENT_INCIDENTS = IncidentAdminDest.ROUTE
+
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
 
@@ -429,6 +453,14 @@ object MoreRoutes {
             ADMIN_DASHBOARD,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
+            ADMIN_MODERATION,
+            ADMIN_VIDEO_REVIEW,
+            ADMIN_DMCA,
+            ADMIN_REFUNDS,
+            ADMIN_DISPUTES,
+            ADMIN_APPEALS,
+            ADMIN_FRAUD,
+            ADMIN_PAYMENT_INCIDENTS,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,

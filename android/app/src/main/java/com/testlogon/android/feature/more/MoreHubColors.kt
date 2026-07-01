@@ -22,4 +22,5 @@ fun MoreHub.accent(): HubAccent = when (this) {
     MoreHub.INBOX -> HubAccent(Color(0xFFEBE2F6), Color(0xFF6A4296)) // violet
     MoreHub.ACCOUNT -> HubAccent(Color(0xFFDDEAF7), Color(0xFF2C5E8F)) // blue
     MoreHub.SUPPORT -> HubAccent(Color(0xFFE4E7EA), Color(0xFF4A555F)) // slate
+    MoreHub.ADMIN -> HubAccent(Color(0xFFF3E0E0), Color(0xFF8A2E2E)) // admin red
 }

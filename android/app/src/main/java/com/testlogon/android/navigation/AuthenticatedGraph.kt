@@ -232,6 +232,16 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         billingConfigDestination(navController)
         // AND-403: read-only admin alerts/dashboards (client-aggregated job + webhook health; 403 self-gate).
         adminDashboardDestination(navController)
+        // B5 admin queues (moderation board + video review + DMCA claims).
+        moderationBoardDestinations(navController)
+        videoReviewDestination(navController)
+        dmcaAdminDestination(navController)
+        // B5 admin financial-ops queues (refunds + disputes + appeals + fraud + payment incidents).
+        refundAdminDestination(navController)
+        disputeAdminDestination(navController)
+        appealAdminDestination(navController)
+        fraudAdminDestination(navController)
+        incidentAdminDestination(navController)
         // AND-404: read-only admin email/SMS delivery dashboards (per-channel stats + recent activity; 403
         // self-gate). One generic VM; channel via nav arg.
         messagingDashboardDestinations(navController)

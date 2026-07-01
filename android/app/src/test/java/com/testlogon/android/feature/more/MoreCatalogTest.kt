@@ -72,6 +72,15 @@ class MoreCatalogTest {
             "bulk_payouts",
             "helpdesk_queue",
             "helpdesk_dashboard",
+            "moderation_board",
+            "video_review",
+            "dmca_admin",
+            "refund_admin",
+            "dispute_admin",
+            "appeal_admin",
+            "fraud_admin",
+            "incident_admin",
+            "agent_configs",
         )
         val resolver = MoreAvailabilityResolver(RouteRegistry())
         val entries = MoreCatalog().entries
